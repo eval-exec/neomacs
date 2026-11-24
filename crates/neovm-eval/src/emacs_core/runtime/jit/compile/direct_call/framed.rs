@@ -83,6 +83,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
                             "error",
                             vec![Value::string("Bytecode stack overflow")],
                         ));
+                        // SAFETY: `ctx`, `leaf`, `const_base`, `args_ptr`, and `out` uphold this direct-framed shim's live native activation contract.
                         return unsafe {
                             call_spec_finish(
                                 ctx,
@@ -103,6 +104,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
             // charged, so a release must be a no-op.
             None => crate::emacs_core::bytecode::vm::BC_STACK_POSITION_UNCHARGED,
         };
+        // SAFETY: `ctx`, `leaf`, `const_base`, `args_ptr`, and `out` uphold this direct-framed shim's live native activation contract.
         let outcome = unsafe { call_spec_framed_run(ctx, leaf, const_base as u64, args_ptr) };
         // No mutable Context reference spans the native/Lisp execution
         // above. Its dormant seam borrow is reconstructed only for cleanup.
@@ -145,6 +147,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
         };
         // This owns depth/frame cleanup, signal propagation and a boxed
         // DeoptAt resume. In particular, a framed run is never FastRun::Raw.
+        // SAFETY: `ctx`, `leaf`, `const_base`, `args_ptr`, and `out` uphold this direct-framed shim's live native activation contract.
         unsafe {
             call_spec_finish(
                 ctx,

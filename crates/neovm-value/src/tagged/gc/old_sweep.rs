@@ -62,6 +62,7 @@ impl TaggedHeap {
         let mut visit = |ptr: *mut GcHeader| {
             let header = unsafe { &*ptr };
             if header.tenured && !header.generation.permanent() && !header.flags.image_resident() {
+                // SAFETY: `ptr` is a live old-generation object walked while the world is stopped.
                 bytes = bytes.saturating_add(unsafe { self.collector_object_bytes(ptr) });
             }
         };

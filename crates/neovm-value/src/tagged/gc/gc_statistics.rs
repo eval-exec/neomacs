@@ -136,6 +136,7 @@ impl TaggedHeap {
                 .count(),
             ..GcObjectCounts::default()
         };
+        // SAFETY: `visit_arena` yields only live initialized `GcHeader` pointers owned by `self`.
         let mut visit = |header| unsafe { self.note_runtime_gc_object(header, &mut counts) };
         visit_arena(&self.string_arena, &mut visit);
         visit_arena(&self.float_arena, &mut visit);

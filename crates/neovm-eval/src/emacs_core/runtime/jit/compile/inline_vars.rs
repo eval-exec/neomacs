@@ -732,6 +732,7 @@ pub(crate) fn reset_inline_var_sites() {
 /// cache.
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) fn with_compile_env_for_test<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
+    // SAFETY: `ctx` is the live `Context` for the duration of this test closure and `_scope` drops before return.
     let _scope = unsafe { CompileEnvScope::enter(ctx) };
     f()
 }

@@ -61,6 +61,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_t2_record_array_use(
     obs: *const LeafObs,
 ) {
     when_open(
+        // SAFETY: `obs` points to the live profile observation record owned by the calling JIT leaf.
         unsafe { super::t2_profile::credit_window_open(obs) },
         || {
             // SAFETY: the native activation owns obs; FeedbackHolds retains source

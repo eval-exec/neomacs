@@ -1046,11 +1046,13 @@ impl TaggedHeap {
         } else if let Some(ptr) = owner.gc_veclike_ptr() {
             // Match ordinary gray enumeration: register weak tables, strongly
             // log only their custom closures, and let weak fixpoint handle KV.
+            // SAFETY: `ptr` was decoded from a live `VecLike` `TaggedValue` owned by this heap during SATB marking.
             if let Some(children) = unsafe { self.register_weak_hash_table_for_sweep(ptr) } {
                 for child in children {
                     self.push_satb_child(child);
                 }
             } else {
+                // SAFETY: `ptr` was decoded from a live `VecLike` `TaggedValue` owned by this heap during SATB marking.
                 unsafe {
                     Self::for_each_veclike_child(
                         self.collector_tables(),

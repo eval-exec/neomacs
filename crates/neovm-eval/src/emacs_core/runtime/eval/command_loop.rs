@@ -1661,6 +1661,7 @@ impl Context {
                 // #776: the drain above finalized any in-flight automatic
                 // cycle, so apply its retired-process batch before this
                 // explicit collection takes a fresh one.
+                // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
                 unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
                 // Pin frame objects named by bare ids (queued input, the last
                 // event frame, mouse position) before this collection can
@@ -1808,6 +1809,7 @@ impl Context {
                     MarkPhase::Idle => {
                         // #776: settle the previous cycle before deciding this
                         // one; an abandoned batch is restored here.
+                        // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
                         unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
                         // A retired process record is decided by a major: a
                         // generational minor treats a promoted object as black
@@ -1829,6 +1831,7 @@ impl Context {
                         // A major (forced or naturally due) arms every record;
                         // a minor arms none and keeps decided records in the
                         // ordinary root walk, as before #776.
+                        // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
                         unsafe { self.begin_automatic_retired_process_cycle(heap_ptr, !minor) };
                         if stress_cycle {
                             // A fresh automatic stress cycle is synchronous. Choose its
@@ -1860,6 +1863,7 @@ impl Context {
                             (*heap_ptr).complete_minor_collection();
                             // The minor's termination ran the reclaim; this
                             // branch returns without the completion block.
+                            // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
                             unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
                             return Ok(self.bank_gc_cycle_time(start));
                         } else {
@@ -1883,6 +1887,7 @@ impl Context {
                             // census. Keep the incomplete cycle for explicit
                             // owner recovery rather than tracing foreign roots.
                             // No cycle started, so restore the batch we took.
+                            // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
                             unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
                             return Ok(self.bank_gc_cycle_time(start));
                         }
@@ -1948,6 +1953,7 @@ impl Context {
             // #776: this call finished the automatic cycle (synchronous STW,
             // stress cycle, or the last deferred-sweep slice of a concurrent
             // cycle), so apply the retired-process batch it owned.
+            // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
             unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
         }
         if !cycle_completed {
@@ -2433,6 +2439,7 @@ impl Context {
         // changed a reached process's sentinel/filter/plist. Re-snapshot the
         // armed fields now, before the termination's ephemeron fixpoint
         // decides them against this cycle's marks.
+        // SAFETY: `heap_ptr` is `self`'s live `TaggedHeap` held exclusively during this GC cycle.
         unsafe { self.refresh_armed_retired_process_fields(heap_ptr) };
         let term_t0 = std::time::Instant::now();
         let (roots_us, drain_us);

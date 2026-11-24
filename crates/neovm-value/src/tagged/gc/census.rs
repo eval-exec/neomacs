@@ -338,6 +338,7 @@ impl TaggedHeap {
                 } {
                     return;
                 }
+                // SAFETY: `header` is a live object visited during world-stopped termination census.
                 let bytes = unsafe { self.collector_object_bytes(header) };
                 let addr = header as usize;
                 if prev.contains(&addr) {
@@ -387,6 +388,7 @@ impl TaggedHeap {
             }
             record
                 .promoted_dead
+                // SAFETY: `header` is a live object visited during world-stopped termination census.
                 .add_object(unsafe { self.collector_object_bytes(header) });
         }
         census.prev_objects = now;

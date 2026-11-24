@@ -441,7 +441,9 @@ static_assertions::assert_not_impl_any!(LocalHeapScope: Send, Sync, Clone, Copy)
 impl LocalHeapScope {
     fn retire_tls(&self) -> Result<(), TransferError> {
         let transfer = self.transfer.as_ref().expect("local retained transfer");
-        retire_transfer_tls(transfer.root.as_non_null())
+        // SAFETY: `LocalHeapScope` retains the sole backing for `transfer.root`
+        // and only retires TLS after the callback/collector frame has returned or unwound.
+        unsafe { retire_transfer_tls(transfer.root.as_non_null()) }
     }
 
     fn into_transfer(mut self) -> (PreparedHeapTransfer, Result<(), TransferError>) {
@@ -468,7 +470,14 @@ impl Drop for LocalHeapScope {
 /// Only after the complete collector or era frame has returned and every
 /// participant has retired. A refusal that can still hold a heap loan clears
 /// TLS by address and does not call this.
-fn retire_transfer_tls(root: NonNull<super::super::TaggedHeap>) -> Result<(), TransferError> {
+///
+/// # Safety
+/// `root` must point to a live `TaggedHeap` whose backing is retained by the
+/// caller, and every callback, collector, or era frame borrowing that heap
+/// must have returned or unwound with no outstanding mutable alias.
+unsafe fn retire_transfer_tls(
+    root: NonNull<super::super::TaggedHeap>,
+) -> Result<(), TransferError> {
     let installed = super::super::TAGGED_HEAP.with(|slot| slot.get() == root.as_ptr());
     // SAFETY: the caller's complete callback, collector, or era frame has
     // returned, or unwound. The scope retains the sole original backing and

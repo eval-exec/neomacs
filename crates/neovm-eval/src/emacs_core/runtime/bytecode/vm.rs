@@ -9239,6 +9239,7 @@ impl<'a> Vm<'a> {
                 }
                 slots[nonrest] = rest.bits() as i64;
             }
+            // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned for this call, and `args_ptr` addresses `nargs` rooted tagged words.
             match unsafe {
                 crate::emacs_core::jit::cache::run_resolved_leaf_native(
                     ctx_ptr,
@@ -9248,6 +9249,7 @@ impl<'a> Vm<'a> {
                     slots.as_ptr(),
                 )
             } {
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned for this call, and `args_ptr` addresses `nargs` rooted tagged words.
                 NativeCallOutcome::Fallback => unsafe {
                     Vm::interp_fallback_native(ctx_ptr, bc, callee, args_ptr, nargs)
                 },
@@ -9261,17 +9263,20 @@ impl<'a> Vm<'a> {
                 // through (no LispArgVec, no rooting, no re-marshal) — and a
                 // register-sized outcome back (no Result<_, Flow> sret moves;
                 // a signalling Flow stays in the pending slot).
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned for this call, and `args_ptr` addresses `nargs` rooted tagged words.
                 match unsafe {
                     crate::emacs_core::jit::cache::run_resolved_leaf_native(
                         ctx_ptr, bc, callee, leaf, args_ptr,
                     )
                 } {
+                    // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned for this call, and `args_ptr` addresses `nargs` rooted tagged words.
                     NativeCallOutcome::Fallback => unsafe {
                         Vm::interp_fallback_native(ctx_ptr, bc, callee, args_ptr, nargs)
                     },
                     o => o,
                 }
             } else {
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned for this call, and `args_ptr` addresses `nargs` rooted tagged words.
                 unsafe { marshal_and_run(ctx_ptr, bc, callee, leaf, args_ptr, nargs) }
             }
         };

@@ -723,6 +723,7 @@ fn concurrent_try_mark_string_major<S: WorkerSymbolMarks>(
     }
     if unsafe { (*ptr).header.mark_claim_at(job.parity) } {
         job.str_claimed.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: `ptr` is a live heap object just claimed by this collector worker.
         unsafe { logs.note_promotion::<true>(ptr.cast()) };
     }
     true
@@ -884,6 +885,7 @@ fn concurrent_try_mark_owned_with_symbols<
         // this cycle) — equally done.
         if unsafe { (*ptr).header.mark_claim_at(job.parity) } {
             job.float_claimed.fetch_add(1, Ordering::Relaxed);
+            // SAFETY: `ptr` is a live heap object just claimed by this collector worker.
             unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
         }
         return true;
@@ -963,6 +965,7 @@ fn concurrent_try_mark_owned_with_symbols<
             }
             if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {
                 job.vec_claimed.fetch_add(1, Ordering::Relaxed);
+                // SAFETY: `ptr` is a live heap object just claimed by this collector worker.
                 unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
             }
             return true;
@@ -1045,6 +1048,7 @@ fn concurrent_try_mark_owned_with_symbols<
             }
             if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {
                 job.bc_claimed.fetch_add(1, Ordering::Relaxed);
+                // SAFETY: `ptr` is a live heap object just claimed by this collector worker.
                 unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
                 // Fresh claim: gray-push the children (coverage leg (a)).
                 // Field reads are race-free per the immutability argument
@@ -1093,6 +1097,7 @@ fn concurrent_try_mark_owned_with_symbols<
             // coverage leg (c)): equally handled, nothing further owed.
             return true;
         }
+        // SAFETY: `ptr` was validated as a live heap object owned by this job's heap.
         if let Some(handled) = unsafe { extension.try_mark::<MAJOR>(ptr, job, gray, logs) } {
             return handled;
         }
@@ -1168,6 +1173,7 @@ impl ClaimExtension for EnabledClaims {
                         .as_ref()
                         .expect("Tier-H snapshot requires a cycle counter")
                         .fetch_add(1, Ordering::Relaxed);
+                    // SAFETY: `ptr` is a live heap object just claimed by this collector worker.
                     unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
                     // Complete this snapshot scan even if stop arrives now:
                     // a claimed header cannot be sent back for retracing.
@@ -1207,6 +1213,7 @@ impl ClaimExtension for EnabledClaims {
                         .as_ref()
                         .expect("enabled leaf claims require a cycle counter")
                         .fetch_add(1, Ordering::Relaxed);
+                    // SAFETY: `ptr` is a live heap object just claimed by this collector worker.
                     unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
                     if class == ChunkClass::SymbolWithPos {
                         // These fields have no post-publication setter. A
@@ -2229,7 +2236,9 @@ fn generation_only_cons_is_old(heap: &TaggedHeap, owner: TaggedValue) -> bool {
     if cur == 0 || ConsBlock::block_base_for_ptr(cur as *const ConsCell) != base {
         let owned = match heap.chunk_map.as_ref() {
             Some(map) => map.get(ptr as usize).is(ChunkClass::Cons),
-            None => return generation_only_registered_cons_is_old(heap, ptr),
+            // SAFETY: `ptr` was decoded from a live `TaggedValue` cons cell
+            // owned by this mutator; this leaf cannot safepoint.
+            None => return unsafe { generation_only_registered_cons_is_old(heap, ptr) },
         };
         if !owned {
             return false;
@@ -2261,9 +2270,14 @@ fn generation_only_cons_cell_offset(addr: usize) -> Option<usize> {
 /// Keep registry lookup temporaries inside the map-off fallback. Carrying
 /// its base and index across `contains_key` otherwise adds callee-saved
 /// registers to every setter, including the GEN0 immediate fast path.
+///
+/// # Safety
+/// If `ptr` falls inside a cons block registered in `heap`, it must point to a
+/// live, properly aligned [`ConsCell`] payload slot and no concurrent GC
+/// release or promotion may race with this call.
 #[cold]
 #[inline(never)]
-fn generation_only_registered_cons_is_old(heap: &TaggedHeap, ptr: *const ConsCell) -> bool {
+unsafe fn generation_only_registered_cons_is_old(heap: &TaggedHeap, ptr: *const ConsCell) -> bool {
     let base = ConsBlock::block_base_for_ptr(ptr);
     if !heap.cons_block_index_by_base.contains_key(&base) {
         return false;

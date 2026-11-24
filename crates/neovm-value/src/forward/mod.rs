@@ -315,11 +315,14 @@ impl FwdRef {
     /// infallible matters beyond tidiness: an `expect` here put a cold panic
     /// edge in every value-cell decode, which changed inlining and cost real
     /// instructions per builtin read (b135 sustained-editing regression).
+    /// # Safety
+    /// `address` must be a non-null, properly aligned address of a live
+    /// [`LispFwd`] descriptor header produced by [`Self::of`] (or stored by
+    /// `CellWord::forwarded`).
     #[inline(always)]
-    pub(crate) fn from_address(address: usize) -> Self {
-        // SAFETY: see the method contract; the address is a `NonNull` header
-        // address stored by `CellWord::forwarded`, or a live descriptor
-        // header from `of`.
+    pub(crate) unsafe fn from_address(address: usize) -> Self {
+        // SAFETY: caller guarantees `address` is a live non-null `LispFwd`
+        // descriptor header address produced by `Self::of` / `CellWord::forwarded`.
         Self(unsafe { std::ptr::NonNull::new_unchecked(address as *mut LispFwd) })
     }
 

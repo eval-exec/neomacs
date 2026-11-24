@@ -106,7 +106,9 @@ impl TaggedHeap {
             // white for the next `begin_collection` flip otherwise.
             (*ptr).header.set_marked(self.mark_parity);
         }
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
         unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
         unsafe {
             alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
@@ -208,7 +210,9 @@ impl TaggedHeap {
             registered,
             "page vector allocated twice (bitmap/registry out of sync)"
         );
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
         unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
         unsafe {
             alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
@@ -261,6 +265,7 @@ impl TaggedHeap {
             extras: extras.into(),
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe {
@@ -285,6 +290,7 @@ impl TaggedHeap {
             contents: contents.into(),
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe {
@@ -299,6 +305,7 @@ impl TaggedHeap {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, 1);
         let obj = Box::new(HashTableObj::new(table));
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::hash_table_object_bytes(&*ptr) });
@@ -314,6 +321,7 @@ impl TaggedHeap {
             count: 0,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::obarray_object_bytes(&*ptr) });
@@ -352,7 +360,9 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally — the link seam's store.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
         unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
         unsafe {
             alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
@@ -387,7 +397,9 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
         unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
         unsafe {
             alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
@@ -411,6 +423,7 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<BufferObj>());
@@ -425,6 +438,7 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<WindowObj>());
@@ -439,6 +453,7 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<FrameObj>());
@@ -452,6 +467,7 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<TimerObj>());
@@ -465,6 +481,7 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<ProcessObj>());
@@ -478,6 +495,7 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<TerminalObj>());
@@ -511,6 +529,7 @@ impl TaggedHeap {
             kill_without_query: false,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<XwidgetObj>());
@@ -529,6 +548,7 @@ impl TaggedHeap {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, 1 + nwords as u64);
         let obj = Box::new(BoolVectorObj::new(nbits, words));
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<BoolVectorObj>() + nwords * size_of::<u64>());
@@ -547,6 +567,7 @@ impl TaggedHeap {
             surface_id,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<SurfaceObj>());
@@ -564,6 +585,7 @@ impl TaggedHeap {
         let object = Box::new(ThreadObj::new(payload));
         let bytes = object.owned_bytes();
         let ptr = Box::into_raw(object);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr.cast()) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(bytes);
@@ -580,6 +602,7 @@ impl TaggedHeap {
         let object = Box::new(MutexObj::new(payload));
         let bytes = object.owned_bytes();
         let ptr = Box::into_raw(object);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr.cast()) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(bytes);
@@ -596,6 +619,7 @@ impl TaggedHeap {
         let object = Box::new(CondVarObj::new(payload));
         let bytes = object.owned_bytes();
         let ptr = Box::into_raw(object);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr.cast()) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(bytes);
@@ -613,6 +637,7 @@ impl TaggedHeap {
             video_id,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<VideoObj>());
@@ -647,6 +672,7 @@ impl TaggedHeap {
             hidden: false,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<XwidgetViewObj>());
@@ -700,7 +726,9 @@ impl TaggedHeap {
             // `link_veclike`).
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
         unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
         unsafe {
             alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
@@ -756,7 +784,9 @@ impl TaggedHeap {
             // `link_veclike`).
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
         unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
         unsafe {
             alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
@@ -792,6 +822,7 @@ impl TaggedHeap {
             data,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::font_object_bytes(&*ptr) });
@@ -841,7 +872,9 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
         unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
         unsafe {
             alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
@@ -872,6 +905,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         let value = unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) };
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<OverlayObj>());
@@ -904,7 +938,9 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
         unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
         unsafe {
             alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
@@ -958,7 +994,9 @@ impl TaggedHeap {
                 },
             );
         }
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
         unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
         unsafe {
             alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
@@ -995,7 +1033,9 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
         unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
         unsafe {
             alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
@@ -1015,6 +1055,7 @@ impl TaggedHeap {
             function,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.finalizer_registry.push(ptr);
         self.current_mutator_gc_mut().allocated_count += 1;
@@ -1031,6 +1072,7 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<SqliteObj>());
@@ -1055,6 +1097,7 @@ impl TaggedHeap {
             finalizer,
         });
         let raw = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(raw as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<UserPtrObj>());
@@ -1088,6 +1131,7 @@ impl TaggedHeap {
             interactive_form,
         });
         let raw = Box::into_raw(obj);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
         unsafe { self.link_veclike(raw as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<ModuleFunctionObj>());

@@ -8018,6 +8018,7 @@ fn lower_simple_op_arms(
             // behind the same run-time symbol check the general lowering
             // emits; a callee mismatch is the plain call of the actual value.
             if let Some((sym, expected, slot_ptr, _, SpecCalleeKind::SubrGeneral)) = spec
+                // SAFETY: `expected` is a valid tagged constant word from the compiled bytecode constant pool.
                 && let Some(leaf) = unsafe { super::leaf_abi::bcall_leaf_site(expected, n, aot) }
             {
                 return lower_bcall_leaf_site(
@@ -8048,6 +8049,7 @@ fn lower_simple_op_arms(
             if let Some((sym, expected, slot_ptr, _, SpecCalleeKind::Bytecode)) = spec
                 && guarded_sym.is_none()
                 && let Some(site) =
+                    // SAFETY: `expected` is a valid tagged constant word from the compiled bytecode constant pool.
                     unsafe { super::direct_call::DirectSite::plan(rt, aot, expected, n) }
             {
                 let sym_v = materialize_op_sym_value(fb, reloc_base, reloc_index, sym);
@@ -8362,6 +8364,7 @@ fn lower_simple_op_arms(
                         match (kind, &reg_args) {
                             (SpecCalleeKind::SubrGeneral, _) => {
                                 if let Some(t2) =
+                                    // SAFETY: `expected` is a valid tagged constant word from the compiled bytecode constant pool.
                                     unsafe { super::t2_profile::subr_profiler(rt, expected) }
                                 {
                                     let f = rt

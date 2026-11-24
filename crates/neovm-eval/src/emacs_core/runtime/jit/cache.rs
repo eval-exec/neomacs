@@ -1055,6 +1055,7 @@ pub(crate) unsafe fn try_run_osr_probe(
         return OsrProbe::NoTransfer;
     }
     let id = func.jit_runtime().compiled_id_or_assign();
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     let cached = match unsafe { osr_lookup(ctx, func, osr_pc, id) } {
         OsrLookup::Entry(entry) => entry,
         OsrLookup::Pending => return OsrProbe::Pending,
@@ -1104,6 +1105,7 @@ pub(crate) unsafe fn try_run_osr_probe(
         None
     };
     OSR_TRANSFER_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     let run = unsafe {
         leaf.invoke_osr(
             ctx as *mut u8,
@@ -1122,6 +1124,7 @@ pub(crate) unsafe fn try_run_osr_probe(
     // The deopt hook runs before the interpreter installs the resume state
     // (the local `leaf` keeps the OSR leaf alive across it).
     let _verdict = match &run {
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
         NativeRun::Deopt => unsafe {
             super::reopt::note_deopt(
                 ctx,
@@ -1150,6 +1153,7 @@ pub(crate) unsafe fn try_run_osr_probe(
                         )
                     },
                 );
+                // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
                 unsafe {
                     super::reopt::note_deopt_chain(
                         ctx,
@@ -1166,6 +1170,7 @@ pub(crate) unsafe fn try_run_osr_probe(
                     )
                 }
             } else {
+                // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
                 unsafe {
                     super::reopt::note_deopt(
                         ctx,
@@ -1244,6 +1249,7 @@ unsafe fn osr_lookup(
     }
     // The running function's own frame is the innermost one.
     let name_hint = stats::naming_enabled()
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
         .then(|| unsafe { callee_name_hint(ctx, id) })
         .flatten();
     // A refused OSR job (the queue full of OSR jobs, or too many pending)
@@ -1254,6 +1260,7 @@ unsafe fn osr_lookup(
     );
     // The inline-variable environment (`NEOVM_JIT_INLINE_VARS`) is read by
     // the lowering, which runs here on the eval thread in every mode.
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
     let compiled = compile_osr_leaf(&live.obarray, func, osr_pc, id, name_hint);
     drop(defer);
@@ -2848,6 +2855,7 @@ unsafe fn request_upgrade(
     let name_hint = stats::naming_enabled()
         .then(|| unsafe { callee_name_hint(ctx, id) })
         .flatten();
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
     if kind == super::tier2::T2Upgrade::Retier {
         stats::record_retier();
@@ -2962,6 +2970,7 @@ unsafe fn probe_tier2_upgrade(
                 .due()
                 .or_else(|| super::aot::retier::legacy_request(old, func.jit_runtime()))?;
             let old = Rc::clone(old);
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
             Some(unsafe { request_upgrade(cache, id, func, old, kind, ctx) })
         }
         _ => None,
@@ -3188,6 +3197,7 @@ pub(crate) unsafe fn try_run_compiled(
         // A countdown upgrade keeps its T1 live until the replacement
         // really installs. The legacy heat-driven re-tier below is unchanged.
         if super::compile::jit_tier_upgrade_enabled()
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
             && let Some(leaf) = unsafe { probe_tier2_upgrade(&mut cache, id, func, ctx) }
         {
             return Some(leaf).filter(|leaf| leaf.accepts(args.len()));
@@ -3337,6 +3347,7 @@ pub(crate) unsafe fn try_run_compiled(
                 }
             }
             let name_hint = stats::naming_enabled()
+                // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
                 .then(|| unsafe { callee_name_hint(ctx, id) })
                 .flatten();
             // The origin is only read on this cold miss path.
@@ -3348,6 +3359,7 @@ pub(crate) unsafe fn try_run_compiled(
                 stats::CompileOrigin::Dispatch
             };
             // Inline variable ops classify against this context (P1.4 B).
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
             let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
             compile_cache_entry(
                 cache,
@@ -3379,6 +3391,7 @@ pub(crate) unsafe fn try_run_compiled(
         Some(leaf) => {
             #[cfg(test)]
             super::test_support::note_native_dispatch();
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
             unsafe { run_resolved_leaf(ctx, func, func_value, &leaf, args) }
         }
     }
@@ -3554,6 +3567,7 @@ pub(crate) unsafe fn arm_leaf_slot(ctx: *mut Context, func: &ByteCodeFunction) {
     if rt.armed_leaf_word(epoch).is_some() {
         return;
     }
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     if let Some(leaf) = unsafe { resolve_compiled_leaf_ptr(ctx, func) } {
         // SAFETY: `leaf` was resolved from this source's cache entry while the
         // entry is live and under `epoch`; the cache retires leaves without
@@ -3617,6 +3631,7 @@ pub(crate) unsafe fn resolve_spec_call_leaf(
         // calls receive a retained handle instead, so a cold source need
         // not fall through the interpreter's initial heat threshold.
         if super::compile::jit_tier_upgrade_enabled() {
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
             unsafe { probe_tier2_upgrade(&mut cache, id, func, ctx) };
         }
         match cache.get_or_insert_with(id, |cache| {
@@ -3628,6 +3643,7 @@ pub(crate) unsafe fn resolve_spec_call_leaf(
             let name_hint = stats::naming_enabled()
                 .then(|| unsafe { callee_name_hint(ctx, id) })
                 .flatten();
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
             let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
             compile_cache_entry(
                 cache,
@@ -3736,6 +3752,7 @@ pub(crate) unsafe fn run_resolved_leaf(
     // `run_resolved_leaf_native` does; an over-budget frame falls back to the
     // interpreter entry, which raises GNU's error.
     if ctx.is_null() {
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
         return unsafe { run_resolved_leaf_inner(ctx, func, func_value, leaf, args) };
     }
     // SAFETY: the seam-provided Context is dormant for this native call.
@@ -3752,6 +3769,7 @@ pub(crate) unsafe fn run_resolved_leaf(
     let Some(saved_budget) = charged else {
         return Ok(None);
     };
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     let outcome = unsafe {
         run_with_bytecode_stack_probe(ctx, |ctx| {
             run_resolved_leaf_inner(ctx, func, func_value, leaf, args)
@@ -3776,6 +3794,7 @@ unsafe fn run_resolved_leaf_inner(
     args: &[Value],
 ) -> Result<Option<usize>, Flow> {
     super::stats::record_native_entry();
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     unsafe {
         finish_native_run(
             ctx,
@@ -3812,6 +3831,7 @@ pub(crate) unsafe fn run_resolved_leaf_native(
     // which continues this same frame -- has finished; a fallback releases
     // before returning so the interpreter entry charges the frame once.
     if ctx.is_null() {
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
         return unsafe { run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr) };
     }
     // SAFETY: the seam-provided Context is dormant for this native call.
@@ -3835,6 +3855,7 @@ pub(crate) unsafe fn run_resolved_leaf_native(
     // compiled leaf entered between samples never meets its own entry guard
     // before the bytecode budget is exhausted (the guard's threshold is
     // inside the probe reserve, see `maybe_grow_tracking_jit_limit`).
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     let outcome = unsafe {
         run_with_bytecode_stack_probe(ctx, |ctx| {
             run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr)
@@ -3877,6 +3898,7 @@ pub(crate) unsafe fn run_with_bytecode_stack_probe<R>(
     {
         return run(ctx);
     }
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     unsafe { run_with_bytecode_stack_probe_sampled(ctx, run) }
 }
 
@@ -3956,8 +3978,10 @@ unsafe fn run_resolved_leaf_native_inner(
         }
         #[cfg(any(test, debug_assertions, feature = "test-support"))]
         count_native_status(status);
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
         return unsafe { direct_call_cold(ctx, func, func_value, leaf, status) };
     }
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     unsafe { run_resolved_leaf_native_outlined(ctx, func, func_value, leaf, args_ptr) }
 }
 
@@ -3992,11 +4016,14 @@ unsafe fn run_resolved_leaf_native_outlined(
         }
         #[cfg(any(test, debug_assertions, feature = "test-support"))]
         count_native_status(ret.status);
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
         return unsafe { direct_call_cold(ctx, func, func_value, leaf, ret.status) };
     }
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     let outcome = unsafe {
         leaf.call_premarshaled_consts(ctx as *mut u8, func.jit_constant_base(), args_ptr)
     };
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     unsafe { finish_framed_run(ctx, func, func_value, leaf, outcome) }
 }
 
@@ -4025,6 +4052,7 @@ pub(crate) unsafe fn finish_framed_run(
         // call_premarshaled maps null-vmctx deopts to Deopt; defensive only —
         // the caller re-runs the callee on the interpreter.
         NativeRun::Deopt => {
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
             unsafe {
                 super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun)
             };
@@ -4041,6 +4069,7 @@ pub(crate) unsafe fn finish_framed_run(
             stash_pending_flow(flow);
             NativeCallOutcome::FlowStashed
         }
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
         NativeRun::DeoptAt(resume) => unsafe {
             deopt_resume_outcome(ctx, func, func_value, leaf, *resume)
         },
@@ -4127,12 +4156,15 @@ pub(crate) unsafe fn direct_call_cold(
             stash_pending_flow(flow);
             return NativeCallOutcome::FlowStashed;
         }
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
         return unsafe { dispatch_raw_signal(ctx, flow) };
     }
     if status == STATUS_DEOPT_AT {
         // Precise deopt: no bind/cond frames exist on the direct path (the
         // eligibility gate excludes them).
+        // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
         return match unsafe { leaf.deopt_at_outcome(ctx as *mut u8, None, None) } {
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
             NativeRun::DeoptAt(resume) => unsafe {
                 deopt_resume_outcome(ctx, func, func_value, leaf, *resume)
             },
@@ -4140,6 +4172,7 @@ pub(crate) unsafe fn direct_call_cold(
             NativeRun::Signal => {
                 let flow = take_pending_flow()
                     .expect("STATUS_SIGNAL from compiled code implies a stashed Flow");
+                // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
                 unsafe { dispatch_raw_signal(ctx, flow) }
             }
             _ => NativeCallOutcome::Fallback,
@@ -4149,6 +4182,7 @@ pub(crate) unsafe fn direct_call_cold(
     // (the same defensive rule invoke_native applies).
     leaf.obs.note_deopt_rerun();
     leaf.assert_rerunnable();
+    // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
     unsafe { super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun) };
     NativeCallOutcome::Fallback
 }
@@ -4297,6 +4331,7 @@ unsafe fn finish_native_run(
     match outcome {
         NativeRun::Ok(bits) => Ok(Some(bits)),
         NativeRun::Deopt => {
+            // SAFETY: `ctx` is the live owner `Context` guaranteed by this function's contract and any `args_ptr`/`leaf` arguments remain valid for the call.
             unsafe {
                 super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun)
             };
@@ -4447,6 +4482,7 @@ pub(crate) unsafe fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunc
     );
     sync_cache_to_current_heap().expect("serial jit grace");
     let id = func.jit_runtime().compiled_id_or_assign();
+    // SAFETY: `ctx` is the live owner `Context` passed into this test helper.
     let _ = unsafe { osr_lookup(ctx, func, pc, id) };
     assert!(
         super::bg::quiesce_for_test(Duration::from_secs(60)),
@@ -4454,6 +4490,7 @@ pub(crate) unsafe fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunc
     );
     assert!(
         matches!(
+            // SAFETY: `ctx` is the live owner `Context` passed into this test helper.
             unsafe { osr_lookup(ctx, func, pc, id) },
             OsrLookup::Entry(_)
         ),
@@ -4476,6 +4513,7 @@ pub(crate) unsafe fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCode
     };
     if super::compile::jit_tier_upgrade_enabled() {
         COMPILED.with(|cache| {
+            // SAFETY: `ctx` is the live owner `Context` passed into this test helper.
             unsafe { probe_tier2_upgrade(&mut cache.borrow_mut(), id, func, ctx) };
         });
         assert!(

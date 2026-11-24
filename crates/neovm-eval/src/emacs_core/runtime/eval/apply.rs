@@ -2737,6 +2737,7 @@ impl Context {
                     // reallocate `bc_buf` under a pointer into it, this vector
                     // is a local that nothing appends to for the duration of
                     // the call.
+                    // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
                     unsafe {
                         cache::run_armed_leaf(
                             ctx_ptr,
@@ -2765,6 +2766,7 @@ impl Context {
                         };
                         bits.push(rest.bits() as i64);
                     }
+                    // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
                     unsafe {
                         cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
                     }
@@ -2837,6 +2839,7 @@ impl Context {
                 // cache probe above — the same hand-off
                 // `dispatch_bytecode_call_from_stack` makes.
                 if matches!(native, Ok(Some(_))) {
+                    // SAFETY: `ctx_ptr` is the live `Context` for this bytecode call and `bc_data` is rooted for the duration of arming.
                     unsafe { cache::arm_leaf_slot(ctx_ptr, bc_data) };
                 }
                 restore_scratch_gc_roots(saved_roots);
@@ -3209,6 +3212,7 @@ impl Context {
             let native = if !has_rest && nonrest == 1 {
                 // `Value` is `#[repr(transparent)]` over a word: the local IS
                 // a one-element argument array in the leaf's ABI.
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
                 unsafe {
                     cache::run_armed_leaf(
                         ctx_ptr,
@@ -3234,6 +3238,7 @@ impl Context {
                     };
                     bits.push(rest.bits() as i64);
                 }
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
                 unsafe { cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr()) }
             };
             return match native {
@@ -3378,6 +3383,7 @@ impl Context {
             let ctx_ptr = self as *mut Context;
             let saved_roots = save_scratch_gc_roots();
             let native = if !has_rest && nonrest == 2 {
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
                 unsafe {
                     cache::run_armed_leaf(
                         ctx_ptr,
@@ -3403,6 +3409,7 @@ impl Context {
                     };
                     bits.push(rest.bits() as i64);
                 }
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
                 unsafe { cache::run_armed_leaf(ctx_ptr, bc_data, function, leaf, bits.as_ptr()) }
             };
             return match native {
@@ -3511,6 +3518,7 @@ impl Context {
                     };
                     bits[nonrest] = rest.bits() as i64;
                 }
+                // SAFETY: `ctx_ptr` is the live `Context`, `leaf` is pinned by the cache/slot, and `bits` holds rooted argument words matching the leaf arity.
                 let native = unsafe {
                     cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
                 };
@@ -3536,6 +3544,7 @@ impl Context {
                         )
                     };
                     if matches!(native, Ok(Some(_))) {
+                        // SAFETY: `ctx_ptr` is the live `Context` for this bytecode call and `bc_data` is rooted for the duration of arming.
                         unsafe { cache::arm_leaf_slot(ctx_ptr, bc_data) };
                     }
                     restore_scratch_gc_roots(saved_roots);

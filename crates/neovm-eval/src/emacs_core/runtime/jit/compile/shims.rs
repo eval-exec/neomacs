@@ -669,6 +669,7 @@ macro_rules! jit_shim_contain {
         let args_raw: *const i64 = $args_ptr;
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
             Ok(v) => v,
+            // SAFETY: `ctx_raw` is either null or the calling JIT shim's live `Context` pointer.
             Err(payload) => match unsafe { contain_jit_shim_panic(ctx_raw, payload) } {
                 Ok(()) => {
                     // SAFETY: the seam-provided dormant Context (the shim's
@@ -692,6 +693,7 @@ macro_rules! jit_shim_contain {
     (no_ctx, $sentinel:expr, $body:expr) => {{
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
             Ok(v) => v,
+            // SAFETY: `ctx_raw` is either null or the calling JIT shim's live `Context` pointer.
             Err(payload) => match unsafe { contain_jit_shim_panic(core::ptr::null_mut(), payload) }
             {
                 Ok(()) => $sentinel,
@@ -703,6 +705,7 @@ macro_rules! jit_shim_contain {
         let ctx_raw: *mut u8 = $ctx;
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
             Ok(v) => v,
+            // SAFETY: `ctx_raw` is either null or the calling JIT shim's live `Context` pointer.
             Err(payload) => match unsafe { contain_jit_shim_panic(ctx_raw, payload) } {
                 Ok(()) => $sentinel,
                 Err(payload) => std::panic::resume_unwind(payload),
@@ -778,9 +781,11 @@ pub(crate) unsafe extern "C" fn neovm_jit_call(
                     Vm::call_armed_bytecode_value_native(ctx_ref, func_val, args_ptr, nargs)
                 }
             {
+                // SAFETY: `out` is the calling JIT frame's writable `i64` result slot.
                 return unsafe { native_call_status(outcome, out) };
             }
         }
+        // SAFETY: `ctx`/`ctx_ref` is the live `Context`, `args_ptr` addresses `nargs` live tagged words, and `out` is writable.
         unsafe { neovm_jit_call_general(ctx, func_val, args_ptr, nargs, out) }
     })
 }
@@ -843,8 +848,10 @@ unsafe fn neovm_jit_call_general(
             if nargs >= 2
                 && func_val.as_bare_symbol_id() == Some(Vm::apply_builtin_id())
                 && let Some(outcome) =
+                    // SAFETY: `out` is the calling JIT frame's writable `i64` result slot.
                     unsafe { Vm::call_apply_native(ctx_ref, func_val, args_ptr, nargs) }
             {
+                // SAFETY: `out` is the calling JIT frame's writable `i64` result slot.
                 return unsafe { native_call_status(outcome, out) };
             }
             let args_start = ctx_ref.bc_buf.len();
@@ -861,6 +868,7 @@ unsafe fn neovm_jit_call_general(
                     }
             {
                 ctx_ref.bc_buf.truncate(args_start);
+                // SAFETY: `out` is the calling JIT frame's writable `i64` result slot.
                 return unsafe { jit_call_status(res, out) };
             }
             // `maybe_quit_hot_ok` above tested exactly `maybe_quit`'s

@@ -222,6 +222,7 @@ unsafe extern "C" fn neovm_jit_call_recording(
     out: *mut i64,
     site: *const CallSiteFeedback,
 ) -> i64 {
+    // SAFETY: `site` is the calling leaf's live feedback slot and `args_ptr` addresses `nargs` live tagged argument words.
     unsafe { record_at(site, func_bits, args_ptr, nargs) };
     // SAFETY: this shim's contract above covers ctx, args_ptr and out.
     unsafe { neovm_jit_call(ctx, func_bits, args_ptr, nargs, out) }
@@ -269,6 +270,7 @@ unsafe extern "C" fn neovm_jit_apply_recording(
     out: *mut i64,
     site: *const CallSiteFeedback,
 ) -> i64 {
+    // SAFETY: `site` is the calling leaf's live feedback slot and `args_ptr` addresses `nargs` live tagged argument words.
     unsafe { record_at(site, func_bits, args_ptr, nargs) };
     // SAFETY: the recording shim's contract covers ctx, args_ptr and out.
     unsafe { neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out) }

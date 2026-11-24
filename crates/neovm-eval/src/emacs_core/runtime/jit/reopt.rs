@@ -436,6 +436,7 @@ pub(crate) unsafe fn note_deopt(
     origin: LeafOrigin<'_>,
     event: DeoptEvent<'_>,
 ) -> ReoptVerdict {
+    // SAFETY: caller guarantees `ctx` points to the live owner `Context` for this deopt recording.
     unsafe { note_deopt_for_source(ctx, func, func, leaf, origin, event, None) }
 }
 
@@ -457,6 +458,7 @@ pub(crate) unsafe fn note_deopt_chain(
     physical_pc: usize,
     event: DeoptEvent<'_>,
 ) -> ReoptVerdict {
+    // SAFETY: caller guarantees `ctx` points to the live owner `Context` for this deopt recording.
     unsafe { note_deopt_for_source(ctx, physical, inner, leaf, origin, event, Some(physical_pc)) }
 }
 
@@ -492,6 +494,7 @@ unsafe fn note_deopt_for_source(
             } else {
                 origin
             };
+            // SAFETY: caller guarantees `ctx` points to the live owner `Context` for this deopt recording.
             unsafe { classify(ctx, func.executable_ops(), leaf, classify_origin, pc, stack) }
         }
     };

@@ -564,6 +564,7 @@ impl TaggedHeap {
             .map(|o| o.header)
             .collect();
         for ptr in veclike {
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
             if unsafe { self.veclike_has_young_child(ptr) } {
                 let value = unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) };
                 self.remember_owner(value);
@@ -618,6 +619,7 @@ impl TaggedHeap {
             out
         };
         for header in tenured {
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
             unsafe { self.remember_tenured_owner_if_collectible_children(header) };
         }
         // -- PAGE-TENURED objects (stage 3): the arenas' tenured slots are on
@@ -660,9 +662,11 @@ impl TaggedHeap {
     ) {
         let kind = unsafe { (*header).kind };
         let has_collectible = match kind {
+            // SAFETY: caller guarantees `header` points to a live tenured `GcHeader` owned by `self`.
             HeapObjectKind::VecLike => unsafe {
                 self.veclike_has_young_child(header as *mut VecLikeHeader)
             },
+            // SAFETY: caller guarantees `header` points to a live tenured `GcHeader` owned by `self`.
             HeapObjectKind::String => unsafe { self.heap_object_children(header) }
                 .iter()
                 .any(|c| self.permanent_child_needs_trace(*c)),
@@ -692,6 +696,7 @@ impl TaggedHeap {
     /// readable under collector exclusivity.
     unsafe fn veclike_has_young_child(&self, ptr: *mut VecLikeHeader) -> bool {
         let mut young = false;
+        // SAFETY: caller guarantees `ptr` points to a live `VecLikeHeader` owned by `self`.
         unsafe {
             Self::for_each_veclike_child(
                 self.collector_tables(),
@@ -973,6 +978,7 @@ impl TaggedHeap {
                 // verifier never sees an unmarked weak child. This mirrors GNU's
                 // `mark_object` PVEC_HASH_TABLE (alloc.c): weak tables register
                 // themselves and do NOT mark their contents.
+                // SAFETY: `ptr` was decoded from a live `VecLike` `TaggedValue` during marking.
                 if let Some(weak_children) = unsafe { self.register_weak_hash_table_for_sweep(ptr) }
                 {
                     for child in weak_children {
@@ -984,6 +990,7 @@ impl TaggedHeap {
                     // dump-partition verifier require every heap child of a
                     // permanent owner to be marked, or it is swept while still
                     // referenced (UAF).
+                    // SAFETY: `ptr` was decoded from a live `VecLike` `TaggedValue` during marking.
                     unsafe {
                         Self::for_each_veclike_child(
                             self.collector_tables(),
@@ -1148,6 +1155,7 @@ impl TaggedHeap {
             .collect();
         for (ptr, ty) in veclike {
             let owner = format!("{ty:?}");
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
             for child in unsafe { self.collect_veclike_children(ptr) } {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     record(&owner, child);
@@ -1219,6 +1227,7 @@ impl TaggedHeap {
             } else {
                 format!("tenured:{kind:?}@{header:p}")
             };
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
             let children: Vec<TaggedValue> = unsafe { self.heap_object_children(header) };
             for child in children {
                 if child.is_heap_object() && !self.is_value_marked(child) {
@@ -1246,6 +1255,7 @@ impl TaggedHeap {
             } else {
                 format!("tenured-page:{kind:?}@{header:p}")
             };
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
             for child in unsafe { self.heap_object_children(header) } {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     record(&owner, child);
@@ -1322,6 +1332,7 @@ impl TaggedHeap {
         };
         for header in young {
             let kind = unsafe { (*header).kind };
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
             let children: Vec<TaggedValue> = unsafe { self.heap_object_children(header) };
             let owner = format!("young:{kind:?}");
             for child in children {
@@ -1341,6 +1352,7 @@ impl TaggedHeap {
         for header in self.collect_young_marked_page_slot_headers() {
             let kind = unsafe { (*header).kind };
             let owner = format!("young-page:{kind:?}");
+            // SAFETY: object header was walked from `self`'s live arena/boxed partition during world-stopped GC.
             for child in unsafe { self.heap_object_children(header) } {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     *violations.entry(owner.clone()).or_insert(0) += 1;
@@ -1394,6 +1406,7 @@ impl TaggedHeap {
     /// whose payload is readable without concurrent mutation.
     pub(super) unsafe fn heap_object_children(&self, header: *mut GcHeader) -> Vec<TaggedValue> {
         match unsafe { (*header).kind } {
+            // SAFETY: caller guarantees `ptr` points to a live `VecLikeHeader` owned by `self`.
             HeapObjectKind::VecLike => unsafe {
                 self.collect_veclike_children(header as *mut VecLikeHeader)
             },

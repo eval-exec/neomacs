@@ -438,9 +438,9 @@ impl CellWord {
     /// The word stored under `Forwarded` by [`Self::forwarded`].
     #[inline(always)]
     fn read_forwarded(&self) -> FwdRef {
-        // Only `CellWord::forwarded` stores under this tag, and it stores a
-        // live descriptor's header address.
-        FwdRef::from_address(self.load())
+        // SAFETY: only `CellWord::forwarded` stores under this tag, and it
+        // stores a live non-null `LispFwd` descriptor header address from `FwdRef::of`.
+        unsafe { FwdRef::from_address(self.load()) }
     }
 
     /// Decode under the tag the word was stored with.

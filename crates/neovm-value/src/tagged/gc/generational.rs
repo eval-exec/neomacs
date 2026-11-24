@@ -426,6 +426,7 @@ impl TaggedHeap {
                     debug_assert!(header.is_marked_at(self.mark_parity));
                     header.promote_to_old_generation();
                     let image_resident = header.flags.image_resident();
+                    // SAFETY: `ptr` is a live surviving object visited during world-stopped promotion.
                     let bytes = unsafe { self.collector_object_bytes(ptr) };
                     // Image provenance excludes this storage even before a
                     // partition cycle makes it permanent. Runtime hash

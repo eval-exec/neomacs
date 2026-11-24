@@ -80,6 +80,7 @@ impl TaggedHeap {
     /// `header` must point to a live, initialized `GcHeader` allocated on this heap.
     pub(super) unsafe fn note_black_born(&mut self, header: *mut GcHeader) {
         if self.generational.major_in_progress {
+            // SAFETY: caller guarantees `header` points to a newly initialized live heap object.
             unsafe { self.record_black_born_major(header) };
         }
     }

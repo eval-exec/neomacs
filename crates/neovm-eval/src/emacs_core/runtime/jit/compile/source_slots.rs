@@ -466,6 +466,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
     } else {
         // A framed entry is always a memory entry; the key is the bare
         // constant base (no flags).
+        // SAFETY: `ctx`/`ctx_ref`, `leaf`, `args_ptr[..nargs]`, and `out` uphold `neovm_jit_call_source_spec`'s native activation contract.
         match unsafe {
             call_spec_framed_run(
                 std::ptr::from_mut(ctx_ref).cast::<u8>(),
@@ -498,6 +499,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
             other => FastRun::Framed(other),
         }
     };
+    // SAFETY: `ctx`/`ctx_ref`, `leaf`, `args_ptr[..nargs]`, and `out` uphold `neovm_jit_call_source_spec`'s native activation contract.
     unsafe {
         call_spec_finish(
             ctx,

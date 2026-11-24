@@ -220,7 +220,9 @@ impl EraScope {
         if foreign {
             return Err(self.refuse(ScopedEraError::Transfer(TransferError::InstalledTls)));
         }
-        if let Err(reason) = super::retire_transfer_tls(self.root) {
+        // SAFETY: the era frame has completed and all participants have retired,
+        // while `self` still retains the sole backing allocation for `self.root`.
+        if let Err(reason) = unsafe { super::retire_transfer_tls(self.root) } {
             return Err(self.refuse(ScopedEraError::Transfer(reason)));
         }
         let owner = ManuallyDrop::into_inner(self.owner.take().expect("returned era owner"));

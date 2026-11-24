@@ -504,7 +504,9 @@ fn mapped_blv_default_never_uses_the_owned_cons_trailer_or_a_baked_remembered_fa
         cdr_or_next: ConsCdrWord::new(old_default.cons_cdr()),
     }));
     // SAFETY: leaked writable storage satisfies mapped range lifetime and
-    // alignment. Both BLV pointers are updated while the collector is idle.
+    // alignment. `replace_blv_defcell_for_test` updates `defcell` (and
+    // `valcell` while equal to `defcell`, which holds for `blv_fixture(false)`)
+    // while the collector is idle.
     let owner = unsafe {
         context.tagged_heap.register_mapped_cons_range(mapped, 1);
         Value::from_cons_ptr(mapped)

@@ -3552,15 +3552,15 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(
             let base = leaf.reloc_data.as_ptr();
             leaf.reloc_data[slot] = relocated;
             assert_eq!(leaf.reloc_data.as_ptr(), base);
+            // SAFETY: `ctx` is the live `Context` for this 0-arg selftest leaf,
+            // and the relocated variable slot points into the live symbol table.
             match unsafe { leaf.call(ctx as *mut u8, &[]) } {
                 super::compile::NativeRun::Ok(bits) => {
-                    assert_eq!(
-                        unsafe {
-                            /* SAFETY: JIT constant-pool word */
-                            Value::from_bits(bits)
-                        },
-                        Value::make_int(42)
-                    );
+                    // SAFETY: `NativeRun::Ok` carries a valid tagged Lisp value
+                    // word returned by the executed selftest leaf above, which
+                    // evaluated the relocated variable binding.
+                    let value = unsafe { Value::from_bits(bits) };
+                    assert_eq!(value, Value::make_int(42));
                 }
                 other => return Err(format!("relocated variable leaf: {other:?}")),
             }

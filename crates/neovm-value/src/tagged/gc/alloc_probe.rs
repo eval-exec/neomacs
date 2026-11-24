@@ -163,7 +163,9 @@ pub(crate) fn bytecode_backtraces() -> Vec<String> {
 /// `header` must point to a live, initialized GC object whose header and
 /// payload match its `kind` and `type_tag`.
 pub(crate) unsafe fn record(header: *const GcHeader, addr_set_len: usize) {
+    // SAFETY: `record`'s caller guarantees `header` points to a live initialized `GcHeader`.
     let bytes = unsafe { TaggedHeap::object_bytes_from_header(header) };
+    // SAFETY: `record`'s caller guarantees `header` points to a live initialized `GcHeader`.
     let k = unsafe { kind_index(header) };
     COUNTS[k][bucket(bytes)].fetch_add(1, Ordering::Relaxed);
     TOTAL_BYTES[k].fetch_add(bytes as u64, Ordering::Relaxed);

@@ -377,9 +377,12 @@ unsafe fn note_header(
 ) {
     let h = unsafe { &*header };
     let age = header_age(h);
+    // SAFETY: caller guarantees `header` points to a live initialized `GcHeader` owned by `heap`.
     let pacing = unsafe { heap.collector_object_bytes(header) };
+    // SAFETY: caller guarantees `header` points to a live initialized `GcHeader` owned by `heap`.
     let shared = unsafe { shared_bytecode_bytes(header) };
     let owned_payload = payload.capacity_bytes.saturating_sub(shared);
+    // SAFETY: caller guarantees `header` points to a live initialized `GcHeader` owned by `heap`.
     let text_properties = unsafe { text_property_storage(header) };
     let item = ages.get_mut(age);
     add(
@@ -450,8 +453,10 @@ fn arena_inventory<T: PagedObject>(
                 let payload = payload_layout(object);
                 add(
                     &mut out.known_text_property_capacity_bytes,
+                    // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
                     unsafe { text_property_storage(header) }.known_owned_capacity_bytes,
                 );
+                // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
                 let shared = unsafe { shared_bytecode_bytes(header) };
                 add(
                     &mut out.known_owned_payload_capacity_bytes,
@@ -459,6 +464,7 @@ fn arena_inventory<T: PagedObject>(
                 );
                 add(&mut out.known_payload_logical_bytes, payload.logical_bytes);
                 add(&mut out.bytecode_shared_reference_bytes, shared);
+                // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
                 unsafe {
                     note_header(
                         heap,
@@ -592,6 +598,7 @@ unsafe fn boxed_inventory(
     out: &mut MemoryInventory,
 ) {
     while !header.is_null() {
+        // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
         let class = unsafe { TaggedHeap::boxed_class(header) };
         let index = match out.boxed.iter().position(|item| item.class == class) {
             Some(index) => index,
@@ -603,15 +610,19 @@ unsafe fn boxed_inventory(
                 out.boxed.len() - 1
             }
         };
+        // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
         let payload = unsafe { header_payload(heap, header) };
+        // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
         let struct_bytes = unsafe { object_struct_bytes(header) };
         let item = &mut out.boxed[index];
         add(
             &mut item.known_text_property_capacity_bytes,
+            // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
             unsafe { text_property_storage(header) }.known_owned_capacity_bytes,
         );
         item.objects += 1;
         add(&mut item.object_struct_bytes, struct_bytes);
+        // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
         add(&mut item.pacing_bytes, unsafe {
             heap.collector_object_bytes(header)
         });
@@ -619,8 +630,10 @@ unsafe fn boxed_inventory(
             &mut item.known_owned_payload_capacity_bytes,
             payload
                 .capacity_bytes
+                // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
                 .saturating_sub(unsafe { shared_bytecode_bytes(header) }),
         );
+        // SAFETY: `header` is a live object walked from `heap`'s owned arena/boxed storage during inventory.
         unsafe {
             note_header(
                 heap,

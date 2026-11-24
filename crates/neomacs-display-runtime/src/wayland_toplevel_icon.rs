@@ -84,7 +84,11 @@ impl WaylandIconBackend {
 }
 
 impl WaylandIconSession {
-    fn connect(display: NonNull<c_void>) -> Result<WaylandIconBackend, ToplevelIconError> {
+    /// # Safety
+    /// `display` must be a valid, live `wl_display` pointer owned by the
+    /// caller's windowing backend that outlives the returned session on this
+    /// thread.
+    unsafe fn connect(display: NonNull<c_void>) -> Result<WaylandIconBackend, ToplevelIconError> {
         // SAFETY: the raw display comes from the live winit Window. The guest
         // backend never disconnects it, and the session stays on the render
         // thread where the Window outlives icon application.
@@ -118,7 +122,11 @@ impl WaylandIconSession {
         }))
     }
 
-    fn set_icon(
+    /// # Safety
+    /// `raw_toplevel` must be a live `xdg_toplevel` proxy belonging to the same
+    /// `wl_display` that `self` connected to, remaining valid for the duration
+    /// of this call.
+    unsafe fn set_icon(
         &mut self,
         raw_toplevel: NonNull<c_void>,
         icon_pixels: &RasterizedWindowIcon,
@@ -218,14 +226,21 @@ impl WaylandToplevelIconService {
             .is_none_or(|current| current.display() != display)
         {
             self.shutdown();
-            self.backend = Some(WaylandIconSession::connect(display)?);
+            // SAFETY: `display` was extracted from `window.display_handle()`,
+            // which stays live on this thread while the backend is shut down
+            // before the window drops.
+            self.backend = Some(unsafe { WaylandIconSession::connect(display) }?);
         }
         match self
             .backend
             .as_mut()
             .expect("backend was initialized above")
         {
-            WaylandIconBackend::Protocol(session) => session.set_icon(raw_toplevel, icon_pixels),
+            WaylandIconBackend::Protocol(session) => {
+                // SAFETY: `raw_toplevel` comes from `window.xdg_toplevel()` on
+                // the same live `window` and `wl_display` as `session`.
+                unsafe { session.set_icon(raw_toplevel, icon_pixels) }
+            }
             WaylandIconBackend::DesktopEntryOnly { .. } => Ok(()),
         }
     }

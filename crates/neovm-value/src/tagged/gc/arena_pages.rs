@@ -651,6 +651,7 @@ impl<T: PagedObject> Drop for ObjectPage<T> {
         } else if std::mem::needs_drop::<T>() {
             self.drop_objects::<false>();
         }
+        // SAFETY: `storage` came from `alloc_storage` and all live slots in the page have been finalized or released.
         unsafe { Self::free_storage(self.storage) };
     }
 }
@@ -1356,6 +1357,7 @@ impl<T: PagedObject> ObjectArena<T> {
                             // The first sweep precedes image promotion. Loader
                             // provenance already proves these survivors immortal;
                             // they must not enlarge gc-cons-percentage's census.
+                            // SAFETY: `slot` is a live marked object in this arena page during world-stopped sweep.
                             live_bytes = live_bytes.saturating_add(unsafe {
                                 TaggedHeap::object_bytes_from_header(slot as *const GcHeader)
                             });
@@ -1398,6 +1400,7 @@ impl<T: PagedObject> ObjectArena<T> {
     pub(super) fn release_empty_pages(&mut self) -> usize {
         let stale = self.spare_unused_floor.min(self.spare_storage.len());
         for storage in self.spare_storage.drain(..stale) {
+            // SAFETY: `storage` came from `alloc_storage` and all live slots in the page have been finalized or released.
             unsafe { ObjectPage::<T>::free_storage(storage) };
         }
         self.spare_unused_floor = self.spare_storage.len();
@@ -1557,6 +1560,7 @@ impl<T: PagedObject> ObjectArena<T> {
 impl<T: PagedObject> Drop for ObjectArena<T> {
     fn drop(&mut self) {
         for storage in self.spare_storage.drain(..) {
+            // SAFETY: `storage` came from `alloc_storage` and all live slots in the page have been finalized or released.
             unsafe { ObjectPage::<T>::free_storage(storage) };
         }
     }

@@ -493,7 +493,9 @@ impl EmacsQuery {
         node: ffi::TSNode,
         byte_range: Option<Range<usize>>,
     ) -> Result<Vec<RawQueryMatch>, &'static str> {
-        let cursor = RawQueryCursor::new(self.raw, node, byte_range)?;
+        // SAFETY: `self.raw` is a live `TSQuery` owned by `self` for the
+        // duration of `&self`, and `cursor` is dropped before `matches` returns.
+        let cursor = unsafe { RawQueryCursor::new(self.raw, node, byte_range) }?;
         let mut matches = Vec::new();
         loop {
             let mut raw_match = MaybeUninit::<ffi::TSQueryMatch>::uninit();
@@ -579,7 +581,11 @@ struct RawQueryCursor {
 }
 
 impl RawQueryCursor {
-    fn new(
+    /// # Safety
+    /// `query` must point to a live `TSQuery` that outlives the returned
+    /// `RawQueryCursor`, and `node` must belong to a live tree compatible with
+    /// that query.
+    unsafe fn new(
         query: NonNull<ffi::TSQuery>,
         node: ffi::TSNode,
         byte_range: Option<Range<usize>>,

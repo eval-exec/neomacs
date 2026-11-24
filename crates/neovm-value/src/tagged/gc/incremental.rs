@@ -807,6 +807,7 @@ impl TaggedHeap {
             // first-cycle window of the type sim) before being classified.
             let addr = ptr as usize;
             if (addr >= self.dump_addr_lo && addr < self.dump_addr_hi)
+                // SAFETY: `ptr` was decoded from a `VecLike` `TaggedValue` during incremental marking.
                 || !unsafe { self.owns_live_veclike_object(ptr as *const u8) }
             {
                 if self.mark_mapped_veclike(ptr) {
@@ -2012,6 +2013,7 @@ impl TaggedHeap {
                     },
                     VecLikeType::Sqlite => {
                         if self.deferring_native_reclaims() {
+                            // SAFETY: unmarked boxed object was just unlinked from `self`'s live list for deferred finalization.
                             unsafe { self.push_deferred_sqlite(ptr as *mut SqliteObj) };
                             return;
                         }
@@ -2041,6 +2043,7 @@ impl TaggedHeap {
                     VecLikeType::UserPtr => {
                         let up = ptr as *mut UserPtrObj;
                         if self.deferring_native_reclaims() {
+                            // SAFETY: unmarked boxed object was just unlinked from `self`'s live list for deferred finalization.
                             unsafe { self.push_deferred_user_ptr(up) };
                             return;
                         }
@@ -2065,6 +2068,7 @@ impl TaggedHeap {
                     VecLikeType::ModuleFunction => {
                         let mf = ptr as *mut ModuleFunctionObj;
                         if self.deferring_native_reclaims() {
+                            // SAFETY: unmarked boxed object was just unlinked from `self`'s live list for deferred finalization.
                             unsafe { self.push_deferred_module_function(mf) };
                             return;
                         }

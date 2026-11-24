@@ -301,14 +301,20 @@ macro_rules! bare_trampoline {
             let (c, active) = unsafe { leaf_enter(ctx, &$spec) };
             let word = match $fast(c, &[a, b, Value::NIL, Value::NIL]) {
                 Some(value) => value.bits() as i64,
-                None => $rest(ctx, a, b),
+                // SAFETY: `ctx` satisfies this extern-C shim's live owner
+                // `Context` contract for the full duration of the call.
+                None => unsafe { $rest(ctx, a, b) },
             };
             leaf_finish(active, c, word)
         }
 
+        /// # Safety
+        /// `ctx` must point to the live owner `Context` for the duration of the
+        /// contained leaf call.
         #[cold]
         #[inline(never)]
-        fn $rest(ctx: *const Context, a: Value, b: Value) -> i64 {
+        unsafe fn $rest(ctx: *const Context, a: Value, b: Value) -> i64 {
+            // SAFETY: caller upholds the live owner `Context` contract for `ctx`.
             unsafe { leaf_contained(ctx, &$spec, |c| $body(c, a, b)) }
         }
     };

@@ -281,6 +281,7 @@ impl DirectSite {
         let self_only = jit_direct_sites() == DirectSitesMode::SelfOnly;
         if self_only {
             let source = rt.self_direct_source?;
+            // SAFETY: `expected` is a live JIT constant-pool tagged callee word.
             if !unsafe { self_only::expected_is_source(expected, source) }
                 || params.fixed_arity() != Some(nargs)
             {
@@ -1158,13 +1159,14 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_finish(
     } else {
         super::dispatch::FastRun::Raw(status)
     };
+    // SAFETY: `expected` is a live JIT constant-pool tagged callee word.
+    let expected = unsafe { Value::from_bits(expected as usize) };
+    // SAFETY: `ctx`, `leaf`, `args[..nargs]`, and `out` uphold this direct-call
+    // finish shim's native activation contract for the duration of the call.
     unsafe {
         super::dispatch::call_spec_finish(
             ctx,
-            unsafe {
-                /* SAFETY: JIT constant-pool word */
-                Value::from_bits(expected as usize)
-            },
+            expected,
             leaf,
             args,
             nargs,

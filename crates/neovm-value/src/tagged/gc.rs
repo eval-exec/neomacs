@@ -2209,6 +2209,7 @@ impl TaggedHeap {
         stats: &mut Vec<BoxedKindLayoutStats>,
     ) {
         while !header.is_null() {
+            // SAFETY: `header` is a live node on `self`'s boxed object list visited with exclusive heap access.
             let class = unsafe { Self::boxed_class(header) };
             let index = stats
                 .iter()
@@ -2224,6 +2225,7 @@ impl TaggedHeap {
             item.objects += 1;
             item.known_bytes = item
                 .known_bytes
+                // SAFETY: `header` is a live node on `self`'s boxed object list visited with exclusive heap access.
                 .saturating_add(unsafe { self.collector_object_bytes(header) });
             unsafe {
                 item.tenured_objects += usize::from((*header).tenured);

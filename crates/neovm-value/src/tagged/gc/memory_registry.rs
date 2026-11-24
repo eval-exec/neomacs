@@ -571,6 +571,7 @@ impl TaggedHeap {
             }
         }
         for object in &self.mapped_veclike_objects {
+            // SAFETY: `object.header` is a live mapped `VecLikeHeader` registered in `self`.
             let payload = unsafe { Self::veclike_payload_layout(object.header) };
             if payload.owned {
                 mapped.copied_veclike_payloads += 1;
@@ -581,6 +582,7 @@ impl TaggedHeap {
         }
 
         let mut boxed = Vec::new();
+        // SAFETY: `self.all_objects` and `self.tenured_objects` are live intrusive boxed lists owned by `self`.
         unsafe {
             self.note_boxed_list_layout(self.all_objects, &mut boxed);
             self.note_boxed_list_layout(self.tenured_objects, &mut boxed);

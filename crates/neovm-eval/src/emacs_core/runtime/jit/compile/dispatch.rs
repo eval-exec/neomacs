@@ -387,7 +387,8 @@ pub(crate) unsafe extern "C" fn neovm_jit_aref(ctx: *mut u8, array: i64, index: 
     };
     match aref_fast(array, index) {
         Some(value) => value.bits() as i64,
-        None => aref_slow(ctx, array, index),
+        // SAFETY: `ctx` satisfies `neovm_jit_aref`'s live dormant `Context` contract.
+        None => unsafe { aref_slow(ctx, array, index) },
     }
 }
 
@@ -425,9 +426,11 @@ thread_local! {
         const { std::cell::Cell::new(0) };
 }
 
+/// # Safety
+/// `ctx` must point to the live dormant `Context` for the calling JIT frame.
 #[cold]
 #[inline(never)]
-fn aref_slow(ctx: *mut u8, array: Value, index: Value) -> i64 {
+unsafe fn aref_slow(ctx: *mut u8, array: Value, index: Value) -> i64 {
     #[cfg(test)]
     ARRAY_SHIM_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
@@ -757,7 +760,8 @@ pub(crate) unsafe extern "C" fn neovm_jit_memq(ctx: *mut u8, elt: i64, list: i64
     let ctx_ref = unsafe { &*(ctx as *const Context) };
     match memq_fast(ctx_ref, elt, list) {
         Ok(value) => value.bits() as i64,
-        Err(tail) => list_slow_memq_from(ctx, elt, list, tail),
+        // SAFETY: `ctx` satisfies `neovm_jit_memq`'s live dormant `Context` contract.
+        Err(tail) => unsafe { list_slow_memq_from(ctx, elt, list, tail) },
     }
 }
 
@@ -783,7 +787,8 @@ pub(crate) unsafe extern "C" fn neovm_jit_assq(ctx: *mut u8, key: i64, list: i64
     let ctx_ref = unsafe { &*(ctx as *const Context) };
     match assq_fast(ctx_ref, key, list) {
         Some(value) => value.bits() as i64,
-        None => list_slow(ctx, pure_assq, key, list),
+        // SAFETY: `ctx` satisfies `neovm_jit_assq`'s live dormant `Context` contract.
+        None => unsafe { list_slow(ctx, pure_assq, key, list) },
     }
 }
 
@@ -810,7 +815,8 @@ pub unsafe extern "C" fn neovm_jit_setcar_collection(ctx: *mut u8, cell: i64, ne
     if compiled_cons_store(cell, new_car, false) {
         return new_car.bits() as i64;
     }
-    list_slow(ctx, pure_setcar, cell, new_car)
+    // SAFETY: `ctx` satisfies `neovm_jit_setcar_collection`'s live dormant `Context` contract.
+    unsafe { list_slow(ctx, pure_setcar, cell, new_car) }
 }
 
 // The legacy host entry retains the original full setter without a compiled
@@ -835,7 +841,8 @@ pub unsafe extern "C" fn neovm_jit_setcar(ctx: *mut u8, cell: i64, new_car: i64)
     if neovm_value::tagged::mutate::set_cons_car(cell, new_car) {
         return new_car.bits() as i64;
     }
-    list_slow(ctx, pure_setcar, cell, new_car)
+    // SAFETY: `ctx` satisfies `neovm_jit_setcar`'s live owner `Context` contract.
+    unsafe { list_slow(ctx, pure_setcar, cell, new_car) }
 }
 
 /// `Op::Setcdr` (GNU `Bsetcdr`): [`neovm_jit_setcar`]'s twin.
@@ -856,7 +863,8 @@ pub unsafe extern "C" fn neovm_jit_setcdr_collection(ctx: *mut u8, cell: i64, ne
     if compiled_cons_store(cell, new_cdr, true) {
         return new_cdr.bits() as i64;
     }
-    list_slow(ctx, pure_setcdr, cell, new_cdr)
+    // SAFETY: `ctx` satisfies `neovm_jit_setcdr_collection`'s live dormant `Context` contract.
+    unsafe { list_slow(ctx, pure_setcdr, cell, new_cdr) }
 }
 
 // The legacy host entry retains the original full setter without a compiled
@@ -881,7 +889,8 @@ pub unsafe extern "C" fn neovm_jit_setcdr(ctx: *mut u8, cell: i64, new_cdr: i64)
     if neovm_value::tagged::mutate::set_cons_cdr(cell, new_cdr) {
         return new_cdr.bits() as i64;
     }
-    list_slow(ctx, pure_setcdr, cell, new_cdr)
+    // SAFETY: `ctx` satisfies `neovm_jit_setcdr`'s live owner `Context` contract.
+    unsafe { list_slow(ctx, pure_setcdr, cell, new_cdr) }
 }
 
 /// A window hit can be an unobserved hole in the observation envelope.
@@ -936,9 +945,11 @@ fn compiled_cons_store(cell: Value, value: Value, cdr: bool) -> bool {
     })
 }
 
+/// # Safety
+/// `ctx` must point to the live dormant `Context` for the calling JIT frame.
 #[cold]
 #[inline(never)]
-fn list_slow(ctx: *mut u8, builtin: JitBuiltin2Pure, a: Value, b_: Value) -> i64 {
+unsafe fn list_slow(ctx: *mut u8, builtin: JitBuiltin2Pure, a: Value, b_: Value) -> i64 {
     #[cfg(test)]
     ARRAY_SHIM_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
@@ -962,9 +973,12 @@ fn list_slow(ctx: *mut u8, builtin: JitBuiltin2Pure, a: Value, b_: Value) -> i64
 /// already checked. `list` stays the original head, which only the exact
 /// fallback (improper, circular, or budget-exhausted) reads, so every error
 /// and its data are unchanged.
+///
+/// # Safety
+/// `ctx` must point to the live dormant `Context` for the calling JIT frame.
 #[cold]
 #[inline(never)]
-fn list_slow_memq_from(ctx: *mut u8, elt: Value, list: Value, tail: Value) -> i64 {
+unsafe fn list_slow_memq_from(ctx: *mut u8, elt: Value, list: Value, tail: Value) -> i64 {
     #[cfg(test)]
     ARRAY_SHIM_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
@@ -1177,7 +1191,8 @@ pub unsafe extern "C" fn neovm_jit_aset_collection(
     if aset_collection_fast(array, index, value) {
         return value.bits() as i64;
     }
-    aset_slow(ctx, array, index, value)
+    // SAFETY: `ctx` satisfies `neovm_jit_aset_collection`'s live dormant `Context` contract.
+    unsafe { aset_slow(ctx, array, index, value) }
 }
 
 /// The original primitive array setter host entry. Knob-off generated code
@@ -1212,12 +1227,15 @@ pub(crate) unsafe extern "C" fn neovm_jit_aset(
     if aset_fast(array, index, value) {
         return value.bits() as i64;
     }
-    aset_slow(ctx, array, index, value)
+    // SAFETY: `ctx` satisfies `neovm_jit_aset`'s live owner `Context` contract.
+    unsafe { aset_slow(ctx, array, index, value) }
 }
 
+/// # Safety
+/// `ctx` must point to the live dormant `Context` for the calling JIT frame.
 #[cold]
 #[inline(never)]
-fn aset_slow(ctx: *mut u8, array: Value, index: Value, value: Value) -> i64 {
+unsafe fn aset_slow(ctx: *mut u8, array: Value, index: Value, value: Value) -> i64 {
     #[cfg(test)]
     ARRAY_SHIM_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
@@ -1514,11 +1532,13 @@ unsafe fn call_for_jit_from_native(
     args_ptr: *const i64,
     nargs: usize,
 ) -> neovm_value::error::EvalResult {
-    unsafe {
-        stack_call_from_native(ctx, target, args_ptr, nargs, |vm, args_start| {
-            vm.call_for_jit_stack(target, args_start, nargs)
-        })
-    }
+    let body = |vm: &mut crate::emacs_core::bytecode::vm::Vm<'_>, args_start: usize| {
+        // SAFETY: `stack_call_from_native` pushed `nargs` rooted arguments at
+        // `args_start` onto `vm`'s operand stack before invoking this closure.
+        unsafe { vm.call_for_jit_stack(target, args_start, nargs) }
+    };
+    // SAFETY: caller guarantees `args_ptr` addresses `nargs` valid tagged words.
+    unsafe { stack_call_from_native(ctx, target, args_ptr, nargs, body) }
 }
 
 /// [`call_for_jit_from_native`] for an armed spec site whose callee the leaf
@@ -1539,11 +1559,11 @@ unsafe fn call_resolved_for_jit_from_native(
     args_ptr: *const i64,
     nargs: usize,
 ) -> neovm_value::error::EvalResult {
-    unsafe {
-        stack_call_from_native(ctx, callee, args_ptr, nargs, |vm, args_start| {
-            vm.call_resolved_bytecode_for_jit_stack(called, callee, args_start, nargs)
-        })
-    }
+    let body = |vm: &mut crate::emacs_core::bytecode::vm::Vm<'_>, args_start: usize| {
+        vm.call_resolved_bytecode_for_jit_stack(called, callee, args_start, nargs)
+    };
+    // SAFETY: caller guarantees `args_ptr` addresses `nargs` valid tagged words.
+    unsafe { stack_call_from_native(ctx, callee, args_ptr, nargs, body) }
 }
 
 /// The operand-stack setup of the strict calls above: `root` scratch-rooted
@@ -1802,6 +1822,7 @@ macro_rules! spec_call_body {
                         true,
                     );
                 }
+                // SAFETY: `ctx_ref` is live for the call, `leaf` is pinned by the spec slot, and `args_ptr` addresses the call's rooted tagged words.
                 match unsafe {
                     call_spec_framed_run(
                         std::ptr::from_mut(ctx_ref).cast::<u8>(),
@@ -2007,6 +2028,7 @@ pub(super) unsafe fn call_spec_framed_run(
 ) -> NativeRun {
     let consts = (key & !SpecSlot::KEY_FLAGS) as usize as *const Value;
     jit_shim_contain!(ctx, NativeRun::Signal, {
+        // SAFETY: caller guarantees `ctx`, `consts`, and `args_ptr` are valid for this framed leaf invocation.
         unsafe { leaf.call_premarshaled_consts(ctx, consts, args_ptr) }
     })
 }
@@ -2083,10 +2105,12 @@ pub(super) unsafe fn call_spec_finish(
             FastRun::Raw(status) => {
                 #[cfg(any(test, debug_assertions, feature = "test-support"))]
                 cache::count_native_status(status);
+                // SAFETY: `ctx` is live for the call, `leaf` is pinned by the caller, and `args_ptr` addresses `nargs` rooted tagged words.
                 unsafe {
                     cache::direct_call_cold(std::ptr::from_mut(ctx), bc, callee, leaf, status)
                 }
             }
+            // SAFETY: `ctx` is live for the call, `leaf` is pinned by the caller, and `args_ptr` addresses `nargs` rooted tagged words.
             FastRun::Framed(outcome) => unsafe {
                 cache::finish_framed_run(std::ptr::from_mut(ctx), bc, callee, leaf, outcome)
             },
@@ -2102,6 +2126,7 @@ pub(super) unsafe fn call_spec_finish(
             crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx, budget_restore);
         }
         let outcome = match outcome {
+            // SAFETY: `ctx` is live for the call, `leaf` is pinned by the caller, and `args_ptr` addresses `nargs` rooted tagged words.
             NativeCallOutcome::Fallback => unsafe {
                 Vm::interp_fallback_native(std::ptr::from_mut(ctx), bc, callee, args_ptr, nargs)
             },
@@ -2272,6 +2297,7 @@ unsafe fn call_spec_slow(
                     // does (`cache::pin_redefined_function`) -- and
                     // `Vm::from_context`'s eager cache zero-fill was a
                     // measured per-call tax.
+                    // SAFETY: `ctx` is live and `args_ptr` addresses `nargs` valid tagged words for this spec-call slow path.
                     match unsafe {
                         Vm::call_armed_callee_native(ctx, called, target, slot, args_ptr, nargs)
                     } {
@@ -2280,11 +2306,13 @@ unsafe fn call_spec_slow(
                         // proof says the symbol names, so it resolves
                         // nothing again; its frame records the SYMBOL, as
                         // GNU's `Bcall` does and as the unarmed call below.
+                        // SAFETY: `ctx` is live and `args_ptr` addresses `nargs` valid tagged words for this spec-call slow path.
                         None => NativeCallOutcome::from_result(unsafe {
                             call_resolved_for_jit_from_native(ctx, called, target, args_ptr, nargs)
                         }),
                     }
                 } else {
+                    // SAFETY: `ctx` is live and `args_ptr` addresses `nargs` valid tagged words for this spec-call slow path.
                     NativeCallOutcome::from_result(unsafe {
                         call_for_jit_from_native(ctx, called, args_ptr, nargs)
                     })
@@ -2669,6 +2697,7 @@ unsafe fn call_fixed_builtin_from_native(
     if let Some(encoded) = SpecSlot::pack_screened_subr_entry(entry.fn_ptr, entry.slots) {
         slot.cache_screened_subr_entry(encoded);
     }
+    // SAFETY: `entry` was screened against this epoch's subr and `args_ptr` addresses `nargs` live tagged words.
     Some(unsafe { run_screened_fixed_builtin(ctx, sym_id, entry, args_ptr, nargs) })
 }
 
@@ -2856,6 +2885,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_subr_spec(
                 None
             };
             let res = match screened {
+                // SAFETY: `entry` was screened against this epoch's subr and `args_ptr` addresses `nargs` live tagged words.
                 Some(entry) => Some(unsafe {
                     run_screened_fixed_builtin(ctx, sym_id, entry, args_ptr, nargs)
                 }),
@@ -2879,17 +2909,15 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_subr_spec(
                     }
                 };
             }
+            // SAFETY: `expected` is a live JIT constant-pool tagged subr word.
+            let target = unsafe { Value::from_bits(expected as usize) };
+            // SAFETY: `args_ptr` addresses `nargs` live tagged words and `out`
+            // is the calling JIT frame's writable result slot.
             return unsafe {
-                call_stack_builtin_from_native(
-                    ctx,
-                    sym_id,
-                    Value::from_bits(expected as usize),
-                    args_ptr,
-                    nargs,
-                    out,
-                )
+                call_stack_builtin_from_native(ctx, sym_id, target, args_ptr, nargs, out)
             };
         }
+        // SAFETY: `ctx`, `args_ptr[..nargs]`, `out`, and constant-pool `expected` satisfy `neovm_jit_call_subr_spec`'s ABI contract.
         unsafe { subr_spec_call_reference(ctx, sym, expected, slot, args_ptr, nargs, out) }
     })
 }
@@ -2936,17 +2964,12 @@ unsafe fn subr_spec_call_reference(
     // in registers — no operand-stack copy, no span frame, no dispatch hop.
     // Everything else (Many/slice subrs, an arity the fixed entry rejects,
     // a debugger armed) takes the stack path below, the reference protocol.
+    // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
+    let sym_id = unsafe { SymId::from_raw(sym as u32) };
     if !ctx.debug_on_next_call_is_armed()
+        // SAFETY: `args_ptr` addresses `nargs` live tagged words for this call.
         && let Some(res) = unsafe {
-            // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
-            call_fixed_builtin_from_native(
-                ctx,
-                SymId::from_raw(sym as u32),
-                target,
-                slot,
-                args_ptr,
-                nargs,
-            )
+            call_fixed_builtin_from_native(ctx, sym_id, target, slot, args_ptr, nargs)
         }
     {
         return match res {
@@ -2961,17 +2984,9 @@ unsafe fn subr_spec_call_reference(
             }
         };
     }
-    // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
-    unsafe {
-        call_stack_builtin_from_native(
-            ctx,
-            SymId::from_raw(sym as u32),
-            target,
-            args_ptr,
-            nargs,
-            out,
-        )
-    }
+    // SAFETY: `args_ptr` addresses `nargs` live tagged words and `out` is the
+    // calling JIT frame's writable result slot.
+    unsafe { call_stack_builtin_from_native(ctx, sym_id, target, args_ptr, nargs, out) }
 }
 
 /// Stack-argument fallback for an armed native subr call. Keep its argument

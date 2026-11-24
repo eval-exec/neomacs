@@ -1241,6 +1241,7 @@ impl CompiledLeaf {
     /// `vmctx` must be null (only for bodies performing no runtime re-entry)
     /// or point to the dormant owner-thread [`Context`] alive for the call.
     pub unsafe fn call(&self, vmctx: *mut u8, args: &[Value]) -> NativeRun {
+        // SAFETY: caller guarantees `vmctx`, `args`/`args_ptr`, and `consts` satisfy this leaf's native ABI contract.
         unsafe { self.call_consts(vmctx, core::ptr::null(), args) }
     }
 
@@ -1278,6 +1279,7 @@ impl CompiledLeaf {
             };
             arg_bits.push(rest.bits() as i64);
         }
+        // SAFETY: caller guarantees `vmctx`, `args`/`args_ptr`, and `consts` satisfy this leaf's native ABI contract.
         unsafe { self.invoke_native(vmctx, arg_bits.as_ptr(), consts) }
     }
 
@@ -1441,6 +1443,7 @@ impl CompiledLeaf {
     #[doc(hidden)]
     pub unsafe fn call_premarshaled(&self, vmctx: *mut u8, args_ptr: *const i64) -> NativeRun {
         debug_assert!(!vmctx.is_null(), "native-to-native requires a Context");
+        // SAFETY: caller guarantees `vmctx`, `args`/`args_ptr`, and `consts` satisfy this leaf's native ABI contract.
         unsafe { self.invoke_native(vmctx, args_ptr, core::ptr::null()) }
     }
 
@@ -1472,6 +1475,7 @@ impl CompiledLeaf {
     ) -> NativeRun {
         debug_assert!(!vmctx.is_null(), "native-to-native requires a Context");
         debug_assert_eq!(self.entry_shape, EntryShape::Framed);
+        // SAFETY: caller guarantees `vmctx`, `args`/`args_ptr`, and `consts` satisfy this leaf's native ABI contract.
         unsafe { self.invoke_native_frame::<false, false>(vmctx, args_ptr, consts, None) }
     }
 
@@ -1497,9 +1501,11 @@ impl CompiledLeaf {
         consts: *const Value,
     ) -> NativeRun {
         match self.abi {
+            // SAFETY: caller guarantees `vmctx`, `args`/`args_ptr`, and `consts` satisfy this leaf's native ABI contract.
             LeafAbi::Memory => unsafe {
                 self.invoke_native_frame::<false, false>(vmctx, args_ptr, consts, None)
             },
+            // SAFETY: caller guarantees `vmctx`, `args`/`args_ptr`, and `consts` satisfy this leaf's native ABI contract.
             LeafAbi::Register { .. } => unsafe {
                 self.invoke_native_frame::<false, true>(vmctx, args_ptr, consts, None)
             },
@@ -1523,6 +1529,7 @@ impl CompiledLeaf {
         bind_frame: Option<(usize, usize)>,
     ) -> NativeRun {
         // An OSR entry always has the memory ABI (`LeafAbi::for_build`).
+        // SAFETY: caller guarantees `vmctx`, `args`/`args_ptr`, and `consts` satisfy this leaf's native ABI contract.
         unsafe { self.invoke_native_frame::<true, false>(vmctx, args_ptr, consts, bind_frame) }
     }
 
@@ -1705,6 +1712,7 @@ impl CompiledLeaf {
         }
         sweep_pending_root_floor(&bases);
         if status == STATUS_DEOPT_AT {
+            // SAFETY: caller guarantees `vmctx`, `args`/`args_ptr`, and `consts` satisfy this leaf's native ABI contract.
             let outcome = unsafe { self.deopt_at_outcome(vmctx, bind_frame, cond_base) };
             if matches!(outcome, NativeRun::Signal)
                 && let Some(bases) = &bases
@@ -1753,6 +1761,7 @@ impl CompiledLeaf {
             // Everything below the fast path is a no-op unless a signal is
             // pending or this leaf registered frames — outlined so the hot
             // OK-exit stops paying their register spills.
+            // SAFETY: caller guarantees `vmctx`, `args`/`args_ptr`, and `consts` satisfy this leaf's native ABI contract.
             status = unsafe {
                 self.cold_frame_exit(vmctx, status, out, bind_frame, cond_base, bases.as_ref())
             };
@@ -2078,6 +2087,7 @@ impl CompiledLeaf {
             !self.needs_vmctx,
             "a body with inline heap sites reads its vmctx: run it on a real Context"
         );
+        // SAFETY: test helper invokes a self-contained leaf that does not dereference `vmctx`.
         match unsafe { self.call(core::ptr::null_mut(), args) } {
             NativeRun::Ok(bits) => Some(bits),
             NativeRun::Deopt | NativeRun::DeoptAt(_) => None,

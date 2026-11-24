@@ -252,6 +252,7 @@ unsafe fn credit_generic(
     nargs: i64,
     obs: *const LeafObs,
 ) {
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
     if nargs < 2 || !unsafe { credit_window_open(obs) } {
         return;
     }
@@ -307,6 +308,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_t2_call_prof(
     out: *mut i64,
     obs: *const LeafObs,
 ) -> i64 {
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
     unsafe { credit_generic(ctx, func_bits, args_ptr, nargs, obs) };
     // SAFETY: this shim's contract above covers ctx, args_ptr and out.
     unsafe { neovm_jit_call(ctx, func_bits, args_ptr, nargs, out) }
@@ -334,6 +336,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_t2_call_subr_prof(
     out: *mut i64,
     obs: *const LeafObs,
 ) -> i64 {
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
     if nargs < 2 || !unsafe { credit_window_open(obs) } {
         // SAFETY: this shim's contract covers ctx, args_ptr and out.
         return unsafe { neovm_jit_call_subr_spec(ctx, sym, expected, slot, args_ptr, nargs, out) };
@@ -374,6 +377,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_t2_call_feedback_prof(
     site: *const CallSiteFeedback,
     obs: *const LeafObs,
 ) -> i64 {
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
     unsafe { credit_generic(ctx, func_bits, args_ptr, nargs, obs) };
     // SAFETY: this shim's contract covers ctx, args_ptr, out and site.
     unsafe {
@@ -402,6 +406,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_t2_call_feedback_census(
     site: *const CallSiteFeedback,
     obs: *const LeafObs,
 ) -> i64 {
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
     unsafe { credit_generic(ctx, func_bits, args_ptr, nargs, obs) };
     // SAFETY: this shim's contract covers ctx, args_ptr, out and site.
     unsafe {
@@ -438,11 +443,14 @@ pub(crate) unsafe extern "C" fn neovm_jit_t2_call_use_prof(
     obs: *const LeafObs,
     loop_credit: i64,
 ) -> i64 {
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
     if unsafe { credit_window_open(obs) } {
         // Record before HOF credit can request: the decision sees the target
         // of the current call. The plain shim still owns the full Lisp call.
+        // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
         unsafe { super::call_feedback::record_at(site, func_bits, args_ptr, nargs) };
         if loop_credit != 0 {
+            // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
             unsafe { credit_generic(ctx, func_bits, args_ptr, nargs, obs) };
         }
     }
@@ -469,7 +477,9 @@ pub(crate) unsafe extern "C" fn neovm_jit_t2_apply_use_prof(
     site: *const CallSiteFeedback,
     obs: *const LeafObs,
 ) -> i64 {
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
     if unsafe { credit_window_open(obs) } {
+        // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
         unsafe { super::call_feedback::record_at(site, func_bits, args_ptr, nargs) };
     }
     // SAFETY: this shim's contract above covers ctx, args_ptr and out.
@@ -491,6 +501,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_t2_record_call_use_target(
     target: i64,
     obs: *const LeafObs,
 ) {
+    // SAFETY: `obs`, `site`, `ctx`, and `args_ptr[..nargs]` uphold this tier-2 profile shim's live activation contract.
     if unsafe { credit_window_open(obs) } {
         // SAFETY: the calling leaf keeps its source's table alive.
         unsafe { &*site }.observe_counted(unsafe {

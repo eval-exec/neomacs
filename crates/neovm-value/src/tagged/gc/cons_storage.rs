@@ -430,6 +430,7 @@ impl ConsCatalog {
     /// still exclusively owned. No catalog lock and no heap TLS.
     pub(super) fn mark_published_cons_card(&self, owner_addr: usize) {
         let base = self.card_base.load(Ordering::Acquire);
+        // SAFETY: `base` is the owning live `ConsBlock` containing `owner_addr`.
         unsafe { super::card_table::mark_published(base, owner_addr) };
     }
 
@@ -921,6 +922,7 @@ impl ConsCatalog {
                 // Bits above the rewound top were never set.
                 block.rewind_tail(tail.start as usize);
             } else {
+                // SAFETY: `tail.base` is an owned `ConsBlock` and `[tail.cursor, tail.cursor + unused)` are unallocated tail cells.
                 unsafe { ConsBlock::mark_run_at(tail.base, tail.cursor as usize, unused, false) };
                 // SAFETY: these exact unhanded cells are absent from every
                 // free list and exclusively owned by this batch.
@@ -1143,6 +1145,7 @@ impl ConsCatalog {
                     // Bits above the rewound top were never set.
                     block.rewind_tail(tail.cursor as usize);
                 } else {
+                    // SAFETY: `tail.base` is an owned `ConsBlock` and `[tail.cursor, tail.cursor + unused)` are unallocated tail cells.
                     unsafe {
                         ConsBlock::mark_run_at(tail.base, tail.cursor as usize, unused, false)
                     };
