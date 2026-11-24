@@ -284,7 +284,10 @@ pub struct ByteCodeFunction {
     /// GNU does not allocate a hash table for this: it executes directly from
     /// the byte string.  Keep Neomacs' bridge representation compact and cheap
     /// to restore; `Bswitch` is the only runtime user.
-    pub gnu_byte_offset_map: Option<Vec<GnuByteOffsetMapEntry>>,
+    ///
+    /// Crate-private. A write cannot change a shared lazy cell: its map is
+    /// decoded from the byte string, and this Vec is cloned per value.
+    pub(crate) gnu_byte_offset_map: Option<Vec<GnuByteOffsetMapEntry>>,
     /// Original GNU-format bytecode bytes from the .elc file or `make-byte-code`
     /// call.  NeoVM normally executes from `ops` (decoded IR), but elisp code
     /// like `byte-compile-make-closure` does `(aref FUN 1)` to read the raw
@@ -390,6 +393,12 @@ impl ByteCodeFunction {
     #[doc(hidden)]
     pub const fn offset_of_gnu_bytecode_bytes() -> usize {
         std::mem::offset_of!(Self, gnu_bytecode_bytes)
+    }
+
+    /// Layout pin. The field is crate-private; [`Self::set_gnu_byte_offset_map`] assigns it.
+    #[doc(hidden)]
+    pub const fn offset_of_gnu_byte_offset_map() -> usize {
+        std::mem::offset_of!(Self, gnu_byte_offset_map)
     }
 }
 
@@ -1011,6 +1020,20 @@ impl ByteCodeFunction {
         bytes
     }
 
+    /// Eager GNU byte-offset table. A lazy cell ignores this Vec.
+    #[inline(always)]
+    pub fn gnu_byte_offset_map(&self) -> Option<&[GnuByteOffsetMapEntry]> {
+        self.gnu_byte_offset_map.as_deref()
+    }
+
+    /// Replace the eager GNU byte-offset table. Does not reinstall a lazy
+    /// cell: the cell's map is decoded from the byte string, and this Vec is
+    /// not shared with that cell.
+    #[inline]
+    pub fn set_gnu_byte_offset_map(&mut self, map: Option<Vec<GnuByteOffsetMapEntry>>) {
+        self.gnu_byte_offset_map = map;
+    }
+
     #[inline]
     #[doc(hidden)]
     pub fn lazy_gnu_code(&self) -> &Option<std::sync::Arc<LazyGnuCode>> {
@@ -1092,6 +1115,19 @@ impl ByteCodeFunction {
     ) -> *mut Option<crate::tagged::header::LispByteVec> {
         // SAFETY: the caller guarantees the place.
         unsafe { &raw mut (*this).gnu_bytecode_bytes }
+    }
+    /// Place of `gnu_byte_offset_map` for the pdump stub initializer.
+    /// Writing the place does not reinstall a lazy cell: there is no
+    /// `&mut self`.
+    ///
+    /// # Safety
+    /// `this` is aligned for `ByteCodeFunction` and the place is valid to write.
+    #[doc(hidden)]
+    pub unsafe fn gnu_byte_offset_map_ptr(
+        this: *mut Self,
+    ) -> *mut Option<Vec<GnuByteOffsetMapEntry>> {
+        // SAFETY: the caller guarantees the place.
+        unsafe { &raw mut (*this).gnu_byte_offset_map }
     }
     #[cfg(feature = "jit")]
     #[inline]

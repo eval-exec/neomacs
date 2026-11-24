@@ -51,10 +51,10 @@ fn file_pdump_object_descriptors_stay_sparse() {
 fn dumped_gnu_bytecode_does_not_duplicate_derived_instructions() {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(Vec::new()));
     function.set_ops(vec![Op::Nil, Op::Return]);
-    function.gnu_byte_offset_map = Some(vec![
+    function.set_gnu_byte_offset_map(Some(vec![
         GnuByteOffsetMapEntry::new(0, 0),
         GnuByteOffsetMapEntry::new(1, 1),
-    ]);
+    ]));
     function.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
         0xC1, 0x87,
     ])));

@@ -319,6 +319,10 @@ fn bytecode_lazy_iterative_admission_preserves_shared_layout_and_eager_fallback(
         std::mem::offset_of!(OriginalFunction, env)
     );
     assert_eq!(
+        ByteCodeFunction::offset_of_gnu_byte_offset_map(),
+        std::mem::offset_of!(OriginalFunction, gnu_byte_offset_map)
+    );
+    assert_eq!(
         ByteCodeFunction::offset_of_gnu_bytecode_bytes(),
         std::mem::offset_of!(OriginalFunction, gnu_bytecode_bytes)
     );

@@ -176,10 +176,10 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
         b"Lazy stub docstring.".to_vec(),
     ));
     function.interactive = Some(Value::string("p"));
-    function.gnu_byte_offset_map = Some(vec![
+    function.set_gnu_byte_offset_map(Some(vec![
         GnuByteOffsetMapEntry::new(0, 0),
         GnuByteOffsetMapEntry::new(1, 1),
-    ]);
+    ]));
     // Bconstant0 (0xC0), Breturn (0x87).
     function.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
         0xC0, 0x87,

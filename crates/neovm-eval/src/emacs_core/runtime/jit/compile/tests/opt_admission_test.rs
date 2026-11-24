@@ -185,7 +185,7 @@ fn opt_admits_switch_with_raw_gnu_targets_and_equal_keys() {
     );
     // The table stores byte addresses 50/70, while native blocks use source
     // instruction indexes 5/7. The shared switch shim returns the raw address.
-    f.gnu_byte_offset_map = Some(
+    f.set_gnu_byte_offset_map(Some(
         [0, 1, 2, 30, 40, 50, 60, 70, 80]
             .into_iter()
             .enumerate()
@@ -193,7 +193,7 @@ fn opt_admits_switch_with_raw_gnu_targets_and_equal_keys() {
                 GnuByteOffsetMapEntry::new(byte_offset, instruction_index)
             })
             .collect(),
-    );
+    ));
     let leaf = compile(&ctx, &f);
     for arg in [
         symbol,

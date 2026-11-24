@@ -195,7 +195,7 @@ fn opaque_initial_bytecode(value: TaggedValue) -> bool {
             && f.docstring.is_none()
             && f.extra_slots.is_empty()
             && f.gnu_bytecode_bytes().is_none()
-            && f.gnu_byte_offset_map.is_none()
+            && f.gnu_byte_offset_map().is_none()
             && f.lazy_gnu_code().is_none()
     })
 }

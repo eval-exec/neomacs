@@ -125,7 +125,7 @@ fn traced(
     // Keep the original tables and their printed values intact. Relocate the
     // resolver's GNU-byte-offset map, so Switch still uses real source keys.
     use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
-    output.gnu_byte_offset_map = Some(match source.executable_gnu_byte_offset_map() {
+    output.set_gnu_byte_offset_map(Some(match source.executable_gnu_byte_offset_map() {
         Some(map) => map
             .iter()
             .map(|entry| GnuByteOffsetMapEntry {
@@ -141,7 +141,7 @@ fn traced(
                 instruction_index: pc as usize,
             })
             .collect(),
-    });
+    }));
     let result = tier0(ctx, &output, args);
     let mut trace_value = ctx.eval_str("opt-reference-trace").expect("read trace");
     let mut steps = Vec::new();
@@ -481,7 +481,7 @@ fn opt_reference_switch_resolves_gnu_offsets_and_equal_keys_like_tier0() {
             ..ParamShape::default()
         },
     );
-    function.gnu_byte_offset_map = Some(
+    function.set_gnu_byte_offset_map(Some(
         [0, 1, 2, 30, 40, 50, 60, 70, 80]
             .into_iter()
             .enumerate()
@@ -490,7 +490,7 @@ fn opt_reference_switch_resolves_gnu_offsets_and_equal_keys_like_tier0() {
                 instruction_index,
             })
             .collect(),
-    );
+    ));
     for argument in [
         symbol,
         Value::list(vec![symbol, Value::fixnum(7)]),

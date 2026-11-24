@@ -697,10 +697,10 @@ fn classic_fuser_header_scan_keeps_unused_pdump_bytecode_lazy() {
         vec![Op::Constant(0), Op::Return],
         vec![Value::make_int(42)],
     );
-    callee.gnu_byte_offset_map = Some(vec![
+    callee.set_gnu_byte_offset_map(Some(vec![
         GnuByteOffsetMapEntry::new(0, 0),
         GnuByteOffsetMapEntry::new(1, 1),
-    ]);
+    ]));
     callee.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
         0xC0, 0x87,
     ])));

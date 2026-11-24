@@ -4836,7 +4836,7 @@ fn a_switch_carries_known_fixnum_slots_to_its_arms() {
     f.set_ops(ops.to_vec());
     f.set_constants(constants.to_vec().into());
     f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
-    f.gnu_byte_offset_map = Some(map.clone());
+    f.set_gnu_byte_offset_map(Some(map.clone()));
     for arg in [Value::make_int(5), Value::make_int(-3)] {
         let native = leaf.call(ctx_ptr, &[arg]);
         let interp = {

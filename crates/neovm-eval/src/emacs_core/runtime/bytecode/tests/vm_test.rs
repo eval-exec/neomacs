@@ -3689,10 +3689,10 @@ fn switch_on_arg(table: Value) -> ByteCodeFunction {
         .into(),
     );
     func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(3));
-    func.gnu_byte_offset_map = Some(vec![
+    func.set_gnu_byte_offset_map(Some(vec![
         GnuByteOffsetMapEntry::new(8, 5),
         GnuByteOffsetMapEntry::new(12, 7),
-    ]);
+    ]));
     func
 }
 

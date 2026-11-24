@@ -250,7 +250,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         );
         self.set_ops(Vec::new());
         self.reset_to_deferred_gnu();
-        self.gnu_byte_offset_map = None;
+        self.set_gnu_byte_offset_map(None);
     }
     /// Operand-stack entry depth the verifier must assume, mirroring
     /// `run_frame`'s argument staging exactly: params-on-stack conventions
@@ -493,7 +493,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         let Some((ops, byte_offset_map)) = decoded? else {
             self.ops_mut().clear();
             self.reset_to_deferred_gnu();
-            self.gnu_byte_offset_map = None;
+            self.set_gnu_byte_offset_map(None);
             return Ok(());
         };
         self.set_ops(ops);
@@ -502,7 +502,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
             super::decode::verify_stack_effects(self.ops(), depth, self.max_stack().get())
         });
         unsafe { self.set_stack_verified(stack_verified) };
-        self.gnu_byte_offset_map = Some(byte_offset_map);
+        self.set_gnu_byte_offset_map(Some(byte_offset_map));
         Ok(())
     }
     /// Executable instructions, decoding a cold GNU byte string on first use.
@@ -555,7 +555,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                 let map = decoded.byte_offset_map();
                 (!map.is_empty()).then_some(map)
             }
-            None => self.gnu_byte_offset_map.as_deref(),
+            None => self.gnu_byte_offset_map(),
         }
     }
     /// Disassemble to a human-readable string.

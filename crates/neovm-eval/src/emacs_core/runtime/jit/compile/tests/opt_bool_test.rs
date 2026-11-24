@@ -837,14 +837,14 @@ fn cold_source(first: Op) -> ByteCodeFunction {
         ],
         4,
     );
-    source.gnu_byte_offset_map = Some(
+    source.set_gnu_byte_offset_map(Some(
         (0..15)
             .map(|instruction_index| GnuByteOffsetMapEntry {
                 byte_offset: instruction_index,
                 instruction_index,
             })
             .collect(),
-    );
+    ));
     source
 }
 

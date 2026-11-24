@@ -59,7 +59,7 @@ fn gnu_ir_is_decoded_only_on_first_access() {
         super::super::decode::decode_gnu_bytecode_with_offset_map(&raw, &mut constants).unwrap();
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     func.set_ops(ops.clone());
-    func.gnu_byte_offset_map = Some(offset_map);
+    func.set_gnu_byte_offset_map(Some(offset_map));
     func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(raw)));
 
     func.defer_gnu_decode();
@@ -81,7 +81,7 @@ fn cloning_deferred_gnu_code_shares_the_decoded_ir() {
     let raw = vec![135]; // return
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     func.set_ops(vec![Op::Return]);
-    func.gnu_byte_offset_map = Some(Vec::new());
+    func.set_gnu_byte_offset_map(Some(Vec::new()));
     func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(raw)));
     func.defer_gnu_decode();
     let decodes_before = super::lazy_gnu_decode_count_for_test();
