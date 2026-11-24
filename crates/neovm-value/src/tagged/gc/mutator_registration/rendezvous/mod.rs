@@ -11,6 +11,7 @@ pub use control::{Mode, Phase, Request};
 pub use keeper::AllStopped;
 pub use keeper::AllStoppedFailure;
 pub use keeper::SerialGrant;
+pub use keeper::{StopAttempt, StopPending};
 pub use owner::PollOutcome;
 pub use owner::RootedRetireFailure;
 pub use resume::ResumeGcImage;
@@ -582,10 +583,9 @@ pub(super) fn wait<'a>(
     wait_after_poison_check(registry, gate)
 }
 
-/// Bounded form of [`wait`]. A timeout is `Busy` only after the caller's
-/// own deadline; this helper returns the guard either way so the predicate
-/// runs again. Poison still refuses.
-#[cfg(any(test, feature = "test-support"))]
+/// Bounded form of [`wait`]. The caller owns the deadline; this helper
+/// returns the guard either way so the predicate runs again. Poison still
+/// refuses.
 pub(super) fn wait_timeout<'a>(
     registry: &'a Registry,
     gate: RegistryGuard<'a>,

@@ -468,6 +468,15 @@ macro_rules! era_operations {
                 self.core.stop()
             }
 
+            /// [`Self::stop`] bounded by BUDGET (L6.7 K8). A pending attempt
+            /// leaves the request standing; the next attempt continues it.
+            pub fn stop_within(
+                &self,
+                budget: std::time::Duration,
+            ) -> Result<StopAttempt<'_>, RendezvousError> {
+                self.core.stop_within(budget)
+            }
+
             /// Main-thread GC request. See [`EraCore::collect_requested`].
             #[cold]
             pub fn collect_requested(

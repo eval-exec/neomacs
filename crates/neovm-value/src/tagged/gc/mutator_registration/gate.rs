@@ -216,9 +216,9 @@ impl Registry {
     }
 
     /// Same wake as [`Self::wait`]. A timeout returns the guard so the caller
-    /// can recheck its predicate; it does not poison. Test rows use this to
-    /// bound a parked owner. Production waits stay on [`Self::wait`].
-    #[cfg(any(test, feature = "test-support"))]
+    /// can recheck its predicate; it does not poison. The keeper's bounded
+    /// stop (L6.7 K8) waits here, and test rows use it to bound a parked
+    /// owner. Owners still park on [`Self::wait`].
     pub(super) fn wait_timeout<'a>(
         &'a self,
         guard: RegistryGuard<'a>,

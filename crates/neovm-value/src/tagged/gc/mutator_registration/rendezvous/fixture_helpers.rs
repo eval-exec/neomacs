@@ -71,6 +71,7 @@ pub enum RootedRendezvousCase {
     KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
     KeeperReenteringAnEntryItHoldsRefusesAtOnce,
     KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop,
+    KeeperBoundedStopPendsAndKeepsItsEpoch,
 }
 
 impl RootedRendezvousCase {
@@ -121,6 +122,7 @@ impl RootedRendezvousCase {
         Self::KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
         Self::KeeperReenteringAnEntryItHoldsRefusesAtOnce,
         Self::KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop,
+        Self::KeeperBoundedStopPendsAndKeepsItsEpoch,
     ];
 }
 

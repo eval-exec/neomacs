@@ -1269,6 +1269,73 @@ fn keeper_grants_the_serial_head_only_inside_its_traced_stop_body<
     });
 }
 
+/// L6.7 K8. A bounded stop that a running owner has not met comes back
+/// pending, names that owner, and leaves the request standing: the owner
+/// still sees the same epoch, and the next attempt stops in it.
+fn keeper_bounded_stop_pends_and_keeps_its_epoch_body<K: EraKeeper + std::fmt::Debug + 'static>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1942, 1).unwrap();
+        let key = permit.key();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            let (running_tx, running_rx) = mpsc::channel::<()>();
+            let (poll_tx, poll_rx) = mpsc::channel::<()>();
+            let (seen_tx, seen_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let owner = scope.spawn(move || {
+                let mut owner = activate(permit, heap, 1942);
+                running_tx.send(()).unwrap();
+                // Running and not polling until the keeper's first attempt
+                // has come back.
+                receive(&poll_rx);
+                let epoch = retry(|| owner.wait_request());
+                seen_tx.send(epoch).unwrap();
+                retry(|| owner.acknowledge(epoch, &input));
+                receive(&release_rx);
+                apply(owner.begin_restore_retry(false).unwrap());
+                retire(owner, &input);
+            });
+            receive(&running_rx);
+            let first = retry(|| era.stop_within(Duration::from_millis(20)));
+            poll_tx.send(()).unwrap();
+            let seen: NonZeroU64 = receive(&seen_rx);
+            let pending = match first {
+                StopAttempt::Pending(pending) => pending,
+                StopAttempt::Stopped(stopped) => {
+                    complete(stopped);
+                    panic!("the first attempt stopped an owner that never polled");
+                }
+            };
+            let mut stopped = match retry(|| era.stop_within(Duration::from_secs(30))) {
+                StopAttempt::Stopped(stopped) => stopped,
+                StopAttempt::Pending(again) => {
+                    panic!("the next attempt did not stop: {again:?} after {pending:?}")
+                }
+            };
+            let epoch = stopped.epoch();
+            trace_owners(&mut stopped, &[key]);
+            complete(stopped);
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(
+                pending.epoch(),
+                Some(seen),
+                "the pending attempt names the standing epoch"
+            );
+            assert_eq!(
+                pending.waiting_on(),
+                &[key],
+                "it names the owner it waits on"
+            );
+            assert_eq!(epoch, seen, "the next attempt stops in the same epoch");
+        });
+        finish_era(era);
+    });
+}
+
 fn a6_ht_b9_table_scope_gate_contention_retries_before_job_body<
     K: EraKeeper + std::fmt::Debug + 'static,
 >(
@@ -1635,6 +1702,9 @@ pub(crate) fn run_rooted_mutator_case<K: EraKeeper + std::fmt::Debug + 'static>(
         }
         RootedRendezvousCase::KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop => {
             keeper_grants_the_serial_head_only_inside_its_traced_stop_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperBoundedStopPendsAndKeepsItsEpoch => {
+            keeper_bounded_stop_pends_and_keeps_its_epoch_body(rooted_era)
         }
     }
 }

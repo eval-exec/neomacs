@@ -1,22 +1,25 @@
 //! Unique keeper admission and epoch-bounded stopped access.
 
 use super::sync::atomic::Ordering;
+use std::convert::Infallible;
 use std::fmt;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[cfg(any(test, feature = "test-support"))]
 use super::super::a8_probes;
 use super::super::image::PublishedGcImage;
 use super::super::{
-    EraCore, EraKeeper, MutatorEntry, MutatorKey, RegistrationError, Registry, RegistryState,
+    EraCore, EraKeeper, MutatorEntry, MutatorKey, RegistrationError, Registry, RegistryGuard,
+    RegistryState,
 };
-use super::control::Phase;
+use super::control::{Mode, Phase};
 use super::{
     RendezvousError, StoppedRootAdmission, entry_state, finish_debt, membership, request,
-    verify_stopped, wait,
+    verify_stopped, wait, wait_timeout,
 };
 use crate::tagged::gc::scan_contract::ParallelStoppedMutatorsProof;
 use crate::tagged::transport::ParallelRootBatchReader;
@@ -115,6 +118,37 @@ impl fmt::Debug for AllStoppedFailure<'_> {
     }
 }
 
+/// One bounded attempt at the keeper's stop (L6.7 K8).
+#[must_use = "a stopped epoch must be completed; a pending one still stands"]
+#[derive(Debug)]
+pub enum StopAttempt<'era> {
+    Stopped(AllStopped<'era>),
+    /// The bound passed before every owner stopped.
+    Pending(StopPending),
+}
+
+/// A stop the owners have not all met yet. The request stands: owners that
+/// stopped stay stopped, and the next attempt continues the same epoch.
+/// Diagnostic data only; it carries no authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StopPending {
+    epoch: Option<NonZeroU64>,
+    waiting_on: Vec<MutatorKey>,
+}
+
+impl StopPending {
+    /// The standing epoch, or `None` while the request waits for the last
+    /// stop's resumes to drain.
+    pub fn epoch(&self) -> Option<NonZeroU64> {
+        self.epoch
+    }
+
+    /// The owners the attempt was still waiting on.
+    pub fn waiting_on(&self) -> &[MutatorKey] {
+        &self.waiting_on
+    }
+}
+
 impl<K: EraKeeper> EraCore<'_, K> {
     pub(crate) fn try_stop(&self) -> Result<Option<AllStopped<'_>>, RendezvousError> {
         let registry = self.registry();
@@ -143,7 +177,27 @@ impl<K: EraKeeper> EraCore<'_, K> {
         }))
     }
 
+    /// [`Self::stop`] bounded by BUDGET (L6.7 K8). When the bound passes
+    /// first, the attempt is pending and the request stands: the owners that
+    /// stopped stay stopped, and the next attempt continues the same epoch.
+    pub(crate) fn stop_within(&self, budget: Duration) -> Result<StopAttempt<'_>, RendezvousError> {
+        Ok(match self.stop_by(&Until(Instant::now() + budget))? {
+            Ok(stopped) => StopAttempt::Stopped(stopped),
+            Err(((), pending)) => StopAttempt::Pending(pending),
+        })
+    }
+
     pub(crate) fn stop(&self) -> Result<AllStopped<'_>, RendezvousError> {
+        match self.stop_by(&Unbounded)? {
+            Ok(stopped) => Ok(stopped),
+            Err((never, _)) => match never {},
+        }
+    }
+
+    fn stop_by<B: StopBound>(
+        &self,
+        bound: &B,
+    ) -> Result<Result<AllStopped<'_>, (B::Expired, StopPending)>, RendezvousError> {
         let registry = self.registry();
         keeper(registry)?;
         request(registry)?;
@@ -168,13 +222,13 @@ impl<K: EraKeeper> EraCore<'_, K> {
                     if gate.rendezvous.ready(&owners)? {
                         verify_stopped(registry, &gate)?;
                         gate.rendezvous.begin_trace(epoch, &owners)?;
-                        return Ok(AllStopped {
+                        return Ok(Ok(AllStopped {
                             registry,
                             epoch,
                             traced: false,
                             finished: false,
                             _thread: PhantomData,
-                        });
+                        }));
                     }
                 }
                 // A single keeper cannot wait for its own outstanding guard.
@@ -202,11 +256,98 @@ impl<K: EraKeeper> EraCore<'_, K> {
                     }
                 }
             }
+            if let Some(expired) = bound.expired() {
+                return Ok(Err((expired, pending(&gate)?)));
+            }
             // Event-driven wait atomically releases this predicate mutex.
             // Poison uses that same gate; a wake supplies no stop authority.
-            gate = wait(registry, gate)?;
+            gate = bound.wait(registry, gate)?;
         }
     }
+}
+
+/// How long one stop attempt waits for its owners.
+trait StopBound {
+    /// What the attempt yields when the bound passes first.
+    type Expired;
+    fn expired(&self) -> Option<Self::Expired>;
+    fn wait<'a>(
+        &self,
+        registry: &'a Registry,
+        gate: RegistryGuard<'a>,
+    ) -> Result<RegistryGuard<'a>, RendezvousError>;
+}
+
+/// [`EraCore::stop`]: wait as long as the owners take.
+struct Unbounded;
+
+impl StopBound for Unbounded {
+    type Expired = Infallible;
+
+    fn expired(&self) -> Option<Infallible> {
+        None
+    }
+
+    fn wait<'a>(
+        &self,
+        registry: &'a Registry,
+        gate: RegistryGuard<'a>,
+    ) -> Result<RegistryGuard<'a>, RendezvousError> {
+        wait(registry, gate)
+    }
+}
+
+/// [`EraCore::stop_within`]: give up waiting at the deadline.
+struct Until(Instant);
+
+impl StopBound for Until {
+    type Expired = ();
+
+    fn expired(&self) -> Option<()> {
+        (Instant::now() >= self.0).then_some(())
+    }
+
+    fn wait<'a>(
+        &self,
+        registry: &'a Registry,
+        gate: RegistryGuard<'a>,
+    ) -> Result<RegistryGuard<'a>, RendezvousError> {
+        wait_timeout(
+            registry,
+            gate,
+            self.0.saturating_duration_since(Instant::now()),
+        )
+    }
+}
+
+/// What a pending stop still waits on: the frozen owners that have not
+/// stopped, or, while the request is queued behind the last stop's resumes,
+/// the owners that still owe one.
+fn pending(gate: &RegistryState) -> Result<StopPending, RendezvousError> {
+    Ok(match gate.rendezvous.phase {
+        Phase::Stopping(epoch) => {
+            let owners = membership(gate)?;
+            let waiting_on = gate
+                .rendezvous
+                .frozen
+                .iter()
+                .copied()
+                .filter(|key| {
+                    owners.iter().any(|(owner, mode)| {
+                        owner == key && !matches!(mode, Mode::Stopped | Mode::NativeStopped)
+                    })
+                })
+                .collect();
+            StopPending {
+                epoch: Some(epoch),
+                waiting_on,
+            }
+        }
+        _ => StopPending {
+            epoch: None,
+            waiting_on: gate.rendezvous.debt.clone(),
+        },
+    })
 }
 
 impl<'era> AllStopped<'era> {
