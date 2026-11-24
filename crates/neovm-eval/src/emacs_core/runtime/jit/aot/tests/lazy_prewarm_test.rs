@@ -364,7 +364,8 @@ fn manifest_member_stream_yields_members_behind_the_interlock() {
     };
     let header = |fingerprint: &str| {
         format!(
-            "version {PRELOAD_MANIFEST_VERSION}\nabi_tag {ABI_TAG:08x}\nfingerprint {fingerprint}\nleaves 6\n"
+            "version {PRELOAD_MANIFEST_VERSION}\nabi_tag {ABI_TAG:08x}\nfingerprint {fingerprint}\nvec_layout {}\nleaves 6\n",
+            vec_slice_layout_token(),
         )
     };
     use PreloadClass::{AtTierUp, NonMember, Prewarm};

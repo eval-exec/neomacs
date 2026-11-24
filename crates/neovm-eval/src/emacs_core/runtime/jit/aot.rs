@@ -1691,7 +1691,8 @@ fn define_leaf_index_into_module(
 
 /// File name of the dump-time AOT preload shared object (beside the pdump).
 pub const PRELOAD_SO_NAME: &str = "libneomacs-preload.so";
-/// File name of the preload manifest (fingerprint interlock + per-name pre-keys).
+/// File name of the preload manifest (fingerprint and Vec-layout interlock
+/// + per-name pre-keys).
 pub const PRELOAD_MANIFEST_NAME: &str = "libneomacs-preload.manifest";
 /// Manifest format version (bump on any manifest schema change).
 ///
@@ -1705,6 +1706,8 @@ pub const PRELOAD_MANIFEST_NAME: &str = "libneomacs-preload.manifest";
 /// stale by construction.
 /// v3 (P4.2 A4): a member is classed `m` (profitable native, prewarmed from its
 /// first call) or `c` (call glue, served when the JIT would compile it).
+/// The same version requires a `vec_layout` header line. A manifest that
+/// omits it fails [`manifest_interlock_ok`], so the version stays 3.
 const PRELOAD_MANIFEST_VERSION: u32 = 3;
 
 /// A hashable loadup function's class in the preload manifest.
@@ -1859,6 +1862,8 @@ struct ParsedPreloadManifest {
     version: Option<u32>,
     abi_tag: Option<u32>,
     fingerprint: Option<String>,
+    /// Live `value_vec_slice_offsets` token (`{ptr:x}_{len:x}`, or `none`).
+    vec_layout: Option<String>,
     prekeys: Option<PreKeyMap>,
 }
 
@@ -1869,6 +1874,7 @@ fn parse_preload_manifest(text: &str) -> ParsedPreloadManifest {
     let mut version: Option<u32> = None;
     let mut abi_tag: Option<u32> = None;
     let mut fingerprint: Option<String> = None;
+    let mut vec_layout: Option<String> = None;
     let mut declared_leaves: Option<usize> = None;
     let mut map: PreKeyMap = PreKeyMap::new();
     let mut malformed = false;
@@ -1879,6 +1885,7 @@ fn parse_preload_manifest(text: &str) -> ParsedPreloadManifest {
             "version" => version = it.next().and_then(|v| v.parse().ok()),
             "abi_tag" => abi_tag = it.next().and_then(|v| u32::from_str_radix(v, 16).ok()),
             "fingerprint" => fingerprint = it.next().map(str::to_string),
+            "vec_layout" => vec_layout = it.next().map(str::to_string),
             "leaves" => declared_leaves = it.next().and_then(|v| v.parse().ok()),
             "leaf" => {
                 let parsed = (|| {
@@ -1921,14 +1928,17 @@ fn parse_preload_manifest(text: &str) -> ParsedPreloadManifest {
         version,
         abi_tag,
         fingerprint,
+        vec_layout,
         prekeys,
     }
 }
 
-/// The STALE INTERLOCK on a parsed manifest: `version`, `abi_tag`, and
-/// `fingerprint` must all match the RUNNING build, else the whole preload is
-/// skipped (→ JIT) — a foreign / stale / ABI-incompatible preload never
-/// mis-serves native code. Mismatches are logged at debug.
+/// The STALE INTERLOCK on a parsed manifest: `version`, `abi_tag`,
+/// `fingerprint`, and `vec_layout` must all match the RUNNING build, else
+/// the whole preload is skipped (→ JIT). Two stamped builds can share a
+/// fingerprint and still disagree on `value_vec_slice_offsets`, so the
+/// layout token is part of the identity. A missing token does not match.
+/// Mismatches are logged at debug.
 fn manifest_interlock_ok(parsed: &ParsedPreloadManifest) -> bool {
     if parsed.version != Some(PRELOAD_MANIFEST_VERSION) {
         tracing::debug!(
@@ -1953,15 +1963,24 @@ fn manifest_interlock_ok(parsed: &ParsedPreloadManifest) -> bool {
         );
         return false;
     }
+    let layout = vec_slice_layout_token();
+    if parsed.vec_layout.as_deref() != Some(layout.as_str()) {
+        tracing::debug!(
+            "aot-preload: manifest vec_layout mismatch (manifest={:?} running={layout}); skip→JIT",
+            parsed.vec_layout
+        );
+        return false;
+    }
     true
 }
 
 /// R2-B6: enumerate `ctx`'s loadup AOT candidates, build ONE preload object,
 /// link it to `out_dir/libneomacs-preload.so`, and write
 /// `out_dir/libneomacs-preload.manifest`. The manifest carries the running
-/// pdump's `fingerprint_hex` (the STALE INTERLOCK — the loader refuses a `.so`
-/// whose manifest fingerprint ≠ the running pdump, so a foreign/stale preload is
-/// a clean skip→JIT, never a crash), the ABI_TAG, the manifest version, and (v2,
+/// pdump's `fingerprint_hex` and the live Vec slice token (the STALE
+/// INTERLOCK — the loader refuses a `.so` whose manifest fingerprint or
+/// layout ≠ the running build, so a foreign/stale preload is a clean
+/// skip→JIT, never a crash), the ABI_TAG, the manifest version, and (v2,
 /// task #11) one PRE-KEY line per hashable required-only loadup fn: NAME +
 /// ops-count + arity + content hash, classed (v3, P4.2 A4) `m` (emitted preload
 /// member, prewarmed), `c` (emitted member that is call glue, served at its
@@ -2027,6 +2046,7 @@ pub(crate) fn build_and_link_preload(
         "fingerprint {}\n",
         crate::emacs_core::pdump::fingerprint_hex()
     ));
+    manifest.push_str(&format!("vec_layout {}\n", vec_slice_layout_token()));
     manifest.push_str(&format!("leaves {prekey_count}\n"));
     manifest.push_str(&prekey_lines);
     let manifest_path = out_dir.join(PRELOAD_MANIFEST_NAME);
@@ -4467,8 +4487,9 @@ fn load_unit(content_hash: u128) -> Option<std::sync::Arc<super::compile::Loaded
 
 // ---------------------------------------------------------------------------
 // R2-C1/C2: the dump-time PRELOAD — ONE `.so` (all loadup leaves) beside the
-// running executable, validated by a manifest fingerprint interlock + loaded
-// with RTLD_NOW (fail-closed). Distinct from the per-hash NEOVM_AOT_DIR index
+// running executable, validated by a manifest fingerprint and Vec-layout
+// interlock, then loaded with RTLD_NOW (fail-closed). Distinct from the
+// per-hash NEOVM_AOT_DIR index
 // above (R1c): the preload is a single unit serving every loadup entry by dlsym.
 // ---------------------------------------------------------------------------
 
@@ -4489,8 +4510,9 @@ pub(crate) fn preload_manifest_path_for_executable(exe: &std::path::Path) -> std
 
 /// Parse + validate the preload manifest at `manifest_path` against THIS image.
 /// Returns `true` only when the manifest header is well-formed AND its
-/// `version`, `abi_tag`, and `fingerprint` all match the running build — the
-/// STALE INTERLOCK: a foreign / stale / ABI-incompatible preload fails here so
+/// `version`, `abi_tag`, `fingerprint`, and `vec_layout` all match the
+/// running build — the STALE INTERLOCK: a foreign / stale / ABI-incompatible
+/// preload, or one baked with different Vec slice offsets, fails here so
 /// the loader skips it (→ JIT), never mis-serving native code built for a
 /// different image. Any parse/IO/mismatch → `false` (logged at debug). The v2
 /// pre-key section is NOT part of the interlock (a manifest with a valid header
@@ -4515,8 +4537,9 @@ fn preload_manifest_matches(manifest_path: &std::path::Path) -> bool {
 /// never the difference between serving and not serving a leaf the `.so` has).
 /// Re-reads + re-interlocks the manifest independently of [`load_preload`]'s
 /// validation: prepopulate runs once per startup, and a manifest swapped in
-/// between the two reads either carries the same fingerprint (same image →
-/// consistent pre-keys) or fails the interlock here (→ no pre-filter).
+/// between the two reads either carries the same fingerprint and Vec layout
+/// (same image → consistent pre-keys) or fails the interlock here (→ no
+/// pre-filter).
 fn load_preload_prekeys() -> Option<PreKeyMap> {
     // Test seam: directly-injected pre-keys let a unit test drive the pre-filter
     // without a real manifest beside the test binary.
@@ -4573,6 +4596,7 @@ fn for_each_manifest_member(text: &str, mut f: impl FnMut(&str, ManifestPreKey))
         version: None,
         abi_tag: None,
         fingerprint: None,
+        vec_layout: None,
         prekeys: None,
     };
     // The header lines precede the pre-keys (`build_and_link_preload`).
@@ -4585,6 +4609,7 @@ fn for_each_manifest_member(text: &str, mut f: impl FnMut(&str, ManifestPreKey))
                 header.abi_tag = it.next().and_then(|v| u32::from_str_radix(v, 16).ok());
             }
             Some("fingerprint") => header.fingerprint = it.next().map(str::to_string),
+            Some("vec_layout") => header.vec_layout = it.next().map(str::to_string),
             _ => {}
         }
     }

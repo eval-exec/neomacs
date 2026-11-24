@@ -339,6 +339,67 @@ fn aot_unit_index_refuses_a_placeholder_fingerprint_with_foreign_vec_offsets() {
     );
 }
 
+/// Two builds can share a pdump fingerprint and still disagree on
+/// `value_vec_slice_offsets`. The preload interlock carries that token.
+/// A foreign token, and a manifest that omits it, are refused.
+#[test]
+fn preload_interlock_refuses_a_foreign_vec_layout() {
+    let running = crate::emacs_core::pdump::fingerprint_hex();
+    let live = vec_slice_layout_token();
+    let foreign = match super::super::compile::jit_layout::heap::value_vec_slice_offsets() {
+        Some((pointer, length)) => {
+            format!("{:x}_{:x}", pointer.wrapping_add(1), length.wrapping_add(1))
+        }
+        None => "foreign".to_string(),
+    };
+    assert_ne!(live, foreign);
+
+    let manifest = |layout: Option<&str>| {
+        let mut text = format!(
+            "version {PRELOAD_MANIFEST_VERSION}\nabi_tag {ABI_TAG:08x}\nfingerprint {running}\n"
+        );
+        if let Some(layout) = layout {
+            text.push_str(&format!("vec_layout {layout}\n"));
+        }
+        text.push_str("leaves 1\n");
+        text.push_str(&manifest_leaf_line(
+            PreloadClass::Prewarm,
+            3,
+            1,
+            0xabc,
+            "member",
+        ));
+        text
+    };
+
+    let live_text = manifest(Some(&live));
+    assert!(
+        manifest_interlock_ok(&parse_preload_manifest(&live_text)),
+        "the running layout is admitted"
+    );
+    let mut seen = Vec::new();
+    assert!(for_each_manifest_member(&live_text, |name, _| {
+        seen.push(name.to_string())
+    }));
+    assert_eq!(seen, vec!["member".to_string()]);
+
+    let foreign_text = manifest(Some(&foreign));
+    assert!(
+        !manifest_interlock_ok(&parse_preload_manifest(&foreign_text)),
+        "a foreign slice pair is refused when the fingerprint matches"
+    );
+    let mut stale = Vec::new();
+    assert!(!for_each_manifest_member(&foreign_text, |name, _| {
+        stale.push(name.to_string())
+    }));
+    assert!(stale.is_empty());
+
+    assert!(
+        !manifest_interlock_ok(&parse_preload_manifest(&manifest(None))),
+        "a manifest with no layout token is refused"
+    );
+}
+
 /// The LIVE reloc set a test must pass to `load_leaf_from_unit` (audit #A):
 /// the function's own constant objects, re-collected in emit-time order.
 #[cfg(target_os = "linux")]
@@ -1585,6 +1646,11 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
         parsed.fingerprint.as_deref(),
         Some(crate::emacs_core::pdump::fingerprint_hex()),
         "manifest carries the running fingerprint (stale interlock)"
+    );
+    assert_eq!(
+        parsed.vec_layout.as_deref(),
+        Some(vec_slice_layout_token().as_str()),
+        "manifest carries the live Vec slice layout"
     );
     let map = parsed
         .prekeys
