@@ -7390,6 +7390,23 @@ fn clipped_invisible_ellipsis_continues_on_the_next_fresh_row() {
         continued.starts_with("...") && continued.contains(tail),
         "the continued ellipsis precedes the visible tail, rows={rows:?}"
     );
+    let text_rows: Vec<_> = trace
+        .matrix_rows
+        .iter()
+        .filter(|row| {
+            row.enabled && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+        })
+        .collect();
+    assert!(
+        text_rows.len() >= 2,
+        "expected at least two text rows for continued ellipsis, got {}",
+        text_rows.len()
+    );
+    assert_eq!(
+        text_rows[0].end_charpos, text_rows[1].start_charpos,
+        "the row before a continued invisible ellipsis must advance end_charpos past the skipped hidden span"
+    );
+    assert_eq!(text_rows[0].end_charpos, hidden_end);
 }
 
 #[test]

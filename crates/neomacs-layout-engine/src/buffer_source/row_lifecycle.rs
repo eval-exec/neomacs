@@ -1487,7 +1487,7 @@ impl BufferSourceInvisibleTextSkip {
             source_render,
             row_progress,
             request,
-            true,
+            Some(self.skip_to.max(0) as usize),
         )
     }
 }
@@ -1498,7 +1498,7 @@ fn place_invisible_ellipsis<FS: crate::neovm_bridge::FaceServices>(
     source_render: &mut TextRowSourceRenderState<'_, FS>,
     row_progress: &mut DisplaySourceRowProgressState<'_>,
     request: SyntheticTextAppendRequest,
-    continue_when_clipped: bool,
+    continue_source_end: Option<usize>,
 ) -> InvisibleEllipsisRowPlacement {
     let checkpoint = source_render.capture_glyph_checkpoint();
     let had_other_glyphs = checkpoint.text_glyph_count() > 0;
@@ -1512,8 +1512,10 @@ fn place_invisible_ellipsis<FS: crate::neovm_bridge::FaceServices>(
         }
         return InvisibleEllipsisRowPlacement::Settled;
     }
-    if continue_when_clipped && had_other_glyphs {
-        source_render.restore_glyph_checkpoint(checkpoint);
+    if let Some(source_end) = continue_source_end
+        && had_other_glyphs
+    {
+        source_render.restore_glyph_checkpoint_with_source_end(checkpoint, source_end);
         return InvisibleEllipsisRowPlacement::ContinueOnNextRow;
     }
     if let Some(progress) = rendered {
@@ -1661,7 +1663,7 @@ impl<'a> BufferSourceInvisibleTextRenderContext<'a> {
                 SyntheticTextMarker::InvisibleEllipsis,
                 ellipsis_text.as_deref(),
             ),
-            false,
+            None,
         );
     }
 }

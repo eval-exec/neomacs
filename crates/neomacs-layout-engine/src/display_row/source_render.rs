@@ -955,11 +955,15 @@ impl<'a> TextRowOutputRenderState<'a> {
 
     /// Truncate the current output row's drawn glyphs back to `checkpoint`,
     /// dropping glyphs the caller has decided belong on the next row.
-    fn restore_current_row_glyph_checkpoint(&mut self, checkpoint: DisplayRowGlyphCheckpoint) {
+    fn restore_current_row_glyph_checkpoint(
+        &mut self,
+        checkpoint: DisplayRowGlyphCheckpoint,
+        source_end: Option<usize>,
+    ) {
         self.output.current_row_output().apply_current_row_mutation(
             DisplayRowGlyphCheckpointRestoreMutation {
                 checkpoint,
-                source_end: None,
+                source_end,
             },
         );
     }
@@ -2030,9 +2034,23 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
     ///
     /// Word wrap drops a partial word this way. A clipped invisible ellipsis
     /// drops the dots that fit so the whole marker can open the next row.
+    #[cfg(test)]
     pub(crate) fn restore_glyph_checkpoint(&mut self, checkpoint: DisplayRowGlyphCheckpoint) {
         self.output_render
-            .restore_current_row_glyph_checkpoint(checkpoint);
+            .restore_current_row_glyph_checkpoint(checkpoint, None);
+    }
+
+    /// Roll the current row's drawn glyphs back to `checkpoint` and advance
+    /// the row's `end_charpos` to `source_end` (for a skipped invisible span
+    /// whose ellipsis continues on the next row, keeping `row->end` contiguous
+    /// with the continuation row's start as in GNU `display_line`).
+    pub(crate) fn restore_glyph_checkpoint_with_source_end(
+        &mut self,
+        checkpoint: DisplayRowGlyphCheckpoint,
+        source_end: usize,
+    ) {
+        self.output_render
+            .restore_current_row_glyph_checkpoint(checkpoint, Some(source_end));
     }
 
     pub(crate) fn restore_word_wrap_checkpoint(
