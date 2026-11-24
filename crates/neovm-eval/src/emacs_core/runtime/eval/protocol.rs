@@ -295,6 +295,12 @@ pub struct FontResolveRequest {
     pub character: EmacsChar,
     /// Fully merged face attributes; family-less fontset rules inherit this family.
     pub face: Face,
+    /// Face id redisplay sealed for this buffer position. `None` when the
+    /// position has no sealed face, or the caller has no buffer position
+    /// (string `font-at`, named `face-font`).
+    pub realized_face_id: Option<u32>,
+    /// Arena epoch that keys `realized_face_id`. Absent together with the id.
+    pub realized_face_epoch: Option<u64>,
 }
 
 pub trait DisplayHost {

@@ -4226,8 +4226,13 @@ pub(crate) fn resolve_font_match(
     frame_id: FrameId,
     character: neovm_value::emacs_char::EmacsChar,
     face: &RuntimeFace,
+    realized_fontset: Option<(u32, u64)>,
 ) -> Option<neovm_eval::emacs_core::eval::ResolvedFontMatch> {
     let (use_primary_font, char_script_table) = symbol_font_policy_inputs(eval);
+    let (realized_face_id, realized_face_epoch) = match realized_fontset {
+        Some((face_id, epoch)) => (Some(face_id), Some(epoch)),
+        None => (None, None),
+    };
     eval.display_host
         .as_mut()
         .and_then(|host| {
@@ -4236,10 +4241,29 @@ pub(crate) fn resolve_font_match(
                 frame_id,
                 character,
                 face: face.clone(),
+                realized_face_id,
+                realized_face_epoch,
             })
             .ok()
         })
         .flatten()
+}
+
+/// The face id redisplay sealed for this window's buffer position.
+///
+/// The hook is taken for the call so a nested `font-at` does not borrow it
+/// twice. `None` (no hook, or the layout engine already borrowed) keeps the
+/// implicit fontset.
+fn realized_fontset_at(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+    window_id: WindowId,
+    lisp_pos: i64,
+) -> Option<(u32, u64)> {
+    let mut hook = eval.realized_fontset_fn.take()?;
+    let found = hook(eval, frame_id.0, window_id.0, lisp_pos);
+    eval.realized_fontset_fn = Some(hook);
+    found
 }
 
 /// `(font-at POSITION &optional WINDOW STRING)` -- resolve the effective font
@@ -4320,7 +4344,9 @@ pub(crate) fn font_at(
         let Some(character) = neovm_value::emacs_char::EmacsChar::from_code(code) else {
             return Ok(Value::NIL);
         };
-        if let Some(matched) = resolve_font_match(eval, frame_id, character, &face) {
+        // A string position has no buffer face cache. GNU resolves it through
+        // `face_at_string_position`; this caller keeps the implicit fontset.
+        if let Some(matched) = resolve_font_match(eval, frame_id, character, &face, None) {
             return Ok(opened_font_from_resolved_match(&face, &matched));
         }
         return Ok(Value::NIL);
@@ -4374,7 +4400,8 @@ pub(crate) fn font_at(
                 vec![args[0], Value::fixnum(beg), Value::fixnum(end)],
             )
         })?;
-    if let Some(matched) = resolve_font_match(eval, frame_id, character, &face) {
+    let realized_fontset = realized_fontset_at(eval, frame_id, window_id, pos);
+    if let Some(matched) = resolve_font_match(eval, frame_id, character, &face, realized_fontset) {
         return Ok(opened_font_from_resolved_match(&face, &matched));
     }
     Ok(Value::NIL)
@@ -4407,7 +4434,7 @@ pub(crate) fn internal_char_font(
     let position = args[0];
     let ch_arg = args.get(1).copied().unwrap_or(Value::NIL);
 
-    let (frame_id, character, face) = if position.is_nil() {
+    let (frame_id, character, face, realized_fontset) = if position.is_nil() {
         let code = neovm_eval::emacs_core::builtins::expect_character_code(&ch_arg)?;
         let Some(character) = u32::try_from(code)
             .ok()
@@ -4425,7 +4452,9 @@ pub(crate) fn internal_char_font(
         }
         let face_table = realized_frame_face_table(eval, frame_id);
         let default_face = face_table.resolve("default");
-        (frame_id, character, default_face)
+        // A nil POSITION is the selected frame's default face, not a buffer
+        // position, so there is no realized face id to carry.
+        (frame_id, character, default_face, None)
     } else {
         let current_buffer_id = eval
             .edit
@@ -4511,10 +4540,12 @@ pub(crate) fn internal_char_font(
                 })?
         };
         let face = resolved_face_at_buffer_byte(eval, &face_table, buffer, bytepos);
-        (frame_id, character, face)
+        let realized_fontset = realized_fontset_at(eval, frame_id, window_id, pos);
+        (frame_id, character, face, realized_fontset)
     };
 
-    let Some(matched) = resolve_font_match(eval, frame_id, character, &face) else {
+    let Some(matched) = resolve_font_match(eval, frame_id, character, &face, realized_fontset)
+    else {
         return Ok(Value::NIL);
     };
     let Some(glyph_code) = matched.glyph_code else {

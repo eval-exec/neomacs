@@ -145,6 +145,23 @@ fn face_identity_hash(identity: &Face) -> u64 {
     hasher.finish()
 }
 
+/// Hit the attempt memo the same way [`FrameFaceAttempt::face_id_for_resolved`]
+/// does, without reserving a new id.
+fn lookup_resolved_face_id(
+    state: &FrameFaceAttemptState,
+    face: &crate::neovm_bridge::ResolvedFace,
+) -> Option<FaceId> {
+    let route = resolved_face_route_hash(face);
+    let hit = |memo: &ResolvedFaceMemo| {
+        memo.get(&route).and_then(|bucket| {
+            bucket.iter().find_map(|(memo_face, id)| {
+                (face.shares_resolved_identity(memo_face) || memo_face == face).then_some(*id)
+            })
+        })
+    };
+    hit(&state.resolved_memo).or_else(|| hit(&state.fresh_resolved_memo))
+}
+
 /// Routing hash for the attempt-local resolved-face memo. Same subset rule
 /// as [`face_identity_hash`]: equality is full `ResolvedFace::eq`.
 fn resolved_face_route_hash(face: &crate::neovm_bridge::ResolvedFace) -> u64 {
@@ -873,6 +890,15 @@ impl FrameFaceAttempt {
         face_id
     }
 
+    /// The id redisplay already sealed for `face`. A miss does not allocate:
+    /// font-at must not invent a face id the draw path will not share.
+    pub(crate) fn lookup_face_id_for_resolved(
+        &self,
+        face: &crate::neovm_bridge::ResolvedFace,
+    ) -> Option<FaceId> {
+        lookup_resolved_face_id(&self.state.borrow(), face)
+    }
+
     /// [`Self::stable_face_id`] with a memo keyed by the resolved face —
     /// this attempt's entries plus the arena's persistent memo folded at
     /// seal — so repeated checkpoints of the same face skip building the
@@ -887,22 +913,10 @@ impl FrameFaceAttempt {
         face: &crate::neovm_bridge::ResolvedFace,
         canonical: impl FnOnce() -> Face,
     ) -> FaceId {
-        let route = resolved_face_route_hash(face);
-        {
-            let state = self.state.borrow();
-            let hit = |memo: &ResolvedFaceMemo| {
-                memo.get(&route).and_then(|bucket| {
-                    bucket.iter().find_map(|(memo_face, id)| {
-                        (face.shares_resolved_identity(memo_face) || memo_face == face)
-                            .then_some(*id)
-                    })
-                })
-            };
-            if let Some(id) = hit(&state.resolved_memo).or_else(|| hit(&state.fresh_resolved_memo))
-            {
-                return id;
-            }
+        if let Some(id) = lookup_resolved_face_id(&self.state.borrow(), face) {
+            return id;
         }
+        let route = resolved_face_route_hash(face);
         let face_id = self.stable_face_id(canonical());
         self.state
             .borrow_mut()

@@ -152,3 +152,74 @@ fn deleting_a_frame_drops_its_fallback_group() {
         "another frame's group stays"
     );
 }
+
+#[test]
+fn font_at_lookup_uses_the_redisplayed_face_id() {
+    let (mut ctx, frame) = frame_with_text("fontset-font-at");
+    let window_id = ctx
+        .frame_manager()
+        .get(frame)
+        .and_then(|frame| frame.selected_window())
+        .expect("selected window")
+        .id();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    let attempt = engine.redisplay_frame_attempt(&mut ctx, frame);
+    let FrameLayoutAttempt::Prepared(state) = attempt else {
+        panic!("redisplay must seal a frame before font-at can see its face");
+    };
+    let drawn = state
+        .window_matrices
+        .iter()
+        .flat_map(|entry| &entry.matrix.rows)
+        .flat_map(|row| &row.glyphs[neomacs_display_protocol::GlyphArea::Text.index()])
+        .find(|glyph| {
+            matches!(
+                glyph.provenance,
+                neomacs_display_protocol::GlyphProvenance::Buffer { charpos: 0 }
+            )
+        })
+        .expect("the first buffer character is drawn")
+        .face_id;
+    let (face, epoch) = engine
+        .realized_fontset_for_lisp_pos(&mut ctx, frame, window_id, 1)
+        .expect("font-at lookup sees the sealed face");
+    let arena_epoch = engine
+        .frame_face_arenas
+        .get(&frame)
+        .expect("sealed arena")
+        .face_epoch()
+        .get();
+    assert_eq!(
+        face,
+        drawn.get(),
+        "font-at must name the face redisplay drew"
+    );
+    assert_eq!(epoch, arena_epoch, "the order key uses the arena epoch");
+
+    let implicit = crate::font::metrics::selection_for_realized_fontset(
+        "Probe", 400, false, 16.0, frame.0, None, None,
+    );
+    let named = crate::font::metrics::selection_for_realized_fontset(
+        "Probe",
+        400,
+        false,
+        16.0,
+        frame.0,
+        Some(face),
+        Some(epoch),
+    );
+    assert_eq!(
+        implicit.fontset_id(),
+        crate::font::fallback_order::FaceFontsetId::default(),
+        "a missing realized id stays on the implicit fontset"
+    );
+    assert_eq!(
+        named.fontset_id(),
+        crate::font::fallback_order::FaceFontsetId {
+            frame: frame.0,
+            face,
+            face_epoch: epoch,
+        },
+        "both realized ids name the fontset redisplay moved"
+    );
+}

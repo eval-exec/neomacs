@@ -2672,11 +2672,14 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .synchronized_font_metrics()
             .select_font_for_realized_face_char(
                 character,
-                neomacs_layout_engine::font::metrics::RealizedFaceFontSelection::new(
+                neomacs_layout_engine::font::metrics::selection_for_realized_fontset(
                     requested_family,
                     requested_weight,
                     requested_italic,
                     font_size,
+                    request.frame_id.0,
+                    request.realized_face_id,
+                    request.realized_face_epoch,
                 ),
             );
         tracing::debug!(
@@ -4891,6 +4894,7 @@ fn run_gui_evaluator_worker(
     frame_layout::install_window_layout_query_fn(&mut evaluator);
     frame_layout::install_font_shape_driver(&mut evaluator);
     frame_layout::install_font_glyph_metrics_driver(&mut evaluator);
+    frame_layout::install_realized_fontset_driver(&mut evaluator);
     // Lisp's frame-initialize will create the first GUI frame. Publishing the
     // startup terminal as a GUI scene would expose the same premature frame.
 

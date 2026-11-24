@@ -1416,6 +1416,71 @@ fn font_at_eval_passes_effective_inline_family_to_font_selection() {
         Some("Symbols Nerd Font Mono"),
         "the inline family realizes the ASCII/primary face"
     );
+    assert_eq!(request.realized_face_id, None);
+    assert_eq!(request.realized_face_epoch, None);
+}
+
+#[test]
+fn font_at_passes_the_realized_face_redisplay_sealed() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    let captured = Rc::new(RefCell::new(None));
+    eval.set_display_host(Box::new(CapturingFontAtDisplayHost {
+        last_request: captured.clone(),
+    }));
+    eval.realized_fontset_fn = Some(Box::new(|_eval, _frame, _window, _pos| Some((7, 3))));
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer");
+    buffer.insert("ab");
+
+    assert!(
+        font_at(&mut eval, vec![Value::fixnum(1)])
+            .expect("font-at")
+            .is_nil()
+    );
+    let request = captured.borrow().clone().expect("captured request");
+    assert_eq!(request.realized_face_id, Some(7));
+    assert_eq!(request.realized_face_epoch, Some(3));
+
+    *captured.borrow_mut() = None;
+    assert!(
+        font_at(
+            &mut eval,
+            vec![Value::fixnum(0), Value::NIL, Value::string("ab")]
+        )
+        .expect("string font-at")
+        .is_nil()
+    );
+    let string_request = captured.borrow().clone().expect("string request");
+    assert_eq!(
+        string_request.realized_face_id, None,
+        "a string position has no buffer face id"
+    );
+    assert_eq!(string_request.realized_face_epoch, None);
+
+    *captured.borrow_mut() = None;
+    assert!(
+        internal_char_font(&mut eval, vec![Value::fixnum(1)])
+            .expect("internal-char-font")
+            .is_nil()
+    );
+    let char_font = captured.borrow().clone().expect("char-font request");
+    assert_eq!(char_font.realized_face_id, Some(7));
+    assert_eq!(char_font.realized_face_epoch, Some(3));
+
+    *captured.borrow_mut() = None;
+    assert!(
+        internal_char_font(&mut eval, vec![Value::NIL, Value::fixnum('a' as i64)])
+            .expect("nil-position internal-char-font")
+            .is_nil()
+    );
+    let nil_position = captured.borrow().clone().expect("nil position request");
+    assert_eq!(nil_position.realized_face_id, None);
+    assert_eq!(nil_position.realized_face_epoch, None);
 }
 
 #[test]

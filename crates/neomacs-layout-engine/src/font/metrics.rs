@@ -717,6 +717,32 @@ impl<'a> RealizedFaceFontSelection<'a> {
         };
         self
     }
+
+    #[cfg(test)]
+    pub(crate) fn fontset_id(self) -> crate::font::fallback_order::FaceFontsetId {
+        self.fontset
+    }
+}
+
+/// The selection `(font-at)` and `internal-char-font` hand the host.
+///
+/// Both realized ids are required. A missing half stays on the implicit
+/// fontset, which is the selection used when redisplay has not sealed a face
+/// for this position.
+pub fn selection_for_realized_fontset<'a>(
+    family: &'a str,
+    weight: u16,
+    italic: bool,
+    font_size: f32,
+    frame: u64,
+    realized_face: Option<u32>,
+    realized_epoch: Option<u64>,
+) -> RealizedFaceFontSelection<'a> {
+    let selection = RealizedFaceFontSelection::new(family, weight, italic, font_size);
+    match (realized_face, realized_epoch) {
+        (Some(face), Some(epoch)) => selection.with_fontset(frame, face, epoch),
+        _ => selection,
+    }
 }
 
 type RealizedFaceFontCacheKey = MetricsCacheKey;

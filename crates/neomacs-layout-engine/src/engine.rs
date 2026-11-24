@@ -2004,6 +2004,80 @@ impl LayoutEngine {
         self.frame_layout_attempt(evaluator, frame_id, LayoutPurpose::Redisplay)
     }
 
+    /// The face id redisplay sealed for one buffer position, and the arena
+    /// epoch that keys that face's fallback order.
+    ///
+    /// GNU `font_at` reads the frame face cache (`src/font.c` `font_at` and
+    /// `FACE_FOR_CHAR` at a360712c9d). This lookup uses that same arena. It
+    /// does not poll the font catalog and does not install a new fontset
+    /// context: either of those can clear or re-key the order font-at is
+    /// trying to see. A face this arena never sealed returns `None`, so the
+    /// caller keeps the implicit fontset instead of inventing an id.
+    pub fn realized_fontset_for_lisp_pos(
+        &mut self,
+        evaluator: &mut neovm_core::emacs_core::Context,
+        frame_id: neovm_core::window::FrameId,
+        window_id: neovm_core::window::WindowId,
+        lisp_pos: i64,
+    ) -> Option<(u32, u64)> {
+        let arena_epoch = self.frame_face_arenas.get(&frame_id)?.face_epoch();
+        let (bootstrap, window_system) = {
+            let frame = evaluator.frame_manager().get(frame_id)?;
+            if frame.find_window(window_id).is_none() {
+                return None;
+            }
+            let bootstrap = crate::neovm_bridge::frame_params_from_neovm(
+                frame,
+                evaluator.face_table(),
+                evaluator.variables(),
+            );
+            let window_system = frame
+                .effective_window_system()
+                .and_then(|value| value.as_bare_symbol_name().map(str::to_owned));
+            (bootstrap, window_system)
+        };
+        let font_sizing = self.font_sizing;
+        let mut resolver = crate::neovm_bridge::FaceResolver::new_with_font_sizing(
+            evaluator.face_table(),
+            0x00FFFFFF,
+            bootstrap.background,
+            bootstrap.font_pixel_size,
+            window_system,
+            font_sizing,
+        );
+        self.bind_face_composed_sources(&mut resolver);
+        self.prepare_face_resolver_tty(&mut resolver, frame_id, evaluator);
+        resolver.set_current_window_parameters(
+            evaluator.frame_manager().window_parameters_pairs(window_id),
+        );
+        resolver.set_current_window_id(Some(window_id.0));
+        let buffer_id = evaluator
+            .frame_manager()
+            .get(frame_id)?
+            .find_window(window_id)?
+            .buffer_id()?;
+        let mut resolved = {
+            let buffer = evaluator.buffer_manager().get(buffer_id)?;
+            let beg = buffer.point_min_lisp_char_pos().as_i64();
+            let end = buffer.point_max_lisp_char_pos().as_i64();
+            if !(beg <= lisp_pos && lisp_pos < end) {
+                return None;
+            }
+            let origin = crate::display_origin::DisplayOrigin::BufferText {
+                charpos: neovm_core::buffer::LispCharPos1::new(lisp_pos).to_char_pos(),
+            };
+            let mut next_check = 0usize;
+            resolver.default_base_face_for_origin(Some(buffer), &origin, &mut next_check)
+        };
+        resolver.realize_for_display(&mut resolved, evaluator);
+        let face_id = self
+            .frame_face_arenas
+            .get(&frame_id)?
+            .begin_attempt()
+            .lookup_face_id_for_resolved(&resolved)?;
+        Some((face_id.get(), arena_epoch.get()))
+    }
+
     /// Run one renderer-facing snapshot attempt.
     pub fn snapshot_frame_attempt(
         &mut self,

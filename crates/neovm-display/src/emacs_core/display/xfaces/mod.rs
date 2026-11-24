@@ -5372,7 +5372,9 @@ pub fn builtin_face_font(
         // an XLFD pixel size; fabricating a name corrupts window-font-*.
         neovm_value::emacs_char::EmacsChar::from_char('M')
     };
-    Ok(resolve_font_match(eval, frame_id, character, &face)
+    // Named `face-font` has no buffer position, so it stays on the implicit
+    // fontset. Buffer `(font-at)` is the path that carries the realized id.
+    Ok(resolve_font_match(eval, frame_id, character, &face, None)
         .and_then(|matched| font_name_value(&opened_font_from_resolved_match(&face, &matched)))
         .unwrap_or(Value::NIL))
 }

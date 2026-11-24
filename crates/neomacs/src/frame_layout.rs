@@ -266,6 +266,14 @@ pub fn install_font_glyph_metrics_driver(evaluator: &mut Context) {
     }));
 }
 
+/// Install the lookup `(font-at)` uses to name the face redisplay sealed.
+pub fn install_realized_fontset_driver(evaluator: &mut Context) {
+    evaluator.realized_fontset_fn = Some(Box::new(|eval, frame, window, lisp_pos| {
+        REDISPLAY_RUNTIME
+            .with(|runtime| runtime.realized_fontset_for_lisp_pos(eval, frame, window, lisp_pos))
+    }));
+}
+
 pub fn install_window_layout_query_fn(evaluator: &mut Context) {
     install_window_layout_query_with_policy(
         evaluator,
@@ -487,6 +495,7 @@ pub(crate) fn install_headless_tty_redisplay(
     install_window_layout_query_fn(evaluator);
     install_font_shape_driver(evaluator);
     install_font_glyph_metrics_driver(evaluator);
+    install_realized_fontset_driver(evaluator);
 }
 
 pub fn install_tty_redisplay_callback_with_popup_redraw(
@@ -573,6 +582,7 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
     );
     install_font_shape_driver(evaluator);
     install_font_glyph_metrics_driver(evaluator);
+    install_realized_fontset_driver(evaluator);
 }
 
 #[cfg(test)]

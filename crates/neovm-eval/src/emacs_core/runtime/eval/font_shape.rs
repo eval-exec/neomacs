@@ -35,6 +35,13 @@ pub type FontShapeFn = Box<dyn FnMut(&mut Context, Value, Value) -> GstringShape
 pub type FontGlyphMetricsFn =
     Box<dyn FnMut(Value, u32) -> Option<neovm_value::display_vocab::GlyphTextMetrics>>;
 
+/// Lookup of the face id redisplay sealed for a buffer position.
+///
+/// Arguments are the frame id, the window id, and the 1-based Lisp position.
+/// The pair is `(face_id, arena_epoch)`. `None` means redisplay has not
+/// sealed a face for that position, or the layout engine is already borrowed.
+pub type RealizedFontsetFn = Box<dyn FnMut(&mut Context, u64, u64, i64) -> Option<(u32, u64)>>;
+
 /// The shaped-gstring cache owns its values strongly, like GNU's staticpro'd
 /// gstring_hash_table (src/composite.c:2201-2202). Keys contain no Lisp edges.
 pub(crate) fn trace_gstring_shape_cache(

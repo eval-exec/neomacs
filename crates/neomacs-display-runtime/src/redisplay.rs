@@ -292,6 +292,24 @@ impl RedisplayRuntime {
         })
     }
 
+    /// Face id and arena epoch redisplay sealed for a buffer position.
+    ///
+    /// `font-at` can run while redisplay still holds the engine (a mode line,
+    /// for example). That borrow must miss instead of panicking: the caller
+    /// keeps the implicit fontset until the sealed arena is free to read.
+    pub fn realized_fontset_for_lisp_pos(
+        &self,
+        evaluator: &mut Context,
+        frame: u64,
+        window: u64,
+        lisp_pos: i64,
+    ) -> Option<(u32, u64)> {
+        let Ok(mut engine) = self.engine.try_borrow_mut() else {
+            return None;
+        };
+        engine.realized_fontset_for_lisp_pos(evaluator, FrameId(frame), WindowId(window), lisp_pos)
+    }
+
     /// Produce one logical frame through the presentation engine.
     pub fn prepare_frame(
         &self,

@@ -4064,6 +4064,12 @@ pub struct Context {
     /// including the JIT-baked ones, stays put.
     #[allow(clippy::type_complexity)]
     pub font_glyph_metrics_fn: Option<font_shape::FontGlyphMetricsFn>,
+    /// Frontend-installed lookup of the face id redisplay sealed for a buffer
+    /// position. `(font-at)` uses it so a fallback move recorded on that face
+    /// is the move `font-at` sees. Appended after the pinned layout: it is the
+    /// last Context field, so every earlier offset stays put.
+    #[allow(clippy::type_complexity)]
+    pub realized_fontset_fn: Option<font_shape::RealizedFontsetFn>,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.
