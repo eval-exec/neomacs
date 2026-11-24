@@ -252,7 +252,19 @@ impl HashKey {
     pub(crate) fn contains_truncation(&self) -> bool {
         match self {
             HashKey::Cycle(index) => *index == super::TRUNCATED_KEY_CYCLE,
-            HashKey::EqualCons(car, cdr) => car.contains_truncation() || cdr.contains_truncation(),
+            HashKey::EqualCons(car, cdr) => {
+                if car.contains_truncation() {
+                    return true;
+                }
+                let mut node = cdr.as_ref();
+                while let HashKey::EqualCons(next_car, next_cdr) = node {
+                    if next_car.contains_truncation() {
+                        return true;
+                    }
+                    node = next_cdr.as_ref();
+                }
+                node.contains_truncation()
+            }
             HashKey::EqualVec(keys) => keys.iter().any(HashKey::contains_truncation),
             HashKey::SymbolWithPos(sym, pos) => {
                 sym.contains_truncation() || pos.contains_truncation()

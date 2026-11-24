@@ -56,7 +56,7 @@ fn an_ordinary_key_is_unchanged_by_the_budget() {
         Value::cons(Value::fixnum(2), Value::fixnum(3)),
         sym,
     ]);
-    let unbounded = value.to_equal_key_depth_swp(0, &mut Vec::new(), false);
+    let unbounded = value.to_equal_key_depth_swp(0, &mut EqualKeySeen::new(), false);
     assert!(!unbounded.contains_truncation());
     assert_eq!(
         unbounded,

@@ -1976,7 +1976,7 @@ pub enum ByteCodeKeyPart {
 }
 
 /// Key type that supports hashing for `eq`, `eql`, and `equal` tests.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum HashKey {
     Nil,
     True,
@@ -2219,6 +2219,21 @@ fn hash_char_array<H: std::hash::Hasher>(bytes: &[u8], state: &mut H) {
 
 impl std::hash::Hash for HashKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // A proper list is one `EqualCons` cdr chain. Hashing that chain by
+        // recursion overflows near 1e5 cells. Cars stay recursive: the builder
+        // caps car nesting at depth 200.
+        if let HashKey::EqualCons(car, cdr) = self {
+            12u8.hash(state);
+            car.hash(state);
+            let mut rest = cdr.as_ref();
+            while let HashKey::EqualCons(next_car, next_cdr) = rest {
+                12u8.hash(state);
+                next_car.hash(state);
+                rest = next_cdr.as_ref();
+            }
+            rest.hash(state);
+            return;
+        }
         let tag: u8 = match self {
             HashKey::Nil => 0,
             HashKey::True => 1,
@@ -2231,7 +2246,6 @@ impl std::hash::Hash for HashKey {
             HashKey::Window(_) => 8,
             HashKey::Frame(_) => 9,
             HashKey::Ptr(_) => 10,
-            HashKey::EqualCons(_, _) => 12,
             HashKey::EqualVec(_) => 13,
             HashKey::ByteCode(_) => 22,
             HashKey::Keyword(_) => 14,
@@ -2242,6 +2256,7 @@ impl std::hash::Hash for HashKey {
             HashKey::Marker(_) => 18,
             HashKey::Overlay(_) => 19,
             HashKey::BoolVector(_) => 24,
+            HashKey::EqualCons(_, _) => unreachable!("spines are hashed above"),
         };
         tag.hash(state);
         match self {
@@ -2257,10 +2272,7 @@ impl std::hash::Hash for HashKey {
             HashKey::Char(c) => c.hash(state),
             HashKey::Window(id) | HashKey::Frame(id) => id.hash(state),
             HashKey::Ptr(p) => p.hash(state),
-            HashKey::EqualCons(car, cdr) => {
-                car.hash(state);
-                cdr.hash(state);
-            }
+            HashKey::EqualCons(_, _) => {}
             HashKey::EqualVec(items) => {
                 items.len().hash(state);
                 for item in items {
@@ -2298,39 +2310,243 @@ impl std::hash::Hash for HashKey {
 
 impl PartialEq for HashKey {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (HashKey::Nil, HashKey::Nil) | (HashKey::True, HashKey::True) => true,
-            (HashKey::Int(a), HashKey::Int(b)) => a == b,
-            (HashKey::Bignum(a), HashKey::Bignum(b)) => a == b,
-            (HashKey::Float(a), HashKey::Float(b)) => a == b,
-            (HashKey::FloatEq(a, id_a), HashKey::FloatEq(b, id_b)) => a == b && id_a == id_b,
-            (HashKey::Symbol(a), HashKey::Symbol(b)) => a == b,
-            (HashKey::Keyword(a), HashKey::Keyword(b)) => a == b,
-            (HashKey::Char(a), HashKey::Char(b)) => a == b,
-            (HashKey::Window(a), HashKey::Window(b)) | (HashKey::Frame(a), HashKey::Frame(b)) => {
-                a == b
+        let mut left = self;
+        let mut right = other;
+        loop {
+            match (left, right) {
+                (HashKey::EqualCons(a_car, a_cdr), HashKey::EqualCons(b_car, b_cdr)) => {
+                    // Cars recurse (nesting is capped at 200). The cdr chain
+                    // stays in this loop so a long proper list does not blow
+                    // the stack.
+                    if a_car != b_car {
+                        return false;
+                    }
+                    left = a_cdr.as_ref();
+                    right = b_cdr.as_ref();
+                }
+                (HashKey::Nil, HashKey::Nil) | (HashKey::True, HashKey::True) => return true,
+                (HashKey::Int(a), HashKey::Int(b)) => return a == b,
+                (HashKey::Bignum(a), HashKey::Bignum(b)) => return a == b,
+                (HashKey::Float(a), HashKey::Float(b)) => return a == b,
+                (HashKey::FloatEq(a, id_a), HashKey::FloatEq(b, id_b)) => {
+                    return a == b && id_a == id_b;
+                }
+                (HashKey::Symbol(a), HashKey::Symbol(b)) => return a == b,
+                (HashKey::Keyword(a), HashKey::Keyword(b)) => return a == b,
+                (HashKey::Char(a), HashKey::Char(b)) => return a == b,
+                (HashKey::Window(a), HashKey::Window(b))
+                | (HashKey::Frame(a), HashKey::Frame(b)) => return a == b,
+                (HashKey::Ptr(a), HashKey::Ptr(b)) => return a == b,
+                (HashKey::EqualVec(a), HashKey::EqualVec(b)) => return a == b,
+                (HashKey::ByteCode(a), HashKey::ByteCode(b)) => return a == b,
+                (HashKey::Marker(a), HashKey::Marker(b)) => return a == b,
+                (HashKey::Overlay(a), HashKey::Overlay(b)) => return a == b,
+                (HashKey::BoolVector(a), HashKey::BoolVector(b)) => return a == b,
+                (HashKey::SymbolWithPos(a_sym, a_pos), HashKey::SymbolWithPos(b_sym, b_pos)) => {
+                    return a_sym == b_sym && a_pos == b_pos;
+                }
+                (HashKey::Cycle(a), HashKey::Cycle(b)) => return a == b,
+                (HashKey::Text(a), HashKey::Text(b)) => return a == b,
+                (HashKey::StringContent(a), HashKey::StringContent(b)) => return a == b,
+                _ => return false,
             }
-            (HashKey::Ptr(a), HashKey::Ptr(b)) => a == b,
-            (HashKey::EqualCons(a_car, a_cdr), HashKey::EqualCons(b_car, b_cdr)) => {
-                a_car == b_car && a_cdr == b_cdr
-            }
-            (HashKey::EqualVec(a), HashKey::EqualVec(b)) => a == b,
-            (HashKey::ByteCode(a), HashKey::ByteCode(b)) => a == b,
-            (HashKey::Marker(a), HashKey::Marker(b)) => a == b,
-            (HashKey::Overlay(a), HashKey::Overlay(b)) => a == b,
-            (HashKey::BoolVector(a), HashKey::BoolVector(b)) => a == b,
-            (HashKey::SymbolWithPos(a_sym, a_pos), HashKey::SymbolWithPos(b_sym, b_pos)) => {
-                a_sym == b_sym && a_pos == b_pos
-            }
-            (HashKey::Cycle(a), HashKey::Cycle(b)) => a == b,
-            (HashKey::Text(a), HashKey::Text(b)) => a == b,
-            (HashKey::StringContent(a), HashKey::StringContent(b)) => a == b,
-            _ => false,
         }
     }
 }
 
 impl Eq for HashKey {}
+
+impl Clone for HashKey {
+    fn clone(&self) -> Self {
+        if let HashKey::EqualCons(_, _) = self {
+            return clone_equal_cons_spine(self);
+        }
+        match self {
+            HashKey::Nil => HashKey::Nil,
+            HashKey::True => HashKey::True,
+            HashKey::Int(n) => HashKey::Int(*n),
+            HashKey::Bignum(limbs) => HashKey::Bignum(limbs.clone()),
+            HashKey::Float(bits) => HashKey::Float(*bits),
+            HashKey::FloatEq(bits, id) => HashKey::FloatEq(*bits, *id),
+            HashKey::Symbol(id) => HashKey::Symbol(id.clone()),
+            HashKey::Keyword(id) => HashKey::Keyword(id.clone()),
+            HashKey::Char(c) => HashKey::Char(*c),
+            HashKey::Window(id) => HashKey::Window(*id),
+            HashKey::Frame(id) => HashKey::Frame(*id),
+            HashKey::Ptr(ptr) => HashKey::Ptr(*ptr),
+            HashKey::EqualVec(items) => HashKey::EqualVec(items.clone()),
+            HashKey::ByteCode(parts) => HashKey::ByteCode(parts.clone()),
+            HashKey::Marker(parts) => HashKey::Marker(parts.clone()),
+            HashKey::Overlay(parts) => HashKey::Overlay(parts.clone()),
+            HashKey::BoolVector(parts) => HashKey::BoolVector(parts.clone()),
+            HashKey::SymbolWithPos(sym, pos) => HashKey::SymbolWithPos(sym.clone(), pos.clone()),
+            HashKey::Cycle(index) => HashKey::Cycle(*index),
+            HashKey::Text(text) => HashKey::Text(text.clone()),
+            HashKey::StringContent(content) => HashKey::StringContent(content.clone()),
+            HashKey::EqualCons(_, _) => unreachable!("spines are cloned above"),
+        }
+    }
+}
+
+/// Clone one `EqualCons` cdr chain without a stack frame per cell.
+fn clone_equal_cons_spine(key: &HashKey) -> HashKey {
+    let mut cars = Vec::new();
+    let mut node = key;
+    let tail = loop {
+        match node {
+            HashKey::EqualCons(car, cdr) => {
+                cars.push(car.as_ref());
+                node = cdr.as_ref();
+            }
+            other => break other.clone(),
+        }
+    };
+    let mut cloned = tail;
+    while let Some(car) = cars.pop() {
+        cloned = HashKey::EqualCons(Box::new(car.clone()), Box::new(cloned));
+    }
+    cloned
+}
+
+impl Drop for HashKey {
+    fn drop(&mut self) {
+        // A derived drop recurses on both boxes and overflows on a long list
+        // key. Rust also rejects moving those boxes out of a type that
+        // implements `Drop`, so the chain is taken apart by copying the box
+        // pointers and forgetting the shell.
+        if !matches!(self, HashKey::EqualCons(_, _)) {
+            return;
+        }
+        let mut node = std::mem::replace(self, HashKey::Nil);
+        while matches!(node, HashKey::EqualCons(_, _)) {
+            let (car, cdr) = if let HashKey::EqualCons(car, cdr) = &mut node {
+                // SAFETY: `node` is `EqualCons`, so both fields are
+                // initialized boxes. `read` copies those two pointers.
+                // `forget` below skips `Drop` on `node`, which would free
+                // the same boxes. `car` is dropped next; the cdr key becomes
+                // the next `node`.
+                unsafe { (std::ptr::read(car), std::ptr::read(cdr)) }
+            } else {
+                break;
+            };
+            std::mem::forget(node);
+            drop(car);
+            node = *cdr;
+        }
+    }
+}
+
+/// Pointers already entered by the structural `equal` key walk, in visit order.
+///
+/// [`HashKey::Cycle`] stores that visit index, so a short key stays
+/// bit-identical to the linear scan. Once `order` reaches
+/// [`SEEN_INDEX_THRESHOLD`], lookup switches to a map: a list of a few
+/// thousand cells was an O(n²) scan, past the cost of the old depth cap.
+/// `cars` is scratch shared by nested cons walks so each cons does not
+/// allocate its own vector.
+pub struct EqualKeySeen {
+    order: Vec<usize>,
+    index: Option<HashMap<usize, u32>>,
+    cars: Vec<HashKey>,
+    #[cfg(test)]
+    compares: u64,
+}
+
+/// Length of `order` at which [`EqualKeySeen`] builds its pointer map.
+const SEEN_INDEX_THRESHOLD: usize = 32;
+
+impl EqualKeySeen {
+    pub fn new() -> Self {
+        Self {
+            order: Vec::new(),
+            index: None,
+            cars: Vec::new(),
+            #[cfg(test)]
+            compares: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    fn index_of(&mut self, ptr: usize) -> Option<u32> {
+        if let Some(index) = &self.index {
+            #[cfg(test)]
+            {
+                self.compares = self.compares.saturating_add(1);
+            }
+            return index.get(&ptr).copied();
+        }
+        for (at, seen) in self.order.iter().enumerate() {
+            #[cfg(test)]
+            {
+                self.compares = self.compares.saturating_add(1);
+            }
+            if *seen == ptr {
+                return Some(at as u32);
+            }
+        }
+        None
+    }
+
+    fn push(&mut self, ptr: usize) {
+        let at = self.order.len() as u32;
+        self.order.push(ptr);
+        if let Some(index) = &mut self.index {
+            index.insert(ptr, at);
+        } else if self.order.len() >= SEEN_INDEX_THRESHOLD {
+            let mut index = HashMap::with_capacity(self.order.len());
+            for (at, seen) in self.order.iter().enumerate() {
+                index.insert(*seen, at as u32);
+            }
+            self.index = Some(index);
+        }
+    }
+
+    fn pop(&mut self) {
+        let Some(ptr) = self.order.pop() else {
+            return;
+        };
+        if let Some(index) = &mut self.index {
+            index.remove(&ptr);
+        }
+    }
+
+    fn truncate(&mut self, len: usize) {
+        if len >= self.order.len() {
+            return;
+        }
+        if let Some(index) = &mut self.index {
+            for ptr in self.order.drain(len..) {
+                index.remove(&ptr);
+            }
+        } else {
+            self.order.truncate(len);
+        }
+    }
+
+    fn cars_len(&self) -> usize {
+        self.cars.len()
+    }
+
+    fn push_car(&mut self, key: HashKey) {
+        self.cars.push(key);
+    }
+
+    fn pop_car(&mut self) -> Option<HashKey> {
+        self.cars.pop()
+    }
+}
+
+/// Seen-pointer comparisons performed while building one unbounded equal key.
+#[cfg(test)]
+fn equal_key_compare_count_for_test(value: Value) -> u64 {
+    let mut seen = EqualKeySeen::new();
+    let mut budget = usize::MAX;
+    let _key = value.to_equal_key_depth_budgeted(0, &mut seen, false, &mut budget);
+    seen.compares
+}
 
 impl HashKey {
     /// Create a string hash key by allocating on the heap.
@@ -2356,7 +2572,15 @@ impl HashKey {
     pub(crate) fn heap_bytes(&self) -> usize {
         match self {
             HashKey::Bignum(limbs) => limbs.len() * size_of::<u64>(),
-            HashKey::EqualCons(car, cdr) => car.heap_bytes() + cdr.heap_bytes(),
+            HashKey::EqualCons(car, cdr) => {
+                let mut total = car.heap_bytes();
+                let mut node = cdr.as_ref();
+                while let HashKey::EqualCons(next_car, next_cdr) = node {
+                    total += next_car.heap_bytes();
+                    node = next_cdr.as_ref();
+                }
+                total + node.heap_bytes()
+            }
             HashKey::EqualVec(parts) => parts.iter().map(Self::heap_bytes).sum(),
             HashKey::ByteCode(parts) => parts.iter().map(ByteCodeKeyPart::heap_bytes).sum(),
             HashKey::Marker(body) => 0,
@@ -4175,7 +4399,12 @@ impl TaggedValue {
         symbols_with_pos_enabled: bool,
     ) -> HashKey {
         let mut budget = max_nodes;
-        self.to_equal_key_depth_budgeted(0, &mut Vec::new(), symbols_with_pos_enabled, &mut budget)
+        self.to_equal_key_depth_budgeted(
+            0,
+            &mut EqualKeySeen::new(),
+            symbols_with_pos_enabled,
+            &mut budget,
+        )
     }
 
     /// The materialized key filed beside a new entry of a table with `test`.
@@ -4267,12 +4496,12 @@ impl TaggedValue {
     }
 
     fn to_equal_key(self) -> HashKey {
-        let mut seen = Vec::new();
+        let mut seen = EqualKeySeen::new();
         self.to_equal_key_depth_swp(0, &mut seen, false)
     }
 
     fn to_equal_key_swp(self, symbols_with_pos_enabled: bool) -> HashKey {
-        let mut seen = Vec::new();
+        let mut seen = EqualKeySeen::new();
         self.to_equal_key_depth_swp(0, &mut seen, symbols_with_pos_enabled)
     }
 
@@ -4280,7 +4509,7 @@ impl TaggedValue {
     pub fn to_equal_key_depth_swp(
         self,
         depth: usize,
-        seen: &mut Vec<usize>,
+        seen: &mut EqualKeySeen,
         symbols_with_pos_enabled: bool,
     ) -> HashKey {
         let mut budget = usize::MAX;
@@ -4289,20 +4518,22 @@ impl TaggedValue {
 
     /// Equal-hash of one cons, walking the cdr spine at `depth`.
     ///
-    /// GNU `equal` does not count list length as nesting. The same walk
-    /// keeps `Hash` aligned with `PartialEq`: a tail past depth 200 used to
-    /// become a pointer key, so two long equal lists hashed apart.
+    /// GNU `equal` does not count list length as nesting. This walk keeps
+    /// the stored key aligned with `PartialEq` for an acyclic list of one
+    /// shape: a tail past depth 200 used to become a pointer key, so two
+    /// long equal lists hashed apart. Two values can still be `equal` and
+    /// hash apart when their cycle shapes differ.
     /// Each cons still spends one budget node. Cars and the non-cons tail
     /// are hashed at `depth + 1`.
     fn equal_cons_key(
         self,
         depth: usize,
-        seen: &mut Vec<usize>,
+        seen: &mut EqualKeySeen,
         symbols_with_pos_enabled: bool,
         budget: &mut usize,
     ) -> HashKey {
         let seen_start = seen.len();
-        let mut car_keys = Vec::new();
+        let cars_start = seen.cars_len();
         let mut tail = self;
         let mut first = true;
         let terminal = loop {
@@ -4322,21 +4553,23 @@ impl TaggedValue {
             }
             first = false;
             let ptr = tail.bits();
-            if let Some(index) = seen.iter().position(|&p| p == ptr) {
-                break HashKey::Cycle(index as u32);
+            if let Some(index) = seen.index_of(ptr) {
+                break HashKey::Cycle(index);
             }
             seen.push(ptr);
-            car_keys.push(tail.cons_car().to_equal_key_depth_budgeted(
+            let car_key = tail.cons_car().to_equal_key_depth_budgeted(
                 depth + 1,
                 seen,
                 symbols_with_pos_enabled,
                 budget,
-            ));
+            );
+            seen.push_car(car_key);
             tail = tail.cons_cdr();
         };
         seen.truncate(seen_start);
         let mut key = terminal;
-        while let Some(car_key) = car_keys.pop() {
+        while seen.cars_len() > cars_start {
+            let car_key = seen.pop_car().expect("cons car key");
             key = HashKey::EqualCons(Box::new(car_key), Box::new(key));
         }
         key
@@ -4357,7 +4590,7 @@ impl TaggedValue {
     pub fn to_equal_key_depth_budgeted(
         self,
         depth: usize,
-        seen: &mut Vec<usize>,
+        seen: &mut EqualKeySeen,
         symbols_with_pos_enabled: bool,
         budget: &mut usize,
     ) -> HashKey {
@@ -4417,8 +4650,8 @@ impl TaggedValue {
                 ) =>
             {
                 let ptr = self.bits();
-                if let Some(index) = seen.iter().position(|&p| p == ptr) {
-                    return HashKey::Cycle(index as u32);
+                if let Some(index) = seen.index_of(ptr) {
+                    return HashKey::Cycle(index);
                 }
                 seen.push(ptr);
                 let view = StructuralPseudovectorView::from_value(self, kind)
@@ -4458,8 +4691,8 @@ impl TaggedValue {
             }
             ValueKind::Veclike(VecLikeType::ByteCode) => {
                 let ptr = self.bits();
-                if let Some(index) = seen.iter().position(|&p| p == ptr) {
-                    return HashKey::Cycle(index as u32);
+                if let Some(index) = seen.index_of(ptr) {
+                    return HashKey::Cycle(index);
                 }
                 seen.push(ptr);
                 let key = bytecode_semantics().to_equal_key(
@@ -4474,8 +4707,8 @@ impl TaggedValue {
             }
             ValueKind::Veclike(VecLikeType::Lambda) => {
                 let ptr = self.bits();
-                if let Some(index) = seen.iter().position(|&p| p == ptr) {
-                    return HashKey::Cycle(index as u32);
+                if let Some(index) = seen.index_of(ptr) {
+                    return HashKey::Cycle(index);
                 }
                 seen.push(ptr);
                 let key = closure_to_equal_key(
@@ -5367,7 +5600,7 @@ pub fn try_equal_value_inner(
 fn closure_to_equal_key(
     value: Value,
     depth: usize,
-    seen: &mut Vec<usize>,
+    seen: &mut EqualKeySeen,
     symbol_mode: crate::tagged::SymbolMode,
     budget: &mut usize,
 ) -> HashKey {

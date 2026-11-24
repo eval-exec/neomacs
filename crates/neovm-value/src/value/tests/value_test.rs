@@ -532,6 +532,17 @@ fn long_proper_list_partialeq_matches_lisp_equal() {
         assert!(!eq_value(&left, &right), "the lists are distinct objects");
         assert!(left != different, "a different last pair is not equal");
 
+        let mut bounded = Value::fixnum(1);
+        let mut bounded_copy = Value::fixnum(1);
+        for _ in 0..200 {
+            bounded = Value::cons(bounded, Value::NIL);
+            bounded_copy = Value::cons(bounded_copy, Value::NIL);
+        }
+        assert!(
+            bounded == bounded_copy,
+            "car nesting of 200 is still equal; the cap is depth > 200"
+        );
+
         let mut deep = Value::fixnum(1);
         let mut deep_copy = Value::fixnum(1);
         for _ in 0..201 {
@@ -588,6 +599,48 @@ fn long_proper_list_partialeq_matches_lisp_equal() {
         assert_eq!(
             cycle_left.to_hash_key(&HashTableTest::Equal),
             cycle_right.to_hash_key(&HashTableTest::Equal)
+        );
+    });
+}
+
+fn fixnum_list(len: usize) -> Value {
+    let mut tail = Value::NIL;
+    for i in (0..len).rev() {
+        tail = Value::cons(Value::fixnum(i as i64), tail);
+    }
+    tail
+}
+
+/// The old seen scan was quadratic: a 2048-cell list did about 2e6 pointer
+/// compares. The depth cap this replaced stopped near 201 cells, about 2e4
+/// compares. The map has to stay under that.
+#[test]
+fn equal_key_seen_compares_stay_under_parent_order() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let key = fixnum_list(2048);
+        let compares = super::equal_key_compare_count_for_test(key);
+        assert!(
+            compares < 20_000,
+            "seen lookup on a 2048-list key did {compares} compares"
+        );
+    });
+}
+
+/// Building and dropping the stored key of a 100k-cell list must not recurse
+/// one frame per cons. Quiet is not active, so this row checks completion
+/// rather than wall time.
+#[test]
+fn equal_key_hundred_thousand_list_does_not_overflow() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let left = fixnum_list(100_000);
+        let right = fixnum_list(100_000);
+        assert!(left == right, "a 100k-element list is equal");
+        assert_eq!(
+            left.to_hash_key(&HashTableTest::Equal),
+            right.to_hash_key(&HashTableTest::Equal),
+            "a 100k-element list key builds, compares, and drops"
         );
     });
 }
