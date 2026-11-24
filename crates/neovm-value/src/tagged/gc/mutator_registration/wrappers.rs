@@ -468,6 +468,12 @@ macro_rules! era_operations {
                 self.core.stop()
             }
 
+            /// The gate tag of the thread holding the registry gate now, for a
+            /// contention diagnostic (L6.7 K8). It carries no authority.
+            pub fn gate_holder(&self) -> Option<std::num::NonZeroU64> {
+                self.core.gate_holder()
+            }
+
             /// [`Self::stop`] bounded by BUDGET (L6.7 K8). A pending attempt
             /// leaves the request standing; the next attempt continues it.
             pub fn stop_within(

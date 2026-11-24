@@ -89,6 +89,12 @@ impl Registry {
         self.gate.gate_owner.load(Ordering::Acquire) == current_thread()
     }
 
+    /// The gate's tag for the thread holding it now, if any. A diagnostic
+    /// read with no authority; it may be stale when the caller looks.
+    pub(super) fn gate_holder(&self) -> Option<std::num::NonZeroU64> {
+        std::num::NonZeroU64::new(self.gate.gate_owner.load(Ordering::Acquire))
+    }
+
     /// Real failed acquisition of the predicate mutex. Fixtures use this to
     /// prove a waiter is about to park; it is not a sleep or a `Busy` guess.
     #[cfg(any(test, feature = "test-support"))]

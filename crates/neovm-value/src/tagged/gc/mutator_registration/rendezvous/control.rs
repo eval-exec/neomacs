@@ -172,10 +172,10 @@ impl State {
 
     /// Start a stop epoch. A parallel owner's grant is issued only inside the
     /// keeper's own stop and retired before that stop completes (`complete`
-    /// refuses while one is out), so none is out here. The Idle
-    /// `try_grant_head` path, an L6.7b candidate, keeps the old rule: its
-    /// granted owner is a frozen stop participant and must ACK at its next
-    /// poll; once the phase leaves Idle no new Idle grant is issued.
+    /// refuses while one is out). An Idle `try_grant_head` grant may still be
+    /// out here: its owner is a frozen stop participant, and once the phase
+    /// leaves Idle no new Idle grant is issued. That grant blocks this stop's
+    /// `complete` until it is retired (lead #13911 M1).
     pub(in crate::tagged::gc) fn activate(
         &mut self,
         membership: Membership<'_>,
@@ -247,7 +247,10 @@ impl State {
     /// Not the parallel owners' grant: since L6.7a (lead #13898) their turn
     /// is granted only by `grant_head_in_stop`, under the keeper's own stop.
     /// This Idle/DrainingResumes grant stays as a candidate for the L6.7b
-    /// Baton-group entry.
+    /// Baton-group entry. `complete` refuses while any grant is out, so a
+    /// stop that starts while this grant is out cannot complete until the
+    /// grant is retired: L6.7b retires its turn before its owner ACKs a stop,
+    /// or moves the grant under the stop.
     pub(in crate::tagged::gc) fn try_grant_head(
         &mut self,
         membership: Membership<'_>,

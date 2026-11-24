@@ -150,6 +150,11 @@ impl StopPending {
 }
 
 impl<K: EraKeeper> EraCore<'_, K> {
+    /// The registry gate's holder, for a contention diagnostic.
+    pub(crate) fn gate_holder(&self) -> Option<NonZeroU64> {
+        self.registry().gate_holder()
+    }
+
     pub(crate) fn try_stop(&self) -> Result<Option<AllStopped<'_>>, RendezvousError> {
         let registry = self.registry();
         keeper(registry)?;
