@@ -6,7 +6,7 @@
 //! E5.2's rows run here, not against a test keeper). R7 (a collection at
 //! the park) waits on L6.5's session.
 
-use super::super::keeper_custody::ReturnedSerialTicket;
+use super::super::keeper_custody::{ReturnedSerialTicket, StoppedKeeper};
 use super::super::owned_source::era_fixture::{
     KeeperEra, KeeperPanicGuard, activate, close, finish_fixture, keeper_serve, ready, retire,
     retry_native,
@@ -17,8 +17,10 @@ use super::{Grant, KeeperPort, PortRefusal, SerialHome, begin_turn};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 use neovm_value::intern::intern;
-use neovm_value::tagged::gc::heap_transfer::PublishedOwner;
-use neovm_value::tagged::gc::{Mutator, MutatorPermit, RendezvousError, StopPending};
+use neovm_value::tagged::gc::heap_transfer::{PublishedOwner, with_stop_scope};
+use neovm_value::tagged::gc::{
+    AllStopped, AllStoppedFailure, Mutator, MutatorPermit, RendezvousError, StopPending,
+};
 use neovm_value::value::Value;
 use std::convert::Infallible;
 use std::num::NonZeroU64;
@@ -124,7 +126,8 @@ const P: u64 = 7203;
 // ---------------------------------------------------------------------------
 
 use super::super::keeper_driver::{
-    Breach, ChannelLend, ChannelPort, Driver, DriverEnd, GrantMsg, KeeperMsg, LendDrop,
+    Breach, ChannelLend, ChannelPort, CollectRefusal, Driver, DriverEnd, GrantMsg, KeeperMsg,
+    LendDrop,
 };
 
 /// What one owner thread takes for the driver rows.
@@ -1460,5 +1463,566 @@ fn l67b_a_panic_in_a_group_interval_poisons() {
         answer,
         Err(PortRefusal::Poisoned),
         "B learns the era is poisoned"
+    );
+}
+
+fn stop_retrying<'k>(era: &'k KeeperEra<'_, '_>) -> AllStopped<'k> {
+    let mut stopped = retry_native("stop", || era.stop());
+    retry_native("control trace", || stopped.trace(|_stopped, _proof| Ok(())));
+    stopped
+}
+
+fn complete_retrying(label: &str, mut result: Result<(), AllStoppedFailure<'_>>) {
+    let start = Instant::now();
+    loop {
+        match result {
+            Ok(()) => return,
+            Err(failure) if failure.reason == RendezvousError::Busy && start.elapsed() < BOUND => {
+                std::thread::yield_now();
+                result = failure.into_stopped().complete();
+            }
+            Err(failure) => panic!("{label}: {:?}", failure.reason),
+        }
+    }
+}
+
+/// Like `with_live_era`, also allocating one World-rooted cons survivor and
+/// one unrooted garbage cons on the source heap before admission.
+fn with_live_era_with_garbage(
+    label: &'static str,
+    body: impl for<'k, 'service, 'heap> FnOnce(&'k KeeperEra<'service, 'heap>, usize, usize)
+    + Send
+    + 'static,
+) {
+    let mut source = ready();
+    let private = Value::string(label);
+    source.lexenv = private;
+    let survivor = source
+        .tagged_heap
+        .alloc_cons(Value::fixnum(777), Value::NIL);
+    source.set_variable("l67a-k5-survivor", survivor);
+    let garbage = source
+        .tagged_heap
+        .alloc_cons(Value::fixnum(999), Value::NIL)
+        .bits();
+    let survivor_word = survivor.bits();
+    source.tagged_heap.close_alloc_regions();
+    let (shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |keeper| body(keeper, survivor_word, garbage));
+        match outcome {
+            Ok((end, ())) => tx.send(Ok(end)).expect("send keeper end"),
+            Err(failure) => tx.send(Err(failure.notice())).expect("send keeper notice"),
+        }
+    });
+    let outcome = rx.recv().expect("keeper outcome");
+    service.join().expect("keeper service thread");
+    let end = outcome.unwrap_or_else(|notice| panic!("{label}: era refused: {notice:?}"));
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    let returned = shell.accept_return(end).unwrap();
+    finish_fixture(returned, private);
+}
+
+/// D-8 (K5). A `KeeperMsg::Collect` and a queued serial turn ride ONE stop:
+/// `report.epoch == grant.epoch`, unrooted garbage is reclaimed, the World
+/// survivor stays live, the serial turn runs in that same stop, and the driver
+/// drains cleanly.
+#[test]
+fn l67a_collection_request_rides_batch_stop_once() {
+    with_live_era_with_garbage("l67a-k5-d8", |era, survivor, garbage| {
+        let before = {
+            let stopped = stop_retrying(era);
+            assert!(era.owns_heap_word_for_test(&stopped, survivor).unwrap());
+            assert!(era.owns_heap_word_for_test(&stopped, garbage).unwrap());
+            let cycles = era.gc_collections_for_test(&stopped).unwrap();
+            complete_retrying("baseline stop", stopped.complete());
+            cycles
+        };
+        let (inbox, inbox_rx) = mpsc::channel();
+        let (notices_tx, notices) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx).observe_pending(
+            Duration::from_millis(5),
+            move |_pending: &StopPending, queued| {
+                let _ = notices_tx.send(queued);
+            },
+        );
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        let slow = era.register(L, 0).expect("register slow owner");
+        let heap = era.heap_identity();
+        let collect_inbox = inbox.clone();
+        drop(inbox);
+        let (running_tx, running) = mpsc::channel::<()>();
+        let (l_go_tx, l_go) = mpsc::channel::<()>();
+        let (c_tx, c_rx) = mpsc::sync_channel(1);
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            scope.spawn(move || lagging_owner(slow, heap, L, running_tx, l_go));
+            let owner = scope.spawn(move || {
+                running.recv_timeout(BOUND).expect("L runs");
+                a.run(|state, home, port| {
+                    let granted = port.request_turn().ok().expect("A is granted");
+                    let epoch = granted.0.epoch;
+                    let mut turn = begin_turn(state, home, granted, port, standalone)
+                        .ok()
+                        .expect("A begins");
+                    let seen = turn.with_world(|ev| eval(ev, "(setq sp-live 81)"));
+                    turn.end(port).ok().expect("A ends");
+                    (epoch, seen)
+                })
+            });
+            scope.spawn(move || {
+                loop {
+                    let queued = notices.recv_timeout(BOUND).expect("pending notice");
+                    if queued == 1 {
+                        collect_inbox
+                            .send(KeeperMsg::Collect { reply: Some(c_tx) })
+                            .expect("send Collect during pending stop");
+                        drop(collect_inbox);
+                        // Wait for one more pending tick so `between_stops` has
+                        // drained `Collect` before releasing L.
+                        let _ = notices.recv_timeout(BOUND).expect("post-collect notice");
+                        l_go_tx.send(()).expect("release L");
+                        return;
+                    }
+                }
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            let report = c_rx
+                .recv_timeout(BOUND)
+                .expect("collect reply")
+                .expect("collection succeeded");
+            let (grant_epoch, seen) = owner.join().expect("A");
+            assert_eq!(seen, "81");
+            assert!(report.major);
+            assert_eq!(
+                report.epoch,
+                grant_epoch.get(),
+                "collection and serial turn must ride ONE stop"
+            );
+            assert_eq!(report.cycle, before + 1);
+        });
+        let stopped = stop_retrying(era);
+        assert!(era.owns_heap_word_for_test(&stopped, survivor).unwrap());
+        assert!(
+            !era.owns_heap_word_for_test(&stopped, garbage).unwrap(),
+            "in-stop collection must reclaim unrooted garbage"
+        );
+        complete_retrying("verify stop", stopped.complete());
+    });
+}
+
+/// D-8b (K5). With the serial ring empty, `KeeperMsg::Collect` wakes the
+/// parked driver, runs one GC-only stop without entering `with_batch`, replies
+/// `Ok(report)`, reclaims garbage, and lets later turns proceed normally.
+#[test]
+fn l67a_collection_runs_with_empty_serial_ring() {
+    with_live_era_with_garbage("l67a-k5-d8b", |era, survivor, garbage| {
+        let before = {
+            let stopped = stop_retrying(era);
+            let cycles = era.gc_collections_for_test(&stopped).unwrap();
+            complete_retrying("baseline stop", stopped.complete());
+            cycles
+        };
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        let collect_inbox = inbox.clone();
+        drop(inbox);
+        let (idle_tx, idle_rx) = mpsc::channel::<()>();
+        let (after_tx, after_rx) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let owner = scope.spawn(move || {
+                a.run(|state, home, port| {
+                    port.publish_idle().expect("A parks idle");
+                    idle_tx.send(()).expect("A is idle");
+                    after_rx.recv_timeout(BOUND).expect("collect finished");
+                    let mut turn = driver_turn(state, home, port, "(setq sp-live 82)");
+                    let seen = turn.with_world(|ev| eval(ev, "sp-live"));
+                    turn.end(port).ok().expect("A ends");
+                    seen
+                })
+            });
+            let requester = scope.spawn(move || {
+                idle_rx.recv_timeout(BOUND).expect("A parked");
+                let (c_tx, c_rx) = mpsc::sync_channel(1);
+                collect_inbox
+                    .send(KeeperMsg::Collect { reply: Some(c_tx) })
+                    .expect("send empty-ring Collect");
+                let report = c_rx
+                    .recv_timeout(BOUND)
+                    .expect("collect reply")
+                    .expect("empty-ring collection succeeded");
+                drop(collect_inbox);
+                after_tx.send(()).expect("release A");
+                report
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            let report = requester.join().expect("requester");
+            assert!(report.major);
+            assert_eq!(report.cycle, before + 1);
+            assert_eq!(owner.join().expect("A"), "82");
+        });
+        let stopped = stop_retrying(era);
+        assert!(era.owns_heap_word_for_test(&stopped, survivor).unwrap());
+        assert!(!era.owns_heap_word_for_test(&stopped, garbage).unwrap());
+        complete_retrying("verify stop", stopped.complete());
+    });
+}
+
+/// D-8c (K5). With no `KeeperMsg::Collect`, published allocation debt reaching
+/// `gc_threshold` piggybacks a collection onto the owner's serial stop,
+/// reclaims garbage, resets debt, and does not re-collect on the next turn.
+#[test]
+fn l67a_pacer_debt_piggybacks_collection_on_serial_stop() {
+    with_live_era_with_garbage("l67a-k5-d8c", |era, survivor, garbage| {
+        let before = {
+            let stopped = stop_retrying(era);
+            assert!(era.owns_heap_word_for_test(&stopped, garbage).unwrap());
+            // Entry 0's published image already carries the allocation debt
+            // from `survivor` and `garbage`; lowering the threshold to 1 makes
+            // the next serial stop due without any `KeeperMsg::Collect`.
+            era.set_gc_threshold_for_test(&stopped, 1).unwrap();
+            let cycles = era.gc_collections_for_test(&stopped).unwrap();
+            complete_retrying("setup stop", stopped.complete());
+            cycles
+        };
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        drop(inbox);
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let owner = scope.spawn(move || {
+                a.run(|state, home, port| {
+                    let mut t1 = driver_turn(state, home, port, "(setq sp-live 83)");
+                    let s1 = t1.with_world(|ev| eval(ev, "sp-live"));
+                    t1.end(port).ok().expect("turn 1 ends");
+                    // Second turn after debt reset: must NOT collect again.
+                    let mut t2 = driver_turn(state, home, port, "(setq sp-live 84)");
+                    let s2 = t2.with_world(|ev| eval(ev, "sp-live"));
+                    t2.end(port).ok().expect("turn 2 ends");
+                    (s1, s2)
+                })
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            assert_eq!(
+                owner.join().expect("A"),
+                ("83".to_string(), "84".to_string())
+            );
+        });
+        let stopped = stop_retrying(era);
+        assert_eq!(
+            era.gc_collections_for_test(&stopped).unwrap(),
+            before + 1,
+            "pacer must collect exactly once on the due stop and reset debt"
+        );
+        assert!(era.owns_heap_word_for_test(&stopped, survivor).unwrap());
+        assert!(!era.owns_heap_word_for_test(&stopped, garbage).unwrap());
+        complete_retrying("verify stop", stopped.complete());
+    });
+}
+
+/// D-8c-serial (lead #13986 condition). With zero published debt across all
+/// images and no `KeeperMsg::Collect`, allocation debt charged ONLY on the
+/// keeper heap itself (serial-turn debt) drives a due collection on the next
+/// serial stop and resets to false afterward.
+#[test]
+fn l67a_serial_turn_only_debt_drives_due_collection() {
+    with_live_era("l67a-k5-d8c-serial", |era| {
+        let before = {
+            let mut stopped = retry_native("initial stop", || era.stop());
+            let report = retry_native("drain baseline debt", || {
+                era.collect_requested(&mut stopped)
+            });
+            assert_eq!(
+                era.should_collect_stopped(&mut stopped),
+                Ok(false),
+                "post-collection baseline debt must be 0"
+            );
+            let threshold = era.gc_threshold_for_test(&stopped).unwrap();
+            // Charge ONLY the keeper heap's own `bytes_since_gc` (zero peer or
+            // entry-0 image debt).
+            era.charge_serial_bytes_for_test(&stopped, threshold)
+                .unwrap();
+            complete_retrying("setup stop", stopped.complete());
+            report.cycle
+        };
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        drop(inbox);
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let owner = scope.spawn(move || {
+                a.run(|state, home, port| {
+                    let mut turn = driver_turn(state, home, port, "(setq sp-live 85)");
+                    let seen = turn.with_world(|ev| eval(ev, "sp-live"));
+                    turn.end(port).ok().expect("turn ends");
+                    seen
+                })
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            assert_eq!(owner.join().expect("A"), "85");
+        });
+        let mut stopped = stop_retrying(era);
+        assert_eq!(
+            era.gc_collections_for_test(&stopped).unwrap(),
+            before + 1,
+            "serial-turn-only keeper heap debt must drive a collection"
+        );
+        assert_eq!(
+            era.should_collect_stopped(&mut stopped),
+            Ok(false),
+            "collection must reset serial-turn keeper heap debt"
+        );
+        complete_retrying("verify stop", stopped.complete());
+    });
+}
+
+/// D-8d (K5). A permanent in-stop collection failure (`Publication` from a
+/// poisoned cons allocator holding a lease) poisons the driver and wakes both
+/// the `Collect` waiter (`CollectRefusal::Poisoned`) and queued serial
+/// requester (`PortRefusal::Poisoned`) without hanging.
+#[test]
+fn l67a_collection_failure_in_stop_poisons_and_wakes_waiters() {
+    let (end, collect_res, port_res) = with_poisoned_era("l67a-k5-d8d", |era| {
+        // Retire one owner with a closed owner-cons lease and poison the cons
+        // allocator so `collect_requested` refuses with `Publication`.
+        let lease_permit = era.register(B, 0).expect("register leased owner");
+        let lease_key = lease_permit.key();
+        let heap = era.heap_identity();
+        std::thread::scope(|scope| {
+            let (parked_tx, parked_rx) = mpsc::channel::<()>();
+            let (retire_tx, retire_rx) = mpsc::channel::<()>();
+            let leased = scope.spawn(move || {
+                let mut owner = activate(lease_permit, heap, B);
+                retry_native("enter native", || owner.enter_native(&[]));
+                parked_tx.send(()).expect("leased parked");
+                retire_rx.recv_timeout(BOUND).expect("retire leased");
+                retire(owner);
+            });
+            parked_rx.recv_timeout(BOUND).expect("leased parked");
+            let stopped = stop_retrying(era);
+            era.grant_closed_owner_cons_lease_for_test(&stopped, lease_key)
+                .unwrap();
+            era.poison_cons_allocator_for_test(&stopped).unwrap();
+            complete_retrying("poison-setup stop", stopped.complete());
+            retire_tx.send(()).expect("retire leased");
+            leased.join().expect("leased owner");
+        });
+
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        let (c_tx, c_rx) = mpsc::sync_channel(1);
+        let collect_inbox = inbox.clone();
+        drop(inbox);
+        std::thread::scope(|scope| {
+            let owner = scope.spawn(move || {
+                let (_state, _home, mut port) = a.start();
+                // Queue Collect only after A has activated so A is live when
+                // the failing stop poisons the era.
+                collect_inbox
+                    .send(KeeperMsg::Collect { reply: Some(c_tx) })
+                    .expect("queue Collect");
+                drop(collect_inbox);
+                let res = port.request_turn().map(|_| ());
+                drop(port.exit());
+                res
+            });
+            let end = driver.run();
+            let collect_res = c_rx.recv_timeout(BOUND).expect("collect waiter woken");
+            let port_res = owner.join().expect("A");
+            (end, collect_res, port_res)
+        })
+    });
+    assert_eq!(
+        end,
+        DriverEnd::Poisoned(Breach::Rendezvous(RendezvousError::Publication))
+    );
+    assert_eq!(collect_res, Err(CollectRefusal::Poisoned));
+    assert_eq!(port_res, Err(PortRefusal::Poisoned));
+}
+
+/// D-8e' (K5 / K8 r2). A slow owner delays an empty-ring `KeeperMsg::Collect`
+/// past the attempt bound without poisoning; a second `KeeperMsg::Collect`
+/// arriving during `Pending` is drained via `between_stops`, and once the slow
+/// owner parks, BOTH waiters receive `Ok(report)` from the same collection.
+#[test]
+fn l67a_slow_owner_delays_empty_ring_collect_then_completes() {
+    with_live_era("l67a-k5-d8e", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let (notices_tx, notices) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx).observe_pending(
+            Duration::from_millis(5),
+            move |pending: &StopPending, queued| {
+                let _ = notices_tx.send((pending.epoch(), queued));
+            },
+        );
+        let slow = era.register(L, 0).expect("register slow owner");
+        let heap = era.heap_identity();
+        let collect_inbox = inbox.clone();
+        drop(inbox);
+        let (running_tx, running) = mpsc::channel::<()>();
+        let (l_go_tx, l_go) = mpsc::channel::<()>();
+        let (c1_tx, c1_rx) = mpsc::sync_channel(1);
+        let (c2_tx, c2_rx) = mpsc::sync_channel(1);
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            scope.spawn(move || lagging_owner(slow, heap, L, running_tx, l_go));
+            scope.spawn(move || {
+                running.recv_timeout(BOUND).expect("L runs");
+                collect_inbox
+                    .send(KeeperMsg::Collect { reply: Some(c1_tx) })
+                    .expect("send Collect 1");
+                let (epoch1, queued1) = notices.recv_timeout(BOUND).expect("pending notice 1");
+                assert!(epoch1.is_some(), "stop is standing");
+                assert_eq!(queued1, 0, "empty serial ring");
+                // Deliver a second Collect while Pending; the driver drains it
+                // through `between_stops` and answers both from this stop.
+                collect_inbox
+                    .send(KeeperMsg::Collect { reply: Some(c2_tx) })
+                    .expect("send Collect 2");
+                drop(collect_inbox);
+                let _ = notices.recv_timeout(BOUND).expect("pending notice 2");
+                l_go_tx.send(()).expect("release L");
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            let r1 = c1_rx
+                .recv_timeout(BOUND)
+                .expect("waiter 1")
+                .expect("collect 1 ok");
+            let r2 = c2_rx
+                .recv_timeout(BOUND)
+                .expect("waiter 2")
+                .expect("collect 2 ok");
+            assert!(r1.major);
+            assert_eq!(r1.epoch, r2.epoch, "both waiters share the single stop");
+            assert_eq!(r1.cycle, r2.cycle);
+        });
+    });
+}
+
+/// D-8f (K5 / C-R1 / C-R4). A closed registration-tagged owner-cons lease from
+/// a retired owner is reclaimed when collection rides a batch stop, draining
+/// `OwnerConsRetireQueue`, clearing `has_owner_cons_reserves`, and allowing
+/// clean era `finish()`.
+#[test]
+fn l67a_collection_in_batch_stop_reclaims_abandoned_owner_cons_lease() {
+    with_live_era("l67a-k5-d8f", |era| {
+        let lease_permit = era.register(B, 0).expect("register leased owner");
+        let lease_key = lease_permit.key();
+        let heap = era.heap_identity();
+        std::thread::scope(|scope| {
+            let (parked_tx, parked_rx) = mpsc::channel::<()>();
+            let (retire_tx, retire_rx) = mpsc::channel::<()>();
+            let leased = scope.spawn(move || {
+                let mut owner = activate(lease_permit, heap, B);
+                retry_native("enter native", || owner.enter_native(&[]));
+                parked_tx.send(()).expect("leased parked");
+                retire_rx.recv_timeout(BOUND).expect("retire leased");
+                retire(owner);
+            });
+            parked_rx.recv_timeout(BOUND).expect("leased parked");
+            let stopped = stop_retrying(era);
+            era.grant_closed_owner_cons_lease_for_test(&stopped, lease_key)
+                .unwrap();
+            assert!(era.has_owner_cons_reserves_for_test(&stopped).unwrap());
+            complete_retrying("grant stop", stopped.complete());
+            retire_tx.send(()).expect("retire leased");
+            leased.join().expect("leased owner");
+        });
+        assert_eq!(
+            era.retired_owner_cons_len_for_test(),
+            1,
+            "retire_rooted queued the leased registration"
+        );
+
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        let (c_tx, c_rx) = mpsc::sync_channel(1);
+        let collect_inbox = inbox.clone();
+        drop(inbox);
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let owner = scope.spawn(move || {
+                a.run(|state, home, port| {
+                    collect_inbox
+                        .send(KeeperMsg::Collect { reply: Some(c_tx) })
+                        .expect("queue Collect");
+                    drop(collect_inbox);
+                    let mut turn = driver_turn(state, home, port, "(setq sp-live 86)");
+                    let seen = turn.with_world(|ev| eval(ev, "sp-live"));
+                    turn.end(port).ok().expect("A ends");
+                    seen
+                })
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            let report = c_rx
+                .recv_timeout(BOUND)
+                .expect("collect reply")
+                .expect("collection ok");
+            assert!(report.major);
+            assert_eq!(owner.join().expect("A"), "86");
+        });
+        assert_eq!(
+            era.retired_owner_cons_len_for_test(),
+            0,
+            "in-stop collection must drain OwnerConsRetireQueue"
+        );
+        let stopped = stop_retrying(era);
+        assert!(
+            !era.has_owner_cons_reserves_for_test(&stopped).unwrap(),
+            "in-stop collection must discharge owner_reserved_blocks before finish()"
+        );
+        complete_retrying("verify stop", stopped.complete());
+    });
+}
+
+/// Lead #13986 condition (a4.2): binding an untraced `AllStopped` through
+/// `StoppedKeeper::from_scope` must refuse `grant_for` with
+/// `RendezvousError::Publication` before any serial lend can be minted.
+#[test]
+fn l67a_binding_an_untraced_stop_refuses_grant_before_any_lend() {
+    let grant_result = with_poisoned_era("l67a-untraced-bind", |era| {
+        let permit = era.register(O, 0).expect("register O");
+        let key = permit.key();
+        let heap = era.heap_identity();
+        std::thread::scope(|scope| {
+            let (receipt_tx, receipt_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel::<()>();
+            let owner = scope.spawn(move || {
+                let mut mutator = activate(permit, heap, O);
+                let receipt = retry_native("publish", || mutator.publish_native_owner(&[]));
+                receipt_tx.send(receipt).expect("send receipt");
+                done_rx.recv_timeout(BOUND).expect("done");
+                drop(mutator);
+            });
+            let receipt = receipt_rx.recv_timeout(BOUND).expect("receipt");
+            let (_, generation, _) = receipt.serial_facts();
+            retry_native("enqueue", || era.enqueue_serial(key, generation));
+            // Deliberately do NOT call `trace_serial` or `collect_requested`.
+            let stopped = retry_native("untraced stop", || era.stop());
+            let grant_error = with_stop_scope(|scope| {
+                let mut keeper = StoppedKeeper::from_scope(scope, stopped)
+                    .map_err(|(_, _, reason)| reason)
+                    .expect("bind succeeds on untraced stop");
+                let ready = keeper.ready_request(receipt).expect("receipt ready");
+                let err = keeper.grant_for(&ready).err();
+                drop(keeper);
+                err
+            });
+            done_tx.send(()).expect("release owner");
+            owner.join().expect("owner");
+            grant_error
+        })
+    });
+    assert_eq!(
+        grant_result,
+        Some(RendezvousError::Publication),
+        "binding an untraced stop must refuse grant_serial_head before any lend"
     );
 }

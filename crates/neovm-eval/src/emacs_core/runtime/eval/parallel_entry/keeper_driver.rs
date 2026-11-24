@@ -7,10 +7,10 @@
 //! `Breach`, `DriverEnd`, `LendDrop`) are this binding's instances.
 #![forbid(unsafe_code)]
 
-pub(crate) use super::driver_core::LendDrop;
 use super::driver_core::{
     self, Attempt, Batch, BatchVisitor, CustodyRefused, Head, KeeperOps, Refusal, Settle,
 };
+pub(crate) use super::driver_core::{CollectRefusal, LendDrop};
 use super::keeper_custody::{
     KeeperReadyRequest, RestoredKeeper, ReturnedSerialTicket, StoppedKeeper,
 };
@@ -21,8 +21,8 @@ use super::sync::mpsc;
 use super::world_turn::{WorldReturned, WorldTurn, WorldTurnIdentity};
 use neovm_value::tagged::gc::heap_transfer::{PublishedOwner, with_stop_scope};
 use neovm_value::tagged::gc::{
-    AllStopped, Mutator, MutatorKey, RendezvousError, RingClient, SerialGrant, StopAttempt,
-    StopPending,
+    AllStopped, CollectionReport, Mutator, MutatorKey, RendezvousError, RingClient, SerialGrant,
+    StopAttempt, StopPending,
 };
 use std::num::NonZeroU64;
 use std::time::Duration;
@@ -34,6 +34,7 @@ pub(crate) type KeeperMsg = driver_core::KeeperMsg<
     StoppedSerialTicket,
     ReceiveReason,
     WorldReturned,
+    CollectionReport,
 >;
 /// Keeper -> one owner.
 pub(crate) type GrantMsg = driver_core::GrantMsg<StoppedSerialTicket>;
@@ -66,6 +67,7 @@ impl<'k, 'service, 'heap> KeeperOps for &'k KeeperEra<'service, 'heap> {
     type Error = RendezvousError;
     type Stopped = AllStopped<'k>;
     type Pending = StopPending;
+    type Report = CollectionReport;
 
     fn refusal(error: RendezvousError) -> Refusal {
         match error {
@@ -126,6 +128,21 @@ impl<'k, 'service, 'heap> KeeperOps for &'k KeeperEra<'service, 'heap> {
 
     fn trace(stopped: &mut AllStopped<'k>) -> Result<(), RendezvousError> {
         stopped.trace_serial()
+    }
+
+    fn should_collect(self, stopped: &mut AllStopped<'k>) -> Result<bool, RendezvousError> {
+        self.should_collect_stopped(stopped)
+    }
+
+    fn collect_stopped(
+        self,
+        stopped: &mut AllStopped<'k>,
+    ) -> Result<CollectionReport, RendezvousError> {
+        self.collect_requested(stopped)
+    }
+
+    fn complete_empty(stopped: AllStopped<'k>) -> Result<(), RendezvousError> {
+        stopped.complete().map_err(|failure| failure.reason)
     }
 
     fn ring_len(stopped: &AllStopped<'k>) -> Result<usize, RendezvousError> {

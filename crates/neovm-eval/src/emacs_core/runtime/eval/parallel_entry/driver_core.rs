@@ -85,6 +85,8 @@ pub(crate) trait KeeperOps: Copy {
     type Stopped;
     /// What a pending attempt waited on.
     type Pending: Debug;
+    /// Summary of one completed in-stop collection.
+    type Report: Copy + Debug;
 
     fn refusal(error: Self::Error) -> Refusal;
     fn owner(key: Self::Key) -> u64;
@@ -105,6 +107,12 @@ pub(crate) trait KeeperOps: Copy {
     fn poison(self);
     fn epoch(stopped: &Self::Stopped) -> NonZeroU64;
     fn trace(stopped: &mut Self::Stopped) -> Result<(), Self::Error>;
+    /// Whether aggregate allocation debt meets the heap's GC threshold.
+    fn should_collect(self, stopped: &mut Self::Stopped) -> Result<bool, Self::Error>;
+    /// Run one stopped collection on `stopped`, consuming its single trace.
+    fn collect_stopped(self, stopped: &mut Self::Stopped) -> Result<Self::Report, Self::Error>;
+    /// Complete a traced stop that has no queued serial turns (GC-only stop).
+    fn complete_empty(stopped: Self::Stopped) -> Result<(), Self::Error>;
     /// Serial requests queued or granted under this stop.
     fn ring_len(stopped: &Self::Stopped) -> Result<usize, Self::Error>;
     /// Bind STOPPED as the keeper's custody for one batch and hand it to
@@ -172,9 +180,17 @@ pub(crate) enum Settle<E> {
     Retire(E),
 }
 
+/// Why a collection request was refused (K5 r1 / K8 r2: a slow stop keeps
+/// waiting rather than returning `Retry`, so poison is the only refusal).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CollectRefusal {
+    /// The era is poisoned.
+    Poisoned,
+}
+
 /// Owner or Baton group -> keeper. One inbox, so each sender's messages
 /// arrive in the order it sent them.
-pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason, WorldReturned> {
+pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason, WorldReturned, Report> {
     /// The owner published `receipt` and asks for a serial turn.
     Request { owner: u64, receipt: Receipt },
     /// The lent ticket came back.
@@ -198,6 +214,11 @@ pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason, WorldReturned> {
     GroupAbandon { cause: LendDrop },
     /// The group left the era; it requests nothing more.
     GroupExit,
+    /// Explicit collection request (K5): wakes the keeper even when the serial
+    /// ring is empty and rides the next stop.
+    Collect {
+        reply: Option<mpsc::SyncSender<Result<Report, CollectRefusal>>>,
+    },
 }
 
 /// Keeper -> one owner.
@@ -278,6 +299,7 @@ pub(crate) type MsgOf<O> = KeeperMsg<
     <O as KeeperOps>::Ticket,
     <O as KeeperOps>::Reason,
     <O as KeeperOps>::WorldReturned,
+    <O as KeeperOps>::Report,
 >;
 pub(crate) type GrantOf<O> = GrantMsg<<O as KeeperOps>::Ticket>;
 pub(crate) type GroupOf<O> = GroupMsg<<O as KeeperOps>::WorldTurn>;
@@ -317,6 +339,10 @@ pub(crate) struct Driver<'o, O: KeeperOps> {
     queued: BTreeMap<u64, O::Receipt>,
     /// The Baton group, once enrolled (L6.7b).
     group: Option<Group<O>>,
+    /// Explicit collection requested for the next stop (K5).
+    collect_requested: bool,
+    /// Waiters expecting the next in-stop collection's report (or Poisoned).
+    collect_waiters: Vec<mpsc::SyncSender<Result<O::Report, CollectRefusal>>>,
     /// One stop attempt's bound.
     stop_bound: Duration,
     /// How long a refused stop may stay `Busy` before the keeper warns, or,
@@ -337,6 +363,8 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             owners: BTreeMap::new(),
             queued: BTreeMap::new(),
             group: None,
+            collect_requested: false,
+            collect_waiters: Vec::new(),
             stop_bound: CONTENTION_BOUND,
             contention_bound: CONTENTION_BOUND,
             pending_observer: None,
@@ -391,7 +419,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
     /// break poisons the era.
     pub(crate) fn run(mut self) -> EndOf<O> {
         loop {
-            if self.queued_len() == 0 {
+            if self.queued_len() == 0 && !self.collect_requested {
                 match self.inbox.recv() {
                     Ok(message) => {
                         if let Err(breach) = self.between_stops(message) {
@@ -406,11 +434,21 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                     return self.poison(breach);
                 }
             }
-            if self.queued_len() != 0
+            if (self.queued_len() != 0 || self.collect_requested)
                 && let Err(breach) = self.serve_stop()
             {
                 return self.poison(breach);
             }
+        }
+    }
+
+    fn queue_collect(
+        &mut self,
+        reply: Option<mpsc::SyncSender<Result<O::Report, CollectRefusal>>>,
+    ) {
+        self.collect_requested = true;
+        if let Some(reply) = reply {
+            self.collect_waiters.push(reply);
         }
     }
 
@@ -445,6 +483,10 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                 message: "a returned World with no turn out",
             }),
             KeeperMsg::GroupAbandon { cause } => Err(Breach::GroupAbandoned { cause }),
+            KeeperMsg::Collect { reply } => {
+                self.queue_collect(reply);
+                Ok(())
+            }
         }
     }
 
@@ -578,13 +620,43 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
         }
     }
 
-    /// One stop: lend the ring's head in order, each after the previous
-    /// ticket came back, at most the requests queued when the stop began.
+    /// Run collection on `stopped` when `forced` is true or `should_collect`
+    /// reports debt at threshold; otherwise run the single empty serial trace.
+    /// Shared by `serve_stop` and future callers (such as b5 group GC) that
+    /// force a collection before binding a batch.
+    fn collect_or_trace(
+        &mut self,
+        stopped: &mut O::Stopped,
+        forced: bool,
+    ) -> Result<(), BreachOf<O>> {
+        let ops = self.ops;
+        let due = forced
+            || retry_busy::<O, _>(|| ops.should_collect(stopped)).map_err(Breach::Rendezvous)?;
+        if due {
+            let report =
+                retry_busy::<O, _>(|| ops.collect_stopped(stopped)).map_err(Breach::Rendezvous)?;
+            for reply in std::mem::take(&mut self.collect_waiters) {
+                let _ = reply.send(Ok(report));
+            }
+        } else {
+            retry_busy::<O, _>(|| O::trace(stopped)).map_err(Breach::Rendezvous)?;
+        }
+        Ok(())
+    }
+
+    /// One stop: collect instead of trace when collection is due (K5), then
+    /// lend the ring's head in order, each after the previous ticket came back,
+    /// at most the requests queued when the stop began. An empty ring completes
+    /// directly without binding a serial batch.
     fn serve_stop(&mut self) -> Result<(), BreachOf<O>> {
         let mut stopped = self.take_stop()?;
         let epoch = O::epoch(&stopped);
-        retry_busy::<O, _>(|| O::trace(&mut stopped)).map_err(Breach::Rendezvous)?;
+        let forced = std::mem::take(&mut self.collect_requested);
+        self.collect_or_trace(&mut stopped, forced)?;
         let bound = O::ring_len(&stopped).map_err(Breach::Rendezvous)?;
+        if bound == 0 {
+            return O::complete_empty(stopped).map_err(Breach::Rendezvous);
+        }
         let ops = self.ops;
         ops.with_batch(
             stopped,
@@ -759,6 +831,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                 KeeperMsg::Abandon { owner, cause } => {
                     return Err(Breach::Abandoned { owner, cause });
                 }
+                KeeperMsg::Collect { reply } => self.queue_collect(reply),
             }
         }
     }
@@ -819,6 +892,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                 KeeperMsg::GroupAbandon { cause } => {
                     return Err(Breach::GroupAbandoned { cause });
                 }
+                KeeperMsg::Collect { reply } => self.queue_collect(reply),
             }
         }
     }
@@ -827,6 +901,9 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
     /// poisoned it when the breach came from inside one.
     fn poison(mut self, breach: BreachOf<O>) -> EndOf<O> {
         self.ops.poison();
+        for reply in std::mem::take(&mut self.collect_waiters) {
+            let _ = reply.send(Err(CollectRefusal::Poisoned));
+        }
         // The ring dies with the era (a poisoned gate refuses every ring
         // call), so queued owners are only told.
         for (owner, _receipt) in std::mem::take(&mut self.queued) {

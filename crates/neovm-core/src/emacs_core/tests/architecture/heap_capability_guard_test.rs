@@ -351,7 +351,11 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
         // Era-level unsafe collection wrappers share that rule except for
         // the canonical Baton World-root adapter (`ERA_COLLECT_SAFE_CALLERS`).
         let sweep = is_sweep_method(&name);
-        let era_collect = ERA_COLLECT_METHODS.contains(&name.as_str());
+        // Era-level unsafe collection wrappers (`collect_stopped_with`,
+        // `collect_stopped_minor_with`, `collect_requested`) all take two
+        // arguments `(stopped, roots)`. A one-argument `KeeperEra::collect_requested`
+        // delegates to the allowlisted Baton adapter in `keeper_service.rs`.
+        let era_collect = ERA_COLLECT_METHODS.contains(&name.as_str()) && call.args.len() == 2;
         let collect = name == "collect_exact" || (name == "collect" && call.args.len() == 1);
         if collect
             || (sweep && !self.sweep_caller_allowed())

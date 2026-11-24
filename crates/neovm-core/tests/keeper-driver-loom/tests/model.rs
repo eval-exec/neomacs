@@ -127,6 +127,7 @@ impl<'a> KeeperOps for Era<'a> {
     type Error = RendezvousError;
     type Stopped = Stop<'a>;
     type Pending = Vec<MutatorKey>;
+    type Report = ();
 
     fn refusal(error: RendezvousError) -> Refusal {
         match error {
@@ -219,6 +220,24 @@ impl<'a> KeeperOps for Era<'a> {
     }
 
     fn trace(_stopped: &mut Stop<'a>) -> Result<(), RendezvousError> {
+        Ok(())
+    }
+
+    fn should_collect(self, _stopped: &mut Stop<'a>) -> Result<bool, RendezvousError> {
+        Ok(false)
+    }
+
+    fn collect_stopped(self, _stopped: &mut Stop<'a>) -> Result<(), RendezvousError> {
+        Ok(())
+    }
+
+    fn complete_empty(stopped: Stop<'a>) -> Result<(), RendezvousError> {
+        let mut model = stopped.era.model.lock().unwrap();
+        let members = model.members.clone();
+        model.ring.complete(stopped.epoch, &members)?;
+        model.ring.finish_debt(&members)?;
+        drop(model);
+        stopped.era.changed.notify();
         Ok(())
     }
 
@@ -366,7 +385,7 @@ impl<'a> Batch<Era<'a>> for ModelBatch<'a> {
     }
 }
 
-type Msg = KeeperMsg<Receipt, Ticket, Ticket, (), WorldTurn>;
+type Msg = KeeperMsg<Receipt, Ticket, Ticket, (), WorldTurn, ()>;
 type Grant = GrantMsg<Ticket>;
 type World = GroupMsg<WorldTurn>;
 

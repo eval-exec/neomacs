@@ -15,7 +15,8 @@ use neovm_value::tagged::gc::heap_transfer::{
 use std::num::NonZeroU64;
 
 use neovm_value::tagged::gc::{
-    AllStopped, MutatorKey, ParallelHeapEra, RendezvousError, StopAttempt,
+    AllStopped, CollectionError, CollectionReport, MutatorKey, ParallelHeapEra, RendezvousError,
+    StopAttempt,
 };
 #[cfg(test)]
 use neovm_value::tagged::gc::{HeapIdentity, MutatorPermit, RegistrationError};
@@ -121,6 +122,104 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
     /// L6.7 K7: poison the era on a proven invariant break.
     pub(crate) fn poison_era(&self) -> Result<(), RendezvousError> {
         self.era.poison_era()
+    }
+
+    /// L6.7 K5: whether aggregate stopped allocation debt meets the heap's GC
+    /// threshold (`published + keeper bytes_since_gc >= gc_threshold`).
+    pub(crate) fn should_collect_stopped(
+        &self,
+        stopped: &mut AllStopped<'_>,
+    ) -> Result<bool, RendezvousError> {
+        self.era.should_collect_stopped(stopped)
+    }
+
+    /// L6.7 K5: run one stopped major collection on `stopped`, supplying the
+    /// sole canonical Baton World-root walk so callers stay safe.
+    pub(crate) fn collect_requested(
+        &self,
+        stopped: &mut AllStopped<'_>,
+    ) -> Result<CollectionReport, CollectionError> {
+        // SAFETY: `self.era` is bound to `Baton` and
+        // `Baton::collect_parallel_world_roots` is the canonical complete
+        // CURRENT World root walk for this stopped era.
+        unsafe {
+            self.era
+                .collect_requested(stopped, Baton::collect_parallel_world_roots)
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn charge_serial_bytes_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        bytes: usize,
+    ) -> Result<(), CollectionError> {
+        self.era.charge_serial_bytes_for_test(stopped, bytes)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_gc_threshold_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        threshold: usize,
+    ) -> Result<(), CollectionError> {
+        self.era.set_gc_threshold_for_test(stopped, threshold)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gc_threshold_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<usize, CollectionError> {
+        self.era.gc_threshold_for_test(stopped)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gc_collections_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<usize, CollectionError> {
+        self.era.gc_collections_for_test(stopped)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn owns_heap_word_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        word: usize,
+    ) -> Result<bool, CollectionError> {
+        self.era.owns_heap_word_for_test(stopped, word)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn grant_closed_owner_cons_lease_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        key: MutatorKey,
+    ) -> Result<(), CollectionError> {
+        self.era
+            .grant_closed_owner_cons_lease_for_test(stopped, key)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn poison_cons_allocator_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<(), CollectionError> {
+        self.era.poison_cons_allocator_for_test(stopped)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_owner_cons_reserves_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<bool, CollectionError> {
+        self.era.has_owner_cons_reserves_for_test(stopped)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retired_owner_cons_len_for_test(&self) -> usize {
+        self.era.retired_owner_cons_len_for_test()
     }
 
     /// Heap the service thread registers a mutator permit against.
