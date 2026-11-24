@@ -889,8 +889,12 @@ impl ByteCodeFunction {
     }
 
     /// Replace leading constant values. The pool length, the ops, the lazy
-    /// cell, and the execution certificate stay: the captured prefix does
-    /// not change indices or the stack shape proved on the prototype.
+    /// cell, and the execution certificate stay.
+    ///
+    /// Constant values never enter that certificate. `seal_ops` reads only
+    /// the pool length, and the stack proof is op arithmetic. The exception
+    /// is a switch jump table: the verified driver re-checks the table at
+    /// run time and signals unless the target's depth is already proved.
     pub fn overwrite_constant_prefix(&mut self, values: &[crate::value::Value]) {
         debug_assert!(values.len() <= self.constants.len());
         for (i, value) in values.iter().enumerate() {

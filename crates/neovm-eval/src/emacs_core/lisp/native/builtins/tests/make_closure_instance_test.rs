@@ -457,6 +457,8 @@ fn make_closure_by_clone_keeps_the_decoded_certificate() {
         "clone path replaced the lazy cell"
     );
     assert!(clone_cell.decoded_ready().is_some());
+    assert!(data(by_clone).executes_sealed_ops());
+    assert!(data(by_clone).executes_verified_ops());
     super::symbols::force_make_closure_in_place_for_test(true);
     let in_place = make_closure(proto, &[Value::fixnum(7)]);
     let place_cell = data(in_place).lazy_gnu_code().as_ref().expect("lazy cell");
