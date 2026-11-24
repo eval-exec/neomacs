@@ -840,6 +840,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
     let before = ambient.tagged_heap().bytes_since_gc_exact();
     owner.discard_specpdl_to(count);
     let after = ambient.tagged_heap().bytes_since_gc_exact();
+    drop(ambient);
     owner.setup_thread_locals();
     assert_eq!(
         after, before,

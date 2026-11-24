@@ -184,6 +184,7 @@ fn same_buffer_fontifier_name_unintern_child() {
     // then put eval back: the unintern runs on `other` during eval's capture.
     neovm_value::tagged::gc::clear_tagged_heap_if_installed(eval.tagged_heap());
     let mut other = crate::test_utils::new_context();
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(other.tagged_heap());
     eval.setup_thread_locals();
     eval.eval_str(
         r#"(progn

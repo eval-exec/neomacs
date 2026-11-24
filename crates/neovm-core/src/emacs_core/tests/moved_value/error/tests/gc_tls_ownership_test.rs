@@ -144,7 +144,7 @@ fn gc_tls_ownership_in_flight_shared_registry_pin_outlives_owner_local_error() {
             .any(|root| root.bits() == payload_bits)
     );
 
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(first.tagged_heap());
+    let parked_first = first.park_for_test();
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let other = second
         .eval_str("(signal 'error (list (vector 47)))")
@@ -167,13 +167,16 @@ fn gc_tls_ownership_in_flight_shared_registry_pin_outlives_owner_local_error() {
     worker
         .join()
         .expect("release the worker's local registry pin");
-    first.setup_thread_locals();
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     assert!(
         roots_for(&first)
             .iter()
             .all(|root| root.bits() != payload_bits)
     );
     first.gc_collect_exact();
+    drop(first);
+    let _second = parked_second.resume_for_test().expect("resume second");
     drop(other);
 }
 
@@ -211,7 +214,7 @@ fn gc_tls_ownership_in_flight_registry_pins_change_during_owner_gc() {
         drop(pin);
         worker_finished.store(true, Ordering::Release);
     });
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(first.tagged_heap());
+    let parked_first = first.park_for_test();
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let other = second
         .eval_str("(signal 'error (list (vector 49)))")
@@ -220,6 +223,8 @@ fn gc_tls_ownership_in_flight_registry_pins_change_during_owner_gc() {
         EvalError::Signal { data, .. } => data[0],
         other => panic!("expected signal, received {other:?}"),
     };
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     collecting.wait();
     drop(error);
     let mut collections = 0;
@@ -231,14 +236,14 @@ fn gc_tls_ownership_in_flight_registry_pins_change_during_owner_gc() {
     worker
         .join()
         .expect("clone and release registry pins during owner GC");
-    first.setup_thread_locals();
     assert!(
         roots_for(&first)
             .iter()
             .all(|root| root.bits() != payload_bits)
     );
     first.gc_collect_exact();
-    second.setup_thread_locals();
+    drop(first);
+    let mut second = parked_second.resume_for_test().expect("resume second");
     assert!(
         roots_for(&second)
             .iter()

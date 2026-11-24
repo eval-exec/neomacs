@@ -1985,7 +1985,7 @@ pub fn installed_slot_is_armed_test_fallback() -> bool {
 #[inline(never)]
 fn refuse_foreign_heap_install() -> ! {
     panic!(
-        "dormant Context: a second Context cannot be constructed while another heap is installed on this thread"
+        "dormant Context: a Context heap cannot be installed while another heap is installed on this thread"
     );
 }
 

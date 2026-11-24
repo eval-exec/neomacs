@@ -101,81 +101,69 @@ fn clear_heap_only(ctx: &Context) {
     neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
 }
 
-/// Install `foreign`, then collect `ctx`. The collector's
-/// `!tagged_heap_is_current` arm (command_loop) must switch to `ctx`.
-/// Resume already installed `ctx`, so the nest is what reaches that arm.
-///
-/// # Safety
-///
-/// `foreign` must remain a live `AliasableBox` root for the duration of the
-/// call, with no live references into it.
-unsafe fn collect_while_foreign_heap_installed(ctx: &mut Context, foreign: HeapRoot, exact: bool) {
-    // SAFETY: caller guarantees `foreign` stays live for the call and `ctx`
-    // owns the displaced root.
-    let nest = unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(foreign) };
+/// Clear `ctx`'s heap slot (leaving `!tagged_heap_is_current`), then collect
+/// `ctx`. The collector's `!tagged_heap_is_current` arm (command_loop) must
+/// reactivate `ctx` on the empty slot without touching a parked foreign heap.
+fn collect_from_empty_slot(ctx: &mut Context, exact: bool) {
+    clear_heap_only(ctx);
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_current(
+        &ctx.tagged_heap
+    ));
     if exact {
         ctx.gc_collect_exact();
     } else {
         ctx.gc_collect_from_current_roots();
     }
-    drop(nest);
+    assert!(neovm_value::tagged::gc::tagged_heap_is_current(
+        &ctx.tagged_heap
+    ));
 }
 
-type HeapRoot = std::ptr::NonNull<neovm_value::tagged::gc::TaggedHeap>;
-
 fn two_heaps() -> (
-    HeapRoot,
     super::parked_context::ParkedContext,
-    HeapRoot,
     super::parked_context::ParkedContext,
 ) {
     let first = Context::new(crate::test_utils::unit_runtime());
-    let first_root = first.tagged_heap.heap_root();
     let parked_first = first.park_for_test();
     let second = Context::new(crate::test_utils::unit_runtime());
-    let second_root = second.tagged_heap.heap_root();
     let parked_second = second.park_for_test();
-    (first_root, parked_first, second_root, parked_second)
+    (parked_first, parked_second)
 }
 
 #[test]
 fn gc_tls_ownership_exact_collection_uses_the_collecting_heap() {
-    let (first_root, parked_first, second_root, parked_second) = two_heaps();
+    let (parked_first, parked_second) = two_heaps();
     let mut parked_first = Some(parked_first);
     let mut parked_second = Some(parked_second);
-    // Two rounds, each starting with the other heap installed. A collector
-    // that used the TLS heap instead of `self.tagged_heap` would collect the
-    // foreign heap.
+    // Two rounds, each starting with `!tagged_heap_is_current` on an empty
+    // slot while the other World stays parked. The collector's activation arm
+    // must install and collect `self.tagged_heap`.
     for _ in 0..2 {
         let mut first = parked_first
             .take()
             .unwrap()
             .resume_for_test()
             .expect("resume first");
-        // SAFETY: `parked_second` owns `second_root` and outlives this call.
-        unsafe { collect_while_foreign_heap_installed(&mut first, second_root, true) };
+        collect_from_empty_slot(&mut first, true);
         parked_first = Some(first.park_for_test());
         let mut second = parked_second
             .take()
             .unwrap()
             .resume_for_test()
             .expect("resume second");
-        // SAFETY: `parked_first` owns `first_root` and outlives this call.
-        unsafe { collect_while_foreign_heap_installed(&mut second, first_root, true) };
+        collect_from_empty_slot(&mut second, true);
         parked_second = Some(second.park_for_test());
     }
 }
 
 #[test]
 fn gc_tls_ownership_safe_point_uses_the_collecting_heap() {
-    let (first_root, parked_first, second_root, parked_second) = two_heaps();
+    let (parked_first, parked_second) = two_heaps();
     let mut first = parked_first.resume_for_test().expect("resume first");
-    // SAFETY: `parked_second` owns `second_root` and outlives this call.
-    unsafe { collect_while_foreign_heap_installed(&mut first, second_root, false) };
+    collect_from_empty_slot(&mut first, false);
     let parked_first = first.park_for_test();
     let mut second = parked_second.resume_for_test().expect("resume second");
-    // SAFETY: `parked_first` owns `first_root` and outlives this call.
-    unsafe { collect_while_foreign_heap_installed(&mut second, first_root, false) };
+    collect_from_empty_slot(&mut second, false);
     drop(parked_first);
     drop(second);
 }
@@ -264,6 +252,7 @@ fn gc_tls_ownership_eval_str_activates_its_context_registries() {
             .is_nil()
     );
     second.gc_collect_exact();
+    clear_heap_only(&second);
     first.gc_collect_exact();
 }
 
@@ -299,6 +288,7 @@ fn gc_tls_ownership_eval_form_activates_its_context_registries() {
         &["gc-tls-public-first", "gc-tls-public-extra"],
     );
     second.gc_collect_exact();
+    clear_heap_only(&second);
     first.gc_collect_exact();
 }
 
@@ -323,6 +313,7 @@ fn gc_tls_ownership_eval_value_activates_its_context_registries() {
     );
     assert_ccl_registry_programs(&["gc-tls-public-first"], &["gc-tls-public-second"]);
     first.gc_collect_exact();
+    clear_heap_only(&first);
     second.gc_collect_exact();
 }
 
@@ -363,5 +354,6 @@ fn gc_tls_ownership_eval_str_each_activates_its_context_registries() {
         "eval_str_each registered a program in another Context"
     );
     second.gc_collect_exact();
+    clear_heap_only(&second);
     first.gc_collect_exact();
 }

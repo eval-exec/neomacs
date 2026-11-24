@@ -1,6 +1,7 @@
-//! At most one active Context per thread. A second `Context::new` while a
-//! heap is installed refuses in release. Parking is the test suspension
-//! primitive; it has no eval API. Outer doors debug-assert when a foreign
+//! At most one active Context per thread. A second `Context::new`, pdump
+//! load/restore, or `setup_thread_locals` while another live heap is installed
+//! refuses in release before the first TLS write. Parking (`ParkedContext`)
+//! suspends a `Context` with no eval API. Outer doors refuse when a foreign
 //! heap is nested over a live Context.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -128,7 +129,6 @@ fn nested_bare_heap_restores_the_context_heap() {
     assert_eq!(ctx.eval_str("1").expect("restored door"), Value::fixnum(1));
 }
 
-#[cfg(debug_assertions)]
 #[test]
 fn outer_doors_debug_assert_under_a_foreign_heap() {
     let mut ctx = Context::new(crate::test_utils::unit_runtime());
@@ -149,7 +149,7 @@ fn outer_doors_debug_assert_under_a_foreign_heap() {
         let text = panic_text(caught.expect_err(label));
         assert!(
             text.contains("dormant Context"),
-            "{label} must debug-assert, got {text}"
+            "{label} must refuse under a foreign heap, got {text}"
         );
         assert!(
             tagged_heap_is_current(&foreign),
@@ -164,22 +164,18 @@ fn outer_doors_debug_assert_under_a_foreign_heap() {
     );
 }
 
-#[cfg(debug_assertions)]
 fn eval_str_door(ctx: &mut Context) {
     let _ = ctx.eval_str("1");
 }
 
-#[cfg(debug_assertions)]
 fn eval_form_door(ctx: &mut Context) {
     let _ = ctx.eval_form(Value::fixnum(1));
 }
 
-#[cfg(debug_assertions)]
 fn eval_value_door(ctx: &mut Context) {
     let _ = ctx.eval_value(&Value::fixnum(1));
 }
 
-#[cfg(debug_assertions)]
 fn eval_str_each_door(ctx: &mut Context) {
     let _ = ctx.eval_str_each("1");
 }
@@ -457,4 +453,84 @@ fn pdump_reload_written_bootstrap_dump_round_trips_ok_and_err() {
             .expect("reloaded eval preserves binding"),
         Value::fixnum(77)
     );
+}
+
+#[test]
+fn setup_thread_locals_refuses_over_foreign_heap_without_mutating_tls() {
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
+    let ctx_id = ctx.tagged_heap().tagged_heap_identity();
+    let ctx_ccl = neovm_text::emacs_core::ccl::current_ccl_registry_handle();
+
+    let foreign =
+        neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
+    let foreign_id = foreign.tagged_heap_identity();
+    // SAFETY: `foreign` and `ctx` both outlive `nest` with no live heap
+    // references during install or drop.
+    let nest = unsafe { NestedTaggedHeapInstall::install_bare(foreign.root()) };
+    neovm_text::emacs_core::ccl::reset_ccl_registry();
+    let foreign_ccl = neovm_text::emacs_core::ccl::current_ccl_registry_handle();
+    assert!(!neovm_value::heap_registry::HeapRegistryHandle::registry_ptr_eq_for_test(
+        &ctx_ccl,
+        &foreign_ccl
+    ));
+    let _foreign_quit = neovm_value::quit::install_quit_requested_for_test(true);
+    assert!(neovm_value::quit::quit_pending());
+
+    for (label, call) in [
+        ("setup_thread_locals", Context::setup_thread_locals as fn(&mut Context)),
+        (
+            "setup_owner_thread_locals",
+            Context::setup_owner_thread_locals as fn(&mut Context),
+        ),
+        ("gc_collect_exact", Context::gc_collect_exact as fn(&mut Context)),
+        (
+            "gc_collect_from_current_roots",
+            Context::gc_collect_from_current_roots as fn(&mut Context),
+        ),
+    ] {
+        let refused = catch_unwind(AssertUnwindSafe(|| call(&mut ctx)));
+        let text = panic_text(refused.expect_err(label));
+        assert!(
+            text.contains("dormant Context"),
+            "{label} must refuse with dormant Context, got {text}"
+        );
+        assert_eq!(
+            current_tagged_heap_identity(),
+            Some(foreign_id),
+            "{label} must leave the foreign heap installed"
+        );
+        assert!(
+            neovm_value::heap_registry::HeapRegistryHandle::registry_ptr_eq_for_test(
+                &neovm_text::emacs_core::ccl::current_ccl_registry_handle(),
+                &foreign_ccl,
+            ),
+            "{label} must refuse before mutating CCL_REGISTRY TLS"
+        );
+        assert!(
+            neovm_value::quit::quit_pending(),
+            "{label} must refuse before mutating QUIT_REQUESTED TLS"
+        );
+    }
+
+    drop(nest);
+    assert_eq!(current_tagged_heap_identity(), Some(ctx_id));
+    // Same-heap idempotent reinstall succeeds and restores ctx's TLS handles.
+    ctx.setup_thread_locals();
+    assert_eq!(current_tagged_heap_identity(), Some(ctx_id));
+    assert!(
+        neovm_value::heap_registry::HeapRegistryHandle::registry_ptr_eq_for_test(
+            &neovm_text::emacs_core::ccl::current_ccl_registry_handle(),
+            &ctx_ccl,
+        ),
+        "same-heap setup_thread_locals must restore ctx's CCL_REGISTRY"
+    );
+    assert!(
+        !neovm_value::quit::quit_pending(),
+        "same-heap setup_thread_locals must restore ctx's QUIT_REQUESTED"
+    );
+
+    // Empty-slot install (via park + resume) also succeeds.
+    let mut ctx = ctx.park_for_test().resume_for_test().expect("resume on empty slot");
+    assert_eq!(current_tagged_heap_identity(), Some(ctx_id));
+    assert_eq!(ctx.eval_str("42").expect("resumed eval"), Value::fixnum(42));
 }

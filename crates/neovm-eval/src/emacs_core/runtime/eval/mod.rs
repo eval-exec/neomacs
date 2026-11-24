@@ -5565,10 +5565,10 @@ impl Context {
         }
     }
 
-    /// Debug builds refuse an outer door when another Context's heap is
-    /// installed. Release builds keep the door: the release refusal is
-    /// `Context::new`, and `setup_thread_locals` still reactivates. The
-    /// armed test-fallback heap is not a Context.
+    /// Debug builds assert at entry to an outer door before touching TLS;
+    /// release builds enforce the same refusal inside `setup_thread_locals`
+    /// before the first TLS write. The armed test-fallback heap is not a
+    /// Context.
     #[inline]
     fn debug_assert_outer_door_heap(&self) {
         debug_assert!(

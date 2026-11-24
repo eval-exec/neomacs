@@ -861,7 +861,10 @@ impl Context {
 
     /// Set the thread-local heap pointers for the current thread.
     ///
-    /// Reactivates this thread's Context after another local Context ran.
+    /// Installs this `Context`'s heap and TLS registries when the slot is
+    /// empty, already names this `Context`'s heap, or holds the armed
+    /// test-fallback heap. Refuses with a cold release panic before the first
+    /// TLS write if a different live heap is already installed on this thread.
     /// Context is thread-confined; worker threads construct their own Context.
     #[inline(never)]
     pub fn setup_thread_locals(&mut self) {

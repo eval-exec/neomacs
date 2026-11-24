@@ -131,6 +131,7 @@ fn rows_observation_replaced_or_inactive_context_refuses_before_saved_keys() {
         second.static_rows_observation_current(&epoch),
         Err(RowsObservationRefusal::RuntimeChanged)
     );
+    drop(second);
     first.setup_thread_locals();
     assert!(first.static_rows_observation_current(&epoch).is_ok());
 }

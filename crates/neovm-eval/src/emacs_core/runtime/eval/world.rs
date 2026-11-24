@@ -312,8 +312,9 @@ impl WorldView<neovm_value::tagged::gc::TaggedHeap> {
     pub(crate) fn install_tagged_heap(&mut self) {
         // SAFETY: `self.ptr` is the World's AliasableBox provenance root.
         // It lives as long as this view. `&mut self` is what makes a live
-        // heap reference fail to compile across the install.
-        unsafe { neovm_value::tagged::gc::set_tagged_heap_root(self.ptr) };
+        // heap reference fail to compile across the install. Refuses with a
+        // cold release panic if a different live heap is already installed.
+        unsafe { neovm_value::tagged::gc::install_tagged_heap_root_refusing_foreign(self.ptr) };
     }
 }
 
@@ -1392,7 +1393,11 @@ impl WorldStorageBuilder {
         // a `&mut` borrow) is what makes the slot survive every sibling
         // access the owner later takes.
         // SAFETY: `lease` owns the AliasableBox root this view installs.
-        unsafe { neovm_value::tagged::gc::set_tagged_heap_root(lease.0.tagged_heap.root()) };
+        unsafe {
+            neovm_value::tagged::gc::install_tagged_heap_root_refusing_foreign(
+                lease.0.tagged_heap.root(),
+            )
+        };
         Self::publish_views(&lease, selection)
     }
 

@@ -191,36 +191,25 @@ fn forced_collection_after_two_world_marks(join: MarkerJoin) {
     let mut b = Some(b);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let parked_b = b.take().unwrap().park_for_test();
-        let b_root = parked_b.tagged_heap().heap_root();
         let mut a = parked_a
             .take()
             .unwrap()
             .resume_for_test()
             .expect("resume a");
-        // A's collection starts with B's heap installed, so the collector
-        // switches off B. Resume alone would install A and skip that arm.
-        {
-            // SAFETY: `parked_b` owns `b_root` and `a` owns the displaced root;
-            // both outlive `_nest`.
-            let _nest =
-                unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(b_root) };
-            a.gc_collect_from_current_roots_impl(true);
-        }
+        // Clear A's heap slot so A's collection enters the
+        // `!tagged_heap_is_current` arm on an empty slot while B's concurrent
+        // marker is still running on `parked_b`.
+        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&a.tagged_heap);
+        a.gc_collect_from_current_roots_impl(true);
         assert_eq!(a.tagged_heap.mark_phase(), MarkPhase::Idle);
         assert_eq!(
             parked_b.tagged_heap().mark_phase(),
             MarkPhase::ConcurrentRunning
         );
-        let a_root = a.tagged_heap.heap_root();
         parked_a = Some(a.park_for_test());
         let mut b_resumed = parked_b.resume_for_test().expect("resume b");
-        {
-            // SAFETY: `parked_a` owns `a_root` and `b_resumed` owns the
-            // displaced root; both outlive `_nest`.
-            let _nest =
-                unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(a_root) };
-            b_resumed.gc_collect_from_current_roots_impl(true);
-        }
+        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&b_resumed.tagged_heap);
+        b_resumed.gc_collect_from_current_roots_impl(true);
         b = Some(b_resumed);
     }));
     let mut parked_b = b.take().map(|active| active.park_for_test());

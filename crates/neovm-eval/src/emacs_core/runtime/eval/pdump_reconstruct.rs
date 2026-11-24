@@ -106,7 +106,9 @@ impl Context {
         let tagged_heap = tagged_heap;
         // SAFETY: the reconstructed Context owns this AliasableBox. The root
         // stays live until that Context clears it, and no heap reference is live yet.
-        unsafe { neovm_value::tagged::gc::set_tagged_heap_root(tagged_heap.root()) };
+        unsafe {
+            neovm_value::tagged::gc::install_tagged_heap_root_refusing_foreign(tagged_heap.root())
+        };
         let noninteractive = obarray
             .canonical_value_or_nil(
                 CanonicalAccess::DUMP,
