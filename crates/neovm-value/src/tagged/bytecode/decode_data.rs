@@ -88,7 +88,9 @@ impl StackProof {
 
 impl StackProof {
     /// # Safety
-    /// the proof must be the verifier's result for exactly these ops.
+    /// `depths` must be the verifier's result for exactly these ops, and
+    /// `max_stack` must be the limit that verifier ran with. Resume trusts
+    /// both.
     #[doc(hidden)]
     pub unsafe fn from_parts(
         switch_depth: Option<usize>,

@@ -4788,7 +4788,9 @@ impl<'a> Vm<'a> {
     /// of this frame. Either driver installs both stacks in place and
     /// continues at the pc when the handler shape is unchanged. The verified
     /// driver also requires the live depth to equal the proof at that pc:
-    /// it has no frame-depth check. A stack that fails that one check finishes
+    /// it has no frame-depth check. A HOF resume continues at the next
+    /// instruction, two slots down, so it also requires `Call(2)` and the
+    /// proof at that post-call depth. A stack that fails either check finishes
     /// through [`Self::run_resumed_frame_latched`] on the checked driver. The
     /// suspended interpreter frame retains final
     /// cleanup ownership on the in-place path. State the checked driver
@@ -4865,6 +4867,10 @@ impl<'a> Vm<'a> {
             inlined,
             ..
         } = *resume;
+        // A test may name another instruction at the same proven depth as
+        // the call the leaf recorded. Production leaves the cell empty.
+        #[cfg(test)]
+        let pc = HOF_DEOPT_PC_OVERRIDE.with(|slot| slot.take().unwrap_or(pc));
         // In place only when the handler shape still matches this frame.
         // The verified monomorph also requires the one O(1) depth proof:
         // a short or deep deopt stack must not run without the frame check.
@@ -4874,7 +4880,15 @@ impl<'a> Vm<'a> {
             && stack.len() <= func.max_stack().get();
         let depth_matches =
             !VERIFIED || Self::resume_trusts_stack_proof(func, pc, stack.len(), handlers);
-        if handler_shape_matches && depth_matches {
+        // A verified HOF resume continues at `pc + 1` with two fewer slots.
+        // That is sound only for `Call(2)` whose post-call depth is proven.
+        // A deopt map that names another op falls through to the latched
+        // checked resume, which rechecks `(pc + 1, len - 2)` itself.
+        let hof_post_call_ok = !VERIFIED
+            || inlined.as_ref().is_none_or(|inlined| {
+                inlined.hof.is_none() || Self::verified_hof_in_place_ok(func, pc, stack.len())
+            });
+        if handler_shape_matches && depth_matches && hof_post_call_ok {
             #[cfg(test)]
             if VERIFIED {
                 VERIFIED_RESUME_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -5053,6 +5067,24 @@ impl<'a> Vm<'a> {
             return false;
         };
         proof.max_stack() == max_stack && proof.proves_depth(start_pc, depth)
+    }
+
+    /// Whether a verified HOF deopt may keep running in this frame.
+    ///
+    /// The in-place arm returns at `pc + 1` after dropping the function and
+    /// both arguments and pushing the mapping result. `Call(2)` is the only
+    /// op with that net, and the proof at the next instruction must be the
+    /// post-call depth. A subtract or add that overflows is not that shape.
+    #[cfg(feature = "jit")]
+    fn verified_hof_in_place_ok(func: &ByteCodeFunction, pc: usize, stack_len: usize) -> bool {
+        let Some(post) = stack_len.checked_sub(2) else {
+            return false;
+        };
+        let Some(next) = pc.checked_add(1) else {
+            return false;
+        };
+        matches!(func.executable_ops().get(pc), Some(&Op::Call(2)))
+            && Self::resume_trusts_stack_proof(func, next, post, 0)
     }
 
     #[inline(never)]
@@ -5818,7 +5850,7 @@ impl<'a> Vm<'a> {
                                     && (offset > after_dup_len
                                         || after_dup_len >= frame_base + func.max_stack().get())
                                 {
-                                    // SAFETY: len < frame_limit checked above.
+                                    // SAFETY: len < frame_base + max_stack checked above.
                                     unsafe { cursor.push_unchecked(top) };
                                     pc_local += 1;
                                     invalid_bytecode!("dup-lss-gotoifnil-stackref-out-of-range");
@@ -11331,6 +11363,15 @@ pub(crate) use vm_leaf::render_vm_leaf_stats;
 #[cfg(test)]
 pub(crate) static VERIFIED_RESUME_ENTRIES: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+
+/// Replaces the pc a HOF deopt recorded, once, inside `osr_transfer`.
+/// `None` keeps the call the native leaf named. Taken on use so a test
+/// cannot leak it into the next resume.
+#[cfg(all(test, feature = "jit"))]
+thread_local! {
+    pub(crate) static HOF_DEOPT_PC_OVERRIDE: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
 
 #[cfg(test)]
 #[path = "tests/vm_test.rs"]
