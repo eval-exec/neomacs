@@ -274,6 +274,54 @@ pub(super) fn entry_state(
         Err(std::sync::TryLockError::Poisoned(_)) => Err(RendezvousError::Poisoned),
     }
 }
+
+/// An owner holds its entry only for a moment, under the gate. A keeper that
+/// meets that moment outside the gate retries it instead of refusing `Busy`.
+/// The retry is bounded: a hold this long is not an owner's moment (this
+/// thread may hold the entry itself), and it refuses `Busy` as before.
+pub(super) fn wait_out_owner_moment<T>(
+    mut attempt: impl FnMut() -> Result<T, RendezvousError>,
+) -> Result<T, RendezvousError> {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = super::test_fences::take_owner_moment_hook_for_test() {
+        hook();
+    }
+    let deadline = std::time::Instant::now() + super::native_extent::CONTENTION_WAIT;
+    loop {
+        match attempt() {
+            Err(RendezvousError::Busy) if std::time::Instant::now() < deadline => {
+                #[cfg(any(test, feature = "test-support"))]
+                super::test_fences::note_gate_contention();
+                std::thread::yield_now();
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Every published root batch, current or retained, has no reader left.
+fn readers_finished(entries: &[Arc<MutatorEntry>]) -> Result<(), RendezvousError> {
+    for entry in entries {
+        let state = entry_state(entry)?;
+        if let Some(roots) = &state.roots {
+            roots.validate_no_readers().map_err(RendezvousError::from)?;
+        }
+        for roots in &state.retained_roots {
+            roots.validate_no_readers().map_err(RendezvousError::from)?;
+        }
+    }
+    Ok(())
+}
+
+/// The keeper's reader scan (completion and collection). It stays outside the
+/// gate because root-table locks never overlap it, so an owner's moment on an
+/// entry is waited out.
+pub(super) fn readers_finished_waiting(
+    entries: &[Arc<MutatorEntry>],
+) -> Result<(), RendezvousError> {
+    wait_out_owner_moment(|| readers_finished(entries))
+}
+
 pub(super) fn membership(gate: &RegistryState) -> Result<Vec<(MutatorKey, Mode)>, RendezvousError> {
     let mut result = Vec::new();
     result

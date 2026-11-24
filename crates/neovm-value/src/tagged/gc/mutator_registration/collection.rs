@@ -526,20 +526,12 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         }
         let registry = self.registry();
         let (keys, entries) = {
-            let gate = registry.lock()?;
+            let gate = registry.lock_for_keeper()?;
             (gate.rendezvous.frozen.clone(), gate.entries.clone())
         };
         // Refuse a retained/abandoned reader BEFORE any mark or image mutation.
         // Root-table locks never overlap the control gate or the collector job.
-        for entry in &entries {
-            let state = entry_state(entry)?;
-            if let Some(roots) = &state.roots {
-                roots.validate_no_readers()?;
-            }
-            for roots in &state.retained_roots {
-                roots.validate_no_readers()?;
-            }
-        }
+        super::rendezvous::readers_finished_waiting(&entries)?;
         let mut words = Vec::new();
         for key in &keys {
             stopped.with_root_reader(*key, |reader| {

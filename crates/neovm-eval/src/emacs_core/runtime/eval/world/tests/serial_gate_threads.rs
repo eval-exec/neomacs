@@ -12,7 +12,7 @@ use neovm_value::tagged::gc::{
 };
 use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::test_support::authority::{
-    begin_restore_retry_for_test, install_restore_gate_hook_for_test,
+    begin_restore_retry_for_test, gate_contention_for_test, install_restore_gate_hook_for_test,
 };
 use neovm_value::value::Value;
 
@@ -432,8 +432,9 @@ fn request_during_ticket_then_admitted_after_end() {
 }
 
 /// (e) The participant holds the registry gate inside `prepare_restore`
-/// before lend. `Busy` returns that same `AllStopped`. The keeper retries
-/// it, then `serial_gc` and end succeed, and the participant restores.
+/// before lend. The lend waits out that holder (L6.7 F3) instead of
+/// refusing `Busy`: the hook holds the gate until the keeper has met it.
+/// Then `serial_gc` and end succeed, and the participant restores.
 #[test]
 fn lend_races_participant_restore() {
     with_participant!(|era, keeper, heap, rendezvous, permit, car, cdr| {
@@ -448,9 +449,17 @@ fn lend_races_participant_restore() {
                 acknowledge(&mut owner, epoch, &[car, cdr]);
                 acked_tx.send(()).expect("ack");
                 recv(&stopped_rx, "keeper stopped");
+                let before = gate_contention_for_test();
                 install_restore_gate_hook_for_test(Box::new(move || {
                     holding_tx.send(()).expect("holding the gate");
-                    thread::sleep(Duration::from_millis(500));
+                    let deadline = Instant::now() + DEADLINE;
+                    while gate_contention_for_test() == before {
+                        assert!(
+                            Instant::now() < deadline,
+                            "the lend never met the held gate"
+                        );
+                        thread::yield_now();
+                    }
                 }));
                 restore(&mut owner);
                 resumed_tx.send(()).expect("resumed");
@@ -460,10 +469,15 @@ fn lend_races_participant_restore() {
             let stopped = retry_gate("stop", || stop_for_test(era));
             stopped_tx.send(()).expect("keeper stopped");
             recv(&holding_rx, "participant holds the gate");
-            let failure = lend_serial_for_test(era, keeper, stopped)
-                .expect_err("lend while the gate is held");
-            assert_eq!(failure.reason, RendezvousError::Busy);
-            let mut ticket = lend_retrying(era, keeper, failure.stopped);
+            let before = gate_contention_for_test();
+            let mut ticket = match lend_serial_for_test(era, keeper, stopped) {
+                Ok(ticket) => ticket,
+                Err(failure) => panic!("the lend waits out the held gate: {:?}", failure.reason),
+            };
+            assert!(
+                gate_contention_for_test() > before,
+                "the lend met the participant's held gate"
+            );
             retry_gate("serial_gc", || serial_gc_for_test(&mut ticket));
             end_collected(ticket);
             recv(&resumed_rx, "participant restored");

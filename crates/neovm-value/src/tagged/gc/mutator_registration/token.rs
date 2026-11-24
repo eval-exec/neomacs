@@ -245,9 +245,10 @@ pub struct MutatorFinishFailure<'era> {
     owner: Mutator<'era>,
 }
 impl<'era> MutatorFinishFailure<'era> {
-    #[cfg(any(test, feature = "test-support"))]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn into_owner(self) -> Mutator<'era> {
+    /// `finish` consumes the owner, and dropping an unfinished owner poisons
+    /// the era. A refusal (a stop in progress, a contended gate) hands the
+    /// owner back so the caller can finish it later.
+    pub fn into_owner(self) -> Mutator<'era> {
         self.owner
     }
 }

@@ -183,6 +183,10 @@ pub enum RegistrationError {
     WrongOwner,
     StaleRegistration,
     DuplicateOwner,
+    /// The call ran on the wrong thread. Also: the keeper asked the era for
+    /// stopped summaries while it holds a stop; under a stop it takes them
+    /// through `AllStopped::summaries`, so this is the keeper calling from
+    /// the wrong place, not a contention to retry.
     WrongThread,
     Poisoned,
     Busy,

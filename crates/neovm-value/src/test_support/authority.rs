@@ -526,8 +526,8 @@ pub fn function(error: &crate::tagged::gc::mutator_registration::FunctionError) 
 /// only public path.
 pub use crate::tagged::gc::mutator_registration::test_fences::{
     AdmissionProbeGuard, AdmissionProbeState, AuthorityProbeGuard, AuthorityProbeState,
-    KeeperTableScope, begin_restore_retry_for_test, install_restore_gate_hook_for_test,
-    poison_registry_for_test, reset_catalog_waits_for_test,
+    KeeperTableScope, begin_restore_retry_for_test, gate_contention_for_test,
+    install_restore_gate_hook_for_test, poison_registry_for_test, reset_catalog_waits_for_test,
 };
 
 /// Peer-signed MEMQ-TAIL-SHAPES (b): closure-scoped stopped-tables install.

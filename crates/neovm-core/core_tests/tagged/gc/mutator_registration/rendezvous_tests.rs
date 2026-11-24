@@ -129,6 +129,10 @@ shells! {
     keeper_trace_waits_out_a_brief_gate_holder => KeeperTraceWaitsOutABriefGateHolder,
     keeper_complete_waits_out_a_brief_gate_holder => KeeperCompleteWaitsOutABriefGateHolder,
     keeper_complete_retries_an_entry_held_through_the_reader_scan => KeeperCompleteRetriesAnEntryHeldThroughTheReaderScan,
+    keeper_takes_summaries_through_its_stop => KeeperTakesSummariesThroughItsStop,
+    a_broken_census_under_a_stop_is_not_busy => ABrokenCensusUnderAStopIsNotBusy,
+    keeper_world_root_check_waits_out_a_brief_gate_holder => KeeperWorldRootCheckWaitsOutABriefGateHolder,
+    keeper_root_reader_waits_out_an_owner_moment_on_its_entry => KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
 }
 
 #[test]

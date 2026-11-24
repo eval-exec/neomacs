@@ -89,20 +89,6 @@ impl fmt::Debug for AllStoppedFailure<'_> {
     }
 }
 
-/// Every published root batch, current or retained, has no reader left.
-fn readers_finished(entries: &[Arc<MutatorEntry>]) -> Result<(), RendezvousError> {
-    for entry in entries {
-        let state = entry_state(entry)?;
-        if let Some(roots) = &state.roots {
-            roots.validate_no_readers().map_err(RendezvousError::from)?;
-        }
-        for roots in &state.retained_roots {
-            roots.validate_no_readers().map_err(RendezvousError::from)?;
-        }
-    }
-    Ok(())
-}
-
 impl<K: EraKeeper> EraCore<'_, K> {
     pub(crate) fn try_stop(&self) -> Result<Option<AllStopped<'_>>, RendezvousError> {
         let registry = self.registry();
@@ -211,8 +197,21 @@ impl<'era> AllStopped<'era> {
         if self.registry.heap != heap {
             return Err(RendezvousError::Identity);
         }
-        let gate = self.registry.lock()?;
+        let gate = self
+            .registry
+            .lock_for_keeper()
+            .map_err(registration_error)?;
         self.validate(&gate)
+    }
+
+    /// The metadata census under this stop. The borrow keeps `trace`,
+    /// `complete` and `bind` from running while the census holds the gate;
+    /// the era's own `stopped_summaries` refuses the keeper during a stop.
+    pub fn summaries(&mut self) -> Result<super::super::StoppedSummaries<'_>, RegistrationError> {
+        if keeper(self.registry).is_err() {
+            return Err(RegistrationError::WrongThread);
+        }
+        super::super::StoppedSummaries::under_stop(self.registry)
     }
 
     pub(in crate::tagged::gc) fn gate_is_held_by_current_thread(&self) -> bool {
@@ -269,7 +268,16 @@ impl<'era> AllStopped<'era> {
         if gate.rendezvous.phase != Phase::Tracing(self.epoch) {
             return Err(RendezvousError::Publication);
         }
-        verify_stopped(self.registry, gate)
+        // `Busy` from verify_stopped means "not stopped yet", which `stop`
+        // waits on. Under this stop its predicates (admissions quiescent, no
+        // resume debt, every frozen owner stopped) and its entry locks (owners
+        // take entries only under the gate the keeper holds) cannot fail, so
+        // a failure is a broken census: the same refusal as the wrong phase,
+        // never a `Busy` a retrying keeper would spin on.
+        verify_stopped(self.registry, gate).map_err(|error| match error {
+            RendezvousError::Busy => RendezvousError::Publication,
+            other => other,
+        })
     }
 
     #[doc(hidden)]
@@ -309,7 +317,11 @@ impl<'era> AllStopped<'era> {
     }
 
     fn entry(&self, key: MutatorKey) -> Result<Arc<MutatorEntry>, RendezvousError> {
-        let gate = self.registry.lock().map_err(registration_error)?;
+        keeper(self.registry)?;
+        let gate = self
+            .registry
+            .lock_for_keeper()
+            .map_err(registration_error)?;
         self.validate(&gate)?;
         if key.owner != 0 && !gate.rendezvous.frozen.contains(&key) {
             return Err(RendezvousError::Identity);
@@ -328,7 +340,7 @@ impl<'era> AllStopped<'era> {
         let entry = self.entry(key)?;
         // No registry gate survives entry lookup. Root-table acquisition and
         // user code must never run while a control predicate mutex is held.
-        let state = entry_state(&entry)?;
+        let state = super::wait_out_owner_moment(|| entry_state(&entry))?;
         let roots = state.roots.as_ref().ok_or(RendezvousError::Publication)?;
         let admission = StoppedRootAdmission {
             identity: roots.identity(),
@@ -355,7 +367,7 @@ impl<'era> AllStopped<'era> {
         body: impl FnOnce(&mut PublishedGcImage) -> R,
     ) -> Result<R, RendezvousError> {
         let entry = self.entry(key)?;
-        let mut state = entry_state(&entry)?;
+        let mut state = super::wait_out_owner_moment(|| entry_state(&entry))?;
         let image = state.image.as_mut().ok_or(RendezvousError::Publication)?;
         let mut attempt = CallbackAttempt {
             registry: self.registry,
@@ -397,7 +409,7 @@ impl<'era> AllStopped<'era> {
         body: impl FnOnce(&PublishedGcImage) -> R,
     ) -> Result<R, RendezvousError> {
         let entry = self.entry(key)?;
-        let mut state = entry_state(&entry)?;
+        let mut state = super::wait_out_owner_moment(|| entry_state(&entry))?;
         let image = state.image.as_ref().ok_or(RendezvousError::Publication)?;
         let mut attempt = CallbackAttempt {
             registry: self.registry,
@@ -434,20 +446,7 @@ impl<'era> AllStopped<'era> {
             entries.extend(gate.entries.iter().cloned());
             entries
         };
-        #[cfg(any(test, feature = "test-support"))]
-        if let Some(hook) = super::super::test_fences::take_reader_scan_hook_for_test() {
-            hook();
-        }
-        loop {
-            match readers_finished(&entries) {
-                Err(RendezvousError::Busy) => {
-                    #[cfg(any(test, feature = "test-support"))]
-                    super::super::test_fences::note_gate_contention();
-                    std::thread::yield_now();
-                }
-                scanned => break scanned?,
-            }
-        }
+        super::readers_finished_waiting(&entries)?;
         // With the gate held, no owner holds an entry lock (owners take them
         // only under the gate), so the entry locks below cannot meet `Busy`,
         // the failure that poisons once the control commit has opened.

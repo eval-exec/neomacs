@@ -59,28 +59,30 @@ pub(crate) fn note_gate_contention() {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) fn gate_contention_for_test() -> u64 {
+pub fn gate_contention_for_test() -> u64 {
     GATE_CONTENTION.load(std::sync::atomic::Ordering::Acquire)
 }
 
 #[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
-    /// One-shot hook for the instant the keeper's `complete` starts its
-    /// reader scan, outside the gate. A row uses it to have an owner hold
-    /// its entry exactly there.
-    static READER_SCAN_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+    /// One-shot hook for the instant the keeper starts waiting out an owner's
+    /// moment on an entry, outside the gate (the reader scans, and the root
+    /// reader and image entry locks). A row uses it to have an owner hold its
+    /// gate and entry exactly there.
+    static OWNER_MOMENT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
-/// Install the hook on the keeper thread. The next `complete` runs it once.
+/// Install the hook on the keeper thread. The next owner-moment wait runs it
+/// once, before its first attempt.
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) fn install_reader_scan_hook_for_test(hook: Box<dyn FnOnce()>) {
-    READER_SCAN_HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+pub(crate) fn install_owner_moment_hook_for_test(hook: Box<dyn FnOnce()>) {
+    OWNER_MOMENT_HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
 }
 
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) fn take_reader_scan_hook_for_test() -> Option<Box<dyn FnOnce()>> {
-    READER_SCAN_HOOK.with(|slot| slot.borrow_mut().take())
+pub(crate) fn take_owner_moment_hook_for_test() -> Option<Box<dyn FnOnce()>> {
+    OWNER_MOMENT_HOOK.with(|slot| slot.borrow_mut().take())
 }
 
 /// One-shot hook for the instant `prepare_restore` holds the registry gate,

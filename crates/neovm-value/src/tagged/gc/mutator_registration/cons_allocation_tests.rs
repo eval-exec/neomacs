@@ -187,7 +187,8 @@ pub enum ConsAllocationCase {
     DroppingOpenConsRegionPoisonRetainsStorageAndRefusesPublication,
     CollectionRequiresReturnedCatalogAndResumeRequiresCurrentStop,
     EarlierTailCloseNeverRewindsThroughAnotherOwnersLiveRegion,
-    ReturnConsStoragePreservesBusyStopValidationForRetry,
+    ReturnConsStorageWaitsOutABriefGateHolder,
+    CollectWaitsOutAnOwnerMomentInItsReaderScan,
     ForgottenOpenConsRunRefusesPublicationNativeAndFinishWithoutWaiting,
     ForeignStopCannotReturnOrResumeAConsCatalog,
     ConsResultSurvivesFromPublishedHeadThenReclaimsAfterSerialRestore,
@@ -234,7 +235,8 @@ impl ConsAllocationCase {
         Self::DroppingOpenConsRegionPoisonRetainsStorageAndRefusesPublication,
         Self::CollectionRequiresReturnedCatalogAndResumeRequiresCurrentStop,
         Self::EarlierTailCloseNeverRewindsThroughAnotherOwnersLiveRegion,
-        Self::ReturnConsStoragePreservesBusyStopValidationForRetry,
+        Self::ReturnConsStorageWaitsOutABriefGateHolder,
+        Self::CollectWaitsOutAnOwnerMomentInItsReaderScan,
         Self::ForgottenOpenConsRunRefusesPublicationNativeAndFinishWithoutWaiting,
         Self::ForeignStopCannotReturnOrResumeAConsCatalog,
         Self::ConsResultSurvivesFromPublishedHeadThenReclaimsAfterSerialRestore,
@@ -338,8 +340,11 @@ pub(crate) fn run_cons_allocation_test<K, W>(
                 world_roots,
             )
         }
-        ConsAllocationCase::ReturnConsStoragePreservesBusyStopValidationForRetry => {
-            return_cons_storage_preserves_busy_stop_validation_for_retry(roots_era, world_roots)
+        ConsAllocationCase::ReturnConsStorageWaitsOutABriefGateHolder => {
+            return_cons_storage_waits_out_a_brief_gate_holder(roots_era, world_roots)
+        }
+        ConsAllocationCase::CollectWaitsOutAnOwnerMomentInItsReaderScan => {
+            collect_waits_out_an_owner_moment_in_its_reader_scan(roots_era, world_roots)
         }
         ConsAllocationCase::ForgottenOpenConsRunRefusesPublicationNativeAndFinishWithoutWaiting => {
             forgotten_open_cons_run_refuses_publication_native_and_finish_without_waiting(
@@ -1091,7 +1096,7 @@ fn earlier_tail_close_never_rewinds_through_another_owners_live_region<K, W>(
     });
 }
 
-fn return_cons_storage_preserves_busy_stop_validation_for_retry<K, W>(
+fn return_cons_storage_waits_out_a_brief_gate_holder<K, W>(
     roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
     world_roots: W,
 ) where
@@ -1112,26 +1117,120 @@ fn return_cons_storage_preserves_busy_stop_validation_for_retry<K, W>(
         let root = with_run(&mut owner, |run| run.cons(&cars[0], &nil).unwrap());
         owner.enter_native(std::slice::from_ref(&root)).unwrap();
         let mut stopped = era.stop().unwrap();
+        // The keeper's stop check waits out a brief gate holder instead of
+        // refusing Busy (L6.7 F3). The holder lets go once the keeper has met
+        // the held gate, or once the call has returned without meeting it.
+        // The return completes only after the holder lets go.
+        let released = std::sync::atomic::AtomicBool::new(false);
         thread::scope(|scope| {
+            use super::test_fences::gate_contention_for_test;
             let registry = era.registry();
+            let released = &released;
             let (held_tx, held_rx) = mpsc::channel();
-            let (release_tx, release_rx) = mpsc::channel();
+            let (returned_tx, returned_rx) = mpsc::channel::<()>();
+            let before = gate_contention_for_test();
             let actor = scope.spawn(move || {
-                let _gate = registry.gate.state.lock().unwrap();
+                let gate = registry.gate.state.lock().unwrap();
                 held_tx.send(()).unwrap();
-                receive(&release_rx);
+                while gate_contention_for_test() == before && returned_rx.try_recv().is_err() {
+                    thread::yield_now();
+                }
+                released.store(true, Ordering::Release);
+                drop(gate);
             });
             receive(&held_rx);
-            let refusal = era.return_cons_storage(&stopped);
+            let returned = era.return_cons_storage(&stopped);
+            let returned_after_release = released.load(Ordering::Acquire);
             // Release BEFORE assertions so a failure never strands the join.
-            release_tx.send(()).unwrap();
+            let _ = returned_tx.send(());
             actor.join().unwrap();
-            assert_eq!(refusal, Err(RegistrationError::Busy));
+            assert!(
+                gate_contention_for_test() > before,
+                "the return met the held gate"
+            );
+            assert!(
+                returned_after_release,
+                "the return completed only after the holder let go"
+            );
+            assert_eq!(returned, Ok(()), "the stop check waits out the holder");
             assert!(!registry.park.poisoned.load(Ordering::Acquire));
         });
-        // The competing gate holder has joined; any refusal is now a defect.
-        era.return_cons_storage(&stopped).unwrap();
         era.collect_stopped(&mut stopped, world_roots).unwrap();
+        era.with_stopped_heap_for_test(&stopped, |heap| check_pair(heap, &root, 1701))
+            .unwrap();
+        complete(stopped);
+        owner.leave_native().unwrap();
+        drop(root);
+        retire(owner);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+/// collect's reader scan runs outside the gate (root-table locks never
+/// overlap it). An owner's gate-and-entry moment there is waited out, not
+/// returned as Busy (L6.7 F3).
+fn collect_waits_out_an_owner_moment_in_its_reader_scan<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, (cars, nil)| {
+        era.start_cons_storage().unwrap();
+        let mut owner = activate(era.register(1719, 0).unwrap(), era.heap_identity(), 1719);
+        let root = with_run(&mut owner, |run| run.cons(&cars[0], &nil).unwrap());
+        owner.enter_native(std::slice::from_ref(&root)).unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        let entry = owner.entry();
+        let collected = thread::scope(|scope| {
+            use super::test_fences::{
+                gate_contention_for_test, install_owner_moment_hook_for_test,
+            };
+            let registry = era.registry();
+            let (go_tx, go_rx) = mpsc::channel::<()>();
+            let (held_tx, held_rx) = mpsc::channel::<()>();
+            let (returned_tx, returned_rx) = mpsc::channel::<()>();
+            let before = gate_contention_for_test();
+            // An owner's moment: the gate, then its entry, exactly when the
+            // keeper starts the scan with the gate released.
+            let holder = scope.spawn(move || {
+                receive(&go_rx);
+                let gate = registry.gate.state.lock().unwrap();
+                let state = entry.state.lock().unwrap();
+                held_tx.send(()).unwrap();
+                while gate_contention_for_test() == before && returned_rx.try_recv().is_err() {
+                    thread::yield_now();
+                }
+                drop(state);
+                drop(gate);
+            });
+            install_owner_moment_hook_for_test(Box::new(move || {
+                go_tx.send(()).unwrap();
+                receive(&held_rx);
+            }));
+            let collected = era.collect_stopped(&mut stopped, world_roots);
+            // Release BEFORE assertions so a failure never strands the join.
+            let _ = returned_tx.send(());
+            holder.join().unwrap();
+            assert!(
+                gate_contention_for_test() > before,
+                "the reader scan met the owner's moment"
+            );
+            collected
+        });
+        collected.expect("collect waits out the owner's moment");
         era.with_stopped_heap_for_test(&stopped, |heap| check_pair(heap, &root, 1701))
             .unwrap();
         complete(stopped);

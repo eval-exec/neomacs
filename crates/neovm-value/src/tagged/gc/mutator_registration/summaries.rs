@@ -71,6 +71,32 @@ impl std::fmt::Debug for StoppedSummaries<'_> {
 impl<'era> StoppedSummaries<'era> {
     pub(super) fn new(registry: &'era Registry) -> Result<Self, RegistrationError> {
         let gate = registry.lock()?;
+        // The keeper holding a stop takes its census through
+        // `AllStopped::summaries`, whose borrow keeps `trace` and `complete`
+        // from running while this guard holds the gate. Here nothing would:
+        // a `complete` under this guard refuses, and that refusal poisons.
+        if std::thread::current().id() == registry.keeper_thread
+            && matches!(
+                gate.rendezvous.phase,
+                super::rendezvous::control::Phase::Stopping(_)
+                    | super::rendezvous::control::Phase::Tracing(_)
+            )
+        {
+            return Err(RegistrationError::WrongThread);
+        }
+        Self::from_gate(registry, gate)
+    }
+
+    /// The census taken by the keeper under its stop (`AllStopped::summaries`).
+    pub(super) fn under_stop(registry: &'era Registry) -> Result<Self, RegistrationError> {
+        let gate = registry.lock_for_keeper()?;
+        Self::from_gate(registry, gate)
+    }
+
+    fn from_gate(
+        registry: &'era Registry,
+        gate: RegistryGuard<'era>,
+    ) -> Result<Self, RegistrationError> {
         // Do not filter out Running, Starting, loaned or missing entries.
         for entry in &gate.entries {
             if entry.cancelled_start.load(Ordering::Acquire) {
