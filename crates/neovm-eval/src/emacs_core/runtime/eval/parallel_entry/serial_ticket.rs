@@ -126,11 +126,12 @@ impl<'s, 'era> SerialLendHeld<'s, 'era> {
 
 /// Names the ticket heap on the destination thread.
 ///
-/// Construction does not install the heap. The loan is `!Send` and ends when
-/// `end_serial` consumes the local owner; the return envelope does not carry it.
+/// Construction does not install the heap. The loan is `!Send` and stays on
+/// `LocalSerialOwner` until `end_serial` consumes it; the return envelope does
+/// not carry it. Before reattaching the dormant Context, activation verifies
+/// that the loaned heap matches the dormant Context's `HeapIdentity`.
 #[derive(Debug)]
 #[must_use]
-#[allow(dead_code)] // the receive row reads `heap`; the turn holds the loan
 struct LocalSerialHeapLoan {
     heap: HeapIdentity,
     _local: PhantomData<Rc<()>>,
@@ -141,6 +142,14 @@ impl LocalSerialHeapLoan {
         Self {
             heap,
             _local: PhantomData,
+        }
+    }
+
+    fn verify_heap(&self, host_heap: HeapIdentity) -> Result<(), ReceiveReason> {
+        if self.heap == host_heap {
+            Ok(())
+        } else {
+            Err(ReceiveReason::WrongHeap)
         }
     }
 
@@ -240,6 +249,19 @@ impl ReceivedSerial {
 impl LocalSerialOwner {
     pub(crate) fn identity(&self) -> TicketIdentity {
         self.received.identity()
+    }
+
+    /// Verify that the received ticket's loaned heap matches the dormant
+    /// host's heap identity before reattaching it. Does not install any heap.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "L6.4 activation verifies the loaned heap against the dormant Context before reattach"
+        )
+    )]
+    pub(crate) fn verify_host_heap(&self, host_heap: HeapIdentity) -> Result<(), ReceiveReason> {
+        self.received.loan.verify_heap(host_heap)
     }
 
     /// End the turn and re-arm the seat. A mismatch returns this guard.
@@ -486,5 +508,32 @@ mod tests {
             Some(expected.heap),
             "receive constructs the local serial heap loan"
         );
+    }
+
+    #[test]
+    fn pentry_l64_local_heap_loan_refuses_mismatched_host_heap_without_installing() {
+        let installed = neovm_value::tagged::gc::tagged_heap_is_installed();
+        let expected = identity(7, 1, 1);
+        let mut seat = SerialDestination::new(expected);
+        let local = seat
+            .receive_serial(StoppedSerialTicket::transport(expected))
+            .expect("the identity matches")
+            .guard();
+        assert_eq!(
+            local.verify_host_heap(heap(1)),
+            Ok(()),
+            "matching host heap passes verification"
+        );
+        assert_eq!(
+            local.verify_host_heap(heap(2)),
+            Err(ReceiveReason::WrongHeap),
+            "mismatched host heap is refused with WrongHeap"
+        );
+        assert_eq!(
+            neovm_value::tagged::gc::tagged_heap_is_installed(),
+            installed,
+            "loan verification does not install any heap"
+        );
+        let _returned = local.finish(&mut seat).expect("re-arm seat");
     }
 }
