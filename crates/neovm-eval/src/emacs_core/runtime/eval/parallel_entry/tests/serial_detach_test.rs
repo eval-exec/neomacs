@@ -1,7 +1,7 @@
 //! L6.4's suspend half: a detached owner leaves no heap on its OS thread,
 //! and reattaching it restores everything its next serial turn reads.
 
-use super::HostRefusal;
+use super::{DetachedWorldCarriers, HostRefusal};
 use crate::emacs_core::eval::parallel_entry::serial_turn::{
     OwnerSerialState, SerialTurn, TurnRefusal,
 };
@@ -124,6 +124,9 @@ fn l64_green_reattach_installs_the_heap_and_restores_frame_slab_buffer_and_carri
         OWNER_ANSWER,
         "the owner state is set before the detach"
     );
+    assert_eq!(eval(&mut ev, "(lossage-size 300)"), "300");
+    ev.display_var_change_count = 77;
+    ev.face_change_count = 19;
     let buffer = ev.edit.buffers.current_buffer_id();
     let buffer_name = eval(&mut ev, "(buffer-name)");
     let frame = ev.frame_manager().selected;
@@ -131,17 +134,43 @@ fn l64_green_reattach_installs_the_heap_and_restores_frame_slab_buffer_and_carri
     let slab = ev.ensure_owner_slab() as *const _ as usize;
     assert!(buffer.is_some(), "the owner has a current buffer");
     let detached = detach(&mut ev);
+    assert_eq!(
+        detached.world_carriers(),
+        DetachedWorldCarriers::Stowed,
+        "detaching the World carrier holder records Stowed"
+    );
     assert!(names_no_heap(), "(b) detach takes this owner's heap down");
     assert_eq!(
         ev.serial_world_parked_for_test(),
         Some((true, true)),
         "(d) detach stows the warm carrier"
     );
+    assert_eq!(
+        ev.display_var_change_count, 0,
+        "OwnerCarried::take moved the warm display counter out of the dormant Context"
+    );
+    assert_eq!(
+        ev.face_change_count, 0,
+        "OwnerCarried::take moved the warm face counter out of the dormant Context"
+    );
     reattach(&mut ev, detached);
     assert_eq!(
         ev.serial_world_parked_for_test(),
         Some((false, false)),
-        "(d) reattach restores the warm carrier before the mirrors are read"
+        "(d) reattach restores the warm carrier before resume_owner refreshes the mirrors"
+    );
+    assert_eq!(
+        eval(&mut ev, "(lossage-size)"),
+        "300",
+        "F5: carried TLS value (lossage-size) round-trips across detach and reattach"
+    );
+    assert_eq!(
+        ev.display_var_change_count, 77,
+        "F5: warm OwnerCarried display_var_change_count round-trips (drop(warm) would lose it)"
+    );
+    assert_eq!(
+        ev.face_change_count, 19,
+        "F5: warm OwnerCarried face_change_count round-trips (drop(warm) would lose it)"
     );
     assert_eq!(
         ev.edit.buffers.current_buffer_id(),
@@ -181,6 +210,11 @@ fn l64_detach_leaves_no_heap_on_this_thread_and_reattach_restores_the_turn() {
     assert_eq!(eval(&mut ev, OWNER_STATE), "1", "the match starts at 1");
     assert_eq!(eval(&mut ev, PROBE), OWNER_ANSWER, "the owner state is set");
     let detached = detach(&mut ev);
+    assert_eq!(
+        detached.world_carriers(),
+        DetachedWorldCarriers::NotStowed,
+        "a Sim World has no Green runtime, so detach records NotStowed"
+    );
     assert!(names_no_heap(), "a detached owner's thread names no heap");
     super::super::super::green::carrier_tls::carrier_tls_idle_state_and_check();
     reattach(&mut ev, detached);
@@ -502,4 +536,150 @@ fn l64_context_is_the_only_production_serial_host() {
         ),
     ];
     assert_eq!(impls, expected, "a new SerialHost impl needs review");
+}
+
+#[test]
+fn l64_owner_serial_state_refuses_a_seated_green_context() {
+    let mut ev =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    ev.start_green_threads_for_test().expect("seat main");
+    assert!(ev.green_seat().is_some(), "main holds a Green seat");
+    let Err((mut returned, refusal)) =
+        OwnerSerialState::<Context, (u64, &'static str)>::new(7, Box::new(ev))
+    else {
+        panic!("F3: a seated Green Context must be refused at the dormant door");
+    };
+    assert_eq!(
+        refusal,
+        HostRefusal::Seated,
+        "F3: detach_serial_owner returns HostRefusal::Seated before AbortOnPanic"
+    );
+    assert!(
+        owns_the_thread(&mut returned),
+        "refusal leaves the seated Context's heap installed"
+    );
+    assert_eq!(
+        eval(&mut returned, "(+ 1 2)"),
+        "3",
+        "the handed-back seated Context remains usable"
+    );
+}
+
+#[test]
+fn l64_further_green_owner_detaches_without_corrupting_unparked_main() {
+    let mut main =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    assert_eq!(eval(&mut main, "(lossage-size 300)"), "300");
+    main.display_var_change_count = 77;
+    let baton = main.start_green_runtime().expect("start the Green runtime");
+    let (to_main, from_worker) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        baton.enter();
+        let owner = Context::new_green_owner(&baton);
+        let mut state: State = OwnerSerialState::new(7, Box::new(owner))
+            .ok()
+            .expect("a further Green owner detaches cleanly while main is unparked");
+        let mut turn = state.begin((7, "ticket-1")).ok().expect("own ticket");
+        assert_eq!(turn.with_world(|ev| eval(ev, "(+ 1 2)")), "3");
+        assert_eq!(ended(turn), (7, "ticket-1"));
+        drop(state);
+        to_main.send(baton).expect("return baton to main");
+    });
+    let baton = from_worker.recv().expect("baton returns from worker");
+    worker.join().expect("worker thread finishes cleanly");
+    baton.enter();
+    main.seat_green_main_for_test(baton);
+    main.green_park_runnable_for_test()
+        .expect("main parks and resumes without two-places abort");
+    assert_eq!(
+        eval(&mut main, "(lossage-size)"),
+        "300",
+        "main's carried lossage-size survived the further owner's turn"
+    );
+    assert_eq!(
+        main.display_var_change_count, 77,
+        "main's warm redisplay counter survived the further owner's turn"
+    );
+}
+
+#[test]
+fn l64_further_green_owner_acquires_stowed_world_carriers_on_begin() {
+    let mut main =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    assert_eq!(eval(&mut main, "(lossage-size 300)"), "300");
+    main.display_var_change_count = 77;
+    let baton = main.start_green_runtime().expect("start the Green runtime");
+    let main_detached = detach(&mut main);
+    let (to_main, from_worker) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        baton.enter();
+        let owner = Context::new_green_owner(&baton);
+        let mut state: State = OwnerSerialState::new(7, Box::new(owner))
+            .ok()
+            .expect("a further Green owner detaches cleanly while world carriers are stowed");
+        let mut turn = state.begin((7, "ticket-1")).ok().expect("own ticket");
+        turn.with_world(|ev| {
+            assert_eq!(
+                eval(ev, "(lossage-size)"),
+                "300",
+                "begin acquired the stowed carried lossage-size"
+            );
+            assert_eq!(
+                ev.display_var_change_count, 77,
+                "begin acquired the stowed warm display_var_change_count"
+            );
+            assert_eq!(eval(ev, "(lossage-size 400)"), "400");
+            ev.display_var_change_count = 88;
+        });
+        assert_eq!(ended(turn), (7, "ticket-1"));
+        drop(state);
+        to_main.send(baton).expect("return baton to main");
+    });
+    let baton = from_worker.recv().expect("baton returns from worker");
+    worker.join().expect("worker thread finishes cleanly");
+    baton.enter();
+    reattach(&mut main, main_detached);
+    assert_eq!(
+        eval(&mut main, "(lossage-size)"),
+        "400",
+        "main reattached the worker's updated carried lossage-size"
+    );
+    assert_eq!(
+        main.display_var_change_count, 88,
+        "main reattached the worker's updated warm display_var_change_count"
+    );
+    main.seat_green_main_for_test(baton);
+    main.green_park_runnable_for_test()
+        .expect("main parks and resumes cleanly after serial handoff");
+    assert_eq!(eval(&mut main, "(lossage-size)"), "400");
+    assert_eq!(main.display_var_change_count, 88);
+}
+
+#[test]
+fn l64_reattach_unstows_world_carriers_before_resume_owner_swap_in() {
+    let mut ev =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    let _baton = ev.start_green_runtime().expect("start the Green runtime");
+    let id = intern("tab-width");
+    assert!(
+        ev.binds_in_place(id),
+        "tab-width is a forwarded buffer-obj display variable"
+    );
+    ev.display_var_change_count = 40;
+    let count = ev.specpdl.len();
+    ev.try_specbind(id, Value::fixnum(4))
+        .expect("bind default tab-width");
+    let before_detach = ev.display_var_change_count;
+    assert!(
+        before_detach > 40,
+        "specbind bumped display_var_change_count from 40"
+    );
+    let detached = detach(&mut ev);
+    reattach(&mut ev, detached);
+    assert_eq!(
+        ev.display_var_change_count,
+        before_detach + 2,
+        "F2: detach swap-out (+1) and reattach swap-in (+1) must both survive warm restore"
+    );
+    ev.unbind_to(count);
 }

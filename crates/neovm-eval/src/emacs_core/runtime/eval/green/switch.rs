@@ -1901,6 +1901,7 @@ pub(super) fn run_carrier_job(
 fn stow_carried_state(baton: &Baton) {
     if let Some(runtime) = baton.green_runtime().as_ref() {
         runtime.carried.borrow_mut().stow();
+        runtime.carried_holder.set(super::CarriedHolder::Stowed);
     }
 }
 
@@ -1922,9 +1923,19 @@ fn stow_owner_state(owner: &mut Context, baton: &Baton) {
 
 /// The warm GNU-global state arrives in OWNER with the Baton.
 fn unstow_owner_state(owner: &mut Context, baton: &Baton) {
-    if let Some(runtime) = baton.green_runtime().as_ref()
-        && let Some(state) = runtime.owner_carried.borrow_mut().take()
-    {
+    let owner_slab = owner.ensure_owner_slab() as *const _ as usize;
+    let state = {
+        let runtime = baton.green_runtime();
+        let Some(runtime) = runtime.as_ref() else {
+            return;
+        };
+        runtime.carried_holder.set(super::CarriedHolder::Held {
+            slab: owner_slab,
+            thread: std::thread::current().id(),
+        });
+        runtime.owner_carried.borrow_mut().take()
+    };
+    if let Some(state) = state {
         state.put(owner);
     }
 }

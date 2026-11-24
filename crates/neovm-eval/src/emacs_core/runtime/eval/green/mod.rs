@@ -42,6 +42,20 @@ use super::admission::AdmissionError;
 use super::{Context, ThreadingMode};
 use neovm_value::tagged::gc::{CollectorQuiescenceError, FacadeMarkExclusionError};
 
+/// Which owner currently holds the World's carried TLS and warm
+/// `OwnerCarried` state on its OS thread, or whether both are stowed in
+/// [`GreenRuntime`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CarriedHolder {
+    /// Both `carried` and `owner_carried` are stowed in `GreenRuntime`.
+    Stowed,
+    /// Held inline by the Context whose `OwnerSlab` is at `slab` on `thread`.
+    Held {
+        slab: usize,
+        thread: std::thread::ThreadId,
+    },
+}
+
 /// The World's Green runtime, once started: what further owners are built
 /// from, the scheduler, and the state every Lisp thread shares. Held by the
 /// World and traced with it.
@@ -59,6 +73,9 @@ pub(crate) struct GreenRuntime {
     /// The warm GNU-global state while its holder is parked
     /// (`owner_carried`, plan-3w.md section 10).
     pub(super) owner_carried: std::cell::RefCell<Option<owner_carried::OwnerCarried>>,
+    /// Ownership of `carried` and `owner_carried`: either stowed in this
+    /// runtime or held by one specific Context on its OS thread.
+    pub(super) carried_holder: std::cell::Cell<CarriedHolder>,
     /// A `kill-emacs` run by another thread, for main to exit with.
     pub(super) exit: std::cell::Cell<Option<super::ShutdownRequest>>,
     /// GNU reports an outgoing owner's failed constant exchange in the next
@@ -197,6 +214,8 @@ impl Context {
         if !self.threads_admitted() {
             self.admit_threads()?;
         }
+        let main_slab = self.ensure_owner_slab() as *const _ as usize;
+        let main_thread = std::thread::current().id();
         let bootstrap = GreenBootstrap::capture(self);
         let baton = self.issue_green_baton()?;
         self.install_green_runtime(Box::new(GreenRuntime {
@@ -209,6 +228,10 @@ impl Context {
             exit: Default::default(),
             carried: std::cell::RefCell::new(carried::CarriedState::placeholders()),
             owner_carried: Default::default(),
+            carried_holder: std::cell::Cell::new(CarriedHolder::Held {
+                slab: main_slab,
+                thread: main_thread,
+            }),
             standard_case_table: std::cell::Cell::new(self.cached_standard_case_table),
             outgoing_constant_error: std::cell::Cell::new(None),
             carriers: carrier::CarrierPool::new(),
@@ -216,13 +239,28 @@ impl Context {
         Ok(baton)
     }
 
-    /// The World's carried state and the warm carrier leave this OS thread
-    /// with a serial detach. A Sim World has no Green runtime, so it skips.
-    /// `OwnerCarried::take` finishes before the runtime slot is borrowed
-    /// again: the take needs `&mut self`.
-    pub(crate) fn stow_serial_world_state(&mut self) {
-        if self.green_runtime_ref().is_none() {
-            return;
+    /// Move the World's carried TLS and warm `OwnerCarried` into `GreenRuntime`
+    /// during a serial detach, only when this Context on this OS thread
+    /// currently holds them.
+    ///
+    /// Returns `true` if this detach stowed them, or `false` when this is a
+    /// Sim World or when the World's carried state is held elsewhere (e.g., an
+    /// unparked main) or is already stowed in `GreenRuntime`.
+    #[cold]
+    pub(in crate::emacs_core::eval) fn stow_serial_world_state(&mut self) -> bool {
+        let Some(my_slab) = self.owner.slab().map(|slab| slab as *const _ as usize) else {
+            return false;
+        };
+        let expected_holder = CarriedHolder::Held {
+            slab: my_slab,
+            thread: std::thread::current().id(),
+        };
+        let holds_world_here = self
+            .green_runtime_ref()
+            .as_ref()
+            .is_some_and(|runtime| runtime.carried_holder.get() == expected_holder);
+        if !holds_world_here {
+            return false;
         }
         let warm = owner_carried::OwnerCarried::take(self);
         let runtime = self.green_runtime_ref();
@@ -235,19 +273,41 @@ impl Context {
             *slot = Some(warm);
         }
         runtime.carried.borrow_mut().stow();
+        runtime.carried_holder.set(CarriedHolder::Stowed);
+        true
     }
 
-    /// The reverse of [`Self::stow_serial_world_state`], after
-    /// `resume_owner`: `setup_thread_locals` must not overwrite the restored
-    /// carriers. A Sim World skips.
-    pub(crate) fn unstow_serial_world_state(&mut self) {
+    /// Acquire the World's stowed carried TLS and warm `OwnerCarried` onto this
+    /// Context and OS thread during a serial reattach, before `resume_owner`
+    /// (matching Green's resume order in `switch.rs`).
+    ///
+    /// A Sim World, or a Green World whose carried state is currently held by
+    /// another owner rather than stowed in `GreenRuntime`, is left alone.
+    #[cold]
+    pub(in crate::emacs_core::eval) fn unstow_serial_world_state(&mut self) {
+        let stowed = self
+            .green_runtime_ref()
+            .as_ref()
+            .is_some_and(|runtime| runtime.carried_holder.get() == CarriedHolder::Stowed);
+        if !stowed {
+            return;
+        }
+        let my_slab = self.ensure_owner_slab() as *const _ as usize;
         let warm = {
             let runtime = self.green_runtime_ref();
             let Some(runtime) = runtime.as_ref() else {
                 return;
             };
+            if runtime.carried_holder.get() != CarriedHolder::Stowed {
+                return;
+            }
             runtime.carried.borrow_mut().unstow();
-            runtime.owner_carried.borrow_mut().take()
+            let warm = runtime.owner_carried.borrow_mut().take();
+            runtime.carried_holder.set(CarriedHolder::Held {
+                slab: my_slab,
+                thread: std::thread::current().id(),
+            });
+            warm
         };
         if let Some(warm) = warm {
             warm.put(self);
@@ -300,14 +360,12 @@ impl Context {
         owner.cached_standard_case_table = case_table;
         owner.gc_count = owner.tagged_heap.gc_collections() as u64;
         owner.ensure_owner_slab();
+        debug_assert!(
+            owner.green_seat().is_none(),
+            "a newly assembled Green owner holds no seat"
+        );
         owner.setup_thread_locals();
         owner.republish_owner_mirrors();
-        // A3: Context::drop calls green_teardown, which hands off every
-        // other thread when the seat is Main and aborts if that Main has
-        // no receiver. An E6-P owner is not that seat.
-        if owner.green_key() == Some(ThreadKey::Main) {
-            panic!("an E6-P owner Context must not hold the Main Green seat");
-        }
         owner
     }
 
@@ -420,6 +478,14 @@ impl Context {
 
 #[cfg(test)]
 impl Context {
+    /// Seat this main owner with an already-issued Baton (after
+    /// `start_green_runtime`), keeping `scheduler::Wake` inside Green.
+    pub(crate) fn seat_green_main_for_test(&mut self, baton: super::world::Baton) {
+        let control = self.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
+        let receiver = control.register_main();
+        self.take_green_seat(ThreadKey::Main, control, receiver, baton);
+    }
+
     /// Carrier pool `(slot count, join-handle count)`.
     ///
     /// `cfg(test)` only. The test-support build does not call it, and
