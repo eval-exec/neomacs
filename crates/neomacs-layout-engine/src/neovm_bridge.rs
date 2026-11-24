@@ -3721,8 +3721,12 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
             .buffer
             .layout_overlays()
             .overlays_in_emacs_byte_range(scan_range);
-        overlay_ids.sort();
-        overlay_ids.dedup();
+        // Deduplicate by object identity (`eq`), NOT `Value::eq` (Lisp `equal`):
+        // two distinct overlays at the same endpoints with equal-text
+        // `before-string`s (e.g. `" "` carrying different `display` fringe specs)
+        // compare `equal` because Lisp `equal` ignores string text properties.
+        overlay_ids.sort_by_key(|v| v.bits());
+        overlay_ids.dedup_by_key(|v| v.bits());
 
         for oid in overlay_ids {
             if !self.overlay_applies_to_window(oid) {

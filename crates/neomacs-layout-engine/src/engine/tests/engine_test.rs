@@ -6034,6 +6034,86 @@ fn fringe_bitmap_unknown_spec_face_falls_back_to_the_fringe_face() {
     );
 }
 
+/// Issue #834: two zero-width overlays at the same position with equal
+/// priority and equal-text `" "` `before-string`s (carrying different
+/// `left-fringe` and `right-fringe` display properties) must BOTH render.
+/// Deduplicating overlay IDs by `Value::eq` (Lisp `equal`, which ignores
+/// string text properties) previously dropped one of the two overlays.
+#[test]
+fn fringe_bitmap_two_same_pos_zero_width_overlays_both_render() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("c834-both-fringes", 640, 200, buf_id);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_window_system(Some(Value::symbol("neo")));
+    }
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    let selected_window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    eval.eval_str(FRINGE_FACE_SETUP).expect("fringe face setup");
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("both fringes\n");
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+    eval.eval_str(
+        r#"(progn
+  (goto-char (point-min))
+  (let ((p (point)))
+    (overlay-put (make-overlay p p) 'before-string
+                 (propertize " " 'display '((left-fringe c834-bmp c834-fg-only))))
+    (overlay-put (make-overlay p p) 'before-string
+                 (propertize " " 'display '((right-fringe c834-bmp c834-override))))))"#,
+    )
+    .expect("two same-pos overlays");
+    let first_user_index = eval
+        .eval_str("(get 'c834-bmp 'fringe)")
+        .expect("fringe bitmap index property")
+        .as_fixnum()
+        .expect("fringe index") as u16;
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let target_window_id =
+        neomacs_display_protocol::types::DisplayWindowId::new(selected_window_id.0 as i64);
+    let mut paint = Vec::new();
+    state.for_each_glyph(|glyph| {
+        if let FrameGlyph::FringeBitmap {
+            window_id,
+            side,
+            bitmap_index,
+            face_id,
+            ..
+        } = glyph
+            && window_id == target_window_id
+            && bitmap_index >= first_user_index
+            && let Some(face) = state.faces.get(&face_id)
+        {
+            paint.push((side, bitmap_index, face.foreground, face.background));
+        }
+    });
+    assert_fringe_paint(
+        &paint,
+        &[
+            (FringeSide::Left, RED, grey95()),
+            (FringeSide::Right, BLUE, grey95()),
+        ],
+    );
+}
+
 /// Issue #834, GNU `handle_single_display_spec` (src/xdisp.c:6409-6421):
 /// `(left-fringe nil)` is still a fringe display spec — it draws no bitmap
 /// and consumes its covered character instead of leaving an inline space.

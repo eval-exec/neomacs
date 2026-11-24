@@ -1877,8 +1877,9 @@ fn collect_overlay_strings_at(buf: &Buffer, pos: usize, before: bool) -> Vec<Ove
         EmacsBytePos::new(pos + 1),
     );
     let mut overlay_ids = buf.overlays().overlays_in_emacs_byte_range(scan_range);
-    overlay_ids.sort();
-    overlay_ids.dedup();
+    // Deduplicate by object identity (`eq`), not `Value::eq` (Lisp `equal`).
+    overlay_ids.sort_by_key(|v| v.bits());
+    overlay_ids.dedup_by_key(|v| v.bits());
 
     let mut entries = Vec::new();
     for oid in overlay_ids {

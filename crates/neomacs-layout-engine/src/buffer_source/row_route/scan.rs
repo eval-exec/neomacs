@@ -616,8 +616,9 @@ fn overlays_possibly_intersecting(
         EmacsBytePos::new(end_byte.saturating_add(1)),
     );
     let mut ids = overlays.overlays_in_emacs_byte_range(scan_range);
-    ids.sort();
-    ids.dedup();
+    // Deduplicate by object identity (`eq`), not `Value::eq` (Lisp `equal`).
+    ids.sort_by_key(|v| v.bits());
+    ids.dedup_by_key(|v| v.bits());
     ids
 }
 
