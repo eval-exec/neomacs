@@ -266,6 +266,38 @@ fn content_hash_stable_and_discriminating() {
     assert!(sym.contains(&format!("{h1:032x}")));
 }
 
+/// `value_vec_slice_offsets` is baked into AOT code and is not a const the
+/// ABI salt can see. The unit index serves only a file named for this
+/// binary's pdump fingerprint. A legacy tag-only name, a foreign
+/// fingerprint, and a wrong tag are left for the JIT.
+#[test]
+fn aot_unit_index_skips_a_stale_build_fingerprint() {
+    let hash: u128 = 0x0123_4567_89ab_cdef_0123_4567_89ab_cdef;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let current_name = aot_unit_file_name(hash);
+    let running = crate::emacs_core::pdump::fingerprint_hex();
+    assert!(
+        current_name.contains(running),
+        "the unit name carries the running fingerprint"
+    );
+    let legacy_name = format!("{hash:032x}_{ABI_TAG:08x}.so");
+    assert_ne!(current_name, legacy_name);
+    let stale_name = format!("{hash:032x}_{ABI_TAG:08x}_{}.so", "00".repeat(32));
+    let wrong_tag_name = format!("{hash:032x}_{:08x}_{running}.so", ABI_TAG ^ 1);
+    for name in [&current_name, &legacy_name, &stale_name, &wrong_tag_name] {
+        std::fs::write(dir.path().join(name), b"not a real object").expect("write");
+    }
+    let indexed = super::index_aot_dir(dir.path());
+    assert_eq!(indexed.len(), 1, "only this build's unit is indexed");
+    assert_eq!(
+        indexed
+            .get(&hash)
+            .and_then(|path| path.file_name())
+            .and_then(|n| n.to_str()),
+        Some(current_name.as_str())
+    );
+}
+
 /// The LIVE reloc set a test must pass to `load_leaf_from_unit` (audit #A):
 /// the function's own constant objects, re-collected in emit-time order.
 #[cfg(target_os = "linux")]
@@ -287,9 +319,7 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
         .expect("compile ok")
         .expect("pure subset → Some");
     let dir = tempfile::tempdir().expect("tempdir");
-    let so_path = dir
-        .path()
-        .join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+    let so_path = dir.path().join(aot_unit_file_name(content_hash));
     link_object_to_so(&obj, &so_path).expect("link .so");
     // SAFETY: dlopen a `.so` we just emitted; pure leaf has no shim imports.
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
@@ -480,9 +510,7 @@ fn aot_symbol_const_relocs_by_name_not_baked_sym_id() {
         panic!("symbol-bearing shim-free leaf must be AOT-runnable");
     };
     let dir = tempfile::tempdir().expect("tempdir");
-    let so_path = dir
-        .path()
-        .join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+    let so_path = dir.path().join(aot_unit_file_name(content_hash));
     link_object_to_so(&obj, &so_path).expect("link");
 
     // Grow the intern table BEFORE loading, so an emit-time-baked SymId for
@@ -617,9 +645,7 @@ fn aot_reloc_bearing_leaf_rebuilds_string_const() {
         .expect("compile ok")
         .expect("reloc-bearing shim-free leaf → Some");
     let dir = tempfile::tempdir().expect("tempdir");
-    let so_path = dir
-        .path()
-        .join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+    let so_path = dir.path().join(aot_unit_file_name(content_hash));
     link_object_to_so(&obj, &so_path).expect("link .so");
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
     let unit = std::sync::Arc::new(super::super::compile::LoadedUnit::new(lib));
@@ -694,9 +720,7 @@ fn aot_two_reloc_consts_rebuild_in_index_order() {
         return;
     };
     let dir = tempfile::tempdir().expect("tempdir");
-    let so_path = dir
-        .path()
-        .join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+    let so_path = dir.path().join(aot_unit_file_name(content_hash));
     link_object_to_so(&obj, &so_path).expect("link");
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
     let unit = std::sync::Arc::new(super::super::compile::LoadedUnit::new(lib));

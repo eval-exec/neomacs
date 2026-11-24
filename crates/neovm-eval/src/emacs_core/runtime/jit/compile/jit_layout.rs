@@ -23,7 +23,10 @@
 //!
 //! Everything here is JIT-only: a baked host offset is a fact of the process
 //! that generated the code, so AOT code may use only the plain constants, and
-//! only through `compute_abi_tag`'s salt.
+//! only through `compute_abi_tag`'s salt. The `LispValueVec` slice offsets are
+//! a runtime probe, so they cannot join that const salt. A per-hash unit that
+//! bakes them carries the running pdump fingerprint in its file name, and the
+//! unit index refuses any other build.
 //!
 //! The heap's object layouts (the `GcHeader` byte map, the cons-block
 //! trailer, float and vector words) are the [`heap`] submodule.

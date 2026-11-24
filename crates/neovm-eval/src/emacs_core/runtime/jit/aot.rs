@@ -2187,7 +2187,7 @@ pub(crate) fn link_object_to_so(
 }
 
 /// Test-only: compile + link a leaf and place its `.so` into `dir` under the
-/// unit-index naming convention (`{hash:032x}_{tag:08x}.so`), so an INTEGRATION
+/// unit-index naming convention ([`aot_unit_file_name`]), so an INTEGRATION
 /// test can exercise the real `NEOVM_AOT=force` + `NEOVM_AOT_DIR` production path
 /// (the lib's `test_support` seam is unavailable to integration tests, and the
 /// `-rdynamic` shim export only applies to test binaries — see build.rs).
@@ -2204,7 +2204,7 @@ pub fn testkit_emit_and_place_so(
     // These low-level testkits emit WITHOUT a live obarray (no `Op::Call` spec
     // baking); the spec-aware selftests call the emit fns with an obarray directly.
     let (obj, content_hash) = compile_leaf_to_object(ops, constants, arity, None).ok()??;
-    let so_path = dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+    let so_path = dir.join(aot_unit_file_name(content_hash));
     link_object_to_so(&obj, &so_path).ok()?;
     Some(content_hash)
 }
@@ -2222,7 +2222,7 @@ pub fn testkit_emit_baseline_and_place_so(
 ) -> Option<u128> {
     let (obj, content_hash) =
         build_baseline_object_for_leaf(ops, constants, arity, None).ok()??;
-    let so_path = dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+    let so_path = dir.join(aot_unit_file_name(content_hash));
     link_object_to_so(&obj, &so_path).ok()?;
     Some(content_hash)
 }
@@ -3706,7 +3706,7 @@ pub fn testkit_spec_aot_selftest(
         )
         .map_err(|e| format!("{}: emit err {e}", c.label))?
         .ok_or_else(|| format!("{}: emit produced no object (not spec-baked?)", c.label))?;
-        let so_path = dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+        let so_path = dir.join(aot_unit_file_name(content_hash));
         link_object_to_so(&obj, &so_path).map_err(|e| format!("{}: link err {e}", c.label))?;
     }
     // Emit the CRUX body — aliased to `recordp` at emit (bakes a PredRecordp site).
@@ -3718,7 +3718,7 @@ pub fn testkit_spec_aot_selftest(
             build_baseline_object_for_leaf(f.ops(), f.constants(), 1, Some(&emit_ctx.obarray))
                 .map_err(|e| format!("crux: emit err {e}"))?
                 .ok_or("crux: emit produced no object")?;
-        let so_path = dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+        let so_path = dir.join(aot_unit_file_name(content_hash));
         link_object_to_so(&obj, &so_path).map_err(|e| format!("crux: link err {e}"))?;
     }
 
@@ -4035,7 +4035,7 @@ pub fn testkit_pgo_roundtrip_selftest(
                     "pgo-roundtrip: compile_leaf_to_object produced no object \
                      (not AOT-runnable / not spec-baked?)",
                 )?;
-        let so_path = dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"));
+        let so_path = dir.join(aot_unit_file_name(content_hash));
         link_object_to_so(&obj, &so_path).map_err(|e| format!("pgo-roundtrip: link err {e}"))?;
     }
 
@@ -4188,7 +4188,7 @@ pub fn testkit_pgo_drain_selftest(
     }
     // Correct unit-index name.
     let hash = leaf_content_hash(bc.ops(), bc.constants(), 1).ok_or("content hash None")?;
-    let expected = dir.join(format!("{hash:032x}_{ABI_TAG:08x}.so"));
+    let expected = dir.join(aot_unit_file_name(hash));
     if !expected.exists() {
         return Err(format!(
             "drained .so not at expected name {}",
@@ -4340,38 +4340,65 @@ fn ev_alias_and_build(
 /// One AOT compilation unit's on-disk location, keyed by content hash.
 type UnitIndex = std::collections::HashMap<u128, std::path::PathBuf>;
 
+/// On-disk name of a per-hash AOT unit for this build:
+/// `{content_hash:032x}_{ABI_TAG:08x}_{fingerprint}.so`.
+///
+/// `ABI_TAG` salts the named layouts. `value_vec_slice_offsets` is measured
+/// on a live `Vec` and baked into the object, so a rustc layout change does
+/// not move the tag. The running pdump fingerprint is this binary's identity.
+/// [`unit_index`] serves a file only when that fingerprint matches.
+pub(crate) fn aot_unit_file_name(content_hash: u128) -> String {
+    format!(
+        "{content_hash:032x}_{ABI_TAG:08x}_{}.so",
+        crate::emacs_core::pdump::fingerprint_hex()
+    )
+}
+
+/// Content hash of `name` when it is a unit of this build. A legacy
+/// `{hash}_{ABI_TAG}.so` name, or any other fingerprint, is `None`.
+fn content_hash_of_running_unit_name(name: &str) -> Option<u128> {
+    let suffix = format!(
+        "_{ABI_TAG:08x}_{}.so",
+        crate::emacs_core::pdump::fingerprint_hex()
+    );
+    let stem = name.strip_suffix(&suffix)?;
+    if stem.len() != 32 || !stem.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    u128::from_str_radix(stem, 16).ok()
+}
+
+/// Index `dir` the way [`unit_index`] does. A file whose name is not
+/// [`aot_unit_file_name`] for the running build is skipped.
+fn index_aot_dir(dir: &std::path::Path) -> UnitIndex {
+    let mut idx = UnitIndex::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return idx;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if let Some(hash) = content_hash_of_running_unit_name(name) {
+            idx.insert(hash, path);
+        }
+    }
+    idx
+}
+
 /// Process-wide index of available AOT `.so`s by content hash, built once from
 /// `NEOVM_AOT_DIR` (default: none → AOT disabled). Memoized loaded units are
 /// thread-local (the cache + leaves are `!Send`); the INDEX is shareable (just
-/// paths). Indexes only files whose name carries the CURRENT `ABI_TAG`.
+/// paths). Indexes only files whose name carries the current `ABI_TAG` and
+/// the running pdump fingerprint.
 fn unit_index() -> &'static UnitIndex {
     static INDEX: std::sync::OnceLock<UnitIndex> = std::sync::OnceLock::new();
     INDEX.get_or_init(|| {
-        let mut idx = UnitIndex::new();
         let Some(dir) = std::env::var_os("NEOVM_AOT_DIR") else {
-            return idx;
+            return UnitIndex::new();
         };
-        let tag_suffix = format!("_{ABI_TAG:08x}.so");
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for e in entries.flatten() {
-                let path = e.path();
-                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                    continue;
-                };
-                // Expect `<hash:032x>_<tag:08x>.so` (the entry-symbol stem). Only
-                // index files matching the current ABI_TAG.
-                if !name.ends_with(&tag_suffix) {
-                    continue;
-                }
-                let stem = &name[..name.len() - tag_suffix.len()];
-                if stem.len() == 32
-                    && let Ok(hash) = u128::from_str_radix(stem, 16)
-                {
-                    idx.insert(hash, path);
-                }
-            }
-        }
-        idx
+        index_aot_dir(std::path::Path::new(&dir))
     })
 }
 
@@ -5413,9 +5440,9 @@ pub(crate) const PGO_DRAIN_CAP: usize = 128;
 static PGO_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The FINAL on-disk path of a drained leaf `.so`, in the unit-index naming the
-/// loader indexes: `{hash:032x}_{tag:08x}.so` (same convention as [`unit_index`]).
+/// loader indexes ([`aot_unit_file_name`]).
 fn pgo_final_path(dir: &std::path::Path, content_hash: u128) -> std::path::PathBuf {
-    dir.join(format!("{content_hash:032x}_{ABI_TAG:08x}.so"))
+    dir.join(aot_unit_file_name(content_hash))
 }
 
 /// ATOMIC place: link `obj_bytes` into a UNIQUE temp `.so` in `dir` then `fs::rename`
@@ -5425,7 +5452,7 @@ fn pgo_final_path(dir: &std::path::Path, content_hash: u128) -> std::path::PathB
 /// one. The temp `.so` (and `cc`'s own derived temp `.o`) carry pid + a monotonic
 /// counter + nanos, so parallel drainers into a shared dir don't clobber each other's
 /// intermediates; the `.tmp` extension also keeps them out of the loader's
-/// `_<tag>.so` index until the rename lands.
+/// fingerprint-suffixed index until the rename lands.
 fn pgo_atomic_place(
     obj_bytes: &[u8],
     dir: &std::path::Path,
