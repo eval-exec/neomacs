@@ -111,6 +111,28 @@ impl ConsAllocatorOwner {
         allocator.owner_cons_leases.push(lease);
     }
 
+    /// Take the leases recorded under one registration. Others stay, in order.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn take_owner_cons_leases_for_registration(
+        &mut self,
+        registration: std::num::NonZeroU64,
+    ) -> Vec<Arc<OwnerConsLease>> {
+        let allocator = self
+            .0
+            .as_deref_mut()
+            .expect("allocator owner is initialized");
+        let mut taken = Vec::new();
+        let mut index = 0;
+        while index < allocator.owner_cons_leases.len() {
+            if allocator.owner_cons_leases[index].registration == Some(registration) {
+                taken.push(allocator.owner_cons_leases.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        taken
+    }
+
     pub(super) fn remove_owner_cons_lease(&mut self, owner_key: u64) {
         let allocator = self
             .0
@@ -1120,13 +1142,17 @@ pub(super) struct OwnerConsRange {
 
 /// Cons blocks one owner holds, shared by the book and the heap lease table.
 ///
-/// `owner_key` is a minted counter, the stand-in for the owner's
-/// registration until a production grant supplies that id. Reclaim is every
-/// lease at the next stopped collection. Retire-path reclaim, one owner at
-/// `retire_rooted`, is still owed.
+/// `owner_key` is a minted counter. `registration` is the owner's
+/// registration when the grant named one. The stopped session still returns
+/// every lease. `retire_rooted` records that registration, and the keeper
+/// returns only that lease.
 #[derive(Debug)]
 pub(super) struct OwnerConsLease {
     pub(super) owner_key: u64,
+    /// `None` for a grant that did not name a registration. Those leases
+    /// stay on the full-table stop walk.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) registration: Option<std::num::NonZeroU64>,
     /// `Mutex` so the closed book stays `Sync`. The stop protocol is the real
     /// exclusion: the keeper runs only while the owner is stopped.
     pub(super) blocks: Mutex<Vec<OwnerConsRange>>,
@@ -1182,6 +1208,15 @@ impl ConsAllocator {
     #[inline]
     pub(super) fn owner_reserved_blocks(&self) -> usize {
         self.owner_reserved_blocks
+    }
+
+    /// Registration of each lease still in the table, in table order.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn owner_cons_registrations_for_test(&self) -> Vec<Option<std::num::NonZeroU64>> {
+        self.owner_cons_leases
+            .iter()
+            .map(|lease| lease.registration)
+            .collect()
     }
 
     #[inline]

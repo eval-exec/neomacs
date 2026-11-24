@@ -226,6 +226,7 @@ pub enum ConsAllocationCase {
     OwnerConsReserveOrdinaryRequestRoutesThroughStop,
     OwnerConsReserveResumeOfALiveLeaseIsNotBusy,
     OwnerConsReserveSessionReturnKeepsHandedCellAndReclaimsTail,
+    OwnerConsReserveRetireRootedReclaimsOneRegistration,
 }
 
 impl ConsAllocationCase {
@@ -275,6 +276,7 @@ impl ConsAllocationCase {
         Self::OwnerConsReserveOrdinaryRequestRoutesThroughStop,
         Self::OwnerConsReserveResumeOfALiveLeaseIsNotBusy,
         Self::OwnerConsReserveSessionReturnKeepsHandedCellAndReclaimsTail,
+        Self::OwnerConsReserveRetireRootedReclaimsOneRegistration,
     ];
 }
 
@@ -479,6 +481,11 @@ pub(crate) fn run_cons_allocation_test<K, W>(
             owner_reserve_cases::owner_cons_reserve_session_return_keeps_handed_cell_and_reclaims_tail(
                 roots_era,
                 world_roots,
+            );
+        }
+        ConsAllocationCase::OwnerConsReserveRetireRootedReclaimsOneRegistration => {
+            owner_reserve_cases::owner_cons_reserve_retire_rooted_reclaims_one_registration(
+                roots_era,
             );
         }
         ConsAllocationCase::OwnerConsReserveGrantsOnlyConsStorage => {

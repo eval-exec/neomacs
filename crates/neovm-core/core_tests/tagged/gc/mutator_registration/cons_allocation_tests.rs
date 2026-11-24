@@ -205,6 +205,7 @@ shells! {
     owner_cons_reserve_ordinary_request_routes_through_stop => OwnerConsReserveOrdinaryRequestRoutesThroughStop,
     owner_cons_reserve_resume_of_a_live_lease_is_not_busy => OwnerConsReserveResumeOfALiveLeaseIsNotBusy,
     owner_cons_reserve_session_return_keeps_handed_cell_and_reclaims_tail => OwnerConsReserveSessionReturnKeepsHandedCellAndReclaimsTail,
+    owner_cons_reserve_retire_rooted_reclaims_one_registration => OwnerConsReserveRetireRootedReclaimsOneRegistration,
     owner_cons_reserve_two_idle_stops_hold_no_reserve => OwnerConsReserveTwoIdleStopsHoldNoReserve,
     owner_cons_reserve_pacing_charges_carved_cells_and_subtracts_the_open_tail => OwnerConsReservePacingChargesCarvedCellsAndSubtractsTheOpenTail,
     owner_cons_reserve_the_cap_is_a_reserve_miss => OwnerConsReserveTheCapIsAReserveMiss,

@@ -259,6 +259,31 @@ impl OwnerEraReserve {
         region_closed: bool,
         interval: MeasuredInterval,
     ) -> Result<GrantOutcome, ReserveError> {
+        self.grant_cons_at_stop(stopped, heap, region_closed, interval, None)
+    }
+
+    /// Same grant, recorded under `registration` so one retire can reclaim it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn grant_at_stop_for_registration(
+        &mut self,
+        stopped: &AllStopped<'_>,
+        heap: &mut TaggedHeap,
+        region_closed: bool,
+        interval: MeasuredInterval,
+        registration: std::num::NonZeroU64,
+    ) -> Result<GrantOutcome, ReserveError> {
+        self.grant_cons_at_stop(stopped, heap, region_closed, interval, Some(registration))
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn grant_cons_at_stop(
+        &mut self,
+        stopped: &AllStopped<'_>,
+        heap: &mut TaggedHeap,
+        region_closed: bool,
+        interval: MeasuredInterval,
+        registration: Option<std::num::NonZeroU64>,
+    ) -> Result<GrantOutcome, ReserveError> {
         self.check_heap(heap)?;
         check_stop(stopped, heap)?;
         if !region_closed {
@@ -292,6 +317,7 @@ impl OwnerEraReserve {
             .ok_or(ReserveError::Capacity)?;
         let lease = Arc::new(OwnerConsLease {
             owner_key: heap.cons_allocator.mint_owner_cons_key(),
+            registration,
             blocks: std::sync::Mutex::new(Vec::new()),
         });
         lock_blocks(&lease)
@@ -630,8 +656,9 @@ impl TaggedHeap {
     /// that count does not clear. The session reports `Publication` for
     /// either leftover. A forgotten book whose lease is still in the table
     /// is returned on the next stop while the allocator is healthy.
-    /// Retire-path reclaim, one owner at `retire_rooted`, is still owed:
-    /// this walk returns every owner.
+    /// This walk still returns every owner. One registration is reclaimed
+    /// earlier by `reclaim_owner_cons_registration`, which `retire_rooted`
+    /// queues and the keeper applies.
     pub(in crate::tagged::gc) fn return_leased_owner_cons_reserves(&mut self) {
         if !self.has_owner_cons_reserves() || self.cons_allocator.is_poisoned() {
             return;
@@ -648,5 +675,39 @@ impl TaggedHeap {
         if count > 0 {
             self.cons_allocator.return_owner_reserved_blocks(count);
         }
+    }
+
+    /// Return one registration's closed lease and discharge its count.
+    ///
+    /// Other leases stay. A poisoned allocator changes nothing and returns
+    /// false so the caller can keep the registration queued. An open run is
+    /// not represented here: the book must already be closed, and the unused
+    /// tail is returned the same way `return_cons_block` returns a closed book.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(in crate::tagged::gc) fn reclaim_owner_cons_registration(
+        &mut self,
+        registration: std::num::NonZeroU64,
+    ) -> bool {
+        if self.cons_allocator.is_poisoned() {
+            return false;
+        }
+        if !self.has_owner_cons_reserves() {
+            return true;
+        }
+        let taken = self
+            .cons_allocator
+            .take_owner_cons_leases_for_registration(registration);
+        let mut count = 0usize;
+        for lease in &taken {
+            let blocks = take_blocks(lease);
+            count += blocks.len();
+            for block in &blocks {
+                return_cons_block(self, block);
+            }
+        }
+        if count > 0 {
+            self.cons_allocator.return_owner_reserved_blocks(count);
+        }
+        true
     }
 }

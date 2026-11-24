@@ -401,9 +401,31 @@ struct Registry {
     root_epoch: super::FacadeEpochRetention,
     cons_catalog: super::cons_storage::ConsCatalog,
     symbols: symbol_authority::SymbolSidecar,
+    /// Registrations `retire_rooted` handed to the keeper. The owner thread
+    /// has no heap loan, so the blocks are returned by
+    /// `EraCore::reclaim_retired_owner_cons`.
+    #[cfg(any(test, feature = "test-support"))]
+    retired_owner_cons: std::sync::Mutex<Vec<std::num::NonZeroU64>>,
 }
 
 impl Registry {
+    /// Record one registration whose cons lease the keeper should return.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn note_retired_owner_cons(
+        &self,
+        registration: std::num::NonZeroU64,
+    ) -> Result<(), RegistrationError> {
+        let mut queue = self
+            .retired_owner_cons
+            .lock()
+            .map_err(|_| RegistrationError::Poisoned)?;
+        queue
+            .try_reserve(1)
+            .map_err(|_| RegistrationError::Capacity)?;
+        queue.push(registration);
+        Ok(())
+    }
+
     fn validate(
         &self,
         state: &RegistryState,
@@ -680,6 +702,8 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                     root_epoch,
                     cons_catalog: super::cons_storage::ConsCatalog::new(heap),
                     symbols,
+                    #[cfg(any(test, feature = "test-support"))]
+                    retired_owner_cons: std::sync::Mutex::new(Vec::new()),
                 })),
                 _thread: PhantomData,
             },
@@ -774,6 +798,71 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
 
     pub(crate) fn stopped_summaries(&self) -> Result<StoppedSummaries<'_>, RegistrationError> {
         StoppedSummaries::new(self.registry())
+    }
+
+    /// Return cons blocks for registrations `retire_rooted` recorded.
+    ///
+    /// The owner thread has no heap loan, and the quiescent collector is not
+    /// `Sync`, so the keeper calls this on its own thread while the collector
+    /// is free. A poisoned allocator puts the registration back on the queue.
+    /// Leases granted without a registration stay for the full-table stop walk.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn reclaim_retired_owner_cons(&self) -> Result<(), RegistrationError> {
+        if std::thread::current().id() != self.registry().keeper_thread {
+            return Err(RegistrationError::WrongThread);
+        }
+        let pending = {
+            let mut queue = self
+                .registry()
+                .retired_owner_cons
+                .lock()
+                .map_err(|_| RegistrationError::Poisoned)?;
+            std::mem::take(&mut *queue)
+        };
+        if pending.is_empty() {
+            return Ok(());
+        }
+        if self.collector.try_borrow_mut().is_err() {
+            self.requeue_retired_owner_cons(pending)?;
+            return Err(RegistrationError::Busy);
+        }
+        let mut deferred = Vec::new();
+        {
+            let mut collector_ref = self
+                .collector
+                .try_borrow_mut()
+                .map_err(|_| RegistrationError::Busy)?;
+            let Some(active) = collector_ref.as_mut() else {
+                drop(collector_ref);
+                self.requeue_retired_owner_cons(pending)?;
+                return Err(RegistrationError::Busy);
+            };
+            let heap = active.registration_heap_mut();
+            for registration in pending {
+                if !heap.reclaim_owner_cons_registration(registration) {
+                    deferred.push(registration);
+                }
+            }
+        }
+        if !deferred.is_empty() {
+            self.requeue_retired_owner_cons(deferred)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn requeue_retired_owner_cons(
+        &self,
+        mut front: Vec<std::num::NonZeroU64>,
+    ) -> Result<(), RegistrationError> {
+        let mut queue = self
+            .registry()
+            .retired_owner_cons
+            .lock()
+            .map_err(|_| RegistrationError::Poisoned)?;
+        front.append(&mut *queue);
+        *queue = front;
+        Ok(())
     }
 
     /// Explicit teardown performs no collection or implicit owner resumption.

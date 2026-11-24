@@ -1264,3 +1264,89 @@ pub(super) fn owner_cons_reserve_session_return_keeps_handed_cell_and_reclaims_t
         drop(keeper);
     });
 }
+
+/// One abandoned registration is reclaimed at `retire_rooted`. A second
+/// registration's closed lease stays in the table and in the count. The
+/// full-table walk still returns that survivor afterwards.
+pub(super) fn owner_cons_reserve_retire_rooted_reclaims_one_registration<K>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+) where
+    K: EraKeeper + std::fmt::Debug,
+{
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut owner_a = activate(era.register(1741, 0).unwrap(), era.heap_identity(), 1741);
+        let mut owner_b = activate(era.register(1742, 0).unwrap(), era.heap_identity(), 1742);
+        let reg_a = owner_a.key().registration;
+        let reg_b = owner_b.key().registration;
+        assert_ne!(reg_a, reg_b);
+        owner_a.enter_native(&[]).unwrap();
+        owner_b.enter_native(&[]).unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        let (block_a, block_b) = with_stopped_legacy_heap(&era, &stopped, |heap| {
+            let mut book_a = OwnerEraReserve::new();
+            let mut book_b = OwnerEraReserve::new();
+            book_a
+                .grant_at_stop_for_registration(
+                    &stopped,
+                    heap,
+                    true,
+                    MeasuredInterval::zero(),
+                    reg_a,
+                )
+                .unwrap();
+            book_b
+                .grant_at_stop_for_registration(
+                    &stopped,
+                    heap,
+                    true,
+                    MeasuredInterval::zero(),
+                    reg_b,
+                )
+                .unwrap();
+            assert_eq!(heap.cons_allocator.owner_reserved_blocks(), 2);
+            let block_a = book_a.first_leased_block_for_test();
+            let block_b = book_b.first_leased_block_for_test();
+            assert_ne!(block_a, block_b);
+            let closed_a = book_a.into_closed().unwrap();
+            let closed_b = book_b.into_closed().unwrap();
+            std::mem::forget(closed_a);
+            std::mem::forget(closed_b);
+            (block_a, block_b)
+        });
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+        retire(owner_a);
+        era.core.reclaim_retired_owner_cons().unwrap();
+        {
+            let mut collector = era.core.collector.borrow_mut();
+            let heap = collector.as_mut().unwrap().registration_heap_mut();
+            let registrations = heap.cons_allocator.owner_cons_registrations_for_test();
+            assert_eq!(
+                (
+                    heap.cons_allocator.owner_reserved_blocks(),
+                    registrations,
+                    heap.cons_blocks[block_a].next_index,
+                    heap.cons_blocks[block_b].next_index,
+                ),
+                (
+                    1,
+                    vec![Some(reg_b)],
+                    0,
+                    crate::tagged::gc::CONS_BLOCK_SIZE as u16
+                ),
+                "retire_rooted reclaims only the retiring registration"
+            );
+            heap.return_leased_owner_cons_reserves();
+            assert!(
+                !heap.has_owner_cons_reserves(),
+                "the full-table walk still returns the lease that did not retire"
+            );
+        }
+        retire(owner_b);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}

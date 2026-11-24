@@ -241,6 +241,10 @@ impl<'era> Mutator<'era> {
             if e.rendezvous.mode != Mode::NativeStopped {
                 return Err(RendezvousError::Busy);
             }
+            // The owner thread cannot borrow the collector. The keeper returns
+            // this registration's lease in `reclaim_retired_owner_cons`.
+            self.registry
+                .note_retired_owner_cons(self.entry.key.registration)?;
             e.rendezvous.retiring = true;
             e.phase = EntryPhase::Retiring;
             Ok(())
