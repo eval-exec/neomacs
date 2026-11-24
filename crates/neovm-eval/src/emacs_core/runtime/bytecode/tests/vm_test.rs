@@ -7813,9 +7813,9 @@ fn deferred_switch_on_arg(table: Value) -> ByteCodeFunction {
         .into(),
     );
     func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(3));
-    func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(vec![
+    func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
         137, 192, 183, 193, 135, 194, 135, 195, 135,
-    ]));
+    ])));
     func.defer_gnu_decode();
     func
 }

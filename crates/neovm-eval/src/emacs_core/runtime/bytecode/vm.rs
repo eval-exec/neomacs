@@ -649,7 +649,7 @@ fn trace_invalid_bytecode_site(
         .map(|(idx, op)| format!("{}:{:?}", op_window_start + idx, op))
         .collect::<Vec<_>>()
         .join(" ");
-    let raw_bytes = func.gnu_bytecode_bytes.as_ref().map(|bytes| {
+    let raw_bytes = func.gnu_bytecode_bytes().map(|bytes| {
         let start = gnu_byte_offset.unwrap_or(0).saturating_sub(12);
         let end = (gnu_byte_offset.unwrap_or(0) + 24).min(bytes.len());
         bytes[start..end]

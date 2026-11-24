@@ -701,9 +701,9 @@ fn classic_fuser_header_scan_keeps_unused_pdump_bytecode_lazy() {
         GnuByteOffsetMapEntry::new(0, 0),
         GnuByteOffsetMapEntry::new(1, 1),
     ]);
-    callee.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(vec![
+    callee.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
         0xC0, 0x87,
-    ]));
+    ])));
     ev.obarray
         .set_symbol_value("fuser-unused-lazy-bytecode", Value::make_bytecode(callee));
     let dir = tempfile::tempdir().unwrap();

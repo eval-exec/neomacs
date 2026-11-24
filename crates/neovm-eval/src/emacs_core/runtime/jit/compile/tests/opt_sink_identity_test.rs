@@ -84,10 +84,7 @@ fn load(ctx: &mut Context, roots: &Roots) {
         let source = value.get_bytecode_data().unwrap();
         assert_eq!(source.arglist(), Value::make_int(spec.descriptor));
         assert_eq!(source.max_stack().get(), spec.max_stack as usize);
-        assert_eq!(
-            source.gnu_bytecode_bytes.as_ref().unwrap().as_slice(),
-            spec.bytes
-        );
+        assert_eq!(source.gnu_bytecode_bytes().unwrap().as_slice(), spec.bytes);
         assert_eq!(source.constants().len(), spec.constants.len());
         for (&actual, &expected) in source.constants().iter().zip(spec.constants) {
             match expected {

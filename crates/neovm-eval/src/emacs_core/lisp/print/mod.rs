@@ -2457,7 +2457,7 @@ fn with_bytecode_literal_slots<R>(value: &Value, f: impl FnOnce(&[Value]) -> R) 
     use neovm_value::tagged::header::ByteCodeSlotObject;
     let code = if let Some(code) = value.bytecode_slot_object_if_created(ByteCodeSlotObject::Code) {
         code
-    } else if let Some(bytes) = &bc.gnu_bytecode_bytes {
+    } else if let Some(bytes) = bc.gnu_bytecode_bytes() {
         Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
             bytes.as_slice().to_vec(),
         ))

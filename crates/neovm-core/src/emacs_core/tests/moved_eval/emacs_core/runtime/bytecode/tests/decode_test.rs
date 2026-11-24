@@ -523,7 +523,7 @@ fn validate_matches_decode_on_real_elc_functions() {
             continue;
         }
         let data = f.get_bytecode_data().expect("byte-code function");
-        if let Some(bytes) = &data.gnu_bytecode_bytes {
+        if let Some(bytes) = data.gnu_bytecode_bytes() {
             bodies.push(bytes.to_vec());
         }
         pending.extend(

@@ -181,9 +181,9 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
         GnuByteOffsetMapEntry::new(1, 1),
     ]);
     // Bconstant0 (0xC0), Breturn (0x87).
-    function.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(vec![
+    function.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
         0xC0, 0x87,
-    ]));
+    ])));
     let func_val = Value::make_bytecode(function);
     eval.obarray_mut()
         .set_symbol_value("pdump-lazy-probe", func_val);

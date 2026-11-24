@@ -291,7 +291,10 @@ pub struct ByteCodeFunction {
     /// bytecode string and pass it to `make-byte-code` for closure prototype
     /// generation.  Without preserving the original bytes, those round-trips
     /// produce empty bytecode functions.
-    pub gnu_bytecode_bytes: Option<crate::tagged::header::LispByteVec>,
+    ///
+    /// Private. [`Self::set_gnu_bytecode_bytes`] replaces a shared lazy cell
+    /// with a cold one, so a clone's bytes are not decoded into the prototype.
+    gnu_bytecode_bytes: Option<crate::tagged::header::LispByteVec>,
     /// Optional docstring.
     pub docstring: Option<LispString>,
     /// Optional documentation form (e.g., oclosure type symbol in slot 4).
@@ -381,6 +384,12 @@ impl ByteCodeFunction {
     #[doc(hidden)]
     pub const fn offset_of_env() -> usize {
         std::mem::offset_of!(Self, env)
+    }
+
+    /// Layout pin. The field is private; [`Self::set_gnu_bytecode_bytes`] owns it.
+    #[doc(hidden)]
+    pub const fn offset_of_gnu_bytecode_bytes() -> usize {
+        std::mem::offset_of!(Self, gnu_bytecode_bytes)
     }
 }
 
@@ -979,6 +988,29 @@ impl ByteCodeFunction {
         self.env = env;
     }
 
+    /// Original GNU byte string, when this function was loaded from one.
+    #[inline(always)]
+    pub fn gnu_bytecode_bytes(&self) -> Option<&crate::tagged::header::LispByteVec> {
+        self.gnu_bytecode_bytes.as_ref()
+    }
+
+    /// Replace the original GNU byte string. A shared lazy cell becomes a
+    /// cold cell on this value only, so these bytes are not decoded into
+    /// the prototype's cell.
+    #[inline]
+    pub fn set_gnu_bytecode_bytes(&mut self, bytes: Option<crate::tagged::header::LispByteVec>) {
+        self.gnu_bytecode_bytes = bytes;
+        self.reinstall_lazy_gnu_code();
+    }
+
+    /// Remove the original GNU byte string and drop a shared lazy cell.
+    #[inline]
+    pub fn take_gnu_bytecode_bytes(&mut self) -> Option<crate::tagged::header::LispByteVec> {
+        let bytes = self.gnu_bytecode_bytes.take();
+        self.reinstall_lazy_gnu_code();
+        bytes
+    }
+
     #[inline]
     #[doc(hidden)]
     pub fn lazy_gnu_code(&self) -> &Option<std::sync::Arc<LazyGnuCode>> {
@@ -1047,6 +1079,19 @@ impl ByteCodeFunction {
     pub unsafe fn env_ptr(this: *mut Self) -> *mut Option<Value> {
         // SAFETY: the caller guarantees the place.
         unsafe { &raw mut (*this).env }
+    }
+    /// Place of `gnu_bytecode_bytes` for the pdump stub initializer.
+    /// Writing the place does not reinstall a lazy cell: there is no
+    /// `&mut self`.
+    ///
+    /// # Safety
+    /// `this` is aligned for `ByteCodeFunction` and the place is valid to write.
+    #[doc(hidden)]
+    pub unsafe fn gnu_bytecode_bytes_ptr(
+        this: *mut Self,
+    ) -> *mut Option<crate::tagged::header::LispByteVec> {
+        // SAFETY: the caller guarantees the place.
+        unsafe { &raw mut (*this).gnu_bytecode_bytes }
     }
     #[cfg(feature = "jit")]
     #[inline]

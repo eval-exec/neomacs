@@ -45,10 +45,10 @@ fn bytecode_fn(constants: Vec<TaggedValue>, n_ops: usize, payload: usize) -> Byt
     f.set_constants(constants.into());
     f.set_ops(vec![Op::Nil; n_ops]);
     if payload > 0 {
-        f.gnu_bytecode_bytes = Some(crate::tagged::header::LispByteVec::owned(vec![
+        f.set_gnu_bytecode_bytes(Some(crate::tagged::header::LispByteVec::owned(vec![
             0xAA;
             payload
-        ]));
+        ])));
     }
     f
 }
@@ -1304,8 +1304,8 @@ fn bytecode_shared_gnu_bytes_survive_the_sweep_of_either_holder() {
 
     let proto_fn = bytecode_fn(vec![TaggedValue::fixnum(1)], 2, 4_096);
     let instance_fn = proto_fn.clone();
-    let proto_bytes = proto_fn.gnu_bytecode_bytes.as_ref().unwrap();
-    let instance_bytes = instance_fn.gnu_bytecode_bytes.as_ref().unwrap();
+    let proto_bytes = proto_fn.gnu_bytecode_bytes().unwrap();
+    let instance_bytes = instance_fn.gnu_bytecode_bytes().unwrap();
     assert!(proto_bytes.shares_storage_with(instance_bytes));
     assert_eq!(proto_bytes.owned_bytes(), 4_096);
     assert_eq!(instance_bytes.owned_bytes(), 4_096);
@@ -1321,7 +1321,11 @@ fn bytecode_shared_gnu_bytes_survive_the_sweep_of_either_holder() {
     heap.collect_rooted(std::iter::once(instance));
     assert!(!heap.bytecode_arena.owns(bc_ptr(proto)));
     let obj = unsafe { &*(instance.as_veclike_ptr().unwrap() as *const ByteCodeObj) };
-    let bytes = obj.data.gnu_bytecode_bytes.as_deref().unwrap();
+    let bytes = obj
+        .data
+        .gnu_bytecode_bytes()
+        .map(|bytes| bytes.as_slice())
+        .unwrap();
     assert_eq!(bytes.len(), 4_096);
     assert!(bytes.iter().all(|&b| b == 0xAA));
     assert_eq!(heap.live_bytes(), per_object(instance));
@@ -1420,10 +1424,9 @@ fn bytecode_instance_reads_back_as_the_prototype_with_its_own_pool() {
     assert_eq!(i.env(), p.env());
     assert_eq!(i.gnu_byte_offset_map, p.gnu_byte_offset_map);
     assert!(
-        i.gnu_bytecode_bytes
-            .as_ref()
+        i.gnu_bytecode_bytes()
             .unwrap()
-            .shares_storage_with(p.gnu_bytecode_bytes.as_ref().unwrap())
+            .shares_storage_with(p.gnu_bytecode_bytes().unwrap())
     );
     assert_eq!(
         i.docstring.as_ref().unwrap().as_bytes(),
@@ -1446,7 +1449,12 @@ fn bytecode_instance_reads_back_as_the_prototype_with_its_own_pool() {
     assert!(!heap.bytecode_arena.owns(bc_ptr(proto)));
     let i = bc_data(instance);
     assert_eq!(i.constants().as_slice(), pool.as_slice());
-    assert_eq!(i.gnu_bytecode_bytes.as_deref().unwrap(), &[0xAA; 48][..]);
+    assert_eq!(
+        i.gnu_bytecode_bytes()
+            .map(|bytes| bytes.as_slice())
+            .unwrap(),
+        &[0xAA; 48][..]
+    );
     assert_eq!(i.docstring.as_ref().unwrap().as_bytes(), b"Instance doc.");
     heap.assert_object_arenas_coherent();
 }

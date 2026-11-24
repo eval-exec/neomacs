@@ -6,7 +6,7 @@ fn admission_function(argdesc: i64, max_stack: usize, bytes: Vec<u8>) -> ByteCod
     let mut func = ByteCodeFunction::new(params);
     func.set_max_stack(StackDepth::for_test(max_stack));
     func.set_constants(vec![Value::fixnum(42)].into());
-    func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(bytes));
+    func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(bytes)));
     func.defer_gnu_decode();
     assert!(func.lazy_gnu_code().is_some());
     func
@@ -161,7 +161,9 @@ fn bytecode_lazy_set_env_keeps_the_cell_and_drops_the_stale_entry_proof() {
         "c9-x",
     )]));
     proto.set_max_stack(StackDepth::for_test(1));
-    proto.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(vec![135]));
+    proto.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
+        135,
+    ])));
     proto.defer_gnu_decode();
     assert_eq!(proto.verifier_entry_depth(), Some(0));
     assert!(proto.executes_verified_ops());
@@ -317,7 +319,7 @@ fn bytecode_lazy_iterative_admission_preserves_shared_layout_and_eager_fallback(
         std::mem::offset_of!(OriginalFunction, env)
     );
     assert_eq!(
-        std::mem::offset_of!(ByteCodeFunction, gnu_bytecode_bytes),
+        ByteCodeFunction::offset_of_gnu_bytecode_bytes(),
         std::mem::offset_of!(OriginalFunction, gnu_bytecode_bytes)
     );
     assert_eq!(

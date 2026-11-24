@@ -459,7 +459,7 @@ fn opt_fold_gnu_dhry_proc3_alias_join_remains_verifiable() {
     let mut function = source(ops, constants, 1);
     function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     function.gnu_byte_offset_map = Some(offsets);
-    function.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(raw));
+    function.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(raw)));
     // Installing GNU bytes must use the canonical decode publication path.
     // Merely attaching decoded ops does not establish the unchecked driver's
     // sealed-code proof, and test-only hand-assembly sealing refuses GNU bodies.

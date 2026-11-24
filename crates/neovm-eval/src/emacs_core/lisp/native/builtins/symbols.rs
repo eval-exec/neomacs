@@ -5921,7 +5921,7 @@ fn adopt_make_byte_code_slot_objects(function: Value, code: Value, constants: Va
     let Some(bc) = function.get_bytecode_data() else {
         return;
     };
-    if bc.gnu_bytecode_bytes.is_some() {
+    if bc.gnu_bytecode_bytes().is_some() {
         install_bytecode_slot_object(function, ByteCodeSlotObject::Code, code);
     }
     let pool = bc.constants().as_slice();

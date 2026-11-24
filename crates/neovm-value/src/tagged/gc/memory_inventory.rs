@@ -349,8 +349,7 @@ fn shared_bytecode_bytes(header: *const GcHeader) -> usize {
         {
             (*(header as *const ByteCodeObj))
                 .data
-                .gnu_bytecode_bytes
-                .as_ref()
+                .gnu_bytecode_bytes()
                 .map_or(0, LispByteVec::owned_bytes)
         } else {
             0

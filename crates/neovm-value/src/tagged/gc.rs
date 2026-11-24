@@ -1921,8 +1921,7 @@ impl TaggedHeap {
                     .saturating_mul(size_of::<GnuByteOffsetMapEntry>()),
             )
             .saturating_add(
-                data.gnu_bytecode_bytes
-                    .as_ref()
+                data.gnu_bytecode_bytes()
                     .map_or(0, |bytes| bytes.owned_bytes()),
             )
             .saturating_add(Self::vector_storage_bytes(&data.extra_slots))
@@ -2117,7 +2116,7 @@ impl TaggedHeap {
                 mapped: false,
             });
         }
-        if let Some(bytes) = &data.gnu_bytecode_bytes {
+        if let Some(bytes) = data.gnu_bytecode_bytes() {
             stats = stats.add(PayloadLayout {
                 logical_bytes: bytes.len(),
                 capacity_bytes: bytes.owned_bytes(),

@@ -410,7 +410,7 @@ impl TaggedValueBytecodeSlotCreationExt for TaggedValue {
             .get_bytecode_data()
             .expect("caller proved a byte-code value");
         let object = match slot {
-            ByteCodeSlotObject::Code => match &bc.gnu_bytecode_bytes {
+            ByteCodeSlotObject::Code => match bc.gnu_bytecode_bytes() {
                 // GNU byte-code strings are unibyte: each byte one character.
                 Some(bytes) => {
                     Value::heap_string(LispString::from_unibyte(bytes.as_slice().to_vec()))

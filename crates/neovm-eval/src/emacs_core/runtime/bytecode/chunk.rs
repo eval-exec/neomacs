@@ -245,7 +245,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
             return;
         }
         assert!(
-            self.gnu_bytecode_bytes.is_some(),
+            self.gnu_bytecode_bytes().is_some(),
             "deferred GNU decode requires original bytecode bytes"
         );
         self.set_ops(Vec::new());
@@ -385,8 +385,8 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                     decoded.stack_verified()
                 } else {
                     let raw_bytes = self
-                        .gnu_bytecode_bytes
-                        .as_deref()
+                        .gnu_bytecode_bytes()
+                        .map(|bytes| bytes.as_slice())
                         .expect("lazy GNU bytecode lost its original bytes");
                     decode_lazy_gnu_code(
                         lazy,
@@ -448,7 +448,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// `ops` and `constants` are both in place; no-op for GNU-backed or
     /// already-sealed functions.
     fn seal_hand_assembled_ops(&mut self) {
-        if self.executes_sealed_ops() || self.gnu_bytecode_bytes.is_some() {
+        if self.executes_sealed_ops() || self.gnu_bytecode_bytes().is_some() {
             return;
         }
         let constants_len = self.constants().len();
@@ -478,8 +478,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         // Hold the original bytes in a local. The decoder also needs a
         // mutable constant pool, and that borrow covers the whole function.
         let raw_bytes = self
-            .gnu_bytecode_bytes
-            .take()
+            .take_gnu_bytecode_bytes()
             .expect("restored GNU bytecode requires original bytes");
         let decoded = if eager_gnu_bytecode() {
             super::decode::decode_gnu_bytecode_with_offset_map(
@@ -490,7 +489,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         } else {
             Ok(None)
         };
-        self.gnu_bytecode_bytes = Some(raw_bytes);
+        self.set_gnu_bytecode_bytes(Some(raw_bytes));
         let Some((ops, byte_offset_map)) = decoded? else {
             self.ops_mut().clear();
             self.reset_to_deferred_gnu();
@@ -515,8 +514,8 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                     Some(decoded) => decoded,
                     None => {
                         let raw_bytes = self
-                            .gnu_bytecode_bytes
-                            .as_deref()
+                            .gnu_bytecode_bytes()
+                            .map(|bytes| bytes.as_slice())
                             .expect("lazy GNU bytecode lost its original bytes");
                         decode_lazy_gnu_code(
                             lazy,
@@ -541,8 +540,8 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                     Some(decoded) => decoded,
                     None => {
                         let raw_bytes = self
-                            .gnu_bytecode_bytes
-                            .as_deref()
+                            .gnu_bytecode_bytes()
+                            .map(|bytes| bytes.as_slice())
                             .expect("lazy GNU bytecode lost its original bytes");
                         decode_lazy_gnu_code(
                             lazy,

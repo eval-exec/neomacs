@@ -224,9 +224,9 @@ fn deferred_gnu_function_with_a_switch_is_verified_and_resolves_through_its_proo
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     func.set_constants(pool(jump_table(&[("vsw-foo", Value::fixnum(8))])).into());
     func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
-    func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(
+    func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(
         SWITCH_BYTES.to_vec(),
-    ));
+    )));
     func.defer_gnu_decode();
 
     assert!(
@@ -266,9 +266,9 @@ fn switches_at_different_depths_keep_the_checked_driver() {
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     func.set_constants(constants.into());
     func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(3));
-    func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(
+    func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(
         bytes.to_vec(),
-    ));
+    )));
     func.defer_gnu_decode();
     assert!(!func.executes_verified_ops());
     assert_eq!(func.verified_switch_pc(7), None, "use the checked resolver");
@@ -318,9 +318,9 @@ fn pre_resolved_switch_hit_uses_the_fixed_proof_depth() {
     let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     func.set_constants(pool(jump_table(&[("vsw-foo", Value::fixnum(8))])).into());
     func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
-    func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(
+    func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(
         SWITCH_BYTES.to_vec(),
-    ));
+    )));
     func.defer_gnu_decode();
     assert!(func.executes_verified_ops());
     // Byte 8 is pre-resolved at the fixed switch depth. Byte 9 is proven

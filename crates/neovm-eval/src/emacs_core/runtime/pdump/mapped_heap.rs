@@ -859,7 +859,11 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
             None,
             Option::is_none,
         );
-        write_canonical_none(addr_of_mut!((*p).gnu_bytecode_bytes), None, Option::is_none);
+        write_canonical_none(
+            ByteCodeFunction::gnu_bytecode_bytes_ptr(p),
+            None,
+            Option::is_none,
+        );
         write_canonical_none(addr_of_mut!((*p).docstring), None, Option::is_none);
         write_canonical_none(addr_of_mut!((*p).doc_form), None, Option::is_none);
         write_canonical_none(addr_of_mut!((*p).interactive), None, Option::is_none);
@@ -889,7 +893,7 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         assert!(!stub.lexical());
         assert!(stub.env().is_none());
         assert!(stub.gnu_byte_offset_map.is_none());
-        assert!(stub.gnu_bytecode_bytes.is_none());
+        assert!(stub.gnu_bytecode_bytes().is_none());
         assert!(stub.docstring.is_none());
         assert!(stub.doc_form.is_none());
         assert!(stub.interactive.is_none());

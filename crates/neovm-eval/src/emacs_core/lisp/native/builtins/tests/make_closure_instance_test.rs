@@ -160,8 +160,8 @@ fn make_closure_instance_patches_the_prefix_and_keeps_every_other_slot() {
         assert_eq!(i.params(), p.params());
         assert_eq!(i.env(), p.env());
         assert_eq!(
-            i.gnu_bytecode_bytes.as_deref(),
-            p.gnu_bytecode_bytes.as_deref()
+            i.gnu_bytecode_bytes().map(|bytes| bytes.as_slice()),
+            p.gnu_bytecode_bytes().map(|bytes| bytes.as_slice())
         );
         assert_eq!(
             i.docstring.as_ref().map(|d| d.as_bytes().to_vec()),
@@ -344,9 +344,9 @@ fn make_closure_instances_share_the_prototype_bytes() {
     );
     let a = make_closure(proto, &[Value::fixnum(1)]);
     let b = make_closure(a, &[Value::fixnum(2)]);
-    let proto_bytes = data(proto).gnu_bytecode_bytes.as_ref().expect("bytes");
+    let proto_bytes = data(proto).gnu_bytecode_bytes().expect("bytes");
     for instance in [a, b] {
-        let bytes = data(instance).gnu_bytecode_bytes.as_ref().expect("bytes");
+        let bytes = data(instance).gnu_bytecode_bytes().expect("bytes");
         assert!(bytes.shares_storage_with(proto_bytes));
         assert_eq!(bytes.as_slice(), b"\xC0\x87");
     }
@@ -387,10 +387,9 @@ fn make_closure_by_clone_and_in_place_build_the_same_instance() {
             ]
         );
         assert!(
-            i.gnu_bytecode_bytes
-                .as_ref()
+            i.gnu_bytecode_bytes()
                 .unwrap()
-                .shares_storage_with(p.gnu_bytecode_bytes.as_ref().unwrap())
+                .shares_storage_with(p.gnu_bytecode_bytes().unwrap())
         );
         #[cfg(feature = "jit")]
         assert!(std::ptr::eq(&**i.jit_runtime(), &**p.jit_runtime()));

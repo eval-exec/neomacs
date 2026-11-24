@@ -84,11 +84,11 @@ fn frozen_loop_add() -> ByteCodeFunction {
     source.set_arglist(LispValue::fixnum(771));
     source.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     source.set_constants(vec![LispValue::fixnum(0)].into());
-    source.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::copy_from_slice(
-        &[
+    source.set_gnu_bytecode_bytes(Some(
+        neovm_value::tagged::header::LispByteVec::copy_from_slice(&[
             2, 137, 192, 137, 4, 87, 131, 21, 0, 2, 5, 92, 137, 178, 4, 178, 2, 84, 130, 3, 0, 2,
             2, 66, 135,
-        ],
+        ]),
     ));
     source
         .restore_gnu_decode_policy()

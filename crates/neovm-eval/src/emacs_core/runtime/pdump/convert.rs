@@ -2957,7 +2957,7 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
             extra_slots,
         )
     };
-    if function.gnu_bytecode_bytes.is_some() {
+    if function.gnu_bytecode_bytes().is_some() {
         function
             .restore_gnu_decode_policy()
             .unwrap_or_else(|error| {
@@ -3129,7 +3129,7 @@ pub(crate) fn dump_bytecode(
     encoder: &mut DumpEncoder,
     bc: &ByteCodeFunction,
 ) -> DumpByteCodeFunction {
-    let instructions = match &bc.gnu_bytecode_bytes {
+    let instructions = match bc.gnu_bytecode_bytes() {
         Some(bytes) => {
             DumpByteCodeInstructions::Gnu(DumpByteData::owned(bytes.as_slice().to_vec()))
         }
@@ -5246,7 +5246,7 @@ fn load_bytecode_owned(
                 .collect(),
         )
     };
-    if function.gnu_bytecode_bytes.is_some() {
+    if function.gnu_bytecode_bytes().is_some() {
         function.restore_gnu_decode_policy().map_err(|error| {
             DumpError::DeserializationError(format!("invalid GNU bytecode in pdump: {error}"))
         })?;

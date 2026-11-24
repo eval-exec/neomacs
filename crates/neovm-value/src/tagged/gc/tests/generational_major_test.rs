@@ -144,13 +144,13 @@ fn bytecode(constants: Vec<TaggedValue>) -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     function.set_constants(constants.into());
     function.set_ops(vec![Op::Nil]);
-    function.gnu_bytecode_bytes = Some(LispByteVec::owned(vec![0xAA; 32]));
+    function.set_gnu_bytecode_bytes(Some(LispByteVec::owned(vec![0xAA; 32])));
     function
 }
 
 fn retained_bytes(value: TaggedValue) -> LispByteVec {
     let object = unsafe { &*(value.as_veclike_ptr().unwrap() as *const ByteCodeObj) };
-    object.data.gnu_bytecode_bytes.as_ref().unwrap().clone()
+    object.data.gnu_bytecode_bytes().unwrap().clone()
 }
 
 fn weak_key_table(heap: &mut TaggedHeap) -> TaggedValue {

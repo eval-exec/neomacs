@@ -543,9 +543,9 @@ fn lazy_hof_physical(inner: Value) -> Value {
     func.set_lexical(true);
     func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     func.set_constants(vec![Value::symbol("mapcar"), inner].into());
-    func.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(vec![
+    func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
         192, 193, 2, 137, 136, 34, 135,
-    ]));
+    ])));
     func.defer_gnu_decode();
     let value = Value::make_bytecode(func);
     let data = value.get_bytecode_data().expect("bytecode");

@@ -55,9 +55,9 @@ fn dumped_gnu_bytecode_does_not_duplicate_derived_instructions() {
         GnuByteOffsetMapEntry::new(0, 0),
         GnuByteOffsetMapEntry::new(1, 1),
     ]);
-    function.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(vec![
+    function.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
         0xC1, 0x87,
-    ]));
+    ])));
 
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.obarray
