@@ -3,7 +3,7 @@
 use crate::buffer_source::face_resolution::*;
 use crate::buffer_source::loop_context::BufferSourceLoopRequestContext;
 use crate::buffer_source::loop_state::BufferSourceLoopMutableState;
-use crate::buffer_source::render::BufferSourceRenderRequest;
+use crate::buffer_source::render::{BufferSourceRenderRequest, emit_nested_source_visual_wrap};
 use crate::buffer_source::row_lifecycle::{
     BufferSourceHscrollSkipRenderContext, BufferSourceInvisibleTextRenderContext,
     BufferSourceInvisibleTextRenderOutcome,
@@ -66,6 +66,16 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                 return BufferSourceVisibleLoopOutcome::GlyphMatrixCapacityExhausted;
             }
             self.render_row_prelude(row_prelude_context, params, active_face_state, buffer);
+            if self.invisible_text_checkpoint.take_deferred_ellipsis() {
+                loop_context
+                    .invisible_text_request(
+                        text,
+                        self.surface.append_surface,
+                        active_face_state,
+                        0.0,
+                    )
+                    .place_deferred_ellipsis(buffer, self.reborrow());
+            }
 
             let invisible_text_outcome = self.render_invisible_text_for_context(
                 loop_context,
@@ -92,6 +102,14 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                     continue;
                 }
                 BufferSourceInvisibleTextRenderOutcome::HiddenSpanApplied => continue,
+                BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow => {
+                    self.row_carryover.line_numbers.mark_continuation_row();
+                    if emit_nested_source_visual_wrap(loop_context, self.reborrow()).should_break()
+                    {
+                        break;
+                    }
+                    continue;
+                }
             }
 
             if self.row_carryover.hscroll_skip.should_skip() {

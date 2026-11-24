@@ -954,8 +954,7 @@ impl<'a> TextRowOutputRenderState<'a> {
     }
 
     /// Truncate the current output row's drawn glyphs back to `checkpoint`,
-    /// dropping the partial-word glyphs that the word-wrap break rewinds past.
-    #[cfg(test)]
+    /// dropping glyphs the caller has decided belong on the next row.
     fn restore_current_row_glyph_checkpoint(&mut self, checkpoint: DisplayRowGlyphCheckpoint) {
         self.output.current_row_output().apply_current_row_mutation(
             DisplayRowGlyphCheckpointRestoreMutation {
@@ -2027,9 +2026,10 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
             .apply_current_row_mutation(FirstTextGlyphAfterCheckpointMutation { checkpoint })?
     }
 
-    /// Roll the current row's drawn glyphs back to `checkpoint` when the
-    /// word-wrap break rewinds to a word boundary.
-    #[cfg(test)]
+    /// Roll the current row's drawn glyphs back to `checkpoint`.
+    ///
+    /// Word wrap drops a partial word this way. A clipped invisible ellipsis
+    /// drops the dots that fit so the whole marker can open the next row.
     pub(crate) fn restore_glyph_checkpoint(&mut self, checkpoint: DisplayRowGlyphCheckpoint) {
         self.output_render
             .restore_current_row_glyph_checkpoint(checkpoint);

@@ -894,6 +894,10 @@ impl DisplayRowGlyphCheckpoint {
         }
     }
 
+    pub(crate) fn text_glyph_count(self) -> usize {
+        self.area_lengths[GlyphArea::Text.index()]
+    }
+
     pub(crate) fn restore(self, row: &mut GlyphRow) {
         row.glyphs[GlyphArea::LeftMargin.index()].truncate(self.area_lengths[0]);
         row.glyphs[GlyphArea::Text.index()].truncate(self.area_lengths[1]);

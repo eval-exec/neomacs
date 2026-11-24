@@ -432,6 +432,11 @@ pub(crate) struct DisplayRowSourceStart {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct InvisibleTextScanCheckpoint {
     invisible_next: i64,
+    /// The ellipsis for an already-consumed hidden span did not fit on the row
+    /// that skipped it. The next row draws that whole marker before any later
+    /// source. A `String` would drop `Copy`; the marker text is read again from
+    /// the buffer display table.
+    deferred_ellipsis: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1300,6 +1305,7 @@ impl InvisibleTextScanCheckpoint {
     pub(crate) fn new(start_charpos: i64) -> Self {
         Self {
             invisible_next: start_charpos,
+            deferred_ellipsis: false,
         }
     }
 
@@ -1311,8 +1317,21 @@ impl InvisibleTextScanCheckpoint {
         self.invisible_next = charpos;
     }
 
+    pub(crate) fn defer_ellipsis(&mut self) {
+        self.deferred_ellipsis = true;
+    }
+
+    /// Takes the pending ellipsis. Clearing it here is what stops an empty row
+    /// that still cannot hold the marker from wrapping forever.
+    pub(crate) fn take_deferred_ellipsis(&mut self) -> bool {
+        let deferred = self.deferred_ellipsis;
+        self.deferred_ellipsis = false;
+        deferred
+    }
+
     pub(crate) fn rewind_to(&mut self, position: crate::display_source::DisplaySourceTextPosition) {
         self.invisible_next = position.charpos();
+        self.deferred_ellipsis = false;
     }
 }
 

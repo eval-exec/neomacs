@@ -7341,6 +7341,57 @@ fn layout_frame_rust_collapses_consecutive_invisible_runs_to_one_ellipsis() {
     );
 }
 
+/// An invisible ellipsis that does not fit after the visible prefix continues,
+/// whole, on the next fresh row.
+///
+/// An 88px frame lays out 10 buffer cells
+/// (`p45_word_wrap_break_shadow_pins_the_c9_corpora`). Nine `a`s leave one
+/// cell, which cannot hold the three-dot marker. GNU `setup_for_ellipsis`
+/// (src/xdisp.c:5653) produces that marker, and `display_line` restores the
+/// iterator before an element that draws past the right edge and continues
+/// the row (src/xdisp.c:26433). The fresh walk must do the same before the
+/// text that follows the hidden span. The offscreen worker already continues
+/// the marker as one anchor-preserving operation.
+#[test]
+fn clipped_invisible_ellipsis_continues_on_the_next_fresh_row() {
+    let prefix = "aaaaaaaaa";
+    let hidden = "hidden";
+    let tail = "TAIL";
+    let text = format!("{prefix}{hidden}{tail}\n");
+    let hidden_start = prefix.len();
+    let hidden_end = hidden_start + hidden.len();
+    let trace = layout_trace_with_buffer_setup(&text, 88, 240, |buffer, _, _| {
+        buffer.set_buffer_local("truncate-lines", Value::NIL);
+        buffer.set_buffer_local("word-wrap", Value::NIL);
+        buffer.set_buffer_local(
+            "buffer-invisibility-spec",
+            Value::list(vec![Value::cons(Value::symbol("outline"), Value::T)]),
+        );
+        assert!(buffer.put_text_property(
+            hidden_start,
+            hidden_end,
+            Value::symbol("invisible"),
+            Value::symbol("outline"),
+        ));
+    });
+
+    let rows = row_texts(&trace);
+    assert!(
+        !rows.is_empty() && !rows[0].contains('.'),
+        "the full prefix row must not keep a partial ellipsis, rows={rows:?}"
+    );
+    let continued = rows.iter().find(|row| row.contains("..."));
+    assert!(
+        continued.is_some(),
+        "a clipped invisible ellipsis must continue on a later row, rows={rows:?}"
+    );
+    let continued = continued.expect("continued ellipsis row");
+    assert!(
+        continued.starts_with("...") && continued.contains(tail),
+        "the continued ellipsis precedes the visible tail, rows={rows:?}"
+    );
+}
+
 #[test]
 fn layout_frame_rust_display_table_maps_char_to_glyph_vector() {
     // `buffer-display-table` maps a buffer char (`x`) to a glyph VECTOR
