@@ -7375,20 +7375,34 @@ fn clipped_invisible_ellipsis_continues_on_the_next_fresh_row() {
         ));
     });
 
+    // GNU `setup_for_ellipsis` (src/xdisp.c:5653-5672) and
+    // `next_element_from_display_vector` (src/xdisp.c:9258) produce one dot
+    // per element and resume mid-vector on the continuation row (attested on
+    // GNU Emacs 31.1 oracle: 1 dot fits on row 0, remaining 2 dots precede
+    // TAIL on row 1).
     let rows = row_texts(&trace);
     assert!(
-        !rows.is_empty() && !rows[0].contains('.'),
-        "the full prefix row must not keep a partial ellipsis, rows={rows:?}"
+        rows.len() >= 2,
+        "expected wrapped ellipsis across two rows, rows={rows:?}"
     );
-    let continued = rows.iter().find(|row| row.contains("..."));
     assert!(
-        continued.is_some(),
-        "a clipped invisible ellipsis must continue on a later row, rows={rows:?}"
+        rows[0].starts_with(prefix) && rows[0].contains('.'),
+        "the prefix row must keep the ellipsis dot(s) that fit, rows={rows:?}"
     );
-    let continued = continued.expect("continued ellipsis row");
+    let prefix_dots = rows[0].matches('.').count();
+    let continued_dots = rows[1].chars().take_while(|ch| *ch == '.').count();
     assert!(
-        continued.starts_with("...") && continued.contains(tail),
-        "the continued ellipsis precedes the visible tail, rows={rows:?}"
+        prefix_dots > 0 && prefix_dots < 3,
+        "expected a split ellipsis on the first row, rows={rows:?}"
+    );
+    assert_eq!(
+        prefix_dots + continued_dots,
+        3,
+        "the split ellipsis must preserve all three dots across the wrap, rows={rows:?}"
+    );
+    assert!(
+        rows[1][continued_dots..].starts_with(tail),
+        "the continued ellipsis dots must immediately precede the visible tail, rows={rows:?}"
     );
     let text_rows: Vec<_> = trace
         .matrix_rows
@@ -7407,6 +7421,64 @@ fn clipped_invisible_ellipsis_continues_on_the_next_fresh_row() {
         "the row before a continued invisible ellipsis must advance end_charpos past the skipped hidden span"
     );
     assert_eq!(text_rows[0].end_charpos, hidden_end);
+}
+
+#[test]
+fn clipped_invisible_ellipsis_truncates_without_wrapping_when_truncate_lines_is_t() {
+    let prefix = "aaaaaaaaa";
+    let hidden = "hidden";
+    let tail = "TAIL";
+    let next = "NEXT";
+    let text = format!("{prefix}{hidden}{tail}\n{next}\n");
+    let hidden_start = prefix.len();
+    let hidden_end = hidden_start + hidden.len();
+    let trace = layout_trace_with_buffer_setup(&text, 88, 240, |buffer, _, _| {
+        buffer.set_buffer_local("truncate-lines", Value::T);
+        buffer.set_buffer_local("word-wrap", Value::NIL);
+        buffer.set_buffer_local(
+            "buffer-invisibility-spec",
+            Value::list(vec![Value::cons(Value::symbol("outline"), Value::T)]),
+        );
+        assert!(buffer.put_text_property(
+            hidden_start,
+            hidden_end,
+            Value::symbol("invisible"),
+            Value::symbol("outline"),
+        ));
+    });
+
+    // Attested on GNU Emacs 31.1 oracle: under `truncate-lines t`, a clipped
+    // invisible ellipsis truncates in place with no continuation row and NEXT
+    // lands on screen row 1.
+    let rows = row_texts(&trace);
+    assert!(
+        rows.len() >= 2,
+        "expected truncated line plus NEXT row, rows={rows:?}"
+    );
+    assert!(
+        rows[0].starts_with(prefix),
+        "row 0 must hold the visible prefix, rows={rows:?}"
+    );
+    assert!(
+        rows[1].trim_end() == next,
+        "truncated ellipsis must not open a continuation row; NEXT must land on row 1, rows={rows:?}"
+    );
+    let text_rows: Vec<_> = trace
+        .matrix_rows
+        .iter()
+        .filter(|row| {
+            row.enabled && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+        })
+        .collect();
+    assert!(
+        !text_rows[0].continued,
+        "a truncated ellipsis row must not be marked continued"
+    );
+    assert_eq!(
+        text_rows[1].start_charpos,
+        hidden_end + tail.len() + 1,
+        "row 1 must start at NEXT"
+    );
 }
 
 #[test]

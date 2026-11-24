@@ -432,11 +432,10 @@ pub(crate) struct DisplayRowSourceStart {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct InvisibleTextScanCheckpoint {
     invisible_next: i64,
-    /// The ellipsis for an already-consumed hidden span did not fit on the row
-    /// that skipped it. The next row draws that whole marker before any later
-    /// source. A `String` would drop `Copy`; the marker text is read again from
-    /// the buffer display table.
-    deferred_ellipsis: bool,
+    /// Character offset into the ellipsis display vector (GNU `dpvec_index`,
+    /// src/xdisp.c:4115-4121) for an already-consumed hidden span whose
+    /// ellipsis clipped on the previous wrapping row. `None` when settled.
+    deferred_ellipsis: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1305,7 +1304,7 @@ impl InvisibleTextScanCheckpoint {
     pub(crate) fn new(start_charpos: i64) -> Self {
         Self {
             invisible_next: start_charpos,
-            deferred_ellipsis: false,
+            deferred_ellipsis: None,
         }
     }
 
@@ -1317,21 +1316,18 @@ impl InvisibleTextScanCheckpoint {
         self.invisible_next = charpos;
     }
 
-    pub(crate) fn defer_ellipsis(&mut self) {
-        self.deferred_ellipsis = true;
+    pub(crate) fn defer_ellipsis_from(&mut self, char_offset: usize) {
+        self.deferred_ellipsis = Some(char_offset);
     }
 
-    /// Takes the pending ellipsis. Clearing it here is what stops an empty row
-    /// that still cannot hold the marker from wrapping forever.
-    pub(crate) fn take_deferred_ellipsis(&mut self) -> bool {
-        let deferred = self.deferred_ellipsis;
-        self.deferred_ellipsis = false;
-        deferred
+    /// Takes the pending ellipsis resume offset (GNU `dpvec_index`).
+    pub(crate) fn take_deferred_ellipsis(&mut self) -> Option<usize> {
+        self.deferred_ellipsis.take()
     }
 
     pub(crate) fn rewind_to(&mut self, position: crate::display_source::DisplaySourceTextPosition) {
         self.invisible_next = position.charpos();
-        self.deferred_ellipsis = false;
+        self.deferred_ellipsis = None;
     }
 }
 

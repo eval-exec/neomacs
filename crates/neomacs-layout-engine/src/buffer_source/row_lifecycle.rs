@@ -1131,11 +1131,13 @@ pub(crate) enum BufferSourceInvisibleTextRenderOutcome {
 /// Where an invisible-text ellipsis landed on the current row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InvisibleEllipsisRowPlacement {
-    /// Nothing to draw, the whole marker fit, or an empty row overflowed.
+    /// Nothing to draw, the whole marker fit, the row truncated in place
+    /// (`truncate-lines`), or an empty row overflowed without progress.
     Settled,
-    /// The marker did not fit and the row already held other glyphs. Those
-    /// glyphs are restored; the caller continues the marker on the next row.
-    ContinueOnNextRow,
+    /// Wrapping row clipped before or inside the ellipsis. The glyphs that fit
+    /// remain on this row; the caller continues from this character offset
+    /// (GNU `dpvec_index`, src/xdisp.c:4115-4121) on the next row.
+    ContinueOnNextRow(usize),
 }
 
 impl BufferSourceSelectiveDisplayTailRenderOutcome {
@@ -1477,55 +1479,67 @@ impl BufferSourceInvisibleTextSkip {
             source_render.advance_current_row_source_end(skip_end);
             return InvisibleEllipsisRowPlacement::Settled;
         };
-        // GNU `display_line` restores the iterator before an element that draws
-        // past the right edge (src/xdisp.c:26433). This marker is one operation,
-        // matching the offscreen row program: a partial prefix would leave a
-        // dot here and drop the rest. Move the whole marker when this row
-        // already holds other glyphs. An empty row that cannot hold it still
-        // keeps that partial overflow instead of wrapping forever.
-        let placement = place_invisible_ellipsis(
+        let total_chars = ellipsis_char_count(ellipsis_text);
+        // GNU `setup_for_ellipsis` (src/xdisp.c:5653-5672) and
+        // `next_element_from_display_vector` (src/xdisp.c:9258) produce one
+        // ellipsis glyph per element. Keep the glyphs that fit on this row;
+        // under `LineWrapMode::Wrap` resume the remaining dots at `dpvec_index`
+        // on the next continuation row (xdisp.c:4115-4121). Under
+        // `LineWrapMode::Truncate`, keep the partial dots and stay on this row
+        // so truncation handles the rest of the line without wrapping.
+        place_invisible_ellipsis(
             render_context,
             row_geometry,
             source_render,
             row_progress,
             request,
+            0,
+            total_chars,
             Some(skip_end),
-        );
-        if placement == InvisibleEllipsisRowPlacement::Settled {
-            source_render.advance_current_row_source_end(skip_end);
-        }
-        placement
+        )
     }
 }
 
+fn ellipsis_char_count(ellipsis_text: Option<&str>) -> usize {
+    match ellipsis_text {
+        Some(text) if !text.is_empty() => text.chars().count(),
+        _ => SyntheticTextMarker::InvisibleEllipsis
+            .text()
+            .chars()
+            .count(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn place_invisible_ellipsis<FS: crate::neovm_bridge::FaceServices>(
     render_context: BufferSyntheticTextRenderContext<'_>,
     row_geometry: &DisplayRowGeometryState,
     source_render: &mut TextRowSourceRenderState<'_, FS>,
     row_progress: &mut DisplaySourceRowProgressState<'_>,
     request: SyntheticTextAppendRequest,
-    continue_source_end: Option<usize>,
+    start_offset: usize,
+    total_chars: usize,
+    skip_end: Option<usize>,
 ) -> InvisibleEllipsisRowPlacement {
-    let checkpoint = source_render.capture_glyph_checkpoint();
-    let had_other_glyphs = checkpoint.text_glyph_count() > 0;
+    let wraps = render_context.wraps();
+    let had_other_glyphs = source_render.capture_glyph_checkpoint().text_glyph_count() > 0;
     let rendered = render_context.render_request_to_text_row(source_render, row_geometry, request);
-    let fully_placed = rendered
-        .as_ref()
-        .is_some_and(|progress| progress.status() == DisplayRowAppendStatus::Complete);
-    if fully_placed {
-        if let Some(progress) = rendered {
-            row_progress.apply_position(progress.end());
-        }
+    if let Some(progress) = &rendered {
+        row_progress.apply_position(progress.end());
+    }
+    if let Some(source_end) = skip_end {
+        source_render.advance_current_row_source_end(source_end);
+    }
+    let Some(progress) = rendered else {
+        return InvisibleEllipsisRowPlacement::Settled;
+    };
+    if progress.status() == DisplayRowAppendStatus::Complete || !wraps {
         return InvisibleEllipsisRowPlacement::Settled;
     }
-    if let Some(source_end) = continue_source_end
-        && had_other_glyphs
-    {
-        source_render.restore_glyph_checkpoint_with_source_end(checkpoint, source_end);
-        return InvisibleEllipsisRowPlacement::ContinueOnNextRow;
-    }
-    if let Some(progress) = rendered {
-        row_progress.apply_position(progress.end());
+    let emitted = progress.emitted_glyphs();
+    let next_offset = start_offset.saturating_add(emitted);
+    if (had_other_glyphs || emitted > 0) && next_offset < total_chars {
+        return InvisibleEllipsisRowPlacement::ContinueOnNextRow(next_offset);
     }
     InvisibleEllipsisRowPlacement::Settled
 }
@@ -1616,11 +1630,13 @@ impl<'a> BufferSourceInvisibleTextRenderContext<'a> {
             &mut row_progress,
             ellipsis_text.as_deref(),
         );
-        if placement == InvisibleEllipsisRowPlacement::ContinueOnNextRow {
-            row_build
-                .row_geometry
-                .replace_current_row_metrics(row_height, row_ascent);
-            invisible_text_checkpoint.defer_ellipsis();
+        if let InvisibleEllipsisRowPlacement::ContinueOnNextRow(resume_offset) = placement {
+            if resume_offset == 0 {
+                row_build
+                    .row_geometry
+                    .replace_current_row_metrics(row_height, row_ascent);
+            }
+            invisible_text_checkpoint.defer_ellipsis_from(resume_offset);
             return BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow;
         }
 
@@ -1631,18 +1647,19 @@ impl<'a> BufferSourceInvisibleTextRenderContext<'a> {
         BufferSourceInvisibleTextRenderOutcome::HiddenSpanApplied
     }
 
-    /// Draw an ellipsis that the previous row could not hold. This is the next
-    /// row, so a marker that still does not fit stays as an empty-row overflow
-    /// instead of scheduling another continuation.
+    /// Draw the remaining invisible-ellipsis glyphs from `resume_offset`
+    /// (GNU `dpvec_index`, src/xdisp.c:4115-4121) on a continuation row.
     pub(crate) fn place_deferred_ellipsis<
         B: LayoutBufferView,
         FS: crate::neovm_bridge::FaceServices,
     >(
         self,
         buffer: &B,
+        resume_offset: usize,
         state: BufferSourceLoopMutableState<'_, '_, '_, FS>,
-    ) {
+    ) -> BufferSourceInvisibleTextRenderOutcome {
         let BufferSourceLoopMutableState {
+            invisible_text_checkpoint,
             mut progress,
             source_render,
             row_build,
@@ -1651,9 +1668,18 @@ impl<'a> BufferSourceInvisibleTextRenderContext<'a> {
         } = state;
         let mut source_render = source_render;
         let ellipsis_text = crate::neovm_bridge::buffer_invisible_ellipsis_text(buffer);
+        let total_chars = ellipsis_char_count(ellipsis_text.as_deref());
         let mut row_progress = progress.row_progress_mut().reborrow();
         let position = row_progress.row_position();
-        place_invisible_ellipsis(
+        let Some(request) = SyntheticTextAppendRequest::active_marker_with_text_from_offset(
+            position,
+            SyntheticTextMarker::InvisibleEllipsis,
+            ellipsis_text.as_deref(),
+            resume_offset,
+        ) else {
+            return BufferSourceInvisibleTextRenderOutcome::HiddenSpanApplied;
+        };
+        let placement = place_invisible_ellipsis(
             BufferSyntheticTextRenderContext::with_face_attempt(
                 self.append_surface,
                 self.active_face_state,
@@ -1664,13 +1690,16 @@ impl<'a> BufferSourceInvisibleTextRenderContext<'a> {
             row_build.row_geometry,
             &mut source_render,
             &mut row_progress,
-            SyntheticTextAppendRequest::active_marker_with_text(
-                position,
-                SyntheticTextMarker::InvisibleEllipsis,
-                ellipsis_text.as_deref(),
-            ),
+            request,
+            resume_offset,
+            total_chars,
             None,
         );
+        if let InvisibleEllipsisRowPlacement::ContinueOnNextRow(next_offset) = placement {
+            invisible_text_checkpoint.defer_ellipsis_from(next_offset);
+            return BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow;
+        }
+        BufferSourceInvisibleTextRenderOutcome::HiddenSpanApplied
     }
 }
 

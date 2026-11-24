@@ -2052,19 +2052,6 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
             .restore_current_row_glyph_checkpoint(checkpoint, None);
     }
 
-    /// Roll the current row's drawn glyphs back to `checkpoint` and advance
-    /// the row's `end_charpos` to `source_end` (for a skipped invisible span
-    /// whose ellipsis continues on the next row, keeping `row->end` contiguous
-    /// with the continuation row's start as in GNU `display_line`).
-    pub(crate) fn restore_glyph_checkpoint_with_source_end(
-        &mut self,
-        checkpoint: DisplayRowGlyphCheckpoint,
-        source_end: usize,
-    ) {
-        self.output_render
-            .restore_current_row_glyph_checkpoint(checkpoint, Some(source_end));
-    }
-
     /// Advance the current row's `end_charpos` to at least `source_end` (for a
     /// skipped invisible span whose synthetic ellipsis or elision adds no
     /// buffer-sourced glyph, matching GNU `display_line`'s `row->end = it->current`).

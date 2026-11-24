@@ -872,11 +872,13 @@ fn word_wrap_after_string_checkpoint_does_not_restart_inserted_text_on_worker() 
 }
 
 /// GNU `display_line` restores the iterator to before an element that drew
-/// past the right edge (src/xdisp.c:26433-26466). One dot of this ellipsis
-/// fits in the leftover cell, but the ellipsis is one operation whose
-/// buffer anchor stays at the end of "abcd" (`preserves_buffer_anchor`).
-/// Resuming after that dot would move the anchor, so the whole ellipsis
-/// continues on the next row and the text already placed stays.
+/// GNU `setup_for_ellipsis` (src/xdisp.c:5653-5672) and
+/// `next_element_from_display_vector` (src/xdisp.c:9258) produce one dot per
+/// element and resume mid-vector on the continuation row (xdisp.c:4115-4121).
+/// When one dot fits in the leftover cell on row 0, row 0 keeps that dot and
+/// row 1 continues with the remaining two dots while holding the unconsumed
+/// buffer anchor (`preserves_buffer_anchor`). When zero dots fit, all three
+/// dots continue on row 1.
 #[test]
 fn zero_fit_invisible_ellipsis_continues_on_the_next_row() {
     use crate::display_row::source_append::SyntheticTextMarker;
@@ -895,11 +897,27 @@ fn zero_fit_invisible_ellipsis_continues_on_the_next_row() {
             DisplayItemKind::TextRun(DisplayTextRun::independent(body)),
         )
     };
-    let mut geometry = geometry(40.0);
-    geometry.character_wrap = true;
+    let chars = |row: &ComputedRow| -> String {
+        row.row.glyphs[GlyphArea::Text.index()]
+            .iter()
+            .filter(|glyph| !glyph.padding)
+            // GNU `append_space_for_newline` (src/xdisp.c:24141) stamps a
+            // positionless space on the terminated row. It is not ellipsis text.
+            .filter(|glyph| glyph.provenance != GlyphProvenance::line_end())
+            .filter_map(|glyph| match glyph.glyph_type {
+                GlyphType::Char { ch } => Some(ch),
+                _ => None,
+            })
+            .collect()
+    };
+
+    // One leftover cell (40px = 5 cells after 4-cell "abcd"): 1 dot fits on
+    // row 0, remaining 2 dots continue on row 1.
+    let mut split_geometry = geometry(40.0);
+    split_geometry.character_wrap = true;
     let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
     let program = RowProgram::capture(
-        geometry,
+        split_geometry,
         [
             text(1, 0, 4, "abcd"),
             text(ellipsis.source_id(), 0, 3, ellipsis.text()),
@@ -916,23 +934,46 @@ fn zero_fit_invisible_ellipsis_continues_on_the_next_row() {
         &mut measurer,
         limits(),
     )
-    .expect("capture the clipped ellipsis program");
+    .expect("capture the split ellipsis program");
+    let rows = program
+        .compute_visual_rows(4, || false)
+        .expect("a partially fitting ellipsis splits across visual rows");
+    assert_eq!(chars(&rows[0]), "abcd.");
+    assert_eq!(rows[0].end_kind, ComputedRowEnd::Continuation);
+    assert_eq!(chars(&rows[1]), "..");
+    assert_eq!(rows[1].source.start, rows[0].source.end);
+    assert!(
+        preserves_buffer_anchor(&rows[1].slots[0].source()),
+        "the continued ellipsis keeps its display-vector anchor"
+    );
+
+    // Zero leftover cells (32px = 4 cells after 4-cell "abcd"): all 3 dots
+    // continue on row 1.
+    let mut zero_geometry = geometry(32.0);
+    zero_geometry.character_wrap = true;
+    let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
+    let program = RowProgram::capture(
+        zero_geometry,
+        [
+            text(1, 0, 4, "abcd"),
+            text(ellipsis.source_id(), 0, 3, ellipsis.text()),
+            DisplayItem::new(
+                SourceSpan::synthetic(1, 4, 5),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::RowBreak(DisplayRowBreak {
+                    line_height: DisplayLineHeightPolicy::Default,
+                    line_spacing: DisplayLineSpacingPolicy::Inherit,
+                }),
+            ),
+        ],
+        faces.clone(),
+        &mut measurer,
+        limits(),
+    )
+    .expect("capture the zero-fit ellipsis program");
     let rows = program
         .compute_visual_rows(4, || false)
         .expect("a zero-fit ellipsis moves to the next row");
-    let chars = |row: &ComputedRow| -> String {
-        row.row.glyphs[GlyphArea::Text.index()]
-            .iter()
-            .filter(|glyph| !glyph.padding)
-            // GNU `append_space_for_newline` (src/xdisp.c:24141) stamps a
-            // positionless space on the terminated row. It is not ellipsis text.
-            .filter(|glyph| glyph.provenance != GlyphProvenance::line_end())
-            .filter_map(|glyph| match glyph.glyph_type {
-                GlyphType::Char { ch } => Some(ch),
-                _ => None,
-            })
-            .collect()
-    };
     assert_eq!(chars(&rows[0]), "abcd");
     assert_eq!(rows[0].end_kind, ComputedRowEnd::Continuation);
     assert_eq!(chars(&rows[1]), "...");

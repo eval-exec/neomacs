@@ -122,13 +122,10 @@ enum Operation {
     },
 }
 
-fn is_invisible_ellipsis(source: &DisplaySourcePosition) -> bool {
-    matches!(source, DisplaySourcePosition::Synthetic { source_id, .. }
-        if source_id.get() == crate::display_row::source_append::SyntheticTextMarker::InvisibleEllipsis.source_id())
-}
-
 fn preserves_buffer_anchor(source: &DisplaySourcePosition) -> bool {
-    matches!(source, DisplaySourcePosition::LispString { .. }) || is_invisible_ellipsis(source)
+    matches!(source, DisplaySourcePosition::LispString { .. })
+        || matches!(source, DisplaySourcePosition::Synthetic { source_id, .. }
+            if source_id.get() == crate::display_row::source_append::SyntheticTextMarker::InvisibleEllipsis.source_id())
 }
 
 impl Operation {
@@ -969,10 +966,12 @@ impl RowProgram {
             item_layout.ascent_px = row.ascent_px.max(minimum.ascent_px());
             let render_item =
                 crate::display_row::render_item::DisplayRowRenderItem::from_source_item(item);
-            let can_split = can_wrap
-                && matches!(render_item.source_item().kind, DisplayItemKind::TextRun(_))
-                && !is_invisible_ellipsis(&render_item.source_item().span.start);
+            let can_split =
+                can_wrap && matches!(render_item.source_item().kind, DisplayItemKind::TextRun(_));
             let checkpoint = DisplayRowGlyphCheckpoint::capture(&row);
+            let row_height_before_item = row.height_px;
+            let row_ascent_before_item = row.ascent_px;
+            let row_spacing_before_item = row.line_spacing_px;
             let previous_slots = slots.len();
             let insertion = matches!(
                 original.span.start,
@@ -1095,14 +1094,7 @@ impl RowProgram {
             {
                 word_wrap.allow_after_current_char(last);
             }
-            let position_before_item = position;
-            let row_height_before_item = row.height_px;
-            let row_ascent_before_item = row.ascent_px;
-            let row_spacing_before_item = row.line_spacing_px;
             position = progress.end();
-            // A mapped run can fold into the previous hit span. Remember that
-            // span so a deferred clip can put it back unchanged.
-            let mut merged_away = None;
             if let DisplayItemKind::SourceMappedText(mapped) = &render_item.source_item().kind
                 && let Some(measurement_face) = mapped.measurement_face
             {
@@ -1113,11 +1105,9 @@ impl RowProgram {
                     .last()
                     .is_some_and(|slot: &DisplayRowGlyphSlot| slot.source() == source)
                 {
-                    let height = slot_heights.pop().ok_or(RowProgramError::Unsupported)?;
+                    slot_heights.pop().ok_or(RowProgramError::Unsupported)?;
                     let slot = slots.pop().ok_or(RowProgramError::Unsupported)?;
-                    let start = slot.start_position();
-                    merged_away = Some((slot, height));
-                    start
+                    slot.start_position()
                 } else {
                     progress.start()
                 };
@@ -1199,91 +1189,75 @@ impl RowProgram {
                     });
                     return Ok(rows);
                 }
-                // GNU `display_line` restores the iterator to before an element
-                // that drew past the right edge and keeps only that element's
-                // already-committed glyphs (src/xdisp.c:26433-26466,
-                // `row->used[TEXT_AREA] = n_glyphs_before + i`). An invisible
-                // ellipsis is one atomic synthetic marker: drop every glyph it
-                // added and produce it whole on the next row. A pushed overlay
-                // `LispString` wraps mid-string like GNU WINDOW_WRAP while
-                // keeping its unconsumed buffer anchor.
-                let deferred_whole = previous_slots > 0
-                    && is_invisible_ellipsis(&render_item.source_item().span.start);
-                if !deferred_whole && (!can_split || slots.is_empty()) {
+                // GNU `display_line` restores the iterator to before the glyph
+                // that drew past the right edge and keeps already-committed
+                // glyphs (src/xdisp.c:26433-26466). Both pushed overlay
+                // `LispString`s and `InvisibleEllipsis` display vectors
+                // (`setup_for_ellipsis`, xdisp.c:5653-5672;
+                // `next_element_from_display_vector`, xdisp.c:9258) produce one
+                // glyph per element and resume mid-item on the continuation row
+                // (xdisp.c:4115-4121) while keeping their unconsumed buffer
+                // anchor. When zero glyphs of the clipped item fit on a
+                // non-empty row, restore the row metrics and move the whole
+                // remainder to the next row; an empty row still overflows.
+                if !can_split || slots.is_empty() {
                     return Err(RowProgramError::Overflow);
                 }
-                if deferred_whole {
-                    checkpoint.restore(&mut row);
-                    if let Some((slot, height)) = merged_away {
-                        slots.pop();
-                        slot_heights.pop();
-                        slots.push(slot);
-                        slot_heights.push(height);
-                    } else {
-                        slots.truncate(previous_slots);
-                        slot_heights.truncate(previous_slots);
-                    }
+                if progress.slots().is_empty() {
                     row.height_px = row_height_before_item;
                     row.ascent_px = row_ascent_before_item;
                     row.line_spacing_px = row_spacing_before_item;
-                    position = position_before_item;
                 }
+                let anchor_preserving =
+                    preserves_buffer_anchor(&render_item.source_item().span.start);
                 let mut wrap_extend = active_extend;
-                let (next_index, next_offset) =
-                    if !deferred_whole && !insertion && word_wrap.has_candidate() {
-                        let candidate = word_wrap.candidate();
-                        wrap_extend = candidate.row_extend();
-                        let boundary = candidate.source_position().charpos();
-                        let replay_insertions = match candidate.source_cursor() {
-                            DisplaySourceResumeCursor::BeforeOverlayStrings(_) => true,
-                            DisplaySourceResumeCursor::AfterOverlayStrings(_) => false,
-                        };
-                        let (index, offset) = operations
-                            .iter()
-                            .enumerate()
-                            .find_map(|(index, (item, _))| {
-                                if replay_insertions
-                                    && matches!(
-                                        item.span.start,
-                                        DisplaySourcePosition::LispString { .. }
-                                    )
-                                    && let DisplaySourcePosition::Buffer { char_pos, .. } =
-                                        buffer_anchors[index]
-                                    && char_pos.get() as i64 == boundary
-                                {
-                                    return Some((index, 0));
-                                }
-                                let (
-                                    DisplaySourcePosition::Buffer {
-                                        char_pos: start, ..
-                                    },
-                                    DisplaySourcePosition::Buffer { char_pos: end, .. },
-                                ) = (&item.span.start, &item.span.end)
-                                else {
-                                    return None;
-                                };
-                                ((start.get() as i64) <= boundary && boundary < end.get() as i64)
-                                    .then_some((index, (boundary - start.get() as i64) as usize))
-                            })
-                            .ok_or(RowProgramError::Unsupported)?;
-                        if candidate.display_point_count() == 0 {
-                            return Err(RowProgramError::Overflow);
-                        }
-                        candidate.glyph_checkpoint().restore(&mut row);
-                        slots.truncate(candidate.display_point_count());
-                        slot_heights.truncate(candidate.display_point_count());
-                        position = candidate.row_position();
-                        (index, offset)
-                    } else {
-                        (
-                            operation_index,
-                            if deferred_whole {
-                                operation_offset
-                            } else {
-                                operation_offset + progress.slots().len()
-                            },
-                        )
+                let (next_index, next_offset) = if !anchor_preserving && word_wrap.has_candidate() {
+                    let candidate = word_wrap.candidate();
+                    wrap_extend = candidate.row_extend();
+                    let boundary = candidate.source_position().charpos();
+                    let replay_insertions = match candidate.source_cursor() {
+                        DisplaySourceResumeCursor::BeforeOverlayStrings(_) => true,
+                        DisplaySourceResumeCursor::AfterOverlayStrings(_) => false,
                     };
+                    let (index, offset) = operations
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, (item, _))| {
+                            if replay_insertions
+                                && matches!(
+                                    item.span.start,
+                                    DisplaySourcePosition::LispString { .. }
+                                )
+                                && let DisplaySourcePosition::Buffer { char_pos, .. } =
+                                    buffer_anchors[index]
+                                && char_pos.get() as i64 == boundary
+                            {
+                                return Some((index, 0));
+                            }
+                            let (
+                                DisplaySourcePosition::Buffer {
+                                    char_pos: start, ..
+                                },
+                                DisplaySourcePosition::Buffer { char_pos: end, .. },
+                            ) = (&item.span.start, &item.span.end)
+                            else {
+                                return None;
+                            };
+                            ((start.get() as i64) <= boundary && boundary < end.get() as i64)
+                                .then_some((index, (boundary - start.get() as i64) as usize))
+                        })
+                        .ok_or(RowProgramError::Unsupported)?;
+                    if candidate.display_point_count() == 0 {
+                        return Err(RowProgramError::Overflow);
+                    }
+                    candidate.glyph_checkpoint().restore(&mut row);
+                    slots.truncate(candidate.display_point_count());
+                    slot_heights.truncate(candidate.display_point_count());
+                    position = candidate.row_position();
+                    (index, offset)
+                } else {
+                    (operation_index, operation_offset + progress.slots().len())
+                };
                 let next_source = if preserves_buffer_anchor(&operations[next_index].0.span.start) {
                     buffer_anchors[next_index].clone()
                 } else {

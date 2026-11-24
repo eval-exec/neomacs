@@ -66,15 +66,24 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                 return BufferSourceVisibleLoopOutcome::GlyphMatrixCapacityExhausted;
             }
             self.render_row_prelude(row_prelude_context, params, active_face_state, buffer);
-            if self.invisible_text_checkpoint.take_deferred_ellipsis() {
-                loop_context
+            if let Some(resume_offset) = self.invisible_text_checkpoint.take_deferred_ellipsis() {
+                if loop_context
                     .invisible_text_request(
                         text,
                         self.surface.append_surface,
                         active_face_state,
                         0.0,
                     )
-                    .place_deferred_ellipsis(buffer, self.reborrow());
+                    .place_deferred_ellipsis(buffer, resume_offset, self.reborrow())
+                    == BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow
+                {
+                    self.row_carryover.line_numbers.mark_continuation_row();
+                    if emit_nested_source_visual_wrap(loop_context, self.reborrow()).should_break()
+                    {
+                        break;
+                    }
+                    continue;
+                }
             }
 
             let invisible_text_outcome = self.render_invisible_text_for_context(
