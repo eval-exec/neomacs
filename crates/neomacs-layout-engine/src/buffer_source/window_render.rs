@@ -554,6 +554,7 @@ where
                 let metrics = font_metrics.as_mut()?;
                 shorter_face_line_at_window_start(
                     buffer,
+                    params.window_id as u64,
                     resolved_window_start,
                     default_resolved,
                     resolver.resolver().font_sizing(),
@@ -736,11 +737,13 @@ where
     }
 }
 
-/// Line box of a `face` text property at the window start, when that spec
-/// names a height. Named faces and specs without `:height` stay `None`, so
-/// the frame-font row count is unchanged.
+/// Line box of a `face` text property or window-applicable overlay (including
+/// overlay `category` faces) at the window start, when that spec names a
+/// height. Named faces and specs without `:height` stay `None`, so the
+/// frame-font row count is unchanged.
 fn shorter_face_line_at_window_start<B: crate::neovm_bridge::LayoutBufferView>(
     buffer: &B,
+    window_id: u64,
     window_start: ResolvedWindowStart,
     default_face: &crate::neovm_bridge::ResolvedFace,
     font_sizing: crate::font::sizing::FontSizing,
@@ -748,28 +751,50 @@ fn shorter_face_line_at_window_start<B: crate::neovm_bridge::LayoutBufferView>(
 ) -> Option<f32> {
     use neovm_core::emacs_core::Value;
 
-    let spec = crate::neovm_bridge::LayoutCharPropertyLookup::new(
+    let start_byte = buffer.layout_char_pos_to_emacs_byte_pos(neovm_core::buffer::CharPos0::new(
+        window_start.get().max(0) as usize,
+    ));
+    let face_lookup = crate::neovm_bridge::LayoutCharPropertyLookup::new(
         buffer,
         Value::symbol(&crate::fixed_symbols::FACE),
-    )
-    .text_value_at(
-        buffer,
-        buffer.layout_char_pos_to_emacs_byte_pos(neovm_core::buffer::CharPos0::new(
-            window_start.get().max(0) as usize,
-        )),
-    )?;
-    let (font_size, family) = face_spec_probe(&spec, default_face.font_size, font_sizing)?;
-    metrics
-        .vertical_metrics_for_face_probe(
-            'X',
-            crate::font::metrics::RealizedFaceFontSelection::new(
-                family.as_deref().unwrap_or(default_face.font_family.as_ref()),
-                default_face.font_weight,
-                default_face.italic,
-                font_size,
-            ),
-        )
-        .map(|measured| measured.line_height)
+    );
+    let mut probe_spec = |spec: &Value| -> Option<f32> {
+        let (font_size, family) = face_spec_probe(spec, default_face.font_size, font_sizing)?;
+        metrics
+            .vertical_metrics_for_face_probe(
+                'X',
+                crate::font::metrics::RealizedFaceFontSelection::new(
+                    family
+                        .as_deref()
+                        .unwrap_or(default_face.font_family.as_ref()),
+                    default_face.font_weight,
+                    default_face.italic,
+                    font_size,
+                ),
+            )
+            .map(|measured| measured.line_height)
+    };
+    let mut shortest = face_lookup
+        .text_value_at(buffer, start_byte)
+        .as_ref()
+        .and_then(&mut probe_spec);
+    let overlays = buffer.layout_overlays();
+    for overlay in overlays
+        .iter_overlays_at_emacs_byte_pos(start_byte)
+        .take(32)
+    {
+        if !overlays.overlay_applies_to_window(overlay, Some(window_id)) {
+            continue;
+        }
+        if let Some(height) = face_lookup
+            .effective_overlay_value(buffer, overlay)
+            .as_ref()
+            .and_then(&mut probe_spec)
+        {
+            shortest = Some(shortest.map_or(height, |current| current.min(height)));
+        }
+    }
+    shortest
 }
 
 fn face_spec_probe(

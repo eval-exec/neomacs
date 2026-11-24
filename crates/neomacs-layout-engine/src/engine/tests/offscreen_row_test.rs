@@ -355,6 +355,21 @@ fn first_visit_worker_page_resolves_overlay_category_faces() {
 }
 
 #[test]
+fn worker_overlay_category_shorter_face_matches_fresh_viewport_fill() {
+    first_visit_with_setup(
+        None,
+        "ordinary offscreen text\n",
+        None,
+        0,
+        5,
+        Some(
+            "(progn (put 'worker-short-overlay-cat 'face '(:height 80 :slant italic))
+                 (overlay-put (make-overlay 2761 3600) 'category 'worker-short-overlay-cat))",
+        ),
+    );
+}
+
+#[test]
 fn worker_capture_rejects_overlay_replacements_and_excessive_overlap() {
     use crate::row_layout::program::RowProgramError;
     for (setup, expected) in [

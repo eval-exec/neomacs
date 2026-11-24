@@ -1384,7 +1384,7 @@ impl LayoutEngine {
         if let Some(shortest) = faces
             .iter()
             .map(|face| face.metrics.line_height_px())
-            .filter(|height| *height >= 1.0 && *height + 1.0 < key.char_height)
+            .filter(|height| *height >= 1.0 && *height + 1.0 <= key.char_height)
             .reduce(f32::min)
         {
             let widened = (body_height / shortest)

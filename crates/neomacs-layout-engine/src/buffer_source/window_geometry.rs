@@ -161,7 +161,7 @@ impl BufferWindowGeometry {
     /// at the top and the bottom. The frame-font count stays the floor, and
     /// a face at least as tall as that font does not move the mode line.
     pub(crate) fn widen_body_for_shorter_face(&mut self, face_line_px: f32) {
-        if !(face_line_px >= 1.0 && face_line_px + 1.0 < self.char_height) {
+        if !(face_line_px >= 1.0 && face_line_px + 1.0 <= self.char_height) {
             return;
         }
         let span = self.vscroll + self.text_height;
