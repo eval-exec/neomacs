@@ -7,13 +7,15 @@
 use super::*;
 
 fn set_layout_stats_env() {
+    let dir = std::env::temp_dir().join(format!(
+        "neomacs-overlay-layout-stats-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("overlay layout stats tempdir");
     // SAFETY: nextest runs this test in its own process, and this runs before
     // any worker can read the once-per-process knob.
     unsafe {
-        std::env::set_var(
-            "NEOMACS_LAYOUT_STATS_FILE",
-            "/tmp/neomacs-overlay-layout-stats-p1",
-        );
+        std::env::set_var("NEOMACS_LAYOUT_STATS_FILE", dir.join("stats"));
     }
 }
 

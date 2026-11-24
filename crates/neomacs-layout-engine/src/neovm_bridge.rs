@@ -64,7 +64,6 @@ use neovm_core::buffer::{
     buffer::{BufferSlotInfo, lookup_buffer_slot_by_sym_id},
     overlay::{
         OverlayList, OverlayPropertyAtPoint, OverlayPropertyFilter, OverlayPropertyResolver,
-        OverlayRead,
     },
 };
 use neovm_core::emacs_core::effect_profile::{
@@ -162,8 +161,9 @@ impl DisplayLineNumbersMode {
     }
 }
 
-/// Overlay view a layout attempt reads. Today's only variant is the captured
-/// list. A later slice can add a live variant without changing callers.
+/// Overlay view a layout attempt reads. The only variant is the captured
+/// list, and each method forwards to that list. There is no shared trait
+/// until a live view is a second implementor.
 #[derive(Clone, Copy)]
 pub(crate) enum LayoutOverlays<'a> {
     Snapshot(&'a OverlayList),
@@ -254,52 +254,6 @@ impl<'a> LayoutOverlays<'a> {
     {
         self.list()
             .resolve_overlay_property_at_emacs_byte_pos(pos, window_id, property_value)
-    }
-}
-
-impl OverlayRead for LayoutOverlays<'_> {
-    fn is_empty(&self) -> bool {
-        LayoutOverlays::is_empty(*self)
-    }
-    fn may_contain_property(&self, property: Value) -> bool {
-        LayoutOverlays::may_contain_property(*self, property)
-    }
-    fn overlay_plist(&self, overlay: Value) -> Option<Value> {
-        LayoutOverlays::overlay_plist(*self, overlay)
-    }
-    fn overlay_get_named(&self, overlay: Value, prop_name: Value) -> Option<Value> {
-        LayoutOverlays::overlay_get_named(*self, overlay, prop_name)
-    }
-    fn overlay_applies_to_window(&self, overlay: Value, window_id: Option<u64>) -> bool {
-        LayoutOverlays::overlay_applies_to_window(*self, overlay, window_id)
-    }
-    fn overlay_start_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
-        LayoutOverlays::overlay_start_emacs_byte_pos(*self, overlay)
-    }
-    fn overlay_end_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
-        LayoutOverlays::overlay_end_emacs_byte_pos(*self, overlay)
-    }
-    fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value> {
-        LayoutOverlays::overlays_at_emacs_byte_pos(*self, pos)
-    }
-    fn overlays_in_emacs_byte_range(&self, range: EmacsByteRange) -> Vec<Value> {
-        LayoutOverlays::overlays_in_emacs_byte_range(*self, range)
-    }
-    fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos> {
-        LayoutOverlays::next_boundary_after_emacs_byte_pos(*self, pos)
-    }
-    fn highest_priority_overlay_property_value_at_emacs_byte_pos(
-        &self,
-        pos: EmacsBytePos,
-        property: Value,
-        window_id: Option<u64>,
-    ) -> Option<Value> {
-        LayoutOverlays::highest_priority_overlay_property_value_at_emacs_byte_pos(
-            *self, pos, property, window_id,
-        )
-    }
-    fn sort_overlay_ids_by_priority_desc(&self, overlay_ids: &mut [Value]) {
-        LayoutOverlays::sort_overlay_ids_by_priority_desc(*self, overlay_ids)
     }
 }
 

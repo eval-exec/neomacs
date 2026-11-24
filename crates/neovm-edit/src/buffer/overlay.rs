@@ -209,9 +209,10 @@ pub(crate) use neovm_value::heap_types::overlay_storage::instrumentation::{
 #[cfg(test)]
 pub(crate) use neovm_value::test_support::authority::reset_overlay_full_enumeration_visit_count;
 
-/// Preserve-precedence overlay copies. Tests always increment this. The
-/// editor binary increments it only while [`overlay_layout_stats_enabled`]
-/// is set, so a stats-off run does not touch the atomic.
+/// Preserve-precedence overlay copies. `cfg(test)` increments this inside
+/// neovm-edit's own tests only. Every other build, including the editor,
+/// increments it only while [`overlay_layout_stats_enabled`] is set, so a
+/// stats-off run does not touch the atomic.
 static OVERLAY_SNAPSHOT_COPIES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
@@ -285,6 +286,7 @@ fn load_overlay_layout_stats(take: bool) -> OverlayLayoutStats {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub fn overlay_layout_stats() -> OverlayLayoutStats {
     load_overlay_layout_stats(false)
 }
@@ -293,6 +295,7 @@ pub fn take_overlay_layout_stats() -> OverlayLayoutStats {
     load_overlay_layout_stats(true)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub fn reset_overlay_layout_stats() {
     OVERLAY_SNAPSHOT_COPIES.store(0, std::sync::atomic::Ordering::Relaxed);
     OVERLAY_VIEW_ENTRIES.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -3009,77 +3012,6 @@ impl OverlayModificationHook {
     #[inline]
     pub fn overlay(&self) -> Value {
         self.overlay
-    }
-}
-
-/// Read surface shared by a captured overlay list and a layout overlay view.
-///
-/// Inherent methods on [`OverlayList`] stay the implementation. Layout calls
-/// this trait so a later live view can answer the same questions without
-/// another copy of the call sites.
-pub trait OverlayRead {
-    fn is_empty(&self) -> bool;
-    fn may_contain_property(&self, property: Value) -> bool;
-    fn overlay_plist(&self, overlay: Value) -> Option<Value>;
-    fn overlay_get_named(&self, overlay: Value, prop_name: Value) -> Option<Value>;
-    fn overlay_applies_to_window(&self, overlay: Value, window_id: Option<u64>) -> bool;
-    fn overlay_start_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos>;
-    fn overlay_end_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos>;
-    fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value>;
-    fn overlays_in_emacs_byte_range(&self, range: EmacsByteRange) -> Vec<Value>;
-    fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos>;
-    fn highest_priority_overlay_property_value_at_emacs_byte_pos(
-        &self,
-        pos: EmacsBytePos,
-        property: Value,
-        window_id: Option<u64>,
-    ) -> Option<Value>;
-    fn sort_overlay_ids_by_priority_desc(&self, overlay_ids: &mut [Value]);
-}
-
-impl OverlayRead for OverlayList {
-    fn is_empty(&self) -> bool {
-        OverlayList::is_empty(self)
-    }
-    fn may_contain_property(&self, property: Value) -> bool {
-        OverlayList::may_contain_property(self, property)
-    }
-    fn overlay_plist(&self, overlay: Value) -> Option<Value> {
-        OverlayList::overlay_plist(self, overlay)
-    }
-    fn overlay_get_named(&self, overlay: Value, prop_name: Value) -> Option<Value> {
-        OverlayList::overlay_get_named(self, overlay, prop_name)
-    }
-    fn overlay_applies_to_window(&self, overlay: Value, window_id: Option<u64>) -> bool {
-        OverlayList::overlay_applies_to_window(self, overlay, window_id)
-    }
-    fn overlay_start_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
-        OverlayList::overlay_start_emacs_byte_pos(self, overlay)
-    }
-    fn overlay_end_emacs_byte_pos(&self, overlay: Value) -> Option<EmacsBytePos> {
-        OverlayList::overlay_end_emacs_byte_pos(self, overlay)
-    }
-    fn overlays_at_emacs_byte_pos(&self, pos: EmacsBytePos) -> Vec<Value> {
-        OverlayList::overlays_at_emacs_byte_pos(self, pos)
-    }
-    fn overlays_in_emacs_byte_range(&self, range: EmacsByteRange) -> Vec<Value> {
-        OverlayList::overlays_in_emacs_byte_range(self, range)
-    }
-    fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos> {
-        OverlayList::next_boundary_after_emacs_byte_pos(self, pos)
-    }
-    fn highest_priority_overlay_property_value_at_emacs_byte_pos(
-        &self,
-        pos: EmacsBytePos,
-        property: Value,
-        window_id: Option<u64>,
-    ) -> Option<Value> {
-        OverlayList::highest_priority_overlay_property_value_at_emacs_byte_pos(
-            self, pos, property, window_id,
-        )
-    }
-    fn sort_overlay_ids_by_priority_desc(&self, overlay_ids: &mut [Value]) {
-        OverlayList::sort_overlay_ids_by_priority_desc(self, overlay_ids)
     }
 }
 

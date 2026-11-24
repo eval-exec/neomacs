@@ -859,11 +859,13 @@ fn snapshot_initial_display_when_object_survives_fontification_gc() {
 fn layout_stats_capture_counts_retained_overlay_roots() {
     // SAFETY: nextest runs this test in its own process. The stats OnceLock
     // must see the path before capture reads it.
+    let dir = std::env::temp_dir().join(format!(
+        "neomacs-overlay-layout-stats-roots-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("overlay layout stats tempdir");
     unsafe {
-        std::env::set_var(
-            "NEOMACS_LAYOUT_STATS_FILE",
-            "/tmp/neomacs-overlay-layout-stats-p1-roots",
-        );
+        std::env::set_var("NEOMACS_LAYOUT_STATS_FILE", dir.join("stats"));
     }
     neovm_core::buffer::overlay::reset_overlay_layout_stats();
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
@@ -899,4 +901,38 @@ fn layout_stats_capture_counts_retained_overlay_roots() {
         "{before:?} {after:?}"
     );
     assert_eq!(after.live_records, 0, "{after:?}");
+}
+
+#[test]
+fn layout_stats_off_leaves_all_five_counters_at_zero() {
+    // SAFETY: nextest runs this test in its own process. Clear the knob
+    // before the first read so the OnceLock records stats-off.
+    unsafe {
+        std::env::remove_var("NEOMACS_LAYOUT_STATS_FILE");
+    }
+    neovm_core::buffer::overlay::reset_overlay_layout_stats();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+             (insert (make-string 64 ?x))
+             (make-overlay 1 8)
+             (make-overlay 10 20))"#,
+    )
+    .unwrap();
+    let buffer = eval.buffer_manager().current_buffer().unwrap();
+    let _snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+        buffer,
+        eval.variables(),
+        None,
+        None,
+        crate::display_property::DisplayPropertyTarget::Terminal,
+        eval.symbol_mode(),
+        &eval.owned_root_retainer(),
+    );
+    let stats = neovm_core::buffer::overlay::overlay_layout_stats();
+    assert_eq!(
+        stats,
+        neovm_core::buffer::overlay::OverlayLayoutStats::default(),
+        "a layout-engine test build must not count with the stats file unset: {stats:?}"
+    );
 }
