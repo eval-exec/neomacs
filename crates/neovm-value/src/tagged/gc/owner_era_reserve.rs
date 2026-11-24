@@ -625,7 +625,8 @@ impl TaggedHeap {
     /// A poisoned allocator is permanent, so this leaves the count
     /// outstanding. The session reports `Publication` for that case. A
     /// forgotten or abandoned book is recoverable on the next stop while
-    /// the allocator is healthy.
+    /// the allocator is healthy. Retire-path reclaim, one owner at
+    /// `retire_rooted`, is still owed: this walk returns every owner.
     pub(in crate::tagged::gc) fn return_leased_owner_cons_reserves(&mut self) {
         if !self.has_owner_cons_reserves() || self.cons_allocator.is_poisoned() {
             return;

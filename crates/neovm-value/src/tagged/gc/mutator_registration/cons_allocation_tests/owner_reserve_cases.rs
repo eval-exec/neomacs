@@ -409,10 +409,10 @@ fn owner_cons_reserve_old_store<K, W>(
     });
 }
 
-/// A fully consumed block is still reserved until its closed book is returned.
-/// Initialize every cell so the old collector can sweep safely on this RED;
-/// never touch the dangling old book if that unexpected sweep succeeds.
-pub(super) fn owner_cons_reserve_refuses_sweep_until_explicit_return<K, W>(
+/// A fully consumed block stays reserved until the stopped session returns it.
+/// The session returns the closed book and then collects. An ordinary
+/// collector entry still refuses a live lease at `assert_no_owner_cons_reserves`.
+pub(super) fn owner_cons_reserve_session_returns_closed_book_then_collects<K, W>(
     roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
     world_roots: W,
 ) where
@@ -469,42 +469,20 @@ pub(super) fn owner_cons_reserve_refuses_sweep_until_explicit_return<K, W>(
             world_calls.set(world_calls.get() + 1);
             world_roots(keeper, guard, roots)
         });
-        let refused = matches!(result, Err(RendezvousError::Busy));
-        let calls_before_return = world_calls.get();
-        if refused {
-            // Refusal must leave this SAME stopped epoch retryable. Only
-            // successful explicit return discharges the block obligation.
-            with_stopped_legacy_heap(&era, &stopped, |heap| {
-                reserve.return_unused_before_sweep(&stopped, heap).unwrap();
-            });
-            assert!(!reserve.holds_reserve());
-            era.collect_stopped(&mut stopped, |keeper, guard, roots| {
-                world_calls.set(world_calls.get() + 1);
-                world_roots(keeper, guard, roots)
-            })
-            .expect("return makes collection admissible in the same epoch");
-        } else {
-            // OLD code has already swept. Do not carve, refund or return this
-            // stale metadata. Dropping the book never dereferences its ranges.
-            assert!(
-                result.is_ok(),
-                "the RED actually entered its ordinary sweep"
-            );
-        }
         complete(stopped);
         let (collector, keeper) = era.finish().unwrap();
         drop(collector);
         drop(keeper);
         assert!(
-            !refused && result.is_ok(),
+            result.is_ok(),
             "the session returns the reserved block and then collects"
         );
         assert!(!reserve.holds_reserve());
         assert_eq!(
-            calls_before_return, 1,
-            "the return happens before the World callback, inside the session"
+            world_calls.get(),
+            1,
+            "the session returns the book before the World callback, then collects once"
         );
-        assert_eq!(world_calls.get(), 1);
     });
 }
 
@@ -661,10 +639,12 @@ pub(super) fn owner_cons_reserve_refuses_every_foreign_heap_operation<K>(
     });
 }
 
-/// Abandoning a nonempty book leaves the lease outstanding. The fallible
-/// session stays `Busy` until the ordinary collector entry returns that lease
-/// and then collects. Dropping the book is loud in debug and does not itself
-/// discharge the count.
+/// Abandoning a nonempty book leaves the lease outstanding. The next
+/// `collect_stopped` returns that lease and then collects. An ordinary
+/// collector entry still hits `assert_no_owner_cons_reserves`. Dropping the
+/// book is loud in debug and does not itself discharge the count.
+/// `PanicWhileHolding` is a same-thread `catch_unwind` stand-in for an
+/// owner thread that panics.
 pub(super) fn owner_cons_reserve_drop_and_forget_keep_collection_excluded<K, W>(
     roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
     world_roots: W,

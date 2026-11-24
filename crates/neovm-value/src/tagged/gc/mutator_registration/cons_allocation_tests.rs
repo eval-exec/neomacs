@@ -208,7 +208,7 @@ pub enum ConsAllocationCase {
     NumericRequestEpochDoesNotRepeatAfterAnUnobservedPool,
     OwnerConsReserveRefusesUseAfterHeapDrop,
     OwnerConsReserveGrantsOnlyConsStorage,
-    OwnerConsReserveRefusesSweepUntilExplicitReturn,
+    OwnerConsReserveSessionReturnsClosedBookThenCollects,
     OwnerConsReserveRefusesForeignBookWithoutMutation,
     OwnerConsReserveRefusesEveryForeignHeapOperation,
     OwnerConsReserveDropAndForgetKeepCollectionExcluded,
@@ -253,7 +253,7 @@ impl ConsAllocationCase {
         Self::NumericRequestEpochDoesNotRepeatAfterAnUnobservedPool,
         Self::OwnerConsReserveRefusesUseAfterHeapDrop,
         Self::OwnerConsReserveGrantsOnlyConsStorage,
-        Self::OwnerConsReserveRefusesSweepUntilExplicitReturn,
+        Self::OwnerConsReserveSessionReturnsClosedBookThenCollects,
         Self::OwnerConsReserveRefusesForeignBookWithoutMutation,
         Self::OwnerConsReserveRefusesEveryForeignHeapOperation,
         Self::OwnerConsReserveDropAndForgetKeepCollectionExcluded,
@@ -425,8 +425,8 @@ pub(crate) fn run_cons_allocation_test<K, W>(
         ConsAllocationCase::OwnerConsReserveRefusesForeignBookWithoutMutation => {
             owner_reserve_cases::owner_cons_reserve_refuses_foreign_book_without_mutation(roots_era);
         }
-        ConsAllocationCase::OwnerConsReserveRefusesSweepUntilExplicitReturn => {
-            owner_reserve_cases::owner_cons_reserve_refuses_sweep_until_explicit_return(roots_era, world_roots);
+        ConsAllocationCase::OwnerConsReserveSessionReturnsClosedBookThenCollects => {
+            owner_reserve_cases::owner_cons_reserve_session_returns_closed_book_then_collects(roots_era, world_roots);
         }
         ConsAllocationCase::OwnerConsReserveMainGcReturnsTheBookThenCollects => {
             owner_reserve_cases::owner_cons_reserve_main_gc_returns_the_book_then_collects(

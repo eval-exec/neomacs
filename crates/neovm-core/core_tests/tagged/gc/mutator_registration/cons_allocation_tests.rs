@@ -193,7 +193,7 @@ shells! {
     numeric_request_epoch_does_not_repeat_after_an_unobserved_pool => NumericRequestEpochDoesNotRepeatAfterAnUnobservedPool,
     owner_cons_reserve_refuses_use_after_heap_drop => OwnerConsReserveRefusesUseAfterHeapDrop,
     owner_cons_reserve_grants_only_cons_storage => OwnerConsReserveGrantsOnlyConsStorage,
-    owner_cons_reserve_refuses_sweep_until_explicit_return => OwnerConsReserveRefusesSweepUntilExplicitReturn,
+    owner_cons_reserve_session_returns_closed_book_then_collects => OwnerConsReserveSessionReturnsClosedBookThenCollects,
     owner_cons_reserve_refuses_foreign_book_without_mutation => OwnerConsReserveRefusesForeignBookWithoutMutation,
     owner_cons_reserve_refuses_every_foreign_heap_operation => OwnerConsReserveRefusesEveryForeignHeapOperation,
     owner_cons_reserve_drop_and_forget_keep_collection_excluded => OwnerConsReserveDropAndForgetKeepCollectionExcluded,

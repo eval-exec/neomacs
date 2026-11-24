@@ -1120,8 +1120,10 @@ pub(super) struct OwnerConsRange {
 
 /// Cons blocks one owner holds, shared by the book and the heap lease table.
 ///
-/// `owner_key` is the table key minted at grant. It is the stand-in for the
-/// owner's registration until a production grant supplies that id.
+/// `owner_key` is a minted counter, the stand-in for the owner's
+/// registration until a production grant supplies that id. Reclaim is every
+/// lease at the next stopped collection. Retire-path reclaim, one owner at
+/// `retire_rooted`, is still owed.
 #[derive(Debug)]
 pub(super) struct OwnerConsLease {
     pub(super) owner_key: u64,
