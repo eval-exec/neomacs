@@ -414,6 +414,10 @@ impl PreparedViewports {
             let mut candidate = entry.retained.clone();
             candidate.key.window_start = key.window_start;
             candidate.key.vscroll = key.vscroll;
+            // The destination was resized to this viewport. The cursor replay
+            // still requires an exact key match, so the built matrix must name
+            // the capacity it actually holds.
+            candidate.key.viewport_rows = key.viewport_rows;
             candidate.matrix.resize(
                 geometry.display_text_row_base + geometry.max_rows,
                 candidate.matrix.ncols,
@@ -456,18 +460,38 @@ impl PreparedViewports {
                     *row = neomacs_display_protocol::glyph_matrix::MatrixRow::new(disabled);
                 }
             }
+            let capacity = geometry.display_text_row_base + geometry.max_rows;
+            let mut placed_index = None;
+            let mut placed_bottom = 0.0;
             for (index, row) in above {
-                // A fractional offset can reduce the destination's row
-                // capacity while the retained prefix still includes its old
-                // bottom row. Such a prefix cannot be completed here.
-                let destination = candidate.matrix.rows.get_mut(*index)?;
+                // A fractional offset can shrink the destination below the old
+                // prefix. Rows past that capacity are below the new body; the
+                // rows that still fit keep the page.
+                if *index >= capacity {
+                    break;
+                }
+                let Some(destination) = candidate.matrix.rows.get_mut(*index) else {
+                    break;
+                };
                 if RetainedWindowMatrix::is_chrome_role(destination.role) {
                     return None;
                 }
+                placed_bottom = row.pixel_y + row.height_px;
+                placed_index = Some(*index);
                 *destination = row.clone();
             }
-            let mut index = last_index + 1;
-            let mut y = last_row.pixel_y + last_row.height_px;
+            let Some(placed_index) = placed_index else {
+                return None;
+            };
+            snapshot.rows.retain(|row| row.row <= placed_index as i64);
+            if let Some(points) = snapshot.point_rows.as_mut() {
+                points.rows.retain(|row| row.row() <= placed_index as i64);
+            }
+            snapshot
+                .points
+                .retain(|point| point.row <= placed_index as i64);
+            let mut index = placed_index + 1;
+            let mut y = placed_bottom;
             let bottom = snapshot.regions.text_body.bottom() - snapshot.regions.outer.y;
             let mut next = seam;
             let mut remap = rustc_hash::FxHashMap::default();
@@ -501,9 +525,9 @@ impl PreparedViewports {
                 index += 1;
             }
             // Any row intersecting the body is laid out in full, then clipped.
-            if (y < bottom && index < geometry.display_text_row_base + geometry.max_rows)
-                || index == last_index + 1
-            {
+            // A prefix that already fills the shorter viewport is complete
+            // without appending a prepared row below it.
+            if y < bottom && index < capacity {
                 return None;
             }
             snapshot.rows.extend(
