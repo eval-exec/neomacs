@@ -133,6 +133,14 @@ impl WindowDelta {
         aligned.overlay_digest = curr.overlay_digest;
         aligned.face_overlay_coverage = curr.face_overlay_coverage;
         aligned.window_start = curr.window_start;
+        // Category and overlay-arrow symbols share this counter. A point-only
+        // wake keeps the current glyphs: GNU `Fput` sets no redisplay flag
+        // (fns.c:2729-2737) and `try_cursor_movement` reuses the matrix
+        // (xdisp.c:19867-19902). `body_redisplay` stays out of this list, so
+        // `force-window-update` still escalates. An overlay-arrow string or
+        // bitmap that moves only this counter is the same reuse until another
+        // unaligned field wakes a full layout (xdisp.c:17098-17135).
+        aligned.symbol_property_revision = curr.symbol_property_revision;
         Self {
             point_moved: prev.point != curr.point,
             text_changed: prev.chars_modified_tick != curr.chars_modified_tick
