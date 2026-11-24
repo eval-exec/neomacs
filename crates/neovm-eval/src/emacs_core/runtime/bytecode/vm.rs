@@ -9623,6 +9623,9 @@ impl<'a> Vm<'a> {
     /// Everything else matches the traced twin: the same resolved callee, the
     /// same arity signal, the same `ManySlice` fixnum fast values, the same
     /// signal dispatch on the way out.
+    // The fixnum miss is the slow path. Cold so that call does not keep the
+    // context pointer live across the verified dispatch header.
+    #[cold]
     #[inline(never)]
     #[doc(hidden)]
     pub fn call_arith_builtin_from_stack_args(

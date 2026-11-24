@@ -3287,6 +3287,10 @@ impl Context {
 
     /// Match GNU `bytecode.c:op_branch`: after the bytecode loop's unsigned
     /// quit counter wraps, run `maybe_gc (); maybe_quit ();`.
+    ///
+    /// The wrap is one in 256 backward branches. Cold so the verified
+    /// dispatch does not reserve a register for this call.
+    #[cold]
     #[inline(never)]
     #[doc(hidden)]
     pub fn bytecode_branch_maybe_gc_and_quit(&mut self) -> Result<(), Flow> {
