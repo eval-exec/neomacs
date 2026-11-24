@@ -1683,9 +1683,13 @@ macro_rules! spec_call_body {
                 charge_unstamped_spec_frame(ctx_ref, callee)
             };
             let Some(saved_budget) = saved_budget else {
-                return call_spec_slow(
-                    $ctx, $sym_bits, $expected, slot_ref, $args_ptr, $nargs, $out,
-                );
+                // SAFETY: `$ctx`, `$sym_bits`, `$expected`, `$args_ptr[..$nargs]`,
+                // and `$out` uphold the enclosing spec-call shim's ABI contract.
+                return unsafe {
+                    call_spec_slow(
+                        $ctx, $sym_bits, $expected, slot_ref, $args_ptr, $nargs, $out,
+                    )
+                };
             };
             #[cfg(any(test, debug_assertions, feature = "test-support"))]
             {
@@ -1875,27 +1879,35 @@ macro_rules! spec_call_body {
             // The cold exit owns the rest of this frame's life: it releases
             // the charge after any precise-deopt resume (which continues the
             // frame) and before an interpreter rerun, whose entry charges it.
-            return call_spec_finish(
-                $ctx,
-                callee,
-                leaf,
-                $args_ptr,
-                $nargs,
-                $out,
-                bt_count,
-                run,
-                saved_budget,
-            );
+            // SAFETY: `$ctx`, `leaf`, `$args_ptr[..$nargs]`, and `$out` uphold
+            // this spec-call shim's live native activation contract.
+            return unsafe {
+                call_spec_finish(
+                    $ctx,
+                    callee,
+                    leaf,
+                    $args_ptr,
+                    $nargs,
+                    $out,
+                    bt_count,
+                    run,
+                    saved_budget,
+                )
+            };
         }
-        call_spec_slow(
-            $ctx,
-            $sym_bits,
-            $expected,
-            slot_ref,
-            $args_ptr,
-            $nargs as usize,
-            $out,
-        )
+        // SAFETY: `$ctx`, `$sym_bits`, `$expected`, `$args_ptr[..$nargs]`, and
+        // `$out` uphold the enclosing spec-call shim's ABI contract.
+        unsafe {
+            call_spec_slow(
+                $ctx,
+                $sym_bits,
+                $expected,
+                slot_ref,
+                $args_ptr,
+                $nargs as usize,
+                $out,
+            )
+        }
     }};
 }
 
