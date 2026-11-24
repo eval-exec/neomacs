@@ -888,6 +888,16 @@ impl ByteCodeFunction {
         &mut self.constants
     }
 
+    /// Replace leading constant values. The pool length, the ops, the lazy
+    /// cell, and the execution certificate stay: the captured prefix does
+    /// not change indices or the stack shape proved on the prototype.
+    pub fn overwrite_constant_prefix(&mut self, values: &[crate::value::Value]) {
+        debug_assert!(values.len() <= self.constants.len());
+        for (i, value) in values.iter().enumerate() {
+            self.constants[i] = *value;
+        }
+    }
+
     /// Declared operand-stack depth.
     #[inline(always)]
     pub fn max_stack(&self) -> StackDepth {

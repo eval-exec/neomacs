@@ -6573,7 +6573,8 @@ fn make_closure_in_place() -> bool {
 /// `make-closure` of a GNU prototype the former way, kept for the
 /// `NEOVM_MAKE_CLOSURE_IN_PLACE=off` A/B: clone the whole prototype (its
 /// constant pool included), patch the captured prefix in the copy, and
-/// move the copy into the heap.
+/// move the copy into the heap. The patch writes values only.
+/// `constants_mut` would drop the seal and replace the shared lazy cell.
 #[inline(never)]
 fn make_closure_by_clone(
     prototype: Value,
@@ -6587,9 +6588,7 @@ fn make_closure_by_clone(
             vec![Value::string("Closure vars do not fit in constvec")],
         ));
     }
-    for (i, var) in closure_vars.iter().enumerate() {
-        new_bc.constants_mut()[i] = *var;
-    }
+    new_bc.overwrite_constant_prefix(closure_vars);
     #[cfg(feature = "jit")]
     if let Some(id) = new_bc.jit_runtime().note_patched_prefix(closure_vars.len()) {
         crate::emacs_core::jit::cache::evict_compiled(id);

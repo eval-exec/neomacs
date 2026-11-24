@@ -431,3 +431,36 @@ fn make_closure_by_clone_and_in_place_build_the_same_instance() {
         eval(&mut ctx, "'(t (1 one mci-tail))")
     );
 }
+
+/// The clone path patches constant values only. It keeps the prototype's
+/// lazy cell, including a decode that already ran. `constants_mut` would
+/// drop that cell and the execution certificate.
+#[test]
+fn make_closure_by_clone_keeps_the_decoded_certificate() {
+    let mut ctx = Context::new(crate::test_utils::unit_runtime());
+    let proto = eval(
+        &mut ctx,
+        "(make-byte-code 0 \"\\300\\207\" [V0 mci-seal] 1)",
+    );
+    assert!(data(proto).executes_verified_ops());
+    let proto_cell = data(proto)
+        .lazy_gnu_code()
+        .as_ref()
+        .expect("lazy cell")
+        .clone();
+    assert!(proto_cell.decoded_ready().is_some());
+    super::symbols::force_make_closure_in_place_for_test(false);
+    let by_clone = make_closure(proto, &[Value::fixnum(7)]);
+    let clone_cell = data(by_clone).lazy_gnu_code().as_ref().expect("lazy cell");
+    assert!(
+        std::sync::Arc::ptr_eq(clone_cell, &proto_cell),
+        "clone path replaced the lazy cell"
+    );
+    assert!(clone_cell.decoded_ready().is_some());
+    super::symbols::force_make_closure_in_place_for_test(true);
+    let in_place = make_closure(proto, &[Value::fixnum(7)]);
+    let place_cell = data(in_place).lazy_gnu_code().as_ref().expect("lazy cell");
+    assert!(std::sync::Arc::ptr_eq(place_cell, &proto_cell));
+    ctx.set_variable("mci-seal-clone", by_clone);
+    assert_eq!(eval(&mut ctx, "(funcall mci-seal-clone)"), Value::fixnum(7));
+}
