@@ -1769,6 +1769,133 @@ fn regexp_one_half_context_uses_contiguous_engine_storage() {
     assert_eq!(segmented, 0, "one-half windows paid segmented engine setup");
 }
 
+/// The typed slice entry must perform cached-prefix work without preparing
+/// generic prefix batches. The crossing control keeps those probes live.
+#[test]
+fn regexp_one_half_dense_scan_enters_contiguous_engine_without_batch_setup() {
+    crate::test_utils::init_test_tracing();
+    use regex_emacs::dfa;
+
+    dfa::with_first_step(true, || {
+        dfa::with_cold_path(false, || {
+            dfa::with_dfa_mode(dfa::DfaMode::On, || {
+                let miss = "abcdefx ".repeat(256);
+                let winner = miss.len();
+                let positive = format!("{miss}qa{}Z{}", "b".repeat(32), " ".repeat(64));
+                let crossing =
+                    regex_emacs::regex_compile(r"\([a-z]a\)\([bcdef]*\)Z", false, false).unwrap();
+                assert!(crossing.literal_prefilter().is_none());
+                for _ in 0..2 {
+                    assert!(
+                        regex_emacs::re_search(
+                            &crossing,
+                            miss.as_bytes(),
+                            0,
+                            miss.len() as isize,
+                            &DefaultSyntaxLookup,
+                            0,
+                        )
+                        .is_none()
+                    );
+                }
+                let mut control = literal_gap_test_buffer(&positive);
+                park_gap_at_keeping_point(&mut control, winner + 10);
+                let parked = control.gap_position_lisp();
+                let before = regex_emacs::prefix_storage_probe();
+                let segments_before = regex_emacs::segment_engine_entry_count();
+                let (origin, registers) = super::re_search_buffer_regexp(
+                    &control,
+                    &crossing,
+                    control.accessible_emacs_byte_region().range(),
+                    EmacsBytePos::ZERO,
+                    control.total_emacs_byte_end_pos(),
+                    true,
+                    |_| DefaultSyntaxLookup,
+                )
+                .expect("the control match consumes across the real gap");
+                let work = regex_emacs::prefix_storage_probe().since(before);
+                assert_eq!(
+                    (
+                        origin.get() + registers.start[0] as usize,
+                        origin.get() + registers.end[0] as usize
+                    ),
+                    (winner, winner + 35),
+                );
+                assert_eq!(
+                    (
+                        origin.get() + registers.start[1] as usize,
+                        origin.get() + registers.end[1] as usize
+                    ),
+                    (winner, winner + 2),
+                );
+                assert_eq!(
+                    (
+                        origin.get() + registers.start[2] as usize,
+                        origin.get() + registers.end[2] as usize
+                    ),
+                    (winner + 2, winner + 34),
+                );
+                assert!(regex_emacs::segment_engine_entry_count() > segments_before);
+                assert_eq!(work.contiguous_search_entries, 0, "{work:?}");
+                assert!(
+                    work.calls > 0 && work.batch_prepares > 0 && work.batch_checks > 0,
+                    "crossing must exercise the real generic preparation and probes: {work:?}"
+                );
+                assert_eq!(control.gap_position_lisp(), parked);
+
+                let text = format!("{miss} ## {miss}");
+                let mut buf = literal_gap_test_buffer(&text);
+                park_gap_at_keeping_point(&mut buf, miss.len() + 2);
+                let parked = buf.gap_position_lisp();
+                let accessible = buf.accessible_emacs_byte_region().range();
+                let pattern = regex_emacs::regex_compile("[a-z][bcdef]*Z", false, false).unwrap();
+                assert!(pattern.literal_prefilter().is_none());
+                assert!(
+                    pattern.fastmap.iter().filter(|&&set| set).count() > 3,
+                    "the fixture must use dense candidate scanning"
+                );
+                for (low, high) in [(8, miss.len() - 8), (miss.len() + 12, text.len() - 8)] {
+                    for forward in [true, false] {
+                        let (start, limit) = if forward { (low, high) } else { (high, low) };
+                        let search = || {
+                            super::re_search_buffer_regexp(
+                                &buf,
+                                &pattern,
+                                accessible,
+                                EmacsBytePos::new(start),
+                                EmacsBytePos::new(limit),
+                                forward,
+                                |_| DefaultSyntaxLookup,
+                            )
+                        };
+                        for _ in 0..2 {
+                            assert!(search().is_none());
+                        }
+                        assert!(matches!(*pattern.dfa.slot(), dfa::DfaSlot::Live(_)));
+                        let before = regex_emacs::prefix_storage_probe();
+                        let segments_before = regex_emacs::segment_engine_entry_count();
+                        assert!(search().is_none());
+                        let work = regex_emacs::prefix_storage_probe().since(before);
+                        assert_eq!(buf.gap_position_lisp(), parked);
+                        assert_eq!(work.contiguous_search_entries, 1, "{work:?}");
+                        assert_eq!(regex_emacs::segment_engine_entry_count(), segments_before);
+                        assert!(
+                            work.calls >= 256 && work.rejected >= 256,
+                            "the slice must execute warmed prefix rejections: {work:?}"
+                        );
+                        eprintln!("bounded one-half start={start} limit={limit} work={work:?}");
+                        assert_eq!(
+                            (work.batch_prepares, work.batch_checks),
+                            (0, 0),
+                            "a contiguous slice search must not set up generic batches: {work:?}"
+                        );
+                    }
+                }
+            })
+        })
+    });
+}
+
 #[test]
 fn regexp_one_half_context_preserves_gap_edge_assertions() {
     crate::test_utils::init_test_tracing();

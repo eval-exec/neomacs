@@ -695,8 +695,9 @@ fn assert_warm_prefix_admission_is_bounded(scan: WarmPrefixScan) {
                             "admit candidate batches once per search half and seam, not per prefix: scan={scan:?} repeats={repeats} range={range} {segmented:?}"
                         );
                         assert_eq!(
-                            contiguous.batch_checks, 1,
-                            "admit contiguous storage once per search, not per prefix: scan={scan:?} repeats={repeats} range={range} {contiguous:?}"
+                            (contiguous.batch_prepares, contiguous.batch_checks),
+                            (0, 0),
+                            "the contiguous scanner must not prepare generic batches: scan={scan:?} repeats={repeats} range={range} {contiguous:?}"
                         );
                     }
                 }
@@ -940,14 +941,18 @@ fn split_gap_cold_promotion_admits_prefix_batches_once_per_search() {
                                 work.calls > 0,
                                 "promotion must execute cached prefixes: {work:?}"
                             );
-                            assert_eq!(work.batch_prepares, 1, "{work:?}");
-                            let max_checks = if segmented { 3 } else { 1 };
-                            assert!(
-                                work.batch_checks > 0 && work.batch_checks <= max_checks,
-                                "expression={expression} forward={forward} segmented={segmented}: {work:?}"
-                            );
-                            if !segmented {
-                                assert_eq!(work.batch_checks, 1, "{work:?}");
+                            if segmented {
+                                assert_eq!(work.batch_prepares, 1, "{work:?}");
+                                assert!(
+                                    work.batch_checks > 0 && work.batch_checks <= 3,
+                                    "expression={expression} forward={forward}: {work:?}"
+                                );
+                            } else {
+                                assert_eq!(
+                                    (work.batch_prepares, work.batch_checks),
+                                    (0, 0),
+                                    "cold promotion must retain the contiguous scanner: {work:?}"
+                                );
                             }
                             assert!(work.batch_advances <= 2, "{work:?}");
                             assert!(

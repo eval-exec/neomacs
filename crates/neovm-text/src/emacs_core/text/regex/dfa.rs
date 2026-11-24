@@ -2014,6 +2014,129 @@ impl ExistenceDfa {
         verdict
     }
 
+    /// Direct slice cache for the monomorphic contiguous scanner. Keep its
+    /// byte loop independent of segmented reader closures and tuple windows.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    fn cached_prefix_rejection_contiguous(
+        &self,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        p: usize,
+        stop: usize,
+        point: usize,
+        overflow_free_span: usize,
+    ) -> Option<usize> {
+        #[cfg(test)]
+        let mut storage_probe = super::PrefixProbeGuard::enter();
+        // Establish memory safety first. The remaining guards apply only
+        // once an existing DEAD entry could actually reject this candidate.
+        if p >= text.len() {
+            return None;
+        }
+        #[cfg(test)]
+        super::note_prefix_storage(true, false, false, false, false);
+        let class = self.classes.byte_class[text[p] as usize];
+        if class == UNKNOWN_CLASS {
+            return None;
+        }
+        let prev_mask = self.prev_mask.0;
+        let reads_prev_syntax = prev_mask & !(Facts::EDGE.0 | Facts::NEWLINE.0) != 0;
+        let facts = if prev_mask == 0 {
+            // No assertion reads the previous character: use start[0]
+            // without inspecting point zero or the preceding byte.
+            0
+        } else if p == 0 {
+            Facts::EDGE.0
+        } else if !reads_prev_syntax {
+            // EDGE and newline facts do not depend on syntax or decoding.
+            #[cfg(test)]
+            super::note_prefix_storage(true, false, false, false, false);
+            if text[p - 1] == b'\n' {
+                Facts::NEWLINE.0
+            } else {
+                0
+            }
+        } else {
+            #[cfg(test)]
+            super::note_prefix_storage(true, false, false, false, false);
+            let byte = text[p - 1];
+            if pattern.target_multibyte && byte >= 0x80 {
+                return None;
+            }
+            let prev_class = self.classes.byte_class[byte as usize];
+            if prev_class != UNKNOWN_CLASS {
+                self.classes.facts(prev_class).0
+            } else {
+                let facts = self.classes.byte_facts[byte as usize];
+                if facts == NO_FACTS {
+                    return None;
+                }
+                facts
+            }
+        };
+        let start = self.start[(facts & prev_mask) as usize];
+        if start == 0 {
+            return None;
+        }
+        let mut row = start << self.stride_shift;
+        // Every consumed byte must be before the stop, frontier and point's
+        // special closure, and within already established plain syntax.
+        // Eight probes cover short literal failures without making a true
+        // candidate walk an unbounded prefix twice.
+        let mut limit = stop
+            .min(text.len())
+            .min(self.search.read_limit)
+            .min(p.saturating_add(CACHED_PREFIX_BYTES))
+            .min(p.saturating_add(overflow_free_span));
+        if self.has_at_dot && point >= p {
+            limit = limit.min(point);
+        }
+        if self.search.positional {
+            // The current class is a base-table class. Previous word/symbol
+            // facts require base syntax at p - 1 too, in the same known run.
+            let from = if p > 0 && reads_prev_syntax { p - 1 } else { p };
+            if from < self.plain.start || p >= self.plain.end {
+                return None;
+            }
+            limit = limit.min(self.plain.end);
+        }
+        let stride = 1u32 << self.stride_shift;
+        let mut d = p;
+        while d < limit {
+            let class = if d == p {
+                class
+            } else {
+                #[cfg(test)]
+                super::note_prefix_storage(true, false, false, false, false);
+                self.classes.byte_class[text[d] as usize]
+            };
+            if class == UNKNOWN_CLASS {
+                return None;
+            }
+            let at = row as usize + class as usize;
+            debug_assert!(at < self.trans.len());
+            // SAFETY: as in `run`, cached rows have a complete stride and
+            // known byte classes are below that stride. This path mutates
+            // neither rows nor classes.
+            let next = unsafe { *self.trans.get_unchecked(at) };
+            if next == DEAD {
+                #[cfg(test)]
+                {
+                    storage_probe.rejected = Some(d - p);
+                }
+                return Some(d - p);
+            }
+            if next < stride {
+                return None;
+            }
+            row = next;
+            d += 1;
+        }
+        None
+    }
+
     /// A bounded cached rejection, without classifying, interning, or reading
     /// syntax. Called only after the give-up and memory-cap guards. Returns
     /// the same consumed span as `run`, strictly below `overflow_free_span`.
@@ -3247,6 +3370,47 @@ impl<'p> DfaLease<'p> {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn inline_first_step_enabled(&self) -> bool {
         self.mode == DfaMode::On && first_step_enabled()
+    }
+
+    /// Contiguous candidates call the slice cache directly. The eligibility
+    /// and accounting order matches the segmented path without a closure ABI.
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(super) fn try_inline_first_step_skip_contiguous(
+        &mut self,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        pos: usize,
+        stop: usize,
+        point: usize,
+    ) -> bool {
+        debug_assert_eq!(self.mode, DfaMode::On);
+        let DfaSlot::Live(live) = &mut *self.slot else {
+            return false;
+        };
+        // Leave state clearing, retirement, and a possible overflow to the
+        // outlined path. Its original ordering and accounting stay intact.
+        if live.dfa.gave_up.is_some()
+            || live.dfa.memory > MEMORY_CAP
+            || live.overflow_free_span == 0
+        {
+            return false;
+        }
+        let Some(consumed) = live.dfa.cached_prefix_rejection_contiguous(
+            pattern,
+            text,
+            pos,
+            stop,
+            point,
+            live.overflow_free_span,
+        ) else {
+            return false;
+        };
+        live.dfa.counters.no += 1;
+        live.dfa.counters.bytes += consumed as u64;
+        live.note(Exists::No { consumed });
+        self.skipped += 1;
+        true
     }
 
     /// Skip one bounded cached rejection without entering `candidate`.
