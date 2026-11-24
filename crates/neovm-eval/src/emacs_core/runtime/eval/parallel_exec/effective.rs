@@ -645,7 +645,7 @@ pub(crate) fn effective_plain_unbind<A: PlainAccess + ?Sized>(
 /// visible: `do_one_unbind` takes the entry off the specpdl first
 /// (eval.c:3946-3955), `set_internal` then notifies the watchers with
 /// `Qunlet` (data.c:1697-1708), and only then stores the outer value
-/// (`SET_SYMBOL_VAL`, data.c:1715). A watcher that signals skips the store:
+/// (`SET_SYMBOL_VAL`, data.c:1720, after the `start:` label at :1716). A watcher that signals skips the store:
 /// the inner value stays in place (owner_bindings.rs:1265-1272 says the
 /// same). The owner-local restore runs take and store back to back because
 /// nothing runs between them; a hand-off with a watcher runs them around

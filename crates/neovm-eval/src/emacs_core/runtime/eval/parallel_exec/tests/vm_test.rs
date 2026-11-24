@@ -279,7 +279,7 @@ impl VmEscape for RecordingEscape {
         // order: the record leaves the slab (`do_one_unbind` decrements
         // first, eval.c:3946-3955), then the watcher's Lisp runs - the
         // script says whether it signaled - then the outer value is stored
-        // (`set_internal`, data.c:1697-1715). A signal skips the store; the
+        // (`set_internal`, data.c:1697-1708 then :1720). A signal skips the store; the
         // inner value stays.
         let mut taken = None;
         if let EscapeWhy::PlainUnbind { record, .. } = &request.why {
@@ -4232,7 +4232,8 @@ fn vm_a_signalling_plain_unbind_hand_off_leaves_no_entry_and_takes_the_record_fi
     // O2: GNU runs an unbind take, notify, store. `do_one_unbind` takes the
     // entry off the specpdl first (eval.c:3946-3955); `set_internal` then
     // notifies the watchers with `Qunlet` (data.c:1697-1708) and stores the
-    // outer value only after (data.c:1715). So when the watcher's Lisp
+    // outer value only after (the `start:` label :1716, the store :1720). So
+    // when the watcher's Lisp
     // signals, the record and the executor's entry are already gone and the
     // INNER value stays in place - the store never ran. The run ends
     // Signaled and nothing is retried. Red under a pop-after walk: the
