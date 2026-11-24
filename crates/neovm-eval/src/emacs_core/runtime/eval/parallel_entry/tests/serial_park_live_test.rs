@@ -1617,3 +1617,38 @@ fn l67a_a_keeper_waiting_on_itself_ends_as_a_self_wait() {
         "A learns the era is poisoned"
     );
 }
+
+/// Lead #14025 nit. Only a superseded receipt (`Generation`) is sent back
+/// to publish. A's receipt is from a publication it has since left: it ran
+/// again and then acknowledged the stop as a running owner, so it holds no
+/// native publication. The head's check refuses `Publication`, and that is a
+/// breach, not a Republish.
+#[test]
+fn l67a_a_receipt_from_an_owner_no_longer_native_is_a_breach() {
+    let (end, told) = with_poisoned_era("l67a-publication", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        drop(inbox);
+        std::thread::scope(|scope| {
+            let owner = scope.spawn(move || {
+                let (_state, _home, mut raw, grants) = a.start_raw();
+                let receipt = raw.publish();
+                raw.leave();
+                raw.request(receipt);
+                let epoch = retry_native("A sees the stop", || raw.mutator.wait_request());
+                retry_native("A stops", || raw.mutator.acknowledge(epoch, &[]));
+                let told = matches!(grants.recv_timeout(BOUND), Ok(GrantMsg::Poisoned));
+                drop(raw);
+                told
+            });
+            let end = driver.run();
+            (end, owner.join().expect("A"))
+        })
+    });
+    assert_eq!(
+        end,
+        DriverEnd::Poisoned(Breach::Rendezvous(RendezvousError::Publication))
+    );
+    assert!(told, "A learns the era is poisoned");
+}

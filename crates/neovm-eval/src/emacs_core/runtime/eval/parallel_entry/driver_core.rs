@@ -1,0 +1,665 @@
+//! L6.7a: the keeper driver's protocol, for parallel owners' serial turns.
+//!
+//! One keeper service thread runs [`Driver::run`]. Owners reach it only by
+//! messages: a request (sent after publishing), the returned ticket, a
+//! refused ticket, an abandoned lend, and an exit. The keeper grants inside
+//! its own stop, one ticket at a time, in ring order, and serves at most the
+//! requests queued when that stop began; later requests wait for the next
+//! stop, so parallel owners run between stops.
+//!
+//! Only a proven invariant break poisons the era: an owner whose lend guard
+//! dropped armed (a Rust unwind or a leaked turn), a message that cannot
+//! belong to the protocol, or a keeper whose stop waits on its own guard
+//! (`SelfWait`). A Lisp signal ends a turn normally. A stop its
+//! owners have not met within its bound stays requested: the keeper warns,
+//! serves its inbox, and waits on (K8 r2). A slow owner poisons nothing.
+//!
+//! This file holds no era or custody type (a3.1, K9). [`KeeperOps`] is the
+//! era and [`Batch`] the keeper between two lends of one stop, so one body
+//! runs over the product binding (`keeper_driver.rs`) and over a Loom model.
+//! Its only synchronization comes through `super::sync`.
+#![forbid(unsafe_code)]
+
+use super::sync::{self, mpsc};
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::num::NonZeroU64;
+use std::time::{Duration, Instant};
+
+/// How long one stop attempt waits for its owners before the keeper warns
+/// and serves its inbox, and how long a contended gate is retried before the
+/// call gives up. Neither poisons.
+pub(crate) const CONTENTION_BOUND: Duration = Duration::from_secs(60);
+
+/// One bounded stop attempt, as the era reports it.
+pub(crate) enum Attempt<S, P> {
+    /// Every owner stopped: the stop is the keeper's.
+    Stopped(S),
+    /// The bound passed first; the request stands.
+    Pending(P),
+}
+
+/// What an era refusal means to the driver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// A gate holder or the keeper's own guard: back off and retry.
+    Busy,
+    /// The receipt was superseded by a newer publication: send the owner back
+    /// to publish.
+    Superseded,
+    /// Anything else: a breach.
+    Other,
+}
+
+/// The era and the keeper's custody as the driver uses them.
+pub(crate) trait KeeperOps: Copy {
+    type Key: Copy + Eq + Debug;
+    /// An owner's published request.
+    type Receipt;
+    /// The ticket a grant lends.
+    type Ticket;
+    /// A ticket that came back.
+    type Returned;
+    /// Why an owner refused a ticket.
+    type Reason: Copy + Debug + Eq;
+    type Error: Copy + Debug + Eq;
+    /// The keeper's stop.
+    type Stopped;
+    /// What a pending attempt waited on.
+    type Pending: Debug;
+
+    fn refusal(error: Self::Error) -> Refusal;
+    fn owner(key: Self::Key) -> u64;
+    /// The publication generation a receipt commits its request under.
+    fn generation(receipt: &Self::Receipt) -> NonZeroU64;
+    fn enqueue(self, key: Self::Key, generation: NonZeroU64) -> Result<(), Self::Error>;
+    fn cancel(self, key: Self::Key) -> Result<(), Self::Error>;
+    fn stop_within(
+        self,
+        bound: Duration,
+    ) -> Result<Attempt<Self::Stopped, Self::Pending>, Self::Error>;
+    /// The registry gate's holder now, for a contention diagnostic.
+    fn gate_holder(self) -> Option<NonZeroU64>;
+    fn poison(self);
+    fn epoch(stopped: &Self::Stopped) -> NonZeroU64;
+    fn trace(stopped: &mut Self::Stopped) -> Result<(), Self::Error>;
+    /// Serial requests queued or granted under this stop.
+    fn ring_len(stopped: &Self::Stopped) -> Result<usize, Self::Error>;
+    /// Bind STOPPED as the keeper's custody for one batch and hand it to
+    /// VISITOR. The custody types are branded to this call.
+    fn with_batch<V: BatchVisitor<Self>>(
+        self,
+        stopped: Self::Stopped,
+        visitor: V,
+    ) -> Result<V::Output, BreachOf<Self>>;
+}
+
+/// The keeper between two lends of one stop: nothing is out.
+pub(crate) trait Batch<O: KeeperOps>: Sized {
+    /// A request validated against its owner's current publication.
+    type Ready;
+    type Grant;
+    /// The custody a lent ticket comes back to.
+    type Held;
+
+    /// The ring head's owner.
+    fn head(&self) -> Result<Option<O::Key>, O::Error>;
+    fn ready(&self, receipt: O::Receipt) -> Result<Self::Ready, O::Error>;
+    fn grant_for(&mut self, ready: &Self::Ready) -> Result<Option<Self::Grant>, O::Error>;
+    /// Lend READY's turn: cut its ticket. `Err` means custody refused a lend
+    /// it had validated.
+    fn lend(self, ready: Self::Ready) -> Result<(O::Ticket, Self::Held), CustodyRefused>;
+    /// The ticket came back: accept it and retire its grant.
+    fn settle(
+        held: Self::Held,
+        returned: O::Returned,
+        grant: Self::Grant,
+    ) -> Result<Self, Settle<O::Error>>;
+    fn complete(self) -> Result<(), O::Error>;
+}
+
+/// Runs the driver's batch over a branded [`Batch`].
+pub(crate) trait BatchVisitor<O: KeeperOps> {
+    type Output;
+    fn visit<B: Batch<O>>(self, batch: B) -> Result<Self::Output, BreachOf<O>>;
+}
+
+/// Custody refused a lend it had validated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CustodyRefused;
+
+/// Why a returned ticket could not be settled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Settle<E> {
+    /// It is not the ticket the keeper cut.
+    NotTheTicketCut,
+    /// Retiring the grant was refused.
+    Retire(E),
+}
+
+/// Owner -> keeper. One inbox, so each owner's messages arrive in the order
+/// its port sent them.
+pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason> {
+    /// The owner published `receipt` and asks for a serial turn.
+    Request { owner: u64, receipt: Receipt },
+    /// The lent ticket came back.
+    GiveBack { owner: u64, returned: Returned },
+    /// The owner could not receive the lent ticket; it comes back unopened.
+    Refuse {
+        owner: u64,
+        ticket: Ticket,
+        reason: Reason,
+    },
+    /// The owner's lend guard dropped armed: the ticket is lost.
+    Abandon { owner: u64, cause: LendDrop },
+    /// The owner finished; it requests nothing more.
+    Exit { owner: u64 },
+}
+
+/// Keeper -> one owner.
+pub(crate) enum GrantMsg<Ticket> {
+    /// A ticket cut in the stop of `epoch`.
+    Grant { ticket: Ticket, epoch: NonZeroU64 },
+    /// The request's publication is no longer current: publish again.
+    Republish,
+    /// The era is poisoned.
+    Poisoned,
+}
+
+/// Why a lend guard dropped armed. Both lose the ticket, so both poison; the
+/// cause is the diagnostic (lead #13898: a Lisp signal never gets here).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LendDrop {
+    /// Dropped while the owner thread was unwinding from a Rust panic.
+    Unwound,
+    /// Dropped without `end` or `park` and without a panic.
+    Leaked,
+}
+
+/// Why the driver stopped serving.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DriverEnd<Reason, Error> {
+    /// Every owner exited and no request is queued.
+    Drained,
+    /// A proven invariant break poisoned the era.
+    Poisoned(Breach<Reason, Error>),
+}
+
+/// A proven invariant break.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Breach<Reason, Error> {
+    /// An owner's lend guard dropped armed.
+    Abandoned { owner: u64, cause: LendDrop },
+    /// A message the protocol does not allow at this point.
+    Unexpected { owner: u64, message: &'static str },
+    /// An owner refused the ticket the keeper cut for it. The keeper sends
+    /// each ticket to the owner it was cut for, so no reason is recoverable.
+    Refused { owner: u64, reason: Reason },
+    /// A message from an owner the keeper did not enroll.
+    UnknownOwner { owner: u64 },
+    /// The owner's grant channel closed while a ticket was cut for it: the
+    /// grant bounced back and its ticket is dropped with the stop, so the era
+    /// is poisoned as for an abandoned lend.
+    Unreachable { owner: u64 },
+    /// The keeper's stop refused `Busy` for a whole contention bound with no
+    /// gate holder ever seen: the keeper waits on its own guard, which no
+    /// retry can release.
+    SelfWait,
+    /// Every sender is gone while a ticket is out.
+    Disconnected,
+    /// A refusal the driver cannot recover from.
+    Rendezvous(Error),
+    /// The keeper's custody refused a lend it validated.
+    Custody,
+}
+
+pub(crate) type MsgOf<O> = KeeperMsg<
+    <O as KeeperOps>::Receipt,
+    <O as KeeperOps>::Returned,
+    <O as KeeperOps>::Ticket,
+    <O as KeeperOps>::Reason,
+>;
+pub(crate) type GrantOf<O> = GrantMsg<<O as KeeperOps>::Ticket>;
+pub(crate) type BreachOf<O> = Breach<<O as KeeperOps>::Reason, <O as KeeperOps>::Error>;
+pub(crate) type EndOf<O> = DriverEnd<<O as KeeperOps>::Reason, <O as KeeperOps>::Error>;
+
+struct Enrolled<O: KeeperOps> {
+    key: O::Key,
+    grants: mpsc::SyncSender<GrantOf<O>>,
+}
+
+/// Called after each pending stop attempt, once the keeper has served its
+/// inbox, with what the attempt waited on and how many requests are queued.
+type PendingObserver<'o, P> = Box<dyn FnMut(&P, usize) + 'o>;
+
+/// The keeper side of L6.7a.
+pub(crate) struct Driver<'o, O: KeeperOps> {
+    ops: O,
+    inbox: mpsc::Receiver<MsgOf<O>>,
+    owners: HashMap<u64, Enrolled<O>>,
+    /// The receipt each queued request was committed under.
+    queued: HashMap<u64, O::Receipt>,
+    /// One stop attempt's bound.
+    stop_bound: Duration,
+    /// How long a refused stop may stay `Busy` before the keeper warns, or,
+    /// with no gate holder seen, ends as a self-wait.
+    contention_bound: Duration,
+    pending_observer: Option<PendingObserver<'o, O::Pending>>,
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "no production spawner until E6-P admission")
+)]
+impl<'o, O: KeeperOps> Driver<'o, O> {
+    pub(crate) fn new(ops: O, inbox: mpsc::Receiver<MsgOf<O>>) -> Self {
+        Self {
+            ops,
+            inbox,
+            owners: HashMap::new(),
+            queued: HashMap::new(),
+            stop_bound: CONTENTION_BOUND,
+            contention_bound: CONTENTION_BOUND,
+            pending_observer: None,
+        }
+    }
+
+    /// Shorten the contention bound to BOUND.
+    #[cfg(test)]
+    pub(crate) fn contention_bound(mut self, bound: Duration) -> Self {
+        self.contention_bound = bound;
+        self
+    }
+
+    /// Shorten each stop attempt to BOUND and hand every pending attempt to
+    /// OBSERVER. The driver's loop is the same with or without one.
+    #[cfg(test)]
+    pub(crate) fn observe_pending(
+        mut self,
+        bound: Duration,
+        observer: impl FnMut(&O::Pending, usize) + 'o,
+    ) -> Self {
+        self.stop_bound = bound;
+        self.pending_observer = Some(Box::new(observer));
+        self
+    }
+
+    /// Enroll one owner before it can request. `grants` is that owner's own
+    /// one-slot channel.
+    pub(crate) fn enroll(&mut self, owner: u64, key: O::Key, grants: mpsc::SyncSender<GrantOf<O>>) {
+        self.owners.insert(owner, Enrolled { key, grants });
+    }
+
+    /// Serve until every owner has exited, or until a proven invariant
+    /// break poisons the era.
+    pub(crate) fn run(mut self) -> EndOf<O> {
+        loop {
+            if self.queued.is_empty() {
+                match self.inbox.recv() {
+                    Ok(message) => {
+                        if let Err(breach) = self.between_stops(message) {
+                            return self.poison(breach);
+                        }
+                    }
+                    Err(mpsc::RecvError) => return DriverEnd::Drained,
+                }
+            }
+            while let Ok(message) = self.inbox.try_recv() {
+                if let Err(breach) = self.between_stops(message) {
+                    return self.poison(breach);
+                }
+            }
+            if !self.queued.is_empty()
+                && let Err(breach) = self.serve_stop()
+            {
+                return self.poison(breach);
+            }
+        }
+    }
+
+    fn key(&self, owner: u64) -> Result<O::Key, BreachOf<O>> {
+        self.owners
+            .get(&owner)
+            .map(|enrolled| enrolled.key)
+            .ok_or(Breach::UnknownOwner { owner })
+    }
+
+    /// A message while no ticket is out.
+    fn between_stops(&mut self, message: MsgOf<O>) -> Result<(), BreachOf<O>> {
+        match message {
+            KeeperMsg::Request { owner, receipt } => self.commit(owner, receipt),
+            KeeperMsg::Exit { owner } => self.exit(owner),
+            KeeperMsg::GiveBack { owner, .. } => Err(Breach::Unexpected {
+                owner,
+                message: "a returned ticket with no lend out",
+            }),
+            KeeperMsg::Refuse {
+                owner,
+                ticket,
+                reason,
+            } => {
+                drop(ticket);
+                Err(Breach::Refused { owner, reason })
+            }
+            KeeperMsg::Abandon { owner, cause } => Err(Breach::Abandoned { owner, cause }),
+        }
+    }
+
+    /// Commit a request at the ring's tail: commit order is receive order.
+    fn commit(&mut self, owner: u64, receipt: O::Receipt) -> Result<(), BreachOf<O>> {
+        let key = self.key(owner)?;
+        if self.queued.contains_key(&owner) {
+            return Err(Breach::Unexpected {
+                owner,
+                message: "a second request while one is queued",
+            });
+        }
+        let generation = O::generation(&receipt);
+        let ops = self.ops;
+        retry_busy::<O, _>(|| ops.enqueue(key, generation)).map_err(Breach::Rendezvous)?;
+        self.queued.insert(owner, receipt);
+        Ok(())
+    }
+
+    /// A normal exit: cancel the owner's queued request, if any.
+    fn exit(&mut self, owner: u64) -> Result<(), BreachOf<O>> {
+        let key = self.key(owner)?;
+        if self.queued.remove(&owner).is_some() {
+            let ops = self.ops;
+            retry_busy::<O, _>(|| ops.cancel(key)).map_err(Breach::Rendezvous)?;
+        }
+        self.owners.remove(&owner);
+        Ok(())
+    }
+
+    /// Send MESSAGE to OWNER. A closed grant channel hands it back: that
+    /// owner is gone.
+    fn send(&self, owner: u64, message: GrantOf<O>) -> Result<(), GrantOf<O>> {
+        match self.owners.get(&owner) {
+            Some(enrolled) => enrolled
+                .grants
+                .send(message)
+                .map_err(|mpsc::SendError(message)| message),
+            None => Err(message),
+        }
+    }
+
+    /// Take the stop (K8 r2). Each attempt is bounded. A pending attempt
+    /// leaves the request standing, so the owners that stopped stay stopped
+    /// and a requester keeps its place: the keeper warns, commits what its
+    /// inbox holds, and continues the same epoch. As with GNU's global lock,
+    /// a slow owner delays the turn and poisons nothing.
+    fn take_stop(&mut self) -> Result<O::Stopped, BreachOf<O>> {
+        let mut contended: Option<Backoff> = None;
+        loop {
+            match self.ops.stop_within(self.stop_bound) {
+                Ok(Attempt::Stopped(stopped)) => return Ok(stopped),
+                Ok(Attempt::Pending(pending)) => {
+                    contended = None;
+                    tracing::warn!(?pending, "keeper stop overdue");
+                    while let Ok(message) = self.inbox.try_recv() {
+                        self.between_stops(message)?;
+                    }
+                    let queued = self.queued.len();
+                    if let Some(observe) = &mut self.pending_observer {
+                        observe(&pending, queued);
+                    }
+                }
+                // A gate holder is brief by construction. Back off rather
+                // than spin, and name the holder if the hold lasts. Busy with
+                // the gate free for a whole bound is the keeper waiting on
+                // its own guard (`stop`'s self-wait refusals), not contention.
+                Err(error) if O::refusal(error) == Refusal::Busy => {
+                    let backoff =
+                        contended.get_or_insert_with(|| Backoff::new(self.contention_bound));
+                    backoff.note_holder(self.ops.gate_holder());
+                    backoff.wait();
+                    match backoff.window_end() {
+                        None => {}
+                        Some(None) => return Err(Breach::SelfWait),
+                        Some(Some(holder)) => tracing::warn!(
+                            holder,
+                            waited = ?backoff.waited(),
+                            "keeper stop: the registry gate stays held"
+                        ),
+                    }
+                }
+                Err(error) => return Err(Breach::Rendezvous(error)),
+            }
+        }
+    }
+
+    /// One stop: lend the ring's head in order, each after the previous
+    /// ticket came back, at most the requests queued when the stop began.
+    fn serve_stop(&mut self) -> Result<(), BreachOf<O>> {
+        let mut stopped = self.take_stop()?;
+        let epoch = O::epoch(&stopped);
+        retry_busy::<O, _>(|| O::trace(&mut stopped)).map_err(Breach::Rendezvous)?;
+        let bound = O::ring_len(&stopped).map_err(Breach::Rendezvous)?;
+        let ops = self.ops;
+        ops.with_batch(
+            stopped,
+            ServeBatch {
+                driver: self,
+                epoch,
+                bound,
+            },
+        )
+    }
+
+    fn serve_batch<B: Batch<O>>(
+        &mut self,
+        mut batch: B,
+        epoch: NonZeroU64,
+        bound: usize,
+    ) -> Result<(), BreachOf<O>> {
+        for _ in 0..bound {
+            let Some(head) = batch.head().map_err(Breach::Rendezvous)? else {
+                break;
+            };
+            let owner = O::owner(head);
+            let Some(receipt) = self.queued.remove(&owner) else {
+                return Err(Breach::Unexpected {
+                    owner,
+                    message: "a ring entry with no committed request",
+                });
+            };
+            let ready = match batch.ready(receipt) {
+                Ok(ready) => ready,
+                // The owner published again after its request, so the
+                // receipt is superseded. Send it back to publish and requeue
+                // at the tail. FIFO is not skipped, so this stop lends
+                // nothing more. Any other refusal is a breach.
+                Err(error) if O::refusal(error) == Refusal::Superseded => {
+                    let ops = self.ops;
+                    retry_busy::<O, _>(|| ops.cancel(head)).map_err(Breach::Rendezvous)?;
+                    if self.send(owner, GrantMsg::Republish).is_err() {
+                        // Gone while only queued: like an exit.
+                        self.owners.remove(&owner);
+                    }
+                    break;
+                }
+                Err(error) => return Err(Breach::Rendezvous(error)),
+            };
+            let Some(grant) = batch.grant_for(&ready).map_err(Breach::Rendezvous)? else {
+                return Err(Breach::Unexpected {
+                    owner,
+                    message: "a ready head the ring did not grant",
+                });
+            };
+            let (ticket, held) = batch
+                .lend(ready)
+                .map_err(|CustodyRefused| Breach::Custody)?;
+            if self.send(owner, GrantMsg::Grant { ticket, epoch }).is_err() {
+                // The bounced message drops the ticket, and `held` drops the
+                // stop with the breach.
+                return Err(Breach::Unreachable { owner });
+            }
+            let returned = self.await_return(owner)?;
+            batch = B::settle(held, returned, grant).map_err(|settle| match settle {
+                Settle::NotTheTicketCut => Breach::Unexpected {
+                    owner,
+                    message: "a returned ticket that is not the one cut",
+                },
+                Settle::Retire(error) => Breach::Rendezvous(error),
+            })?;
+        }
+        batch.complete().map_err(Breach::Rendezvous)
+    }
+
+    /// Wait for `owner`'s ticket. Other owners' requests and exits are
+    /// handled as they come; anything else is a breach.
+    fn await_return(&mut self, lent: u64) -> Result<O::Returned, BreachOf<O>> {
+        loop {
+            let message = self
+                .inbox
+                .recv()
+                .map_err(|mpsc::RecvError| Breach::Disconnected)?;
+            match message {
+                KeeperMsg::GiveBack { owner, returned } if owner == lent => return Ok(returned),
+                KeeperMsg::Abandon { owner, cause } => {
+                    return Err(Breach::Abandoned { owner, cause });
+                }
+                KeeperMsg::Request { owner, receipt } if owner != lent => {
+                    self.commit(owner, receipt)?;
+                }
+                KeeperMsg::Exit { owner } if owner != lent => self.exit(owner)?,
+                KeeperMsg::Request { owner, .. } => {
+                    return Err(Breach::Unexpected {
+                        owner,
+                        message: "a request while its own ticket is out",
+                    });
+                }
+                KeeperMsg::Exit { owner } => {
+                    return Err(Breach::Unexpected {
+                        owner,
+                        message: "an exit while its ticket is out",
+                    });
+                }
+                KeeperMsg::GiveBack { owner, .. } => {
+                    return Err(Breach::Unexpected {
+                        owner,
+                        message: "a returned ticket from an owner with no lend",
+                    });
+                }
+                KeeperMsg::Refuse {
+                    owner,
+                    ticket,
+                    reason,
+                } => {
+                    // The ticket is dropped with the stop the breach ends.
+                    drop(ticket);
+                    return Err(Breach::Refused { owner, reason });
+                }
+            }
+        }
+    }
+
+    /// Poison the era and tell every owner. Dropping a held stop has already
+    /// poisoned it when the breach came from inside one.
+    fn poison(mut self, breach: BreachOf<O>) -> EndOf<O> {
+        self.ops.poison();
+        // The ring dies with the era (a poisoned gate refuses every ring
+        // call), so queued owners are only told.
+        for (owner, _receipt) in std::mem::take(&mut self.queued) {
+            let _ = self.send(owner, GrantMsg::Poisoned);
+        }
+        for enrolled in self.owners.values() {
+            let _ = enrolled.grants.try_send(GrantMsg::Poisoned);
+        }
+        DriverEnd::Poisoned(breach)
+    }
+}
+
+/// The batch of one stop, run inside the custody `with_batch` binds.
+struct ServeBatch<'d, 'o, O: KeeperOps> {
+    driver: &'d mut Driver<'o, O>,
+    epoch: NonZeroU64,
+    bound: usize,
+}
+
+impl<O: KeeperOps> BatchVisitor<O> for ServeBatch<'_, '_, O> {
+    type Output = ();
+
+    fn visit<B: Batch<O>>(self, batch: B) -> Result<(), BreachOf<O>> {
+        self.driver.serve_batch(batch, self.epoch, self.bound)
+    }
+}
+
+/// Waits on a contended registry gate (lead #13966 LOW-1). The first waits
+/// only yield; later ones sleep, doubling up to a millisecond, so a long
+/// hold never spins. Both go through the sync seam, so the Loom copy
+/// schedules them.
+struct Backoff {
+    attempts: u32,
+    start: Instant,
+    bound: Duration,
+    window_end: Duration,
+    /// The last gate holder seen in the current window.
+    holder: Option<NonZeroU64>,
+}
+
+impl Backoff {
+    /// Waits that only yield before the sleeps start.
+    const YIELDS: u32 = 64;
+
+    fn new(bound: Duration) -> Self {
+        Self {
+            attempts: 0,
+            start: Instant::now(),
+            bound,
+            window_end: bound,
+            holder: None,
+        }
+    }
+
+    fn wait(&mut self) {
+        self.attempts = self.attempts.saturating_add(1);
+        match self.attempts.checked_sub(Self::YIELDS) {
+            None | Some(0) => sync::yield_now(),
+            Some(extra) => sync::sleep(Duration::from_micros(1 << extra.min(10))),
+        }
+    }
+
+    fn waited(&self) -> Duration {
+        self.start.elapsed()
+    }
+
+    fn note_holder(&mut self, holder: Option<NonZeroU64>) {
+        if holder.is_some() {
+            self.holder = holder;
+        }
+    }
+
+    /// Once per bound of waiting: `Some` with the last holder seen in that
+    /// window (`None` if the gate was never seen held), then a new window.
+    fn window_end(&mut self) -> Option<Option<NonZeroU64>> {
+        if self.waited() < self.window_end {
+            return None;
+        }
+        self.window_end += self.bound;
+        Some(self.holder.take())
+    }
+}
+
+/// Retry a refusal that BUSY classifies as contention until
+/// [`CONTENTION_BOUND`]; any other result, and contention past the bound,
+/// passes through.
+pub(crate) fn retry_contended<T, E: Copy>(
+    busy: impl Fn(E) -> bool,
+    mut attempt: impl FnMut() -> Result<T, E>,
+) -> Result<T, E> {
+    let mut backoff = Backoff::new(CONTENTION_BOUND);
+    loop {
+        match attempt() {
+            Err(error) if busy(error) && backoff.waited() < CONTENTION_BOUND => backoff.wait(),
+            other => return other,
+        }
+    }
+}
+
+fn retry_busy<O: KeeperOps, T>(
+    attempt: impl FnMut() -> Result<T, O::Error>,
+) -> Result<T, O::Error> {
+    retry_contended(|error| O::refusal(error) == Refusal::Busy, attempt)
+}
