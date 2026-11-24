@@ -7241,8 +7241,12 @@ impl BufferManager {
             other
                 .text
                 .retarget_markers_for_buffer_swap(current_id, other_id);
-            current.overlays.retarget_buffer(other_id, current_id);
-            other.overlays.retarget_buffer(current_id, other_id);
+            current
+                .overlays
+                .retarget_buffer_for_swap(other_id, current_id);
+            other
+                .overlays
+                .retarget_buffer_for_swap(current_id, other_id);
             current.text.record_char_modification(1);
             other.text.record_char_modification(1);
             current.increment_overlay_modified_tick();

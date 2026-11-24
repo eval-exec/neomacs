@@ -1501,6 +1501,22 @@ impl OverlayList {
         }
     }
 
+    /// Retarget overlays after `buffer-swap-text` swapped two buffers' lists.
+    /// Always advances the generation even when this list is empty so a live
+    /// view captured against the old buffer goes stale after the swap.
+    pub(crate) fn retarget_buffer_for_swap(&mut self, from: BufferId, to: BufferId) {
+        self.invalidate_snapshot();
+        self.clear_snapshot_copies();
+        for overlay in self.index.values() {
+            let _ = overlay.with_overlay_data_mut(|data| {
+                if data.buffer == Some(from) {
+                    data.buffer = Some(to);
+                }
+            });
+        }
+        self.index.bump_generation();
+    }
+
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn overlay_put(
         &mut self,
@@ -1527,11 +1543,12 @@ impl OverlayList {
         // Adding a previously absent nil property changes the plist even
         // though GNU's display-change flag remains false.
         if changed || plist_replaced {
-            self.index.bump_generation();
             self.bump_snapshot_copy_revision(overlay);
             if plist_replaced && range.is_some() {
                 self.index
                     .overlay_property_key_added_to_member(overlay, prop);
+            } else {
+                self.index.bump_generation();
             }
             self.subtract_overlay_content_component(previous_component);
             if !self.content_dirty.get() {

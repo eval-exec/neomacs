@@ -95,3 +95,202 @@ fn each_overlay_write_advances_generation_and_noop_remap_does_not() {
     list.delete_all_overlays();
     assert_bumped(before_clear, list.overlay_generation(), "delete-all");
 }
+
+#[test]
+fn text_deletion_and_evaporating_delete_advance_generation() {
+    crate::test_utils::init_test_tracing();
+    let (mut list, overlay) = fresh();
+    let before_delete = list.overlay_generation();
+    list.adjust_for_text_edit(OverlayTextEdit::Delete {
+        range: emacs_byte_range(12, 15),
+    });
+    let after_delete = list.overlay_generation();
+    assert_bumped(before_delete, after_delete, "text delete");
+
+    list.overlay_put(overlay, Value::symbol("evaporate"), Value::t())
+        .unwrap();
+    let before_evap = list.overlay_generation();
+    list.adjust_for_text_edit(OverlayTextEdit::Delete {
+        range: emacs_byte_range(10, 17),
+    });
+    let after_evap = list.overlay_generation();
+    assert_bumped(before_evap, after_evap, "evaporating text delete");
+    assert!(
+        list.get(overlay).is_none(),
+        "deleted evaporating overlay must leave the index"
+    );
+}
+
+#[test]
+fn evaporate_on_unchanged_empty_move_advances_generation() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    let overlay = alloc_overlay(20, 20);
+    list.insert_overlay(overlay);
+    list.overlay_put(overlay, Value::symbol("evaporate"), Value::t())
+        .unwrap();
+    // Moving an already-empty overlay to its same range does not change the
+    // interval range (move_to is Unchanged); the generation bump must come
+    // from the evaporating detach itself.
+    let before = list.overlay_generation();
+    list.move_overlay_to_emacs_byte_range(overlay, emacs_byte_range(20, 20));
+    assert_bumped(before, list.overlay_generation(), "evaporate detach");
+    assert!(list.get(overlay).is_none());
+}
+
+#[test]
+fn no_change_operations_do_not_advance_generation() {
+    crate::test_utils::init_test_tracing();
+    let mut empty = OverlayList::new();
+    let empty_gen = empty.overlay_generation();
+    empty.adjust_for_text_edit(OverlayTextEdit::Insert {
+        position: emacs_byte_pos(0),
+        length: emacs_byte_len(4),
+        before_markers: false,
+    });
+    empty.adjust_for_text_edit(OverlayTextEdit::Delete {
+        range: emacs_byte_range(0, 4),
+    });
+    assert_eq!(
+        empty.overlay_generation(),
+        empty_gen,
+        "text edits on an empty overlay list must not bump generation"
+    );
+
+    let (mut list, overlay) = fresh();
+    list.overlay_put(overlay, Value::symbol("face"), Value::symbol("bold"))
+        .unwrap();
+    let stable = list.overlay_generation();
+
+    list.insert_overlay(overlay);
+    assert_eq!(
+        list.overlay_generation(),
+        stable,
+        "re-attaching an already-attached overlay must not bump generation"
+    );
+
+    let unattached = alloc_overlay(30, 40);
+    assert!(!list.detach_overlay(unattached));
+    assert_eq!(
+        list.overlay_generation(),
+        stable,
+        "detaching an unattached overlay must not bump generation"
+    );
+
+    list.move_overlay_to_emacs_byte_range(overlay, emacs_byte_range(10, 20));
+    assert_eq!(
+        list.overlay_generation(),
+        stable,
+        "moving an overlay to its unchanged range must not bump generation"
+    );
+
+    list.overlay_put(overlay, Value::symbol("face"), Value::symbol("bold"))
+        .unwrap();
+    assert_eq!(
+        list.overlay_generation(),
+        stable,
+        "putting the same eq value for an existing property must not bump generation"
+    );
+
+    list.retarget_buffer(BufferId(99), BufferId(100));
+    assert_eq!(
+        list.overlay_generation(),
+        stable,
+        "standalone retarget_buffer with no matching overlays must not bump generation"
+    );
+
+    list.adjust_for_text_edit(OverlayTextEdit::Insert {
+        position: emacs_byte_pos(15),
+        length: emacs_byte_len(0),
+        before_markers: false,
+    });
+    list.adjust_for_text_edit(OverlayTextEdit::Delete {
+        range: emacs_byte_range(15, 15),
+    });
+    assert_eq!(
+        list.overlay_generation(),
+        stable,
+        "zero-length text edits must not bump generation"
+    );
+}
+
+#[test]
+fn mirrored_plist_write_advances_snapshot_generation() {
+    crate::test_utils::init_test_tracing();
+    let (mut list, overlay) = fresh();
+    let (gen_before, ptr_before) = {
+        let snap_before = list.snapshot();
+        (
+            snap_before.overlay_generation(),
+            &*snap_before as *const OverlayList,
+        )
+    };
+    list.overlay_put(overlay, Value::symbol("face"), Value::symbol("bold"))
+        .unwrap();
+    let snap_after = list.snapshot();
+    assert_eq!(
+        &*snap_after as *const OverlayList, ptr_before,
+        "overlay_put should reuse and mirror into the cached snapshot"
+    );
+    assert_bumped(
+        gen_before,
+        snap_after.overlay_generation(),
+        "mirrored plist write on cached snapshot",
+    );
+}
+
+#[test]
+fn buffer_swap_text_advances_generation_for_empty_overlay_list() {
+    crate::test_utils::init_test_tracing();
+    let mut manager = crate::buffer::BufferManager::new();
+    let empty_id = manager.create_buffer("*p4-m2-empty*");
+    let non_empty_id = manager.create_buffer("*p4-m2-nonempty*");
+    manager.insert_into_buffer(empty_id, "hello world").unwrap();
+    manager
+        .insert_into_buffer(non_empty_id, "hello world")
+        .unwrap();
+    let ov = Value::make_overlay(neovm_value::heap_types::OverlayDataInit {
+        serial: neovm_value::heap_types::OverlaySerialSource::Mint,
+        plist: Value::NIL,
+        buffer: Some(non_empty_id),
+        start: 1,
+        end: 5,
+        front_advance: false,
+        rear_advance: false,
+    });
+    manager
+        .get_mut(non_empty_id)
+        .unwrap()
+        .overlays
+        .insert_overlay(ov);
+
+    let empty_gen_before = manager.get(empty_id).unwrap().overlays.overlay_generation();
+    let non_empty_gen_before = manager
+        .get(non_empty_id)
+        .unwrap()
+        .overlays
+        .overlay_generation();
+
+    manager.swap_buffer_text(empty_id, non_empty_id).unwrap();
+
+    // After the swap, empty_id's old empty OverlayList now lives in non_empty_id,
+    // and non_empty_id's old list now lives in empty_id. Both cores must advance
+    // unconditionally so a live view captured for the previously empty buffer
+    // goes stale.
+    let moved_empty_gen = manager
+        .get(non_empty_id)
+        .unwrap()
+        .overlays
+        .overlay_generation();
+    let moved_non_empty_gen = manager.get(empty_id).unwrap().overlays.overlay_generation();
+    assert_bumped(
+        empty_gen_before,
+        moved_empty_gen,
+        "M2: buffer-swap-text on empty overlay list",
+    );
+    assert_bumped(
+        non_empty_gen_before,
+        moved_non_empty_gen,
+        "M2: buffer-swap-text on non-empty overlay list",
+    );
+}

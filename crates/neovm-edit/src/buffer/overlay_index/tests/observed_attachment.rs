@@ -75,9 +75,16 @@ fn attachment_publishes_handle_before_observed_property_reads() {
         assert!(reads.unchanged(), "attachment invalidated its own reads");
         assert_owner_observed(&reads, overlay);
         assert_attachment(&index, overlay, 2, 8);
-        assert_eq!(index.direct_property_keys.get(&face.bits()), Some(&2));
         assert_eq!(
-            index.direct_property_keys.get(&before_string.bits()),
+            index.core.read().direct_property_keys.get(&face.bits()),
+            Some(&2)
+        );
+        assert_eq!(
+            index
+                .core
+                .read()
+                .direct_property_keys
+                .get(&before_string.bits()),
             Some(&1)
         );
         assert!(index.may_contain_property(face));
@@ -120,9 +127,16 @@ fn batch_attachment_publishes_handles_before_observed_property_reads() {
         assert_owner_observed(&reads, second);
         assert_attachment(&index, first, 2, 8);
         assert_attachment(&index, second, 4, 6);
-        assert_eq!(index.direct_property_keys.get(&face.bits()), Some(&4));
         assert_eq!(
-            index.direct_property_keys.get(&before_string.bits()),
+            index.core.read().direct_property_keys.get(&face.bits()),
+            Some(&4)
+        );
+        assert_eq!(
+            index
+                .core
+                .read()
+                .direct_property_keys
+                .get(&before_string.bits()),
             Some(&2)
         );
         assert!(index.may_contain_property(face));
