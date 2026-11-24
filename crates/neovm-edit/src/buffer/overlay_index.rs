@@ -629,6 +629,8 @@ impl OverlayIndex {
     }
 
     /// Monotonic stamp of index writes. A no-op remap does not advance it.
+    /// Nothing reads it before the live overlay view (memo P4); tests do.
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn generation(&self) -> u64 {
         self.core.read().generation
     }
@@ -667,6 +669,7 @@ impl OverlayIndex {
         unsafe { &*ptr }
     }
 
+    #[cfg(test)]
     fn published_endpoints(&self) -> Option<&EndpointBPlusTree> {
         let core = self.core.read();
         let ptr = core

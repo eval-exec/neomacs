@@ -1422,6 +1422,7 @@ impl OverlayList {
 
     /// Generation of the live overlay index. Writes advance it; a no-op
     /// remap does not.
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn overlay_generation(&self) -> u64 {
         self.index.generation()
