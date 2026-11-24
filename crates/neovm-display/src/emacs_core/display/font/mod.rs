@@ -4561,9 +4561,7 @@ fn realized_font_object_key(matched: &neovm_eval::emacs_core::eval::ResolvedFont
     let font = &matched.font;
     format!(
         "{}@{}:{}",
-        font.resolved.identity.stable_key,
-        font.metrics.pixel_size,
-        font.resolved.family
+        font.resolved.identity.stable_key, font.metrics.pixel_size, font.resolved.family
     )
 }
 

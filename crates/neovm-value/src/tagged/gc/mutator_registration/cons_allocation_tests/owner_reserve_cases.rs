@@ -939,7 +939,7 @@ pub(super) fn owner_cons_reserve_ordinary_gc_refuses_a_live_lease<K, W>(
                 }
             }
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                heap.collect(std::iter::once(handed));
+                heap.collect_rooted(std::iter::once(handed));
             }));
             match outcome {
                 Err(payload) => {
