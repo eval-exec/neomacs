@@ -915,6 +915,27 @@ impl FrameRoots for InterpFrame {
     }
 }
 
+/// The owner-local exit flags of a VM frame (V4). `DEBUG_ON_EXIT` is GNU's
+/// `backtrace_debug_on_exit` on the frame's backtrace entry (bytecode.c:900):
+/// set, `Breturn` runs the debugger with `(exit val)` before the frame
+/// leaves (:900-901). Owner-local state; the backtrace adapter sets it on a
+/// stopped owner (V6), the harness arms it on the entry frame.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ExitFlags(u8);
+
+impl ExitFlags {
+    pub(crate) const EMPTY: Self = Self(0);
+    pub(crate) const DEBUG_ON_EXIT: Self = Self(1 << 0);
+
+    pub(crate) const fn contains(self, flag: Self) -> bool {
+        self.0 & flag.0 != 0
+    }
+
+    pub(crate) const fn set(self, flag: Self) -> Self {
+        Self(self.0 | flag.0)
+    }
+}
+
 /// The parallel VM's owned frame. The operand segment lives in the arena's
 /// operand stack; the arena publishes it in the same group.
 #[derive(Clone, Copy, Debug)]
@@ -926,6 +947,7 @@ pub(crate) struct VmFrame {
     pub(crate) bind_base: OwnerRecordMark,
     pub(crate) handler_base: HandlerMark,
     pub(crate) poll_budget: PollBudget,
+    pub(crate) exit_flags: ExitFlags,
 }
 
 impl VmFrame {
@@ -947,7 +969,17 @@ impl VmFrame {
             bind_base,
             handler_base,
             poll_budget,
+            exit_flags: ExitFlags::EMPTY,
         }
+    }
+
+    /// Add `flags` to the frame's exit flags (V4). A builder, so the
+    /// constructors in other lanes' files are untouched; the exhaustive
+    /// destructure below is what a missed field breaks.
+    #[doc(hidden)]
+    pub const fn with_exit_flags(mut self, flags: ExitFlags) -> Self {
+        self.exit_flags = self.exit_flags.set(flags);
+        self
     }
 }
 
@@ -963,6 +995,7 @@ impl FrameRoots for VmFrame {
             bind_base: _,
             handler_base: _,
             poll_budget: _,
+            exit_flags: _,
         } = self;
         visit(RootGroup::VmFrames, *function);
         visit(RootGroup::VmFrames, *code);

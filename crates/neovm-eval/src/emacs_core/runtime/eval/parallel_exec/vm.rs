@@ -36,15 +36,16 @@ use super::effective::{
 };
 use super::engine::{CoreOutcome, EngineFault, RecordStack};
 use super::frames::{
-    FrameArena, FrameId, HandlerMark, OperandCursor, OwnerRecord, OwnerRecordMark, Pc, PollBudget,
-    RootGroup, RootHandle, RootRevokeError, SerialHandlerToken, SerialRecordToken, VmFrame,
+    ExitFlags, FrameArena, FrameId, HandlerMark, OperandCursor, OwnerRecord, OwnerRecordMark, Pc,
+    PollBudget, RootGroup, RootHandle, RootRevokeError, SerialHandlerToken, SerialRecordToken,
+    VmFrame,
 };
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::bytecode::arith_kind::ArithGenericKind;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::poll::PollOutcome;
 use crate::emacs_core::subr::effect_schema::{
-    ArithOperands, ParallelArm, PlainVarAccess, SealedAuthority, WorldSplit,
+    ArithOperands, ParallelArm, PlainVarAccess, ReturnDisposition, SealedAuthority, WorldSplit,
 };
 use neovm_value::error::{Flow, signal};
 use neovm_value::intern::{NIL_SYM_ID, SymId};
@@ -443,6 +444,9 @@ pub(crate) struct VmExec<'era, E, S, A, V, P> {
     poll: P,
     frame: Option<FrameId>,
     state: RunState,
+    /// The exit flags the next run's bottom frame carries (V4). The
+    /// harness arms them; V6's backtrace adapter sets a stopped owner's.
+    entry_exit_flags: ExitFlags,
     /// The Plain keys this stepper admitted, one per symbol (V2; N1 picks
     /// the production structure). A key survives runs; its validity is
     /// checked at use against the port's generation.
@@ -488,6 +492,12 @@ where
     P: VmPoll,
 {
     /// `era` is the borrow the admitted keys live in (see the field).
+    /// Add `flags` to the exit flags the next run's bottom frame carries
+    /// (V4 rows; V6's adapter sets a stopped owner's frame instead).
+    pub(crate) fn set_entry_exit_flags(&mut self, flags: ExitFlags) {
+        self.entry_exit_flags = self.entry_exit_flags.set(flags);
+    }
+
     pub(crate) fn new(era: &'era (), escape: E, sealed: S, arith: A, plain: V, poll: P) -> Self {
         Self {
             arena: FrameArena::new(FRAME_DEPTH_LIMIT),
@@ -498,6 +508,7 @@ where
             poll,
             frame: None,
             state: RunState::Idle,
+            entry_exit_flags: ExitFlags::EMPTY,
             keys: Vec::new(),
             era,
         }
@@ -573,6 +584,7 @@ where
         if !matches!(self.state, RunState::Idle) {
             return VmOutcome::Fault(EngineFault::Busy);
         }
+        let entry_exit_flags = self.entry_exit_flags;
         let frame = VmFrame::new(
             program.function,
             program.code,
@@ -581,7 +593,8 @@ where
             OwnerRecordMark::EMPTY,
             HandlerMark::EMPTY,
             PollBudget::new(NonZeroU32::MIN),
-        );
+        )
+        .with_exit_flags(entry_exit_flags);
         let id = match self.arena.push_vm(frame) {
             Ok(id) => id,
             Err(error) => return VmOutcome::Fault(EngineFault::Frame(error)),
@@ -626,6 +639,16 @@ where
     /// Drop the frame, its operands, every record and every root this run
     /// pushed. A refused pop or truncate sets `Poisoned` and leaves the
     /// leftover in place. `Idle` is set only after every step succeeded.
+    ///
+    /// N-v2-idle-slab-undo: an owner binding record names a slab record that
+    /// roots its value, so dropping the entry alone leaks it (GNU `unbind_to`
+    /// undoes each record as it leaves, eval.c:3940-3954). Each is undone
+    /// innermost first through the unbind-time re-validation. A serial marker
+    /// is the serial side's, whose own records a signal's unwind already
+    /// removed (the `Flow` arm applied no deltas): the marker is dropped. A
+    /// record the re-validation refuses needs the serial side, which the
+    /// idle unwind cannot reach (V8 runs it with Lisp): `Poisoned`, the scene
+    /// kept.
     fn unwind_to_idle(&mut self) -> Result<(), EngineFault> {
         if let Some(id) = self.frame.take() {
             let _ = self.arena.vm_truncate_operands(id, 0);
@@ -636,6 +659,28 @@ where
         }
         // truncate(EMPTY) is correct only because VmExec owns its FrameArena exclusively.
         self.arena.handlers_mut().truncate(HandlerMark::EMPTY);
+        while let Some(top) = self.arena.bindings().above(OwnerRecordMark::EMPTY).last() {
+            match top {
+                OwnerRecord::Plain(record) => {
+                    match effective_plain_unbind_checked(&mut self.plain, record) {
+                        Ok(PlainUnbind::Done) => {
+                            self.arena.bindings_mut().pop();
+                        }
+                        Ok(PlainUnbind::NeedsSerial { .. }) | Err(_) => {
+                            tracing::error!(
+                                record = ?record,
+                                "the idle unwind met an owner record the serial side must undo"
+                            );
+                            self.state = RunState::Poisoned;
+                            return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
+                        }
+                    }
+                }
+                OwnerRecord::Serial(_) => {
+                    self.arena.bindings_mut().pop();
+                }
+            }
+        }
         self.arena.bindings_mut().truncate(OwnerRecordMark::EMPTY);
         if let Err(error) = self.arena.roots_mut().truncate(0) {
             self.state = RunState::Poisoned;
@@ -672,6 +717,9 @@ where
             }
             ParallelArm::World(WorldSplit::PlainVar(access)) => {
                 self.step_plain(access, op, frame, operands, branch_pc, program)
+            }
+            ParallelArm::World(WorldSplit::Return(_)) => {
+                self.step_return(op, frame, operands, branch_pc, program)
             }
             ParallelArm::World(split) => self.escape(
                 op,
@@ -1538,12 +1586,160 @@ where
         }
     }
 
-    /// The `Return` escape completed (r1 §5, V1 stand-in): pop the frame and
-    /// publish its value. V4 replaces this with the typed disposition.
+    /// The disposition of a `Return` in `frame` (design §5): the serial
+    /// cleanup when GNU would run it, else the owner-local unwind. GNU's
+    /// `Breturn` (bytecode.c:892-926) runs the debugger when the frame's
+    /// backtrace entry wants debug-on-exit (:900-901), and assumes the
+    /// frame's dynamic state is already gone: a frame that still owns a
+    /// serial record (R1c) or handler (R1d) must run it on return, through
+    /// the serial slow arm (E4-DESIGN :226-228). An owner binding whose
+    /// unbind-time re-validation refuses it needs the serial side too
+    /// (N-v2-unbind-revalidate). `None` for a stale frame.
+    fn return_disposition(&self, frame: FrameId) -> Option<ReturnDisposition> {
+        let vm = self.arena.vm(frame)?;
+        let needs_serial = vm.exit_flags.contains(ExitFlags::DEBUG_ON_EXIT)
+            || self.arena.bindings().has_serial_above(vm.bind_base)
+            || self.arena.handlers().has_serial_above(vm.handler_base)
+            || self.arena.bindings().above(vm.bind_base).any(|record| {
+                matches!(record, OwnerRecord::Plain(entry)
+                    if self.plain.unbind_needs_serial(entry.symbol))
+            });
+        Some(if needs_serial {
+            ReturnDisposition::NeedsSerialCleanup
+        } else {
+            ReturnDisposition::OwnerLocal
+        })
+    }
+
+    /// `Return` (V4): `val` is the frame's top operand (GNU `Breturn`,
+    /// bytecode.c:897); a frame with none is malformed code. The disposition
+    /// decides the arm.
+    fn step_return(
+        &mut self,
+        op: Op,
+        frame: FrameId,
+        operands: OperandCursor,
+        branch_pc: usize,
+        program: VmProgram<'_>,
+    ) -> Step {
+        let Some(value) = self.arena.operand_segment(operands).last().copied() else {
+            return invalid();
+        };
+        match self.return_disposition(frame) {
+            None => Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame)),
+            Some(ReturnDisposition::OwnerLocal) => self.return_owner_local(frame, value),
+            Some(ReturnDisposition::NeedsSerialCleanup) => self.escape(
+                op,
+                EscapeWhy::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup)),
+                frame,
+                operands,
+                branch_pc,
+                program,
+            ),
+        }
+    }
+
+    /// The owner-local `Return` (design §5): the frame's owner arena state
+    /// goes with it - handlers to `handler_base`, the owner binding records
+    /// undone innermost-first through the unbind-time re-validation, the
+    /// operand segment dropped, the frame popped (`CallDepth::leave`) - and
+    /// the value goes to the owner entry: the bottom frame's `exit`
+    /// (bytecode.c:925-926). On compiled code every truncation is a no-op;
+    /// on malformed code it is the leak guard.
+    fn return_owner_local(&mut self, frame: FrameId, value: Value) -> Step {
+        let Some((bind_base, handler_base)) = self
+            .arena
+            .vm(frame)
+            .map(|vm| (vm.bind_base, vm.handler_base))
+        else {
+            return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
+        };
+        self.arena.handlers_mut().truncate(handler_base);
+        if let Err(fault) = self.unwind_owner_records_above(bind_base, false) {
+            return Step::Stop(VmOutcome::Fault(fault));
+        }
+        self.exit_frame_with(frame, value)
+    }
+
+    /// Undo every owner binding record above `bind_base`, innermost first,
+    /// through the unbind-time re-validation (GNU `unbind_to`,
+    /// eval.c:3940-3954: each record undone as it leaves). A serial record
+    /// above the base is not the owner's to touch: a caller that finds one
+    /// mis-decided its disposition. A record the re-validation refuses needs
+    /// the serial side, which a `Return` unwind reaches only through the
+    /// disposition that sent it there. Both are the record-contract fault,
+    /// the scene kept.
+    ///
+    /// After the serial cleanup (`serial_cleanup_ran`) the serial side's
+    /// `unbind_to` has already undone the frame's owner records - that is
+    /// why the disposition sent the Return there - so an entry whose record
+    /// is gone from the slab is dropped, not restored again. Before any
+    /// escape a missing record is the broken pairing (C2): the fault.
+    fn unwind_owner_records_above(
+        &mut self,
+        bind_base: OwnerRecordMark,
+        serial_cleanup_ran: bool,
+    ) -> Result<(), EngineFault> {
+        while let Some(top) = self.arena.bindings().above(bind_base).last() {
+            match top {
+                OwnerRecord::Plain(record)
+                    if serial_cleanup_ran && !self.plain.record_live(record.record) =>
+                {
+                    self.arena.bindings_mut().pop();
+                }
+                OwnerRecord::Plain(record) => {
+                    match effective_plain_unbind_checked(&mut self.plain, record) {
+                        Ok(PlainUnbind::Done) => {
+                            self.arena.bindings_mut().pop();
+                        }
+                        Ok(PlainUnbind::NeedsSerial { .. }) | Err(_) => {
+                            tracing::error!(
+                                record = ?record,
+                                "a Return unwind met an owner record the serial side must undo"
+                            );
+                            return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
+                        }
+                    }
+                }
+                OwnerRecord::Serial(token) => {
+                    tracing::error!(
+                        token = token.0,
+                        "a Return unwind met a serial record above the frame's base"
+                    );
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The `Return` escape completed (§5, the `NeedsSerialCleanup` arm): the
+    /// serial turn ran the slow arm and its deltas removed the frame's serial
+    /// records and handlers; the value the completion carries is the frame's
+    /// result (the debugger may have replaced it, bytecode.c:900-901). The
+    /// owner's own records above `bind_base` are still ours to undo; then the
+    /// frame leaves as in the owner-local arm.
     fn return_from_frame(&mut self, frame: FrameId, produced: Vec<Value>) -> Step {
         let Some(value) = produced.first().copied() else {
             return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(Op::Return)));
         };
+        let Some((bind_base, handler_base)) = self
+            .arena
+            .vm(frame)
+            .map(|vm| (vm.bind_base, vm.handler_base))
+        else {
+            return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
+        };
+        self.arena.handlers_mut().truncate(handler_base);
+        if let Err(fault) = self.unwind_owner_records_above(bind_base, true) {
+            return Step::Stop(VmOutcome::Fault(fault));
+        }
+        self.exit_frame_with(frame, value)
+    }
+
+    /// The frame leaves with `value` for the owner entry: the segment
+    /// dropped, the frame popped, the run's `Done` root pushed.
+    fn exit_frame_with(&mut self, frame: FrameId, value: Value) -> Step {
         let _ = self.arena.vm_truncate_operands(frame, 0);
         if self.arena.pop(frame).is_none() {
             return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));

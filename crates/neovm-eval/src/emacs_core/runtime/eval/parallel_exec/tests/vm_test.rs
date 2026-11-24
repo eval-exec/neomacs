@@ -12,9 +12,9 @@ use super::effective::{
 };
 use super::engine::{CoreOutcome, EngineFault, RecordStack, apply_one};
 use super::frames::{
-    BindStack, FrameArena, FrameId, HandlerKind, HandlerMark, HandlerRecord, HandlerStack,
-    InterpFrame, OperandCursor, OwnerHandler, OwnerRecord, OwnerRecordMark, Pc, PollBudget,
-    RootGroup, SerialHandlerToken, SerialRecordToken, SlotRecord,
+    BindStack, ExitFlags, FrameArena, FrameId, HandlerKind, HandlerMark, HandlerRecord,
+    HandlerStack, InterpFrame, OperandCursor, OwnerHandler, OwnerRecord, OwnerRecordMark, Pc,
+    PollBudget, RootGroup, SerialHandlerToken, SerialRecordToken, SlotRecord,
 };
 use super::vm::{
     ArithOps, ArithRefusal, EscapeCompletion, EscapeStack, EscapeWhy, HandlerDelta, RecordDelta,
@@ -31,7 +31,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::poll::PollOutcome;
 use crate::emacs_core::format_eval_result;
 use crate::emacs_core::subr::effect_schema::{
-    ArithOperands, ParallelArm, PlainVarAccess, SealedAuthority, WorldSplit,
+    ArithOperands, ParallelArm, PlainVarAccess, ReturnDisposition, SealedAuthority, WorldSplit,
 };
 use crate::test_utils::unit_runtime;
 use neovm_edit::emacs_core::marker::make_marker_value;
@@ -171,6 +171,10 @@ struct RecordingEscape {
     /// record onto the owner's slab that the executor's LIFO never hears of
     /// (an `unbind` exchange gone wrong): the O3 row's scene.
     pushes_foreign_record: bool,
+    /// Whether the serial side, on its first non-hand-off escape, takes the
+    /// slab's top record off the executor's feet (an `unbind` exchange gone
+    /// wrong): the "record is gone" scene of the not-the-top row.
+    takes_top_record_on_escape: bool,
     /// Where each request is logged, when a row shares the log.
     log: Option<EffectLog>,
 }
@@ -185,6 +189,7 @@ impl RecordingEscape {
             mirror_return: false,
             handoff_undoes: true,
             pushes_foreign_record: false,
+            takes_top_record_on_escape: false,
             log: None,
         }
     }
@@ -207,6 +212,13 @@ impl RecordingEscape {
     /// first non-hand-off escape.
     fn pushing_foreign_record(mut self) -> Self {
         self.pushes_foreign_record = true;
+        self
+    }
+
+    /// The serial side takes the slab's top record, once, on its first
+    /// non-hand-off escape, without restoring anything.
+    fn taking_the_record(mut self) -> Self {
+        self.takes_top_record_on_escape = true;
         self
     }
 
@@ -281,12 +293,26 @@ impl VmEscape for RecordingEscape {
         // script says whether it signaled - then the outer value is stored
         // (`set_internal`, data.c:1697-1708 then :1720). A signal skips the store; the
         // inner value stays.
-        let mut taken = None;
+        let mut taken = Vec::new();
         if let EscapeWhy::PlainUnbind { record, .. } = &request.why {
             if self.handoff_undoes {
                 // A take the slab refuses (the record is not its top) leaves
                 // the record live; the walk's post-escape check decides.
-                taken = plain.pop_binding(*record);
+                taken.extend(plain.pop_binding(*record));
+            }
+        } else if let EscapeWhy::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup)) =
+            &request.why
+        {
+            // The Return's serial cleanup is the slow arm's `unbind_to`: it
+            // undoes the frame's owner records too (the disposition sent the
+            // Return here for exactly that), take then store.
+            if self.handoff_undoes {
+                while let Some(top) = plain.top_record() {
+                    match plain.pop_binding(top) {
+                        Some(record) => taken.push(record),
+                        None => break,
+                    }
+                }
             }
         } else if self.pushes_foreign_record {
             self.pushes_foreign_record = false;
@@ -296,6 +322,11 @@ impl VmEscape for RecordingEscape {
                 Channel::Default,
                 UndoTarget::Retired,
             );
+        } else if self.takes_top_record_on_escape {
+            self.takes_top_record_on_escape = false;
+            if let Some(top) = plain.top_record() {
+                plain.pop_binding(top);
+            }
         }
         self.segments.push(segment);
         self.lifos.push(lifos(arena));
@@ -313,9 +344,9 @@ impl VmEscape for RecordingEscape {
                 }
                 EscapeCompletion::fall_through(&request.op)
             });
-        if let Some(taken) = taken {
-            if !matches!(completion.stack, EscapeStack::Flow(_)) {
-                restore_taken_binding(plain, taken);
+        if !matches!(completion.stack, EscapeStack::Flow(_)) {
+            for record in taken {
+                restore_taken_binding(plain, record);
             }
         }
         completion
@@ -634,6 +665,9 @@ struct HarnessPlain {
     /// live, the projection was retired, or the channel died. Read at unbind
     /// time through `unbind_needs_serial`.
     watched: HashSet<SymId>,
+    /// The symbols made local or aliased while the binding was live (C4's
+    /// redirect half): the serial unbind's `set_default_internal` path.
+    redirected: HashSet<SymId>,
     log: Option<EffectLog>,
 }
 
@@ -651,6 +685,7 @@ impl HarnessPlain {
             slot_writes: 0,
             canonical_writes: 0,
             watched: HashSet::new(),
+            redirected: HashSet::new(),
             log: None,
         }
     }
@@ -659,6 +694,12 @@ impl HarnessPlain {
     /// side's `add-variable-watch`, run from an escape inside the `let`.
     fn watched(mut self, sym: SymId) -> Self {
         self.watched.insert(sym);
+        self
+    }
+
+    /// The variable was made local, or aliased, while its binding was live.
+    fn redirected(mut self, sym: SymId) -> Self {
+        self.redirected.insert(sym);
         self
     }
 
@@ -789,7 +830,7 @@ impl PlainAccess for HarnessPlain {
     }
 
     fn unbind_needs_serial(&self, sym: SymId) -> bool {
-        self.watched.contains(&sym)
+        self.watched.contains(&sym) || self.redirected.contains(&sym)
     }
 
     fn record_live(&self, id: OwnerRecordId) -> bool {
@@ -1113,14 +1154,19 @@ fn vm_scalar_opcodes_run_owner_locally_without_a_poll() {
         ops.push(Op::Return);
         let mut engine = harness();
         let outcome = engine.run(&mut ctx, program(&ops));
-        assert_eq!(done_value(&mut engine, outcome), Value::NIL, "{name}");
+        // V4: `Return` is owner-local and takes the top operand (GNU
+        // `Breturn`, `val = TOP`, bytecode.c:897); no escape, no poll.
+        let top = expected.last().copied().expect("a segment");
+        assert_eq!(
+            done_value(&mut engine, outcome),
+            top,
+            "{name}: the top operand"
+        );
         let escape = engine.escape_handler();
-        assert_eq!(escape.requests.len(), 1, "{name}: escapes");
-        assert_eq!(escape.requests[0].op, Op::Return, "{name}");
-        assert_eq!(escape.segments[0], expected, "{name}: segment at Return");
+        assert_eq!(escape.requests.len(), 0, "{name}: escapes");
         assert_eq!(
             engine.poll_handler().edges,
-            vec![PollEdge::SerialRequest],
+            Vec::<PollEdge>::new(),
             "{name}: edges"
         );
         assert_clear(&engine);
@@ -1147,11 +1193,9 @@ fn vm_scalar_loop_polls_only_at_the_back_edge() {
     let outcome = engine.run(&mut context(), program(&ops));
     assert_eq!(done_value(&mut engine, outcome), Value::NIL);
     let mut expected = vec![PollEdge::VmBackEdge; 4];
-    expected.push(PollEdge::SerialRequest);
     assert_eq!(engine.poll_handler().edges, expected);
     let escape = engine.escape_handler();
-    assert_eq!(escape.requests.len(), 1);
-    assert_eq!(escape.segments[0], vec![Value::NIL]);
+    assert_eq!(escape.requests.len(), 0, "Return is owner-local (V4)");
     assert_clear(&engine);
 }
 
@@ -1319,30 +1363,31 @@ fn vm_every_world_opcode_outside_the_arith_and_plain_classes_is_exactly_one_esca
         let ParallelArm::World(split) = opcode_slot(&op).arm else {
             continue;
         };
-        if matches!(split, WorldSplit::Arith(_) | WorldSplit::PlainVar(_)) {
+        if matches!(
+            split,
+            WorldSplit::Arith(_) | WorldSplit::PlainVar(_) | WorldSplit::Return(_)
+        ) {
+            // `Return` is typed since V4 (owner-local, or the serial cleanup
+            // escape): its rows are the vm_owner_local_return_* and
+            // vm_debug_on_exit_* ones.
             continue;
         }
         escaped += 1;
         let effect = static_stack_effect(&op);
-        let is_return = op == Op::Return;
         let mut ops = nils(effect.consumed as usize);
         ops.push(op.clone());
-        if !is_return {
-            // `Return` needs its own operand; an opcode that produces none
-            // gets one pushed for it.
-            if effect.produced == 0 {
-                ops.push(Op::Nil);
-            }
-            ops.push(Op::Return);
+        if effect.produced == 0 {
+            ops.push(Op::Nil);
         }
+        ops.push(Op::Return);
         let mut engine = harness();
         let outcome = engine.run(&mut ctx, program(&ops));
         assert_eq!(done_value(&mut engine, outcome), Value::NIL, "{name}");
         let escape = engine.escape_handler();
         assert_eq!(
             escape.requests.len(),
-            if is_return { 1 } else { 2 },
-            "{name}"
+            1,
+            "{name}: the opcode; Return is owner-local"
         );
         let request = &escape.requests[0];
         assert_eq!(request.op, op, "{name}");
@@ -1358,28 +1403,22 @@ fn vm_every_world_opcode_outside_the_arith_and_plain_classes_is_exactly_one_esca
             vec![Value::NIL; effect.consumed as usize],
             "{name}: segment at the escape"
         );
-        if is_return {
-            assert_eq!(
-                engine.poll_handler().edges,
-                vec![PollEdge::SerialRequest],
-                "{name}: edges"
-            );
-        } else {
-            let mut expected = Vec::new();
-            if is_call(&op) {
-                expected.push(PollEdge::VmCall);
-            }
-            expected.extend([PollEdge::SerialRequest, PollEdge::SerialRequest]);
-            assert_eq!(engine.poll_handler().edges, expected, "{name}: edges");
-            assert_eq!(
-                escape.segments[1],
-                vec![Value::NIL; effect.produced.max(1) as usize],
-                "{name}: segment at Return"
-            );
+        // The opcode's escape polls once; the Return behind it is
+        // owner-local (V4) and polls nothing.
+        let mut expected = Vec::new();
+        if is_call(&op) {
+            expected.push(PollEdge::VmCall);
         }
+        expected.push(PollEdge::SerialRequest);
+        assert_eq!(
+            engine.poll_handler().edges,
+            expected,
+            "{name}: edges; Return is owner-local"
+        );
         assert_clear(&engine);
     }
-    assert_eq!(escaped, 43, "escaped opcodes");
+    // 43 before V4; `Return` is typed now.
+    assert_eq!(escaped, 42, "escaped opcodes");
 }
 
 #[test]
@@ -1478,14 +1517,14 @@ fn vm_escape_result_is_in_the_published_segment_before_the_next_poll() {
         RecordingPoll::new(),
     );
     let outcome = engine.run(&mut ctx, program_with(&ops, &[cons]));
-    assert_eq!(done_value(&mut engine, outcome), Value::NIL);
+    // V4: the owner-local Return takes the top operand, `cons` after the loop.
+    assert_eq!(done_value(&mut engine, outcome), cons);
     let poll = engine.poll_handler();
     assert_eq!(
         poll.edges,
         vec![
             PollEdge::SerialRequest,
             PollEdge::VmBackEdge,
-            PollEdge::SerialRequest,
             PollEdge::SerialRequest
         ]
     );
@@ -1496,13 +1535,12 @@ fn vm_escape_result_is_in_the_published_segment_before_the_next_poll() {
         .expect("one back edge");
     assert_eq!(poll.segments[index], vec![cons]);
     let escape = engine.escape_handler();
-    assert_eq!(escape.requests.len(), 3);
+    assert_eq!(escape.requests.len(), 2);
     assert_eq!(
         escape.segments,
         vec![
             vec![cons, Value::NIL, Value::NIL],
-            vec![cons, cons, Value::NIL, Value::NIL],
-            vec![cons, cons]
+            vec![cons, cons, Value::NIL, Value::NIL]
         ]
     );
     assert_clear(&engine);
@@ -1599,7 +1637,7 @@ fn vm_poll_refusal_is_engine_fault_poll_and_restarts() {
     let cases: Vec<(&str, Vec<Op>, PollEdge)> = vec![
         (
             "serial request",
-            vec![Op::Nil, Op::Return],
+            vec![Op::Nil, Op::PushConditionCase(4), Op::Return],
             PollEdge::SerialRequest,
         ),
         (
@@ -1878,10 +1916,9 @@ fn vm_escape_completions_mirror_serial_records_and_handlers_in_lifo_order() {
             (vec![], vec![]),
             (vec![Some(1), Some(2)], vec![Some(10)]),
             (vec![Some(3)], vec![Some(10)]),
-            (vec![], vec![]),
         ]
     );
-    assert_eq!(escape.requests.len(), 4);
+    assert_eq!(escape.requests.len(), 3);
     assert_clear(&engine);
 }
 
@@ -2073,7 +2110,13 @@ fn vm_serial_markers_and_owner_binding_entries_publish_no_roots() {
 }
 
 #[test]
-fn vm_a_return_escape_ends_the_run_with_the_reported_value() {
+fn vm_owner_local_return_of_the_bottom_frame_exits_with_the_value() {
+    // V4: a `Return` with no serial state to run is owner-local. GNU
+    // `Breturn` (bytecode.c:892-926): `val = TOP` (:897); with no caller,
+    // `goto exit` (:925-926) with the value. No escape: the completion the
+    // script left for the Return is never taken, and the run's value is the
+    // operand, not a reported one. (V1-V3 escaped every `Return`; this row
+    // was that stand-in.)
     let constants = [Value::fixnum(42)];
     let ops = [Op::Constant(0), Op::Return];
     let script = vec![Some(completion(&Op::Return, vec![Value::fixnum(7)]))];
@@ -2090,12 +2133,361 @@ fn vm_a_return_escape_ends_the_run_with_the_reported_value() {
         VmOutcome::Done { pending } => pending,
         other => panic!("expected Done, got {other:?}"),
     };
-    assert_eq!(engine.escape_handler().segments[0], vec![Value::fixnum(42)]);
-    assert_eq!(engine.lookup_root(pending), Some(Value::fixnum(7)));
-    assert_eq!(engine.take(pending), Ok(Value::fixnum(7)));
+    assert_eq!(engine.escape_handler().requests.len(), 0, "no escape");
+    assert_eq!(engine.escape_handler().requests.is_empty(), true);
+    assert_eq!(engine.lookup_root(pending), Some(Value::fixnum(42)));
+    assert_eq!(engine.take(pending), Ok(Value::fixnum(42)));
     assert_clear(&engine);
     let outcome = engine.run(&mut context(), program(&[Op::Nil, Op::Return]));
     assert_eq!(done_value(&mut engine, outcome), Value::NIL);
+}
+
+#[test]
+fn vm_debug_on_exit_return_takes_the_serial_cleanup() {
+    // V4, the first trigger: GNU `Breturn` runs the debugger when the frame's
+    // backtrace entry wants debug-on-exit (bytecode.c:900-901), and the
+    // debugger may replace the value. The frame's DEBUG_ON_EXIT flag sends
+    // the Return through the ONE escape; the value the completion carries is
+    // the run's. The same program without the flag is the owner-local row.
+    let constants = [Value::fixnum(42)];
+    let ops = [Op::Constant(0), Op::Return];
+    let script = vec![Some(completion(&Op::Return, vec![Value::fixnum(7)]))];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    engine.set_entry_exit_flags(ExitFlags::DEBUG_ON_EXIT);
+    let outcome = engine.run(&mut context(), program_with(&ops, &constants));
+    let pending = match outcome {
+        VmOutcome::Done { pending } => pending,
+        other => panic!("expected Done, got {other:?}"),
+    };
+    let escape = engine.escape_handler();
+    assert_eq!(escape.requests.len(), 1);
+    assert_eq!(escape.requests[0].op, Op::Return);
+    assert!(
+        matches!(
+            escape.requests[0].why,
+            EscapeWhy::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup))
+        ),
+        "the escape names the serial cleanup"
+    );
+    assert_eq!(
+        engine.lookup_root(pending),
+        Some(Value::fixnum(7)),
+        "the debugger's value"
+    );
+    assert_eq!(engine.take(pending), Ok(Value::fixnum(7)));
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_owner_local_return_truncates_records_and_pops_the_frame() {
+    // V4, the owner-local unwind (design §5): a frame that still owns an
+    // owner binding record when it returns - malformed code, since the
+    // compiler emits the Unbind - has it undone innermost-first through the
+    // unbind-time re-validation on the way out, the frame is popped, and the
+    // run ends with the top operand. GNU's `Breturn` assumes the dynamic
+    // state is gone; the owner truncation is the leak guard. Before V4 the
+    // Return escape left the record live on the slab.
+    let mut ctx = context();
+    let x = plain_sym("pvm-return-truncates");
+    let (xs, one, two) = (Value::from_sym_id(x), Value::fixnum(1), Value::fixnum(2));
+    let ops = plain_program(vec![
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::Constant(2),
+        Op::Return,
+    ]);
+    let log = EffectLog::default();
+    let plain = HarnessPlain::new().admit(x).logging(log.clone());
+    let mut engine = harness_with_plain(RecordingEscape::logging(log.clone()), plain);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &vec![xs, one, two]));
+    assert_eq!(done_value(&mut engine, outcome), two);
+    assert_eq!(
+        log.entries(),
+        vec!["slot <- 1", "slot <- none"],
+        "the bind, then the unwind's restore; no escape"
+    );
+    assert_eq!(engine.escape_handler().requests.len(), 0);
+    assert!(
+        engine.plain_handler().live_records().is_empty(),
+        "no record survives the frame"
+    );
+    assert!(engine.frame_id().is_none(), "the frame is popped");
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_return_under_a_watched_owner_record_takes_the_serial_cleanup() {
+    // V4, the fourth trigger: a frame that still owns an owner binding the
+    // unbind-time re-validation refuses (its symbol gained a watcher inside
+    // the let) must undo it through the serial side on return, as GNU's
+    // `unbind_to` notifies the watcher: the serial cleanup escape. The
+    // double stands for the slow arm - it takes and restores the frame's
+    // records - and the post-escape unwind finds the record gone and drops
+    // the entry instead of restoring twice.
+    let mut ctx = context();
+    let x = plain_sym("pvm-watched-return");
+    let (xs, one, two) = (Value::from_sym_id(x), Value::fixnum(1), Value::fixnum(2));
+    let ops = plain_program(vec![
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::Constant(2),
+        Op::Return,
+    ]);
+    let log = EffectLog::default();
+    let plain = HarnessPlain::new().admit(x).watched(x).logging(log.clone());
+    let mut engine = harness_with_plain(
+        RecordingEscape::logging_with_script(
+            vec![Some(completion(&Op::Return, vec![two]))],
+            log.clone(),
+        ),
+        plain,
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &vec![xs, one, two]));
+    assert_eq!(done_value(&mut engine, outcome), two);
+    assert_eq!(
+        log.entries(),
+        vec!["slot <- 1", "escape Return", "slot <- none"],
+        "the serial cleanup took and restored the watched record; the owner restored nothing"
+    );
+    let escape = engine.escape_handler();
+    assert_eq!(escape.requests.len(), 1);
+    assert_eq!(escape.requests[0].op, Op::Return);
+    assert!(matches!(
+        escape.requests[0].why,
+        EscapeWhy::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup))
+    ));
+    assert!(
+        engine.plain_handler().live_records().is_empty(),
+        "no record survives; no double restore"
+    );
+    assert!(lifos(engine.arena()).0.is_empty());
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_return_under_a_serial_record_marker_takes_the_serial_cleanup() {
+    // V4, R1c: a frame that still owns a serial record (a save-excursion
+    // the compiler did not pop) must run it on return, through the serial
+    // slow arm: ONE escape with op Return, the completion's deltas name the
+    // marker, and no owner truncation happens before it (the marker is on
+    // the LIFO at the escape). The value is the top operand.
+    let mut ctx = context();
+    let ops = plain_program(vec![Op::Constant(0), Op::SaveExcursion, Op::Return]);
+    let mut engine = harness_with(RecordingEscape::with_script(vec![
+        Some(completion_pushing(&Op::SaveExcursion, token(9))),
+        Some(EscapeCompletion {
+            records: RecordDelta {
+                popped: vec![token(9)],
+                pushed: Vec::new(),
+            },
+            ..completion(&Op::Return, vec![Value::fixnum(1)])
+        }),
+    ]));
+    let outcome = engine.run(&mut ctx, program_with(&ops, &[Value::fixnum(1)]));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(1));
+    let escape = engine.escape_handler();
+    assert_eq!(escape.requests.len(), 2, "the save, then the Return");
+    assert_eq!(escape.requests[1].op, Op::Return);
+    assert_eq!(
+        escape.lifos[1].0,
+        vec![Some(9)],
+        "the serial marker is still there when the Return escapes: no owner truncation first"
+    );
+    assert!(
+        lifos(engine.arena()).0.is_empty(),
+        "the completion's delta removed it"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_return_under_a_serial_handler_marker_takes_the_serial_cleanup() {
+    // V4, R1d: the same for a serial handler the frame still owns (a
+    // condition-case the compiler did not pop): the handler marker above
+    // handler_base sends the Return through the serial cleanup, and the
+    // completion's delta removes the handler.
+    let mut ctx = context();
+    let ops = plain_program(vec![Op::Constant(0), Op::PushConditionCase(4), Op::Return]);
+    let mut engine = harness_with(RecordingEscape::with_script(vec![
+        Some(EscapeCompletion {
+            handlers: HandlerDelta {
+                popped: Vec::new(),
+                pushed: vec![handler(10)],
+            },
+            ..EscapeCompletion::fall_through(&Op::PushConditionCase(4))
+        }),
+        Some(EscapeCompletion {
+            handlers: HandlerDelta {
+                popped: vec![handler(10)],
+                pushed: Vec::new(),
+            },
+            ..completion(&Op::Return, vec![Value::fixnum(1)])
+        }),
+    ]));
+    let outcome = engine.run(&mut ctx, program_with(&ops, &[Value::fixnum(1)]));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(1));
+    let escape = engine.escape_handler();
+    assert_eq!(escape.requests.len(), 2, "the push, then the Return");
+    assert_eq!(escape.requests[1].op, Op::Return);
+    assert_eq!(
+        escape.lifos[1].1,
+        vec![Some(10)],
+        "the handler marker is still there when the Return escapes"
+    );
+    assert!(
+        lifos(engine.arena()).1.is_empty(),
+        "the completion's delta removed it"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_return_with_stale_keys_still_escapes_once() {
+    // V4: a stale cached Plain key (the era moved under a surviving key)
+    // costs nothing on a Return. Under a serial marker the Return is ONE
+    // escape - the serial cleanup - never one per stale key.
+    let mut ctx = context();
+    let x = plain_sym("pvm-stale-return");
+    let (xs, one) = (Value::from_sym_id(x), Value::fixnum(1));
+    let plain = HarnessPlain::new().admit(x).with_canonical(x, one);
+    // One script for both runs, consumed by escape index: run 1 escapes
+    // nothing (the Return is owner-local), so run 2 takes both entries.
+    let mut engine = harness_with_plain(
+        RecordingEscape::with_script(vec![
+            Some(completion_pushing(&Op::SaveExcursion, token(9))),
+            Some(EscapeCompletion {
+                records: RecordDelta {
+                    popped: vec![token(9)],
+                    pushed: Vec::new(),
+                },
+                ..completion(&Op::Return, vec![one])
+            }),
+        ]),
+        plain,
+    );
+    // Run 1 mints the key.
+    let read = plain_program(vec![Op::VarRef(0)]);
+    let outcome = engine.run(&mut ctx, program_with(&read, &vec![xs]));
+    done_value(&mut engine, outcome);
+    assert_clear(&engine);
+    // The era moves: the key is stale.
+    engine.plain_handler_mut().next_era();
+    // Run 2 returns under a serial marker.
+    let ops = plain_program(vec![Op::Constant(0), Op::SaveExcursion, Op::Return]);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &vec![one]));
+    assert_eq!(done_value(&mut engine, outcome), one);
+    let escape = engine.escape_handler();
+    assert_eq!(escape.requests.len(), 2, "the save, then ONE Return escape");
+    assert_eq!(escape.requests[1].op, Op::Return);
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_idle_after_a_signal_inside_let_leaves_no_owner_binding() {
+    // N-v2-idle-slab-undo (peer #11957): a signal inside a `let` settles the
+    // run, and the idle unwind undoes the frame's binding - the record is
+    // gone from the slab and the slot restored - instead of dropping the
+    // executor's entry and leaking the record with its rooted value. GNU's
+    // `unbind_to` undoes each record as it leaves (eval.c:3940-3954).
+    let mut ctx = context();
+    let x = plain_sym("pvm-idle-undo");
+    let (xs, one) = (Value::from_sym_id(x), Value::fixnum(1));
+    let ops = plain_program(vec![
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::SaveExcursion,
+        Op::Nil,
+    ]);
+    let log = EffectLog::default();
+    let plain = HarnessPlain::new().admit(x).logging(log.clone());
+    let mut engine = harness_with_plain(
+        RecordingEscape::logging_with_script(
+            vec![Some(EscapeCompletion {
+                stack: EscapeStack::Flow(signal("error", vec![Value::string("boom")])),
+                records: RecordDelta::default(),
+                handlers: HandlerDelta::default(),
+            })],
+            log.clone(),
+        ),
+        plain,
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &vec![xs, one]));
+    assert!(matches!(outcome, VmOutcome::Signaled(_)), "{outcome:?}");
+    assert!(engine.is_idle(), "the run settled to Idle");
+    assert_eq!(
+        log.entries(),
+        vec!["slot <- 1", "escape SaveExcursion", "slot <- none"],
+        "the bind, the signal, then the idle unwind's restore"
+    );
+    assert!(
+        engine.plain_handler().live_records().is_empty(),
+        "no owner binding survives the signal"
+    );
+    assert!(lifos(engine.arena()).0.is_empty());
+}
+
+#[test]
+fn vm_unbind_after_a_make_local_inside_let_takes_the_serial_unbind() {
+    // C4's redirect half (peer #12980, lead #12991): GNU's `do_one_unbind`
+    // for a LET re-reads the redirect too (eval.c:3848-3870); a variable
+    // made local or aliased inside the let goes through
+    // `set_default_internal`, the serial path. Modelled like the watcher:
+    // the harness's `redirected` set is the serial side's make-local-variable,
+    // run from inside the let.
+    let mut ctx = context();
+    let x = plain_sym("pvm-redirected");
+    let (xs, one) = (Value::from_sym_id(x), Value::fixnum(1));
+    let ops = plain_program(vec![
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::SaveExcursion,
+        Op::Unbind(2),
+        Op::Nil,
+    ]);
+    let log = EffectLog::default();
+    let plain = HarnessPlain::new()
+        .admit(x)
+        .redirected(x)
+        .logging(log.clone());
+    let mut engine = harness_with_plain(
+        RecordingEscape::logging_with_script(
+            vec![
+                Some(completion_pushing(&Op::SaveExcursion, token(9))),
+                Some(completion_popping(&Op::Unbind(2), &[token(9)])),
+                Some(EscapeCompletion::fall_through(&Op::Unbind(2))),
+                None,
+            ],
+            log.clone(),
+        ),
+        plain,
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &vec![xs, one]));
+    assert_eq!(done_value(&mut engine, outcome), Value::NIL);
+    assert_eq!(
+        log.entries(),
+        vec![
+            "slot <- 1",
+            "escape SaveExcursion",
+            "escape Unbind(2) [9]",
+            "escape Unbind(2) [plain]",
+            "slot <- none",
+        ],
+        "the serial run leaves first; the redirected binding is handed to the serial unbind; the owner never restores it; Return is owner-local"
+    );
+    let escape = engine.escape_handler();
+    assert!(matches!(
+        escape.requests[2].why,
+        EscapeWhy::PlainUnbind { symbol, .. } if symbol == x
+    ));
+    assert!(engine.plain_handler().live_records().is_empty());
+    assert_clear(&engine);
 }
 
 #[test]
@@ -2125,7 +2517,8 @@ fn vm_sealed_cons_opcodes_run_owner_locally_through_the_port() {
     let mut ctx = context();
     let cons = Value::cons(Value::fixnum(1), Value::fixnum(2));
     let constants = [Value::fixnum(5), cons];
-    // (name, program without its Return, result at the Return escape)
+    // (name, program without its Return, its result: the top operand the
+    // owner-local Return takes since V4)
     let cases: Vec<(&str, Vec<Op>, Value)> = vec![
         (
             "cons+car",
@@ -2155,14 +2548,20 @@ fn vm_sealed_cons_opcodes_run_owner_locally_through_the_port() {
         ops.push(Op::Return);
         let mut engine = harness();
         let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
-        assert_eq!(done_value(&mut engine, outcome), Value::NIL, "{name}");
+        assert_eq!(
+            done_value(&mut engine, outcome),
+            result,
+            "{name}: the result"
+        );
         let escape = engine.escape_handler();
-        assert_eq!(escape.requests.len(), 1, "{name}: escapes");
-        assert_eq!(escape.requests[0].op, Op::Return, "{name}");
-        assert_eq!(escape.segments[0], vec![result], "{name}: result");
+        assert_eq!(
+            escape.requests.len(),
+            0,
+            "{name}: escapes; Return is owner-local (V4)"
+        );
         assert_eq!(
             engine.poll_handler().edges,
-            vec![PollEdge::SerialRequest],
+            Vec::<PollEdge>::new(),
             "{name}: edges"
         );
         assert_clear(&engine);
@@ -2512,18 +2911,20 @@ fn vm_fixnum_add_runs_owner_locally() {
     let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
     let done = done_value(&mut engine, outcome);
     let escape = engine.escape_handler();
-    assert_eq!(escape.requests.len(), 1, "only Return escapes");
-    assert_eq!(escape.requests[0].op, Op::Return);
     assert_eq!(
-        escape.segments[0],
-        vec![Value::fixnum(5)],
-        "the sum is published when Return escapes"
+        escape.requests.len(),
+        0,
+        "no escape: Return is owner-local (V4)"
     );
-    assert_eq!(done, Value::fixnum(5), "the frame returns the sum");
+    assert_eq!(
+        done,
+        Value::fixnum(5),
+        "the frame returns the sum: the top operand (V4)"
+    );
     assert_eq!(
         engine.poll_handler().edges,
-        vec![PollEdge::SerialRequest],
-        "Return's own request poll; the add took none"
+        Vec::<PollEdge>::new(),
+        "no poll: the add took none, and Return is owner-local (V4)"
     );
     assert_eq!(
         engine.arith_handler().calls,
@@ -2561,8 +2962,8 @@ fn vm_float_result_takes_an_owner_float_slot() {
     );
     assert_eq!(
         engine.escape_handler().requests.len(),
-        1,
-        "only Return escapes"
+        0,
+        "no escape: Return is owner-local (V4)"
     );
     assert_clear(&engine);
 
@@ -2598,7 +2999,11 @@ fn vm_a_marker_operand_escapes_through_the_one_stub() {
         let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
         assert_eq!(done_value(&mut engine, outcome), four, "{op:?}");
         let escape = engine.escape_handler();
-        assert_eq!(escape.requests.len(), 2, "{op:?}: the opcode, then Return");
+        assert_eq!(
+            escape.requests.len(),
+            1,
+            "{op:?}: the opcode; Return is owner-local (V4)"
+        );
         let request = &escape.requests[0];
         assert_eq!(request.op, op, "{op:?}");
         assert_eq!(
@@ -2613,8 +3018,8 @@ fn vm_a_marker_operand_escapes_through_the_one_stub() {
         );
         assert_eq!(
             engine.poll_handler().edges,
-            vec![PollEdge::SerialRequest, PollEdge::SerialRequest],
-            "{op:?}: no call poll, no back edge"
+            vec![PollEdge::SerialRequest],
+            "{op:?}: no call poll, no back edge; Return is owner-local"
         );
         assert_eq!(
             engine.arith_handler().calls.len(),
@@ -2919,17 +3324,16 @@ fn vm_varref_reads_the_owner_slot_without_a_poll() {
         "one slot read, one canonical read, one admission"
     );
     let escape = engine.escape_handler();
-    assert_eq!(escape.requests.len(), 1, "only Return escapes");
-    assert_eq!(escape.requests[0].op, Op::Return);
     assert_eq!(
-        escape.segments[0],
-        vec![five],
-        "the value is on the segment when Return escapes"
+        escape.requests.len(),
+        0,
+        "no escape: Return is owner-local (V4)"
     );
+    // V4: the value is the frame's, read by the owner-local Return; no poll.
     assert_eq!(
         engine.poll_handler().edges,
-        vec![PollEdge::SerialRequest],
-        "Return's own request poll; the read took none"
+        Vec::<PollEdge>::new(),
+        "no poll: the read took none, and Return is owner-local"
     );
     assert_clear(&engine);
 
@@ -2948,12 +3352,14 @@ fn vm_varref_reads_the_owner_slot_without_a_poll() {
     assert_eq!(done_value(&mut engine, outcome), seven);
     assert_eq!(
         engine.plain_handler().accesses(),
-        (3, 1, 0, 0, 1),
-        "the bind's slot read and write, the two reads; no canonical read"
+        // V4: the third write is the Return's unwind restoring the binding.
+        (3, 2, 0, 0, 1),
+        "the bind's slot read and write, the two reads, the Return's restore; no canonical read"
     );
-    assert_eq!(engine.escape_handler().segments[0], vec![seven, seven]);
-    assert_eq!(engine.poll_handler().edges, vec![PollEdge::SerialRequest]);
-    assert_finished_with_records(&engine, 1);
+    // V4: the two values were the frame's segment; the Return took the top
+    // and unwound the binding. No escape, no poll, nothing left.
+    assert_eq!(engine.poll_handler().edges, Vec::<PollEdge>::new());
+    assert_finished_with_records(&engine, 0);
 }
 
 #[test]
@@ -2979,8 +3385,12 @@ fn vm_varset_writes_the_owner_slot_without_a_poll() {
         (2, 0, 1, 1, 1),
         "two decision reads, one canonical read, one canonical write; the slot is never written"
     );
-    assert_eq!(engine.escape_handler().requests.len(), 1, "only Return");
-    assert_eq!(engine.poll_handler().edges, vec![PollEdge::SerialRequest]);
+    assert_eq!(
+        engine.escape_handler().requests.len(),
+        0,
+        "no escape: Return is owner-local (V4)"
+    );
+    assert_eq!(engine.poll_handler().edges, Vec::<PollEdge>::new());
     assert_clear(&engine);
 
     // An owner binding: the slot is replaced; the canonical store keeps 5.
@@ -2999,10 +3409,11 @@ fn vm_varset_writes_the_owner_slot_without_a_poll() {
     assert_eq!(engine.plain_handler().canonical.get(&x), Some(&five));
     assert_eq!(
         engine.plain_handler().accesses(),
-        (3, 2, 0, 0, 1),
-        "the bind and the set read and write the slot, the read-back reads it; no canonical access"
+        // V4: the third write is the Return's unwind restoring the binding.
+        (3, 3, 0, 0, 1),
+        "the bind and the set read and write the slot, the read-back reads it, the Return restores it; no canonical access"
     );
-    assert_finished_with_records(&engine, 1);
+    assert_finished_with_records(&engine, 0);
 }
 
 #[test]
@@ -3018,17 +3429,29 @@ fn vm_varbind_pushes_an_owner_binding_record_and_unbind_restores_the_slot() {
     let (one, two) = (Value::fixnum(1), Value::fixnum(2));
 
     // One let over nothing: the record undoes to "no owner binding".
+    // V4: no finished run leaves a record behind (the Return unwinds the
+    // frame's), so the record is inspected in a kept scene: an escape whose
+    // completion pops a token that is not on the LIFO is the record-contract
+    // fault, which poisons the run and keeps everything for inspection.
     let plain = HarnessPlain::new().admit(x);
-    let mut engine = value_harness(plain);
-    let constants = [Value::from_sym_id(x), one];
-    let ops = [Op::Constant(1), Op::VarBind(0), Op::Nil, Op::Return];
-    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
-    assert_eq!(done_value(&mut engine, outcome), Value::NIL);
-    assert_eq!(
-        engine.escape_handler().segments[0],
-        vec![Value::NIL],
-        "the bind consumed its operand"
+    let mut engine = harness_with_plain(
+        RecordingEscape::with_script(vec![Some(completion_popping(
+            &Op::SaveExcursion,
+            &[token(9)],
+        ))]),
+        plain,
     );
+    let constants = [Value::from_sym_id(x), one];
+    let ops = [Op::Constant(1), Op::VarBind(0), Op::SaveExcursion];
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert!(
+        matches!(
+            outcome,
+            VmOutcome::Fault(EngineFault::EscapeRecordContract(RecordStack::Bindings))
+        ),
+        "{outcome:?}"
+    );
+    assert!(!engine.is_idle(), "the scene is kept");
     let records: Vec<OwnerRecord> = engine
         .arena()
         .bindings()
@@ -3051,23 +3474,34 @@ fn vm_varbind_pushes_an_owner_binding_record_and_unbind_restores_the_slot() {
         "{:?}",
         stored.undo
     );
-    assert_finished_with_records(&engine, 1);
+    assert_eq!(engine.plain_handler().live_records().len(), 1);
 
     // A let over a let: the inner record saves the outer value, and it is
     // the slab's top above the outer record.
     let plain = HarnessPlain::new().admit(x);
-    let mut engine = value_harness(plain);
+    let mut engine = harness_with_plain(
+        RecordingEscape::with_script(vec![Some(completion_popping(
+            &Op::SaveExcursion,
+            &[token(9)],
+        ))]),
+        plain,
+    );
     let constants = [Value::from_sym_id(x), one, two];
     let ops = [
         Op::Constant(1),
         Op::VarBind(0),
         Op::Constant(2),
         Op::VarBind(0),
-        Op::Nil,
-        Op::Return,
+        Op::SaveExcursion,
     ];
     let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
-    assert_eq!(done_value(&mut engine, outcome), Value::NIL);
+    assert!(
+        matches!(
+            outcome,
+            VmOutcome::Fault(EngineFault::EscapeRecordContract(RecordStack::Bindings))
+        ),
+        "{outcome:?}"
+    );
     let records: Vec<OwnerRecord> = engine
         .arena()
         .bindings()
@@ -3097,7 +3531,7 @@ fn vm_varbind_pushes_an_owner_binding_record_and_unbind_restores_the_slot() {
         "{:?}",
         live[1].2
     );
-    assert_finished_with_records(&engine, 2);
+    assert!(!engine.is_idle(), "the scene is kept");
 
     // The unbind: the record leaves and the slot is back to no binding.
     let log = EffectLog::default();
@@ -3115,8 +3549,8 @@ fn vm_varbind_pushes_an_owner_binding_record_and_unbind_restores_the_slot() {
     assert_eq!(done_value(&mut engine, outcome), Value::NIL);
     assert_eq!(
         log.entries(),
-        vec!["slot <- 1", "slot <- none", "escape Return"],
-        "the bind's write, the unbind's restore, then Return"
+        vec!["slot <- 1", "slot <- none"],
+        "the bind's write, the unbind's restore; Return is owner-local"
     );
     assert_eq!(
         engine.plain_handler().accesses(),
@@ -3130,10 +3564,10 @@ fn vm_varbind_pushes_an_owner_binding_record_and_unbind_restores_the_slot() {
             .iter()
             .map(|request| request.op.clone())
             .collect::<Vec<_>>(),
-        vec![Op::Return],
-        "the owner unbind escapes nothing"
+        Vec::<Op>::new(),
+        "the owner unbind escapes nothing, and so does the Return (V4)"
     );
-    assert_eq!(engine.poll_handler().edges, vec![PollEdge::SerialRequest]);
+    assert_eq!(engine.poll_handler().edges, Vec::<PollEdge>::new());
     assert_clear(&engine);
 }
 
@@ -3177,7 +3611,9 @@ fn vm_a_void_binding_signals_void_variable_on_the_owner() {
             plain_program(vec![Op::Constant(1), Op::VarBind(0), Op::VarRef(0)]),
             vec![xs, unbound],
             HarnessPlain::new().admit(x).with_canonical(x, five),
-            (2, 1, 0, 0, 1),
+            // V4 (N-v2-idle-slab-undo): the signal settles the run, and the
+            // idle unwind undoes the frame's binding - the second slot write.
+            (2, 2, 0, 0, 1),
         ),
     ];
     for (name, ops, constants, plain, accesses) in cases {
@@ -3272,7 +3708,8 @@ fn vm_a_refused_key_escapes_once_with_zero_slot_access() {
             PlainVarAccess::Bind,
             PlainRefusal::NotPlain,
             Value::NIL,
-            1,
+            // The marker the serial let left is the Return's cleanup's to pop.
+            0,
         ),
         (
             "set, a constant symbol",
@@ -3295,16 +3732,24 @@ fn vm_a_refused_key_escapes_once_with_zero_slot_access() {
         // The opcode's pc is after the operands it consumes.
         let opcode_pc = before.len();
         let ops = plain_program([before, vec![op.clone()], after].concat());
+        // A refused bind's serial let leaves a marker; the Return under it is
+        // the serial cleanup, whose completion pops the marker (V4).
+        let cleans = matches!(op, Op::VarBind(_));
+        let mut script = vec![Some(completion)];
+        if cleans {
+            script.push(Some(completion_popping(&Op::Return, &[token(5)])));
+        }
         let plain = HarnessPlain::new().refuse(x, refusal);
-        let mut engine = harness_with_plain(
-            RecordingEscape::mirroring_with_script(vec![Some(completion), None]),
-            plain,
-        );
+        let mut engine = harness_with_plain(RecordingEscape::mirroring_with_script(script), plain);
         let constants = [xs, nine];
         let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
         assert_eq!(done_value(&mut engine, outcome), reported, "{name}");
         let escape = engine.escape_handler();
-        assert_eq!(escape.requests.len(), 2, "{name}: the access, then Return");
+        assert_eq!(
+            escape.requests.len(),
+            1 + usize::from(cleans),
+            "{name}: the access, plus the Return's cleanup when a marker is left"
+        );
         assert_eq!(escape.requests[0].op, op, "{name}");
         assert_eq!(
             escape.requests[0].why,
@@ -3324,7 +3769,7 @@ fn vm_a_refused_key_escapes_once_with_zero_slot_access() {
         assert!(engine.plain_handler().canonical.is_empty(), "{name}");
         assert_eq!(
             engine.poll_handler().edges,
-            vec![PollEdge::SerialRequest, PollEdge::SerialRequest],
+            vec![PollEdge::SerialRequest; 1 + usize::from(cleans)],
             "{name}: each escape's request poll"
         );
         assert_finished_with_records(&engine, left);
@@ -3360,8 +3805,9 @@ fn vm_a_stale_plain_key_escapes_once_and_reads_nothing_stale() {
     let (five, six) = (Value::fixnum(5), Value::fixnum(6));
     let plain = HarnessPlain::new().admit(x).with_canonical(x, five);
     let mut engine = harness_with_plain(
+        // Consumed by escape index: run 1 escapes nothing (V4), so run 2's
+        // refused read takes the first entry.
         RecordingEscape::mirroring_with_script(vec![
-            None,
             Some(completion(&Op::VarRef(0), vec![six])),
             None,
         ]),
@@ -3397,19 +3843,19 @@ fn vm_a_stale_plain_key_escapes_once_and_reads_nothing_stale() {
     let escape = engine.escape_handler();
     assert_eq!(
         escape.requests.len(),
-        3,
-        "Return, the re-derived read, Return"
+        1,
+        "the re-derived read alone; Return is owner-local in both runs"
     );
-    assert_eq!(escape.requests[1].op, Op::VarRef(0));
+    assert_eq!(escape.requests[0].op, Op::VarRef(0));
     assert_eq!(
-        escape.requests[1].why,
+        escape.requests[0].why,
         EscapeWhy::PlainRefused {
             access: PlainVarAccess::Ref,
             refusal: PlainRefusal::NotPlain,
         }
     );
     assert_eq!(
-        escape.segments[1],
+        escape.segments[0],
         Vec::<Value>::new(),
         "nothing was pushed before the escape"
     );
@@ -3446,8 +3892,8 @@ fn vm_a_stale_plain_key_that_is_still_plain_is_rederived_without_an_escape() {
             .iter()
             .map(|request| request.op.clone())
             .collect::<Vec<_>>(),
-        vec![Op::Return, Op::Return],
-        "no escape for the re-derivation"
+        Vec::<Op>::new(),
+        "no escape for the re-derivation, nor for the owner-local Return (V4)"
     );
     assert_clear(&engine);
 }
@@ -3493,7 +3939,11 @@ fn vm_a_constant_that_is_no_symbol_is_nil_to_the_admission() {
         let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
         assert_eq!(done_value(&mut engine, outcome), Value::NIL, "{name}");
         let escape = engine.escape_handler();
-        assert_eq!(escape.requests.len(), 2, "{name}");
+        assert_eq!(
+            escape.requests.len(),
+            1,
+            "{name}: the access; Return is owner-local (V4)"
+        );
         assert_eq!(
             escape.requests[0].why,
             EscapeWhy::PlainRefused {
@@ -3526,11 +3976,18 @@ fn vm_a_constant_that_is_no_symbol_is_nil_to_the_admission() {
     assert_eq!(done_value(&mut engine, outcome), seven);
     assert_eq!(
         engine.plain_handler().accesses(),
-        (2, 1, 0, 0, 1),
-        "the bind's slot read for its undo target and its write, the ref's slot read; one admission (the ref's key is cached)"
+        // V4: the signal settles the run and the idle unwind undoes the
+        // frame's binding - a second slot write.
+        (2, 2, 0, 0, 1),
+        "the bind's slot read for its undo target and its write, the ref's slot read, the idle unwind's restore; one admission (the ref's key is cached)"
     );
-    assert_eq!(engine.escape_handler().requests.len(), 1, "only Return");
-    assert_finished_with_records(&engine, 1);
+    assert_eq!(
+        engine.escape_handler().requests.len(),
+        0,
+        "no escape: Return is owner-local (V4)"
+    );
+    // V4: the Return unwound the frame's binding; nothing is left.
+    assert_finished_with_records(&engine, 0);
 }
 
 #[test]
@@ -3584,7 +4041,6 @@ fn vm_unbind_walks_mixed_records_in_lifo_order() {
                 "slot <- 1",
                 "escape Unbind(3) [9]",
                 "slot <- none",
-                "escape Return",
             ],
             vec![None, Some(9)],
         ),
@@ -3614,7 +4070,6 @@ fn vm_unbind_walks_mixed_records_in_lifo_order() {
                 "slot <- 1",
                 "escape Unbind(3) [7]",
                 "slot <- none",
-                "escape Return",
             ],
             vec![None, Some(7)],
         ),
@@ -3642,7 +4097,6 @@ fn vm_unbind_walks_mixed_records_in_lifo_order() {
                 "escape VarBind(1)",
                 "escape Unbind(2) [5]",
                 "slot <- none",
-                "escape Return",
             ],
             vec![None, Some(5)],
         ),
@@ -3662,8 +4116,8 @@ fn vm_unbind_walks_mixed_records_in_lifo_order() {
         let escape = engine.escape_handler();
         assert_eq!(
             escape.requests.len(),
-            3,
-            "{name}: the record, the Unbind, Return"
+            2,
+            "{name}: the record, the Unbind; Return is owner-local"
         );
         assert_eq!(escape.requests[1].op, ops[unbind_pc], "{name}");
         assert!(
@@ -3679,14 +4133,9 @@ fn vm_unbind_walks_mixed_records_in_lifo_order() {
             "{name}: the LIFO at the Unbind escape"
         );
         assert_eq!(
-            escape.lifos[2].0,
-            Vec::<Option<u64>>::new(),
-            "{name}: empty at Return"
-        );
-        assert_eq!(
             engine.poll_handler().edges,
-            vec![PollEdge::SerialRequest; 3],
-            "{name}: each escape's request poll"
+            vec![PollEdge::SerialRequest; 2],
+            "{name}: each escape's request poll; Return is owner-local"
         );
         assert_clear(&engine);
     }
@@ -3752,15 +4201,14 @@ fn vm_unbind_after_a_watcher_added_inside_let_takes_the_serial_unbind() {
             "escape Unbind(2) [9]",
             "escape Unbind(2) [plain]",
             "slot <- none",
-            "escape Return",
         ],
         "the serial run leaves first; the watched binding is handed to the serial unbind, which takes the record and restores the slot; the owner never restores it"
     );
     let escape = engine.escape_handler();
     assert_eq!(
         escape.requests.len(),
-        4,
-        "record, serial run, hand-off, Return"
+        3,
+        "record, serial run, hand-off; Return is owner-local (V4)"
     );
     assert!(
         matches!(
@@ -3775,11 +4223,6 @@ fn vm_unbind_after_a_watcher_added_inside_let_takes_the_serial_unbind() {
         escape.lifos[2].0,
         Vec::<Option<u64>>::new(),
         "the entry left before the escape (GNU's order)"
-    );
-    assert_eq!(
-        escape.lifos[3].0,
-        Vec::<Option<u64>>::new(),
-        "empty at Return"
     );
     // Post-state: the serial side took the slab record; the owner has none.
     assert!(
@@ -3885,15 +4328,14 @@ fn vm_unbind_walks_a_record_the_hand_off_pushes_in_addition_to_n() {
             "escape Unbind(2) [plain]",
             "slot <- none",
             "escape Unbind(2) [7]",
-            "escape Return",
         ],
         "the pushed record is walked after the hand-off, as an extra"
     );
     let escape = engine.escape_handler();
     assert_eq!(
         escape.requests.len(),
-        5,
-        "record, serial run, hand-off, the pushed run, Return"
+        4,
+        "record, serial run, hand-off, the pushed run; Return is owner-local"
     );
     assert!(
         matches!(
@@ -3912,11 +4354,6 @@ fn vm_unbind_walks_a_record_the_hand_off_pushes_in_addition_to_n() {
         escape.lifos[3].0,
         vec![Some(7)],
         "the pushed record is on the LIFO for its own run"
-    );
-    assert_eq!(
-        escape.lifos[4].0,
-        Vec::<Option<u64>>::new(),
-        "empty at Return"
     );
     assert!(engine.plain_handler().live_records().is_empty());
 }
@@ -3968,12 +4405,15 @@ fn vm_unbind_restores_an_unwatched_sibling_on_the_owner_and_hands_the_watched_on
             "slot <- 1",
             "escape Unbind(2) [plain]",
             "slot <- none",
-            "escape Return",
         ],
         "the unwatched sibling is restored on the owner first; the watched one is handed to the serial unbind"
     );
     let escape = engine.escape_handler();
-    assert_eq!(escape.requests.len(), 2, "the hand-off, Return");
+    assert_eq!(
+        escape.requests.len(),
+        1,
+        "the hand-off; Return is owner-local"
+    );
     assert!(
         matches!(
             escape.requests[0].why,
@@ -4033,12 +4473,15 @@ fn vm_unbind_of_nested_watched_bindings_hands_each_record_to_serial_innermost_fi
             "slot <- 1",
             "escape Unbind(2) [plain]",
             "slot <- none",
-            "escape Return",
         ],
         "innermost first: the inner record restores the outer value, the outer restores none"
     );
     let escape = engine.escape_handler();
-    assert_eq!(escape.requests.len(), 3, "two hand-offs, Return");
+    assert_eq!(
+        escape.requests.len(),
+        2,
+        "two hand-offs; Return is owner-local"
+    );
     let handed: Vec<OwnerRecordId> = escape
         .requests
         .iter()
@@ -4213,18 +4656,19 @@ fn vm_unbind_walks_a_record_a_serial_run_pushes_in_addition_to_n() {
             "escape Unbind(2) [1]",
             "escape Unbind(2) [5]",
             "slot <- none",
-            "escape Return",
         ],
         "S5 is walked after the run that pushed it, and y is restored on the owner"
     );
     let escape = engine.escape_handler();
-    assert_eq!(escape.requests.len(), 4, "record, [S1], [S5], Return");
     assert_eq!(
-        escape.lifos[3].0,
-        Vec::<Option<u64>>::new(),
-        "y's entry is gone by Return"
+        escape.requests.len(),
+        3,
+        "record, [S1], [S5]; Return is owner-local"
     );
-    assert!(engine.plain_handler().live_records().is_empty());
+    assert!(
+        engine.plain_handler().live_records().is_empty(),
+        "y's entry is gone"
+    );
 }
 
 #[test]
@@ -4435,11 +4879,14 @@ fn vm_unbind_splits_into_minimal_serial_runs_in_order() {
             "slot <- 1",
             "escape Unbind(4) [1]",
             "slot <- none",
-            "escape Return",
         ]
     );
     let escape = engine.escape_handler();
-    assert_eq!(escape.requests.len(), 5);
+    assert_eq!(
+        escape.requests.len(),
+        4,
+        "the pushes and the two walks; Return is owner-local"
+    );
     let unbind_pc = Pc::new(6);
     assert_eq!(escape.requests[2].op, Op::Unbind(4));
     assert_eq!(escape.requests[2].pc, unbind_pc);
@@ -4463,7 +4910,7 @@ fn vm_unbind_splits_into_minimal_serial_runs_in_order() {
     assert_eq!(escape.lifos[3].0, vec![None, Some(1)]);
     assert_eq!(
         engine.poll_handler().edges,
-        vec![PollEdge::SerialRequest; 5]
+        vec![PollEdge::SerialRequest; 4]
     );
     assert_clear(&engine);
 }
@@ -4491,8 +4938,8 @@ fn vm_unbind_walks_a_run_of_serial_records_as_one_escape_naming_the_tokens_inner
     let escape = engine.escape_handler();
     assert_eq!(
         escape.requests.len(),
-        4,
-        "the two records, the walk, Return"
+        3,
+        "the two records, the walk; Return is owner-local"
     );
     assert_eq!(
         escape.requests[2].why,
@@ -4511,11 +4958,13 @@ fn vm_unbind_walks_a_run_of_serial_records_as_one_escape_naming_the_tokens_inner
         Op::Unbind(1),
         Op::Nil,
     ]);
+    // The count cut the run short of the outer record; it stays for the
+    // Return, whose serial cleanup (R1c) pops it (V4).
     let mut engine = harness_with(RecordingEscape::with_script(vec![
         Some(completion_pushing(&Op::SaveExcursion, token(1))),
         Some(completion_pushing(&Op::SaveExcursion, token(2))),
         Some(completion_popping(&Op::Unbind(1), &[token(2)])),
-        None,
+        Some(completion_popping(&Op::Return, &[token(1)])),
     ]));
     let outcome = engine.run(&mut ctx, program(&ops));
     assert_eq!(done_value(&mut engine, outcome), Value::NIL);
@@ -4523,7 +4972,7 @@ fn vm_unbind_walks_a_run_of_serial_records_as_one_escape_naming_the_tokens_inner
     assert_eq!(
         escape.requests.len(),
         4,
-        "the two records, the walk, Return"
+        "the two records, the walk, the Return's cleanup"
     );
     assert_eq!(
         escape.requests[2].why,
@@ -4531,8 +4980,11 @@ fn vm_unbind_walks_a_run_of_serial_records_as_one_escape_naming_the_tokens_inner
             records: vec![token(2)]
         }
     );
-    assert_finished_with_records(&engine, 1);
-    assert_eq!(lifos(engine.arena()).0, vec![Some(1)]);
+    assert_finished_with_records(&engine, 0);
+    assert!(
+        lifos(engine.arena()).0.is_empty(),
+        "the Return's cleanup left no marker"
+    );
 }
 
 #[test]
@@ -4558,15 +5010,21 @@ fn vm_unbind_zero_is_a_no_op_without_an_escape() {
     ];
     let outcome = engine.run(&mut ctx, program_with(&ops, &[xs, one]));
     assert_eq!(done_value(&mut engine, outcome), one, "still bound");
-    assert_eq!(log.entries(), vec!["slot <- 1", "escape Return"]);
-    assert_eq!(engine.escape_handler().requests.len(), 1, "only Return");
-    assert_finished_with_records(&engine, 1);
+    // V4: `Unbind 0` touched nothing, and the owner-local Return undid the
+    // frame's binding on the way out.
+    assert_eq!(log.entries(), vec!["slot <- 1", "slot <- none"]);
+    assert_eq!(
+        engine.escape_handler().requests.len(),
+        0,
+        "no escape: Return is owner-local (V4)"
+    );
+    assert_finished_with_records(&engine, 0);
 
-    // Above a serial record too.
+    // Above a serial record too: the Return's serial cleanup pops the marker.
     let ops = plain_program(vec![Op::SaveExcursion, Op::Unbind(0), Op::Nil]);
     let mut engine = harness_with(RecordingEscape::with_script(vec![
         Some(completion_pushing(&Op::SaveExcursion, token(1))),
-        None,
+        Some(completion_popping(&Op::Return, &[token(1)])),
     ]));
     let outcome = engine.run(&mut ctx, program(&ops));
     assert_eq!(done_value(&mut engine, outcome), Value::NIL);
@@ -4579,7 +5037,7 @@ fn vm_unbind_zero_is_a_no_op_without_an_escape() {
             .collect::<Vec<_>>(),
         vec![Op::SaveExcursion, Op::Return]
     );
-    assert_finished_with_records(&engine, 1);
+    assert_finished_with_records(&engine, 0);
 }
 
 #[test]
@@ -4606,10 +5064,12 @@ fn vm_unbind_beyond_the_frame_records_signals_invalid_byte_code_and_unbinds_noth
     );
     assert!(engine.escape_handler().requests.is_empty());
     assert!(engine.poll_handler().edges.is_empty());
+    // V4: the signal settles the run and the idle unwind undoes the
+    // frame's binding - the second write. The Unbind itself took nothing.
     assert_eq!(
         engine.plain_handler().slot_writes,
-        1,
-        "the bind's write only"
+        2,
+        "the bind's write, then the idle unwind's restore"
     );
     assert!(engine.is_idle());
     assert_clear(&engine);
@@ -4666,49 +5126,38 @@ fn vm_an_unbind_whose_entry_is_not_the_slab_top_faults_as_a_record_contract_and_
     // C2 (peer #11640): the executor's entry and the slab record are two
     // views of one record, paired LIFO. An entry that names a record the
     // slab does not hold on top is a defect on one side of the pairing: the
-    // record-contract fault, nothing taken from either store, the slot as it
-    // was, the scene kept. Two shapes: the record is gone (an `unbind`
-    // exchange took it under the stepper), and another record sits above it.
+    // record-contract fault, nothing taken, the scene kept. One run: the
+    // bind, a serial escape during which the serial side takes the record or
+    // pushes one above it, then the Unbind. (V4: no run leaves a record
+    // behind any more - the Return unwinds the frame's records - so the
+    // scene cannot span two runs.)
     let mut ctx = context();
     let x = plain_sym("pvm-mismatch");
-    let (xs, one, two) = (Value::from_sym_id(x), Value::fixnum(1), Value::fixnum(2));
-    let bind = [Op::Constant(1), Op::VarBind(0), Op::Nil, Op::Return];
-    let unbind = [Op::Unbind(1), Op::Nil, Op::Return];
-    for (name, under) in [
-        ("the record is gone", false),
-        ("a record sits above it", true),
+    let (xs, one) = (Value::from_sym_id(x), Value::fixnum(1));
+    let ops = plain_program(vec![
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::SaveExcursion,
+        Op::Unbind(1),
+        Op::Nil,
+    ]);
+    for (name, gone) in [
+        ("the record is gone", true),
+        ("a record sits above it", false),
     ] {
-        let plain = HarnessPlain::new().admit(x);
-        let mut engine = value_harness(plain);
-        // The first run binds and leaves its record on both stores.
-        let outcome = engine.run(&mut ctx, program_with(&bind, &[xs, one]));
-        assert_eq!(done_value(&mut engine, outcome), Value::NIL, "{name}");
-        let entries: Vec<OwnerRecord> = engine
-            .arena()
-            .bindings()
-            .above(OwnerRecordMark::EMPTY)
-            .collect();
-        let [OwnerRecord::Plain(entry)] = entries[..] else {
-            panic!("{name}: one owner entry, got {entries:?}")
-        };
-        assert_eq!(
-            engine.plain_handler().top_record(),
-            Some(entry.record),
-            "{name}"
+        let log = EffectLog::default();
+        let plain = HarnessPlain::new().admit(x).logging(log.clone());
+        let escape = RecordingEscape::logging_with_script(
+            vec![Some(EscapeCompletion::fall_through(&Op::SaveExcursion))],
+            log.clone(),
         );
-        if under {
-            engine.plain_handler_mut().push_foreign_record(x);
+        let escape = if gone {
+            escape.taking_the_record()
         } else {
-            engine
-                .plain_handler_mut()
-                .take_record_for_test(entry.record);
-        }
-        let records_before = engine.plain_handler().live_records();
-        let accesses_before = engine.plain_handler().accesses();
-        let escapes_before = engine.escape_handler().requests.len();
-        let polls_before = engine.poll_handler().edges.len();
-
-        let outcome = engine.run(&mut ctx, program_with(&unbind, &[xs, two]));
+            escape.pushing_foreign_record()
+        };
+        let mut engine = harness_with_plain(escape, plain);
+        let outcome = engine.run(&mut ctx, program_with(&ops, &vec![xs, one]));
         assert!(
             matches!(
                 outcome,
@@ -4724,34 +5173,22 @@ fn vm_an_unbind_whose_entry_is_not_the_slab_top_faults_as_a_record_contract_and_
             "{name}: the executor's entry stays"
         );
         assert_eq!(
-            format!("{:?}", engine.plain_handler().live_records()),
-            format!("{records_before:?}"),
-            "{name}: nothing was taken from the slab"
+            log.entries(),
+            vec!["slot <- 1", "escape SaveExcursion"],
+            "{name}: the Unbind restored nothing"
         );
-        assert_eq!(
-            engine.plain_handler().accesses(),
-            accesses_before,
-            "{name}: no slot or canonical access"
-        );
-        assert_eq!(
-            engine.plain_handler().observed(x),
-            "1",
-            "{name}: the slot still holds the bind"
-        );
+        let accesses = engine.plain_handler().accesses();
+        assert_eq!(accesses.1, 1, "{name}: the bind's write alone");
         assert_eq!(
             engine.escape_handler().requests.len(),
-            escapes_before,
-            "{name}: no escape"
+            1,
+            "{name}: no hand-off escape"
         );
         assert_eq!(
-            engine.poll_handler().edges.len(),
-            polls_before,
-            "{name}: no poll"
+            engine.plain_handler().live_records().len(),
+            if gone { 0 } else { 2 },
+            "{name}: the slab is as the serial side left it"
         );
-        assert!(matches!(
-            engine.run(&mut ctx, program(&[Op::Nil, Op::Return])),
-            VmOutcome::Fault(EngineFault::Poisoned)
-        ));
     }
 }
 
@@ -4872,11 +5309,14 @@ fn vm_unbind_ties_the_serial_vm_on_the_same_programs() {
                 Op::VarRef(0),
                 Op::Return,
             ],
+            // V4: the Return unwinds the frame's records (N-v2-idle-slab-undo's
+            // sibling), so x shows the canonical value after the run and no
+            // record is left - as the serial VM's frame exit leaves it.
             vec![xs, one],
             HarnessPlain::new().admit(x).with_canonical(x, ten),
             vec![None],
-            "1",
-            1,
+            "10",
+            0,
         ),
         (
             "unbind a void binding, read",
