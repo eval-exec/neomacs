@@ -1190,6 +1190,12 @@ fn worker_page_is_rejected_after_category_symbol_properties_change() {
 }
 
 #[test]
+fn worker_prepares_right_truncated_rows_matching_fresh_layout() {
+    let line = format!("{}\n", "ordinary offscreen text ".repeat(6));
+    first_visit_with_setup(None, &line, None, 0, 2, Some("(setq truncate-lines t)"));
+}
+
+#[test]
 fn idle_preparation_covers_unselected_windows_even_when_selected_rows_are_unsupported() {
     for unsupported_selected in [false, true] {
         let line = "ordinary offscreen text\n";

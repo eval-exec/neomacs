@@ -401,10 +401,13 @@ pub(crate) struct RowProgram {
 
 /// Source consumption at a visual-row boundary. A continuation consumes no
 /// newline and therefore has neither a newline hit cell nor an end-minus-one.
+/// A right-truncated row consumes the complete physical line up to its newline
+/// while keeping `row.end_charpos` at the end of its visible buffer prefix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ComputedRowEnd {
     Newline,
     Continuation,
+    Truncated { visible_end: usize },
 }
 
 pub(crate) struct ComputedRow {
@@ -700,7 +703,7 @@ impl RowProgram {
     ) -> Result<ComputedRow, RowProgramError> {
         let mut rows = self.compute_visual_rows(1, cancelled)?;
         let row = rows.pop().ok_or(RowProgramError::Incomplete)?;
-        if row.end_kind == ComputedRowEnd::Continuation {
+        if row.end_kind != ComputedRowEnd::Newline {
             return Err(RowProgramError::Overflow);
         }
         Ok(row)
@@ -1133,6 +1136,54 @@ impl RowProgram {
                 return Err(RowProgramError::Budget);
             }
             if progress.status() == DisplayRowAppendStatus::Clipped {
+                if !self.geometry.character_wrap {
+                    if !physical_complete
+                        || self.measurements.backend != DisplayGeometryBackend::WindowSystemPixels
+                        || slots.is_empty()
+                        || preserves_buffer_anchor(&render_item.source_item().span.start)
+                    {
+                        return Err(RowProgramError::Overflow);
+                    }
+                    let start = source_start.take().ok_or(RowProgramError::Incomplete)?;
+                    let start_pos = match &start {
+                        DisplaySourcePosition::Buffer { char_pos, .. } => char_pos.get(),
+                        _ => 0,
+                    };
+                    let visible_end = slots
+                        .iter()
+                        .filter_map(|slot| match slot.source() {
+                            DisplaySourcePosition::Buffer { char_pos, .. } => {
+                                Some(char_pos.get() + 1)
+                            }
+                            _ => None,
+                        })
+                        .max()
+                        .unwrap_or(start_pos);
+                    let physical_end = operations
+                        .last()
+                        .ok_or(RowProgramError::Incomplete)?
+                        .0
+                        .span
+                        .end
+                        .clone();
+                    crate::glyph_row_writer::normalize_external_row(&mut row);
+                    rows.push(ComputedRow {
+                        row,
+                        slots: slots
+                            .into_iter()
+                            .map(|slot| slot.into_window_local(self.geometry.text_origin))
+                            .collect(),
+                        slot_heights,
+                        source: SourceSpan::new(start, physical_end),
+                        end: self.geometry.local_position(position),
+                        end_kind: ComputedRowEnd::Truncated { visible_end },
+                        fringe: self.geometry.fringe.clone(),
+                        continuation: false,
+                        terminator_width,
+                        terminator_height,
+                    });
+                    return Ok(rows);
+                }
                 // GNU `display_line` restores the iterator to before an element
                 // that drew past the right edge and keeps only that element's
                 // already-committed glyphs (src/xdisp.c:26433-26466,

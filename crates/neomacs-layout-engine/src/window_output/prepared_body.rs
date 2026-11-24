@@ -104,14 +104,20 @@ pub(crate) fn position_buffer_rows(
             computed.end.x_px().round() as i64,
         );
         // A complete physical line's last consumed character is its newline.
-        if computed.end_kind == ComputedRowEnd::Newline {
-            geometry.note_row_terminator(DisplayRowTerminator::new(
-                LispCharPos1::from_one_based_usize(end.get()),
-                DisplayRowTerminatorCell::new(
-                    computed.terminator_width,
-                    computed.terminator_height,
-                ),
-            ));
+        match computed.end_kind {
+            ComputedRowEnd::Newline => {
+                geometry.note_row_terminator(DisplayRowTerminator::new(
+                    LispCharPos1::from_one_based_usize(end.get()),
+                    DisplayRowTerminatorCell::new(
+                        computed.terminator_width,
+                        computed.terminator_height,
+                    ),
+                ));
+            }
+            ComputedRowEnd::Continuation => {}
+            ComputedRowEnd::Truncated { .. } => {
+                geometry.note_truncated_end(LispCharPos1::from_one_based_usize(end.get()));
+            }
         }
         geometry.push_text_row(DisplayTextRowMetrics {
             y,
@@ -121,8 +127,11 @@ pub(crate) fn position_buffer_rows(
         });
         computed.row.pixel_y = y - window_top;
         computed.row.start_charpos = start.get();
-        computed.row.end_charpos =
-            end.get() - usize::from(computed.end_kind == ComputedRowEnd::Newline);
+        computed.row.end_charpos = match computed.end_kind {
+            ComputedRowEnd::Newline => end.get() - 1,
+            ComputedRowEnd::Continuation => end.get(),
+            ComputedRowEnd::Truncated { visible_end } => visible_end,
+        };
         crate::display_row::finalizer::GlyphRowFinalizationContext::new(
             window_id,
             text_row_base + index,
@@ -137,6 +146,7 @@ pub(crate) fn position_buffer_rows(
                 &mut computed.row,
                 computed.end_kind == ComputedRowEnd::Continuation,
                 computed.continuation,
+                matches!(computed.end_kind, ComputedRowEnd::Truncated { .. }),
             );
         }
         computed.row.hash = computed.row.compute_hash();

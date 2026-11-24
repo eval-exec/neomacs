@@ -1521,9 +1521,14 @@ impl RetainedWindowMatrix {
             }
             let start = row.start_charpos as i64;
             let end = row.end_charpos as i64;
+            let row_truncated_right = self
+                .display_snapshot
+                .rows
+                .iter()
+                .any(|snap| snap.row == idx as i64 && snap.truncated_end_buffer_pos.is_some());
             if new_cursor.is_none()
                 && start <= new_point
-                && (new_point < end || (new_point == end && !row.continued))
+                && (new_point < end || (new_point == end && !row.continued && !row_truncated_right))
             {
                 new_cursor = Some((idx, row.as_ref()));
             }
