@@ -117,8 +117,19 @@ impl<'era> StoppedSummaries<'era> {
             if image.young_id() != entry.young {
                 return Err(RegistrationError::Publication);
             }
+            // A peer that enters `Mode::NativeStopped` (or retires from it)
+            // before any stop has completed publishes at `completed == 0`
+            // (`rendezvous/owner.rs`). Its `publication_generation` is nonzero
+            // and its root batch carries `publication_epoch == 0`; stop #1
+            // advances `coverage_epoch` while leaving `epoch == 0` so
+            // `prepare_finish` keeps matching the batch identity.
+            let pre_stop_native = state.rendezvous.mode == rendezvous::Mode::NativeStopped
+                && state
+                    .roots
+                    .as_ref()
+                    .is_some_and(|roots| roots.identity().publication_epoch() == 0);
             if state.phase != EntryPhase::Frozen
-                && (state.publication_generation == 0 || state.epoch == 0)
+                && (state.publication_generation == 0 || (state.epoch == 0 && !pre_stop_native))
             {
                 return Err(RegistrationError::Publication);
             }

@@ -185,6 +185,8 @@ shells! {
     explicitly_finished_reader_allows_real_collection => ExplicitlyFinishedReaderAllowsRealCollection,
     repeated_worlds_have_distinct_heaps_and_independent_collection_cycles => RepeatedWorldsHaveDistinctHeapsAndIndependentCollectionCycles,
     serial_heap_restoration_reclaims_former_owner_roots_after_resume => SerialHeapRestorationReclaimsFormerOwnerRootsAfterResume,
+    should_collect_stopped_tracks_published_debt_without_consuming_trace => ShouldCollectStoppedTracksPublishedDebtWithoutConsumingTrace,
+    stopped_summaries_rejects_zero_epoch_outside_pre_stop_native => StoppedSummariesRejectsZeroEpochOutsidePreStopNative,
 }
 
 #[test]

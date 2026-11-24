@@ -483,6 +483,18 @@ macro_rules! era_operations {
                 self.core.stop_within(budget)
             }
 
+            /// Whether aggregate stopped allocation debt meets the heap's GC
+            /// threshold (`bytes_since_gc >= gc_threshold`). See
+            /// [`EraCore::should_collect_stopped`].
+            #[cold]
+            #[doc(hidden)]
+            pub fn should_collect_stopped(
+                &self,
+                stopped: &mut AllStopped<'_>,
+            ) -> Result<bool, RendezvousError> {
+                self.core.should_collect_stopped(stopped)
+            }
+
             /// Main-thread GC request. See [`EraCore::collect_requested`].
             ///
             /// # Safety

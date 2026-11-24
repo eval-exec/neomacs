@@ -413,6 +413,36 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             .shutdown_admission())
     }
 
+    /// Whether the stopped era's aggregate allocation debt has reached the
+    /// heap's GC threshold (`bytes_since_gc >= gc_threshold`).
+    ///
+    /// Reads the stopped census through `AllStopped::summaries` (F1
+    /// `lock_for_keeper`, never transient gate `Busy`) and drops that gate
+    /// guard before borrowing `self.collector`. Does not call `stopped.trace`,
+    /// so the caller can follow a `true` result with `collect_requested` on
+    /// the same `AllStopped`.
+    #[cold]
+    pub(super) fn should_collect_stopped(
+        &self,
+        stopped: &mut AllStopped<'_>,
+    ) -> Result<bool, RendezvousError> {
+        self.check_collection(stopped)?;
+        let bytes_since_gc = {
+            let summaries = stopped.summaries()?;
+            summaries.census()?.bytes_since_gc
+        };
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        let threshold = collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut()
+            .gc_threshold();
+        Ok(bytes_since_gc >= threshold)
+    }
+
     /// Stop-session entry for a main-thread GC request.
     ///
     /// The caller is expected to collect, or to return the book, before

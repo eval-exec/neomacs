@@ -152,6 +152,8 @@ pub enum CollectionCase {
     ExplicitlyFinishedReaderAllowsRealCollection,
     RepeatedWorldsHaveDistinctHeapsAndIndependentCollectionCycles,
     SerialHeapRestorationReclaimsFormerOwnerRootsAfterResume,
+    ShouldCollectStoppedTracksPublishedDebtWithoutConsumingTrace,
+    StoppedSummariesRejectsZeroEpochOutsidePreStopNative,
 }
 
 impl CollectionCase {
@@ -163,6 +165,8 @@ impl CollectionCase {
         Self::ExplicitlyFinishedReaderAllowsRealCollection,
         Self::RepeatedWorldsHaveDistinctHeapsAndIndependentCollectionCycles,
         Self::SerialHeapRestorationReclaimsFormerOwnerRootsAfterResume,
+        Self::ShouldCollectStoppedTracksPublishedDebtWithoutConsumingTrace,
+        Self::StoppedSummariesRejectsZeroEpochOutsidePreStopNative,
     ];
 }
 
@@ -232,6 +236,15 @@ pub(crate) fn run_collection_test<K, W>(
                 graph_era_then,
                 world_roots,
             );
+        }
+        CollectionCase::ShouldCollectStoppedTracksPublishedDebtWithoutConsumingTrace => {
+            should_collect_stopped_tracks_published_debt_without_consuming_trace(
+                graph_pair_era,
+                world_roots,
+            );
+        }
+        CollectionCase::StoppedSummariesRejectsZeroEpochOutsidePreStopNative => {
+            stopped_summaries_rejects_zero_epoch_outside_pre_stop_native(graph_era);
         }
     }
 }
@@ -670,6 +683,211 @@ fn serial_heap_restoration_reclaims_former_owner_roots_after_resume<K, W>(
         retire(owner);
         let (collector, keeper) = era.finish().unwrap();
         (collector, keeper, (participant.1, world, legacy))
+    });
+}
+
+/// K5 a4.1: `should_collect_stopped` aggregates `bytes_since_gc` through
+/// `AllStopped::summaries` (F1 `lock_for_keeper`, zero census `Busy`), compares
+/// against `TaggedHeap::gc_threshold()`, and does not consume `stopped.trace`
+/// so `collect_requested` can run immediately on the same `AllStopped`.
+fn should_collect_stopped_tracks_published_debt_without_consuming_trace<K, W>(
+    graph_pair_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, (Graph, Graph))),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    graph_pair_era(&mut |era, (keep, garbage)| {
+        let garbage_words = garbage.1;
+        drop(garbage.0);
+
+        let mut owner = era
+            .register(808, 1)
+            .unwrap()
+            .activate(era.heap_identity(), 808)
+            .unwrap();
+        owner.enter_native(std::slice::from_ref(&keep.0)).unwrap();
+
+        // Stop 1: read current entry-0 debt and threshold; below threshold -> false,
+        // and `stopped.trace` remains unconsumed.
+        let mut stopped = era.stop().unwrap();
+        let threshold = era
+            .with_stopped_heap_for_test(&stopped, |heap| heap.gc_threshold())
+            .unwrap();
+        let baseline = stopped
+            .summaries()
+            .unwrap()
+            .census()
+            .unwrap()
+            .bytes_since_gc;
+        assert!(
+            baseline < threshold,
+            "fresh fixture debt ({baseline}) must start below threshold ({threshold})"
+        );
+        assert_owned(&era, &stopped, &garbage_words, true);
+        assert_eq!(
+            era.should_collect_stopped(&mut stopped),
+            Ok(false),
+            "aggregate debt below threshold must not trigger collection"
+        );
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+
+        // Charge the peer so entry-0 + peer reaches `threshold` exactly, then
+        // drop `keep.0` after native publication so `keep` stays rooted only
+        // through the owner's native batch.
+        owner.leave_native().unwrap();
+        {
+            let mut run = owner.run_access().unwrap();
+            run.state().hot.bytes_since_gc = threshold - baseline;
+        }
+        owner.enter_native(std::slice::from_ref(&keep.0)).unwrap();
+        drop(keep.0);
+
+        // Stop 2: aggregate debt meets threshold -> true, and `collect_requested`
+        // runs on the SAME `AllStopped` (proving `stopped.trace` was not consumed),
+        // preserves native-rooted survivors, reclaims unrooted garbage, consumes
+        // the stop's single trace, and resets `bytes_since_gc` below threshold.
+        let mut stopped = era.stop().unwrap();
+        assert_owned(&era, &stopped, &garbage_words, true);
+        assert_eq!(
+            era.should_collect_stopped(&mut stopped),
+            Ok(true),
+            "published peer debt reaching threshold must report collection due"
+        );
+        // SAFETY: `world_roots` is the core shell's canonical Baton World-root
+        // walk for this stopped era.
+        let report = unsafe { era.collect_requested(&mut stopped, world_roots) }.unwrap();
+        assert!(report.major);
+        assert_eq!(report.epoch, stopped.epoch().get());
+        assert_eq!(report.frozen_owners, 1);
+        assert_eq!(report.frozen_root_words, 1);
+        assert_owned(&era, &stopped, &keep.1, true);
+        assert_owned(&era, &stopped, &garbage_words, false);
+        assert_eq!(
+            stopped.trace(|_, _| Ok(())),
+            Err(RendezvousError::Publication),
+            "collect_requested must consume the stop's single trace"
+        );
+        assert_eq!(
+            era.should_collect_stopped(&mut stopped),
+            Ok(false),
+            "collection resets bytes_since_gc below threshold"
+        );
+        complete(stopped);
+
+        owner.leave_native().unwrap();
+        retire(owner);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+/// K5 a4.1 negative row: `StoppedSummaries::from_gate` accepts `state.epoch == 0`
+/// only for a genuine pre-first-stop `Mode::NativeStopped` entry whose root batch
+/// also carries `publication_epoch == 0`. Both a non-native (`Mode::Stopped`)
+/// zero-epoch entry and a `Mode::NativeStopped` entry with `state.epoch == 0`
+/// against a nonzero root batch `publication_epoch` must refuse with
+/// `RegistrationError::Publication`.
+fn stopped_summaries_rejects_zero_epoch_outside_pre_stop_native<K>(
+    graph_era: &mut dyn FnMut(i64, &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, Graph)),
+) where
+    K: EraKeeper + std::fmt::Debug,
+{
+    graph_era(809, &mut |era, graph| {
+        let permit = era.register(809, 1).unwrap();
+        let key = permit.key();
+        let entry = {
+            let gate = era.registry().lock().unwrap();
+            Arc::clone(&gate.entries[1])
+        };
+        assert_eq!(entry.key, key);
+        let mut owner = permit.activate(era.heap_identity(), 809).unwrap();
+
+        // Publish before Stop #1 completes: `state.epoch == 0`,
+        // `mode == Mode::NativeStopped`, root batch `publication_epoch == 0`.
+        owner.enter_native(std::slice::from_ref(&graph.0)).unwrap();
+
+        let mut stopped = era.stop().unwrap();
+        assert!(
+            stopped.summaries().is_ok(),
+            "genuine pre-stop NativeStopped entry must pass summaries"
+        );
+        // Case A: non-native (`Published`, `Mode::Stopped`) with `epoch == 0`
+        // must refuse with `Publication`.
+        {
+            let mut state = entry.state.lock().unwrap();
+            assert_eq!(state.phase, EntryPhase::Published);
+            assert_eq!(state.epoch, 0);
+            state.rendezvous.mode = rendezvous::Mode::Stopped;
+        }
+        assert_eq!(
+            stopped.summaries().unwrap_err(),
+            RegistrationError::Publication,
+            "non-native Mode::Stopped entry with epoch == 0 must refuse Publication"
+        );
+        entry.state.lock().unwrap().rendezvous.mode = rendezvous::Mode::NativeStopped;
+        // Case B (N4): `publication_generation == 0` must still refuse with
+        // `Publication` even on a pre-stop `Mode::NativeStopped` entry.
+        let saved_generation = {
+            let mut state = entry.state.lock().unwrap();
+            std::mem::replace(&mut state.publication_generation, 0)
+        };
+        assert_eq!(
+            stopped.summaries().unwrap_err(),
+            RegistrationError::Publication,
+            "publication_generation == 0 must refuse Publication even for pre-stop NativeStopped"
+        );
+        entry.state.lock().unwrap().publication_generation = saved_generation;
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+
+        // Re-publish after Stop #1 completed (`completed == 1`): root batch now
+        // carries `publication_epoch == 1`, matching `state.epoch == 1`.
+        owner.leave_native().unwrap();
+        owner.enter_native(std::slice::from_ref(&graph.0)).unwrap();
+
+        let mut stopped = era.stop().unwrap();
+        assert!(
+            stopped.summaries().is_ok(),
+            "post-stop NativeStopped entry with matching nonzero epoch must pass"
+        );
+        // Case B: `Mode::NativeStopped` with `state.epoch == 0` while root batch
+        // has `publication_epoch != 0` must refuse with `Publication`.
+        {
+            let mut state = entry.state.lock().unwrap();
+            assert_eq!(state.rendezvous.mode, rendezvous::Mode::NativeStopped);
+            assert_eq!(state.epoch, 1);
+            assert_eq!(
+                state.roots.as_ref().unwrap().identity().publication_epoch(),
+                1
+            );
+            state.epoch = 0;
+        }
+        assert_eq!(
+            stopped.summaries().unwrap_err(),
+            RegistrationError::Publication,
+            "NativeStopped entry with epoch == 0 and nonzero root-batch publication_epoch must refuse Publication"
+        );
+        entry.state.lock().unwrap().epoch = 1;
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+
+        owner.leave_native().unwrap();
+        retire(owner);
+        drop(graph.0);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
     });
 }
 
