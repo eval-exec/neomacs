@@ -45,9 +45,29 @@ pub fn begin_restore_retry_for_test<'owner, 'era>(
     owner.begin_restore_retry(native)
 }
 
+/// Gate-contention fence: counts the times a gate acquisition found the gate
+/// held and then waited for it (`with_stopped_gate`) or retried it (the
+/// receipt read after a native publication). A fixture that holds the gate
+/// releases it once this count moves, so the row proves the caller met the
+/// held gate instead of racing past a timer.
+#[cfg(any(test, feature = "test-support"))]
+static GATE_CONTENTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn note_gate_contention() {
+    GATE_CONTENTION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn gate_contention_for_test() -> u64 {
+    GATE_CONTENTION.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// One-shot hook for the instant `prepare_restore` holds the registry gate,
 /// before the condvar wait. The `Mutator` field stays cfg(test) inside this
 /// crate so a test-support build does not put `dyn FnOnce` on `Mutator`.
+/// The hook runs as a gate holder: if it blocks on the keeper, a keeper in
+/// `with_stopped_gate` waits for it, so a row must not combine the two.
 #[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static RESTORE_GATE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =

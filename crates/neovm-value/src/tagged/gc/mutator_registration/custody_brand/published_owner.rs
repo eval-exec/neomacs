@@ -146,7 +146,11 @@ impl Mutator<'_> {
                 current_native(self.registry, &gate, &self.entry, self.thread)
             })();
             match attempt {
-                Err(RendezvousError::Busy) => std::thread::yield_now(),
+                Err(RendezvousError::Busy) => {
+                    #[cfg(any(test, feature = "test-support"))]
+                    super::super::test_fences::note_gate_contention();
+                    std::thread::yield_now();
+                }
                 result => break result?,
             }
         };

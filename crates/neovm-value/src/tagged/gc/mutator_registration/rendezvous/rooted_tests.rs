@@ -643,22 +643,43 @@ fn native_publication_is_not_stopped_until_root_and_image_commit_body<
     });
 }
 
-/// Hold the registry gate on another thread for a short while, returning
-/// once it is held. The caller under test cannot signal while it waits for
-/// the gate, so the hold ends on its own.
-fn hold_gate_briefly<'scope, 'env>(
-    scope: &'scope thread::Scope<'scope, 'env>,
-    registry: &'env Registry,
-) -> thread::ScopedJoinHandle<'scope, ()> {
-    let (held_tx, held_rx) = mpsc::channel();
-    let holder = scope.spawn(move || {
-        let gate = retry(|| registry.lock().map_err(RendezvousError::from));
-        held_tx.send(()).unwrap();
-        thread::sleep(Duration::from_millis(50));
-        drop(gate);
-    });
-    receive(&held_rx);
-    holder
+/// The registry gate, held by another thread. The holder lets go once the
+/// caller under test has met the held gate (the contention fence moved) or
+/// has returned without meeting it, so neither outcome rides a timer.
+struct GateHolder<'scope> {
+    holder: thread::ScopedJoinHandle<'scope, ()>,
+    returned: mpsc::Sender<()>,
+}
+
+impl<'scope> GateHolder<'scope> {
+    /// Returns once the gate is held.
+    fn hold<'env>(scope: &'scope thread::Scope<'scope, 'env>, registry: &'env Registry) -> Self {
+        use super::super::test_fences::gate_contention_for_test;
+        let (held_tx, held_rx) = mpsc::channel();
+        let (returned, returned_rx) = mpsc::channel::<()>();
+        let before = gate_contention_for_test();
+        let holder = scope.spawn(move || {
+            let gate = retry(|| registry.lock().map_err(RendezvousError::from));
+            held_tx.send(()).unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            while gate_contention_for_test() == before && returned_rx.try_recv().is_err() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the caller neither met the held gate nor returned"
+                );
+                thread::yield_now();
+            }
+            drop(gate);
+        });
+        receive(&held_rx);
+        Self { holder, returned }
+    }
+
+    /// The caller under test has returned: let go if still holding, and join.
+    fn join(self) {
+        let _ = self.returned.send(());
+        self.holder.join().unwrap();
+    }
 }
 
 /// A gate holder after a native publication commits must not strand the
@@ -677,25 +698,37 @@ fn native_receipt_outlasts_a_gate_holder_after_the_commit_body<
         thread::scope(|scope| {
             let (committed_tx, committed_rx) = mpsc::channel();
             let (held_tx, held_rx) = mpsc::channel();
+            let (published_tx, published_rx) = mpsc::channel();
             let owner = scope.spawn(move || {
                 let mut owner = activate(permit, heap, 1931);
                 owner.protocol.hooks.receipt_hook = Some(Box::new(move || {
                     committed_tx.send(()).unwrap();
                     receive(&held_rx);
                 }));
-                let receipt = owner
-                    .publish_native_owner(&input)
-                    .expect("the committed publication returns its receipt");
-                assert_eq!(receipt.serial_facts().0, 1931);
+                let receipt = owner.publish_native_owner(&input);
+                published_tx
+                    .send(
+                        receipt
+                            .as_ref()
+                            .map(|receipt| receipt.serial_facts().0)
+                            .map_err(|e| *e),
+                    )
+                    .unwrap();
                 drop(receipt);
                 apply(owner.begin_restore_retry(true).unwrap());
                 retire(owner, &input);
             });
             receive(&committed_rx);
-            let holder = hold_gate_briefly(scope, registry);
+            let holder = GateHolder::hold(scope, registry);
             held_tx.send(()).unwrap();
-            holder.join().unwrap();
+            let published = receive(&published_rx);
+            holder.join();
             owner.join().unwrap();
+            assert_eq!(
+                published,
+                Ok(1931),
+                "the committed publication returns its receipt"
+            );
         });
         finish_era(era);
     });
@@ -729,19 +762,19 @@ fn stopped_keeper_waits_out_a_brief_gate_holder_body<K: EraKeeper + std::fmt::De
             let mut stopped = retry(|| era.stop());
             trace_owners(&mut stopped, &[key]);
             with_stop_scope(|stop_scope| {
-                let holder = hold_gate_briefly(scope, registry);
+                let holder = GateHolder::hold(scope, registry);
                 let interval = match stop_scope.bind(stopped) {
                     Ok(interval) => interval,
                     Err((_scope, stopped, reason)) => {
-                        holder.join().unwrap();
+                        holder.join();
                         complete(stopped);
                         panic!("bind refused while another thread held the gate: {reason:?}");
                     }
                 };
-                holder.join().unwrap();
-                let holder = hold_gate_briefly(scope, registry);
+                holder.join();
+                let holder = GateHolder::hold(scope, registry);
                 let validated = interval.validate_owner(&receipt);
-                holder.join().unwrap();
+                holder.join();
                 match interval.complete_traced() {
                     Ok(()) => {}
                     Err(failure) => complete(failure.into_stopped()),

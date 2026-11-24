@@ -151,8 +151,14 @@ impl StoppedRootAdmission<'_> {
 mod owner_test_hooks {
     #[derive(Default)]
     pub(in crate::tagged::gc::mutator_registration) struct Hooks {
+        /// Runs after `Publishing` is visible, with the gate released.
         pub(super) publication_hook: Option<Box<dyn FnOnce()>>,
+        /// Runs while `prepare_restore` HOLDS the gate, just before its
+        /// condvar wait. A hook that blocks here is a gate holder that
+        /// waits: a keeper in `with_stopped_gate` (bind, receipt check)
+        /// waits it out, so a row must not block this hook on the keeper.
         pub(super) restore_wait_hook: Option<Box<dyn FnOnce()>>,
+        /// Runs after a native publication commits, with the gate released.
         pub(super) receipt_hook: Option<Box<dyn FnOnce()>>,
     }
     impl Hooks {

@@ -209,17 +209,29 @@ impl<'era> AllStopped<'era> {
     /// the epoch or take a heap loan. The keeper-thread check is the same
     /// predicate `stop` used to mint this guard.
     ///
-    /// The keeper holds no other guard here and no gate holder waits while
-    /// holding, so this waits out a brief holder (an owner's refused restore
-    /// or publish attempt) instead of failing `Busy`: the callers bind a
-    /// stop, or validate a receipt they consume, and a transient refusal
-    /// would drop either.
+    /// The keeper holds no other guard here, and no gate holder waits on the
+    /// keeper: every wait under the gate is the condvar wait that releases
+    /// it, and the one blocking lock taken under the gate (the cons catalog,
+    /// in `Mutator::publish`) is taken only while Idle, by holders that never
+    /// take the gate. So this waits out a brief holder (an owner's refused
+    /// restore or publish attempt) instead of failing `Busy`: the callers
+    /// bind a stop, or validate a receipt they consume, and a transient
+    /// refusal would drop either. The test-only restore hooks are the
+    /// exception; see `Hooks`.
     pub(in crate::tagged::gc::mutator_registration) fn with_stopped_gate<R>(
         &self,
         body: impl FnOnce(&Registry, &RegistryState) -> Result<R, RendezvousError>,
     ) -> Result<R, RendezvousError> {
         keeper(self.registry)?;
-        let gate = self.registry.lock_blocking().map_err(registration_error)?;
+        let gate = match self.registry.lock() {
+            Err(RegistrationError::Busy) => {
+                #[cfg(any(test, feature = "test-support"))]
+                super::super::test_fences::note_gate_contention();
+                self.registry.lock_blocking()
+            }
+            acquired => acquired,
+        }
+        .map_err(registration_error)?;
         self.validate(&gate)?;
         body(self.registry, &gate)
     }

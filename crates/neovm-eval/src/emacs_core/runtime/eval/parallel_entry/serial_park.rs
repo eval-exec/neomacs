@@ -75,7 +75,10 @@ impl Grant {
 
 /// Why the keeper did not grant a requested turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))] // L6.7's port refuses; the rows do now.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "L6.7's port refuses a request; the rows do now")
+)]
 pub(crate) enum PortRefusal {
     /// The era was poisoned; no further grant will come.
     Poisoned,
@@ -172,7 +175,10 @@ fn give_back(mut seat: SerialDestination, local: LocalSerialOwner, port: &mut im
 /// production; the rows' standalone owners need none).
 #[cold]
 #[inline(never)]
-#[cfg_attr(not(test), allow(dead_code))] // E5.3/E6-P call it; the rows do now.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "E5.3, E5.4 and E6-P call it; the rows do now")
+)]
 pub(crate) fn begin_turn<'t, C: SerialHost, A>(
     state: &'t mut OwnerSerialState<C, LocalSerialOwner>,
     home: SerialHome,
@@ -190,7 +196,10 @@ pub(crate) fn begin_turn<'t, C: SerialHost, A>(
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // E5.3/E6-P call it; the rows do now.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "E5.3, E5.4 and E6-P call it; the rows do now")
+)]
 impl<'t, C: SerialHost> LiveSerial<'t, C> {
     /// Lend the owner's Context to BODY (E5.1 `with_world`).
     pub(crate) fn with_world<R>(&mut self, body: impl for<'g> FnOnce(&'g mut C) -> R) -> R {
@@ -234,7 +243,10 @@ impl<'t, C: SerialHost> LiveSerial<'t, C> {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // E5.3/E6-P call it; the rows do now.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "E5.3, E5.4 and E6-P call it; the rows do now")
+)]
 impl<'t, C: SerialHost, W> ParkedSerial<'t, C, W> {
     /// What this turn waits on.
     pub(crate) fn wait(&self) -> &W {
