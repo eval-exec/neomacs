@@ -8682,3 +8682,63 @@ fn graphical_startup_exposes_only_initial_terminal_before_lisp_frame_creation() 
         "(nil nil neo t t nil nil (t))"
     );
 }
+
+#[test]
+fn webview_pre_thread_configuration_is_gated_to_gui_and_daemon_startup() {
+    use super::super::should_configure_webview_before_threads;
+
+    let parse = |args: &[&str]| {
+        parse_startup_options(args.iter().map(|arg| (*arg).to_owned())).expect("startup options")
+    };
+
+    assert!(
+        should_configure_webview_before_threads(RuntimeMode::FinalRun, &parse(&["neomacs"])),
+        "GUI startup must configure WPE DRM env before threads start"
+    );
+    assert!(
+        should_configure_webview_before_threads(
+            RuntimeMode::FinalRun,
+            &parse(&["neomacs", "--daemon"])
+        ),
+        "background daemon startup may host GUI frames later"
+    );
+    assert!(
+        should_configure_webview_before_threads(
+            RuntimeMode::FinalRun,
+            &parse(&["neomacs", "--fg-daemon=work"])
+        ),
+        "foreground daemon startup may host GUI frames later"
+    );
+    assert!(
+        !should_configure_webview_before_threads(
+            RuntimeMode::FinalRun,
+            &parse(&["neomacs", "--batch"])
+        ),
+        "--batch must not scan DRM devices or export WPE_DRM_* into Lisp getenv"
+    );
+    assert!(
+        !should_configure_webview_before_threads(
+            RuntimeMode::FinalRun,
+            &parse(&["neomacs", "-nw"])
+        ),
+        "TTY (-nw) startup must not export WPE_DRM_*"
+    );
+    assert!(
+        !should_configure_webview_before_threads(
+            RuntimeMode::FinalRun,
+            &parse(&["neomacs", "--batch", "--daemon"])
+        ),
+        "noninteractive startup must not export WPE_DRM_*"
+    );
+    assert!(
+        !should_configure_webview_before_threads(RuntimeMode::Raw, &parse(&["neomacs-temacs"])),
+        "neomacs-temacs build runs must not export WPE_DRM_*"
+    );
+    assert!(
+        !should_configure_webview_before_threads(
+            RuntimeMode::BootstrapUse,
+            &parse(&["bootstrap-neomacs"])
+        ),
+        "bootstrap-neomacs build runs must not export WPE_DRM_*"
+    );
+}

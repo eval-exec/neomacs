@@ -96,8 +96,8 @@ fn webview_create_destroy_cycle_exits_clean_under_fatal_criticals() {
 
 #[test]
 fn reactor_startup_does_not_mutate_process_environment() {
-    // SAFETY: nextest runs each test in its own process and no worker threads
-    // have been spawned yet.
+    // SAFETY: nextest runs each test in its own process, and before spawning
+    // the reactor the only other thread is libtest's parked main thread.
     unsafe {
         std::env::remove_var("WPE_DRM_DEVICE");
         std::env::remove_var("WPE_DRM_RENDER_NODE");
@@ -131,8 +131,8 @@ fn reactor_startup_does_not_mutate_process_environment() {
 
 #[test]
 fn configure_before_threads_exports_drm_override_while_single_threaded() {
-    // SAFETY: nextest runs each test in its own process and no worker threads
-    // have been spawned.
+    // SAFETY: nextest runs each test in its own process, and the only other
+    // thread is libtest's parked main thread.
     unsafe {
         std::env::remove_var("WPE_DRM_DEVICE");
         std::env::set_var("WPE_DRM_RENDER_NODE", "/dev/dri/renderD-test-override");

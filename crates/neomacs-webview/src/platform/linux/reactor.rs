@@ -445,12 +445,7 @@ struct WpeRuntime {
 ///    (verified on a Raptor Lake + RTX 4070 Max-Q machine).
 /// 3. Nothing — single-GPU machines and unknown topologies keep WebKit's
 ///    own inference.
-fn select_wpe_device() -> Option<String> {
-    if let Some(path) =
-        std::env::var_os("WPE_DRM_RENDER_NODE").or_else(|| std::env::var_os("WPE_DRM_DEVICE"))
-    {
-        return Some(path.to_string_lossy().into_owned());
-    }
+fn scan_drm_render_nodes() -> Option<Vec<(String, String)>> {
     let mut enumerator = udev::Enumerator::new().ok()?;
     enumerator.match_subsystem("drm").ok()?;
     let mut nodes: Vec<(String, String)> = Vec::new();
@@ -466,12 +461,28 @@ fn select_wpe_device() -> Option<String> {
         }
         nodes.push((name, drm_node_driver(&device)));
     }
+    Some(nodes)
+}
+
+fn select_wpe_device_with(
+    scan_nodes: impl FnOnce() -> Option<Vec<(String, String)>>,
+) -> Option<String> {
+    if let Some(path) =
+        std::env::var_os("WPE_DRM_RENDER_NODE").or_else(|| std::env::var_os("WPE_DRM_DEVICE"))
+    {
+        return Some(path.to_string_lossy().into_owned());
+    }
+    let nodes = scan_nodes()?;
     // No driver could be determined at all: let WebKit's inference decide
     // rather than blindly pinning the first node.
     if nodes.iter().all(|(_, driver)| driver.is_empty()) {
         return None;
     }
     pick_render_node(nodes).map(|name| format!("/dev/dri/{name}"))
+}
+
+fn select_wpe_device() -> Option<String> {
+    select_wpe_device_with(scan_drm_render_nodes)
 }
 
 /// Kernel driver name of a DRM node, walked up to its PCI ancestor: the
@@ -521,7 +532,16 @@ fn pick_render_node(mut nodes: Vec<(String, String)>) -> Option<String> {
 /// # Safety
 /// The caller must ensure no other threads exist in the current process.
 pub(crate) unsafe fn configure_before_threads() {
-    if let Some(path) = select_wpe_device() {
+    // SAFETY: caller guarantees this process is single-threaded.
+    unsafe { configure_before_threads_with(scan_drm_render_nodes) };
+}
+
+/// # Safety
+/// The caller must ensure no other threads exist in the current process.
+unsafe fn configure_before_threads_with(
+    scan_nodes: impl FnOnce() -> Option<Vec<(String, String)>>,
+) {
+    if let Some(path) = select_wpe_device_with(scan_nodes) {
         // SAFETY: caller guarantees this process is single-threaded.
         unsafe {
             std::env::set_var("WPE_DRM_DEVICE", &path);
@@ -538,6 +558,16 @@ impl WpeRuntime {
         mailbox: Arc<ReactorMailbox>,
         wake: WebViewWake,
     ) -> Result<Self, String> {
+        Self::new_with_device_selector(config, sender, mailbox, wake, select_wpe_device)
+    }
+
+    unsafe fn new_with_device_selector(
+        config: WebViewSystemConfig,
+        sender: ReactorSender,
+        mailbox: Arc<ReactorMailbox>,
+        wake: WebViewWake,
+        device_selector: impl FnOnce() -> Option<String>,
+    ) -> Result<Self, String> {
         // WebKit's headless backend infers a DRM device when none is given,
         // and on multi-GPU machines it can pick the node whose buffers the
         // importer cannot import (gbm_bo_import failure in
@@ -546,7 +576,7 @@ impl WpeRuntime {
         // overrides first, then udev).  Pre-thread callers export those keys
         // via `configure_before_threads` so WebKit's child process inherits
         // the same node without mutating the environment from this thread.
-        let selected_device = select_wpe_device();
+        let selected_device = device_selector();
         let backend = match &selected_device {
             Some(path) => {
                 tracing::info!("WpeRuntime: WPE DRM device = {path}");

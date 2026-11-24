@@ -5173,9 +5173,18 @@ fn maybe_start_diagnostics(
 /// Bootstrap the requested runtime and retain native hosting when graphical
 /// clients may need it, independently of the initial Lisp frame's frontend.
 ///
+fn should_configure_webview_before_threads(mode: RuntimeMode, startup: &StartupOptions) -> bool {
+    mode == RuntimeMode::FinalRun
+        && !startup.noninteractive
+        && (startup.frontend == FrontendKind::Gui || startup.daemon.is_some())
+}
+
+/// Entrypoint for the Neomacs binary.
+///
 /// # Safety
 /// The caller must invoke this from process entry while the process is still
-/// single-threaded (required by `std::env::set_var` and `daemon::prepare`'s
+/// single-threaded (required by `std::env::set_var`,
+/// `neomacs_webview::configure_before_threads`, and `daemon::prepare`'s
 /// `std::env::remove_var` / `libc::fork`).
 pub unsafe fn run(mode: RuntimeMode) {
     let process_started_at = Instant::now();
@@ -5250,6 +5259,17 @@ pub unsafe fn run(mode: RuntimeMode) {
         eprintln!("{message}");
         std::process::exit(1);
     });
+
+    // Export WPE DRM render-node overrides only for interactive GUI or daemon
+    // sessions (never for --batch, -nw, or build-time temacs/bootstrap runs,
+    // which must not leak WPE_DRM_* into Lisp `getenv` or subprocesses).
+    // Runs before `daemon::prepare` and `text_huge_pages` so the process is
+    // still single-threaded and a forked daemon inherits the chosen node.
+    if should_configure_webview_before_threads(mode, &startup) {
+        // SAFETY: `run`'s caller guarantees the process is single-threaded,
+        // and no threads or forks have occurred in `run` yet.
+        unsafe { neomacs_webview::configure_before_threads() };
+    }
 
     // Fork before tracing, display, evaluator, or worker threads exist. The
     // original invocation exits only when Lisp calls daemon-initialized.
@@ -5785,11 +5805,10 @@ fn register_workspace_carrier_tls() {
 }
 
 fn main() {
-    // SAFETY: first statements at process entry before any runtime threads are
-    // spawned (required by `std::env::set_var` in bundle/webview init).
+    // SAFETY: first statement at process entry before any runtime threads are
+    // spawned (required by `std::env::set_var` in macOS bundle init).
     unsafe {
         neomacs_display_runtime::macos_bundle_runtime::configure_before_threads();
-        neomacs_webview::configure_before_threads();
     }
     register_workspace_carrier_tls();
     #[cfg(feature = "gc-memory-telemetry")]
