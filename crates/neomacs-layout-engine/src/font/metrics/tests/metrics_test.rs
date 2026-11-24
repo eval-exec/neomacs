@@ -5188,6 +5188,53 @@ fn second_service_catalog_sync_keeps_the_moved_front() {
 }
 
 #[test]
+fn worker_symbol_tick_keeps_font_caches_warm() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let mut main = make_svc();
+    assert!(main.synchronize_symbol_font_policy(true, None).changed());
+    let before = main
+        .capture_worker_font_policy(&[("monospace", '中', 400, false, 13.0)], 4096)
+        .expect("unicode capture");
+    let mut worker = make_svc();
+    worker.install_worker_font_policy(&before);
+    worker.font_metrics("monospace", 400, false, 13.0);
+    let cached = worker.metrics_cache.len();
+    assert!(cached > 0, "the worker must fill a cache before the tick");
+
+    let tick = neovm_core::emacs_core::fontset::char_script_table_generation();
+    eval.eval_str("(make-char-table nil)")
+        .expect("make-char-table");
+    assert!(neovm_core::emacs_core::fontset::char_script_table_generation() > tick);
+    assert!(
+        !main.synchronize_symbol_font_policy(true, None).changed(),
+        "a char-table write with the same symbol ranges is not a selection change"
+    );
+    let after = main
+        .capture_worker_font_policy(&[("monospace", '中', 400, false, 13.0)], 4096)
+        .expect("capture after the tick");
+    assert_ne!(
+        before.symbols.key.char_script_table_generation,
+        after.symbols.key.char_script_table_generation,
+        "main records the new tick on an unchanged selection"
+    );
+    worker.install_worker_font_policy(&after);
+    assert_eq!(
+        worker.metrics_cache.len(),
+        cached,
+        "a char-table tick must not cold-clear the worker font caches"
+    );
+
+    let mut changed = after.clone();
+    changed.symbols.symbol_ranges.push((0x30, 0x39));
+    worker.install_worker_font_policy(&changed);
+    assert!(
+        worker.metrics_cache.is_empty(),
+        "a real symbol-range change still clears the worker caches"
+    );
+    drop(eval);
+}
+
+#[test]
 fn ascii_worker_policy_keeps_unicode_font_caches_warm() {
     let source = crate::font::metrics::test_catalog::metrics_service();
     let mut unicode = source

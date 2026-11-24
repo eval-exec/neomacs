@@ -1419,12 +1419,19 @@ impl FontMetricsService {
     pub(crate) fn install_worker_font_policy(&mut self, policy: &DetachedFontPolicy) {
         // ASCII always selects its face's primary font. Keep the previous
         // symbol classifier/cache warm until a Unicode row actually needs it.
-        if policy.query_count() != 0 && self.symbol_font_policy != policy.symbols {
-            // The fresh worker service differs from the default symbol policy.
-            // That reset is local. The process-global fallback orders belong
-            // to every frame and survive a worker rebuild.
-            self.clear_local_caches();
-            self.symbol_font_policy = policy.symbols.clone();
+        // A char-table write moves the captured tick without changing which
+        // characters use the primary font, so that tick must not cold-clear.
+        if policy.query_count() != 0 {
+            let selection_changed = self.symbol_font_policy.key.use_primary_font
+                != policy.symbols.key.use_primary_font
+                || self.symbol_font_policy.symbol_ranges != policy.symbols.symbol_ranges;
+            if selection_changed {
+                // Local only. Shared fallback orders belong to every frame.
+                self.clear_local_caches();
+            }
+            if selection_changed || self.symbol_font_policy != policy.symbols {
+                self.symbol_font_policy = policy.symbols.clone();
+            }
         }
         self.font_resolver
             .install_worker_policy(policy.characters.clone());
