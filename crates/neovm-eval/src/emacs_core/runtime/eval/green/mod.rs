@@ -251,8 +251,9 @@ impl Context {
     }
 
     /// Whether this Context belongs to a Green World whose carried TLS and
-    /// warm `OwnerCarried` are currently held by an active owner rather than
-    /// stowed in `GreenRuntime`.
+    /// warm `OwnerCarried` are not stowed in `GreenRuntime` (i.e., any
+    /// `CarriedHolder::Held { .. }` state fails closed; a detached owner cannot
+    /// legally hold the World because detaching a holder moves it to `Stowed`).
     ///
     /// Returns `false` for a Sim World (which has no `GreenRuntime`).
     #[cold]
@@ -264,7 +265,9 @@ impl Context {
 
     /// Whether this Context belongs to a Green World whose carried TLS and
     /// warm `OwnerCarried` are currently stowed in `GreenRuntime`.
-    #[cfg(debug_assertions)]
+    ///
+    /// Kept un-gated so `debug_assert!` in `reattach_serial_owner` type-checks
+    /// in release builds (where `debug_assert!` expands to `if cfg!(...)`).
     #[cold]
     pub(in crate::emacs_core::eval) fn serial_world_is_stowed(&self) -> bool {
         self.green_runtime_ref()
