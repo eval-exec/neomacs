@@ -2318,6 +2318,163 @@ fn vm_owner_local_return_of_nested_lets_restores_innermost_first() {
 }
 
 #[test]
+fn vm_a_return_cleanup_that_leaves_a_serial_handler_marker_faults() {
+    // C2 (lead #13715): the cleanup's completion popped no handler, so the
+    // R1d marker is still above handler_base when the escape completes. An
+    // owner truncation never touches a serial handler (R1d): the contract
+    // fault on the handler stack, before anything is truncated, the scene
+    // kept - the twin of a leftover record marker in the unwind.
+    let mut ctx = context();
+    let ops = plain_program(vec![Op::Constant(0), Op::PushConditionCase(4), Op::Return]);
+    let mut engine = harness_with(RecordingEscape::with_script(vec![
+        Some(EscapeCompletion {
+            handlers: HandlerDelta {
+                popped: Vec::new(),
+                pushed: vec![handler(10)],
+            },
+            ..EscapeCompletion::fall_through(&Op::PushConditionCase(4))
+        }),
+        // The cleanup leaves the handler: pops nothing (it carries the value,
+        // so the fault is the handler's, not a missing result's).
+        Some(completion(&Op::Return, vec![Value::fixnum(1)])),
+    ]));
+    let outcome = engine.run(&mut ctx, program_with(&ops, &[Value::fixnum(1)]));
+    assert!(
+        matches!(
+            outcome,
+            VmOutcome::Fault(EngineFault::EscapeRecordContract(RecordStack::Handlers))
+        ),
+        "{outcome:?}"
+    );
+    assert!(!engine.is_idle(), "the scene is kept");
+    assert_eq!(engine.frame_id().is_some(), true, "the frame stays");
+    assert_eq!(
+        lifos(engine.arena()).1,
+        vec![Some(10)],
+        "the handler marker is still there: not truncated away"
+    );
+}
+
+#[test]
+fn vm_idle_after_a_signal_inside_a_watched_let_poisons() {
+    // C3 (lead #13715), N-idle-undo-needs-serial: a signal inside a `let`
+    // whose symbol gained a watcher. The idle unwind reaches the record and
+    // the unbind-time re-validation refuses it - the watcher's notification
+    // needs the serial side, which the idle path cannot reach. The run
+    // poisons: the record stays live, the slot keeps the inner value, and
+    // the next run is refused. What stays is the binding LIFO, the slab and
+    // the roots; the frame and its handlers are already gone. V8 runs the
+    // unwind with Lisp and closes this.
+    let mut ctx = context();
+    let x = plain_sym("pvm-idle-watched");
+    let (xs, one) = (Value::from_sym_id(x), Value::fixnum(1));
+    let ops = plain_program(vec![
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::SaveExcursion,
+        Op::Nil,
+    ]);
+    let log = EffectLog::default();
+    let plain = HarnessPlain::new().admit(x).watched(x).logging(log.clone());
+    let mut engine = harness_with_plain(
+        RecordingEscape::logging_with_script(
+            vec![Some(EscapeCompletion {
+                stack: EscapeStack::Flow(signal("error", vec![Value::string("boom")])),
+                records: RecordDelta::default(),
+                handlers: HandlerDelta::default(),
+            })],
+            log.clone(),
+        ),
+        plain,
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &vec![xs, one]));
+    assert!(
+        matches!(
+            outcome,
+            VmOutcome::Fault(EngineFault::EscapeRecordContract(RecordStack::Bindings))
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        log.entries(),
+        vec!["slot <- 1", "escape SaveExcursion"],
+        "no owner restore: the watcher must be told first"
+    );
+    assert_eq!(
+        engine.plain_handler().live_records().len(),
+        1,
+        "the record stays live"
+    );
+    assert_eq!(
+        engine.plain_handler().observed(x),
+        "1",
+        "the inner value stays in the slot"
+    );
+    assert_eq!(
+        lifos(engine.arena()).0,
+        vec![None],
+        "the binding entry stays"
+    );
+    assert!(engine.frame_id().is_none(), "the frame is already gone");
+    assert!(
+        matches!(
+            engine.run(&mut ctx, program(&[Op::Nil, Op::Return])),
+            VmOutcome::Fault(EngineFault::Poisoned)
+        ),
+        "the next run is refused"
+    );
+}
+
+#[test]
+fn vm_a_return_over_a_record_the_exchange_took_faults_before_the_cleanup() {
+    // F5 (lead #13715): before the Return escape, every owner entry names a
+    // live record. Here a SaveExcursion's serial side took x's record under
+    // the stepper (the `taking_the_record` double); the Return under
+    // DEBUG_ON_EXIT would otherwise drop the entry silently after the
+    // cleanup, since `!record_live` reads as "the cleanup took it". The
+    // fault comes before the escape, where the two are still told apart.
+    let mut ctx = context();
+    let x = plain_sym("pvm-return-over-taken");
+    let (xs, one, two) = (Value::from_sym_id(x), Value::fixnum(1), Value::fixnum(2));
+    let ops = plain_program(vec![
+        Op::Constant(1),
+        Op::VarBind(0),
+        Op::SaveExcursion,
+        Op::Constant(2),
+        Op::Return,
+    ]);
+    let log = EffectLog::default();
+    let plain = HarnessPlain::new().admit(x).logging(log.clone());
+    let mut engine = harness_with_plain(
+        RecordingEscape::logging_with_script(
+            vec![
+                Some(EscapeCompletion::fall_through(&Op::SaveExcursion)),
+                Some(completion(&Op::Return, vec![two])),
+            ],
+            log.clone(),
+        )
+        .taking_the_record(),
+        plain,
+    );
+    engine.set_entry_exit_flags(ExitFlags::DEBUG_ON_EXIT);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &vec![xs, one, two]));
+    assert!(
+        matches!(
+            outcome,
+            VmOutcome::Fault(EngineFault::EscapeRecordContract(RecordStack::Bindings))
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        engine.escape_handler().requests.len(),
+        1,
+        "the fault came before the Return's escape"
+    );
+    assert!(!engine.is_idle(), "the scene is kept");
+    assert_eq!(engine.frame_id().is_some(), true, "the frame stays");
+}
+
+#[test]
 fn vm_a_return_under_a_serial_record_marker_takes_the_serial_cleanup() {
     // V4, R1c: a frame that still owns a serial record (a save-excursion
     // the compiler did not pop) must run it on return, through the serial

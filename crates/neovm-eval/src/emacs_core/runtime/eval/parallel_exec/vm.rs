@@ -493,7 +493,9 @@ where
 {
     /// `era` is the borrow the admitted keys live in (see the field).
     /// Add `flags` to the exit flags the next run's bottom frame carries
-    /// (V4 rows; V6's adapter sets a stopped owner's frame instead).
+    /// (V4 rows; V6's adapter sets a stopped owner's frame instead). Armed
+    /// for ONE run: GNU's flag is per backtrace frame, so it is cleared when
+    /// that frame is pushed.
     pub(crate) fn set_entry_exit_flags(&mut self, flags: ExitFlags) {
         self.entry_exit_flags = self.entry_exit_flags.set(flags);
     }
@@ -584,7 +586,7 @@ where
         if !matches!(self.state, RunState::Idle) {
             return VmOutcome::Fault(EngineFault::Busy);
         }
-        let entry_exit_flags = self.entry_exit_flags;
+        let entry_exit_flags = std::mem::take(&mut self.entry_exit_flags);
         let frame = VmFrame::new(
             program.function,
             program.code,
@@ -647,8 +649,16 @@ where
     /// is the serial side's, whose own records a signal's unwind already
     /// removed (the `Flow` arm applied no deltas): the marker is dropped. A
     /// record the re-validation refuses needs the serial side, which the
-    /// idle unwind cannot reach (V8 runs it with Lisp): `Poisoned`, the scene
-    /// kept.
+    /// idle unwind cannot reach (V8 runs it with Lisp): `Poisoned`. What
+    /// stays then: the binding LIFO, the slab and the roots - the frame and
+    /// its handlers are already gone when the record loop runs.
+    ///
+    /// V8 (F4): this order assumes the serial side removed its records on a
+    /// signal and never touches the owner's, while the Return cleanup
+    /// assumes the opposite (its `unbind_to` takes the owner's records).
+    /// The Flow contract - who unwinds owner records on a signal, and in
+    /// what interleaving with the serial cleanups, GNU's innermost-first
+    /// (`unbind_to`, eval.c:3940-3954) - is V8's to name and reconcile.
     fn unwind_to_idle(&mut self) -> Result<(), EngineFault> {
         if let Some(id) = self.frame.take() {
             let _ = self.arena.vm_truncate_operands(id, 0);
@@ -1628,14 +1638,35 @@ where
         match self.return_disposition(frame) {
             None => Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame)),
             Some(ReturnDisposition::OwnerLocal) => self.return_owner_local(frame, value),
-            Some(ReturnDisposition::NeedsSerialCleanup) => self.escape(
-                op,
-                EscapeWhy::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup)),
-                frame,
-                operands,
-                branch_pc,
-                program,
-            ),
+            Some(ReturnDisposition::NeedsSerialCleanup) => {
+                // Before the escape, every owner entry above the base names
+                // a live record (C2's pairing). A record a previous exchange
+                // took under the stepper is the contract fault here, where it
+                // is still distinguishable from one the cleanup takes.
+                let bind_base = self.arena.vm(frame).map(|vm| vm.bind_base);
+                let Some(bind_base) = bind_base else {
+                    return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
+                };
+                if self.arena.bindings().above(bind_base).any(|record| {
+                    matches!(record, OwnerRecord::Plain(entry) if !self.plain.record_live(entry.record))
+                }) {
+                    tracing::error!(
+                        op = ?op,
+                        "a Return found an owner entry whose record the slab no longer holds"
+                    );
+                    return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                        RecordStack::Bindings,
+                    )));
+                }
+                self.escape(
+                    op,
+                    EscapeWhy::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup)),
+                    frame,
+                    operands,
+                    branch_pc,
+                    program,
+                )
+            }
         }
     }
 
@@ -1654,10 +1685,12 @@ where
         else {
             return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
         };
-        self.arena.handlers_mut().truncate(handler_base);
+        // Records first, then handlers: a fault in the record unwind keeps
+        // the scene whole, handlers included.
         if let Err(fault) = self.unwind_owner_records_above(bind_base, false) {
             return Step::Stop(VmOutcome::Fault(fault));
         }
+        self.arena.handlers_mut().truncate(handler_base);
         self.exit_frame_with(frame, value)
     }
 
@@ -1730,10 +1763,24 @@ where
         else {
             return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
         };
-        self.arena.handlers_mut().truncate(handler_base);
+        // R1d: an owner truncation never touches a serial handler. A marker
+        // the cleanup left above `handler_base` is its contract failure,
+        // the fault before anything is truncated (as a leftover record
+        // marker faults in the unwind below).
+        if self.arena.handlers().has_serial_above(handler_base) {
+            tracing::error!(
+                frame = ?frame,
+                "a Return cleanup left a serial handler marker above the frame's base"
+            );
+            return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                RecordStack::Handlers,
+            )));
+        }
+        // Records first, then handlers, as in the owner-local arm.
         if let Err(fault) = self.unwind_owner_records_above(bind_base, true) {
             return Step::Stop(VmOutcome::Fault(fault));
         }
+        self.arena.handlers_mut().truncate(handler_base);
         self.exit_frame_with(frame, value)
     }
 

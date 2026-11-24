@@ -625,9 +625,9 @@ pub(crate) fn effective_plain_bind<A: PlainAccess + ?Sized>(
 ///
 /// This is the restore without the unbind-time re-validation; the stepper's
 /// walk goes through [`effective_plain_unbind_checked`], which is this
-/// function behind [`PlainAccess::unbind_needs_serial`]. V4's idle undo and
-/// V8's unwind loop will take the checked form as well; neither call site
-/// exists yet.
+/// function behind [`PlainAccess::unbind_needs_serial`]. The stepper's
+/// `Return` unwinds and the idle undo (V4) take the checked form; V8's
+/// unwind loop will too.
 pub(crate) fn effective_plain_unbind<A: PlainAccess + ?Sized>(
     access: &mut A,
     record: SlotRecord,
@@ -645,7 +645,8 @@ pub(crate) fn effective_plain_unbind<A: PlainAccess + ?Sized>(
 /// visible: `do_one_unbind` takes the entry off the specpdl first
 /// (eval.c:3946-3955), `set_internal` then notifies the watchers with
 /// `Qunlet` (data.c:1697-1708), and only then stores the outer value
-/// (`SET_SYMBOL_VAL`, data.c:1720, after the `start:` label at :1716). A watcher that signals skips the store:
+/// (`SET_SYMBOL_VAL`, data.c:1720, after the `start:` label at :1716). A
+/// watcher that signals skips the store:
 /// the inner value stays in place (owner_bindings.rs:1265-1272 says the
 /// same). The owner-local restore runs take and store back to back because
 /// nothing runs between them; a hand-off with a watcher runs them around
