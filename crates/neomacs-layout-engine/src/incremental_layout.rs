@@ -2599,6 +2599,12 @@ pub struct LayoutStats {
     /// Number of callback-inhibited exhaustion-snapshot fallback passes run to
     /// publish this frame (0 for every ordinary converging frame).
     pub exhaustion_snapshot_passes: usize,
+    /// Number of post-prepass freshness rechecks performed on this frame
+    /// (0 when no fontification callback ran).
+    pub prepass_freshness_rechecks: usize,
+    /// Number of chrome outputs cloned/rooted for ExhaustionSnapshot reuse
+    /// during this frame (0 on every zero-retry converging frame).
+    pub chrome_exhaustion_captures: usize,
 }
 
 #[cfg(test)]

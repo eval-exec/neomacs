@@ -1359,15 +1359,47 @@ impl<'face> WindowChromeDisplayRowRequest<'face> {
 }
 
 /// Plain-value cache of the most recent non-flow chrome outputs evaluated for
-/// each `(window, chrome kind)` during one logical frame attempt's converging
+/// each `(window, chrome kind)` during one logical frame attempt's retry
 /// passes. Values are rooted in the frame attempt's `ScratchGcRootScope`.
-pub(crate) type CapturedChromeOutputs = rustc_hash::FxHashMap<
-    (
-        neomacs_display_protocol::types::DisplayWindowId,
-        WindowChromeKind,
-    ),
-    ModeLineDisplayOutput,
->;
+#[derive(Default)]
+pub(crate) struct CapturedChromeOutputs {
+    entries: rustc_hash::FxHashMap<
+        (
+            neomacs_display_protocol::types::DisplayWindowId,
+            WindowChromeKind,
+        ),
+        ModeLineDisplayOutput,
+    >,
+    captures: usize,
+}
+
+impl CapturedChromeOutputs {
+    pub(crate) fn record(
+        &mut self,
+        key: (
+            neomacs_display_protocol::types::DisplayWindowId,
+            WindowChromeKind,
+        ),
+        output: ModeLineDisplayOutput,
+    ) {
+        self.captures += 1;
+        self.entries.insert(key, output);
+    }
+
+    pub(crate) fn get(
+        &self,
+        key: &(
+            neomacs_display_protocol::types::DisplayWindowId,
+            WindowChromeKind,
+        ),
+    ) -> Option<&ModeLineDisplayOutput> {
+        self.entries.get(key)
+    }
+
+    pub(crate) const fn captures(&self) -> usize {
+        self.captures
+    }
+}
 
 pub(crate) enum WindowChromeEvalMode<'a> {
     Converging {
@@ -1458,7 +1490,7 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
                     for span in output.source_spans() {
                         neovm_core::emacs_core::eval::push_scratch_gc_root(span.source());
                     }
-                    captured.insert(key, output.clone());
+                    captured.record(key, output.clone());
                 }
                 output
             }

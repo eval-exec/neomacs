@@ -1276,9 +1276,11 @@ struct RedisplayLispLedger {
         crate::cursor_source_dependencies::CursorSourceDependencies,
     >,
     /// Most recent non-flow chrome outputs evaluated for each `(window, kind)`
-    /// during this frame's converging attempts. Values are rooted in the frame
+    /// during this frame's retry attempts. Values are rooted in the frame
     /// attempt's `ScratchGcRootScope` and reused by `ExhaustionSnapshot`.
     captured_chrome_outputs: crate::display_status_line::CapturedChromeOutputs,
+    /// Number of post-prepass freshness rechecks executed during this frame.
+    prepass_freshness_rechecks: usize,
 }
 
 /// A rejected body-source projection cannot retain its speculative end.
@@ -3652,6 +3654,8 @@ impl LayoutEngine {
                 let mut prepass_recollect = PrepassRecollectState::Fresh;
                 let allow_prepass_recollect = purpose == LayoutPurpose::Redisplay
                     && attempt_mode == FrameAttemptMode::Converging;
+                let capture_chrome_for_exhaustion = attempt_mode == FrameAttemptMode::Converging
+                    && layout_coordinator.retry_count() > 0;
                 let completed_row_key;
                 let window_layout = loop {
                     // A leaf hook/visibility continuation can re-enter this
@@ -3701,6 +3705,7 @@ impl LayoutEngine {
                         &face_attempt,
                         attempt_mode,
                         allow_prepass_recollect,
+                        capture_chrome_for_exhaustion,
                         &mut prepass_recollect,
                     );
                     // Every in-leaf continuation passes this boundary, including
@@ -4653,6 +4658,38 @@ impl LayoutEngine {
                 }
             }
 
+            if attempt_mode == FrameAttemptMode::ExhaustionSnapshot {
+                // Runtime guard (N3): every known Lisp seam is skipped during
+                // ExhaustionSnapshot, except TTY face realization advice under
+                // `realization.rs:777`. If unexpected Lisp mutated face definitions
+                // or window topology during the snapshot pass, refuse to publish
+                // a half-mutated frame and settle NoSafe cleanly.
+                let face_epoch_moved = evaluator.face_change_count() != frame_face_epoch.get();
+                let topology_moved = evaluator.frame_manager().window_topology_generation()
+                    != attempt_topology_generation;
+                if face_epoch_moved
+                    || topology_moved
+                    || evaluator.has_mode_line_display_flow()
+                    || evaluator.redisplay_hook_flow_pending()
+                {
+                    tracing::error!(
+                        presentation = presentation_id,
+                        face_epoch_moved,
+                        topology_moved,
+                        "rejecting exhaustion snapshot after unexpected state mutation"
+                    );
+                    frame_window_end_attempts.reject_all(evaluator);
+                    evaluator.retire_interaction_presentation(presentation_id);
+                    self.last_frame_display_state = None;
+                    self.reset_frame_attempt_state();
+                    let flow_pending = evaluator.has_mode_line_display_flow()
+                        || evaluator.redisplay_hook_flow_pending();
+                    return FrameLayoutInnerOutcome::Aborted {
+                        settle_no_safe: !flow_pending && purpose == LayoutPurpose::Redisplay,
+                    };
+                }
+            }
+
             break (
                 frame_params,
                 curr_window_infos,
@@ -4737,6 +4774,8 @@ impl LayoutEngine {
                 exhaustion_snapshot_passes: usize::from(
                     attempt_mode == FrameAttemptMode::ExhaustionSnapshot,
                 ),
+                prepass_freshness_rechecks: lisp_ledger.prepass_freshness_rechecks,
+                chrome_exhaustion_captures: lisp_ledger.captured_chrome_outputs.captures(),
                 ..LayoutStats::default()
             };
             let mut retained: rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix> =
@@ -6580,6 +6619,7 @@ impl LayoutEngine {
         face_attempt: &FrameFaceAttempt,
         attempt_mode: FrameAttemptMode,
         allow_prepass_recollect: bool,
+        capture_chrome_for_exhaustion: bool,
         prepass_recollect: &mut PrepassRecollectState,
     ) -> LeafLayoutAttempt {
         // A row walk may finish before coverage, freshness or viewport checks
@@ -6802,6 +6842,7 @@ impl LayoutEngine {
                             neovm_core::emacs_core::xdisp::RedisplayFontificationOutcome::Fontified
                         );
                     if allow_prepass_recollect
+                        && outcome.entered_callbacks()
                         && !preserve_fast_path_replan
                         && !evaluator.has_mode_line_display_flow()
                         && !evaluator.redisplay_hook_flow_pending()
@@ -6809,6 +6850,7 @@ impl LayoutEngine {
                             == topology_generation
                         && evaluator.face_change_count() == face_change_before_prepass
                     {
+                        lisp_ledger.prepass_freshness_rechecks += 1;
                         let after_prepass =
                             evaluator.window_layout_attempt_freshness(frame_id, window_id, buf_id);
                         if let Some(after_prepass) = after_prepass
@@ -7328,8 +7370,9 @@ impl LayoutEngine {
         let chrome_eval_mode = match attempt_mode {
             FrameAttemptMode::Converging => {
                 crate::display_status_line::WindowChromeEvalMode::Converging {
-                    captured: (!position_publication.is_synchronous_query())
-                        .then_some(&mut lisp_ledger.captured_chrome_outputs),
+                    captured: (capture_chrome_for_exhaustion
+                        && !position_publication.is_synchronous_query())
+                    .then_some(&mut lisp_ledger.captured_chrome_outputs),
                 }
             }
             FrameAttemptMode::ExhaustionSnapshot => {

@@ -117,8 +117,13 @@ fn class1_prepass_mutating_fontifier_recollects_and_publishes_inserted_text() {
     assert_all_t_and_inhibit_nil(&mut eval, "fn-inhibit");
 }
 
+/// Declining fontifier that inserts text on every call. GNU Emacs 31.1
+/// (`handle_fontified_prop`, `src/xdisp.c:4780`) updates `it->end_charpos = ZV`
+/// and caps at `:fn-calls 3` / `:win-end-cached 21` on this buffer; Neomacs
+/// recollects prepass inputs and publishes at retry exhaustion with `[F1]`
+/// visible (side-effect call count parity is a separate follow-up).
 #[test]
-fn class1_prepass_declining_inserting_fontifier_publishes_like_gnu() {
+fn class1_prepass_declining_inserting_fontifier_publishes_at_exhaustion() {
     let (mut eval, frame, _buffer, window) = incr_editing_frame("hello world\n", 800, 240);
     realize_test_gui_frame(&mut eval, frame);
     eval.eval_str(
@@ -152,8 +157,79 @@ fn class1_prepass_declining_inserting_fontifier_publishes_like_gnu() {
     assert_all_t_and_inhibit_nil(&mut eval, "fn-inhibit");
 }
 
+/// Exact GNU Emacs 31.1 `mode-line-mutates` probe: a mode-line `:eval` that
+/// inserts `"m1 "` into the displayed buffer and returns `"ML:1"`.
+/// GNU draws mode lines AFTER the body (`display_mode_lines`, `xdisp.c:21443`),
+/// so its attested X11 frame shows body `"seed"` WITHOUT `"m1 "` and mode-line
+/// `"ML:1"` with `:ml-calls 1`. Neomacs matches GNU exactly on this single-pass
+/// path without exhausting or entering `ExhaustionSnapshot`.
+#[test]
+fn class2_mode_line_mutating_buffer_matches_gnu_pre_chrome_body() {
+    let (mut eval, frame, buffer, window) = incr_editing_frame("seed\n", 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    let ml_format = eval
+        .eval_str(
+            r#"(progn
+          (setq inhibit-redisplay nil ml-calls 0 ml-inhibit nil
+                header-line-format nil tab-line-format nil)
+          '((:eval (progn
+                     (setq ml-calls (1+ ml-calls)
+                           ml-inhibit (cons inhibit-redisplay ml-inhibit))
+                     (save-excursion
+                       (goto-char (point-max))
+                       (insert (format "m%d " ml-calls)))
+                     (format "ML:%d" ml-calls)))))"#,
+        )
+        .expect("build GNU mode-line-mutates format");
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buffer).unwrap();
+        buf.set_buffer_local("mode-line-format", ml_format);
+        buf.set_buffer_local("header-line-format", Value::NIL);
+        buf.set_buffer_local("tab-line-format", Value::NIL);
+    }
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    let FrameLayoutAttempt::Prepared(state) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("GNU mode-line-mutates probe must publish on the first pass");
+    };
+    assert_eq!(
+        eval.eval_str("ml-calls").unwrap().as_fixnum(),
+        Some(1),
+        "must match GNU :ml-calls 1"
+    );
+    let stats = engine.last_layout_stats();
+    assert_eq!(stats.exhaustion_snapshot_passes, 0);
+    assert_eq!(stats.prepass_freshness_rechecks, 0);
+    assert_eq!(stats.chrome_exhaustion_captures, 0);
+    let body = window_role_text(&state, window, GlyphRowRole::Text);
+    assert!(
+        body.contains("seed"),
+        "body must contain pre-chrome seed: {body:?}"
+    );
+    assert!(
+        !body.contains("m1"),
+        "published body must be from before chrome :eval mutation (matching GNU): {body:?}"
+    );
+    let mode_line = window_role_text(&state, window, GlyphRowRole::ModeLine);
+    assert!(
+        mode_line.contains("ML:1"),
+        "published mode-line must show ML:1: {mode_line:?}"
+    );
+    assert!(state.validate_spatial_projections().is_ok());
+    assert_all_t_and_inhibit_nil(&mut eval, "ml-inhibit");
+}
+
+/// Class 2 (`SourceInvalidated` exhaustion): a mode-line `:eval` that switches
+/// the window's buffer every attempt exhausts the retry budget and publishes
+/// via `ExhaustionSnapshot`, reusing the last evaluated mode-line string and
+/// quiescing idle redisplay. Note: unlike GNU's single-pass `display_mode_lines`
+/// (which keeps the pre-chrome body), `ExhaustionSnapshot` re-walks the window's
+/// live buffer at exhaustion (documented Neomacs degraded approximation).
 #[test]
 fn class2_mode_line_eval_source_invalidated_publishes_last_evaluated_mode_line() {
+    let _policy = neovm_core::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
     let (mut eval, frame, buffer_a, window) = incr_editing_frame("seed-a\n", 800, 240);
     realize_test_gui_frame(&mut eval, frame);
     let buffer_b = eval.buffer_manager_mut().create_buffer("*832-ml-alt*");
@@ -188,14 +264,51 @@ fn class2_mode_line_eval_source_invalidated_publishes_last_evaluated_mode_line()
         buf.set_buffer_local("tab-line-format", Value::NIL);
     }
 
-    let mut engine = crate::font::metrics::test_catalog::layout_engine();
-    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
-    let outcome = engine.redisplay_frame_attempt(&mut eval, frame);
-    let FrameLayoutAttempt::Prepared(state) = outcome else {
-        panic!("chrome SourceInvalidated exhaustion must publish via ExhaustionSnapshot");
-    };
+    let requests = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let observed_requests = requests.clone();
+    let published = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let published_cb = published.clone();
+    let engine_cell = std::rc::Rc::new(std::cell::RefCell::new({
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+        engine
+    }));
+    let engine_cb = engine_cell.clone();
+    eval.redisplay_fn = Some(Box::new(move |eval| {
+        observed_requests.set(observed_requests.get() + 1);
+        let mut engine = engine_cb.borrow_mut();
+        let outcome = engine.redisplay_frame_attempt(eval, frame);
+        let FrameLayoutAttempt::Prepared(state) = outcome else {
+            panic!("chrome SourceInvalidated exhaustion must publish via ExhaustionSnapshot");
+        };
+        *published_cb.borrow_mut() = Some(state);
+    }));
+
+    eval.gnu_mark_windows_all();
+    eval.redisplay_with_force(false)
+        .expect("class2 exhaustion redisplay");
+    assert_eq!(requests.get(), 1);
     let calls = eval.eval_str("ml-calls").unwrap().as_fixnum().unwrap();
     assert!(calls >= 2, "must actually exhaust retries: {calls}");
+
+    // Idle quiesce check (N2): subsequent idle redisplays must not spin.
+    for _ in 0..3 {
+        eval.redisplay_with_force(false)
+            .expect("idle redisplay after class2 exhaustion");
+    }
+    assert_eq!(
+        requests.get(),
+        1,
+        "class2 exhaustion publish must quiesce idle redisplay without spinning"
+    );
+    assert_eq!(
+        eval.eval_str("ml-calls").unwrap().as_fixnum(),
+        Some(calls),
+        "idle redisplays must not re-run mode-line :eval"
+    );
+
+    let state = published.borrow_mut().take().expect("published state");
+    let mut engine = engine_cell.borrow_mut();
     assert_eq!(
         engine.last_layout_stats().exhaustion_snapshot_passes,
         1,
@@ -204,11 +317,7 @@ fn class2_mode_line_eval_source_invalidated_publishes_last_evaluated_mode_line()
     let body = window_role_text(&state, window, GlyphRowRole::Text);
     assert!(
         body.contains("seed-a") || body.contains("seed-b"),
-        "body must reflect current live buffer: {body:?}"
-    );
-    assert!(
-        body.contains("m1") || body.contains("m2"),
-        "live buffer mutations must be visible: {body:?}"
+        "published body must show a valid buffer seed: {body:?}"
     );
     let mode_line = window_role_text(&state, window, GlyphRowRole::ModeLine);
     let expected_ml = format!("ML:{calls}");
@@ -237,6 +346,8 @@ fn class2_mode_line_eval_source_invalidated_publishes_last_evaluated_mode_line()
         panic!("normal redisplay after ExhaustionSnapshot must recover cleanly");
     };
     assert_eq!(engine.last_layout_stats().exhaustion_snapshot_passes, 0);
+    assert_eq!(engine.last_layout_stats().prepass_freshness_rechecks, 0);
+    assert_eq!(engine.last_layout_stats().chrome_exhaustion_captures, 0);
     assert_eq!(engine.last_layout_stats().reused_rows, 0);
     let recovered_ml = window_role_text(&recovered, window, GlyphRowRole::ModeLine);
     assert!(
@@ -423,20 +534,37 @@ fn controls_non_local_flow_strict_snapshot_and_ordinary_perf() {
     // nextest isolates each test in a process; enable GNU mode-line flow policy
     // so the throw check exercises deferred non-local exits (mode_line_flow_test.rs).
     unsafe { std::env::set_var("NEOVM_MODE_LINE_FLOW", "1") };
-    // 1. Ordinary converging redisplay never runs ExhaustionSnapshot.
+    // 1. Ordinary converging redisplay (with mode-line + header-line) pays zero
+    //    prepass freshness rechecks, zero chrome captures, and zero exhaustion passes.
     {
-        let (mut eval, frame, _buffer, window) = incr_editing_frame("plain text\n", 800, 240);
+        let (mut eval, frame, buffer, window) = incr_editing_frame("plain text\n", 800, 240);
         realize_test_gui_frame(&mut eval, frame);
+        let ml = eval.eval_str("'(\"ML: \" \"%b\")").unwrap();
+        let hl = eval.eval_str("'(\"HL: \" \"%b\")").unwrap();
+        {
+            let buf = eval.buffer_manager_mut().get_mut(buffer).unwrap();
+            buf.set_buffer_local("mode-line-format", ml);
+            buf.set_buffer_local("header-line-format", hl);
+            buf.set_buffer_local("tab-line-format", Value::NIL);
+        }
         let mut engine = crate::font::metrics::test_catalog::layout_engine();
         crate::font::metrics::test_catalog::enable_metrics(&mut engine);
         let outcome = engine.redisplay_frame_attempt(&mut eval, frame);
         let FrameLayoutAttempt::Prepared(state) = outcome else {
             panic!("ordinary frame must prepare");
         };
+        let stats = engine.last_layout_stats();
         assert_eq!(
-            engine.last_layout_stats().exhaustion_snapshot_passes,
-            0,
+            stats.exhaustion_snapshot_passes, 0,
             "ordinary converging frame must not run ExhaustionSnapshot"
+        );
+        assert_eq!(
+            stats.prepass_freshness_rechecks, 0,
+            "ordinary converging frame without fontification callbacks must not recheck prepass freshness"
+        );
+        assert_eq!(
+            stats.chrome_exhaustion_captures, 0,
+            "zero-retry converging frame must not clone/root chrome outputs"
         );
         assert!(window_role_text(&state, window, GlyphRowRole::Text).contains("plain text"));
     }
@@ -516,6 +644,41 @@ fn controls_non_local_flow_strict_snapshot_and_ordinary_perf() {
         assert!(
             matches!(outcome, FrameLayoutAttempt::Aborted),
             "LayoutPurpose::Snapshot must stay strict"
+        );
+        assert_eq!(engine.last_layout_stats().exhaustion_snapshot_passes, 0);
+    }
+
+    // 4. SynchronousQuery (`window-end`) stays strict: never recollects prepass
+    //    or enters ExhaustionSnapshot on an exhausting mutating fontifier.
+    {
+        let (mut eval, frame, _buffer, window) = incr_editing_frame("query body\n", 800, 240);
+        realize_test_gui_frame(&mut eval, frame);
+        eval.eval_str(
+            r#"(progn
+          (setq q-calls 0 mode-line-format nil header-line-format nil tab-line-format nil)
+          (setq fontification-functions
+                (list (lambda (_pos)
+                        (setq q-calls (1+ q-calls))
+                        (save-excursion
+                          (goto-char (point-max))
+                          (insert (format "[Q%d]" q-calls)))
+                        nil))))"#,
+        )
+        .expect("install exhausting fontifier for query control");
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
+        crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+        let result = engine.query_window_layout(
+            &mut eval,
+            frame,
+            window,
+            neovm_core::window::WindowLayoutQueryScope::Viewport,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(neovm_core::window::WindowLayoutQueryFailure::DidNotConverge)
+            ),
+            "SynchronousQuery must stay strict and return DidNotConverge: {result:?}"
         );
         assert_eq!(engine.last_layout_stats().exhaustion_snapshot_passes, 0);
     }

@@ -72,6 +72,10 @@ impl FrameLayoutCoordinator {
         }
     }
 
+    pub(crate) const fn retry_count(&self) -> usize {
+        self.retry_count
+    }
+
     pub(crate) fn request_retry(
         &mut self,
         request: FrameRelayoutRequest,
