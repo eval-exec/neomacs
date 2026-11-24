@@ -1012,17 +1012,29 @@ impl Default for FontMetricsService {
     }
 }
 
-fn process_symbol_policy_changed(policy: &SymbolFontPolicy) -> bool {
-    static APPLIED: std::sync::OnceLock<std::sync::Mutex<SymbolFontPolicy>> =
-        std::sync::OnceLock::new();
-    let applied = APPLIED.get_or_init(|| std::sync::Mutex::new(SymbolFontPolicy::default()));
+/// Process-wide symbol selection. The char-table write tick is not part of
+/// it: `make-char-table` moves that tick without changing which characters
+/// use the primary font.
+fn process_symbol_policy_changed(use_primary_font: bool, symbol_ranges: &[(u32, u32)]) -> bool {
+    struct Applied {
+        use_primary_font: bool,
+        symbol_ranges: Vec<(u32, u32)>,
+    }
+    static APPLIED: std::sync::OnceLock<std::sync::Mutex<Applied>> = std::sync::OnceLock::new();
+    let applied = APPLIED.get_or_init(|| {
+        std::sync::Mutex::new(Applied {
+            use_primary_font: false,
+            symbol_ranges: Vec::new(),
+        })
+    });
     let mut guard = applied
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if *guard == *policy {
+    if guard.use_primary_font == use_primary_font && guard.symbol_ranges == symbol_ranges {
         false
     } else {
-        *guard = policy.clone();
+        guard.use_primary_font = use_primary_font;
+        guard.symbol_ranges = symbol_ranges.to_vec();
         true
     }
 }
@@ -1525,7 +1537,18 @@ impl FontMetricsService {
                 }
                 self.font_file_cache = FontFileCache::new();
             }
-            self.clear_caches();
+            // A native catalog change drops every frame's orders. A render
+            // edge drops them only when this process has not applied these
+            // options yet, so the font-at host's later sync stays local.
+            let process_rendering_changed =
+                policy_changed && process_render_options_changed(options);
+            let clear_orders =
+                matches!(native_change, FontCatalogChange::Changed) || process_rendering_changed;
+            if clear_orders {
+                self.clear_caches();
+            } else {
+                self.clear_local_caches();
+            }
             // GNU ftcrfont_cached_font_ok rejects the old opened font when
             // GSettings options differ. Reobserve under its durable ID for a
             // settings edge as well as a replaced file/catalog edge.
@@ -1568,7 +1591,10 @@ impl FontMetricsService {
         // The font-at host is a second service. Its first sync adopts the
         // policy main already applied, so only a process-wide change drops
         // the shared fallback orders.
-        if process_symbol_policy_changed(&self.symbol_font_policy) {
+        if process_symbol_policy_changed(
+            self.symbol_font_policy.key.use_primary_font,
+            &self.symbol_font_policy.symbol_ranges,
+        ) {
             self.clear_caches();
         } else {
             self.clear_local_caches();

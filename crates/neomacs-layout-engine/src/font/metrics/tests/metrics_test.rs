@@ -5083,6 +5083,16 @@ fn second_service_adopts_symbol_policy_without_clearing_orders() {
         crate::font::fallback_order::fallback_order_groups_for_frame(31),
         1
     );
+    // make-syntax-table is a Lisp wrapper around make-char-table. This eval
+    // context has the primitive. The write moves char_table_write_tick and
+    // leaves the symbol selection alone.
+    let tick_before = neovm_core::emacs_core::fontset::char_script_table_generation();
+    eval.eval_str("(make-char-table nil)")
+        .expect("make-char-table");
+    assert!(
+        neovm_core::emacs_core::fontset::char_script_table_generation() > tick_before,
+        "the char-table write must move the process-wide tick"
+    );
     let mut font_at = make_svc();
     assert!(font_at.synchronize_symbol_font_policy(true, None).changed());
     assert_eq!(
@@ -5126,6 +5136,54 @@ fn second_service_display_identity_keeps_the_moved_front() {
         crate::font::fallback_order::fallback_order_groups_for_frame(32),
         1,
         "a second service binding the same render options must not clear fallback orders"
+    );
+}
+
+#[test]
+fn second_service_catalog_sync_keeps_the_moved_front() {
+    use neomacs_display_protocol::{
+        DesktopFontHinting, DesktopFontRenderOptions, GraphicalBackend,
+    };
+
+    let display = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland);
+    let mut main = make_svc();
+    let mut font_at = make_svc();
+    main.set_display_identity(display.clone());
+    font_at.set_display_identity(display.clone());
+    assert!(
+        display.observe_font_render_options(DesktopFontRenderOptions {
+            hinting: DesktopFontHinting::Full,
+            ..Default::default()
+        })
+    );
+    let edge = main.synchronize_font_catalog();
+    assert!(edge.rendering_changed);
+    crate::font::fallback_order::promote_fallback(
+        &crate::font::fallback_order::FallbackOrderKey {
+            fontset: crate::font::fallback_order::FaceFontsetId {
+                frame: 33,
+                face: 1,
+                face_epoch: 1,
+            },
+            family: "Probe".to_string(),
+            weight: 400,
+            slant: 0,
+            width: 100,
+            size: None,
+            fontset_generation: 1,
+        },
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(33),
+        1
+    );
+    let follow = font_at.synchronize_font_catalog();
+    assert!(follow.rendering_changed);
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(33),
+        1,
+        "a second service's catalog sync of the same render edge must not clear fallback orders"
     );
 }
 
