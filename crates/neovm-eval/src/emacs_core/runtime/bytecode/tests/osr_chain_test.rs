@@ -474,9 +474,10 @@ fn osr_hof_chain_in_place_resumes_the_current_callback_and_mapping_once() {
     crate::emacs_core::jit::inline::force_inline_for_test(None);
 }
 
-/// A verified driver has no frame-depth check. The same precise deopt that
-/// the checked driver resumes in place must finish on the checked driver
-/// instead of continuing inside the verified monomorph.
+/// An eager physical body has no lazy proof, so this verified precise deopt
+/// stays on the checked driver. It would still pass if `proves_depth`
+/// returned true unconditionally. The lazy body that does install in place
+/// is [`verified_osr_hof_lazy_body_installs_in_place`].
 #[cfg(feature = "jit")]
 #[test]
 fn verified_osr_precise_deopt_finishes_on_the_checked_driver() {

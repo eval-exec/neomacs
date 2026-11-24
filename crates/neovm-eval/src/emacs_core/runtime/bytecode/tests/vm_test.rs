@@ -609,8 +609,99 @@ fn resumed_matching_depth_enters_the_verified_driver() {
     );
 }
 
-/// A verified body resumed with fewer slots than the proof at `start_pc`
-/// must not read the caller's slot through the verified driver.
+/// One slot past the proof, still within `max_stack`, stays checked.
+/// Only `proves_depth` rejects the verified driver: depth 2 passes
+/// `depth <= max_stack`. The checked driver then refuses the `stack-ref`
+/// push, because that push would pass `max_stack`.
+#[test]
+fn resumed_depth_past_the_proof_stays_checked() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(r#"(make-byte-code 0 "\300\000\207" [42] 2)"#)
+        .expect("make-byte-code");
+    let func = value.get_bytecode_data().expect("bytecode");
+    assert!(func.executes_verified_ops());
+    assert_eq!(func.max_stack().get(), 2);
+    let proof = func
+        .lazy_gnu_code()
+        .as_ref()
+        .and_then(|lazy| lazy.proof())
+        .expect("published proof");
+    assert!(proof.proves_depth(1, 1));
+    assert!(!proof.proves_depth(1, 2));
+    let before = super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed);
+    let mut vm = new_vm(&mut eval);
+    let deep = vm.run_resumed_frame(
+        func,
+        value,
+        1,
+        &[Value::fixnum(7), Value::fixnum(9)],
+        0,
+        &[],
+        0,
+        0,
+    );
+    assert_eq!(
+        super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed),
+        before,
+        "depth past the proof must not enter the verified driver"
+    );
+    let Err(flow) = deep else {
+        panic!("the checked push past max_stack must signal, got {deep:?}");
+    };
+    let rendered = crate::emacs_core::format_eval_result(&Err(map_flow(flow)));
+    assert!(
+        rendered.contains("Invalid byte-code"),
+        "depth past the proof: {rendered}"
+    );
+}
+
+/// A clone whose `max_stack` changed after the shared proof was published
+/// stays checked, even when the live depth still equals the proof.
+#[test]
+fn resumed_max_stack_mismatch_stays_checked() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(r#"(make-byte-code 0 "\300\000\207" [42] 2)"#)
+        .expect("make-byte-code");
+    let original = value.get_bytecode_data().expect("bytecode");
+    assert!(
+        original.executes_verified_ops(),
+        "decode before set_max_stack, so the proof uses the original limit"
+    );
+    let proof = original
+        .lazy_gnu_code()
+        .as_ref()
+        .and_then(|lazy| lazy.proof())
+        .expect("published proof");
+    assert_eq!(proof.max_stack(), 2);
+    let mut mismatched = original.clone();
+    mismatched.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
+    assert!(std::sync::Arc::ptr_eq(
+        original.lazy_gnu_code().as_ref().expect("lazy"),
+        mismatched.lazy_gnu_code().as_ref().expect("lazy clone"),
+    ));
+    assert_ne!(mismatched.max_stack().get(), proof.max_stack());
+    let before = super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed);
+    let mut vm = new_vm(&mut eval);
+    let resumed = vm.run_resumed_frame(&mismatched, value, 1, &[Value::fixnum(42)], 0, &[], 0, 0);
+    assert_eq!(
+        resumed.expect("the checked driver still accepts this depth"),
+        Value::fixnum(42)
+    );
+    assert_eq!(
+        super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed),
+        before,
+        "a stale max_stack must not enter the verified driver"
+    );
+}
+
+/// An eager body has no lazy proof, so this resume stays checked even if
+/// `proves_depth` were unconditional. It must still leave the caller slot
+/// alone. The depth rule on lazy code is the depth-0 case above and
+/// [`resumed_lazy_short_stack_does_not_read_below_frame_base`].
 #[test]
 fn resumed_short_stack_does_not_read_below_frame_base() {
     crate::test_utils::init_test_tracing();
@@ -654,6 +745,52 @@ fn resumed_short_stack_does_not_read_below_frame_base() {
     assert!(
         rendered.contains("Invalid byte-code"),
         "short resume: {rendered}"
+    );
+}
+
+/// The eager short-stack row has no proof. This lazy body is rejected
+/// because an empty stack is not the proven depth at the `stack-ref`,
+/// and the caller slot must survive.
+#[test]
+fn resumed_lazy_short_stack_does_not_read_below_frame_base() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(r#"(make-byte-code 0 "\300\000\207" [42] 2)"#)
+        .expect("make-byte-code");
+    let func = value.get_bytecode_data().expect("bytecode");
+    assert!(func.executes_verified_ops());
+    assert!(func.lazy_gnu_code().is_some());
+    let before = super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed);
+    let mut vm = new_vm(&mut eval);
+    vm.ctx.bc_buf.push(Value::fixnum(4242));
+    vm.ctx
+        .specpdl
+        .push(crate::emacs_core::eval::SpecBinding::LexicalEnv {
+            old_lexenv: Value::NIL,
+        });
+    let short = vm.run_resumed_frame(func, value, 1, &[], 0, &[], 0, 0);
+    assert_eq!(
+        vm.ctx.bc_buf.as_slice(),
+        &[Value::fixnum(4242)],
+        "a short lazy resume must not consume the caller slot"
+    );
+    assert!(
+        vm.ctx.specpdl.is_empty(),
+        "a rejected lazy resume must drop the frame's dynamic binds"
+    );
+    let Err(flow) = short else {
+        panic!("short lazy resume must be invalid byte-code, got {short:?}");
+    };
+    let rendered = crate::emacs_core::format_eval_result(&Err(map_flow(flow)));
+    assert!(
+        rendered.contains("Invalid byte-code"),
+        "short lazy resume: {rendered}"
+    );
+    assert_eq!(
+        super::VERIFIED_RESUME_ENTRIES.load(std::sync::atomic::Ordering::Relaxed),
+        before,
+        "a short lazy resume must not enter the verified driver"
     );
 }
 
