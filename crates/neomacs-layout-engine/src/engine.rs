@@ -3346,39 +3346,6 @@ impl LayoutEngine {
                             params.char_width,
                         ),
                     );
-                    if params.window_system
-                        && params.measurement_rows.is_none()
-                        && params.measurement_pixels.is_none()
-                        && params.source_extent == crate::types::WindowSourceExtent::Viewport
-                        && let Some(buffer) = evaluator
-                            .buffer_manager()
-                            .get(neovm_core::buffer::BufferId(params.buffer_id))
-                        && let Some(metrics) = self.font_metrics.as_mut()
-                    {
-                        let start =
-                            neovm_core::buffer::CharPos0::new(key.window_start.max(0) as usize);
-                        let view =
-                            crate::neovm_bridge::BorrowedLayoutBuffer::for_window_with_symbols(
-                                buffer,
-                                evaluator.variables(),
-                                start,
-                                1,
-                                crate::display_property::DisplayPropertyTarget::Graphical,
-                                evaluator.symbol_mode(),
-                            );
-                        if let Some(face_line) =
-                            crate::buffer_source::window_render::shorter_face_line_at_window_start(
-                                &view,
-                                params.window_id as u64,
-                                start,
-                                default_resolved,
-                                self.font_sizing,
-                                metrics,
-                            )
-                        {
-                            geometry.widen_body_for_shorter_face(face_line);
-                        }
-                    }
                     let projected = scroll
                         .is_none()
                         .then(|| {
@@ -3406,7 +3373,41 @@ impl LayoutEngine {
                         });
                     if let Some(prefix) = scroll.as_ref().or(projected.as_ref())
                         && let Some(prefix_sources) = prefix_sources
-                        && let Some((replay, faces, sources)) =
+                    {
+                        if params.window_system
+                            && params.measurement_rows.is_none()
+                            && params.measurement_pixels.is_none()
+                            && params.source_extent == crate::types::WindowSourceExtent::Viewport
+                            && let Some(buffer) = evaluator
+                                .buffer_manager()
+                                .get(neovm_core::buffer::BufferId(params.buffer_id))
+                            && let Some(metrics) = self.font_metrics.as_mut()
+                        {
+                            let start =
+                                neovm_core::buffer::CharPos0::new(key.window_start.max(0) as usize);
+                            let view =
+                                crate::neovm_bridge::BorrowedLayoutBuffer::for_window_with_symbols(
+                                    buffer,
+                                    evaluator.variables(),
+                                    start,
+                                    1,
+                                    crate::display_property::DisplayPropertyTarget::Graphical,
+                                    evaluator.symbol_mode(),
+                                );
+                            if let Some(face_line) =
+                                crate::buffer_source::window_render::shorter_face_line_at_window_start(
+                                    &view,
+                                    params.window_id as u64,
+                                    start,
+                                    default_resolved,
+                                    self.font_sizing,
+                                    metrics,
+                                )
+                            {
+                                geometry.widen_body_for_shorter_face(face_line);
+                            }
+                        }
+                        if let Some((replay, faces, sources)) =
                             self.prepared_viewports.complete_forward_scroll(
                                 frame_id,
                                 DisplayWindowId::new(params.window_id),
@@ -3417,15 +3418,16 @@ impl LayoutEngine {
                                 params.force_start,
                                 prefix_sources,
                             )
-                    {
-                        if let Some(sources) = sources {
-                            lisp_ledger
-                                .replay_sources
-                                .insert(DisplayWindowId::new(params.window_id), sources);
+                        {
+                            if let Some(sources) = sources {
+                                lisp_ledger
+                                    .replay_sources
+                                    .insert(DisplayWindowId::new(params.window_id), sources);
+                            }
+                            cursor_only = Some(replay);
+                            prepared_faces = Some(faces);
+                            scroll = None;
                         }
-                        cursor_only = Some(replay);
-                        prepared_faces = Some(faces);
-                        scroll = None;
                     }
                 }
                 // A cursor-only decline or edit can discover a new viewport

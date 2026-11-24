@@ -300,7 +300,9 @@ impl ScrollCoverage {
         let fills_viewport = height >= regions.text_body.height;
         // A suffix can start in a visual continuation: it certifies scroll
         // coverage, not a fresh viewport starting at that buffer character.
-        let complete_viewport = !bridge && (fills_viewport || visible == capacity);
+        // Only pixel coverage of the text body certifies a complete viewport;
+        // clamping at MAX_ROWS must not falsely mark a short-face page complete.
+        let complete_viewport = !bridge && fills_viewport;
         if !bridge {
             rows.truncate(visible);
         }
@@ -1387,10 +1389,10 @@ impl LayoutEngine {
             .filter(|height| *height >= 1.0 && *height + 1.0 <= key.char_height)
             .reduce(f32::min)
         {
-            let widened = (body_height / shortest)
-                .ceil()
-                .min(crate::row_layout::worker::MAX_PROGRAMS as f32)
-                as usize;
+            let widened = (body_height / shortest).ceil() as usize;
+            if widened > crate::row_layout::worker::MAX_PROGRAMS {
+                return Err(RowProgramError::Budget);
+            }
             capture.row_count = capture.row_count.max(widened);
         }
         for face in &faces {

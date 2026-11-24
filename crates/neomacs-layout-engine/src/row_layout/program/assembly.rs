@@ -142,9 +142,9 @@ impl RowProgram {
                     .into_iter()
                     .filter_map(|(index, kind)| {
                         let shifted = if merged_first {
-                            base + index.checked_sub(1)?
+                            base.checked_add(index)?.checked_sub(1)?
                         } else {
-                            base + index
+                            base.checked_add(index)?
                         };
                         Some((shifted, kind))
                     }),
