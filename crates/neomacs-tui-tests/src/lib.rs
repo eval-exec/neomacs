@@ -47,6 +47,7 @@ mod observation;
 pub mod oracle;
 mod pty_output;
 mod recording;
+mod screen_dump;
 pub mod startup;
 
 pub use launch::TuiLaunch;
@@ -57,6 +58,7 @@ pub use recording::TuiRecordingScope;
 use recording::{
     RecordingConfig, RecordingExitStatus, RecordingIdentity, SessionRecording, TerminalSize,
 };
+pub use screen_dump::CanonicalScreenDump;
 use startup::{SessionName, StartupObservation};
 
 // ── Session ──────────────────────────────────────────────────────────
@@ -2795,6 +2797,10 @@ mod snapshot_tests;
 #[cfg(test)]
 #[path = "tests/package_harness_test.rs"]
 mod package_harness_tests;
+
+#[cfg(test)]
+#[path = "tests/screen_dump_test.rs"]
+mod screen_dump_tests;
 
 pub mod git_fixture;
 pub mod package_harness;
