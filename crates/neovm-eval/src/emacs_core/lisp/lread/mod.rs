@@ -8,7 +8,7 @@ use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_max_args, expect_min_args};
 use neovm_value::heap_types::LispString;
-use neovm_value::intern::{intern, resolve_sym};
+use neovm_value::intern::{intern, resolve_sym_lisp_string};
 use neovm_value::value::*;
 
 // ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ fn lread_string_text(value: &Value) -> Option<String> {
 pub fn expect_lisp_string(value: &Value) -> Result<LispString, Flow> {
     match value.kind() {
         ValueKind::String => Ok(value.as_lisp_string().expect("checked string").clone()),
-        ValueKind::Symbol(id) => Ok(LispString::from_utf8(resolve_sym(id))),
+        ValueKind::Symbol(id) => Ok(resolve_sym_lisp_string(id).clone()),
         ValueKind::Nil => Ok(LispString::from_unibyte(b"nil".to_vec())),
         ValueKind::T => Ok(LispString::from_unibyte(b"t".to_vec())),
         _other => Err(signal(

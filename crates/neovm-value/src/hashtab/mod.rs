@@ -10,7 +10,7 @@
 use crate::error::LispCondition;
 use crate::error::{EvalResult, Flow, signal};
 use crate::error::{expect_args, expect_max_args, expect_min_args};
-use crate::intern::{SymId, resolve_sym};
+use crate::intern::resolve_sym_lisp_string;
 use crate::tagged::SymbolMode;
 use crate::tagged::gc::with_tagged_heap;
 use crate::value::positions::{CharLen, CharPos0, CharRange};
@@ -394,6 +394,17 @@ pub fn knuth_hash_index(hash: u32, bits: u32) -> usize {
     ((product as u64) >> (32 - bits)) as usize
 }
 
+fn hash_symbol_name_for_equal(id: crate::intern::SymId, hasher: &mut DefaultHasher) {
+    // UTF-8 names keep the `&str` hash the fallback used before. A raw-byte
+    // name has no `&str`, so it hashes its bytes and does not panic.
+    let name = resolve_sym_lisp_string(id);
+    if let Some(text) = name.as_utf8_str() {
+        text.hash(hasher);
+    } else {
+        name.as_bytes().hash(hasher);
+    }
+}
+
 fn hash_value_for_equal(
     value: &Value,
     hasher: &mut DefaultHasher,
@@ -419,7 +430,7 @@ fn hash_value_for_equal(
         }
         ValueKind::Symbol(id) => {
             4_u8.hash(hasher);
-            resolve_sym(id).hash(hasher);
+            hash_symbol_name_for_equal(id, hasher);
         }
         ValueKind::String => {
             6_u8.hash(hasher);
@@ -475,12 +486,12 @@ fn hash_value_for_equal(
         }
         ValueKind::Subr(id) => {
             13_u8.hash(hasher);
-            resolve_sym(id).hash(hasher);
+            hash_symbol_name_for_equal(id, hasher);
         }
         ValueKind::Veclike(VecLikeType::Subr) => {
             13_u8.hash(hasher);
             let id = value.as_subr_id().unwrap();
-            resolve_sym(id).hash(hasher);
+            hash_symbol_name_for_equal(id, hasher);
         }
         ValueKind::Veclike(VecLikeType::Lambda) => {
             14_u8.hash(hasher);
