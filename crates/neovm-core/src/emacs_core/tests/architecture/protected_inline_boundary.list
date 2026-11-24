@@ -234,6 +234,7 @@ always	tagged/value.rs	TaggedValue::is_veclike	run_loop,apply1,builtin_mapcar_2,
 always	tagged/value.rs	TaggedValue::kind	run_loop,funcall_general_untraced,mapcar1_with_callee,inline
 always	tagged/value.rs	TaggedValue::veclike_type	run_loop,apply1,funcall_general_untraced,builtin_mapcar_2,builtin_mapc_2,inline
 always	tagged/value.rs	TaggedValue::xcons_ptr	run_loop,funcall_general_untraced,mapcar1_with_callee,inline
+never	tagged/value.rs	TaggedValue::cons_accessor_requires_a_cons	run_loop,funcall_general_untraced,mapcar1_with_callee # #[cold] #[inline(never)] #[track_caller]: the cons-tag failure, so an unfolded site keeps a compare and one call
 always	tagged/value.rs	TaggedValue::xfixnum	run_loop,inline
 exempt	buffer/buffer.rs	BufferManager::current_buffer	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 exempt	buffer/buffer.rs	LiveBuffers::get	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass

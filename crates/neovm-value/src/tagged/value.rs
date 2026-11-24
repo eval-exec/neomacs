@@ -894,6 +894,16 @@ impl TaggedValue {
         }
     }
 
+    /// Tag failure shared by the cons accessors. Cold and never-inlined so a
+    /// site that does not fold keeps a compare and one call. `track_caller`
+    /// reports the accessor.
+    #[cold]
+    #[inline(never)]
+    #[track_caller]
+    fn cons_accessor_requires_a_cons() -> ! {
+        panic!("cons accessor requires a cons");
+    }
+
     /// Extract raw cons cell pointer. Panics if this is not a cons.
     ///
     /// A caller that has already tested [`Self::is_cons`] does not pay for
@@ -902,7 +912,9 @@ impl TaggedValue {
     #[inline(always)]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn xcons_ptr(self) -> *const ConsCell {
-        assert!(self.is_cons(), "cons accessor requires a cons");
+        if !self.is_cons() {
+            Self::cons_accessor_requires_a_cons();
+        }
         super::collection_reads::observe(self);
         (self.0 & !TAG_MASK) as *const ConsCell
     }
@@ -985,7 +997,9 @@ impl TaggedValue {
     pub fn cons_car_unobserved(self) -> Self {
         // Same tag compare as the caller's `is_cons` test. On that path the
         // branch deletes; a bare call panics instead of reading a wild word.
-        assert!(self.is_cons(), "cons accessor requires a cons");
+        if !self.is_cons() {
+            Self::cons_accessor_requires_a_cons();
+        }
         // An admitted cons has exact tag TAG_CONS. Subtracting it
         // recovers the same aligned base and permits a field displacement.
         unsafe {
@@ -1001,7 +1015,9 @@ impl TaggedValue {
     pub fn cons_cdr_unobserved(self) -> Self {
         // Same tag compare as the caller's `is_cons` test. On that path the
         // branch deletes; a bare call panics instead of reading a wild word.
-        assert!(self.is_cons(), "cons accessor requires a cons");
+        if !self.is_cons() {
+            Self::cons_accessor_requires_a_cons();
+        }
         // An admitted cons has exact tag TAG_CONS. Subtracting it
         // recovers the same aligned base and permits a field displacement.
         unsafe { (*(self.0.wrapping_sub(TAG_CONS) as *const ConsCell)).cdr() }
