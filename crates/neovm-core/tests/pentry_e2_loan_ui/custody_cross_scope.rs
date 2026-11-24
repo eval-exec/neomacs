@@ -12,3 +12,17 @@ fn lend<'inner, 'outer: 'inner, 'era>(
 }
 
 fn main() {}
+
+// Compile-only neighbour for the included keeper_custody.rs: the return
+// envelope names the serial ticket identity and the ended owner. Kept below
+// main so the golden's line numbers stay put.
+mod serial_ticket {
+    #[derive(Clone, Copy)]
+    pub(crate) struct TicketIdentity;
+    pub(crate) struct ReturnableSerialOwner;
+    impl ReturnableSerialOwner {
+        pub(crate) fn identity(&self) -> TicketIdentity {
+            TicketIdentity
+        }
+    }
+}
