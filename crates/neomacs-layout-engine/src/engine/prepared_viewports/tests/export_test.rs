@@ -87,6 +87,203 @@ fn publish_without_fresh_surface_renews_the_certified_epoch() {
     assert_eq!(renewal.epoch, epoch);
 }
 
+#[derive(Clone, Copy, Debug)]
+enum EvictedCoverageAnchor {
+    Unchanged,
+    WindowStart,
+    FractionalVscroll,
+}
+
+fn check_evicted_coverage_anchor(anchor: EvictedCoverageAnchor) {
+    let mut fixture = CoverageReuseFixture::new();
+    fixture
+        .eval
+        .eval_str("(setq neomacs-compositor-scrolling t)")
+        .unwrap();
+    fixture.layout();
+    let window = fixture.window;
+    let owner = DisplayWindowId::new(window.0 as i64);
+    let held = fixture.certify(window);
+    let original_key = fixture.engine.retained_window_matrices[&owner].key.clone();
+    // Real cache pressure can evict every worker page while the renderer
+    // retains the activated immutable surface.
+    fixture.engine.prepared_viewports.entries.clear();
+    match anchor {
+        EvictedCoverageAnchor::Unchanged => {
+            fixture.eval.eval_str("(forward-char 1)").unwrap();
+        }
+        EvictedCoverageAnchor::WindowStart => {
+            let destination = COVERAGE_REUSE_LINE.len() + 1;
+            fixture
+                .eval
+                .eval_str(&format!(
+                    "(goto-char {destination}) (set-window-start nil {destination})",
+                ))
+                .unwrap();
+        }
+        EvictedCoverageAnchor::FractionalVscroll => {
+            if let neovm_core::window::Window::Leaf {
+                vscroll,
+                force_start,
+                ..
+            } = fixture
+                .eval
+                .frame_manager_mut()
+                .get_mut(fixture.frame)
+                .unwrap()
+                .find_window_mut(window)
+                .unwrap()
+            {
+                *vscroll = -4;
+                *force_start = true;
+            }
+        }
+    }
+    fixture.layout();
+    let current = &fixture.engine.retained_window_matrices[&owner].key;
+    assert!(
+        RetainedWindowKey::row_content_eligible(&original_key, current),
+        "the control must preserve the source/font/geometry lease: {anchor:?}"
+    );
+    let state = fixture.engine.last_frame_display_state.as_ref().unwrap();
+    assert!(
+        state
+            .scroll_coverage
+            .iter()
+            .all(|coverage| coverage.content.window_id != owner),
+        "eviction must make the actual exporter return no surface"
+    );
+    assert_eq!(
+        fixture
+            .engine
+            .last_layout_stats()
+            .coverage_export_calls
+            .get(&owner),
+        Some(&1),
+        "exercise the actual no-eligible-page exporter path"
+    );
+    let renewed = state
+        .scroll_coverage_renewals
+        .iter()
+        .any(|renewal| renewal.window == owner && renewal.epoch == held.coverage().epoch);
+    if matches!(anchor, EvictedCoverageAnchor::Unchanged) {
+        assert_eq!(current.window_start, original_key.window_start);
+        assert_eq!(current.vscroll, original_key.vscroll);
+        assert!(
+            renewed,
+            "an activated surface with an unchanged anchor survives page eviction"
+        );
+        // A second cursor-only publish with pages still evicted must keep
+        // renewing, and a subsequent scroll must still see the original anchor
+        // and expire instead of renewing.
+        fixture.eval.eval_str("(forward-char 1)").unwrap();
+        fixture.layout();
+        let state = fixture.engine.last_frame_display_state.as_ref().unwrap();
+        assert!(
+            state
+                .scroll_coverage_renewals
+                .iter()
+                .any(|renewal| renewal.window == owner && renewal.epoch == held.coverage().epoch),
+            "consecutive unchanged-anchor publishes after eviction keep renewing"
+        );
+        let destination = COVERAGE_REUSE_LINE.len() + 1;
+        fixture
+            .eval
+            .eval_str(&format!(
+                "(goto-char {destination}) (set-window-start nil {destination})",
+            ))
+            .unwrap();
+        fixture.layout();
+        let state = fixture.engine.last_frame_display_state.as_ref().unwrap();
+        assert!(
+            state
+                .scroll_coverage_renewals
+                .iter()
+                .all(|renewal| renewal.window != owner),
+            "a later scroll after an evicted renewal must still revoke the old-anchor surface"
+        );
+        return;
+    }
+
+    // A renewal cannot tell the renderer how to translate an old surface to
+    // this new anchor. Exhibit the stale hit from a small additional pixel
+    // projection, compared with the successor's authoritative visible rows.
+    let viewport = held.coverage().viewport;
+    let height = held
+        .coverage()
+        .content
+        .matrix
+        .rows
+        .iter()
+        .find(|row| row.enabled && row.role == GlyphRowRole::Text)
+        .unwrap()
+        .height_px;
+    let x = viewport.x + 3.0;
+    let y = viewport.y + height - 2.0;
+    let delta = 0.5;
+    let stale = held
+        .hit(coverage_point(&held, x, y), delta)
+        .unwrap()
+        .and_then(|hit| hit.text_position())
+        .unwrap()
+        .buffer_position();
+    let point = neomacs_display_protocol::InteractionProjection::settled(state.presentation_id)
+        .map(
+            neomacs_display_protocol::GeometryPoint::<
+                neomacs_display_protocol::RootSurfaceSpace,
+                neomacs_display_protocol::LogicalPixels,
+            >::from_px(x, y + delta)
+            .unwrap(),
+        )
+        .unwrap();
+    let authoritative = state
+        .presented_hit_index
+        .resolve(neomacs_display_protocol::PresentedHitQuery::new(point))
+        .unwrap()
+        .and_then(|hit| hit.text_position())
+        .unwrap()
+        .buffer_position();
+    let mut projected = state.materialize();
+    held.paint(&mut projected, delta)
+        .expect("the stale surface remains mechanically paintable");
+    assert_ne!(
+        stale, authoritative,
+        "changed-anchor control must expose a stale projected source hit: {anchor:?}"
+    );
+    assert!(
+        !renewed,
+        "cache eviction must revoke an activated surface after its anchor changes: {anchor:?}; stale hit {stale}, authoritative {authoritative}"
+    );
+
+    // Once revoked, a follow-up cursor-only frame at the new anchor must not
+    // resurrect the expired old-anchor epoch.
+    fixture.eval.eval_str("(forward-char 1)").unwrap();
+    fixture.layout();
+    let state = fixture.engine.last_frame_display_state.as_ref().unwrap();
+    assert!(
+        state
+            .scroll_coverage_renewals
+            .iter()
+            .all(|renewal| renewal.window != owner),
+        "follow-up cursor motion must not resurrect a revoked old-anchor epoch: {anchor:?}"
+    );
+}
+
+#[test]
+fn evicted_coverage_with_unchanged_anchor_renews_an_activated_surface() {
+    check_evicted_coverage_anchor(EvictedCoverageAnchor::Unchanged);
+}
+
+#[test]
+fn evicted_coverage_after_window_start_motion_does_not_renew_old_anchor() {
+    check_evicted_coverage_anchor(EvictedCoverageAnchor::WindowStart);
+}
+
+#[test]
+fn evicted_coverage_after_fractional_scroll_does_not_renew_old_anchor() {
+    check_evicted_coverage_anchor(EvictedCoverageAnchor::FractionalVscroll);
+}
+
 #[test]
 fn content_revision_re_keys_and_stops_renewing_the_old_epoch() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();

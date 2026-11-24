@@ -97,6 +97,22 @@ impl CoverageExportInputs {
         })
     }
 
+    fn matches_surface(
+        &self,
+        window: DisplayWindowId,
+        current: &RetainedWindowMatrix,
+        state: &FrameDisplayState,
+    ) -> bool {
+        // Only point may differ. In particular preserve this window's own
+        // start, hscroll, vscroll, partition, source and font invalidators.
+        let mut key = current.key.clone();
+        key.point = self.key.point;
+        key == self.key
+            && ExportPlacement::new(window, current, state) == Some(self.placement)
+            && self.font_catalog == state.font_catalog_generation
+            && self.surface.frame_resources_match(state)
+    }
+
     fn matches(
         &self,
         window: DisplayWindowId,
@@ -110,14 +126,7 @@ impl CoverageExportInputs {
         if std::env::var_os("NEOMACS_TEST_SKIP_COVERAGE_RECEIPT_INPUTS").is_some() {
             return true;
         }
-        // Only point may differ. In particular preserve this window's own
-        // start, hscroll, vscroll, partition, source and font invalidators.
-        let mut key = current.key.clone();
-        key.point = self.key.point;
-        key == self.key
-            && ExportPlacement::new(window, current, state) == Some(self.placement)
-            && self.font_catalog == state.font_catalog_generation
-            && self.surface.frame_resources_match(state)
+        self.matches_surface(window, current, state)
             && self.pages.len() == pages.len()
             && self
                 .pages
@@ -302,13 +311,20 @@ impl PreparedViewports {
                 }
                 // A publish that re-exports nothing (cursor-only redisplay,
                 // drained worker pages, or an exactly-viewport body) must not
-                // read as revocation on the compositor side. Renew the last
-                // certified epoch explicitly; policy bits are stamped by the
-                // evaluator alongside fresh coverages. Absence of both a
-                // surface and a renewal expires the retained coverage.
-                None if self.exports[index].certified => {
+                // read as revocation on the compositor side — only while the
+                // window's anchor (`window_start`, `vscroll`), placement, and
+                // frame resources still match the last exported surface.
+                // Preserve `last_export` so later frames keep checking that
+                // anchor; once the anchor changes, expire the old epoch instead
+                // of renewing a stale surface.
+                None if self.exports[index].certified
+                    && body_reused
+                    && self.exports[index]
+                        .last_export
+                        .as_ref()
+                        .is_some_and(|inputs| inputs.matches_surface(*window, current, state)) =>
+                {
                     let (compositor_enabled, predict_pixels) = window_policy(*window);
-                    self.exports[index].last_export = None;
                     state.scroll_coverage_renewals.push(ScrollCoverageRenewal {
                         window: *window,
                         epoch: self.exports[index].epoch,
@@ -320,6 +336,7 @@ impl PreparedViewports {
                         "renewed certified scroll coverage without a fresh surface");
                 }
                 None => {
+                    self.exports[index].certified = false;
                     self.exports[index].last_export = None;
                 }
             }
