@@ -2264,16 +2264,80 @@ fn worker_prepares_long_unicode_source_fragments() {
         "👩‍💻 words ",
     ] {
         for wrap in ["nil", "t"] {
+            // Each physical line can wrap into up to 8 tall (34px) rows under
+            // wider default fonts (e.g. macOS); physical line 1 stays fully
+            // inside the 600px viewport while line 2 can land on a partially
+            // clipped bottom row where `force_start` must decline replay.
             first_visit_with_setup(
                 None,
                 &format!("{}\n", text.repeat(30)),
                 None,
                 0,
-                2,
+                1,
                 Some(&format!("(setq word-wrap {wrap})")),
             );
         }
     }
+}
+
+#[test]
+fn forced_start_replay_declines_point_on_clipped_bottom_row() {
+    let line = "ordinary offscreen text\n";
+    let fonts = pinned_unicode_catalog();
+    let mut verified_clipped = false;
+    for height in [600, 605, 610] {
+        let (mut eval, frame, _buffer, window) = incr_editing_frame(&line.repeat(300), 800, height);
+        eval.frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .window_system = Some(Value::symbol("neomacs"));
+        let start = 120 * line.len();
+        let mut engine = engine_with_pinned_catalog(&fonts);
+        engine.layout_frame_rust(&mut eval, frame);
+        engine
+            .request_scroll_coverage(&eval, frame, window, CharPos0::new(start))
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !engine
+            .scroll_coverage
+            .drain(&mut engine.prepared_viewports)
+            .expect("worker coverage failed")
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let display_window = neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64);
+        let mut key = engine.retained_window_matrices[&display_window].key.clone();
+        key.window_start = start as i64;
+        key.point = (start + line.len()) as i64;
+        let (replay, _, _) = engine
+            .prepared_viewports
+            .replay(frame, display_window, &key, true)
+            .expect("fully visible interior row must replay under force_start");
+        let body = key.partition.text_body();
+        let outer_y = engine.retained_window_matrices[&display_window]
+            .display_snapshot
+            .regions
+            .outer
+            .y;
+        let last_row = &replay.body_rows.last().expect("prepared body rows").1;
+        if outer_y + last_row.pixel_y + last_row.height_px > body.y + body.height {
+            key.point = last_row.start_charpos as i64;
+            assert!(
+                engine
+                    .prepared_viewports
+                    .replay(frame, display_window, &key, true)
+                    .is_none(),
+                "force_start replay must decline a point on a partially clipped bottom row"
+            );
+            verified_clipped = true;
+            break;
+        }
+    }
+    assert!(
+        verified_clipped,
+        "at least one frame height must produce a partially clipped bottom row"
+    );
 }
 
 #[test]
