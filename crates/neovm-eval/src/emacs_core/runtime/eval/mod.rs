@@ -5565,7 +5565,22 @@ impl Context {
         }
     }
 
+    /// Debug builds refuse an outer door when another Context's heap is
+    /// installed. Release builds keep the door: the release refusal is
+    /// `Context::new`, and `setup_thread_locals` still reactivates. The
+    /// armed test-fallback heap is not a Context.
+    #[inline]
+    fn debug_assert_outer_door_heap(&self) {
+        debug_assert!(
+            !neovm_value::tagged::gc::tagged_heap_is_installed()
+                || neovm_value::tagged::gc::tagged_heap_is_current(&self.tagged_heap)
+                || neovm_value::tagged::gc::installed_slot_is_armed_test_fallback(),
+            "dormant Context: this thread's installed heap is not this Context"
+        );
+    }
+
     pub fn eval_str(&mut self, source: &str) -> Result<Value, EvalError> {
+        self.debug_assert_outer_door_heap();
         self.setup_thread_locals();
         let forms = super::value_reader::read_all(source, self.variables()).map_err(|e| {
             EvalError::signal(
@@ -5615,6 +5630,7 @@ impl Context {
     /// Evaluate a single Value form and return a public EvalError on failure.
     /// Evaluate a single Value form, mapping Flow errors to EvalError.
     pub fn eval_form(&mut self, form: Value) -> Result<Value, EvalError> {
+        self.debug_assert_outer_door_heap();
         self.setup_thread_locals();
         let eval_result = {
             let mut boundary = special_forms::EvalBoundaryRoots::enter(self);
@@ -5638,6 +5654,7 @@ impl Context {
     /// Legacy eval_value: delegates to eval_sub inside one evaluation
     /// boundary (GNU `Feval`: the frame's temp roots die when it returns).
     pub fn eval_value(&mut self, value: &Value) -> EvalResult {
+        self.debug_assert_outer_door_heap();
         if !neovm_value::tagged::gc::tagged_heap_is_current(&self.tagged_heap) {
             self.setup_thread_locals();
         }
@@ -5648,6 +5665,7 @@ impl Context {
     /// Evaluate all forms in a source string and return per-form results.
     /// Uses the Value-native reader.
     pub fn eval_str_each(&mut self, source: &str) -> Vec<Result<Value, EvalError>> {
+        self.debug_assert_outer_door_heap();
         self.setup_thread_locals();
         let forms = match super::value_reader::read_all(source, self.variables()) {
             Ok(f) => f,
@@ -7849,6 +7867,13 @@ mod gc_atomic_slot_tests;
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "tests/dormant_context_eval_test.rs"]
+mod dormant_context_eval_tests;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod parked_context;
 
 // The debug leaf guard: GC safe points, Lisp entries and binding pushes
 // refuse to run under a leaf builtin, and leaves leave state untouched.

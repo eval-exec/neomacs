@@ -2547,6 +2547,18 @@ impl Context {
         // provenance root; installation and every later access derive from it.
         let tagged_heap =
             neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
+        // The only production refusal of a second active Context. An empty
+        // slot is the first install. The armed test-fallback heap is a
+        // harness, not a Context, and may be replaced. A same-heap reinstall
+        // does not pass through here: this root is a fresh allocation.
+        // `WorldStorageBuilder::build` later reinstalls this same root, and
+        // a bare-heap test nest calls `set_tagged_heap_root` directly.
+        if neovm_value::tagged::gc::tagged_heap_is_installed()
+            && !neovm_value::tagged::gc::tagged_heap_is_current(&tagged_heap)
+            && !neovm_value::tagged::gc::installed_slot_is_armed_test_fallback()
+        {
+            refuse_second_active_context();
+        }
         // SAFETY: this Context owns the AliasableBox. The root stays live
         // until the Context clears it, and no heap reference is live yet.
         unsafe { neovm_value::tagged::gc::set_tagged_heap_root(tagged_heap.root()) };
@@ -2826,6 +2838,18 @@ impl Context {
         // remaining test-only private-state resets and subr registration.
         ev
     }
+}
+
+/// Cold refusal: a second `Context::new` while another heap is installed.
+///
+/// No Lisp allocation. The message is a static string so the panic path
+/// does not build a formatted buffer.
+#[cold]
+#[inline(never)]
+fn refuse_second_active_context() -> ! {
+    panic!(
+        "dormant Context: a second Context cannot be constructed while another heap is installed on this thread"
+    );
 }
 
 /// The evaluator leases its World-owned `TaggedHeap` allocation and publishes a raw

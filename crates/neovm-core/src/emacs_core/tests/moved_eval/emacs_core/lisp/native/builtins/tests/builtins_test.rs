@@ -119,7 +119,7 @@ thread_local! {
     static PURE_DISPATCH_TEST_CTX: std::cell::RefCell<
         Option<
             neovm_value::thread_exit_leak::ThreadExitLeak<
-                crate::emacs_core::eval::Context,
+                Option<neovm_eval::emacs_core::eval::parked_context::ParkedContext>,
             >,
         >,
     > = const { std::cell::RefCell::new(None) };
@@ -152,13 +152,21 @@ fn assert_x11_nil_subr_or_ns_void(name: &str, got: Option<EvalResult>) {
 }
 
 fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<EvalResult> {
-    PURE_DISPATCH_TEST_CTX.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        let ctx = slot.get_or_insert_with(|| {
-            neovm_value::thread_exit_leak::ThreadExitLeak::new(crate::test_utils::new_context())
-        });
-        crate::emacs_core::builtins::dispatch_pure_builtin_for_test(ctx.get_mut(), name, args)
-    })
+    let mut holder = PURE_DISPATCH_TEST_CTX.with(|slot| {
+        slot.borrow_mut()
+            .take()
+            .unwrap_or_else(|| neovm_value::thread_exit_leak::ThreadExitLeak::new(None))
+    });
+    let mut ctx = match holder.get_mut().take() {
+        Some(parked) => parked
+            .resume_for_test()
+            .expect("pure dispatch resumes on an empty slot"),
+        None => crate::test_utils::new_context(),
+    };
+    let result = crate::emacs_core::builtins::dispatch_pure_builtin_for_test(&mut ctx, name, args);
+    *holder.get_mut() = Some(ctx.park_for_test());
+    PURE_DISPATCH_TEST_CTX.with(|slot| *slot.borrow_mut() = Some(holder));
+    result
 }
 
 fn install_variable_watcher_probe(eval: &mut crate::emacs_core::eval::Context, callback: &str) {
@@ -370,10 +378,14 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
         false,
     );
 
+    let parked = eval.park_for_test();
     let max_with_marker = dispatch_builtin_pure("max", vec![Value::fixnum(1), marker])
         .expect("builtin max should resolve")
         .expect("builtin max should evaluate");
     assert_eq!(max_with_marker, Value::fixnum(4));
+    let mut eval = parked
+        .resume_for_test()
+        .expect("resume after pure dispatch");
 
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
         &mut eval.edit.buffers,
@@ -381,10 +393,14 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
         LispCharPos1::new(4),
         false,
     );
+    let parked = eval.park_for_test();
     let min_with_marker = dispatch_builtin_pure("min", vec![Value::fixnum(10), marker])
         .expect("builtin min should resolve")
         .expect("builtin min should evaluate");
     assert_eq!(min_with_marker, Value::fixnum(4));
+    let mut eval = parked
+        .resume_for_test()
+        .expect("resume after pure dispatch");
 
     let left_marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
         &mut eval.edit.buffers,
@@ -398,10 +414,14 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
         LispCharPos1::new(5),
         false,
     );
+    let parked = eval.park_for_test();
     let lt_with_markers = dispatch_builtin_pure("<", vec![left_marker, right_marker])
         .expect("builtin < should resolve")
         .expect("builtin < should evaluate");
     assert_eq!(lt_with_markers, Value::T);
+    let mut eval = parked
+        .resume_for_test()
+        .expect("resume after pure dispatch");
 
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
         &mut eval.edit.buffers,
@@ -409,10 +429,14 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
         LispCharPos1::new(4),
         false,
     );
+    let parked = eval.park_for_test();
     let add1_with_marker = dispatch_builtin_pure("1+", vec![marker])
         .expect("builtin 1+ should resolve")
         .expect("builtin 1+ should evaluate");
     assert_eq!(add1_with_marker, Value::fixnum(5));
+    let mut eval = parked
+        .resume_for_test()
+        .expect("resume after pure dispatch");
 
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
         &mut eval.edit.buffers,
@@ -420,6 +444,7 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
         LispCharPos1::new(4),
         false,
     );
+    let _parked = eval.park_for_test();
     let sub1_with_marker = dispatch_builtin_pure("1-", vec![marker])
         .expect("builtin 1- should resolve")
         .expect("builtin 1- should evaluate");
@@ -4766,6 +4791,7 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
         Value::symbol("interpreted-function")
     );
 
+    let parked_eval = eval.park_for_test();
     let mut cancel_eval = crate::test_utils::new_context();
     assert_eq!(
         builtin_cancel_kbd_macro_events(&mut cancel_eval, vec![]).unwrap(),
@@ -4784,6 +4810,8 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
+    drop(cancel_eval);
+    let mut eval = parked_eval.resume_for_test().expect("resume barf context");
     let barf_buffer = builtin_get_buffer_create(&mut eval, vec![Value::string("*barf*")])
         .expect("create buffer for barf-if-buffer-read-only tests");
     let _ = builtin_set_buffer(&mut eval, vec![barf_buffer]).expect("select barf test buffer");
@@ -5022,6 +5050,7 @@ fn byte_position_and_clear_bitmap_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
+    drop(eval);
     let mut face_cache_ctx = crate::test_utils::new_context();
     let face_change_before = face_cache_ctx.face_change_count_for_test();
     assert_eq!(
@@ -7541,6 +7570,7 @@ fn pure_dispatch_record_placeholders_match_compat_contracts() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
+    drop(eval);
     let read_pos = dispatch_builtin_pure("read-positioning-symbols", vec![Value::string("x")])
         .expect("builtin read-positioning-symbols should resolve")
         .expect("builtin read-positioning-symbols should evaluate");
@@ -7559,8 +7589,9 @@ fn pure_dispatch_record_placeholders_match_compat_contracts() {
 #[test]
 fn query_fontset_matches_emacs_regexp_syntax() {
     crate::test_utils::init_test_tracing();
-    let _ctx = crate::test_utils::new_context();
+    let ctx = crate::test_utils::new_context();
     neovm_eval::test_support::authority::reset_symbols_thread_locals_for_test();
+    drop(ctx);
 
     // `[([]` is the character class emitted by GNU `rx` for `[` or `(`.
     // The second Emacs-regexp alternative matches the default fontset.
@@ -7663,6 +7694,7 @@ fn pure_dispatch_reconsider_redirect_placeholders_match_compat_contracts() {
     assert!(set_command_keys.is_nil());
     assert_eq!(eval.read_command_keys(), &[Value::fixnum('x' as i64)]);
 
+    drop(eval);
     let set_auto_saved = dispatch_builtin_pure("set-buffer-auto-saved", vec![])
         .expect("builtin set-buffer-auto-saved should resolve")
         .expect("builtin set-buffer-auto-saved should evaluate");
@@ -13439,7 +13471,9 @@ fn gnutls_aes_256_cbc_crypto_matches_gnu_auth_source_shape() {
 #[test]
 fn dispatch_builtin_pure_handles_face_attribute_vector() {
     crate::test_utils::init_test_tracing();
-    let _eval = crate::test_utils::new_context();
+    // `Value::NIL` does not need a live heap. Drop the boot context so the
+    // pure-dispatch helper can install its own.
+    drop(crate::test_utils::new_context());
     let face = dispatch_builtin_pure("face-attributes-as-vector", vec![Value::NIL])
         .expect("face-attributes-as-vector should resolve")
         .expect("face-attributes-as-vector should evaluate");

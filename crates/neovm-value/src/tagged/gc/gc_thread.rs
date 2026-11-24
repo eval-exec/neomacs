@@ -1942,6 +1942,146 @@ pub fn current_tagged_heap_identity() -> Option<usize> {
     TAGGED_HEAP_ID.with(Cell::get)
 }
 
+/// Whether the allocation slot currently names the armed per-thread test
+/// fallback heap, not a Context.
+///
+/// `Context::new` may replace that harness heap. It is not another live
+/// Context. Production builds, and an unarmed test process, always answer
+/// false: any installed pointer is then a real heap.
+#[doc(hidden)]
+pub fn installed_slot_is_armed_test_fallback() -> bool {
+    #[cfg(any(
+        any(test, feature = "test-support"),
+        feature = "test-thread-fallback-heap"
+    ))]
+    {
+        if !test_fallback_enabled() {
+            return false;
+        }
+        let ptr = TAGGED_HEAP.with(|slot| slot.get());
+        if ptr.is_null() {
+            return false;
+        }
+        TEST_FALLBACK_TAGGED_HEAP.with(|fb| {
+            fb.borrow()
+                .as_ref()
+                .is_some_and(|leak| leak.get().root().as_ptr() == ptr)
+        })
+    }
+    #[cfg(not(any(
+        any(test, feature = "test-support"),
+        feature = "test-thread-fallback-heap"
+    )))]
+    {
+        false
+    }
+}
+
+/// Save the installed heap, install `root`, and restore the saved slot on drop.
+///
+/// This is the only overwrite of a live slot besides `set_tagged_heap_root`
+/// itself. `Context::new` refuses that overwrite. Tests that intentionally
+/// nest a bare heap (no second Context) go through this scope. The scope does
+/// not borrow a Context; [`NestedTaggedHeapInstall`] tied to a Context is the
+/// eval crate's wrapper.
+///
+/// Drop restores only when the slot still names the heap this scope installed.
+/// A later installer keeps its slot.
+#[cfg(any(test, feature = "test-support"))]
+pub struct NestedTaggedHeapInstall<'a> {
+    previous: Option<std::ptr::NonNull<TaggedHeap>>,
+    installed: std::ptr::NonNull<TaggedHeap>,
+    active: bool,
+    _borrow: std::marker::PhantomData<&'a mut ()>,
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl NestedTaggedHeapInstall<'static> {
+    /// Install `root` with no Context borrow. Drop restores the previous slot.
+    ///
+    /// # Safety
+    ///
+    /// Same requirements as [`NestedTaggedHeapInstall::install`]: `root` must
+    /// be a live [`super::AliasableBox`] root owned until this scope ends or
+    /// drops, no references into `root` may be live during installation, and
+    /// any displaced previous root must stay live with no live references into
+    /// it when this scope ends or drops.
+    pub unsafe fn install_bare(root: std::ptr::NonNull<TaggedHeap>) -> Self {
+        // SAFETY: caller upholds `NestedTaggedHeapInstall::install`'s contract.
+        unsafe { Self::install(root) }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl<'a> NestedTaggedHeapInstall<'a> {
+    /// Install `root`, saving any previously installed root to restore on drop.
+    ///
+    /// # Safety
+    ///
+    /// `root` must be a live [`super::AliasableBox`] root owned on this thread
+    /// until [`Self::end`] or [`Drop::drop`] completes. No reference into
+    /// `root` may be live during this call (mirror refresh forms `&mut`). Any
+    /// displaced previous root must remain live until this scope ends or drops,
+    /// with no reference into it live during restoration.
+    pub unsafe fn install(root: std::ptr::NonNull<TaggedHeap>) -> Self {
+        let previous = TAGGED_HEAP.with(|slot| std::ptr::NonNull::new(slot.get()));
+        // SAFETY: caller guarantees `root` is a live AliasableBox root with no
+        // live references into it during installation.
+        unsafe { set_tagged_heap_root(root) };
+        Self {
+            previous,
+            installed: root,
+            active: true,
+            _borrow: std::marker::PhantomData,
+            _not_send: std::marker::PhantomData,
+        }
+    }
+
+    /// `true` when this scope replaced an empty slot, so Drop clears rather
+    /// than reinstalling a previous root.
+    pub fn replaced_empty_slot(&self) -> bool {
+        self.previous.is_none()
+    }
+
+    /// Restore the saved slot if this scope's heap is still installed.
+    pub fn end(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        let current = TAGGED_HEAP.with(|slot| slot.get());
+        if current != self.installed.as_ptr() {
+            return;
+        }
+        match self.previous {
+            Some(previous) => {
+                // SAFETY: `previous` was the live root displaced by `install`,
+                // and the caller guarantees it remains live until `end` with
+                // no live references into it during restoration.
+                unsafe { set_tagged_heap_root(previous) };
+            }
+            None => {
+                // `install` attached the store protocol. The address-only
+                // clear asserts that detach already happened, because an
+                // exclusive collector loan cannot form a heap reference.
+                // This scope holds no loan, so detach through the live heap.
+                // SAFETY: the caller keeps `installed` allocated until `end`.
+                // TestHeapScope ends the nest before retiring the heap.
+                // `install_bare` callers drop the nest while the box lives.
+                unsafe { clear_tagged_heap_if_installed(self.installed.as_ref()) };
+            }
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for NestedTaggedHeapInstall<'_> {
+    fn drop(&mut self) {
+        self.end();
+    }
+}
+
 /// Compile-time mode of the active mutator's heap, without installing one.
 /// Heapless lowering preserves the legacy shape. Heap-store leaves must be
 /// compiled on their intended heap; cached runtime leaves already obey this

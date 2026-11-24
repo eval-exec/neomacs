@@ -25,9 +25,10 @@ fn gen0_native_interior_gap_skips_repeat_shims_without_admitting_growth() {
     crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
     force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));
     let _mode = ObservedMode;
+    let other_context = super::context(false);
+    let other_root = other_context.tagged_heap.heap_root();
+    let _parked_other = other_context.park_for_test();
     let mut context = context(false);
-    let mut other_context = super::context(false);
-    neovm_value::tagged::gc::set_tagged_heap(&mut context.tagged_heap);
     let roots = context.save_specpdl_roots();
     // Three owners and a growth cons allocated in a row from one cons block,
     // so the growth lies past the owners' hull. A run that crosses into
@@ -108,9 +109,12 @@ fn gen0_native_interior_gap_skips_repeat_shims_without_admitting_growth() {
     // sticky ledger. Restore Observed on a different installed heap, then
     // reinstall the original heap: both native predicates must be rederived.
     force_compiled_journal_for_test(Some(CompiledJournalMode::Off));
-    neovm_value::tagged::gc::set_tagged_heap(&mut other_context.tagged_heap);
-    force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));
-    neovm_value::tagged::gc::set_tagged_heap(&mut context.tagged_heap);
+    {
+        // SAFETY: `_parked_other` owns `other_root` and `context` owns the
+        // displaced root; both outlive `_other_nest`.
+        let _other_nest = unsafe { context.nest_foreign_heap_for_test(other_root) };
+        force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));
+    }
     let calls = cons_shims();
     native(&mut context, &setcar, &[target, Value::make_int(17)]);
     native(&mut context, &setcdr, &[growth, Value::make_int(17)]);

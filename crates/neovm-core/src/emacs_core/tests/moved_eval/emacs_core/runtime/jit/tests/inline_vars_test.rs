@@ -336,6 +336,9 @@ fn cached_shapes_take_no_shim_and_answer_as_the_interpreter() {
             warm(&mut ev, VARS);
             let want = interpret(&mut ev, prog, var, args);
             let want_after = observe(&mut ev, var);
+            // The answers are owned strings. Drop this fixture before the
+            // next one: a second `let` would leave the first Context active.
+            drop(ev);
             let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
             warm(&mut ev, VARS);
             reset_inline_var_sites_for_test();
@@ -420,6 +423,7 @@ fn a_class_change_after_compile_takes_the_shim() {
             let want = interpret(&mut ev, prog, "ivt-plain", args);
             let want_after = observe(&mut ev, "ivt-plain");
             let want_log = eval(&mut ev, "(prog1 (reverse ivt-log) (setq ivt-log nil))");
+            drop(ev);
             let mut ev = neovm_value::test_support::authority::with_legacy_gc(fixture);
             // Compiled while the variable was a plain special.
             let leaf = compile(&ev, ALL, prog, "ivt-plain");
@@ -624,6 +628,7 @@ fn let_bodies_that_change_the_world_unbind_as_the_interpreter() {
             let want = interpret(&mut ev, &Prog::let_call(), var, &[Value::make_int(9)]);
             let want_after = observe(&mut ev, var);
             let want_log = eval(&mut ev, "(reverse ivt-log)");
+            drop(ev);
             let mut ev = fixture();
             warm(&mut ev, &[var]);
             eval_ok(&mut ev, &setup);

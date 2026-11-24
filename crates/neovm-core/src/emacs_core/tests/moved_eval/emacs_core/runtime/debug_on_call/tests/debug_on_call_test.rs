@@ -713,6 +713,7 @@ fn debug_cell_resolved_after_activation() {
     assert!(!cell.is_debug_on_next_call_stand_in());
     assert!(!fresh.debug_on_next_call_is_armed());
 
+    drop(fresh);
     let restored = crate::test_utils::runtime_startup_context();
     let cell = restored
         .obarray()

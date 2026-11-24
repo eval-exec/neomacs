@@ -71,6 +71,7 @@ fn admission_needs_a_green_world_and_is_sticky() {
         Err(AdmissionRefusal::NotGreen)
     ));
     assert!(!sim.tagged_heap().threads_admitted());
+    drop(sim);
 
     let mut ev = green();
     admit_threads_refusal_for_test(&mut ev).expect("admission");
@@ -397,13 +398,18 @@ fn symbols_born_after_admission_behave_as_before() {
     let setup = "(progn (defvar tfr-pre 1) (defvar tfr-pre-local 2)
                         (make-variable-buffer-local 'tfr-pre-local))";
     let mut sim = crate::test_utils::new_context();
-    let mut ev = green();
     eval(&mut sim, setup);
-    eval(&mut ev, setup);
-    admit_threads_refusal_for_test(&mut ev).expect("admission");
+    let mut expected_prints = Vec::with_capacity(forms.len());
     for form in forms {
         let expected = eval(&mut sim, form);
         assert!(!expected.starts_with("ERR"), "{form} => {expected}");
+        expected_prints.push(expected);
+    }
+    drop(sim);
+    let mut ev = green();
+    eval(&mut ev, setup);
+    admit_threads_refusal_for_test(&mut ev).expect("admission");
+    for (form, expected) in forms.iter().zip(expected_prints) {
         assert_eq!(eval(&mut ev, form), expected, "{form}");
     }
 }

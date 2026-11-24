@@ -6633,6 +6633,7 @@ fn window_lines_pixel_dimensions_returns_nil_without_a_current_matrix() {
     assert!(wlpd(&mut ev, vec![Value::make_window(wid.0)]).is_nil());
     ev.set_variable("noninteractive", Value::NIL);
 
+    drop(ev);
     // A window whose rows were never committed.
     let mut fresh = Context::new(crate::test_utils::unit_runtime());
     let buf = fresh.edit.buffers.create_buffer("*empty*");

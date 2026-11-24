@@ -62,10 +62,11 @@ fn deleted_terminal_stays_dead_after_context_reactivation() {
     builtin_set_terminal_parameter(&mut ctx, vec![terminal_handle_value(), key, payload])
         .expect("set the live terminal's parameter");
     builtin_delete_terminal(&mut ctx, vec![deleted]).expect("delete the secondary terminal");
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap());
+    let parked_ctx = ctx.park_for_test();
 
-    let _other = Context::new(crate::test_utils::unit_runtime());
-    ctx.setup_thread_locals();
+    let other = Context::new(crate::test_utils::unit_runtime());
+    let _parked_other = other.park_for_test();
+    let mut ctx = parked_ctx.resume_for_test().expect("resume owner");
     assert_deleted_terminal(&mut ctx, deleted);
     assert_eq!(
         builtin_terminal_parameter(&mut ctx, vec![terminal_handle_value(), key])
@@ -88,9 +89,12 @@ fn deleted_terminal_stays_dead_after_another_contexts_pdump_restore() {
         ensure_terminal_runtime_owner(1, "secondary-terminal", TerminalRuntimeConfig::inactive());
     builtin_delete_terminal(&mut original, vec![deleted]).expect("delete secondary terminal");
 
+    let parked_original = original.park_for_test();
     let mut other = Context::new(crate::test_utils::unit_runtime());
     let restored = clone_active_evaluator(&mut other).expect("restore another Context's pdump");
-    original.setup_thread_locals();
+    let other = other.park_for_test();
+    let restored = restored.park_for_test();
+    let mut original = parked_original.resume_for_test().expect("resume original");
     assert_deleted_terminal(&mut original, deleted);
     drop(restored);
     drop(other);
@@ -148,9 +152,10 @@ fn terminal_creation_order_survives_native_manager_rebuild_and_reactivation() {
         assert_eq!(terminal_list_ids(), creation_order);
         assert_eq!(live_terminal_ids_in_keyboard_poll_order(), poll_order);
     }
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap());
-    let _other = Context::new(crate::test_utils::unit_runtime());
-    ctx.setup_thread_locals();
+    let parked_ctx = ctx.park_for_test();
+    let other = Context::new(crate::test_utils::unit_runtime());
+    let _parked_other = other.park_for_test();
+    let mut ctx = parked_ctx.resume_for_test().expect("resume owner");
     assert_eq!(terminal_list_ids(), creation_order);
     assert_eq!(live_terminal_ids_in_keyboard_poll_order(), poll_order);
     neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap());

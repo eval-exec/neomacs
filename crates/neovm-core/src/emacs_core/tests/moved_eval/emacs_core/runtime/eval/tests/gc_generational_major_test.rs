@@ -192,6 +192,7 @@ fn major_and_minor_keep_only_the_matching_heaps_scratch_root_graph() {
     assert_eq!(first_owner.as_vector_data().unwrap()[0], first_child);
     assert_eq!(first_child.cons_car(), Value::fixnum(167));
 
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(first.tagged_heap());
     let mut second = context();
     let second_child = Value::cons(Value::fixnum(173), Value::NIL);
     let second_child_slot = roots.keep(second_child);

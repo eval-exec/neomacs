@@ -45,13 +45,16 @@ fn records(ev: &Context) -> usize {
 
 fn same_answers(forms: &[&str]) {
     let mut plain = context(false);
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(plain.tagged_heap());
     let mut projected = context(true);
     for form in forms {
+        plain.setup_thread_locals();
         let want = eval(&mut plain, form);
         assert!(
             !want.contains("void-function"),
             "the bare harness lacks a function {form} needs: {want}"
         );
+        projected.setup_thread_locals();
         let got = eval(&mut projected, form);
         assert_eq!(got, want, "{form}");
     }

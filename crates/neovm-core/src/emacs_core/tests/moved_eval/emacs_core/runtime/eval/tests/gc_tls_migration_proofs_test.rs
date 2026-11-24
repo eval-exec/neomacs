@@ -4,15 +4,23 @@ use crate::emacs_core::{builtins, category, ccl, charset, syntax, xfaces};
 use neovm_value::intern::intern;
 use neovm_value::value::Value;
 
-fn collect_on_owner_and_reactivate(mut ctx: Context) -> Context {
+fn collect_on_owner_and_reactivate(ctx: Context) -> Context {
     // Local Context switches exercise the same registry reinstallation and
     // canonical root retention without transferring thread-confined storage.
+    // One Context is installed at a time; the other stays parked.
+    let parked_ctx = ctx.park_for_test();
     let mut other = crate::test_utils::new_context();
     other.gc_collect_exact();
+    let parked_other = other.park_for_test();
+    let mut ctx = parked_ctx.resume_for_test().expect("resume owner");
     ctx.setup_thread_locals();
     ctx.gc_collect_exact();
+    let parked_ctx = ctx.park_for_test();
+    let mut other = parked_other.resume_for_test().expect("resume other");
     other.setup_thread_locals();
     other.gc_collect_exact();
+    drop(other);
+    let mut ctx = parked_ctx.resume_for_test().expect("resume owner");
     ctx.setup_thread_locals();
     ctx
 }

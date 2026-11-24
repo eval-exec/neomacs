@@ -5384,6 +5384,7 @@ fn compiled_unbind_and_frame_exit_propagate_restore_watcher_signals() {
         Some(FlowRef::Signal(_))
     ));
     assert_eq!(explicit_ctx.specpdl.len(), explicit_base);
+    drop(explicit_ctx);
 
     let variable = "jit-test-frame-unbind-error";
     let mut frame_ctx = install_restore_watcher(variable);

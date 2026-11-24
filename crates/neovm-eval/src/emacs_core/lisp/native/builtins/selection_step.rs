@@ -299,12 +299,14 @@ mod tests {
         let fresh = Context::new(crate::test_utils::unit_runtime());
         assert_eq!(installed(&fresh), SelectionInstaller::InlineSerialMain);
 
+        drop(fresh);
         let mut local = Context::new(crate::test_utils::unit_runtime());
         local
             .activate_selection_local(&ActivationAuthority::mint_for_test())
             .unwrap();
         assert_eq!(installed(&local), SelectionInstaller::OwnedLocalMain);
 
+        drop(local);
         let mut routed = Context::new(crate::test_utils::unit_runtime());
         routed
             .activate_selection_routed(&ActivationAuthority::mint_for_test())
@@ -346,9 +348,10 @@ mod tests {
     #[test]
     fn inline_serial_clipboard_matches_the_direct_body() {
         let mut direct_ctx = Context::new(crate::test_utils::unit_runtime());
-        let mut step_ctx = Context::new(crate::test_utils::unit_runtime());
         super::super::reset_stubs_thread_locals();
         let direct = super::super::direct_neomacs_clipboard_set(&mut direct_ctx, vec![Value::NIL]);
+        let _parked_direct_ctx = direct_ctx.park_for_test();
+        let mut step_ctx = Context::new(crate::test_utils::unit_runtime());
         super::super::reset_stubs_thread_locals();
         let via = clipboard_set(
             SelectionInstaller::InlineSerialMain,
@@ -358,16 +361,24 @@ mod tests {
         .into_direct();
         assert_same_batch(direct, via);
 
+        let _parked_step_ctx = step_ctx.park_for_test();
+        let mut direct_ctx = _parked_direct_ctx.resume_for_test().expect("resume direct");
         super::super::reset_stubs_thread_locals();
         let direct = super::super::direct_neomacs_clipboard_get(&mut direct_ctx, vec![]);
+        let _parked_direct_ctx = direct_ctx.park_for_test();
+        let mut step_ctx = _parked_step_ctx.resume_for_test().expect("resume step");
         super::super::reset_stubs_thread_locals();
         let via = clipboard_get(SelectionInstaller::InlineSerialMain, &mut step_ctx, vec![])
             .into_direct();
         assert_same_batch(direct, via);
 
+        let _parked_step_ctx = step_ctx.park_for_test();
+        let mut direct_ctx = _parked_direct_ctx.resume_for_test().expect("resume direct");
         super::super::reset_stubs_thread_locals();
         let direct =
             super::super::direct_neomacs_primary_selection_set(&mut direct_ctx, vec![Value::NIL]);
+        let _parked_direct_ctx = direct_ctx.park_for_test();
+        let mut step_ctx = _parked_step_ctx.resume_for_test().expect("resume step");
         super::super::reset_stubs_thread_locals();
         let via = primary_selection_set(
             SelectionInstaller::InlineSerialMain,
@@ -377,24 +388,36 @@ mod tests {
         .into_direct();
         assert_same_batch(direct, via);
 
+        let _parked_step_ctx = step_ctx.park_for_test();
+        let mut direct_ctx = _parked_direct_ctx.resume_for_test().expect("resume direct");
         super::super::reset_stubs_thread_locals();
         let direct = super::super::direct_neomacs_primary_selection_get(&mut direct_ctx, vec![]);
+        let _parked_direct_ctx = direct_ctx.park_for_test();
+        let mut step_ctx = _parked_step_ctx.resume_for_test().expect("resume step");
         super::super::reset_stubs_thread_locals();
         let via =
             primary_selection_get(SelectionInstaller::InlineSerialMain, &mut step_ctx, vec![])
                 .into_direct();
         assert_same_batch(direct, via);
 
+        let _parked_step_ctx = step_ctx.park_for_test();
+        let mut direct_ctx = _parked_direct_ctx.resume_for_test().expect("resume direct");
         super::super::reset_stubs_thread_locals();
         let direct = super::super::direct_neomacs_primary_selection_owner(&mut direct_ctx, vec![]);
+        let _parked_direct_ctx = direct_ctx.park_for_test();
+        let mut step_ctx = _parked_step_ctx.resume_for_test().expect("resume step");
         super::super::reset_stubs_thread_locals();
         let via =
             primary_selection_owner(SelectionInstaller::InlineSerialMain, &mut step_ctx, vec![])
                 .into_direct();
         assert_same_batch(direct, via);
 
+        let _parked_step_ctx = step_ctx.park_for_test();
+        let mut direct_ctx = _parked_direct_ctx.resume_for_test().expect("resume direct");
         super::super::reset_stubs_thread_locals();
         let direct = super::super::direct_neomacs_clipboard_set(&mut direct_ctx, vec![]);
+        let _parked_direct_ctx = direct_ctx.park_for_test();
+        let mut step_ctx = _parked_step_ctx.resume_for_test().expect("resume step");
         super::super::reset_stubs_thread_locals();
         let via = clipboard_set(SelectionInstaller::InlineSerialMain, &mut step_ctx, vec![])
             .into_direct();
@@ -480,8 +503,10 @@ mod tests {
         // branch. A symbol argument stores Some(text); NIL stores None.
         let heap = neovm_value::tagged::gc::TestHeap::new();
         let clear_heap = heap.root();
+        // `TestHeap::new` installs. That pointer is not a Context, and the
+        // constructor refuses every installed heap except the armed fallback.
+        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&heap);
         let mut direct_ctx = Context::new(crate::test_utils::unit_runtime());
-        let mut step_ctx = Context::new(crate::test_utils::unit_runtime());
 
         super::super::reset_stubs_thread_locals();
         let direct_set = super::super::direct_neomacs_clipboard_set(
@@ -490,6 +515,8 @@ mod tests {
         );
         let direct_cached = super::super::cached_clipboard_text();
         let direct_get = super::super::direct_neomacs_clipboard_get(&mut direct_ctx, vec![]);
+        let _parked_direct_ctx = direct_ctx.park_for_test();
+        let mut step_ctx = Context::new(crate::test_utils::unit_runtime());
         super::super::reset_stubs_thread_locals();
         let via_set = clipboard_set(
             SelectionInstaller::InlineSerialMain,
@@ -505,6 +532,8 @@ mod tests {
         assert_same_batch(direct_set, via_set);
         assert_same_batch(direct_get, via_get);
 
+        let _parked_step_ctx = step_ctx.park_for_test();
+        let mut direct_ctx = _parked_direct_ctx.resume_for_test().expect("resume direct");
         super::super::reset_stubs_thread_locals();
         let direct_set = super::super::direct_neomacs_primary_selection_set(
             &mut direct_ctx,
@@ -515,6 +544,8 @@ mod tests {
         let direct_cached = super::super::cached_primary_selection_text();
         let direct_get =
             super::super::direct_neomacs_primary_selection_get(&mut direct_ctx, vec![]);
+        let _parked_direct_ctx = direct_ctx.park_for_test();
+        let mut step_ctx = _parked_step_ctx.resume_for_test().expect("resume step");
         super::super::reset_stubs_thread_locals();
         let via_set = primary_selection_set(
             SelectionInstaller::InlineSerialMain,
@@ -539,6 +570,8 @@ mod tests {
         assert_same_batch(direct_owner, via_owner);
         assert_same_batch(direct_get, via_get);
 
+        let _parked_step_ctx = step_ctx.park_for_test();
+        let mut direct_ctx = _parked_direct_ctx.resume_for_test().expect("resume direct");
         super::super::reset_stubs_thread_locals();
         let direct_set = super::super::direct_neomacs_primary_selection_set(
             &mut direct_ctx,
@@ -549,6 +582,8 @@ mod tests {
         let direct_owner =
             super::super::direct_neomacs_primary_selection_owner(&mut direct_ctx, vec![]);
         let direct_cached = super::super::cached_primary_selection_text();
+        let _parked_direct_ctx = direct_ctx.park_for_test();
+        let mut step_ctx = _parked_step_ctx.resume_for_test().expect("resume step");
         super::super::reset_stubs_thread_locals();
         let via_set = primary_selection_set(
             SelectionInstaller::InlineSerialMain,
@@ -703,10 +738,11 @@ mod tests {
 
     fn run_owned_against_serial(op: SelectionOp, args: Vec<Value>, prime: fn(&mut Context)) {
         let mut serial_ctx = Context::new(crate::test_utils::unit_runtime());
-        let mut owned_ctx = Context::new(crate::test_utils::unit_runtime());
         super::super::reset_stubs_thread_locals();
         prime(&mut serial_ctx);
         let serial = serial_lower(op, &mut serial_ctx, args.clone());
+        let _parked_serial_ctx = serial_ctx.park_for_test();
+        let mut owned_ctx = Context::new(crate::test_utils::unit_runtime());
         super::super::reset_stubs_thread_locals();
         prime(&mut owned_ctx);
         let owned = drive_owned(op, &mut owned_ctx, args);
@@ -798,6 +834,7 @@ mod tests {
 
         // The same calls on a serial Context with an identical host return the
         // same values; the direct bodies are the serial lowering.
+        let _parked_ctx = ctx.park_for_test();
         let mut serial = Context::new(crate::test_utils::unit_runtime());
         serial.set_display_host(Box::new(RecordingClipboardHost::default()));
         let serial_set =
@@ -810,6 +847,7 @@ mod tests {
         // assertion lives in activation_owner::tests::
         // default_mode_hosted_stays_uninstalled, where the eval-scoped take
         // accessor is nameable.
+        drop(serial);
         let mut default_mode = Context::new(crate::test_utils::unit_runtime());
         default_mode.set_display_host(Box::new(RecordingClipboardHost::default()));
         assert_eq!(default_mode.selection_phase(), SelectionPhase::Uninstalled);
@@ -819,6 +857,9 @@ mod tests {
     fn owned_lowering_matches_the_serial_lowering() {
         let heap = neovm_value::tagged::gc::TestHeap::new();
         let clear_heap = heap.root();
+        // Same uninstall as the populated-cache row: the fixture is only the
+        // pointer the trailing clear matches, not a live Context.
+        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&heap);
         run_owned_against_serial(
             SelectionOp::ClipboardSet,
             vec![Value::symbol("clip")],
@@ -1067,12 +1108,14 @@ mod cut4b {
         let serial = Context::new(crate::test_utils::unit_runtime());
         assert_eq!(installed(&serial), SelectionInstaller::InlineSerialMain);
 
+        drop(serial);
         let mut routed = Context::new(crate::test_utils::unit_runtime());
         routed
             .activate_selection_routed(&ActivationAuthority::mint_for_test())
             .unwrap();
         assert_eq!(installed(&routed), SelectionInstaller::OwnedRoutedWorker);
 
+        drop(routed);
         let (hosted, _state) = hosted_green_context();
         assert_eq!(installed(&hosted), SelectionInstaller::OwnedLocalMain);
     }
@@ -1128,8 +1171,10 @@ mod cut4b {
     fn routed_and_serial_lowerings_agree_on_every_entry() {
         use crate::host_effect::selection::SelectionRequest;
 
-        let (mut serial, serial_state) = serial_context();
-        let (mut routed, routed_state) = hosted_green_context();
+        let (serial, serial_state) = serial_context();
+        let mut parked_serial = serial.park_for_test();
+        let (routed, routed_state) = hosted_green_context();
+        let mut parked_routed = routed.park_for_test();
 
         let mut cases: Vec<(String, Option<&str>, Option<SelectionOwner>)> = Vec::new();
         for input in ["nil", "\"ascii\"", "\"λμ\"", "'sym", "42", "'(a b)"] {
@@ -1167,8 +1212,12 @@ mod cut4b {
         }
 
         for (expr, fail, owner) in cases {
+            let mut serial = parked_serial.resume_for_test().expect("resume serial");
             let left = case_result(&mut serial, &serial_state, &expr, fail, owner, false);
+            parked_serial = serial.park_for_test();
+            let mut routed = parked_routed.resume_for_test().expect("resume routed");
             let right = case_result(&mut routed, &routed_state, &expr, fail, owner, true);
+            parked_routed = routed.park_for_test();
             assert_eq!(left, right, "serial and routed disagree on {expr}");
         }
 

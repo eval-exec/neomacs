@@ -1379,6 +1379,7 @@ fn add_face_text_property_basic_and_merge_order() {
         .unwrap();
     assert_eq!(face, Value::symbol("bold"));
 
+    drop(eval);
     let mut eval = eval_with_text("abc");
     builtin_put_text_property(
         &mut eval,
@@ -1408,6 +1409,7 @@ fn add_face_text_property_basic_and_merge_order() {
         Value::list(vec![Value::symbol("italic"), Value::symbol("bold")])
     );
 
+    drop(eval);
     let mut eval = eval_with_text("abc");
     builtin_put_text_property(
         &mut eval,
@@ -1437,6 +1439,7 @@ fn add_face_text_property_basic_and_merge_order() {
         Value::list(vec![Value::symbol("bold"), Value::symbol("italic")])
     );
 
+    drop(eval);
     let mut eval = eval_with_text("abc");
     builtin_add_face_text_property(
         &mut eval,

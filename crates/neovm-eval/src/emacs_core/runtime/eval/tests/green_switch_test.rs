@@ -1886,6 +1886,7 @@ fn native_admission_refusal_trace_records_each_cause_once_and_no_healthy_event()
         let healthy = green();
         assert_eq!(healthy.green_admission_readiness(), Ok(()));
         assert!(events.lock().unwrap().is_empty());
+        drop(healthy);
         for cause in [
             NativeReadinessCause::AbsentPoller,
             NativeReadinessCause::RegistrationFailed(std::io::ErrorKind::PermissionDenied),

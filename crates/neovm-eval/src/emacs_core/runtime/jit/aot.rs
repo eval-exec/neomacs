@@ -4225,6 +4225,7 @@ pub fn testkit_pgo_drain_selftest(
 
     // ---- PASS 2 — a FRESH session serves the drained `.so` AOT + FAST-from-call-1. ----
     super::cache::clear_with_serial_receipt().expect("serial jit grace");
+    drop(c1);
     let mut c2 = Context::new(hooks);
     alias(&mut c2, "pgo-drain-callee", "recordp")?;
     let g = mk_fn("pgo-drain-callee");

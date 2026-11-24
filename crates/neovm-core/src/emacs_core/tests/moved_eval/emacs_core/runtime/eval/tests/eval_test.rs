@@ -94,7 +94,11 @@ use crate::emacs_core::keyboard::CommandLoopHost;
 /// stays unwidened.
 fn minimal_vm_harness_for_test() -> Context {
     let boot = crate::test_utils::new_context();
-    neovm_eval::test_support::authority::new_minimal_vm_harness(boot.hooks_installed())
+    let proof = boot.hooks_installed();
+    // The proof is a token. Drop the boot context before the harness
+    // constructor, which installs its own heap.
+    drop(boot);
+    neovm_eval::test_support::authority::new_minimal_vm_harness(proof)
 }
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::SubrValueExt;
@@ -8924,6 +8928,7 @@ fn lambda_single_string_body_is_a_return_value_not_a_docstring() {
         .and_then(|body| neovm_value::value::list_to_vec(&body))
         .expect("expected lambda body");
     assert_eq!(body, vec![Value::string("ok-1")]);
+    drop(ev);
     assert_eq!(eval_one("(funcall (lambda nil \"ok-1\"))"), "OK \"ok-1\"");
 }
 
@@ -9585,6 +9590,7 @@ fn watched_variables_carry_gnu_trapped_write_on_their_symbol() {
     // Constants are `NoWrite` and stay so: their write check comes first.
     assert_eq!(flag(&ev, "nil"), SymbolTrappedWrite::NoWrite);
 
+    drop(ev);
     // The flag is consulted when an entry is popped, not when it was pushed:
     // a watcher added inside the `let` body still sees the `unlet`.
     let results = eval_all(
@@ -23566,14 +23572,15 @@ fn dropping_the_evaluator_uninstalls_its_thread_local_heap() {
     );
 }
 
-/// A later evaluator's installation wins: retraction is by pointer identity,
-/// so dropping an evaluator that is no longer the installed one is a no-op.
+/// Dropping a dormant Context retracts nothing. The live installation is a
+/// different heap, and drop clears the slot only when the pointer matches.
 #[test]
 fn dropping_a_displaced_evaluator_leaves_the_live_installation() {
     crate::test_utils::init_test_tracing();
     let first = crate::test_utils::new_context();
+    let parked = first.park_for_test();
     let _second = crate::test_utils::new_context();
-    drop(first);
+    drop(parked);
     assert!(
         neovm_value::tagged::gc::tagged_heap_is_installed(),
         "the still-live evaluator's heap must stay installed"
@@ -26087,7 +26094,9 @@ fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
     if pdump && !ev.tagged_heap().dump_partition_active() {
         // Cold bootstrap cache: that first call ran the live bootstrap
         // (dump-less) and WROTE the cache; load the freshly written pdump so
-        // the measured heap really has the mapped partition.
+        // the measured heap really has the mapped partition. Drop the first
+        // evaluator before the reload so this thread does not hold two.
+        drop(ev);
         ev = runtime_startup_context();
         assert!(
             ev.tagged_heap().dump_partition_active(),
@@ -26569,7 +26578,9 @@ fn alloc_class_profile(pdump: bool) {
     if pdump && !ev.tagged_heap().dump_partition_active() {
         // Cold bootstrap cache: first call ran the live bootstrap and wrote
         // the cache; reload so the measured config really has the partition.
+        // Drop the first evaluator before the reload.
         alloc_probe::reset();
+        drop(ev);
         ev = runtime_startup_context();
         assert!(ev.tagged_heap().dump_partition_active());
     }
@@ -27550,26 +27561,35 @@ fn finish_traced_call_agrees_with_unbind() {
     for nargs in 0..=3 {
         for extra_root in [false, true] {
             let mut via_finish = crate::test_utils::new_context();
-            let mut via_unbind = crate::test_utils::new_context();
-            for ev in [&mut via_finish, &mut via_unbind] {
-                ev.push_backtrace_frame(func, &args[..nargs]);
-                if extra_root {
-                    ev.push_specpdl_root(Value::T);
-                }
+            via_finish.push_backtrace_frame(func, &args[..nargs]);
+            if extra_root {
+                via_finish.push_specpdl_root(Value::T);
             }
-            let finished = via_finish.finish_traced_call(0, Ok(Value::fixnum(7)));
+            let parked_finish = via_finish.park_for_test();
+
+            let mut via_unbind = crate::test_utils::new_context();
+            via_unbind.push_backtrace_frame(func, &args[..nargs]);
+            if extra_root {
+                via_unbind.push_specpdl_root(Value::T);
+            }
             let unbound = via_unbind.unbind_to_with_result(0, Ok(Value::fixnum(7)));
+            let unbound_bits = unbound.map(|v| v.bits()).ok();
+            let unbind_empty = via_unbind.specpdl().is_empty();
+            let unbind_stack = via_unbind.backtrace_args_stack_len_for_test();
+            drop(via_unbind);
+
+            let mut via_finish = parked_finish
+                .resume_for_test()
+                .expect("resume finish context");
+            let finished = via_finish.finish_traced_call(0, Ok(Value::fixnum(7)));
             assert_eq!(
                 finished.map(|v| v.bits()).ok(),
-                unbound.map(|v| v.bits()).ok(),
+                unbound_bits,
                 "nargs={nargs} extra_root={extra_root}"
             );
             assert!(via_finish.specpdl().is_empty());
-            assert!(via_unbind.specpdl().is_empty());
-            assert_eq!(
-                via_finish.backtrace_args_stack_len_for_test(),
-                via_unbind.backtrace_args_stack_len_for_test()
-            );
+            assert!(unbind_empty);
+            assert_eq!(via_finish.backtrace_args_stack_len_for_test(), unbind_stack);
         }
     }
 }

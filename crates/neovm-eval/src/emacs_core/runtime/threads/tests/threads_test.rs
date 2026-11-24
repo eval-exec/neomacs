@@ -1083,14 +1083,22 @@ fn thread_signal_to_main_queues_a_thread_event() {
 ///
 /// Lisp execution cannot reach this — the signalling evaluator is by
 /// construction the mutator whose heap its thread installed — so the test
-/// builds the mismatch deliberately: constructing a second Context installs
-/// its heap on this thread and makes the first one foreign.
+/// builds the mismatch deliberately: park each Context before switching,
+/// then nest the second heap while checking the first Context's transport.
 #[test]
 fn thread_event_sharing_reports_a_foreign_heap_as_a_lisp_error() {
     crate::test_utils::init_test_tracing();
     let first = Context::new(crate::test_utils::unit_runtime());
     let sender = Value::string("sender");
-    let _second = Context::new(crate::test_utils::unit_runtime());
+    let parked_first = first.park_for_test();
+    let second = Context::new(crate::test_utils::unit_runtime());
+    let second_heap = second.tagged_heap.heap_root();
+    let _parked_second = second.park_for_test();
+    let first = parked_first.resume_for_test().expect("resume first");
+    // SAFETY: `_parked_second` owns `second_heap` and `first` owns the
+    // displaced root; both outlive `_nested`.
+    let _nested =
+        unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(second_heap) };
     // SAFETY: `first` and `sender` outlive the call, and the identity check
     // fails before either value is touched.
     let result = unsafe { InFlightThreadEvent::share(&first, sender, Value::NIL, Value::NIL) };

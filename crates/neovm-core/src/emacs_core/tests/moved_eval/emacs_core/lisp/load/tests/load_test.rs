@@ -1625,6 +1625,7 @@ fn runtime_image_loader_stops_on_primary_fingerprint_mismatch() {
     primary_bytes[fingerprint_start] ^= 0x01;
     fs::write(&primary, primary_bytes).expect("corrupt primary fingerprint");
 
+    drop(stale);
     let mut fresh = crate::test_utils::new_context();
     fresh.set_variable("runtime-image-candidate-test-var", Value::fixnum(2));
     crate::emacs_core::pdump::dump_to_file(&fresh, &fallback)
@@ -10353,6 +10354,7 @@ fn builtin_load_records_preloaded_files_only_while_purifying() {
         "a dumping load records the requested name, never an absolute path"
     );
 
+    drop(purifying);
     let mut plain = crate::test_utils::new_context();
     plain.set_variable("load-path", load_path);
     plain.set_variable("purify-flag", Value::NIL);

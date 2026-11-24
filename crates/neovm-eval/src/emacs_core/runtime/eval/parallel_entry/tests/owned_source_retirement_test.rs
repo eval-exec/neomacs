@@ -229,6 +229,7 @@ fn pentry_e2b_source_retirement_foreign_reactivation_refuses_before_cache_effect
     seed_canonical_tables(&mut source);
     let alive = source.world_lifetime_probe_for_test();
     let captured = capture(source).unwrap();
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&captured._frame.source.tagged_heap);
     let Some(mut foreign) = ready() else {
         return;
     };
@@ -257,7 +258,12 @@ fn pentry_e2b_source_retirement_drop_and_forget_keep_original_worlds() {
         return;
     };
     let alive = source.world_lifetime_probe_for_test();
-    drop(capture(source).unwrap().retire_text().unwrap());
+    let retired = capture(source).unwrap().retire_text().unwrap();
+    // `SourceFrame` holds `ManuallyDrop<Box<Context>>`, so dropping it leaves
+    // the retired world's heap slot installed. Clear that slot before building
+    // the second test world.
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&retired._frame.source.tagged_heap);
+    drop(retired);
     assert!(alive());
     let Some(source) = ready() else {
         return;

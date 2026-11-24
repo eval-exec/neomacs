@@ -213,6 +213,7 @@ fn stopped_major_weak_sweep_matches_serial_for_every_weakness() {
     let (mut serial, serial_tables) = populate();
     serial.gc_collect_exact();
     assert_tables(&serial_tables, "serial");
+    drop(serial);
 
     let (mut stopped, stopped_tables) = populate();
     run_stopped_major(&mut stopped).expect("the weak tables need no permit");

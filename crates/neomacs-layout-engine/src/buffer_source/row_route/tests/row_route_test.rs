@@ -868,6 +868,7 @@ fn classifier_rejects_string_overlay_touching_row_endpoints() {
     );
     // Overlay starting exactly at the row's newline: its before-string fires
     // at the newline position, which the pipeline's line-break lifecycle owns.
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "ab\ncd\n");
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1030,6 +1031,7 @@ fn classifier_routes_a_prefix_whose_unroutable_string_it_never_reaches() {
         "a whole-line plan reaches the unroutable string"
     );
 
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, &text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1083,6 +1085,7 @@ fn classifier_routes_a_prefix_whose_line_end_anchor_it_never_reaches() {
 
     // Overflow-prefix plan holding 10 columns: the coverage stops 30 chars
     // short of the anchor, so the prefix still routes.
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, &text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1445,6 +1448,7 @@ fn resolve_routed_position_face_covers_the_newline_span() {
 
     // A span ending exactly at the newline leaves the newline on the base
     // face.
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, "abcd\nnext\n");
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1725,6 +1729,7 @@ fn classifier_elision_uses_entry_run_ellipsis_flag_for_adjacent_runs() {
     .expect("entry run without ellipsis routes");
     assert_eq!(plan.elided(), &[(1, 3)], "adjacent runs collapse into one");
 
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);
@@ -1770,6 +1775,7 @@ fn classifier_rejects_invisible_spanning_the_newline() {
     );
 
     // The invisible run covering ONLY the newline refuses too.
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abc\nx\n";
     let buf_id = buffer_with_text(&mut eval, text);
@@ -2072,6 +2078,7 @@ fn classifier_rejects_replacement_combined_with_elision_or_overflow() {
         "replacement + elision must keep the buffer pipeline"
     );
 
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let text = "abXXcdefghij\n";
     let buf_id = buffer_with_text(&mut eval, text);
@@ -2400,6 +2407,7 @@ fn classifier_rejects_composed_cluster_with_hidden_base() {
         "a visible extender whose base is hidden must refuse"
     );
 
+    drop(eval);
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = buffer_with_text(&mut eval, text);
     eval.buffer_manager_mut().set_current(buf_id);

@@ -464,30 +464,34 @@ fn opt_sink_sqrt_native_equal_epoch_context_and_same_pointer_rewrite_replay_curr
     let f = after_store();
     let sym = intern("sqrt");
     let original = owner.obarray.symbol_function_id(sym).unwrap();
+    let owner_epoch = owner.obarray.function_epoch();
+    let parked_owner = owner.park_for_test();
     let mut other = Context::new(crate::test_utils::unit_runtime());
     let _ = other.debug_on_next_call_is_armed();
     other
         .eval_str("(fset 'sqrt (lambda (x) (list 'changed x)))")
         .unwrap();
-    let epoch = owner
-        .obarray
-        .function_epoch()
-        .max(other.obarray.function_epoch());
-    for ctx in [&mut owner, &mut other] {
-        while ctx.obarray.function_epoch() != epoch {
-            ctx.obarray
-                .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
-        }
+    let epoch = owner_epoch.max(other.obarray.function_epoch());
+    while other.obarray.function_epoch() != epoch {
+        other
+            .obarray
+            .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
     }
-    assert_ne!(owner.obarray.generation(), other.obarray.generation());
+    let other_generation = other.obarray.generation();
+    let other_epoch = other.obarray.function_epoch();
+    let parked_other = other.park_for_test();
+    let mut owner = parked_owner.resume_for_test().expect("resume owner heap");
+    while owner.obarray.function_epoch() != epoch {
+        owner
+            .obarray
+            .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
+    }
+    assert_ne!(owner.obarray.generation(), other_generation);
     assert_eq!(
         Value::from_sym_id(intern("sqrt")).bits(),
         f.constants()[0].bits()
     );
-    assert_eq!(
-        owner.obarray.function_epoch(),
-        other.obarray.function_epoch()
-    );
+    assert_eq!(owner.obarray.function_epoch(), other_epoch);
 
     let selected = {
         owner.setup_thread_locals();
@@ -518,6 +522,8 @@ fn opt_sink_sqrt_native_equal_epoch_context_and_same_pointer_rewrite_replay_curr
     // Actual CompiledLeaf::call_consts permits a live different vmctx. Its
     // heap assertion checks CURRENT vmctx/TLS heap agreement, not leaf owner.
     // Same scalar epoch and runtime callee symbol must not admit this lambda.
+    let parked_owner = owner.park_for_test();
+    let mut other = parked_other.resume_for_test().expect("resume other heap");
     {
         other.setup_thread_locals();
         let cell = Value::cons(Value::fixnum(0), Value::NIL);
@@ -549,6 +555,8 @@ fn opt_sink_sqrt_native_equal_epoch_context_and_same_pointer_rewrite_replay_curr
         crate::emacs_core::builtins::builtin_sin_1,
         FixedMin1::One,
     ));
+    let parked_other = other.park_for_test();
+    let mut owner = parked_owner.resume_for_test().expect("resume owner heap");
     assert_eq!(owner.obarray.function_epoch(), epoch);
     assert_eq!(
         owner.obarray.symbol_function_id(sym).unwrap().bits(),
@@ -568,12 +576,17 @@ fn opt_sink_sqrt_native_equal_epoch_context_and_same_pointer_rewrite_replay_curr
         );
         assert_eq!(cell.cons_car(), Value::fixnum(1));
     }
+    let parked_owner = owner.park_for_test();
+    let mut other = parked_other.resume_for_test().expect("resume other heap");
     other.register_subr(SubrSpec::fixed1(
         "sqrt",
         crate::emacs_core::builtins::builtin_sqrt_1,
         FixedMin1::One,
     ));
-    owner.setup_thread_locals();
+    let parked_other = other.park_for_test();
+    let owner = parked_owner.resume_for_test().expect("resume owner heap");
     assert_eq!(owner.jit_root_stack_top, 0);
+    drop(owner);
+    let other = parked_other.resume_for_test().expect("resume other heap");
     assert_eq!(other.jit_root_stack_top, 0);
 }

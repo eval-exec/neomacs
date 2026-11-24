@@ -228,10 +228,23 @@ fn pentry_e2b_owned_source_pre_effect_refusal_returns_same_serial_context() {
 #[test]
 fn pentry_e2b_owned_source_foreign_heap_refusal_preserves_current_owner() {
     let source = source();
+    let parked_source = (*source).park_for_test();
     let foreign = self::source();
-    match capture(source) {
+    let foreign_root = foreign.tagged_heap.heap_root();
+    let parked_foreign = (*foreign).park_for_test();
+    let source = Box::new(parked_source.resume_for_test().expect("resume source"));
+    // SAFETY: `parked_foreign` owns `foreign_root` and outlives `foreign_heap`;
+    // `source` owns the displaced root and outlives `drop(foreign_heap)`.
+    let foreign_heap = unsafe {
+        neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(foreign_root)
+    };
+    let result = capture(source);
+    drop(foreign_heap);
+    match result {
         Err(SourceWithdrawalFailure::BeforeEffects(failure)) => {
             assert_eq!(failure.reason, SourceEntryRefusal::HeapTlsNotCurrent);
+            let failure = (*failure.source).park_for_test();
+            let foreign = parked_foreign.resume_for_test().expect("resume foreign");
             assert!(neovm_value::tagged::gc::tagged_heap_is_current(
                 &foreign.tagged_heap
             ));

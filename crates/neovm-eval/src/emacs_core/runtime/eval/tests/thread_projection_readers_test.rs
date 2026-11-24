@@ -311,11 +311,12 @@ fn canonical_plain_word_survives_collection() {
 #[test]
 fn obarray_clone_normalizes_projections() {
     let mut ev = fixture();
-    let unprojected = fixture();
     for &(name, _) in SHAPES {
         project(&mut ev, name);
     }
     let mut copy = ev.obarray.clone();
+    let parked_ev = ev.park_for_test();
+    let unprojected = fixture();
     for &(name, _) in SHAPES {
         let id = intern(name);
         let sym = copy.get_by_id(id).expect("symbol");
@@ -338,6 +339,8 @@ fn obarray_clone_normalizes_projections() {
             "{name}: default"
         );
     }
+    drop(unprojected);
+    let mut ev = parked_ev.resume_for_test().expect("resume projected");
     copy.set_symbol_value_id(intern("tpr-plain"), Value::fixnum(1));
     copy.set_symbol_value_id(intern("tpr-obj"), Value::fixnum(2));
     assert_eq!(
@@ -353,17 +356,26 @@ fn obarray_clone_normalizes_projections() {
 fn pdump_writes_the_projected_variable() {
     use crate::emacs_core::pdump::convert::dumped_symbol_value_for_test;
     let mut ev = fixture();
-    let unprojected = fixture();
     for &(name, _) in SHAPES {
         project(&mut ev, name);
     }
+    let mut parked_ev = ev.park_for_test();
+    let mut unprojected = fixture();
     for &(name, _) in SHAPES {
         let id = intern(name);
+        let expected =
+            dumped_symbol_value_for_test(unprojected.obarray.get_by_id(id).expect("symbol"));
+        let parked_unprojected = unprojected.park_for_test();
+        let ev = parked_ev.resume_for_test().expect("resume projected");
         assert_eq!(
             dumped_symbol_value_for_test(ev.obarray.get_by_id(id).expect("symbol")),
-            dumped_symbol_value_for_test(unprojected.obarray.get_by_id(id).expect("symbol")),
+            expected,
             "{name}"
         );
+        parked_ev = ev.park_for_test();
+        unprojected = parked_unprojected
+            .resume_for_test()
+            .expect("resume unprojected");
     }
 }
 

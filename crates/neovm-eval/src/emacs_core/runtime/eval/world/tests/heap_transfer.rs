@@ -298,7 +298,11 @@ fn pentry_e2b_heap_transfer_installed_tls_refuses_without_constructing_local_loa
     with_prepared(|pending, transfer| {
         let unrelated =
             neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
-        unsafe { neovm_value::tagged::gc::set_tagged_heap_root(unrelated.root()) };
+        // SAFETY: `unrelated` stays live until after `drop(nest)`, and no
+        // heap reference is live during the install or drop.
+        let nest = unsafe {
+            neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(unrelated.root())
+        };
         let failure = match transfer.with_collector::<()>(|_| panic!("must refuse before callback"))
         {
             Ok((_, ())) => panic!("installed TLS accepted"),
@@ -306,7 +310,11 @@ fn pentry_e2b_heap_transfer_installed_tls_refuses_without_constructing_local_loa
         };
         assert_eq!(failure.reason(), TransferError::InstalledTls);
         assert!(neovm_value::tagged::gc::tagged_heap_is_current(&unrelated));
-        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&unrelated);
+        drop(nest);
+        assert!(
+            !neovm_value::tagged::gc::tagged_heap_is_installed(),
+            "the nest restores the empty slot the transfer started from"
+        );
         assert!(failure.retains_backing());
         assert!(pending.is_poisoned());
     });

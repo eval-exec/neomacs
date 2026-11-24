@@ -265,12 +265,24 @@ fn divergences() -> Vec<String> {
             .map(Step::Form)
             .chain([Step::Bytecode])
             .collect();
-        let mut plain = context(shape, name, false);
-        let mut projected = context(shape, name, true);
+        let plain = context(shape, name, false);
+        let mut parked_plain = plain.park_for_test();
+        let projected = context(shape, name, true);
+        let mut parked_projected = projected.park_for_test();
         let mut collected = context(shape, name, true);
         for step in &steps {
+            let parked_collected = collected.park_for_test();
+            let mut plain = parked_plain.resume_for_test().expect("resume plain");
             let want = step.run(&mut plain, name);
+            parked_plain = plain.park_for_test();
+            let mut projected = parked_projected
+                .resume_for_test()
+                .expect("resume projected");
             let got = step.run(&mut projected, name);
+            parked_projected = projected.park_for_test();
+            collected = parked_collected
+                .resume_for_test()
+                .expect("resume collected");
             collected.gc_collect_exact();
             let got_collected = step.run(&mut collected, name);
             for (arm, got) in [("projected", got), ("collected", got_collected)] {

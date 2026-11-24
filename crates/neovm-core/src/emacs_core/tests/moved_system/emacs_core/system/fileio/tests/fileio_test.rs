@@ -52,15 +52,19 @@ thread_local! {
     /// Previously this stored only the *last* context, which freed
     /// earlier strings and produced use-after-free panics in tests
     /// that compared results across multiple builtin calls.
-    static LAST_TEST_CTX: std::cell::RefCell<Vec<Context>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+    static LAST_TEST_CTX: std::cell::RefCell<
+        Vec<neovm_eval::emacs_core::eval::parked_context::ParkedContext>,
+    > = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 macro_rules! call_fileio_builtin {
     ($builtin:ident, $args:expr) => {{
         let mut eval = crate::emacs_core::eval_hook_installers::new_context();
         let result = $builtin(&mut eval, $args);
-        LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval));
+        // The heap must stay allocated so later assertions can read values
+        // from earlier calls. Parking drops the TLS install without freeing
+        // that heap, so the next constructor is not a second active Context.
+        LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval.park_for_test()));
         result
     }};
 }
@@ -2836,6 +2840,7 @@ fn test_builtin_set_file_modes_eval_respects_default_directory() {
         vec![Value::string("alpha.txt"), Value::fixnum(0o600)],
     )
     .unwrap();
+    drop(eval);
     assert_eq!(
         call_fileio_builtin!(
             builtin_file_modes,
@@ -3709,6 +3714,9 @@ fn test_file_system_info_eval_respects_default_directory() {
         vec![Value::string(dir.to_string_lossy().as_ref())],
     )
     .expect("absolute file-system-info");
+    // `absolute` is read after the next constructor. Park so that heap stays
+    // allocated and the slot is empty.
+    let _parked_absolute = absolute_eval.park_for_test();
 
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     eval.set_variable(
@@ -5581,6 +5589,7 @@ fn test_insert_file_contents_visit_rejects_partial_and_nonempty_visits() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
+    drop(eval_partial);
     let mut eval_nonempty = crate::emacs_core::eval_hook_installers::new_context();
     eval_nonempty
         .edit
@@ -5773,6 +5782,7 @@ fn test_insert_file_contents_beg_end_semantics() {
         "slice 2..4 should insert 'cd'"
     );
 
+    drop(eval_slice);
     let mut eval_empty = crate::emacs_core::eval_hook_installers::new_context();
     let inserted_zero = builtin_insert_file_contents(
         &mut eval_empty,
@@ -5795,6 +5805,7 @@ fn test_insert_file_contents_beg_end_semantics() {
         ""
     );
 
+    drop(eval_empty);
     let mut eval_tail = crate::emacs_core::eval_hook_installers::new_context();
     let inserted_tail = builtin_insert_file_contents(
         &mut eval_tail,
@@ -5817,6 +5828,7 @@ fn test_insert_file_contents_beg_end_semantics() {
         "cdef"
     );
 
+    drop(eval_tail);
     let mut eval_bad = crate::emacs_core::eval_hook_installers::new_context();
     let bad_offset = builtin_insert_file_contents(
         &mut eval_bad,
@@ -5869,6 +5881,7 @@ fn test_insert_file_contents_and_write_region_arity_bounds() {
     .expect("5-arg insert-file-contents should succeed");
     assert_eq!(list_to_vec(&insert_ok).unwrap()[1], Value::fixnum(0));
 
+    drop(eval_insert_ok);
     let mut eval_insert_bad = crate::emacs_core::eval_hook_installers::new_context();
     let insert_bad = builtin_insert_file_contents(
         &mut eval_insert_bad,
@@ -5896,6 +5909,7 @@ fn test_insert_file_contents_and_write_region_arity_bounds() {
     let out_path = dir.join("arity-out.txt");
     let out_str = out_path.to_string_lossy().to_string();
 
+    drop(eval_insert_bad);
     let mut eval_write_ok = crate::emacs_core::eval_hook_installers::new_context();
     eval_write_ok
         .edit
@@ -5917,6 +5931,7 @@ fn test_insert_file_contents_and_write_region_arity_bounds() {
     )
     .expect("7-arg write-region should succeed");
 
+    drop(eval_write_ok);
     let mut eval_write_bad = crate::emacs_core::eval_hook_installers::new_context();
     eval_write_bad
         .edit
@@ -6003,6 +6018,7 @@ fn test_eval_fileio_relative_paths_respect_default_directory() {
     let ibuf = eval_insert.edit.buffers.current_buffer().unwrap();
     assert_eq!(ibuf.buffer_string(), "alpha\n");
 
+    drop(eval_insert);
     let mut eval_write = crate::emacs_core::eval_hook_installers::new_context();
     eval_write.set_variable("default-directory", Value::string(&default_dir));
     eval_write
@@ -7119,6 +7135,7 @@ fn do_auto_save_uses_0666_without_an_existing_visited_file() {
     // A buffer visiting a file that has never been saved.
     let new_file = dir.path().join("new.txt");
     let new_auto_save = dir.path().join("#new.txt#");
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     prepare_buffer_for_auto_save(
         eval.edit
@@ -7140,6 +7157,7 @@ fn do_auto_save_uses_0666_without_an_existing_visited_file() {
     fs::write(&plain_file, "not a directory\n").expect("write regular file");
     let under_file = plain_file.join("new.txt");
     let under_file_auto_save = dir.path().join("#plain.txt!new.txt#");
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     prepare_buffer_for_auto_save(
         eval.edit
@@ -7889,7 +7907,7 @@ fn directory_files_match_reads_current_buffer_syntax_table() {
         .iter()
         .map(|v| v.as_utf8_str().unwrap().to_string())
         .collect();
-    LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval));
+    LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval.park_for_test()));
     assert_eq!(
         names,
         vec!["abc"],
@@ -7930,7 +7948,7 @@ fn find_file_name_handler_reads_current_buffer_syntax_table() {
     )
     .unwrap();
     let hit_name = hit.as_bare_symbol_name().map(|name| name.to_string());
-    LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval));
+    LAST_TEST_CTX.with(|slot| slot.borrow_mut().push(eval.park_for_test()));
     assert_eq!(
         hit_name.as_deref(),
         Some("my-handler"),

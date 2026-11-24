@@ -1982,6 +1982,7 @@ fn pgo_runtime_emit_is_byte_identical_across_sessions_and_default_off() {
     for i in 0..40 {
         let _ = intern(&format!("pgo-eq-drift1-{i}"));
     }
+    let parked_c1 = c1.park_for_test();
     let mut c2 = Context::new(crate::test_utils::unit_runtime());
     for i in 0..123 {
         let _ = intern(&format!("pgo-eq-drift2-{i}"));
@@ -1989,9 +1990,13 @@ fn pgo_runtime_emit_is_byte_identical_across_sessions_and_default_off() {
     pgo_alias(&mut c2, "pgo-eq-callee", "recordp");
 
     let f = pgo_pred_body("pgo-eq-callee");
+    let parked_c2 = c2.park_for_test();
+    let c1 = parked_c1.resume_for_test().expect("resume first session");
     let (o1, h1) = compile_leaf_to_object(f.ops(), f.constants(), 1, Some(&c1.obarray))
         .expect("emit1 ok")
         .expect("emit1 some");
+    drop(c1);
+    let c2 = parked_c2.resume_for_test().expect("resume second session");
     let (o2, h2) = compile_leaf_to_object(f.ops(), f.constants(), 1, Some(&c2.obarray))
         .expect("emit2 ok")
         .expect("emit2 some");

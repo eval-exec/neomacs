@@ -4170,6 +4170,8 @@ fn phase1_cursor_move_matches_full_rebuild_golden() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     // Incremental: warm at point 0, move to 10, second pass takes cursor-only.
     let (mut eval, frame_id, buf_id, _wi) = incr_editing_frame(&text, 800, 600);
@@ -4234,6 +4236,8 @@ fn relative_line_numbers_follow_point_across_incremental_redisplay() {
         &reference_engine,
         reference_frame,
     ));
+    drop(reference_engine);
+    drop(reference_eval);
 
     let (mut incremental_eval, incremental_frame, incremental_buffer, _) =
         incr_editing_frame(&text, 800, 600);
@@ -4828,6 +4832,8 @@ fn scroll_to_top_does_not_match_trailing_placeholder_row() {
     scroll_window_to(&mut eval, frame_id, win, buf_id, 1, 0);
     engine.layout_frame_rust(&mut eval, frame_id);
     let incremental = selected_window_layout_trace(&eval, &engine, frame_id);
+    drop(engine);
+    drop(eval);
 
     // Reference: fresh full rebuild at window_start 1.
     let (mut eval_ref, frame_ref, _br, _wr) = incr_editing_frame(&text, 800, 600);
@@ -4873,6 +4879,8 @@ fn phase2_scroll_matches_full_rebuild_golden() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     // Incremental: warm, scroll, second pass takes the pure-scroll path.
     let (mut eval, frame_id, buf_id, win) = incr_editing_frame(&text, 800, 600);
@@ -4974,6 +4982,9 @@ fn phase2_scroll_replay_keeps_the_selected_windows_phys_cursor() {
         win.0 as i64,
         "the frame's physical cursor must belong to the selected window"
     );
+    let cursor_at = (cursor.row, cursor.col, cursor.x, cursor.y);
+    drop(engine);
+    drop(eval);
 
     // And it must land where a full rebuild of the same state puts it.
     let (mut eval_ref, frame_ref, buf_ref, win_ref) = incr_editing_frame(&text, 800, 600);
@@ -4989,7 +5000,7 @@ fn phase2_scroll_replay_keeps_the_selected_windows_phys_cursor() {
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = frame_phys_cursor(&ref_engine).expect("full rebuild publishes the cursor");
     assert_eq!(
-        (cursor.row, cursor.col, cursor.x, cursor.y),
+        cursor_at,
         (reference.row, reference.col, reference.x, reference.y),
         "the scroll replay's cursor must match a full rebuild's"
     );
@@ -25803,11 +25814,14 @@ fn display_string_replacement_row_routes_and_matches_pipeline() {
 
     // Pipeline side: point inside row 0 refuses the route (PointInRow), so
     // the buffer pipeline renders the replacement row.
-    let (_eval_pipeline, _buf_pipeline, _fid_p, rows_pipeline, _cw_p, _ch_p) =
+    let (eval_pipeline, _buf_pipeline, _fid_p, rows_pipeline, _cw_p, _ch_p) =
         layout_main_text_rows_with(text, |eval, buf_id| {
             put_replacement(eval, buf_id);
             eval.eval_str("(goto-char 2)").expect("point on row 0");
         });
+    // The routed layout installs its own heap. The pipeline rows stay
+    // allocated on this parked heap.
+    let _parked_pipeline = eval_pipeline.park_for_test();
     assert_eq!(
         glyphs_logical_text(&rows_pipeline[0].glyphs[1]),
         "abSTRcd ",
@@ -25929,7 +25943,7 @@ fn space_width_spec_row_routes_and_matches_pipeline() {
     };
 
     // Pipeline side: point inside row 0 refuses the route.
-    let (_e_p, _b_p, _f_p, rows_pipeline, char_width, _c_p) =
+    let (eval_p, _b_p, _f_p, rows_pipeline, char_width, _c_p) =
         layout_main_text_rows_with(text, |eval, buf_id| {
             put_spec(eval, buf_id);
             eval.eval_str("(goto-char 2)").expect("point on row 0");
@@ -25943,6 +25957,9 @@ fn space_width_spec_row_routes_and_matches_pipeline() {
         3.0 * char_width,
         "(space :width 3) must stretch exactly three canonical char widths"
     );
+    // The pipeline glyphs outlive this context. Park so the routed
+    // constructor is the only active Context; dropping would free them.
+    let _parked_pipeline = eval_p.park_for_test();
 
     // Routed side: point at end-of-buffer (row 1).
     let routed_before = crate::buffer_source::row_route::ROUTED_REPLACEMENT_ROW_COUNT
@@ -31917,6 +31934,8 @@ fn phase3_plain_edit_matches_full_rebuild_golden() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     let (mut eval, frame_id, buf_id, _wi) = incr_editing_frame(&text, 800, 600);
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
@@ -31961,6 +31980,8 @@ fn phase3_insert_into_empty_line_matches_full_rebuild_golden() {
     let mut reference_engine = crate::font::metrics::test_catalog::layout_engine();
     reference_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &reference_engine, frame_ref);
+    drop(reference_engine);
+    drop(eval_ref);
 
     let (mut eval, frame_id, buf_id, _incremental_window) = incr_editing_frame(text, 800, 600);
     {
@@ -32198,6 +32219,8 @@ fn edit_below_reuse_shifts_trailing_placeholder_to_new_zv() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     // Incremental: warm layout, edit, relay through below-reuse.
     let (mut eval, frame_id, buf_id, _win) = incr_editing_frame(text, 800, 600);
@@ -32302,6 +32325,8 @@ fn edit_fast_path_reuses_empty_line_and_placeholder_rows() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     // Incremental: warm layout, edit, relay. Must take the edit fast path and
     // relay only the edited line (the empty line and placeholder are reused).
@@ -32364,6 +32389,8 @@ fn edit_fast_path_shifts_indicate_empty_lines_fillers_to_zv() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     // Incremental: warm layout with fillers on, edit, relay via the fast path.
     let (mut eval, frame_id, buf_id, _win) = incr_editing_frame(text, 800, 600);
@@ -32462,6 +32489,8 @@ fn phase5_fast_paths_emit_row_damage() {
         }
     }
     assert!(reused_body > 0, "expected reused body rows");
+    drop(engine);
+    drop(eval);
 
     // --- scroll: reused rows ReusedShifted with a nonzero dvpos ---
     let line = "(defun f (a b) (+ a b))\n";
@@ -32660,6 +32689,8 @@ fn phase3_below_reuse_matches_full_rebuild_golden() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     let (mut eval, frame_id, buf_id, _wi) = incr_editing_frame(&text, 800, 600);
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
@@ -32703,6 +32734,8 @@ fn below_reuse_bail_golden_stats(insert_text: &str) -> LayoutStats {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     let (mut eval, frame_id, buf_id, _wi) = incr_editing_frame(&text, 800, 600);
     let mut engine = crate::font::metrics::test_catalog::layout_engine(); // allow_below_reuse defaults to true
@@ -32791,6 +32824,8 @@ fn no_change_relayout_matches_full_rebuild_golden() {
     let mut ref_engine = crate::font::metrics::test_catalog::layout_engine();
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let reference = selected_window_layout_trace(&eval_ref, &ref_engine, frame_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     let (mut eval, frame_id, _bi, _wi) = incr_editing_frame(&text, 800, 600);
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
@@ -32873,6 +32908,8 @@ fn multi_window_edit_matches_full_rebuild_for_both_windows() {
     ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
     let ref_left = window_layout_trace(&eval_ref, &ref_engine, frame_ref, lw_ref);
     let ref_right = window_layout_trace(&eval_ref, &ref_engine, frame_ref, rw_ref);
+    drop(ref_engine);
+    drop(eval_ref);
 
     // Incremental: warm, edit the left buffer, measured.
     let (mut eval, frame_id, left_buf, lw, rw) = setup();

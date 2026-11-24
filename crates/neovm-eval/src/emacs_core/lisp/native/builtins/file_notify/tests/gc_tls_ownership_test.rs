@@ -37,15 +37,17 @@ fn gc_tls_ownership_file_notify_reset_discards_a_dropped_heap() {
 
 #[test]
 fn gc_tls_ownership_file_notify_roots_exclude_another_live_heap() {
-    let mut first = Context::new(crate::test_utils::unit_runtime());
-    let mut second = Context::new(crate::test_utils::unit_runtime());
+    let first = Context::new(crate::test_utils::unit_runtime());
+    let parked_first = first.park_for_test();
+    let second = Context::new(crate::test_utils::unit_runtime());
     let callback = register_watch();
     assert!(
         roots_for(&second)
             .iter()
             .any(|root| root.bits() == callback.bits())
     );
-    first.setup_thread_locals();
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     assert!(
         roots_for(&first)
             .iter()
@@ -53,16 +55,18 @@ fn gc_tls_ownership_file_notify_roots_exclude_another_live_heap() {
         "file notification callbacks from the second Context are roots of the first heap"
     );
     first.gc_collect_exact();
-    second.setup_thread_locals();
+    drop(first);
+    let mut second = parked_second.resume_for_test().expect("resume second");
     second.gc_collect_exact();
     assert_eq!(callback.as_vector_data().unwrap()[0], Value::fixnum(42));
 }
 
 #[test]
 fn gc_tls_ownership_file_notify_registrations_follow_context_swaps() {
-    let mut first = Context::new(crate::test_utils::unit_runtime());
+    let first = Context::new(crate::test_utils::unit_runtime());
     let a = register_watch();
-    let mut second = Context::new(crate::test_utils::unit_runtime());
+    let parked_first = first.park_for_test();
+    let second = Context::new(crate::test_utils::unit_runtime());
     let b = register_watch();
     let callback = || {
         FILE_NOTIFY_STATE.with(|slot| {
@@ -73,10 +77,12 @@ fn gc_tls_ownership_file_notify_registrations_follow_context_swaps() {
                 .callback()
         })
     };
-    first.setup_thread_locals();
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     assert_eq!(callback().bits(), a.bits());
     first.gc_collect_exact();
-    second.setup_thread_locals();
+    drop(first);
+    let mut second = parked_second.resume_for_test().expect("resume second");
     assert_eq!(callback().bits(), b.bits());
     second.gc_collect_exact();
 }

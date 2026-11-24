@@ -17,11 +17,14 @@ fn gc_tls_ownership_symbol_names_are_rooted_only_in_their_heap() {
         .unwrap();
     let id = symbol.as_bare_symbol_id().unwrap();
     let name = materialize_symbol_name_value(id);
+    let parked_first = first.park_for_test();
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let mut roots = Vec::new();
     collect_symbol_name_gc_roots(&mut roots, second.tagged_heap().tagged_heap_identity());
     assert!(roots.iter().all(|root| root.bits() != name.bits()));
     second.gc_collect_exact();
+    drop(second);
+    let mut first = parked_first.resume_for_test().expect("resume first");
     first.setup_thread_locals();
     let mut roots = Vec::new();
     collect_symbol_name_gc_roots(&mut roots, first.tagged_heap().tagged_heap_identity());
@@ -41,6 +44,7 @@ fn gc_tls_ownership_visible_name_cache_revalidates_on_context_switch() {
     assert!(
         matches!(resolve_lisp_visible_symbol_name(id), LispVisibleSymbolName::LispObject(value) if value.bits() == original.bits())
     );
+    let parked_first = first.park_for_test();
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let own = materialize_symbol_name_value(id);
     assert_ne!(original.bits(), own.bits());
@@ -48,6 +52,8 @@ fn gc_tls_ownership_visible_name_cache_revalidates_on_context_switch() {
         matches!(resolve_lisp_visible_symbol_name(id), LispVisibleSymbolName::LispObject(value) if value.bits() == own.bits())
     );
     second.gc_collect_exact();
+    drop(second);
+    let mut first = parked_first.resume_for_test().expect("resume first");
     first.setup_thread_locals();
     assert!(
         matches!(resolve_lisp_visible_symbol_name(id), LispVisibleSymbolName::LispObject(value) if value.bits() == original.bits())
@@ -93,10 +99,13 @@ fn gc_tls_ownership_interned_name_atoms_do_not_carry_heap_properties() {
         !resolve_sym_lisp_string(id).has_intervals(),
         "the process-lifetime name atom cloned unrooted heap properties"
     );
+    let parked_first = first.park_for_test();
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let name = materialize_symbol_name_value(id);
     assert!(!name.as_lisp_string().unwrap().has_intervals());
     second.gc_collect_exact();
+    drop(second);
+    let mut first = parked_first.resume_for_test().expect("resume first");
     first.setup_thread_locals();
     first.gc_collect_exact();
     assert!(exact.as_lisp_string().unwrap().has_intervals());

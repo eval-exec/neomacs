@@ -41,8 +41,9 @@ thread_local! {
 /// RAII, `!Send`.
 ///
 /// `install` boxes a fresh `TaggedHeap` and installs its root into the
-/// thread's allocation slot via `set_tagged_heap_root` (the production
-/// root-owning installer). `Drop` restores the previous slot value in LIFO
+/// thread's allocation slot via [`crate::tagged::gc::NestedTaggedHeapInstall`]
+/// (which calls the production root-owning installer). `Drop` restores the
+/// previous slot value in LIFO
 /// order (a panic inside the scope therefore restores it during unwinding)
 /// and RETIRES the scope heap into this thread's graveyard; the graveyard
 /// frees retired heaps only when the thread exits. Freeing at scope end would
@@ -68,9 +69,10 @@ thread_local! {
 /// The TLS store is the fence's authority: `TestHeapScope::install`.
 /// `set_tagged_heap` itself gains no new route.
 pub struct TestHeapScope {
-    /// The slot value before this scope installed; `None` means the thread had
-    /// no heap (the common case in a re-homed test).
-    previous: Option<std::ptr::NonNull<crate::tagged::gc::TaggedHeap>>,
+    /// Saves and restores the previous slot. Ended explicitly in `Drop`
+    /// before the scope heap is retired, so the slot no longer names that
+    /// heap when it leaves the mutator.
+    nest: crate::tagged::gc::NestedTaggedHeapInstall<'static>,
     /// The owned heap. `AliasableBox` gives the stable provenance root the
     /// TLS slot names. `ManuallyDrop` is load-bearing: `Drop` never frees the
     /// heap, it retires it into [`TEST_HEAP_GRAVEYARD`].
@@ -85,12 +87,13 @@ impl TestHeapScope {
     #[doc(hidden)]
     pub fn install() -> Self {
         let heap = crate::tagged::gc::AliasableBox::new(crate::tagged::gc::TaggedHeap::new());
-        let root = heap.root();
-        let previous = crate::tagged::gc::installed_tagged_heap_root_for_test_scope();
-        // SAFETY: this scope owns the AliasableBox and keeps it until Drop.
-        unsafe { crate::tagged::gc::set_tagged_heap_root(root) };
+        // SAFETY: this scope owns the AliasableBox and ends `nest` in Drop
+        // before retiring `heap`. Any displaced outer root stays live until
+        // this scope drops.
+        let nest =
+            unsafe { crate::tagged::gc::NestedTaggedHeapInstall::install_bare(heap.root()) };
         Self {
-            previous,
+            nest,
             heap: std::mem::ManuallyDrop::new(heap),
             _not_send: std::marker::PhantomData,
         }
@@ -107,17 +110,15 @@ impl TestHeapScope {
 
 impl Drop for TestHeapScope {
     fn drop(&mut self) {
-        match self.previous {
-            // LIFO: the slot goes back to the outer/default installation,
-            // re-deriving the TLS mirrors from that live root.
-            // SAFETY: `previous` is the root this scope displaced, still owned
-            // by the outer installer for the thread's life.
-            Some(previous) => unsafe { crate::tagged::gc::set_tagged_heap_root(previous) },
-            // No previous heap: uninstall this scope's heap through the
-            // detach-then-pointer-checked-clear path, so the slot and every
-            // hot-path mirror stop naming it. The heap stays allocated.
-            None => crate::tagged::gc::clear_tagged_heap_if_installed(&self.heap),
+        if self.nest.replaced_empty_slot() {
+            // No previous heap: uninstall through the detach-then-pointer
+            // checked clear before the nest's pointer restore. The heap stays
+            // allocated. `end` then sees a slot that no longer names it.
+            crate::tagged::gc::clear_tagged_heap_if_installed(&self.heap);
         }
+        // LIFO when a previous root was saved: the nest reinstalls it.
+        // Either way the slot must not name this heap before retirement.
+        self.nest.end();
         // SAFETY: `install` initialized the field and this is its only move.
         let heap = unsafe { std::mem::ManuallyDrop::take(&mut self.heap) };
         retire_to_graveyard(heap);

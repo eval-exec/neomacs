@@ -10,10 +10,11 @@ fn gc_tls_ownership_terminal_values_survive_owner_collection_and_reactivation() 
     let payload = Value::vector(vec![child]);
     builtin_set_terminal_parameter(&mut ctx, vec![handle, key, payload]).unwrap();
     let expected = [handle.bits(), payload.bits(), child.bits()];
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap());
+    let parked_ctx = ctx.park_for_test();
 
-    let _other = Context::new(crate::test_utils::unit_runtime());
-    ctx.setup_thread_locals();
+    let other = Context::new(crate::test_utils::unit_runtime());
+    let _parked_other = other.park_for_test();
+    let mut ctx = parked_ctx.resume_for_test().expect("resume owner");
     // Do not access terminal TLS before collecting: its original Values
     // must be retained by the owning Context, rather than another local view.
     ctx.gc_collect_exact();

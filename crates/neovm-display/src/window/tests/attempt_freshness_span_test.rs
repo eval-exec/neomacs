@@ -108,6 +108,7 @@ fn native_span_cannot_borrow_another_contexts_input_token() {
     let before = eval
         .window_layout_attempt_freshness(frame, window, buffer)
         .unwrap();
+    let _parked_eval = eval.park_for_test();
     let (other, _, _, _) = fixture();
     let after = other
         .window_layout_attempt_freshness_after_span(&before, WindowLayoutLispAdmission::NativeOnly);

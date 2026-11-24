@@ -178,6 +178,7 @@ fn pentry_e2b_source_observations_foreign_heap_refuses_before_withdrawal() {
     };
     let alive = source.world_lifetime_probe_for_test();
     let captured = capture(source).unwrap();
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&captured._frame.source.tagged_heap);
     let Some(foreign) = ready() else {
         return;
     };

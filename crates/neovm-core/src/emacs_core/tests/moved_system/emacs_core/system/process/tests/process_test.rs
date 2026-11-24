@@ -17431,6 +17431,7 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
     // `ErrorKind::Interrupted` and re-enters (polling-3.11.0/src/lib.rs:
     // 751-764), so even a delivery that DID interrupt the syscall would not
     // shorten the block.
+    drop(eval);
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     disarm_sigchld_for_test();
     let (signal_ready, signal_wait) = std::sync::mpsc::channel();

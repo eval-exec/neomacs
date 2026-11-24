@@ -150,6 +150,9 @@ fn pentry_e2b_source_census_rechecks_entry_before_the_actual_drain() {
     };
     let alive = source.world_lifetime_probe_for_test();
     let retired = capture(source).unwrap().retire_text().unwrap();
+    // Clear the retired source's heap slot so the foreign Context can install
+    // cleanly; the retired source is not entered again, only refused on TLS.
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&retired._frame.source.tagged_heap);
     let Some(foreign) = ready() else {
         return;
     };
@@ -179,6 +182,7 @@ fn pentry_e2b_source_census_existing_keeper_from_another_world_refuses() {
         return;
     };
     let mut first = capture(source).unwrap();
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&first._frame.source.tagged_heap);
     let Some(foreign_source) = ready() else {
         return;
     };

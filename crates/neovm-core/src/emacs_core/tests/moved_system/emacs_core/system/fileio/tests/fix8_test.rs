@@ -221,6 +221,7 @@ fn insert_file_contents_replace_reports_net_inserted_matches_gnu() {
 
     // Partial change: buffer "hello WORLD!" replaced by file "hello world!" ->
     // only "world" differs, so net inserted is 5.
+    drop(eval);
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     eval.edit
         .buffers

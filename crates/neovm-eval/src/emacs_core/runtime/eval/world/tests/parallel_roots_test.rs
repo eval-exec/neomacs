@@ -43,16 +43,21 @@ impl Drop for ScratchScope {
 fn frozen_legacy_capture_rejects_a_foreign_world_keeper() {
     let mut first = Context::new(crate::test_utils::unit_runtime());
     let first_keeper = first.issue_green_baton().unwrap();
+    let parked_first = first.park_for_test();
     let mut second = Context::new(crate::test_utils::unit_runtime());
     let second_keeper = second.issue_green_baton().unwrap();
     assert_ne!(
         first_keeper.parallel_heap_identity(),
         second_keeper.parallel_heap_identity()
     );
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     assert!(matches!(
         first.capture_parallel_legacy_roots(&second_keeper),
         Err(RendezvousError::Identity)
     ));
+    let _parked_first = first.park_for_test();
+    let mut second = parked_second.resume_for_test().expect("resume second");
     assert!(matches!(
         second.capture_parallel_legacy_roots(&first_keeper),
         Err(RendezvousError::Identity)
@@ -72,6 +77,7 @@ fn rooted_admission_rejects_real_capture_from_another_heap_and_returns_capabilit
     let first_heap = frozen.heap_identity();
     // Keep the source Context and keeper alive without running it between
     // capture and the deliberate foreign admission attempt.
+    let _parked_first = first.park_for_test();
     let mut second = Context::new(crate::test_utils::unit_runtime());
     second.setup_thread_locals();
     let keeper = second.issue_green_baton().unwrap();

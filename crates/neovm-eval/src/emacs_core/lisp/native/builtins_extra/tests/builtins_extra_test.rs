@@ -417,6 +417,7 @@ fn user_info() {
             .unwrap()
             .is_string()
     );
+    drop(ctx);
     let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
     assert!(builtin_system_name(&mut eval, vec![]).unwrap().is_string());
     let system_configuration = system_configuration_value();

@@ -60,17 +60,22 @@ fn hosted_green_start_refuses_display_input_or_both() {
     // tables (bootstrap's debug assertion).
     let mut display_only = green_context();
     display_only.set_display_host(Box::new(NullDisplayHost));
+    let parked_display_only = display_only.park_for_test();
     let mut input_only = green_context();
     input_only.attach_input_receiver(detached_input());
+    let parked_input_only = input_only.park_for_test();
     let mut both = green_context();
     both.set_display_host(Box::new(NullDisplayHost));
     both.attach_input_receiver(detached_input());
 
-    for (name, ctx) in [
-        ("display-only", &mut display_only),
-        ("input-only", &mut input_only),
-        ("display-and-input", &mut both),
+    let parked_both = both.park_for_test();
+
+    for (name, parked) in [
+        ("display-only", parked_display_only),
+        ("input-only", parked_input_only),
+        ("display-and-input", parked_both),
     ] {
+        let mut ctx = parked.resume_for_test().expect("resume hosted context");
         match ctx.start_green_runtime() {
             Err(GreenStartError::ThreadAffineHost) => {}
             Err(other) => panic!("{name}: wrong refusal: {other:?}"),

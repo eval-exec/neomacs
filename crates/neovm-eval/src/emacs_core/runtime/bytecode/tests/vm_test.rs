@@ -628,7 +628,9 @@ fn vm_unverified_cons_stack_set_does_not_write_caller_slots() {
         Some("Invalid byte-code")
     );
 
+    drop(eval);
     assert_sealed_underflow_preserves_caller(Op::Cons);
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let mut hand = ByteCodeFunction::new(LambdaParams {
         required: vec![],
         optional: vec![],
@@ -640,7 +642,6 @@ fn vm_unverified_cons_stack_set_does_not_write_caller_slots() {
     hand.seal_hand_assembled_ops_for_test();
     assert!(!hand.stack_verified());
     let hand = Value::make_bytecode(hand);
-    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
     let mut caller = ByteCodeFunction::new(LambdaParams {
         required: vec![],
         optional: vec![],

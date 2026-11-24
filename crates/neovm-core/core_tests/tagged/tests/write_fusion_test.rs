@@ -39,8 +39,9 @@ fn storefast_vm_and_tls_stores_do_not_borrow_the_inactive_capture_recorder() {
     use neovm_eval::emacs_core::builtins;
 
     let boot = crate::test_utils::new_context();
-    let mut context =
-        neovm_eval::test_support::authority::new_minimal_vm_harness(boot.hooks_installed());
+    let proof = boot.hooks_installed();
+    drop(boot);
+    let mut context = neovm_eval::test_support::authority::new_minimal_vm_harness(proof);
     let cons = Value::cons(Value::NIL, Value::NIL);
     let vector = Value::vector(vec![Value::NIL]);
     let record = Value::make_record(vec![Value::NIL]);

@@ -838,6 +838,7 @@ fn display_row_transition_request_context_builds_line_break_and_overflow_request
     assert_eq!(transition, DisplayTextRowTransition::BeganNextRow);
     assert_eq!(line_ctx.geometry.row(), 1);
     assert_eq!(line_ctx.row_y_positions.recorded(), &[0.0, 20.0]);
+    drop(line_ctx);
 
     let mut wrap_ctx = RowTransitionTestContext::new("transition-context-overflow");
     let DisplaySourceTextCharOverflowAction::CharacterWrap { transition } =
@@ -910,6 +911,7 @@ fn display_row_text_window_transition_context_emits_line_break_and_overflow() {
     assert_eq!(transition, DisplayTextRowTransition::BeganNextRow);
     assert_eq!(line_ctx.geometry.row(), 1);
     assert_eq!(line_ctx.row_y_positions.recorded(), &[0.0, 18.0]);
+    drop(line_ctx);
 
     let mut overflow_ctx = RowTransitionTestContext::new("text-window-transition-overflow");
     let DisplaySourceTextCharOverflowAction::CharacterWrap { transition } =
@@ -2988,6 +2990,10 @@ fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position
         buffer.insert("\nnext");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
+    let retainer = eval.owned_root_retainer();
+    // The row fixture installs its own heap. The buffer snapshot stays
+    // allocated on this parked heap, which is no longer the active Context.
+    let _parked = eval.park_for_test();
     let mut context = RowTransitionTestContext::new("line-break-render-request");
     let active_face = test_active_face_state(FaceId::new(9), 8.0);
     let text = b"\nnext";
@@ -3043,7 +3049,7 @@ fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position
         None,
         charpos,
         0,
-        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+        StringSourceRootScope::Rooted(retainer),
     );
 
     let continuation = BufferSourceLineBreakRenderRequest::new(
@@ -3725,7 +3731,6 @@ fn buffer_text_special_wrap_source_action_applies_transition_state() {
 
 #[test]
 fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append() {
-    let mut context = RowTransitionTestContext::new("special-overflow-wrap-request");
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let buf_id = eval
         .buffer_manager()
@@ -3737,6 +3742,9 @@ fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append(
         buffer.insert("a");
     }
     let snapshot = current_buffer_snapshot(&eval, buf_id);
+    let retainer = eval.owned_root_retainer();
+    let _parked = eval.park_for_test();
+    let mut context = RowTransitionTestContext::new("special-overflow-wrap-request");
     let prepared_append = DisplaySourceSpecialCharPreparedAppend::new(
         DisplaySourceSpecialDisplayKind::Control,
         DisplaySourceSpecialCharAppendPlan::new(
@@ -3801,7 +3809,7 @@ fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append(
         None,
         charpos,
         0,
-        StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+        StringSourceRootScope::Rooted(retainer),
     );
 
     let outcome = BufferSourceSpecialOverflowRenderRequest::new(

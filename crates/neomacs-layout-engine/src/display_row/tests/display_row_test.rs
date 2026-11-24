@@ -2463,7 +2463,7 @@ fn render_lisp_string_row_resolves_webkit_display_property_through_display_host(
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_display_space_semantics() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let display_space = Value::list(vec![
         Value::symbol("space"),
         Value::keyword("align-to"),
@@ -2480,11 +2480,13 @@ fn display_row_buffer_and_lisp_sources_share_display_space_semantics() {
         ),
         GlyphRowRole::HeaderLine,
     );
+    let display_name = Value::symbol("display");
+    let _parked = eval.park_for_test();
     let buffer_row = render_buffer_display_row_with_property(
         "A B",
         1,
         2,
-        Value::symbol("display"),
+        display_name,
         display_space,
         GlyphRowRole::HeaderLine,
     );
@@ -2508,7 +2510,7 @@ fn display_row_buffer_and_lisp_sources_share_display_space_semantics() {
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_display_replacement_string_semantics() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let replacement = Value::string("YZ");
     let lisp_row = render_lisp_display_row(
         Value::string_with_text_properties(
@@ -2521,11 +2523,13 @@ fn display_row_buffer_and_lisp_sources_share_display_replacement_string_semantic
         ),
         GlyphRowRole::TabLine,
     );
+    let display_name = Value::symbol("display");
+    let _parked = eval.park_for_test();
     let buffer_row = render_buffer_display_row_with_property(
         "axb",
         1,
         2,
-        Value::symbol("display"),
+        display_name,
         replacement,
         GlyphRowRole::TabLine,
     );
@@ -2543,7 +2547,7 @@ fn display_row_buffer_and_lisp_sources_share_display_replacement_string_semantic
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_face_property_semantics() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let face = Value::list(vec![Value::keyword("foreground"), Value::string("#ff0000")]);
     let lisp_row = render_lisp_display_row(
         Value::string_with_text_properties(
@@ -2556,11 +2560,13 @@ fn display_row_buffer_and_lisp_sources_share_face_property_semantics() {
         ),
         GlyphRowRole::ModeLine,
     );
+    let face_name = Value::symbol("face");
+    let _parked = eval.park_for_test();
     let buffer_row = render_buffer_display_row_with_property(
         "AB",
         1,
         2,
-        Value::symbol("face"),
+        face_name,
         face,
         GlyphRowRole::ModeLine,
     );
@@ -2576,7 +2582,7 @@ fn display_row_buffer_and_lisp_sources_share_face_property_semantics() {
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_raise_property_semantics() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let raise = Value::list(vec![Value::symbol("raise"), Value::make_float(0.25)]);
     let lisp_row = render_lisp_display_row(
         Value::string_with_text_properties(
@@ -2589,11 +2595,13 @@ fn display_row_buffer_and_lisp_sources_share_raise_property_semantics() {
         ),
         GlyphRowRole::ModeLine,
     );
+    let display_name = Value::symbol("display");
+    let _parked = eval.park_for_test();
     let buffer_row = render_buffer_display_row_with_property(
         "AB",
         1,
         2,
-        Value::symbol("display"),
+        display_name,
         raise,
         GlyphRowRole::ModeLine,
     );
@@ -2619,7 +2627,7 @@ fn display_row_buffer_and_lisp_sources_share_raise_property_semantics() {
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_height_property_semantics() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let height = Value::list(vec![Value::symbol("height"), Value::make_float(2.0)]);
     let lisp_row = render_lisp_display_row(
         Value::string_with_text_properties(
@@ -2632,11 +2640,13 @@ fn display_row_buffer_and_lisp_sources_share_height_property_semantics() {
         ),
         GlyphRowRole::ModeLine,
     );
+    let display_name = Value::symbol("display");
+    let _parked = eval.park_for_test();
     let buffer_row = render_buffer_display_row_with_property(
         "AB",
         1,
         2,
-        Value::symbol("display"),
+        display_name,
         height,
         GlyphRowRole::ModeLine,
     );
@@ -2659,10 +2669,12 @@ fn display_row_buffer_and_lisp_sources_share_height_property_semantics() {
 
 #[test]
 fn display_row_buffer_and_lisp_sources_share_control_and_glyphless_semantics() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     // U+FFFC stays glyphless; U+FFF0 would instead escape to `\`+octal.
     let text = "a\u{0001}\u{fffc}b";
-    let lisp_row = render_lisp_display_row(Value::string(text), GlyphRowRole::HeaderLine);
+    let lisp_text = Value::string(text);
+    let lisp_row = render_lisp_display_row(lisp_text, GlyphRowRole::HeaderLine);
+    let _parked = eval.park_for_test();
     let buffer_row = render_buffer_display_row(text, GlyphRowRole::HeaderLine);
 
     assert_eq!(
@@ -3878,17 +3890,20 @@ fn tty_mode_line_relative_space_keeps_cell_and_pixel_pens_together() {
 /// character produces a stretch filling columns 1..4 after the initial "X".
 #[test]
 fn buffer_align_to_number_unchanged_by_unification() {
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let display_name = Value::symbol("display");
+    let spec = Value::list(vec![
+        Value::symbol("space"),
+        Value::keyword("align-to"),
+        Value::fixnum(4),
+    ]);
+    let _parked = eval.park_for_test();
     let row = render_buffer_display_row_with_property(
         "X Y",
         1,
         2,
-        Value::symbol("display"),
-        Value::list(vec![
-            Value::symbol("space"),
-            Value::keyword("align-to"),
-            Value::fixnum(4),
-        ]),
+        display_name,
+        spec,
         GlyphRowRole::Text,
     );
 
@@ -4791,12 +4806,14 @@ fn buffer_align_to_center_measures_from_the_text_area_not_the_window_edge() {
     // exactly half the text area wide however wide the left fringe is.  With
     // an 8px fringe the stretch came out 8px short (dashboard's centered
     // banner and title sat one fringe left of center).
-    let _eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     let spec = Value::list(vec![
         Value::symbol("space"),
         Value::keyword("align-to"),
         Value::symbol("center"),
     ]);
+    // The row helper installs its own heap. The spec stays on this one.
+    let _parked = eval.park_for_test();
     for content_x in [0.0_f32, 8.0] {
         let row = render_buffer_text_row_with_display_at_content_x("XY", spec, content_x);
         let stretch = row.glyphs[1]

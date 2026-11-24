@@ -336,6 +336,7 @@ fn ask_user_about_lock_steal_and_proceed_answers_match_gnu() {
     );
 
     // Answer t: steal the lock, then edit.
+    drop(eval);
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     let our_lock_info = current_lock_info_string(
         &lisp_string(&mut eval, "(user-login-name)"),

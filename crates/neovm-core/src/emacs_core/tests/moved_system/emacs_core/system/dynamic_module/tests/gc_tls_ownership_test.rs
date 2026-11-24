@@ -82,6 +82,7 @@ fn gc_tls_ownership_module_global_refs_preserve_each_live_heap() {
     let mut env = Environment::new();
     let a = Value::vector(vec![Value::fixnum(1)]);
     let a_ref = env.global_ref(a);
+    let parked_first = first.park_for_test();
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let b = Value::vector(vec![Value::fixnum(2)]);
     let b_ref = env.global_ref(b);
@@ -92,6 +93,8 @@ fn gc_tls_ownership_module_global_refs_preserve_each_live_heap() {
         "module global references from the first Context are roots of the second heap"
     );
     second.gc_collect_exact();
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     first.setup_thread_locals();
     assert!(roots_for(&first).iter().any(|root| root.bits() == a.bits()));
     assert!(!roots_for(&first).iter().any(|root| root.bits() == b.bits()));
@@ -100,6 +103,8 @@ fn gc_tls_ownership_module_global_refs_preserve_each_live_heap() {
     assert_eq!(b.as_vector_data().unwrap()[0], Value::fixnum(2));
     drop((a_ref, b_ref));
     assert!(roots_for(&first).is_empty());
+    drop(first);
+    let second = parked_second.resume_for_test().expect("resume second");
     assert!(roots_for(&second).is_empty());
 }
 
@@ -118,6 +123,7 @@ fn gc_tls_ownership_module_active_environment_excludes_another_live_heap() {
             .iter()
             .any(|root| root.bits() == value.bits())
     );
+    let parked_first = first.park_for_test();
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     assert!(
         roots_for(&second)
@@ -126,6 +132,8 @@ fn gc_tls_ownership_module_active_environment_excludes_another_live_heap() {
         "an active module arena belongs to the first heap"
     );
     second.gc_collect_exact();
+    drop(second);
+    let mut first = parked_first.resume_for_test().expect("resume first");
     first.setup_thread_locals();
     first.gc_collect_exact();
     assert_eq!(value.as_vector_data().unwrap()[0], Value::fixnum(42));
@@ -186,8 +194,11 @@ fn gc_tls_ownership_module_global_refs_follow_owner_context_reactivation() {
     let value = Value::vector(vec![Value::fixnum(42)]);
     let reference = env.global_ref(value);
     drop(env);
+    let parked_first = first.park_for_test();
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     second.gc_collect_exact();
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     first.setup_thread_locals();
     assert!(
         roots_for(&first)
@@ -199,6 +210,7 @@ fn gc_tls_ownership_module_global_refs_follow_owner_context_reactivation() {
     assert_eq!(value.as_vector_data().unwrap()[0], Value::fixnum(42));
     drop(first);
     assert!(unsafe { value_to_lisp(reference.0) }.is_nil());
+    let mut second = parked_second.resume_for_test().expect("resume second");
     second.setup_thread_locals();
     second.gc_collect_exact();
     drop(reference);

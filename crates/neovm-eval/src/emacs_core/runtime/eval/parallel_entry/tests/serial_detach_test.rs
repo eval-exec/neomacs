@@ -444,6 +444,7 @@ fn l64_dropping_a_dormant_owner_is_ordinary_teardown() {
 #[test]
 fn l64_detach_refuses_a_context_whose_heap_is_not_installed() {
     let mut first = owner();
+    let first_proof = detach(&mut first);
     let mut second = owner();
     assert!(
         owns_the_thread(&mut second),
@@ -458,6 +459,8 @@ fn l64_detach_refuses_a_context_whose_heap_is_not_installed() {
         "the refusal left the installed Context's TLS alone"
     );
     assert_eq!(eval(&mut second, "(+ 1 2)"), "3");
+    drop(second);
+    reattach(&mut first, first_proof);
 }
 
 #[test]

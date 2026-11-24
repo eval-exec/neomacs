@@ -2731,6 +2731,7 @@ fn minibuffer_input_source_distinguishes_stdin_macros_and_live_input() {
         MinibufferInputSource::CommandLoop
     );
 
+    drop(batch);
     let mut interactive = crate::test_utils::new_context();
     let _input_tx = HostInputPublisher::install(&mut interactive);
     interactive.init_input_system();

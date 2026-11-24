@@ -3504,6 +3504,7 @@ fn x_popup_menu_t_position_uses_the_recorded_mouse_position() {
     let origin = super::popup_menu_position(&mut eval, Value::T).estimated_origin();
     assert_eq!(origin, neomacs_display_protocol::Point::new(60.0, 120.0));
 
+    drop(eval);
     let mut fresh = Context::new(crate::test_utils::unit_runtime());
     let origin = super::popup_menu_position(&mut fresh, Value::T).estimated_origin();
     assert_eq!(origin, neomacs_display_protocol::Point::ZERO);

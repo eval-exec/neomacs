@@ -437,6 +437,9 @@ fn batch_child_identity_and_structural_equality_survive_different_batches() {
     assert_eq!(left, right);
     assert!(!std::thread::spawn(move || left == right).join().unwrap());
 
+    // The first batches stay allocated on their heap. Parking clears the
+    // slot so the foreign-heap check runs against a different Context.
+    let _parked_first = context.park_for_test();
     let mut second_context = Box::new(crate::test_utils::new_context());
     second_context.setup_thread_locals();
     assert!(matches!(
@@ -536,6 +539,9 @@ fn coalescing_rejects_foreign_heap_without_replacing_existing_handles() {
         GlyphStringId::new(1),
         root,
     )];
+    // The first batch stays allocated. Parking clears the slot so the
+    // foreign-heap rejection runs against a different Context.
+    let _parked_first = first.park_for_test();
     let mut second = Box::new(crate::test_utils::new_context());
     second.setup_thread_locals();
     assert!(matches!(

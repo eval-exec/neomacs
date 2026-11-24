@@ -25,10 +25,14 @@ fn eval(ev: &mut Context, src: &str) -> String {
 
 fn each_mode(form: &str, expected: &str) {
     crate::test_utils::init_test_tracing();
-    for (mode, mut ev) in [
-        ("sim", crate::test_utils::new_context()),
-        ("green", crate::test_utils::new_green_context()),
-    ] {
+    // One context at a time. An array would construct both before the loop
+    // body, and the second constructor refuses while the first is still active.
+    for mode in ["sim", "green"] {
+        let mut ev = if mode == "sim" {
+            crate::test_utils::new_context()
+        } else {
+            crate::test_utils::new_green_context()
+        };
         assert_eq!(eval(&mut ev, form), expected, "{mode}");
     }
 }

@@ -340,6 +340,7 @@ fn jit_bg_a_replaced_heap_never_installs_a_pending_leaf() {
             + s.discarded[DiscardReason::Superseded as usize]
     };
     let before = gone(&stats_snapshot());
+    let _parked_ev = ev.park_for_test();
     let replacement = Context::new(crate::test_utils::unit_runtime());
     assert_ne!(
         neovm_value::tagged::gc::current_tagged_heap_identity(),

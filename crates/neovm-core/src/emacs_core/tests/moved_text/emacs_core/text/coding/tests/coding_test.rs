@@ -853,6 +853,7 @@ fn an_undefined_charset_list_entry_signals_and_a_defined_one_computes_ascii_comp
         "GNU keeps the value stored at define time"
     );
 
+    drop(ev);
     // Symmetric: defined nil, the charset becomes ASCII-compatible later,
     // and the coding system keeps saying nil.
     let mut ev = crate::test_utils::new_context();

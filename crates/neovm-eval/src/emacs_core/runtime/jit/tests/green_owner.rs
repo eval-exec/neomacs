@@ -285,7 +285,8 @@ fn green_admission_accepts_all_inline_and_backend_configurations() {
                 Context::new_with_threading(
                     crate::emacs_core::eval::ThreadingMode::Green,
                     crate::test_utils::unit_runtime(),
-                ),
+                )
+                .park_for_test(),
             ));
         }
         for inline in [
@@ -301,11 +302,15 @@ fn green_admission_accepts_all_inline_and_backend_configurations() {
                 Context::new_with_threading(
                     crate::emacs_core::eval::ThreadingMode::Green,
                     crate::test_utils::unit_runtime(),
-                ),
+                )
+                .park_for_test(),
             ));
         }
     }
-    for (mode, inline, background, mut context) in cases {
+    for (mode, inline, background, parked_context) in cases {
+        let mut context = parked_context
+            .resume_for_test()
+            .expect("resume admission case");
         let _backend = compile::opt_mode_scope_for_test(mode);
         let _configuration = AdmissionScope::enter(inline, background);
         context.setup_thread_locals();
@@ -479,9 +484,10 @@ fn green_checkpoint_rejects_foreign_return_before_epoch_mutation() {
     crate::test_utils::init_test_tracing();
     let _admission = AdmissionScope::enter(Inline2Mode::Off, BgMode::Sync);
     let _backend = compile::opt_mode_scope_for_test(OptMode::Legacy);
-    let mut original = Context::new(crate::test_utils::unit_runtime());
+    let original = Context::new(crate::test_utils::unit_runtime());
     let checkpoint = green_owner::ParkedJit::prepare(&original).expect("original owner checkpoint");
     assert!(checkpoint.roots().is_empty());
+    let parked_original = original.park_for_test();
     {
         let foreign = Context::new(crate::test_utils::unit_runtime());
         // Context construction may itself invalidate the cache. Measure only
@@ -493,6 +499,9 @@ fn green_checkpoint_rejects_foreign_return_before_epoch_mutation() {
         ));
         assert_eq!(cache::leaf_slot_epoch(), epoch);
     }
+    let mut original = parked_original
+        .resume_for_test()
+        .expect("resume original owner");
     original.setup_thread_locals();
 }
 

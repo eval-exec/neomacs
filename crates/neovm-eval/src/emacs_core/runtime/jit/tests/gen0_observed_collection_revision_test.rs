@@ -682,13 +682,18 @@ fn gen0_observed_certificate_survives_context_switch_until_its_owner_is_stored()
     let (_, reads) = capture(|| owner.cons_car());
     let reads = reads.expect("Context A owner");
     assert!(is_observed(owner.bits()));
-    let _second_context = context(false);
+    let parked_first = first_context.park_for_test();
+    let second_context = context(false);
     let leaf = compile_bytecode_function(&store_function(Op::Setcar)).expect("Context B setter");
     assert!(reads.unchanged(), "creating B does not mutate A's owner");
-    // Independent Worlds now retain independent journals. Reactivate the
-    // owning World before storing its object; Green peers instead share that
-    // World's state through the Baton (covered by the Green transfer fixture).
-    first_context.setup_thread_locals();
+    // Independent Worlds now retain independent journals. Park B and resume
+    // the owning World before storing its object; Green peers instead share
+    // that World's state through the Baton (covered by the Green transfer
+    // fixture).
+    let _parked_second = second_context.park_for_test();
+    let mut first_context = parked_first
+        .resume_for_test()
+        .expect("resume Context A");
     let before = LispCollectionRevision::current();
     native(&mut first_context, &leaf, &[owner, Value::make_int(65)]);
     assert_eq!(

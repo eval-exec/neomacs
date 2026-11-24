@@ -287,24 +287,35 @@ fn mode_line_incremental_split_fresh_format_survives_nested_context_gc() {
 fn mode_line_incremental_outputs_remain_owned_by_independent_heaps() {
     crate::test_utils::init_test_tracing();
     let before = save_scratch_gc_roots();
-    let (mut first, first_output, first_reference) = owned_output(false);
+    let (first, first_output, first_reference) = owned_output(false);
     let first_heap = neovm_value::tagged::gc::current_tagged_heap_identity().expect("first heap");
+    let parked_first = first.park_for_test();
     let (mut second, second_output, second_reference) = owned_output(true);
     let second_heap = neovm_value::tagged::gc::current_tagged_heap_identity().expect("second heap");
     assert_ne!(first_heap, second_heap);
     assert_eq!(save_scratch_gc_roots(), before);
-    for (eval, output, reference) in [
-        (&mut first, first_output, first_reference),
-        (&mut second, second_output, second_reference),
-    ] {
-        eval.setup_thread_locals();
-        eval.eval_str("(setq d5-heap-source nil d5-heap-format nil)")
-            .expect("detach inputs");
-        let gc = eval.gc_count_for_test();
-        eval.gc_collect_exact();
-        assert_eq!(eval.gc_count_for_test(), gc + 1);
-        assert_live_interval_plists(eval, output);
-        assert_eq!(rendering(output), reference);
-    }
+
+    second.setup_thread_locals();
+    second
+        .eval_str("(setq d5-heap-source nil d5-heap-format nil)")
+        .expect("detach inputs");
+    let gc = second.gc_count_for_test();
+    second.gc_collect_exact();
+    assert_eq!(second.gc_count_for_test(), gc + 1);
+    assert_live_interval_plists(&second, second_output);
+    assert_eq!(rendering(second_output), second_reference);
+
+    // The second heap has to stay allocated while the first is reactivated.
+    let _parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first heap");
+    first.setup_thread_locals();
+    first
+        .eval_str("(setq d5-heap-source nil d5-heap-format nil)")
+        .expect("detach inputs");
+    let gc = first.gc_count_for_test();
+    first.gc_collect_exact();
+    assert_eq!(first.gc_count_for_test(), gc + 1);
+    assert_live_interval_plists(&first, first_output);
+    assert_eq!(rendering(first_output), first_reference);
     assert_eq!(save_scratch_gc_roots(), before);
 }

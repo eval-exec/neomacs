@@ -55,13 +55,17 @@ fn p3sym_c4_compiled_a_current_b_identity_across_owned_era() {
     }
     let _backend = compile::opt_mode_scope_for_test(compile::OptMode::Legacy);
     let _named = Named::enter();
-    let (mut a, ids, a_targets, a_callers, a_replacement) = fixture("p3sym-c4-receiver");
+    let (a, ids, a_targets, a_callers, a_replacement) = fixture("p3sym-c4-receiver");
     let _a_roots = a.retain_gc_roots(
         a_targets
             .into_iter()
             .chain(a_callers)
             .chain([a_replacement]),
     );
+    let a_generation = a.obarray.generation();
+    let a_heap_identity = a.tagged_heap.heap_identity();
+    let a_epoch = a.obarray.function_epoch();
+    let parked_a = a.park_for_test();
     let (mut b, b_ids, b_targets, b_callers, b_replacement) = fixture("p3sym-c4-receiver");
     let _b_roots = b.retain_gc_roots(
         b_targets
@@ -70,17 +74,22 @@ fn p3sym_c4_compiled_a_current_b_identity_across_owned_era() {
             .chain([b_replacement]),
     );
     assert_eq!(ids, b_ids);
-    assert_ne!(a.obarray.generation(), b.obarray.generation());
-    assert_ne!(a.tagged_heap.heap_identity(), b.tagged_heap.heap_identity());
+    assert_ne!(a_generation, b.obarray.generation());
+    assert_ne!(a_heap_identity, b.tagged_heap.heap_identity());
     assert_ne!(a_targets[0].bits(), b_targets[0].bits());
-    let clock = a.obarray.function_epoch().max(b.obarray.function_epoch());
-    for ctx in [&mut a, &mut b] {
-        while ctx.obarray.function_epoch() < clock {
-            ctx.obarray
-                .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
-        }
-        coherent(ctx, clock);
+    let clock = a_epoch.max(b.obarray.function_epoch());
+    while b.obarray.function_epoch() < clock {
+        b.obarray
+            .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
     }
+    coherent(&b, clock);
+    let parked_b = b.park_for_test();
+    let mut a = parked_a.resume_for_test().expect("resume World A");
+    while a.obarray.function_epoch() < clock {
+        a.obarray
+            .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
+    }
+    coherent(&a, clock);
 
     // This host-owned source contains only an immediate symbol. No value from
     // A's heap is supplied as a constant, operand or root in B's World.
@@ -91,7 +100,6 @@ fn p3sym_c4_compiled_a_current_b_identity_across_owned_era() {
     source.set_max_stack(StackDepth::for_test(4));
     source.seal_hand_assembled_ops_for_test();
     source.jit_runtime().set_hot_for_test();
-    a.setup_thread_locals();
     let leaf = compile::compile_bytecode_function_requested(
         &source,
         Some(&a.obarray),
@@ -123,6 +131,8 @@ fn p3sym_c4_compiled_a_current_b_identity_across_owned_era() {
         other => panic!("original World must enter the actual native body: {other:?}"),
     };
     coherent(&a, clock);
+    let parked_a = a.park_for_test();
+    let mut b = parked_b.resume_for_test().expect("resume World B");
     let before_b = current_receiver(&mut b, &source, &leaf, ids[0]);
     assert_eq!(b.obarray.function_epoch(), clock, "equal clocks at refusal");
     assert_eq!(format!("({before_a} {before_b})"), oracle()[0]);
@@ -142,9 +152,10 @@ fn p3sym_c4_compiled_a_current_b_identity_across_owned_era() {
     coherent(&b, clock + 1);
     let after_b = current_receiver(&mut b, &source, &leaf, ids[0]);
     assert_eq!(format!("({before_b} {after_b})"), oracle()[2]);
+    let _parked_b = b.park_for_test();
+    let mut a = parked_a.resume_for_test().expect("resume World A");
     assert_eq!(a.obarray.symbol_function_id(ids[0]), Some(a_targets[0]));
     coherent(&a, clock);
-    a.setup_thread_locals();
     let after_a = match unsafe {
         leaf.call_consts(
             &mut a as *mut Context as *mut u8,

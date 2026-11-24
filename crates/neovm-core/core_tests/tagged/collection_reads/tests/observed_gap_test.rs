@@ -265,6 +265,7 @@ fn observed_heap_switch_dump_change_discards_empty_gap() {
     crate::test_utils::init_test_tracing();
     let _mode = ObservedMode::begin();
     let mut first = context();
+    neovm_value::tagged::gc::clear_tagged_heap_if_installed(first.tagged_heap());
     let mut second = context();
     // SAFETY: serial test setup; the WorldView is used in place and never swapped.
     set_tagged_heap(unsafe { first.tagged_heap_mut() });
