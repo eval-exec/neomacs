@@ -53,7 +53,7 @@ fn indexed_overlays(count: usize) -> (OverlayIndex, Vec<Value>) {
         assert!(index.attach(*overlay, range(i * 4 + 1, i * 4 + 3)));
     }
     // Property sweeps publish endpoints; basic geometric queries do not.
-    let _ = index.endpoint_index();
+    index.publish_endpoints();
     assert_eq!(
         index.next_boundary_after(EmacsBytePos::new(0), EmacsBytePos::new(100_000)),
         Some(EmacsBytePos::new(1))
@@ -138,10 +138,9 @@ fn property_mask_change_republishes_filters_without_a_full_summary_refresh() {
     crate::test_utils::init_test_tracing();
     let (mut index, overlays) = indexed_overlays(300);
     let carrier = overlays[150];
-    let endpoints = index
-        .published_endpoints()
+    index
+        .with_published_endpoints(|endpoints| endpoints.records.reset_summary_refresh_count())
         .expect("endpoint index is published");
-    endpoints.records.reset_summary_refresh_count();
 
     // Diagnostic churn puts a few new names on each fresh overlay. Each new
     // name changes only the conservative filter class, never a position.
@@ -153,12 +152,11 @@ fn property_mask_change_republishes_filters_without_a_full_summary_refresh() {
     );
     put_property_names(&mut index, carrier, &[Value::symbol("help-echo")]);
 
-    let endpoints = index
-        .published_endpoints()
+    let refreshes = index
+        .with_published_endpoints(|endpoints| endpoints.records.summary_refresh_count())
         .expect("endpoint index is published");
     assert_eq!(
-        endpoints.records.summary_refresh_count(),
-        0,
+        refreshes, 0,
         "a filter-mask change rebuilt position summaries"
     );
 }

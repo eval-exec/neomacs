@@ -9,6 +9,7 @@
 //! | --- | --- | --- |
 //! | `NEOVM_OVERLAY_LOCAL_MOVE` | off | Update neighbor-preserving B+ records in place and reinsert every start-changing move in the GNU topology mirror using its authoritative successor. |
 
+use std::cell::Cell;
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::{RwLock, RwLockReadGuard};
@@ -17,7 +18,7 @@ use smallvec::SmallVec;
 
 use super::overlay_bplus::{
     OrderedFilterMask, OrderedFilteredRecord, OrderedRecordRelocation, OrderedShiftRecord,
-    OrderedShiftTree, OrderedTreeMatches, OrderedTreeQuery,
+    OrderedShiftTree, OrderedTreeQuery,
 };
 use super::overlay_order::GnuOverlayOrder;
 use neovm_value::heap_types::OverlayData;
@@ -384,6 +385,8 @@ fn overlay_indexed_property_mask(overlay: Value) -> OrderedFilterMask {
 struct EndpointRangeQuery {
     bounds: EmacsByteRange,
     property_filter: OverlayPropertyFilter,
+    after_key: Option<EndpointKey>,
+    before_key: Option<EndpointKey>,
 }
 
 impl OrderedTreeQuery<EndpointRecord> for EndpointRangeQuery {
@@ -393,12 +396,19 @@ impl OrderedTreeQuery<EndpointRecord> for EndpointRangeQuery {
         maximum: EmacsBytePos,
         _maximum_end: EmacsBytePos,
     ) -> bool {
-        minimum < self.bounds.end() && maximum > self.bounds.start()
+        minimum < self.bounds.end()
+            && maximum > self.bounds.start()
+            && self.after_key.is_none_or(|after| maximum >= after.position)
+            && self
+                .before_key
+                .is_none_or(|before| minimum <= before.position)
     }
 
     fn record_matches(self, record: EndpointRecord) -> bool {
         self.bounds.start() < record.key.position
             && record.key.position < self.bounds.end()
+            && self.after_key.is_none_or(|after| record.key > after)
+            && self.before_key.is_none_or(|before| record.key < before)
             && self.property_filter.record_may_match(record.property_mask)
     }
 
@@ -408,10 +418,16 @@ impl OrderedTreeQuery<EndpointRecord> for EndpointRangeQuery {
 
     fn maximum_end_is_too_small(self, maximum_end: EmacsBytePos) -> bool {
         maximum_end <= self.bounds.start()
+            || self
+                .after_key
+                .is_some_and(|after| maximum_end < after.position)
     }
 
     fn minimum_start_is_too_large(self, minimum_start: EmacsBytePos) -> bool {
         minimum_start >= self.bounds.end()
+            || self
+                .before_key
+                .is_some_and(|before| minimum_start > before.position)
     }
 
     #[cfg(test)]
@@ -425,25 +441,148 @@ pub(super) struct OverlayEndpoint {
     pub(super) position: EmacsBytePos,
     pub(super) overlay: Value,
     pub(super) kind: EndpointKind,
+    key: EndpointKey,
 }
 
+const ENDPOINT_CHUNK_SIZE: usize = 64;
+
+#[derive(Clone, Copy)]
+enum EndpointScanDirection {
+    Forward,
+    Reverse,
+}
+
+/// Guard-free chunked endpoint stream. Each chunk takes a short `core.read()`
+/// guard, checks the generation stamp when serving a live view, copies up to
+/// `ENDPOINT_CHUNK_SIZE` matching endpoints, and releases the guard before
+/// yielding. No `RwLockReadGuard` ever outlives a call, so callers can inspect
+/// overlay ranges or restart sweeps without holding `core` across `intervals`.
 pub(super) struct OverlayEndpointRecords<'a> {
-    records: OrderedTreeMatches<
-        &'a OrderedShiftTree<EndpointRecord>,
-        EndpointRecord,
-        EndpointRangeQuery,
-    >,
+    intervals: &'a Arc<RwLock<IntervalBPlusTree>>,
+    core: &'a Arc<RwLock<OverlayIndexCore>>,
+    live: Option<(&'a Cell<bool>, u64)>,
+    bounds: EmacsByteRange,
+    property_filter: OverlayPropertyFilter,
+    direction: EndpointScanDirection,
+    cursor_key: Option<EndpointKey>,
+    buffer: SmallVec<[OverlayEndpoint; ENDPOINT_CHUNK_SIZE]>,
+    index: usize,
+    exhausted: bool,
+}
+
+impl<'a> OverlayEndpointRecords<'a> {
+    fn new(
+        intervals: &'a Arc<RwLock<IntervalBPlusTree>>,
+        core: &'a Arc<RwLock<OverlayIndexCore>>,
+        live: Option<(&'a Cell<bool>, u64)>,
+        bounds: EmacsByteRange,
+        property_filter: OverlayPropertyFilter,
+        direction: EndpointScanDirection,
+    ) -> Self {
+        let exhausted = !publish_endpoints_for(intervals, core, live);
+        Self {
+            intervals,
+            core,
+            live,
+            bounds,
+            property_filter,
+            direction,
+            cursor_key: None,
+            buffer: SmallVec::new(),
+            index: 0,
+            exhausted,
+        }
+    }
+
+    fn refill(&mut self) {
+        if self.exhausted {
+            return;
+        }
+        if let Some((stale, _)) = self.live
+            && stale.get()
+        {
+            self.exhausted = true;
+            return;
+        }
+        if !publish_endpoints_for(self.intervals, self.core, self.live) {
+            self.exhausted = true;
+            return;
+        }
+        let core = self.core.read();
+        if let Some((stale, stamp)) = self.live
+            && core.generation != stamp
+        {
+            stale.set(true);
+            self.exhausted = true;
+            return;
+        }
+        let Some(endpoints) = core.endpoints.get() else {
+            self.exhausted = true;
+            return;
+        };
+        let query = match self.direction {
+            EndpointScanDirection::Forward => EndpointRangeQuery {
+                bounds: self.bounds,
+                property_filter: self.property_filter,
+                after_key: self.cursor_key,
+                before_key: None,
+            },
+            EndpointScanDirection::Reverse => EndpointRangeQuery {
+                bounds: self.bounds,
+                property_filter: self.property_filter,
+                after_key: None,
+                before_key: self.cursor_key,
+            },
+        };
+        self.buffer.clear();
+        self.index = 0;
+        let map_record = |record: EndpointRecord| OverlayEndpoint {
+            position: record.key.position,
+            overlay: record.overlay,
+            kind: record.kind,
+            key: record.key,
+        };
+        match self.direction {
+            EndpointScanDirection::Forward => {
+                for record in endpoints.records.matches(query).take(ENDPOINT_CHUNK_SIZE) {
+                    self.buffer.push(map_record(record));
+                }
+            }
+            EndpointScanDirection::Reverse => {
+                for record in endpoints
+                    .records
+                    .matches_reverse(query)
+                    .take(ENDPOINT_CHUNK_SIZE)
+                {
+                    self.buffer.push(map_record(record));
+                }
+            }
+        }
+        drop(core);
+        if self.live.is_some() {
+            super::overlay::note_overlay_live_records_visited(self.buffer.len());
+        }
+        if self.buffer.len() < ENDPOINT_CHUNK_SIZE {
+            self.exhausted = true;
+        } else {
+            self.cursor_key = self.buffer.last().map(|endpoint| endpoint.key);
+        }
+    }
 }
 
 impl Iterator for OverlayEndpointRecords<'_> {
     type Item = OverlayEndpoint;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.records.next().map(|record| OverlayEndpoint {
-            position: record.key.position,
-            overlay: record.overlay,
-            kind: record.kind,
-        })
+        if self.index >= self.buffer.len() {
+            self.refill();
+            if self.index >= self.buffer.len() {
+                return None;
+            }
+        }
+        let item = self.buffer[self.index];
+        self.index += 1;
+        Some(item)
     }
 }
 
@@ -495,32 +634,6 @@ impl EndpointBPlusTree {
         self.records
             .remove(EndpointIdentity::of(overlay, kind))
             .map(|record| record.key.position)
-    }
-
-    fn records_strictly_within(
-        &self,
-        bounds: EmacsByteRange,
-        property_filter: OverlayPropertyFilter,
-    ) -> OverlayEndpointRecords<'_> {
-        OverlayEndpointRecords {
-            records: self.records.matches(EndpointRangeQuery {
-                bounds,
-                property_filter,
-            }),
-        }
-    }
-
-    fn records_strictly_within_reverse(
-        &self,
-        bounds: EmacsByteRange,
-        property_filter: OverlayPropertyFilter,
-    ) -> OverlayEndpointRecords<'_> {
-        OverlayEndpointRecords {
-            records: self.records.matches_reverse(EndpointRangeQuery {
-                bounds,
-                property_filter,
-            }),
-        }
     }
 
     fn refresh_overlay_property_mask(&mut self, overlay: Value) {
@@ -649,6 +762,293 @@ fn write_core_lock<R>(
     result
 }
 
+/// Publish the lazy endpoint index if absent. For live views (`live = Some`),
+/// checks the generation stamp before and after building; returns `false` and
+/// latches `stale` if the index changed, without publishing stale state.
+///
+/// Lock order: never holds `core` while acquiring `intervals`.
+fn publish_endpoints_for(
+    intervals_lock: &RwLock<IntervalBPlusTree>,
+    core_lock: &RwLock<OverlayIndexCore>,
+    live: Option<(&Cell<bool>, u64)>,
+) -> bool {
+    {
+        let core = core_lock.read();
+        if let Some((stale, stamp)) = live
+            && core.generation != stamp
+        {
+            stale.set(true);
+            return false;
+        }
+        if core.endpoints.get().is_some() {
+            return true;
+        }
+    }
+    #[cfg(test)]
+    super::overlay::record_endpoint_publication_interval_read();
+    let built = {
+        let intervals = intervals_lock.read();
+        if let Some((stale, stamp)) = live
+            && core_lock.read().generation != stamp
+        {
+            stale.set(true);
+            return false;
+        }
+        let entries = intervals.endpoint_entries_in_attachment_order();
+        EndpointBPlusTree::from_entries(&entries)
+    };
+    let core = core_lock.write();
+    if let Some((stale, stamp)) = live
+        && core.generation != stamp
+    {
+        stale.set(true);
+        return false;
+    }
+    let _ = core.endpoints.get_or_init(|| built);
+    true
+}
+
+/// Shared, generation-stamped read handle onto a live `OverlayIndex`.
+///
+/// Holds cloned `Arc` handles to `intervals` and `core`, never `&Buffer`.
+/// Every read takes a short guard in `intervals -> core` order, checks
+/// `core.generation == stamp`, latches `stale` on mismatch, and drops all
+/// guards before returning.
+#[derive(Clone, Debug)]
+pub(super) struct LiveOverlayIndex {
+    intervals: Arc<RwLock<IntervalBPlusTree>>,
+    core: Arc<RwLock<OverlayIndexCore>>,
+    stamp: u64,
+}
+
+impl LiveOverlayIndex {
+    pub(super) fn stamp(&self) -> u64 {
+        self.stamp
+    }
+
+    pub(super) fn is_stale(&self, stale: &Cell<bool>) -> bool {
+        if stale.get() {
+            return true;
+        }
+        if self.core.read().generation != self.stamp {
+            stale.set(true);
+            return true;
+        }
+        false
+    }
+
+    /// Acquire `intervals.read()` and verify `core.generation == self.stamp`
+    /// while holding it (strict `intervals -> core` lock order). Returns `None`
+    /// and latches `stale` on any mismatch.
+    #[inline]
+    fn lock_intervals_if_fresh<'a>(
+        &'a self,
+        stale: &Cell<bool>,
+    ) -> Option<RwLockReadGuard<'a, IntervalBPlusTree>> {
+        if stale.get() {
+            return None;
+        }
+        let intervals = self.intervals.read();
+        if self.core.read().generation != self.stamp {
+            stale.set(true);
+            return None;
+        }
+        Some(intervals)
+    }
+
+    pub(super) fn is_empty(&self, stale: &Cell<bool>) -> bool {
+        let Some(intervals) = self.lock_intervals_if_fresh(stale) else {
+            return true;
+        };
+        intervals.is_empty()
+    }
+
+    pub(super) fn may_contain_property(&self, property: Value, stale: &Cell<bool>) -> bool {
+        if stale.get() {
+            return false;
+        }
+        let core = self.core.read();
+        if core.generation != self.stamp {
+            stale.set(true);
+            return false;
+        }
+        core.direct_property_keys.contains_key(&property.bits())
+    }
+
+    pub(super) fn contains(&self, overlay: Value, stale: &Cell<bool>) -> bool {
+        let Some(intervals) = self.lock_intervals_if_fresh(stale) else {
+            return false;
+        };
+        intervals.contains(overlay)
+    }
+
+    pub(super) fn range(&self, overlay: Value, stale: &Cell<bool>) -> Option<EmacsByteRange> {
+        let intervals = self.lock_intervals_if_fresh(stale)?;
+        intervals.range_by_identity(OverlayIdentity::of(overlay))
+    }
+
+    pub(super) fn overlays_at(&self, pos: EmacsBytePos, stale: &Cell<bool>) -> Vec<Value> {
+        let Some(intervals) = self.lock_intervals_if_fresh(stale) else {
+            return Vec::new();
+        };
+        let mut overlays = Vec::new();
+        intervals
+            .records()
+            .for_each_match(IntervalBPlusQuery::Point(pos), |record| {
+                overlays.push(record.overlay());
+            });
+        drop(intervals);
+        super::overlay::note_overlay_live_records_visited(overlays.len());
+        overlays
+    }
+
+    pub(super) fn overlays_at_small(
+        &self,
+        pos: EmacsBytePos,
+        stale: &Cell<bool>,
+    ) -> SmallVec<[Value; 8]> {
+        let Some(intervals) = self.lock_intervals_if_fresh(stale) else {
+            return SmallVec::new();
+        };
+        let mut overlays = SmallVec::new();
+        intervals
+            .records()
+            .for_each_match(IntervalBPlusQuery::Point(pos), |record| {
+                overlays.push(record.overlay());
+            });
+        drop(intervals);
+        super::overlay::note_overlay_live_records_visited(overlays.len());
+        overlays
+    }
+
+    pub(super) fn overlays_in_region(
+        &self,
+        range: EmacsByteRange,
+        accessible_end: EmacsBytePos,
+        stale: &Cell<bool>,
+    ) -> Vec<Value> {
+        let Some(intervals) = self.lock_intervals_if_fresh(stale) else {
+            return Vec::new();
+        };
+        let mut overlays = Vec::new();
+        intervals.records().for_each_match(
+            IntervalBPlusQuery::Region {
+                range,
+                accessible_end,
+            },
+            |record| overlays.push(record.overlay()),
+        );
+        drop(intervals);
+        super::overlay::note_overlay_live_records_visited(overlays.len());
+        overlays
+    }
+
+    pub(super) fn overlays_in_region_small(
+        &self,
+        range: EmacsByteRange,
+        accessible_end: EmacsBytePos,
+        stale: &Cell<bool>,
+    ) -> SmallVec<[Value; 8]> {
+        let Some(intervals) = self.lock_intervals_if_fresh(stale) else {
+            return SmallVec::new();
+        };
+        let mut overlays = SmallVec::new();
+        intervals.records().for_each_match(
+            IntervalBPlusQuery::Region {
+                range,
+                accessible_end,
+            },
+            |record| overlays.push(record.overlay()),
+        );
+        drop(intervals);
+        super::overlay::note_overlay_live_records_visited(overlays.len());
+        overlays
+    }
+
+    pub(super) fn all_ascending(&self, stale: &Cell<bool>) -> Vec<Value> {
+        let Some(intervals) = self.lock_intervals_if_fresh(stale) else {
+            return Vec::new();
+        };
+        let mut overlays = Vec::with_capacity(intervals.len());
+        intervals.all_ascending(&mut overlays);
+        drop(intervals);
+        super::overlay::note_overlay_live_records_visited(overlays.len());
+        overlays
+    }
+
+    pub(super) fn next_boundary_after(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        stale: &Cell<bool>,
+    ) -> Option<EmacsBytePos> {
+        if pos >= limit || stale.get() {
+            return None;
+        }
+        {
+            let core = self.core.read();
+            if core.generation != self.stamp {
+                stale.set(true);
+                return None;
+            }
+            if let Some(endpoints) = core.endpoints.get() {
+                let next = endpoints.next_after(pos, limit);
+                drop(core);
+                super::overlay::note_overlay_live_records_visited(usize::from(next.is_some()));
+                return next;
+            }
+        }
+        // Drop `core` before acquiring `intervals` (lock order: intervals -> core).
+        let intervals = self.lock_intervals_if_fresh(stale)?;
+        let mut next = intervals.next_start_after(pos, limit);
+        let mut visited = usize::from(next.is_some());
+        intervals
+            .records()
+            .for_each_match(IntervalBPlusQuery::Point(pos), |record| {
+                visited += 1;
+                let end = record.range().end();
+                if end > pos && end <= limit && next.is_none_or(|current| end < current) {
+                    next = Some(end);
+                }
+            });
+        drop(intervals);
+        super::overlay::note_overlay_live_records_visited(visited);
+        next
+    }
+
+    pub(super) fn endpoint_records_strictly_within<'a>(
+        &'a self,
+        bounds: EmacsByteRange,
+        property_filter: OverlayPropertyFilter,
+        stale: &'a Cell<bool>,
+    ) -> OverlayEndpointRecords<'a> {
+        OverlayEndpointRecords::new(
+            &self.intervals,
+            &self.core,
+            Some((stale, self.stamp)),
+            bounds,
+            property_filter,
+            EndpointScanDirection::Forward,
+        )
+    }
+
+    pub(super) fn endpoint_records_strictly_within_reverse<'a>(
+        &'a self,
+        bounds: EmacsByteRange,
+        property_filter: OverlayPropertyFilter,
+        stale: &'a Cell<bool>,
+    ) -> OverlayEndpointRecords<'a> {
+        OverlayEndpointRecords::new(
+            &self.intervals,
+            &self.core,
+            Some((stale, self.stamp)),
+            bounds,
+            property_filter,
+            EndpointScanDirection::Reverse,
+        )
+    }
+}
+
 #[derive(Debug)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) struct OverlayIndex {
@@ -673,8 +1073,18 @@ impl OverlayIndex {
         }
     }
 
+    /// Capture a live, generation-stamped read handle onto this index's shared
+    /// `intervals` and `core` without copying overlays.
+    pub(super) fn live_handle(&self) -> LiveOverlayIndex {
+        let stamp = self.core.read().generation;
+        LiveOverlayIndex {
+            intervals: Arc::clone(&self.intervals),
+            core: Arc::clone(&self.core),
+            stamp,
+        }
+    }
+
     /// Monotonic stamp of index writes. A no-op remap does not advance it.
-    /// Nothing reads it before the live overlay view (memo P4); tests do.
     #[cfg(any(test, feature = "test-support"))]
     pub(super) fn generation(&self) -> u64 {
         self.core.read().generation
@@ -689,72 +1099,18 @@ impl OverlayIndex {
     }
 
     fn publish_endpoints(&self) {
-        if self.core.read().endpoints.get().is_some() {
-            return;
-        }
-        #[cfg(test)]
-        super::overlay::record_endpoint_publication_interval_read();
-        let built = {
-            let intervals = self.intervals.read();
-            let entries = intervals.endpoint_entries_in_attachment_order();
-            EndpointBPlusTree::from_entries(&entries)
-        };
-        let _ = self.core.write().endpoints.get_or_init(|| built);
-    }
-
-    /// Publish the endpoint tree if needed and return it. The reference is
-    /// tied to `&self`: tree edits take `&mut self`.
-    fn endpoint_index(&self) -> &EndpointBPlusTree {
-        debug_assert_eq!(
-            Arc::strong_count(&self.core),
-            1,
-            "escaped &EndpointBPlusTree reference is only sound while core is unshared"
-        );
-        let ptr = {
-            let core = self.core.read();
-            core.endpoints
-                .get()
-                .map(|tree| tree as *const EndpointBPlusTree)
-        };
-        let ptr = match ptr {
-            Some(ptr) => ptr,
-            None => {
-                self.publish_endpoints();
-                let core = self.core.read();
-                core.endpoints.get().expect("endpoint index published") as *const EndpointBPlusTree
-            }
-        };
-        // SAFETY: `core` lives in an `Arc` owned by `self` and is not moved,
-        // and `OnceLock` does not relocate its initialized value. The
-        // load-bearing aliasing invariant is that no `core.write()` may occur
-        // while the returned `&EndpointBPlusTree` lives (dereferencing
-        // `RwLockWriteGuard` creates `&mut OverlayIndexCore` over the whole
-        // struct, which would invalidate this shared reference under Stacked
-        // Borrows). That holds here because every mutating `core.write()`
-        // requires `&mut self`, `publish_endpoints` only takes `core.write()`
-        // while `endpoints` is still empty (before any reference can exist),
-        // and `self.core` has no external `Arc` clone (`strong_count == 1`).
-        unsafe { &*ptr }
+        let _ = publish_endpoints_for(&self.intervals, &self.core, None);
     }
 
     #[cfg(test)]
-    fn published_endpoints(&self) -> Option<&EndpointBPlusTree> {
-        debug_assert_eq!(
-            Arc::strong_count(&self.core),
-            1,
-            "escaped &EndpointBPlusTree reference is only sound while core is unshared"
-        );
+    fn is_endpoints_published(&self) -> bool {
+        self.core.read().endpoints.get().is_some()
+    }
+
+    #[cfg(test)]
+    fn with_published_endpoints<R>(&self, f: impl FnOnce(&EndpointBPlusTree) -> R) -> Option<R> {
         let core = self.core.read();
-        let ptr = core
-            .endpoints
-            .get()
-            .map(|tree| tree as *const EndpointBPlusTree);
-        drop(core);
-        // SAFETY: same aliasing invariant as `endpoint_index` (no `core.write()`
-        // while the returned reference lives, enforced by `&self` exclusivity
-        // and `strong_count == 1`). `None` means the tree was not published;
-        // the pointer is only dereferenced when `Some`.
-        ptr.map(|ptr| unsafe { &*ptr })
+        core.endpoints.get().map(f)
     }
 
     /// Capture numeric old keys before any plist-head replacement or write.
@@ -1675,8 +2031,14 @@ impl OverlayIndex {
         bounds: EmacsByteRange,
         property_filter: OverlayPropertyFilter,
     ) -> OverlayEndpointRecords<'_> {
-        self.endpoint_index()
-            .records_strictly_within(bounds, property_filter)
+        OverlayEndpointRecords::new(
+            &self.intervals,
+            &self.core,
+            None,
+            bounds,
+            property_filter,
+            EndpointScanDirection::Forward,
+        )
     }
 
     pub(super) fn endpoint_records_strictly_within_reverse(
@@ -1684,8 +2046,14 @@ impl OverlayIndex {
         bounds: EmacsByteRange,
         property_filter: OverlayPropertyFilter,
     ) -> OverlayEndpointRecords<'_> {
-        self.endpoint_index()
-            .records_strictly_within_reverse(bounds, property_filter)
+        OverlayEndpointRecords::new(
+            &self.intervals,
+            &self.core,
+            None,
+            bounds,
+            property_filter,
+            EndpointScanDirection::Reverse,
+        )
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]

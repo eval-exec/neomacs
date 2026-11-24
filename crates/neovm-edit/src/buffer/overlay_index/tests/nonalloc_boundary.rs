@@ -20,7 +20,7 @@ pub fn range(start: usize, end: usize) -> EmacsByteRange {
 }
 
 fn assert_cold_and_published_queries(index: &OverlayIndex, endpoints: &[usize]) {
-    assert!(index.published_endpoints().is_none());
+    assert!(!index.is_endpoints_published());
     let queries = [
         (0, 20),
         (1, 2),
@@ -66,7 +66,7 @@ fn assert_cold_and_published_queries(index: &OverlayIndex, endpoints: &[usize]) 
             "canonical cold next ({position}, {limit}]"
         );
         assert!(
-            index.published_endpoints().is_none(),
+            !index.is_endpoints_published(),
             "borrowed next query must not publish the allocating endpoint index"
         );
         actual
@@ -83,13 +83,13 @@ fn assert_cold_and_published_queries(index: &OverlayIndex, endpoints: &[usize]) 
             "cold previous [{limit}, {position})"
         );
         assert!(
-            index.published_endpoints().is_none(),
+            !index.is_endpoints_published(),
             "borrowed previous query must not publish the allocating endpoint index"
         );
         actual
     });
-    let _ = index.endpoint_index();
-    assert!(index.published_endpoints().is_some());
+    index.publish_endpoints();
+    assert!(index.is_endpoints_published());
     for (i, (position, limit)) in queries.into_iter().enumerate() {
         let actual = index
             .next_boundary_after_no_alloc(EmacsBytePos::new(position), EmacsBytePos::new(limit));

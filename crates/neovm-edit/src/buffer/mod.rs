@@ -58,7 +58,7 @@ pub(crate) use edit_transaction::TranspositionAnchorPolicy;
 pub use edit_transaction::TranspositionAnchorPolicy;
 #[doc(hidden)]
 pub use edit_transaction::{PreparedBufferEdit, TextMeasurement};
-pub use overlay::{Overlay, OverlayList};
+pub use overlay::{LiveOverlayView, Overlay, OverlayList, OverlayRead};
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) use position::BufferLispPos;
 #[cfg(any(test, feature = "test-support"))]

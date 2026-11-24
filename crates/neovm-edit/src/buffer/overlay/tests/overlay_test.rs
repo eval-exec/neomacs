@@ -9,6 +9,9 @@ mod content_accounting_test;
 #[path = "generation.rs"]
 mod generation;
 
+#[path = "live_view.rs"]
+mod live_view;
+
 #[test]
 fn insert_and_delete_overlay_preserves_object_identity() {
     crate::test_utils::init_test_tracing();

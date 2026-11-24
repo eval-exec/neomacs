@@ -43,7 +43,7 @@ fn text_edit_does_not_publish_new_generation_before_tree_edit_finishes() {
     let ov = overlay(10, 20);
     assert!(index.attach(ov, range(10, 20)));
     // Publish endpoints so a reader can inspect them alongside generation.
-    let _ = index.endpoint_index();
+    index.publish_endpoints();
     let before = index.generation();
 
     let intervals = Arc::clone(&index.intervals);
@@ -105,7 +105,7 @@ fn property_mask_writers_advance_generation() {
     let mut index = OverlayIndex::new();
     let ov = overlay(10, 20);
     assert!(index.attach(ov, range(10, 20)));
-    let _ = index.endpoint_index();
+    index.publish_endpoints();
 
     let face = Value::symbol("face");
     let before_add = index.generation();
@@ -137,7 +137,7 @@ fn assert_cold_boundary_does_not_hold_core_across_intervals(
     let mut index = OverlayIndex::new();
     assert!(index.attach(overlay(10, 20), range(10, 20)));
     assert!(
-        index.published_endpoints().is_none(),
+        !index.is_endpoints_published(),
         "test requires a cold endpoint index"
     );
 

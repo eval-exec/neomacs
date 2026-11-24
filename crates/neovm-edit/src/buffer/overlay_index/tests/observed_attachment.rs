@@ -63,7 +63,7 @@ fn attachment_publishes_handle_before_observed_property_reads() {
     for published in [false, true] {
         let mut index = OverlayIndex::new();
         if published {
-            let _ = index.endpoint_index();
+            index.publish_endpoints();
         }
         let face = Value::symbol("face");
         let before_string = Value::symbol("before-string");
@@ -97,7 +97,7 @@ fn attachment_publishes_handle_before_observed_property_reads() {
             index.previous_boundary_before(EmacsBytePos::new(10), EmacsBytePos::ZERO),
             Some(EmacsBytePos::new(8))
         );
-        assert_eq!(index.published_endpoints().is_some(), published);
+        assert_eq!(index.is_endpoints_published(), published);
         assert!(reads.unchanged(), "read-only checks changed the attachment");
         assert_later_mutation_invalidates(&reads, overlay);
     }
@@ -149,10 +149,7 @@ fn batch_attachment_publishes_handles_before_observed_property_reads() {
             index.previous_boundary_before(EmacsBytePos::new(8), EmacsBytePos::ZERO),
             Some(EmacsBytePos::new(6))
         );
-        assert!(
-            index.published_endpoints().is_none(),
-            "geometry must stay cold"
-        );
+        assert!(!index.is_endpoints_published(), "geometry must stay cold");
         assert!(reads.unchanged(), "read-only checks changed the batch");
         assert_later_mutation_invalidates(&reads, first);
     }
