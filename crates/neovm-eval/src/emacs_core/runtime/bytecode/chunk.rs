@@ -43,6 +43,19 @@ pub(crate) fn lazy_gnu_decode_count_for_test() -> usize {
     LAZY_GNU_DECODE_COUNT.load(Ordering::Relaxed)
 }
 
+/// The published proof still describes this function. A missing proof
+/// does not. Callers that have not decoded yet must not use this as a
+/// reason to skip the decode.
+fn lazy_proof_matches_live_frame(func: &ByteCodeFunction, lazy: &LazyGnuCode) -> bool {
+    let Some(proof) = lazy.proof() else {
+        return false;
+    };
+    proof.max_stack() == func.max_stack().get()
+        && func
+            .verifier_entry_depth()
+            .is_some_and(|depth| proof.proves_depth(0, depth))
+}
+
 /// The upper cold decode boundary: it names the decoder/verifier and is the
 /// only place the lazy algorithm runs. The hot path calls it only on a
 /// `decoded_ready()` miss; the storage layer owns the cells and the inline
@@ -288,7 +301,14 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
             return LazyAdmissionPeek::Known(false);
         }
         if let Some(range) = lazy.iterative_admission() {
-            return LazyAdmissionPeek::Known((*range).is_some_and(|range| range.accepts(nargs)));
+            // Published against the proof's max_stack. set_max_stack keeps
+            // the cell, so another live limit must not reuse the range.
+            let same_limit = lazy
+                .proof()
+                .is_some_and(|proof| proof.max_stack() == self.max_stack().get());
+            return LazyAdmissionPeek::Known(
+                same_limit && (*range).is_some_and(|range| range.accepts(nargs)),
+            );
         }
         match self.params().stack_shape() {
             Some(shape) if shape.required() <= nargs && nargs <= shape.nonrest() => {
@@ -317,6 +337,11 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         // decode code for verification nor publish a permanent refusal for
         // a later valid call with a different argument count.
         if nargs < required || nargs > nonrest {
+            return false;
+        }
+        // A clone whose live shape is not this proof must not publish a
+        // refusal over the prototype's cell. A later matching call still can.
+        if lazy.proof().is_some() && !lazy_proof_matches_live_frame(self, lazy) {
             return false;
         }
         let params_on_stack = match self.params() {
@@ -350,26 +375,31 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     }
 
     /// Whether `executable_ops` returns instructions with a standing
-    /// `verify_stack_effects` proof. Resolves the lazy decode if needed —
-    /// callers are classification-time, never the dispatch hot path.
+    /// `verify_stack_effects` proof for this function's live entry depth
+    /// and `max_stack`. Resolves the lazy decode if needed — callers are
+    /// classification-time, never the dispatch hot path.
     fn executes_verified_ops(&self) -> bool {
         match &self.lazy_gnu_code() {
             Some(lazy) => {
-                if let Some(decoded) = lazy.decoded_ready() {
-                    return decoded.stack_verified();
-                }
-                let raw_bytes = self
-                    .gnu_bytecode_bytes
-                    .as_deref()
-                    .expect("lazy GNU bytecode lost its original bytes");
-                decode_lazy_gnu_code(
-                    lazy,
-                    raw_bytes,
-                    self.constants().len(),
-                    || (self.verifier_entry_depth(), self.constants().as_slice()),
-                    self.max_stack().get(),
-                )
-                .stack_verified()
+                let verified = if let Some(decoded) = lazy.decoded_ready() {
+                    decoded.stack_verified()
+                } else {
+                    let raw_bytes = self
+                        .gnu_bytecode_bytes
+                        .as_deref()
+                        .expect("lazy GNU bytecode lost its original bytes");
+                    decode_lazy_gnu_code(
+                        lazy,
+                        raw_bytes,
+                        self.constants().len(),
+                        || (self.verifier_entry_depth(), self.constants().as_slice()),
+                        self.max_stack().get(),
+                    )
+                    .stack_verified()
+                };
+                // The flag is the decode's answer. A setter can keep the
+                // cell after params, env, or max_stack change.
+                verified && lazy_proof_matches_live_frame(self, lazy)
             }
             None => self.stack_verified(),
         }

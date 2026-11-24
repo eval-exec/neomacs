@@ -83,6 +83,64 @@ fn bytecode_lazy_iterative_admission_checks_each_clones_environment() {
     ));
 }
 
+/// `set_max_stack` keeps the shared cell. The cached range was published
+/// against the proof's limit, so a clone with another limit is not admitted
+/// and must not replace that range with a refusal.
+#[test]
+fn bytecode_lazy_iterative_admission_rejects_a_stale_max_stack() {
+    let proto = admission_function(0, 1, vec![192, 135]);
+    assert_eq!(proto.lazy_iterative_admission(0), Some(true));
+    let mut lowered = proto.clone();
+    lowered.set_max_stack(StackDepth::for_test(0));
+    assert!(std::sync::Arc::ptr_eq(
+        proto.lazy_gnu_code().as_ref().unwrap(),
+        lowered.lazy_gnu_code().as_ref().unwrap()
+    ));
+    assert_eq!(
+        lowered.peek_lazy_iterative_admission(0),
+        LazyAdmissionPeek::Known(false)
+    );
+    let mut raised = proto.clone();
+    raised.set_max_stack(StackDepth::for_test(4));
+    assert!(std::sync::Arc::ptr_eq(
+        proto.lazy_gnu_code().as_ref().unwrap(),
+        raised.lazy_gnu_code().as_ref().unwrap()
+    ));
+    assert_eq!(
+        raised.peek_lazy_iterative_admission(0),
+        LazyAdmissionPeek::Known(false)
+    );
+    assert_eq!(
+        proto.peek_lazy_iterative_admission(0),
+        LazyAdmissionPeek::Known(true)
+    );
+}
+
+/// A non-lexical named clone gains an entry depth when `set_env` captures
+/// it. The cell stays shared. The proof was computed at depth 0, so the
+/// clone is no longer verified code.
+#[test]
+fn bytecode_lazy_set_env_keeps_the_cell_and_drops_the_stale_entry_proof() {
+    crate::test_utils::init_test_tracing();
+    let mut proto = ByteCodeFunction::new(LambdaParams::simple(vec![neovm_value::intern::intern(
+        "c9-x",
+    )]));
+    proto.set_max_stack(StackDepth::for_test(1));
+    proto.gnu_bytecode_bytes = Some(neovm_value::tagged::header::LispByteVec::owned(vec![135]));
+    proto.defer_gnu_decode();
+    assert_eq!(proto.verifier_entry_depth(), Some(0));
+    assert!(proto.executes_verified_ops());
+    let mut captured = proto.clone();
+    captured.set_env(Some(Value::NIL));
+    assert!(std::sync::Arc::ptr_eq(
+        proto.lazy_gnu_code().as_ref().unwrap(),
+        captured.lazy_gnu_code().as_ref().unwrap()
+    ));
+    assert_eq!(captured.verifier_entry_depth(), Some(1));
+    assert!(!captured.executes_verified_ops());
+    assert!(proto.executes_verified_ops());
+}
+
 #[test]
 fn bytecode_lazy_iterative_admission_refuses_unverified_oversized_and_rest_code() {
     // An empty Return intentionally returns nil; Pop at entry really underflows.

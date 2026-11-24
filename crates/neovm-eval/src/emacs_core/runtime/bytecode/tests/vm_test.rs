@@ -314,6 +314,93 @@ fn vm_fused_dup_stackref_does_not_read_caller_slots() {
     );
 }
 
+/// A lazy clone whose parameter shape changed after the proof was published
+/// must not run that proof. `stack-ref` 0 was verified at entry depth 1.
+/// Dropping the arity to zero leaves the frame empty, and the verified
+/// driver would return the caller's 4242. The checked driver signals.
+/// `set_env` on the untouched clone still shares the cell.
+#[test]
+fn vm_lazy_stackref_after_set_params_does_not_read_caller_slots() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
+    let value = eval
+        .eval_str(r#"(make-byte-code 257 "\000\207" [] 2)"#)
+        .expect("make-byte-code");
+    let original = value.get_bytecode_data().expect("bytecode");
+    assert_eq!(original.verifier_entry_depth(), Some(1));
+    assert!(original.executes_verified_ops());
+    let proof = original
+        .lazy_gnu_code()
+        .as_ref()
+        .and_then(|lazy| lazy.proof())
+        .expect("published proof");
+    assert!(proof.proves_depth(0, 1));
+    let mut captured = original.clone();
+    captured.set_env(Some(Value::NIL));
+    assert!(std::sync::Arc::ptr_eq(
+        original.lazy_gnu_code().as_ref().expect("lazy"),
+        captured.lazy_gnu_code().as_ref().expect("lazy clone"),
+    ));
+    let mut zero = original.clone();
+    zero.set_params(
+        crate::emacs_core::bytecode::FunctionParams::try_from(Value::fixnum(0)).unwrap(),
+    );
+    zero.set_arglist(Value::fixnum(0));
+    assert_eq!(zero.verifier_entry_depth(), Some(0));
+    let bad = Value::make_bytecode(zero);
+
+    let mut caller = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    let keep_idx = caller.add_constant(Value::fixnum(4242));
+    let bad_idx = caller.add_constant(bad);
+    // 0 const 4242
+    // 1 push-condition-case -> 5
+    // 2 const bad
+    // 3 call 0
+    // 4 return            success would return the stolen slot
+    // 5 stack-ref 1       handler: [keep, err] -> push keep
+    // 6 list 2
+    // 7 return
+    caller.set_ops(vec![
+        Op::Constant(keep_idx),
+        Op::PushConditionCase(5),
+        Op::Constant(bad_idx),
+        Op::Call(0),
+        Op::Return,
+        Op::StackRef(1),
+        Op::List(2),
+        Op::Return,
+    ]);
+    caller.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
+    caller.set_lexical(false);
+
+    let result = {
+        let mut vm = new_vm(&mut eval);
+        vm.execute(&caller, vec![])
+    };
+    let Ok(value) = result else {
+        panic!("stale entry depth must be a caught error, got {result:?}");
+    };
+    assert!(
+        value.is_cons(),
+        "stale entry depth must be a caught error, got {}",
+        crate::emacs_core::print::print_value(&value)
+    );
+    assert_eq!(
+        value.cons_cdr().cons_car(),
+        Value::fixnum(4242),
+        "caller slot must survive, got {}",
+        crate::emacs_core::print::print_value(&value)
+    );
+    assert_eq!(
+        value.cons_car().cons_cdr().cons_car().as_utf8_str(),
+        Some("Invalid byte-code")
+    );
+}
+
 /// The same frame rule as listN, for every unchecked N-ary pop.
 fn assert_sealed_underflow_preserves_caller(op: Op) {
     let mut bad = ByteCodeFunction::new(LambdaParams {

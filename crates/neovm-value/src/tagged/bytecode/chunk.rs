@@ -780,6 +780,7 @@ impl ByteCodeFunction {
         let idx = self.constants.len() as u16;
         self.clear_execution_certificate();
         self.constants.ensure_owned().push(value);
+        self.reinstall_lazy_gnu_code();
         idx
     }
 
@@ -796,6 +797,7 @@ impl ByteCodeFunction {
     pub fn emit(&mut self, op: Op) {
         self.clear_execution_certificate();
         self.ops.push(op);
+        self.reinstall_lazy_gnu_code();
     }
 
     /// Current instruction count (used for jump target calculation).
@@ -822,6 +824,7 @@ impl ByteCodeFunction {
         // The borrow of `ops` ends with the match. A retarget is a new
         // instruction vector for the seal and the stack proof.
         self.clear_execution_certificate();
+        self.reinstall_lazy_gnu_code();
     }
 }
 
@@ -829,6 +832,15 @@ impl ByteCodeFunction {
     fn clear_execution_certificate(&mut self) {
         self.ops_sealed = false;
         self.stack_verified = false;
+    }
+
+    /// Replace a shared lazy decode with a cold cell. Eager code has none.
+    /// `set_env` and a decoded `set_max_stack` do not call this: those keep
+    /// the Arc, and the live shape is checked against the proof at use.
+    fn reinstall_lazy_gnu_code(&mut self) {
+        if self.lazy_gnu_code.is_some() {
+            self.lazy_gnu_code = Some(std::sync::Arc::new(LazyGnuCode::new()));
+        }
     }
 
     /// Instruction vector. The unchecked driver reads this only after
@@ -843,12 +855,14 @@ impl ByteCodeFunction {
     pub fn set_ops(&mut self, ops: Vec<Op>) {
         self.clear_execution_certificate();
         self.ops = ops;
+        self.reinstall_lazy_gnu_code();
     }
 
     /// Mutable instruction vector. Clears `ops_sealed` and `stack_verified`.
     #[inline]
     pub fn ops_mut(&mut self) -> &mut Vec<Op> {
         self.clear_execution_certificate();
+        self.reinstall_lazy_gnu_code();
         &mut self.ops
     }
 
@@ -863,12 +877,14 @@ impl ByteCodeFunction {
     pub fn set_constants(&mut self, constants: crate::tagged::header::LispValueVec) {
         self.clear_execution_certificate();
         self.constants = constants;
+        self.reinstall_lazy_gnu_code();
     }
 
     /// Mutable constant pool. Clears `ops_sealed` and `stack_verified`.
     #[inline]
     pub fn constants_mut(&mut self) -> &mut crate::tagged::header::LispValueVec {
         self.clear_execution_certificate();
+        self.reinstall_lazy_gnu_code();
         &mut self.constants
     }
 
@@ -883,6 +899,15 @@ impl ByteCodeFunction {
     pub fn set_max_stack(&mut self, max_stack: StackDepth) {
         self.clear_execution_certificate();
         self.max_stack = max_stack;
+        // A decoded cell stays shared so a resume clone still sees one Arc.
+        // A cold cell would publish this limit into every other clone.
+        if self
+            .lazy_gnu_code
+            .as_ref()
+            .is_some_and(|lazy| lazy.decoded_ready().is_none())
+        {
+            self.reinstall_lazy_gnu_code();
+        }
     }
 
     /// Parameter specification. Entry depth reads this through the getter.
@@ -896,6 +921,7 @@ impl ByteCodeFunction {
     pub fn set_params(&mut self, params: FunctionParams) {
         self.clear_execution_certificate();
         self.params = params;
+        self.reinstall_lazy_gnu_code();
     }
 
     /// GNU byte-code slot 0. `Value` is `Copy`.
@@ -909,6 +935,7 @@ impl ByteCodeFunction {
     pub fn set_arglist(&mut self, arglist: Value) {
         self.clear_execution_certificate();
         self.arglist = arglist;
+        self.reinstall_lazy_gnu_code();
     }
 
     /// Whether this function was compiled with lexical binding.
@@ -922,6 +949,7 @@ impl ByteCodeFunction {
     pub fn set_lexical(&mut self, lexical: bool) {
         self.clear_execution_certificate();
         self.lexical = lexical;
+        self.reinstall_lazy_gnu_code();
     }
 
     /// Captured lexical environment, if this value is a closure.
