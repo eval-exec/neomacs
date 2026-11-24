@@ -179,13 +179,26 @@ fn n827_window_setup_hook_tool_bar_lines_keeps_lines_and_text_plus_tool() {
     );
 }
 
-/// Explicit size inside `window-setup-hook`, sampled before the command
-/// loop redisplays. Neither editor has realized the tool bar, so
-/// `frame-height` is 40 and `frame-text-height` matches. Outer pixels are
-/// not the contract: the window may still be unmapped (`xwin` 0).
+/// Explicit size inside `window-setup-hook`, sampled once the toolkit
+/// configure has been applied and before the tool bar is built.
+///
+/// `xg_frame_set_char_size` gives ConfigureNotify 0.1s
+/// (`x-wait-for-event-timeout`, xterm.c:32794). Under load that misses,
+/// so an immediate `frame-width` reads the queued `new_width`
+/// (frame.c:4145-4147, gtkutil.c:1161, dispnew.c:6710-6713). `sit-for`
+/// returns on pending input without applying that queue (subr.el:3872).
+/// The fixture's `read-event` reaches `do_pending_window_change`
+/// (process.c:5841) while `inhibit-redisplay` keeps `prepare_menu_bars`
+/// from running (xdisp.c:17377). The Lisp grid is read before xdotool
+/// because `call-process` redisplays (callproc.c:902-904). Neither
+/// editor has realized the tool bar, so `frame-height` is 40.
+/// Outer pixels are not the contract: the window may still be unmapped
+/// (`xwin` 0).
 #[test]
 fn n827_explicit_size_before_first_redisplay_keeps_requested_rows() {
-    let (gnu, actual) = sample_explicit_sizes(
+    let backend = neomacs_gui_tests::requested_backend().unwrap_or(GuiBackend::LinuxX11);
+    let (gnu, actual) = sample_explicit_sizes_on(
+        backend,
         "n827-before-redisplay",
         &[("N827_WHEN", "before-redisplay")],
     );
@@ -216,6 +229,14 @@ fn sample_explicit_sizes(
     artifact_name: &str,
     extra_env: &[(&str, &str)],
 ) -> (ExplicitSize, ExplicitSize) {
+    sample_explicit_sizes_on(GuiBackend::LinuxX11, artifact_name, extra_env)
+}
+
+fn sample_explicit_sizes_on(
+    backend: GuiBackend,
+    artifact_name: &str,
+    extra_env: &[(&str, &str)],
+) -> (ExplicitSize, ExplicitSize) {
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join("target/neomacs-gui-tests").join(artifact_name);
     let _ = fs::remove_dir_all(&artifacts);
@@ -228,7 +249,32 @@ fn sample_explicit_sizes(
     let neo = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
-    let backend = GuiBackend::LinuxX11;
+    // The pinned oracle is an X11 GTK build. On Wayland, Neomacs takes the
+    // Weston socket and GNU takes that compositor's Xwayland display.
+    // `ProcessGuiCommandRunner` drops `DISPLAY` for a Wayland plan and
+    // `WAYLAND_DISPLAY` for an X11 plan, so the two editors use different
+    // plan backends against one session.
+    if backend == GuiBackend::LinuxWayland {
+        let session = neomacs_infra::display::start_weston_pixman_xwayland(&artifacts)
+            .expect("pixman weston with xwayland");
+        let gnu = observe_explicit_size(
+            &root,
+            &artifacts.join("gnu"),
+            oracle.executable_path(),
+            GuiBackend::LinuxX11,
+            session.env(),
+            extra_env,
+        );
+        let actual = observe_explicit_size(
+            &root,
+            &artifacts.join("neo"),
+            neo,
+            GuiBackend::LinuxWayland,
+            session.env(),
+            extra_env,
+        );
+        return (gnu, actual);
+    }
     let session = DisplayHarness::for_backend(backend)
         .start_session(&artifacts)
         .unwrap();
@@ -236,10 +282,18 @@ fn sample_explicit_sizes(
         &root,
         &artifacts.join("gnu"),
         oracle.executable_path(),
-        &session,
+        backend,
+        session.env(),
         extra_env,
     );
-    let actual = observe_explicit_size(&root, &artifacts.join("neo"), neo, &session, extra_env);
+    let actual = observe_explicit_size(
+        &root,
+        &artifacts.join("neo"),
+        neo,
+        backend,
+        session.env(),
+        extra_env,
+    );
     (gnu, actual)
 }
 
@@ -267,12 +321,20 @@ fn observe_explicit_size(
     root: &std::path::Path,
     artifacts: &std::path::Path,
     binary: PathBuf,
-    session: &neomacs_gui_tests::DisplaySession,
+    backend: GuiBackend,
+    session_env: &[(String, String)],
     extra_env: &[(&str, &str)],
 ) -> ExplicitSize {
     let fixture = root.join("crates/neomacs-gui-tests/fixtures/explicit-size-after-font-oracle.el");
+    // Session env is applied after the initial GDK pin, so repeat the pin
+    // last. An Xvfb session sets `GDK_BACKEND=x11`; a Weston session does
+    // not, and the X11 default would put GNU on the wrong display.
+    let gdk_backend = match backend {
+        GuiBackend::LinuxWayland => "wayland",
+        GuiBackend::LinuxX11 | GuiBackend::Macos | GuiBackend::Windows => "x11",
+    };
     let mut plan = GuiTestPlan::new(
-        GuiBackend::LinuxX11,
+        backend,
         root,
         artifacts,
         GuiScenario::new("explicit-size-after-font", &fixture),
@@ -286,14 +348,14 @@ fn observe_explicit_size(
         "-l".to_string(),
         fixture.display().to_string(),
     ])
-    .with_env("GDK_BACKEND", "x11")
     .with_env("GSETTINGS_BACKEND", "memory");
     for (key, value) in extra_env {
         plan = plan.with_env(*key, *value);
     }
-    for (key, value) in session.env() {
+    for (key, value) in session_env {
         plan = plan.with_env(key, value);
     }
+    plan = plan.with_env("GDK_BACKEND", gdk_backend);
     let result = plan
         .run_with(
             &mut ProcessGuiCommandRunner,
