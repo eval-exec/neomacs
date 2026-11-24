@@ -418,10 +418,8 @@ impl PreparedViewports {
             // still requires an exact key match, so the built matrix must name
             // the capacity it actually holds.
             candidate.key.viewport_rows = key.viewport_rows;
-            candidate.matrix.resize(
-                geometry.display_text_row_base + geometry.max_rows,
-                candidate.matrix.ncols,
-            );
+            let capacity = geometry.display_text_row_base + geometry.matrix_body_rows;
+            candidate.matrix.resize(capacity, candidate.matrix.ncols);
             candidate.presented_cursor = None;
             let snapshot = std::sync::Arc::make_mut(&mut candidate.display_snapshot);
             snapshot.logical_cursor = None;
@@ -460,7 +458,6 @@ impl PreparedViewports {
                     *row = neomacs_display_protocol::glyph_matrix::MatrixRow::new(disabled);
                 }
             }
-            let capacity = geometry.display_text_row_base + geometry.max_rows;
             let mut placed_index = None;
             let mut placed_bottom = 0.0;
             for (index, row) in above {
@@ -506,7 +503,7 @@ impl PreparedViewports {
                 if row.start_charpos != next {
                     return None;
                 }
-                if y >= bottom || index >= geometry.display_text_row_base + geometry.max_rows {
+                if y >= bottom || index >= capacity {
                     break;
                 }
                 let destination = candidate.matrix.rows.get_mut(index)?;

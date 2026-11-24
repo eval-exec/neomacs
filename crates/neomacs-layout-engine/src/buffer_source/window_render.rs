@@ -555,7 +555,7 @@ where
                 shorter_face_line_at_window_start(
                     buffer,
                     params.window_id as u64,
-                    resolved_window_start,
+                    neovm_core::buffer::CharPos0::new(resolved_window_start.get().max(0) as usize),
                     default_resolved,
                     resolver.resolver().font_sizing(),
                     metrics,
@@ -741,19 +741,17 @@ where
 /// overlay `category` faces) at the window start, when that spec names a
 /// height. Named faces and specs without `:height` stay `None`, so the
 /// frame-font row count is unchanged.
-fn shorter_face_line_at_window_start<B: crate::neovm_bridge::LayoutBufferView>(
+pub(crate) fn shorter_face_line_at_window_start<B: crate::neovm_bridge::LayoutBufferView>(
     buffer: &B,
     window_id: u64,
-    window_start: ResolvedWindowStart,
+    window_start: neovm_core::buffer::CharPos0,
     default_face: &crate::neovm_bridge::ResolvedFace,
     font_sizing: crate::font::sizing::FontSizing,
     metrics: &mut crate::font::metrics::FontMetricsService,
 ) -> Option<f32> {
     use neovm_core::emacs_core::Value;
 
-    let start_byte = buffer.layout_char_pos_to_emacs_byte_pos(neovm_core::buffer::CharPos0::new(
-        window_start.get().max(0) as usize,
-    ));
+    let start_byte = buffer.layout_char_pos_to_emacs_byte_pos(window_start);
     let face_lookup = crate::neovm_bridge::LayoutCharPropertyLookup::new(
         buffer,
         Value::symbol(&crate::fixed_symbols::FACE),

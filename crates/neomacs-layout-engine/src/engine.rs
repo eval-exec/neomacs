@@ -3176,63 +3176,113 @@ impl LayoutEngine {
             // same-buffer ordering guarantee and the ownership boundary for the
             // frame-wide face namespace below.
             lisp_ledger.replay_sources.clear();
-            let mut window_plans: Vec<IncrementalWindowPlan> = window_params_list
+            let mut window_plans: Vec<IncrementalWindowPlan> =
+                Vec::with_capacity(window_params_list.len());
+            for ((params, (_, layout_box)), (_, key)) in window_params_list
                 .iter()
                 .zip(&window_layout_inputs)
                 .zip(&retained_keys)
-                .map(|((params, (_, layout_box)), (_, key))| {
-                    if query_window.is_some()
-                        || layout_walk_purpose == WindowLayoutWalkPurpose::Snapshot
-                        || attempt_mode == FrameAttemptMode::ExhaustionSnapshot
+            {
+                if query_window.is_some()
+                    || layout_walk_purpose == WindowLayoutWalkPurpose::Snapshot
+                    || attempt_mode == FrameAttemptMode::ExhaustionSnapshot
+                {
+                    // Snapshot/query rows must start at the live marker;
+                    // ExhaustionSnapshot rebuilds cleanly without fast-path reuse.
+                    window_plans.push(IncrementalWindowPlan {
+                        prepared_faces: None,
+                        cursor_only: None,
+                        scroll: None,
+                        is_edit: false,
+                        retry_admitted_faces: None,
+                        scroll_continuation_faces: None,
+                    });
+                    continue;
+                }
+                // The mini-window is probe-excluded from retention: its
+                // layout runs `resize_mini_window` measurement passes whose
+                // results must not become a reusable matrix, and it is one
+                // or two rows tall, so the scroll and edit paths buy
+                // nothing.  It is re-walked every frame (the phase tests
+                // assert exactly this by counting the content window's
+                // classification) -- unless NEOMACS_LAYOUT_MINI_STILL lets
+                // it stand still: GNU's `redisplay_window` leaves an echo
+                // area it "already displayed" alone, and a retained key
+                // equal in every field (the displayed echo or minibuffer
+                // buffer and its ticks, point, cursor role, geometry
+                // including the resize measurement's start) is exactly
+                // that, so the cursor-only replay reuses every row.
+                if params.is_minibuffer() {
+                    let cursor_only = if crate::incremental_layout::mini_window_still_enabled() {
+                        self.build_cursor_only_replay(params, *layout_box, evaluator)
+                    } else {
+                        None
+                    };
+                    window_plans.push(IncrementalWindowPlan {
+                        prepared_faces: None,
+                        cursor_only,
+                        scroll: None,
+                        is_edit: false,
+                        retry_admitted_faces: None,
+                        scroll_continuation_faces: None,
+                    });
+                    continue;
+                }
+                let mut cursor_only = self.build_cursor_only_replay(params, *layout_box, evaluator);
+                let mut prepared_faces = None;
+                if cursor_only.is_none() {
+                    if let Some((replay, faces, sources)) = self.prepared_viewports.replay(
+                        frame_id,
+                        DisplayWindowId::new(params.window_id),
+                        key,
+                        params.force_start,
+                    ) {
+                        if let Some(sources) = sources {
+                            lisp_ledger
+                                .replay_sources
+                                .insert(DisplayWindowId::new(params.window_id), sources);
+                        }
+                        cursor_only = Some(replay);
+                        prepared_faces = Some(faces);
+                    }
+                }
+
+                let mut is_edit = false;
+                let mut scroll = if cursor_only.is_none() {
+                    if let Some(scroll) = self.build_scroll_replay(params, *layout_box, evaluator) {
+                        Some(scroll)
+                    } else if let Some(edit) =
+                        self.build_edit_replay(params, *layout_box, evaluator)
                     {
-                        // Snapshot/query rows must start at the live marker;
-                        // ExhaustionSnapshot rebuilds cleanly without fast-path reuse.
-                        return IncrementalWindowPlan {
-                            prepared_faces: None,
-                            cursor_only: None,
-                            scroll: None,
-                            is_edit: false,
-                            retry_admitted_faces: None,
-                            scroll_continuation_faces: None,
-                        };
+                        is_edit = true;
+                        Some(edit)
+                    } else {
+                        None
                     }
-                    // The mini-window is probe-excluded from retention: its
-                    // layout runs `resize_mini_window` measurement passes whose
-                    // results must not become a reusable matrix, and it is one
-                    // or two rows tall, so the scroll and edit paths buy
-                    // nothing.  It is re-walked every frame (the phase tests
-                    // assert exactly this by counting the content window's
-                    // classification) -- unless NEOMACS_LAYOUT_MINI_STILL lets
-                    // it stand still: GNU's `redisplay_window` leaves an echo
-                    // area it "already displayed" alone, and a retained key
-                    // equal in every field (the displayed echo or minibuffer
-                    // buffer and its ticks, point, cursor role, geometry
-                    // including the resize measurement's start) is exactly
-                    // that, so the cursor-only replay reuses every row.
-                    if params.is_minibuffer() {
-                        let cursor_only = if crate::incremental_layout::mini_window_still_enabled()
-                        {
-                            self.build_cursor_only_replay(params, *layout_box, evaluator)
-                        } else {
-                            None
-                        };
-                        return IncrementalWindowPlan {
-                            prepared_faces: None,
-                            cursor_only,
-                            scroll: None,
-                            is_edit: false,
-                            retry_admitted_faces: None,
-                            scroll_continuation_faces: None,
-                        };
-                    }
-                    let mut cursor_only =
-                        self.build_cursor_only_replay(params, *layout_box, evaluator);
-                    let mut prepared_faces = None;
-                    if cursor_only.is_none() {
+                } else {
+                    None
+                };
+                // With no partial walk, the leaf may resolve a different
+                // semantic start before producing rows. History keys name
+                // that displayed start. Preserve ordinary scroll/edit plans,
+                // which consume the input start exactly, but prefer a full
+                // historical viewport over shifting a subset of that page.
+                if cursor_only.is_none() && scroll.is_none() {
+                    let resolved_start = resolve_leaf_window_start(
+                        evaluator,
+                        params,
+                        &frame_params,
+                        layout_box,
+                        WindowPositionPublication::Redisplay,
+                        false,
+                    );
+                    if resolved_start.get() != key.window_start {
+                        let mut prepared_key = key.clone();
+                        prepared_key.window_start = resolved_start.get();
                         if let Some((replay, faces, sources)) = self.prepared_viewports.replay(
                             frame_id,
                             DisplayWindowId::new(params.window_id),
-                            key,
+                            &prepared_key,
                             params.force_start,
                         ) {
                             if let Some(sources) = sources {
@@ -3244,188 +3294,167 @@ impl LayoutEngine {
                             prepared_faces = Some(faces);
                         }
                     }
-
-                    let mut is_edit = false;
-                    let mut scroll = if cursor_only.is_none() {
-                        if let Some(scroll) =
-                            self.build_scroll_replay(params, *layout_box, evaluator)
-                        {
-                            Some(scroll)
-                        } else if let Some(edit) =
-                            self.build_edit_replay(params, *layout_box, evaluator)
-                        {
-                            is_edit = true;
-                            Some(edit)
-                        } else {
-                            None
+                }
+                // A cached page supplies content, not a new viewport
+                // decision. Point motion alone must still run recentering.
+                // Prefer an existing backward synchronization plan over
+                // shifting an older page with less predictable overlap.
+                if cursor_only.is_none()
+                    && scroll.as_ref().is_none_or(|replay| replay.sync.is_none())
+                    && params.selected
+                    && self
+                        .retained_window_matrices
+                        .get(&DisplayWindowId::new(params.window_id))
+                        .is_some_and(|previous| {
+                            RetainedWindowKey::scroll_eligible(&previous.key, key)
+                        })
+                {
+                    let reused = scroll.as_ref().map_or(0, |replay| replay.reused_rows.len());
+                    if let Some((replay, faces, sources)) = self.prepared_viewports.scroll_replay(
+                        frame_id,
+                        DisplayWindowId::new(params.window_id),
+                        key,
+                        reused,
+                    ) {
+                        if let Some(sources) = sources {
+                            lisp_ledger
+                                .replay_sources
+                                .insert(DisplayWindowId::new(params.window_id), sources);
                         }
-                    } else {
-                        None
-                    };
-                    // With no partial walk, the leaf may resolve a different
-                    // semantic start before producing rows. History keys name
-                    // that displayed start. Preserve ordinary scroll/edit plans,
-                    // which consume the input start exactly, but prefer a full
-                    // historical viewport over shifting a subset of that page.
-                    if cursor_only.is_none() && scroll.is_none() {
-                        let resolved_start = resolve_leaf_window_start(
-                            evaluator,
-                            params,
-                            &frame_params,
-                            layout_box,
-                            WindowPositionPublication::Redisplay,
-                            false,
-                        );
-                        if resolved_start.get() != key.window_start {
-                            let mut prepared_key = key.clone();
-                            prepared_key.window_start = resolved_start.get();
-                            if let Some((replay, faces, sources)) = self.prepared_viewports.replay(
-                                frame_id,
-                                DisplayWindowId::new(params.window_id),
-                                &prepared_key,
-                                params.force_start,
-                            ) {
-                                if let Some(sources) = sources {
-                                    lisp_ledger
-                                        .replay_sources
-                                        .insert(DisplayWindowId::new(params.window_id), sources);
-                                }
-                                cursor_only = Some(replay);
-                                prepared_faces = Some(faces);
-                            }
-                        }
+                        scroll = Some(replay);
+                        prepared_faces = Some(faces);
+                        is_edit = false;
                     }
-                    // A cached page supplies content, not a new viewport
-                    // decision. Point motion alone must still run recentering.
-                    // Prefer an existing backward synchronization plan over
-                    // shifting an older page with less predictable overlap.
-                    if cursor_only.is_none()
-                        && scroll.as_ref().is_none_or(|replay| replay.sync.is_none())
-                        && params.selected
-                        && self
-                            .retained_window_matrices
-                            .get(&DisplayWindowId::new(params.window_id))
-                            .is_some_and(|previous| {
-                                RetainedWindowKey::scroll_eligible(&previous.key, key)
-                            })
+                }
+                if cursor_only.is_none()
+                    && !is_edit
+                    && !params.is_minibuffer()
+                    && self
+                        .prepared_viewports
+                        .has_computed(frame_id, DisplayWindowId::new(params.window_id))
+                    && params.display_line_numbers == crate::types::DisplayLineNumbersMode::Off
+                {
+                    let mut geometry = BufferWindowGeometryRequest::new(
+                        params,
+                        layout_box,
+                        params.char_width,
+                        params.char_height,
+                    )
+                    .into_geometry(
+                        crate::display_row::walk_state::LineNumberFieldLayout::new(
+                            0,
+                            params.char_width,
+                        ),
+                    );
+                    if params.window_system
+                        && params.measurement_rows.is_none()
+                        && params.measurement_pixels.is_none()
+                        && params.source_extent == crate::types::WindowSourceExtent::Viewport
+                        && let Some(buffer) = evaluator
+                            .buffer_manager()
+                            .get(neovm_core::buffer::BufferId(params.buffer_id))
+                        && let Some(metrics) = self.font_metrics.as_mut()
                     {
-                        let reused = scroll.as_ref().map_or(0, |replay| replay.reused_rows.len());
-                        if let Some((replay, faces, sources)) =
-                            self.prepared_viewports.scroll_replay(
-                                frame_id,
-                                DisplayWindowId::new(params.window_id),
-                                key,
-                                reused,
+                        let start =
+                            neovm_core::buffer::CharPos0::new(key.window_start.max(0) as usize);
+                        let view =
+                            crate::neovm_bridge::BorrowedLayoutBuffer::for_window_with_symbols(
+                                buffer,
+                                evaluator.variables(),
+                                start,
+                                1,
+                                crate::display_property::DisplayPropertyTarget::Graphical,
+                                evaluator.symbol_mode(),
+                            );
+                        if let Some(face_line) =
+                            crate::buffer_source::window_render::shorter_face_line_at_window_start(
+                                &view,
+                                params.window_id as u64,
+                                start,
+                                default_resolved,
+                                self.font_sizing,
+                                metrics,
                             )
                         {
-                            if let Some(sources) = sources {
-                                lisp_ledger
-                                    .replay_sources
-                                    .insert(DisplayWindowId::new(params.window_id), sources);
-                            }
-                            scroll = Some(replay);
-                            prepared_faces = Some(faces);
-                            is_edit = false;
+                            geometry.widen_body_for_shorter_face(face_line);
                         }
                     }
-                    if cursor_only.is_none()
-                        && !is_edit
-                        && !params.is_minibuffer()
-                        && self
-                            .prepared_viewports
-                            .has_computed(frame_id, DisplayWindowId::new(params.window_id))
-                        && params.display_line_numbers == crate::types::DisplayLineNumbersMode::Off
-                    {
-                        let geometry = BufferWindowGeometryRequest::new(
-                            params,
-                            layout_box,
-                            params.char_width,
-                            params.char_height,
-                        )
-                        .into_geometry(
-                            crate::display_row::walk_state::LineNumberFieldLayout::new(
-                                0,
-                                params.char_width,
-                            ),
-                        );
-                        let projected = scroll
-                            .is_none()
-                            .then(|| {
-                                self.retained_window_matrices
-                                    .get(&DisplayWindowId::new(params.window_id))
-                                    .and_then(|previous| {
-                                        previous.prepared_projection_prefix(
-                                            key,
-                                            geometry.text_y - geometry.vscroll - params.bounds.y,
-                                        )
-                                    })
-                            })
-                            .flatten();
-                        let prefix_sources = lisp_ledger
-                            .replay_sources
-                            .get(&DisplayWindowId::new(params.window_id))
-                            .cloned()
-                            .or_else(|| {
-                                self.frame_visual_histories
-                                    .get(frame_id)
-                                    .and_then(|history| {
-                                        history.cursor_sources_for(DisplayWindowId::new(
-                                            params.window_id,
-                                        ))
-                                    })
-                            });
-                        if let Some(prefix) = scroll.as_ref().or(projected.as_ref())
-                            && let Some(prefix_sources) = prefix_sources
-                            && let Some((replay, faces, sources)) =
-                                self.prepared_viewports.complete_forward_scroll(
-                                    frame_id,
-                                    DisplayWindowId::new(params.window_id),
-                                    key,
-                                    prefix,
-                                    geometry,
-                                    &committed_face_arena,
-                                    params.force_start,
-                                    prefix_sources,
-                                )
-                        {
-                            if let Some(sources) = sources {
-                                lisp_ledger
-                                    .replay_sources
-                                    .insert(DisplayWindowId::new(params.window_id), sources);
-                            }
-                            cursor_only = Some(replay);
-                            prepared_faces = Some(faces);
-                            scroll = None;
-                        }
-                    }
-                    // A cursor-only decline or edit can discover a new viewport
-                    // while measuring. Admit all retained row faces in Phase A
-                    // so a later scroll continuation can reuse any of those rows
-                    // -- but only while a continuation could reuse them at all:
-                    // after a face/font/display change their IDs name stale
-                    // realizations of faces the fresh walk re-realizes.
-                    let scroll_continuation_faces = (cursor_only.is_none()
-                        && (scroll.is_none() || is_edit))
+                    let projected = scroll
+                        .is_none()
                         .then(|| {
                             self.retained_window_matrices
                                 .get(&DisplayWindowId::new(params.window_id))
+                                .and_then(|previous| {
+                                    previous.prepared_projection_prefix(
+                                        key,
+                                        geometry.text_y - geometry.vscroll - params.bounds.y,
+                                    )
+                                })
                         })
-                        .flatten()
-                        .and_then(|previous| {
-                            previous
-                                .continuation_candidate_rows(key)
-                                .map(|rows| (previous.face_generation, rows))
+                        .flatten();
+                    let prefix_sources = lisp_ledger
+                        .replay_sources
+                        .get(&DisplayWindowId::new(params.window_id))
+                        .cloned()
+                        .or_else(|| {
+                            self.frame_visual_histories
+                                .get(frame_id)
+                                .and_then(|history| {
+                                    history
+                                        .cursor_sources_for(DisplayWindowId::new(params.window_id))
+                                })
                         });
-                    IncrementalWindowPlan {
-                        prepared_faces,
-                        cursor_only,
-                        scroll,
-                        is_edit,
-                        retry_admitted_faces: None,
-                        scroll_continuation_faces,
+                    if let Some(prefix) = scroll.as_ref().or(projected.as_ref())
+                        && let Some(prefix_sources) = prefix_sources
+                        && let Some((replay, faces, sources)) =
+                            self.prepared_viewports.complete_forward_scroll(
+                                frame_id,
+                                DisplayWindowId::new(params.window_id),
+                                key,
+                                prefix,
+                                geometry,
+                                &committed_face_arena,
+                                params.force_start,
+                                prefix_sources,
+                            )
+                    {
+                        if let Some(sources) = sources {
+                            lisp_ledger
+                                .replay_sources
+                                .insert(DisplayWindowId::new(params.window_id), sources);
+                        }
+                        cursor_only = Some(replay);
+                        prepared_faces = Some(faces);
+                        scroll = None;
                     }
-                })
-                .collect();
+                }
+                // A cursor-only decline or edit can discover a new viewport
+                // while measuring. Admit all retained row faces in Phase A
+                // so a later scroll continuation can reuse any of those rows
+                // -- but only while a continuation could reuse them at all:
+                // after a face/font/display change their IDs name stale
+                // realizations of faces the fresh walk re-realizes.
+                let scroll_continuation_faces = (cursor_only.is_none()
+                    && (scroll.is_none() || is_edit))
+                    .then(|| {
+                        self.retained_window_matrices
+                            .get(&DisplayWindowId::new(params.window_id))
+                    })
+                    .flatten()
+                    .and_then(|previous| {
+                        previous
+                            .continuation_candidate_rows(key)
+                            .map(|rows| (previous.face_generation, rows))
+                    });
+                window_plans.push(IncrementalWindowPlan {
+                    prepared_faces,
+                    cursor_only,
+                    scroll,
+                    is_edit,
+                    retry_admitted_faces: None,
+                    scroll_continuation_faces,
+                });
+            }
 
             // Admit all prior-frame face identities as one atomic batch before
             // the tab bar or any window can mint fresh IDs. A stale retained

@@ -871,6 +871,60 @@ fn idle_worker_fractional_scroll_preserves_mixed_face_geometry() {
     }
 }
 
+#[test]
+fn idle_worker_fractional_scroll_widens_for_shorter_face_at_window_start() {
+    let line = "ordinary offscreen text\n";
+    let (mut eval, frame, buffer, window) = incr_editing_frame(&line.repeat(300), 800, 600);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    eval.eval_str(
+        "(progn
+            (put-text-property 1 70 'face '(:height 80))
+            (put-text-property 277 690 'face '(:height 80 :weight bold)))",
+    )
+    .unwrap();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while engine.maintain_scroll_coverage(&eval).is_some() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    for step in [0usize, 1] {
+        let start = step * line.len();
+        scroll_window_to(
+            &mut eval,
+            frame,
+            window,
+            buffer,
+            start as i64 + 1,
+            start + 5 * line.len(),
+        );
+        if let neovm_core::window::Window::Leaf {
+            force_start,
+            vscroll,
+            ..
+        } = eval
+            .frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .find_window_mut(window)
+            .unwrap()
+        {
+            *force_start = true;
+            *vscroll = -4;
+        }
+        engine.layout_frame_rust(&mut eval, frame);
+        assert_eq!(engine.last_layout_stats().prepared_windows, 1);
+        let actual = selected_window_layout_trace(&eval, &engine, frame);
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+        fresh.layout_frame_rust(&mut eval, frame);
+        assert_eq!(actual, selected_window_layout_trace(&eval, &fresh, frame));
+    }
+}
+
 fn idle_first_visit_projected(
     backward: bool,
     redisplay_between_steps: bool,
