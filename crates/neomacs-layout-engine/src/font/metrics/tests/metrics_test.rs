@@ -1072,6 +1072,9 @@ struct ChangingCatalogBackend {
     catalog: crate::font::metrics::test_catalog::TestFontCatalog,
     pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
     advances: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// `0` keeps each poll as its own event. A shared non-zero value is one
+    /// process-wide publication seen by every service.
+    generation: u64,
 }
 
 struct RecordingFamilyShaper {
@@ -1182,6 +1185,10 @@ impl crate::font_backend::FontBackend for ChangingCatalogBackend {
             crate::font::catalog::FontCatalogChange::Unchanged
         }
     }
+
+    fn published_catalog_generation(&self) -> u64 {
+        self.generation
+    }
 }
 
 #[test]
@@ -1194,6 +1201,7 @@ fn font_metrics_consumes_native_catalog_changes_once_at_a_safe_point() {
             catalog: crate::font::metrics::test_catalog::standard_catalog().clone(),
             pending: std::sync::Arc::clone(&pending),
             advances: std::sync::Arc::clone(&advances),
+            generation: 0,
         }));
     let initial = svc.font_catalog_generation();
 
@@ -1227,6 +1235,7 @@ fn native_catalog_and_wayland_preferences_coalesce_into_one_font_generation() {
             catalog: crate::font::metrics::test_catalog::standard_catalog().clone(),
             pending: Arc::clone(&pending),
             advances: Arc::clone(&advances),
+            generation: 0,
         }));
     let display = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland);
     service.set_display_identity(display.clone());
@@ -1779,6 +1788,7 @@ fn catalog_advance_republishes_records_under_stable_ids() {
             catalog: crate::font::metrics::test_catalog::standard_catalog().clone(),
             pending: std::sync::Arc::clone(&pending),
             advances: std::sync::Arc::clone(&advances),
+            generation: 0,
         }));
     let identity = ResolvedFontIdentity::from_file("/fonts/replaced.ttf", 0, None);
     let replay = swash_replay_for(&identity);
@@ -5184,6 +5194,108 @@ fn second_service_catalog_sync_keeps_the_moved_front() {
         crate::font::fallback_order::fallback_order_groups_for_frame(33),
         1,
         "a second service's catalog sync of the same render edge must not clear fallback orders"
+    );
+}
+
+#[test]
+fn second_service_native_catalog_publication_keeps_the_moved_front() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize},
+    };
+    let catalog = crate::font::metrics::test_catalog::standard_catalog().clone();
+    let mut main = make_svc();
+    let mut font_at = make_svc();
+    main.font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog: catalog.clone(),
+            pending: Arc::new(AtomicBool::new(true)),
+            advances: Arc::new(AtomicUsize::new(0)),
+            generation: 1,
+        }));
+    font_at
+        .font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog,
+            pending: Arc::new(AtomicBool::new(true)),
+            advances: Arc::new(AtomicUsize::new(0)),
+            generation: 1,
+        }));
+    assert!(main.synchronize_font_catalog().catalog.changed());
+    crate::font::fallback_order::promote_fallback(
+        &crate::font::fallback_order::FallbackOrderKey {
+            fontset: crate::font::fallback_order::FaceFontsetId {
+                frame: 34,
+                face: 1,
+                face_epoch: 1,
+            },
+            family: "Probe".to_string(),
+            weight: 400,
+            slant: 0,
+            width: 100,
+            size: None,
+            fontset_generation: 1,
+        },
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(34),
+        1
+    );
+    assert!(font_at.synchronize_font_catalog().catalog.changed());
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(34),
+        1,
+        "a second service observing the same catalog publication must not clear fallback orders"
+    );
+}
+
+#[test]
+fn second_service_unshared_catalog_event_clears_the_moved_front() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize},
+    };
+    let catalog = crate::font::metrics::test_catalog::standard_catalog().clone();
+    let mut main = make_svc();
+    let mut font_at = make_svc();
+    main.font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog: catalog.clone(),
+            pending: Arc::new(AtomicBool::new(true)),
+            advances: Arc::new(AtomicUsize::new(0)),
+            generation: 0,
+        }));
+    font_at
+        .font_resolver
+        .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog,
+            pending: Arc::new(AtomicBool::new(true)),
+            advances: Arc::new(AtomicUsize::new(0)),
+            generation: 0,
+        }));
+    assert!(main.synchronize_font_catalog().catalog.changed());
+    crate::font::fallback_order::promote_fallback(
+        &crate::font::fallback_order::FallbackOrderKey {
+            fontset: crate::font::fallback_order::FaceFontsetId {
+                frame: 35,
+                face: 1,
+                face_epoch: 1,
+            },
+            family: "Probe".to_string(),
+            weight: 400,
+            slant: 0,
+            width: 100,
+            size: None,
+            fontset_generation: 1,
+        },
+        &neovm_core::emacs_core::fontset::FontSpecEntry::ExplicitNone,
+    );
+    assert!(font_at.synchronize_font_catalog().catalog.changed());
+    assert_eq!(
+        crate::font::fallback_order::fallback_order_groups_for_frame(35),
+        0,
+        "generation 0 is not a shared publication, so the second Changed poll still clears orders"
     );
 }
 

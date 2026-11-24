@@ -302,4 +302,8 @@ impl FontBackend for FontconfigBackend {
         }
         self.catalog.poll()
     }
+
+    fn published_catalog_generation(&self) -> u64 {
+        self.catalog.published_generation()
+    }
 }

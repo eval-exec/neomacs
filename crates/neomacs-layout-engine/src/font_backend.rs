@@ -652,6 +652,13 @@ pub trait FontBackend: Send {
     /// polling; this method is called from the evaluator redisplay path.
     fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange;
 
+    /// Process-wide id of the native catalog publication this backend
+    /// observes. `0` means the backend has no shared counter, so each
+    /// `Changed` poll is its own event.
+    fn published_catalog_generation(&self) -> u64 {
+        0
+    }
+
     /// Advance to a fresh view of the platform font catalog.
     ///
     /// Native font objects can disappear or be replaced when the process font

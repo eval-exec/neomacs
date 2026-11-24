@@ -1039,6 +1039,31 @@ fn process_symbol_policy_changed(use_primary_font: bool, symbol_ranges: &[(u32, 
     }
 }
 
+/// `0` means the backend has no shared counter, so each `Changed` poll is
+/// its own process-wide event. A non-zero value is one publication: only the
+/// first service to advance the applied id clears orders.
+fn process_catalog_generation_changed(generation: u64) -> bool {
+    if generation == 0 {
+        return true;
+    }
+    static APPLIED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut seen = APPLIED.load(std::sync::atomic::Ordering::Acquire);
+    loop {
+        if generation <= seen {
+            return false;
+        }
+        match APPLIED.compare_exchange(
+            seen,
+            generation,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(current) => seen = current,
+        }
+    }
+}
+
 fn process_render_options_changed(
     options: Option<neomacs_display_protocol::DesktopFontRenderOptions>,
 ) -> bool {
@@ -1544,13 +1569,23 @@ impl FontMetricsService {
                 }
                 self.font_file_cache = FontFileCache::new();
             }
-            // A native catalog change drops every frame's orders. A render
-            // edge drops them only when this process has not applied these
-            // options yet, so the font-at host's later sync stays local.
+            // A native catalog publication drops every frame's orders once
+            // per process. Each service still observes `Changed`, but the
+            // second observation of the same generation only clears that
+            // service. A backend that reports generation 0 has no shared
+            // counter, so each of its `Changed` polls still clears globally.
+            // A render edge drops orders only when this process has not
+            // applied these options yet. Both keys update even when the
+            // other edge also clears: skipping either one would leave the
+            // next service believing that publication was still new.
+            let native_changed = matches!(native_change, FontCatalogChange::Changed);
+            let process_catalog_changed = native_changed
+                && process_catalog_generation_changed(
+                    self.font_resolver.published_catalog_generation(),
+                );
             let process_rendering_changed =
                 policy_changed && process_render_options_changed(options);
-            let clear_orders =
-                matches!(native_change, FontCatalogChange::Changed) || process_rendering_changed;
+            let clear_orders = process_catalog_changed || process_rendering_changed;
             if clear_orders {
                 self.clear_caches();
             } else {

@@ -295,6 +295,10 @@ impl FontResolver {
         self.backend.poll_catalog_change()
     }
 
+    pub(crate) fn published_catalog_generation(&self) -> u64 {
+        self.backend.published_catalog_generation()
+    }
+
     /// List platform families in native discovery order, removing duplicate
     /// names just as GNU's frame-level font-driver dispatcher does.
     pub fn list_families(&self) -> Vec<FontFamilyName> {
@@ -1274,6 +1278,9 @@ impl FontResolver {
         if let Some(policy) = &mut self.worker_policy {
             policy.admitted_queries.clear();
         }
+        // On Linux this also drops the process-wide fontconfig query cache,
+        // so a worker rebuild invalidates main's queries. Fallback orders
+        // are not cleared here.
         self.backend.advance_catalog_generation();
         #[cfg(target_os = "linux")]
         self.render_options_cache
