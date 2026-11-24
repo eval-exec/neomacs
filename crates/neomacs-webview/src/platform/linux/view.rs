@@ -369,6 +369,13 @@ struct BufferCallbackData {
     wake: WebViewWake,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CallbackDataState {
+    Connected,
+    Disconnected,
+    LeakedOnDisconnectFailure,
+}
+
 /// Owns the heap-allocated `BufferCallbackData` together with every native
 /// callback handle (`WPEView` render sink and `WebKitWebView` GObject signal
 /// handlers) that borrows its raw pointer.
@@ -380,7 +387,7 @@ struct ViewCallbackRegistration {
     data: NonNull<BufferCallbackData>,
     decide_policy_handler_id: plat::gulong,
     process_failed_handler_id: plat::gulong,
-    disconnected: bool,
+    state: CallbackDataState,
 }
 
 impl ViewCallbackRegistration {
@@ -393,7 +400,7 @@ impl ViewCallbackRegistration {
             data,
             decide_policy_handler_id,
             process_failed_handler_id,
-            disconnected: false,
+            state: CallbackDataState::Connected,
         }
     }
 
@@ -401,13 +408,19 @@ impl ViewCallbackRegistration {
         self.data.as_ptr()
     }
 
-    /// Safety: caller must be on the reactor thread with no active C callback
-    /// borrowing `self.data`.
+    /// Borrow the owned callback state immutably.
+    ///
+    /// # Safety
+    /// Caller must be on the reactor thread with no active C callback
+    /// mutably borrowing `self.data`.
     unsafe fn as_ref(&self) -> &BufferCallbackData {
         self.data.as_ref()
     }
 
-    /// Safety: caller must be on the reactor thread with no active C callback
+    /// Borrow the owned callback state mutably.
+    ///
+    /// # Safety
+    /// Caller must be on the reactor thread with no active C callback
     /// borrowing `self.data`.
     unsafe fn as_mut(&mut self) -> &mut BufferCallbackData {
         self.data.as_mut()
@@ -416,19 +429,27 @@ impl ViewCallbackRegistration {
     /// Clear the WPEView render sink and disconnect every WebKitWebView signal
     /// handler referencing `self.data`.
     ///
-    /// Safety: `web_view` and `wpe_view` must still be valid GObjects (or null)
-    /// owned on the reactor thread.
+    /// If clearing the render sink fails (because the sink `RefCell` is
+    /// currently borrowed), this fails closed by marking `self.data` leaked so
+    /// [`Drop`] will not free userdata while a native callback may still hold
+    /// it.
+    ///
+    /// # Safety
+    /// `web_view` and `wpe_view` must still be valid GObjects (or null) owned
+    /// on the reactor thread.
     unsafe fn disconnect(
         &mut self,
         web_view: *mut wk::WebKitWebView,
         wpe_view: *mut plat::WPEView,
     ) {
-        if self.disconnected {
+        if self.state != CallbackDataState::Connected {
             return;
         }
-        if !wpe_view.is_null() {
-            native::clear_render_buffer_callback(wpe_view);
-        }
+        let sink_cleared = if !wpe_view.is_null() {
+            native::clear_render_buffer_callback(wpe_view)
+        } else {
+            true
+        };
         if !web_view.is_null() {
             for handler_id in [
                 &mut self.decide_policy_handler_id,
@@ -442,20 +463,41 @@ impl ViewCallbackRegistration {
                 }
             }
         }
-        self.disconnected = true;
+        if sink_cleared {
+            self.state = CallbackDataState::Disconnected;
+        } else {
+            tracing::error!(
+                "WpeWebView::drop: failed to clear WPEView render sink; leaking BufferCallbackData to avoid use-after-free"
+            );
+            self.state = CallbackDataState::LeakedOnDisconnectFailure;
+        }
     }
 }
 
 impl Drop for ViewCallbackRegistration {
     fn drop(&mut self) {
-        debug_assert!(
-            self.disconnected,
-            "ViewCallbackRegistration dropped without disconnecting native callbacks"
-        );
-        // SAFETY: `WpeWebView::drop` disconnected every native callback handle
-        // and unreferenced `web_view` before this field drops.
-        unsafe {
-            let _ = Box::from_raw(self.data.as_ptr());
+        match self.state {
+            CallbackDataState::Disconnected => {
+                // SAFETY: `WpeWebView::drop` cleared the render sink,
+                // disconnected every GObject signal handler, and unreferenced
+                // `web_view` before this field drops.
+                unsafe {
+                    let _ = Box::from_raw(self.data.as_ptr());
+                }
+            }
+            CallbackDataState::LeakedOnDisconnectFailure => {
+                // Fail closed: the render sink could not be cleared because it
+                // was still borrowed, so leak `BufferCallbackData` instead of
+                // risking a use-after-free.
+            }
+            CallbackDataState::Connected => {
+                debug_assert!(
+                    false,
+                    "ViewCallbackRegistration dropped without disconnecting native callbacks"
+                );
+                // Fail closed in release builds as well: never free userdata
+                // that may still be registered with live native callbacks.
+            }
         }
     }
 }
@@ -597,14 +639,14 @@ impl WpeWebView {
             // Allocate callback data
             // Store raw pixel data in callback, create textures on main thread
             let events = Rc::new(RefCell::new(Vec::new()));
-            let callback_data = Box::into_raw(Box::new(BufferCallbackData {
+            let callback_data = NonNull::from(Box::leak(Box::new(BufferCallbackData {
                 view_id: view_id.get(),
                 latest_frame: RefCell::new(None),
                 frame_transport: creation.frame_transport,
                 generation: creation.generation,
                 events: events.clone(),
                 wake: creation.wake.clone(),
-            }));
+            })));
             tracing::debug!("WpeWebView::new: callback_data={:?}", callback_data);
 
             // The Neomacs display creates our WPEView subclass. Its
@@ -613,9 +655,9 @@ impl WpeWebView {
             if !native::set_render_buffer_callback(
                 wpe_view.cast(),
                 render_buffer_callback,
-                callback_data.cast(),
+                callback_data.as_ptr().cast(),
             ) {
-                let _ = Box::from_raw(callback_data);
+                let _ = Box::from_raw(callback_data.as_ptr());
                 plat::g_object_unref(web_view.cast());
                 return Err(DisplayError::WebKit(
                     "WPE display did not create the Rust frame-owning view".into(),
@@ -636,7 +678,7 @@ impl WpeWebView {
                     ) -> i32,
                     unsafe extern "C" fn(),
                 >(decide_policy_callback)),
-                callback_data as *mut _,
+                callback_data.as_ptr().cast(),
                 None,
                 0, // G_CONNECT_DEFAULT
             );
@@ -657,12 +699,12 @@ impl WpeWebView {
                     ),
                     unsafe extern "C" fn(),
                 >(web_process_terminated_callback)),
-                callback_data.cast(),
+                callback_data.as_ptr().cast(),
                 None,
                 0,
             );
             let callbacks = ViewCallbackRegistration::new(
-                NonNull::new_unchecked(callback_data),
+                callback_data,
                 decide_policy_handler_id,
                 process_failed_handler_id,
             );

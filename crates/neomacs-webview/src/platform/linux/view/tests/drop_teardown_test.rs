@@ -4,7 +4,7 @@ use super::super::NetworkSession;
 use super::super::engine::WpeBackend;
 use super::super::native;
 use super::super::sys::platform as plat;
-use super::{WpeFrameTransport, WpeViewCreation, WpeWebView};
+use super::{CallbackDataState, WpeFrameTransport, WpeViewCreation, WpeWebView};
 use crate::{
     StoragePartition, WebContentSize, WebProfileId, WebViewGeneration, WebViewId, WebViewPolicy,
     WebViewWake,
@@ -121,5 +121,53 @@ fn drop_disconnects_callbacks_even_when_external_gobject_ref_survives() {
             after, 0,
             "WpeWebView::drop must disconnect all WebKitWebView signal handlers referencing callback_data"
         );
+    }
+}
+
+#[test]
+fn disconnect_fails_closed_and_leaks_callback_data_when_render_sink_is_borrowed() {
+    let backend = unsafe { WpeBackend::new(ptr::null_mut()) }.expect("WPE backend");
+    let session = NetworkSession::create(&StoragePartition::Ephemeral(WebProfileId::new(2)), None)
+        .expect("ephemeral network session");
+    let mut view = WpeWebView::new(WpeViewCreation {
+        id: WebViewId::new(2),
+        generation: WebViewGeneration::new(1),
+        platform_display: backend.platform_display(),
+        network_session: session.raw(),
+        related_view: None,
+        size: WebContentSize::new(64, 64).expect("nonzero size"),
+        policy: &WebViewPolicy::default(),
+        frame_transport: WpeFrameTransport::SoftwarePixels,
+        wake: WebViewWake::noop(),
+    })
+    .expect("WPE webview");
+
+    let raw_web_view = view.web_view;
+    let raw_wpe_view = view.wpe_view;
+    let raw_callback_data = view.callbacks.as_ptr();
+    let _wpe_view_ref = unsafe { GObjectRefGuard::retain(raw_wpe_view.cast()) };
+
+    unsafe {
+        native::with_borrowed_render_buffer_sink(raw_wpe_view, || {
+            assert!(
+                !native::clear_render_buffer_callback(raw_wpe_view),
+                "clearing a borrowed render sink must report failure"
+            );
+            view.callbacks.disconnect(raw_web_view, raw_wpe_view);
+            assert_eq!(
+                view.callbacks.state,
+                CallbackDataState::LeakedOnDisconnectFailure
+            );
+        });
+    }
+
+    // Dropping `view` must not free `BufferCallbackData` after a failed sink
+    // clear. Verify the leaked allocation is still readable, then clear the
+    // sink and reclaim it cleanly so leak detectors stay happy.
+    drop(view);
+    unsafe {
+        assert_eq!((*raw_callback_data).view_id, 2);
+        assert!(native::clear_render_buffer_callback(raw_wpe_view));
+        let _ = Box::from_raw(raw_callback_data);
     }
 }

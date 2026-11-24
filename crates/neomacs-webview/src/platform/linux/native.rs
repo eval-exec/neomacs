@@ -447,6 +447,13 @@ pub(super) unsafe fn is_custom_view(view: *mut plat::WPEView) -> bool {
         ) != 0
 }
 
+/// Install the Rust render-buffer callback on a `NeomacsWpeView` instance.
+///
+/// # Safety
+/// - `view` must be either null or a valid `WPEView` GObject owned on the
+///   current reactor thread.
+/// - `user_data` must remain valid for every invocation of `callback` until
+///   [`clear_render_buffer_callback`] returns `true` or `view` is finalized.
 pub(super) unsafe fn set_render_buffer_callback(
     view: *mut plat::WPEView,
     callback: RenderBufferCallback,
@@ -466,14 +473,37 @@ pub(super) unsafe fn set_render_buffer_callback(
     true
 }
 
-pub(super) unsafe fn clear_render_buffer_callback(view: *mut plat::WPEView) {
+/// Clear the render-buffer callback on a `NeomacsWpeView` instance.
+///
+/// Returns `true` if the sink is cleared (or `view` is not a custom view), and
+/// `false` if the sink `RefCell` is currently borrowed and could not be
+/// cleared. Callers must fail closed (e.g. leak callback userdata) when this
+/// returns `false`.
+///
+/// # Safety
+/// `view` must be either null or a valid `WPEView` GObject owned on the current
+/// reactor thread.
+pub(super) unsafe fn clear_render_buffer_callback(view: *mut plat::WPEView) -> bool {
     if !is_custom_view(view) {
-        return;
+        return true;
     }
     let instance = &*(view as *mut <view_imp::NeomacsWpeView as ObjectSubclass>::Instance);
-    if let Ok(mut sink) = instance.imp().sink.try_borrow_mut() {
-        *sink = None;
-    }
+    let Ok(mut sink) = instance.imp().sink.try_borrow_mut() else {
+        return false;
+    };
+    *sink = None;
+    true
+}
+
+#[cfg(test)]
+pub(super) unsafe fn with_borrowed_render_buffer_sink<R>(
+    view: *mut plat::WPEView,
+    body: impl FnOnce() -> R,
+) -> R {
+    assert!(is_custom_view(view), "expected NeomacsWpeView");
+    let instance = &*(view as *mut <view_imp::NeomacsWpeView as ObjectSubclass>::Instance);
+    let _guard = instance.imp().sink.borrow();
+    body()
 }
 
 #[cfg(test)]
