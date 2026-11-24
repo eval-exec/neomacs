@@ -55,10 +55,11 @@ impl WorldTurn {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "pentry's World seat (L6.7b b3) is the caller")
-    )]
+    #[cfg(test)]
+    pub(crate) fn cut_for_test(identity: WorldTurnIdentity) -> Self {
+        Self::cut(identity)
+    }
+
     pub(crate) fn identity(&self) -> WorldTurnIdentity {
         self.identity
     }
@@ -67,10 +68,6 @@ impl WorldTurn {
 impl WorldReturned {
     /// End the group's interval: consume the turn so it goes back to the
     /// keeper. The seat stows the World host first.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "pentry's World seat (L6.7b b3) is the caller")
-    )]
     pub(crate) fn from_end(turn: WorldTurn) -> Self {
         Self {
             identity: turn.identity,

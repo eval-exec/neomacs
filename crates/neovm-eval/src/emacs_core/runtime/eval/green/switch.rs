@@ -1908,6 +1908,11 @@ fn stow_carried_state(baton: &Baton) {
 /// The World's thread-local state arrives on this OS thread with the Baton.
 fn unstow_carried_state(baton: &Baton) {
     if let Some(runtime) = baton.green_runtime().as_ref() {
+        assert_eq!(
+            runtime.carried_holder.get(),
+            super::CarriedHolder::Stowed,
+            "A-1: World carried TLS must be stowed before unstowing onto a Green owner"
+        );
         runtime.carried.borrow_mut().unstow();
     }
 }
@@ -1929,6 +1934,11 @@ fn unstow_owner_state(owner: &mut Context, baton: &Baton) {
         let Some(runtime) = runtime.as_ref() else {
             return;
         };
+        assert_eq!(
+            runtime.carried_holder.get(),
+            super::CarriedHolder::Stowed,
+            "A-1: World warm carriers must be stowed before unstowing onto a Green owner"
+        );
         runtime.carried_holder.set(super::CarriedHolder::Held {
             slab: owner_slab,
             thread: std::thread::current().id(),

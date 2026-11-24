@@ -275,6 +275,25 @@ impl Context {
             .is_some_and(|runtime| runtime.carried_holder.get() == CarriedHolder::Stowed)
     }
 
+    /// Whether this Context on this OS thread currently holds the Green
+    /// World's carried TLS and warm `OwnerCarried`.
+    ///
+    /// Returns `false` for a Sim World or when the carriers are stowed or held
+    /// by another owner/thread.
+    #[cold]
+    pub(in crate::emacs_core::eval) fn holds_serial_world_here(&self) -> bool {
+        let Some(my_slab) = self.owner.slab().map(OwnerSlabId::from_slab) else {
+            return false;
+        };
+        let expected_holder = CarriedHolder::Held {
+            slab: my_slab,
+            thread: std::thread::current().id(),
+        };
+        self.green_runtime_ref()
+            .as_ref()
+            .is_some_and(|runtime| runtime.carried_holder.get() == expected_holder)
+    }
+
     /// Move the World's carried TLS and warm `OwnerCarried` into `GreenRuntime`
     /// during a serial detach, only when this Context on this OS thread
     /// currently holds them.
@@ -284,18 +303,7 @@ impl Context {
     /// unparked main) or is already stowed in `GreenRuntime`.
     #[cold]
     pub(in crate::emacs_core::eval) fn stow_serial_world_state(&mut self) -> bool {
-        let Some(my_slab) = self.owner.slab().map(OwnerSlabId::from_slab) else {
-            return false;
-        };
-        let expected_holder = CarriedHolder::Held {
-            slab: my_slab,
-            thread: std::thread::current().id(),
-        };
-        let holds_world_here = self
-            .green_runtime_ref()
-            .as_ref()
-            .is_some_and(|runtime| runtime.carried_holder.get() == expected_holder);
-        if !holds_world_here {
+        if !self.holds_serial_world_here() {
             return false;
         }
         let warm = owner_carried::OwnerCarried::take(self);

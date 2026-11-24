@@ -427,6 +427,7 @@ impl KeeperPort for ChannelPort<'_> {
 /// from the lend until the turn goes back. `Send`: it travels with the turn
 /// between Baton threads, so an unwind on any of them reports the lost turn
 /// instead of leaving the keeper waiting.
+#[derive(Debug)]
 #[must_use = "give the World turn back through the group port"]
 pub(crate) struct WorldLend {
     inbox: mpsc::Sender<KeeperMsg>,
@@ -434,6 +435,20 @@ pub(crate) struct WorldLend {
 }
 
 static_assertions::assert_impl_all!(WorldLend: Send);
+
+impl WorldLend {
+    #[cfg(test)]
+    pub(crate) fn for_test(inbox: mpsc::Sender<KeeperMsg>) -> Self {
+        Self { inbox, armed: true }
+    }
+
+    /// End the group's interval from whichever Baton OS thread currently holds
+    /// the turn: disarms the abandon guard and sends `WorldReturn`.
+    pub(crate) fn give_back(mut self, returned: WorldReturned) {
+        self.armed = false;
+        let _ = self.inbox.send(KeeperMsg::WorldReturn { returned });
+    }
+}
 
 impl Drop for WorldLend {
     fn drop(&mut self) {
@@ -459,7 +474,7 @@ pub(crate) struct GroupPort {
 
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "pentry's World seat (L6.7b b3) is the caller")
+    expect(dead_code, reason = "L6.7b b4 (Green switch points) is the caller")
 )]
 impl GroupPort {
     pub(crate) fn new(inbox: mpsc::Sender<KeeperMsg>, world: mpsc::Receiver<GroupMsg>) -> Self {
@@ -490,9 +505,8 @@ impl GroupPort {
     }
 
     /// End the group's interval: the turn goes back and its guard disarms.
-    pub(crate) fn give_back(&mut self, mut lend: WorldLend, returned: WorldReturned) {
-        lend.armed = false;
-        let _ = self.inbox.send(KeeperMsg::WorldReturn { returned });
+    pub(crate) fn give_back(&mut self, lend: WorldLend, returned: WorldReturned) {
+        lend.give_back(returned);
     }
 
     /// The group leaves the era.
