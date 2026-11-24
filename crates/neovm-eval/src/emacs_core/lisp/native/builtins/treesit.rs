@@ -2645,10 +2645,16 @@ pub fn builtin_treesit_parser_set_included_ranges(
     expect_args("treesit-parser-set-included-ranges", &args, 2)?;
     let parser_id = expect_live_parser_id(eval, "treesit-parser-set-included-ranges", args[0])?;
     let current_ranges = parser_record_slot(args[0], runtime::PARSER_SLOT_INCLUDED_RANGES)?;
-    // GNU `Fequal` (`src/treesit.c:2737`) walks a list spine in a loop.
-    // `Value ==` counts each cdr toward a depth of 200 and then returns
-    // false, so a long range list would reparse. `try_equal_value_swp` is
-    // the same walk `equal` uses.
+    // GNU `CHECK_CONS` runs before `Fequal` (`src/treesit.c:2734-2738`).
+    // Nil skips the check. Any other non-cons signals `consp`.
+    if !args[1].is_nil() && !args[1].is_cons() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("consp"), args[1]],
+        ));
+    }
+    // `try_equal_value_swp` is Lisp `equal`: the spine walk, and a signal
+    // when a car nest passes depth 200.
     if neovm_value::value::try_equal_value_swp(
         &current_ranges,
         &args[1],

@@ -1031,6 +1031,8 @@ fn treesit_parser_set_included_ranges_accepts_valid_fixnum_ranges() {
     );
 }
 
+/// GNU `CHECK_CONS` (`src/treesit.c:2734-2735`) runs before `Fequal` when
+/// ranges is non-nil. A symbol signals `(wrong-type-argument consp X)`.
 #[test]
 fn treesit_parser_set_included_ranges_requires_proper_list() {
     let (mut eval, parser) = eval_with_json_parser("{}");
@@ -1040,7 +1042,24 @@ fn treesit_parser_set_included_ranges_requires_proper_list() {
         builtin_treesit_parser_set_included_ranges(&mut eval, vec![parser, bad_ranges]),
         "wrong-type-argument",
     );
-    assert_eq!(sig.data, vec![Value::symbol("listp"), bad_ranges]);
+    assert_eq!(sig.data, vec![Value::symbol("consp"), bad_ranges]);
+}
+
+/// A dotted list is a cons, so `CHECK_CONS` passes. `CHECK_LIST_END`
+/// (`lisp.h`) then signals `listp` on the whole ranges object.
+#[test]
+fn treesit_parser_set_included_ranges_rejects_dotted_list() {
+    let (mut eval, parser) = eval_with_json_parser("{}");
+    let ranges = Value::cons(
+        Value::cons(Value::fixnum(1), Value::fixnum(2)),
+        Value::symbol("dot"),
+    );
+
+    let sig = expect_signal(
+        builtin_treesit_parser_set_included_ranges(&mut eval, vec![parser, ranges]),
+        "wrong-type-argument",
+    );
+    assert_eq!(sig.data, vec![Value::symbol("listp"), ranges]);
 }
 
 #[test]
