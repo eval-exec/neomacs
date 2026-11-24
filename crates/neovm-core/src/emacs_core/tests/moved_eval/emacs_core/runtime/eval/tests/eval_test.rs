@@ -26804,14 +26804,16 @@ fn display_affecting_var_set_bumps_display_var_change_count() {
     );
 }
 
-/// `setq` of `overlay-arrow-string` must not wake a retained row.
+/// `setq` of an overlay-arrow string or position must not wake a retained row.
 ///
-/// GNU's bare redisplay keeps the old arrow glyphs: `try_cursor_movement`
-/// reuses the matrix (`xdisp.c:20920-20931`) and `update_overlay_arrows`
-/// records the new string (`xdisp.c:18135`). Attested frames stay on `"=>"`
-/// until `force-window-update` (md5 `a826e3eae03c3b50534d180e994824a9`).
-/// `overlay-arrow-position` stays on the display-var list until a marker-move
-/// probe exists.
+/// GNU compares the marker position with `last-arrow-position`
+/// (`xdisp.c:17115-17127`) and sets the buffer redisplay bit, which
+/// `current_matrix_up_to_date_p` ignores (`xdisp.c:20557-20563`).
+/// `try_cursor_movement` reuses the matrix (`xdisp.c:20920-20931`) and
+/// `update_overlay_arrows` records the new position (`xdisp.c:17158`,
+/// `:18135`). Attested frames stay on `"=>ta"` until `force-window-update`
+/// paints `"=>mma"` (X11 move pair md5 `65014cfb2125ddea0357fe41ece8a954`,
+/// force `dc516dab82e0c7faa83affc76fa14423`).
 #[test]
 fn overlay_arrow_string_setq_does_not_bump_display_var_change_count() {
     let mut eval = crate::test_utils::new_context();
@@ -26823,11 +26825,28 @@ fn overlay_arrow_string_setq_does_not_bump_display_var_change_count() {
         before,
         "overlay-arrow-string must not bump display_var_change_count"
     );
-    eval.eval_str("(setq overlay-arrow-position nil)")
+    eval.eval_str("(insert \"alpha\\nbeta\\ngamma\\ndelta\\n\")")
+        .expect("insert");
+    let before = eval.display_var_change_count_for_test();
+    eval.eval_str("(setq overlay-arrow-position (copy-marker 12))")
         .expect("setq overlay-arrow-position");
+    assert_eq!(
+        eval.display_var_change_count_for_test(),
+        before,
+        "overlay-arrow-position must not bump display_var_change_count"
+    );
+    eval.eval_str("(set-marker overlay-arrow-position 7)")
+        .expect("set-marker overlay-arrow-position");
+    assert_eq!(
+        eval.display_var_change_count_for_test(),
+        before,
+        "moving the overlay-arrow marker must not bump display_var_change_count"
+    );
+    eval.eval_str("(setq truncate-lines t)")
+        .expect("setq truncate-lines");
     assert!(
         eval.display_var_change_count_for_test() > before,
-        "overlay-arrow-position stays a display-var wake"
+        "truncate-lines stays a display-var wake"
     );
 }
 
