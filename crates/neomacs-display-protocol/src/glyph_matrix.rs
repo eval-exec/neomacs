@@ -2195,6 +2195,10 @@ pub struct FrameDisplayState {
     pub backgrounds: Vec<BackgroundItem>,
     /// Face-backed rectangular fills for redisplay-owned blank cells.
     pub face_fills: Vec<FaceFillItem>,
+    /// Empty fringe column background rectangles (GNU `fringe` face background,
+    /// painted over the window background and below per-row fringe bitmaps).
+    #[serde(default)]
+    pub fringe_backgrounds: Vec<BackgroundItem>,
     /// Window border/divider rectangles.
     pub borders: Vec<BorderItem>,
     /// Cursor entries.
@@ -2738,6 +2742,7 @@ impl FrameDisplayState {
             transition_hints: Vec::new(),
             backgrounds: Vec::new(),
             face_fills: Vec::new(),
+            fringe_backgrounds: Vec::new(),
             borders: Vec::new(),
             cursors: Vec::new(),
             cursor_effects_by_window: HashMap::default(),
@@ -3117,6 +3122,15 @@ impl FrameDisplayState {
             push(FrameGlyph::Background {
                 bounds: fill.bounds,
                 color: face_data.bg,
+            });
+        }
+        // Fringe column backgrounds sit above the full-window background and
+        // face fills, and below per-row fringe bitmaps, text, borders, and
+        // scroll bars — matching GNU `draw_window_fringes` (src/fringe.c).
+        for bg in &self.fringe_backgrounds {
+            push(FrameGlyph::Background {
+                bounds: bg.bounds,
+                color: bg.color,
             });
         }
 

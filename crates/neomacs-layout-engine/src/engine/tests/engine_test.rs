@@ -6189,6 +6189,197 @@ fn fringe_bitmap_text_property_spec_face_merges_over_the_fringe_face() {
     assert_fringe_paint(&paint, &[(FringeSide::Left, RED, grey95())]);
 }
 
+/// Issue #834 (N2): empty fringe columns on a window-system frame emit
+/// background rectangles painted with the window's resolved `fringe` face
+/// background (including buffer-local `face-remapping-alist` remapping of
+/// `fringe`, matching GNU `draw_window_fringes` in `src/fringe.c`).
+#[test]
+fn fringe_empty_column_backgrounds_use_the_window_fringe_face() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("c834-empty-fringe-bg", 640, 200, buf_id);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_window_system(Some(Value::symbol("neo")));
+    }
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    eval.eval_str(FRINGE_FACE_SETUP).expect("fringe face setup");
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("plain line without fringe bitmap\n");
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let left_rect = state
+        .fringe_backgrounds
+        .iter()
+        .find(|bg| bg.bounds.x == 0.0 && bg.bounds.y == 0.0)
+        .expect("left fringe column background");
+    assert_eq!(left_rect.color, grey95());
+    assert!(left_rect.bounds.width > 0.0 && left_rect.bounds.height > 0.0);
+    assert!(
+        state
+            .fringe_backgrounds
+            .iter()
+            .any(|bg| bg.bounds.x > left_rect.bounds.width
+                && bg.bounds.y == 0.0
+                && bg.color == grey95()),
+        "right fringe column background should also paint with grey95"
+    );
+
+    // Remapping `fringe` buffer-locally must update the empty fringe columns.
+    let cyan = Color::from_pixel(0x0000FFFF);
+    eval.eval_str(
+        r##"(set (make-local-variable 'face-remapping-alist) '((fringe (:background "#00ffff") fringe)))"##,
+    )
+    .expect("remap fringe");
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let remapped = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("remapped display state");
+    let left_remapped = remapped
+        .fringe_backgrounds
+        .iter()
+        .find(|bg| bg.bounds.x == 0.0 && bg.bounds.y == 0.0)
+        .expect("remapped left fringe column background");
+    assert_eq!(left_remapped.color, cyan);
+}
+
+/// Issue #834 (N3b): when `fringe` is remapped buffer-locally, GNU's
+/// `lookup_derived_face (w, f, FACE, FRINGE_FACE_ID, false)` (src/xfaces.c:5350)
+/// still merges a spec FACE over the frame's unremapped `fringe` face, whereas
+/// a FACE-less bitmap falls back to the buffer-remapped `fringe` face
+/// (`lookup_named_face (w, f, Qfringe, false)`, src/fringe.c:608).
+#[test]
+fn fringe_bitmap_remapped_fringe_applies_to_fallback_not_derived_spec_base() {
+    let cyan = Color::from_pixel(0x0000FFFF);
+    let setup = format!(
+        r##"(progn {FRINGE_FACE_SETUP} (set (make-local-variable 'face-remapping-alist) '((fringe (:background "#00ffff") fringe))))"##
+    );
+    let paint = fringe_bitmap_paint(
+        &setup,
+        &[
+            FringeLine::overlay("no spec face", "((left-fringe c834-bmp))"),
+            FringeLine::overlay("fg-only spec face", "((left-fringe c834-bmp c834-fg-only))"),
+        ],
+    );
+    assert_fringe_paint(
+        &paint,
+        &[
+            (FringeSide::Left, BLACK, cyan),
+            (FringeSide::Left, RED, grey95()),
+        ],
+    );
+}
+
+/// Issue #834: a FACE setting both `:foreground` and `:background` (the issue's
+/// red-on-blue shape) paints both colors, and changing the face via
+/// `internal-set-lisp-face-attribute` refreshes on the next layout without
+/// stale color caching.
+#[test]
+fn fringe_bitmap_spec_face_with_fg_and_bg_refreshes_after_face_attribute_change() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("c834-fg-bg-refresh", 640, 200, buf_id);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_window_system(Some(Value::symbol("neo")));
+    }
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    let selected_window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    eval.eval_str(
+        r##"(progn
+  (internal-make-lisp-face 'fringe)
+  (internal-set-lisp-face-attribute 'fringe :background "#f2f2f2" (selected-frame))
+  (internal-make-lisp-face 'c834-fg-bg)
+  (internal-set-lisp-face-attribute 'c834-fg-bg :foreground "#ff0000" (selected-frame))
+  (internal-set-lisp-face-attribute 'c834-fg-bg :background "#0000ff" (selected-frame))
+  (define-fringe-bitmap 'c834-bmp [255 255 255] nil 4 'center))"##,
+    )
+    .expect("setup");
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("red on blue\n");
+        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    }
+    eval.eval_str(
+        r#"(progn
+  (goto-char (point-min))
+  (overlay-put (make-overlay (point) (point)) 'before-string
+               (propertize " " 'display '((left-fringe c834-bmp c834-fg-bg)))))"#,
+    )
+    .expect("overlay");
+    let bmp_index = eval
+        .eval_str("(get 'c834-bmp 'fringe)")
+        .expect("index")
+        .as_fixnum()
+        .expect("fixnum") as u16;
+    let target_window_id =
+        neomacs_display_protocol::types::DisplayWindowId::new(selected_window_id.0 as i64);
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    let sample = |engine: &mut LayoutEngine, eval: &mut neovm_core::emacs_core::Context| {
+        engine.layout_frame_rust(eval, frame_id);
+        let state = engine.last_frame_display_state.as_ref().expect("state");
+        let mut out = Vec::new();
+        state.for_each_glyph(|glyph| {
+            if let FrameGlyph::FringeBitmap {
+                window_id,
+                side,
+                bitmap_index,
+                face_id,
+                ..
+            } = glyph
+                && window_id == target_window_id
+                && bitmap_index == bmp_index
+                && let Some(face) = state.faces.get(&face_id)
+            {
+                out.push((side, bitmap_index, face.foreground, face.background));
+            }
+        });
+        out
+    };
+
+    assert_fringe_paint(
+        &sample(&mut engine, &mut eval),
+        &[(FringeSide::Left, RED, BLUE)],
+    );
+
+    let green = Color::rgb(0.0, 1.0, 0.0);
+    let yellow = Color::from_pixel(0x00FFFF00);
+    eval.eval_str(
+        r##"(progn
+  (internal-set-lisp-face-attribute 'c834-fg-bg :foreground "#00ff00" (selected-frame))
+  (internal-set-lisp-face-attribute 'c834-fg-bg :background "#ffff00" (selected-frame)))"##,
+    )
+    .expect("update face");
+    assert_fringe_paint(
+        &sample(&mut engine, &mut eval),
+        &[(FringeSide::Left, green, yellow)],
+    );
+}
+
 #[test]
 fn layout_frame_rust_lays_out_line_numbers() {
     let text = "abc\ndef\nghi\n";

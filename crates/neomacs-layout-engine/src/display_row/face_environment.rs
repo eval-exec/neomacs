@@ -86,6 +86,17 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> WindowFaces<'a, FS> {
             .resolve_remapped_fixed_face(self.remapping, handle)
     }
 
+    /// Resolve a basic face directly from the frame face table without
+    /// buffer-local `face-remapping-alist`. Used as the base for GNU's
+    /// `lookup_derived_face (w, f, FACE, FRINGE_FACE_ID, false)`
+    /// (`src/xfaces.c:5350`), which reads the frame's `FRINGE_FACE_ID`.
+    pub(crate) fn resolve_unremapped_fixed_face(
+        self,
+        handle: neovm_core::emacs_core::intern::WellKnown,
+    ) -> ResolvedFace {
+        self.frame.resolver.resolver().resolve_fixed_face(handle)
+    }
+
     pub(crate) fn merge_named_face_over(
         self,
         base: &ResolvedFace,

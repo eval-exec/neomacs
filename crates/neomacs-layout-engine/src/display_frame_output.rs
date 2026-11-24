@@ -257,6 +257,10 @@ impl FrameOutputOwner {
         request.render_and_apply(self.frame_output_target());
     }
 
+    pub(crate) fn add_fringe_background(&mut self, bounds: Rect, color: Color) {
+        self.builder.add_output_fringe_background(bounds, color);
+    }
+
     pub(crate) fn publish_window_geometry(
         &mut self,
         window_id: i64,

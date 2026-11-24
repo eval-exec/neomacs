@@ -609,6 +609,13 @@ impl DisplayOutputBuilder {
         self.install_output_frame_artifact(OutputFrameArtifactInstallRequest::FaceFill(item));
     }
 
+    pub(crate) fn add_output_fringe_background(&mut self, bounds: Rect, color: Color) {
+        self.install_output_frame_artifact(OutputFrameArtifactInstallRequest::FringeBackground {
+            bounds,
+            color,
+        });
+    }
+
     pub(crate) fn add_output_border(
         &mut self,
         window_id: i64,

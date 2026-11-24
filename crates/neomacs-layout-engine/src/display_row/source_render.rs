@@ -1966,18 +1966,28 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
         spec_face: Option<Value>,
         face_ids: &mut FrameFaceAttempt,
     ) -> FaceId {
-        let fringe = self.resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Fringe);
+        // GNU `lookup_derived_face (w, f, face, FRINGE_FACE_ID, false)`
+        // (src/xfaces.c:5350) merges over the frame's unremapped
+        // `FRINGE_FACE_ID`, whereas the FACE-less / unknown-FACE fallback in
+        // `draw_fringe_bitmap_1` (src/fringe.c:608) calls
+        // `lookup_named_face (w, f, Qfringe, false)`, honoring buffer-local
+        // `face-remapping-alist`.
+        let frame_fringe = self
+            .faces
+            .resolve_unremapped_fixed_face(neovm_core::emacs_core::intern::WellKnown::Fringe);
         let mut resolved = None;
         if let Some(face_value) = spec_face {
-            resolved = self.resolve_derived_face_over(&fringe, &face_value);
+            resolved = self.resolve_derived_face_over(&frame_fringe, &face_value);
         }
         if resolved.is_none()
             && let Some(name) = override_name
         {
             let sym = Value::from_sym_id(neovm_core::emacs_core::intern::intern(name));
-            resolved = self.resolve_derived_face_over(&fringe, &sym);
+            resolved = self.resolve_derived_face_over(&frame_fringe, &sym);
         }
-        let resolved = resolved.unwrap_or(fringe);
+        let resolved = resolved.unwrap_or_else(|| {
+            self.resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Fringe)
+        });
         self.intern_and_install_face(face_ids, &resolved)
     }
 

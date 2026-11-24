@@ -7559,6 +7559,7 @@ impl LayoutEngine {
                         // produced and there is no field on screen to report.
                         None,
                     ));
+                self.publish_window_fringe_backgrounds(buffer, face_resolver, layout_box);
                 window_snapshot = Some(WindowPresentationSnapshot::live(WindowDisplaySnapshot {
                     window_id,
                     cell_origin: neovm_core::window::geometry::CellOrigin::new(
@@ -7826,6 +7827,7 @@ impl LayoutEngine {
                 live_window_frame_metadata(evaluator, buf_id),
                 line_number_field,
             ));
+        self.publish_window_fringe_backgrounds(buffer, face_resolver, layout_box);
 
         tracing::debug!(
             "  layout_window_rust: window_start={} window_end={}",
@@ -7864,6 +7866,38 @@ impl LayoutEngine {
             window_end_attempt,
             snapshot: window_snapshot,
             produced_key: completed_body_key,
+        }
+    }
+
+    /// Paint the window's left and right fringe columns with the window's
+    /// resolved `fringe` face background (honoring buffer-local
+    /// `face-remapping-alist`, matching GNU `draw_window_fringes` in
+    /// `src/fringe.c`). Runs for accepted and empty/minibuffer windows; TTY
+    /// frames have no fringe regions and emit nothing.
+    fn publish_window_fringe_backgrounds(
+        &mut self,
+        buffer: &impl super::neovm_bridge::LayoutBufferView,
+        face_resolver: &super::neovm_bridge::FaceResolver,
+        layout_box: &crate::window_layout::WindowLayoutBox,
+    ) {
+        let regions = layout_box.regions();
+        if regions.left_fringe.is_none() && regions.right_fringe.is_none() {
+            return;
+        }
+        let fringe_face = crate::display_row::face_environment::FrameFaces::new(face_resolver)
+            .for_window(buffer)
+            .resolve_fixed_face(neovm_core::emacs_core::intern::WellKnown::Fringe);
+        if fringe_face.use_default_background {
+            return;
+        }
+        let color = Color::from_pixel(fringe_face.bg);
+        for rect in [regions.left_fringe, regions.right_fringe]
+            .into_iter()
+            .flatten()
+        {
+            if rect.width > 0.0 && rect.height > 0.0 {
+                self.frame_output.add_fringe_background(rect, color);
+            }
         }
     }
 
