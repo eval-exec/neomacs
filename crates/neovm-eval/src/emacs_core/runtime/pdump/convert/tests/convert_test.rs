@@ -298,38 +298,156 @@ fn load_hash_table_makes_all_dumped_entries_iterable() {
     );
 }
 
-/// A stored equal key for a long list is one `EqualCons` chain. Dump and
-/// load walk that cdr spine in a loop. The insert budget still bounds how
-/// long a stored chain can be. This row locks a 2000-element list of
-/// fixnums. `assert!` avoids the derived `Debug`, which still walks that
-/// chain.
+/// `dump_hash_key`, `load_hash_key`, and `load_hash_key_owned` walk the cdr
+/// spine in a loop. This row uses the unbounded `to_hash_key` builder, so
+/// the chain is one million conses. A hundred thousand still fits the 8MB
+/// test stack, so that count does not fail the recursive parent. A real
+/// equal-table insert stays capped by `EQUAL_KEY_NODE_BUDGET`. `assert!`
+/// avoids the derived `Debug`, which still walks the chain.
 #[test]
-fn dump_and_load_a_two_thousand_element_list_key() {
+fn dump_and_load_a_one_million_element_list_key() {
     crate::test_utils::init_test_tracing();
     let mut tail = Value::NIL;
-    for i in (0..2000).rev() {
+    for i in (0..1_000_000).rev() {
         tail = Value::cons(Value::fixnum(i), tail);
     }
     let key = tail.to_hash_key(&HashTableTest::Equal);
     let dumped = dump_hash_key(&mut DumpEncoder::new(), &key);
-    let heap = DumpTaggedHeap {
+    let heap = empty_heap();
+    let loaded = load_hash_key(&mut LoadDecoder::new(&heap), &dumped);
+    assert!(
+        loaded == key,
+        "a one-million-element list key survives dump and load"
+    );
+    let loaded_owned = load_hash_key_owned(&mut LoadDecoder::new(&heap), dumped);
+    assert!(
+        loaded_owned == key,
+        "the owned load walks the same one-million-element spine"
+    );
+}
+
+/// Codec bytes for a dotted tail, a nested car, a string car, a float car,
+/// and a cyclic key. The expected stream is written here, not by a second
+/// encoder. Read bytes load back through both loaders.
+#[test]
+fn mixed_equal_key_keeps_its_tag_stream() {
+    crate::test_utils::init_test_tracing();
+    let tail = Value::symbol("cired2-codec-tail");
+    let car_a = Value::symbol("cired2-codec-a");
+    let car_b = Value::symbol("cired2-codec-b");
+    let tail_id = tail
+        .as_symbol_id(neovm_value::tagged::value::SymbolMode::Bare)
+        .expect("tail symbol");
+    let a_id = car_a
+        .as_symbol_id(neovm_value::tagged::value::SymbolMode::Bare)
+        .expect("cycle car a");
+    let b_id = car_b
+        .as_symbol_id(neovm_value::tagged::value::SymbolMode::Bare)
+        .expect("cycle car b");
+    let max = tail_id.to_raw().max(a_id.to_raw()).max(b_id.to_raw()) as usize;
+    let mut remap = vec![tail_id; max + 1];
+    remap[tail_id.to_raw() as usize] = tail_id;
+    remap[a_id.to_raw() as usize] = a_id;
+    remap[b_id.to_raw() as usize] = b_id;
+    struct ClearSymRemap;
+    impl Drop for ClearSymRemap {
+        fn drop(&mut self) {
+            PDUMP_LOAD_SYM_REMAP.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+    let _clear = ClearSymRemap;
+    PDUMP_LOAD_SYM_REMAP.with(|slot| *slot.borrow_mut() = Some(remap));
+
+    let nested = cons_key(HashKey::Int(2), cons_key(HashKey::Int(3), HashKey::Int(4)));
+    let mixed = cons_key(
+        HashKey::Int(1),
+        cons_key(
+            nested,
+            cons_key(
+                HashKey::from_str("s"),
+                cons_key(HashKey::Float(5.0_f64.to_bits()), HashKey::Symbol(tail_id)),
+            ),
+        ),
+    );
+    let cyclic = cons_key(
+        HashKey::Symbol(a_id),
+        cons_key(HashKey::Symbol(b_id), HashKey::Cycle(0)),
+    );
+
+    let mut mixed_bytes = Vec::new();
+    mixed_bytes.push(13);
+    push_int(&mut mixed_bytes, 1);
+    mixed_bytes.push(13);
+    mixed_bytes.push(13);
+    push_int(&mut mixed_bytes, 2);
+    mixed_bytes.push(13);
+    push_int(&mut mixed_bytes, 3);
+    push_int(&mut mixed_bytes, 4);
+    mixed_bytes.push(13);
+    push_string_s(&mut mixed_bytes);
+    mixed_bytes.push(13);
+    mixed_bytes.push(3);
+    mixed_bytes.extend_from_slice(&5.0_f64.to_bits().to_ne_bytes());
+    push_sym(&mut mixed_bytes, tail_id.to_raw());
+
+    let mut cyclic_bytes = Vec::new();
+    cyclic_bytes.push(13);
+    push_sym(&mut cyclic_bytes, a_id.to_raw());
+    cyclic_bytes.push(13);
+    push_sym(&mut cyclic_bytes, b_id.to_raw());
+    cyclic_bytes.push(16);
+    cyclic_bytes.extend_from_slice(&0_u32.to_ne_bytes());
+
+    assert_tag_stream_loads(&mixed, &mixed_bytes);
+    assert_tag_stream_loads(&cyclic, &cyclic_bytes);
+}
+
+fn cons_key(car: HashKey, cdr: HashKey) -> HashKey {
+    HashKey::EqualCons(Box::new(car), Box::new(cdr))
+}
+
+fn push_int(out: &mut Vec<u8>, value: i64) {
+    out.push(2);
+    out.extend_from_slice(&value.to_ne_bytes());
+}
+
+fn push_sym(out: &mut Vec<u8>, id: u32) {
+    out.push(5);
+    out.extend_from_slice(&id.to_ne_bytes());
+}
+
+fn push_string_s(out: &mut Vec<u8>) {
+    // String-content tag, then a u64 length, the byte, and SCHARS.
+    out.push(23);
+    out.extend_from_slice(&1_u64.to_ne_bytes());
+    out.push(b's');
+    out.extend_from_slice(&1_u64.to_ne_bytes());
+}
+
+fn assert_tag_stream_loads(key: &HashKey, expected: &[u8]) {
+    let dumped = dump_hash_key(&mut DumpEncoder::new(), key);
+    let mut bytes = Vec::new();
+    super::super::object_value_codec::write_hash_key(&mut bytes, &dumped).expect("write hash key");
+    assert_eq!(bytes, expected, "equal-key tag stream");
+    let mut cursor = super::super::object_value_codec::Cursor::new(&bytes);
+    let read = cursor.read_hash_key().expect("read hash key");
+    assert!(cursor.is_empty(), "hash key bytes are consumed");
+    let heap = empty_heap();
+    let loaded = load_hash_key(&mut LoadDecoder::new(&heap), &read);
+    assert!(loaded == *key, "borrowed load matches the key");
+    let loaded_owned = load_hash_key_owned(&mut LoadDecoder::new(&heap), read);
+    assert!(loaded_owned == *key, "owned load matches the key");
+}
+
+fn empty_heap() -> DumpTaggedHeap {
+    DumpTaggedHeap {
         objects: Vec::new(),
         mapped_cons: Vec::new(),
         mapped_floats: Vec::new(),
         mapped_strings: Vec::new(),
         mapped_veclikes: Vec::new(),
         mapped_slots: Vec::new(),
-    };
-    let loaded = load_hash_key(&mut LoadDecoder::new(&heap), &dumped);
-    assert!(
-        loaded == key,
-        "a 2000-element list key survives dump and load"
-    );
-    let loaded_owned = load_hash_key_owned(&mut LoadDecoder::new(&heap), dumped);
-    assert!(
-        loaded_owned == key,
-        "the owned load walks the same 2000-element spine"
-    );
+    }
 }
 
 fn write_raw_word(bytes: &mut [u8], offset: usize, word: usize) {

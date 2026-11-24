@@ -367,6 +367,22 @@ pub enum DumpHashKey {
     Text(String),
 }
 
+impl Drop for DumpHashKey {
+    fn drop(&mut self) {
+        // Same shape as `HashKey`'s Drop. Take each cdr out of its box and
+        // leave `Nil`, so a long spine does not recurse one frame per cons.
+        // The car drops with the cell. Car nesting stays recursive.
+        let DumpHashKey::EqualCons(_, cdr) = self else {
+            return;
+        };
+        let mut next = std::mem::replace(cdr.as_mut(), DumpHashKey::Nil);
+        while let DumpHashKey::EqualCons(_, cdr) = &mut next {
+            let rest = std::mem::replace(cdr.as_mut(), DumpHashKey::Nil);
+            next = rest;
+        }
+    }
+}
+
 /// Serializable mirror of `ByteCodeKeyPart`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum DumpByteCodeKeyPart {

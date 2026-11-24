@@ -663,21 +663,25 @@ fn equal_key_hundred_thousand_list_does_not_overflow() {
     });
 }
 
-/// `hash_key_to_value` walks the cdr spine in a loop. The insert budget still
-/// bounds the stored chain. This row locks a 2000-element list of fixnums.
+/// `hash_key_to_value` walks the cdr spine in a loop. This row uses the
+/// unbounded `to_hash_key` builder, so the chain is one million conses. A
+/// hundred thousand still fits the 8MB test stack, so that count does not
+/// fail the recursive parent. A real equal-table insert stays capped by
+/// `EQUAL_KEY_NODE_BUDGET`. `assert!` avoids the derived `Debug`, which still
+/// walks the chain.
 #[test]
-fn hash_key_to_value_walks_a_two_thousand_element_list() {
+fn hash_key_to_value_walks_a_one_million_element_list() {
     crate::test_utils::init_test_tracing();
     with_test_heap(|| {
         let mut tail = Value::NIL;
-        for i in (0..2000).rev() {
+        for i in (0..1_000_000).rev() {
             tail = Value::cons(Value::fixnum(i), tail);
         }
         let key = tail.to_hash_key(&HashTableTest::Equal);
         let restored = crate::hashtab::hash_key_to_value(&key);
         assert!(
             restored == tail,
-            "a 2000-element list key converts back to its list"
+            "a one-million-element list key converts back to its list"
         );
     });
 }

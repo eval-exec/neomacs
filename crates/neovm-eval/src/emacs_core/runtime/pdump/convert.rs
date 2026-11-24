@@ -5364,83 +5364,110 @@ fn load_byte_code_key_part(
     }
 }
 
-fn load_hash_key_owned(decoder: &mut LoadDecoder, k: DumpHashKey) -> HashKey {
-    if matches!(k, DumpHashKey::EqualCons(_, _)) {
-        let mut cars = Vec::new();
-        let mut node = k;
-        let tail = loop {
-            match node {
-                DumpHashKey::EqualCons(car, cdr) => {
-                    cars.push(load_hash_key_owned(decoder, *car));
-                    node = *cdr;
-                }
-                other => break load_hash_key_owned(decoder, other),
-            }
-        };
-        let mut loaded = tail;
-        while let Some(car) = cars.pop() {
-            loaded = HashKey::EqualCons(Box::new(car), Box::new(loaded));
-        }
-        return loaded;
-    }
+fn load_hash_key_owned(decoder: &mut LoadDecoder, mut k: DumpHashKey) -> HashKey {
+    // `DumpHashKey` implements `Drop`, so a by-value match cannot move its
+    // fields out. Drain them through this reference and let the shell drop.
+    load_hash_key_owned_in_place(decoder, &mut k)
+}
+
+fn load_hash_key_owned_in_place(decoder: &mut LoadDecoder, k: &mut DumpHashKey) -> HashKey {
     match k {
         DumpHashKey::Nil => HashKey::Nil,
         DumpHashKey::True => HashKey::True,
-        DumpHashKey::Int(n) => HashKey::Int(n),
-        DumpHashKey::Bignum(limbs) => HashKey::Bignum(limbs.into_boxed_slice()),
-        DumpHashKey::Float(bits) => HashKey::Float(bits),
-        DumpHashKey::FloatEq(bits, id) => HashKey::FloatEq(bits, id),
-        DumpHashKey::Symbol(s) => HashKey::Symbol(load_sym_id(&s)),
-        DumpHashKey::Keyword(s) => HashKey::Keyword(load_sym_id(&s)),
-        DumpHashKey::Str(id) => {
-            HashKey::Ptr(decoder.heap_ref_to_value(tagged_heap_ref(&id)).bits())
+        DumpHashKey::Int(n) => HashKey::Int(*n),
+        DumpHashKey::Bignum(limbs) => HashKey::Bignum(std::mem::take(limbs).into_boxed_slice()),
+        DumpHashKey::Float(bits) => HashKey::Float(*bits),
+        DumpHashKey::FloatEq(bits, id) => HashKey::FloatEq(*bits, *id),
+        DumpHashKey::Symbol(s) => HashKey::Symbol(load_sym_id(s)),
+        DumpHashKey::Keyword(s) => HashKey::Keyword(load_sym_id(s)),
+        DumpHashKey::Str(id) => HashKey::Ptr(decoder.heap_ref_to_value(tagged_heap_ref(id)).bits()),
+        DumpHashKey::Char(c) => HashKey::Char(*c),
+        DumpHashKey::Window(w) => HashKey::Window(*w),
+        DumpHashKey::Frame(f) => HashKey::Frame(*f),
+        DumpHashKey::Ptr(p) => HashKey::Ptr(*p as usize),
+        DumpHashKey::HeapRef(a) => HashKey::Ptr(
+            decoder
+                .heap_ref_to_value(TaggedHeapRef { index: *a })
+                .bits(),
+        ),
+        DumpHashKey::EqualCons(car, cdr) => {
+            load_equal_cons_owned(decoder, car.as_mut(), cdr.as_mut())
         }
-        DumpHashKey::Char(c) => HashKey::Char(c),
-        DumpHashKey::Window(w) => HashKey::Window(w),
-        DumpHashKey::Frame(f) => HashKey::Frame(f),
-        DumpHashKey::Ptr(p) => HashKey::Ptr(p as usize),
-        DumpHashKey::HeapRef(a) => {
-            HashKey::Ptr(decoder.heap_ref_to_value(TaggedHeapRef { index: a }).bits())
-        }
-        DumpHashKey::EqualCons(_, _) => unreachable!("spines are loaded above"),
         DumpHashKey::EqualVec(v) => HashKey::EqualVec(
-            v.into_iter()
+            std::mem::take(v)
+                .into_iter()
                 .map(|item| load_hash_key_owned(decoder, item))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),
         DumpHashKey::ByteCode(parts) => HashKey::ByteCode(
-            parts
+            std::mem::take(parts)
                 .into_iter()
                 .map(|part| load_byte_code_key_part_owned(decoder, part))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),
-        DumpHashKey::Marker(buffer, bytepos) => HashKey::Marker(Box::new((buffer, bytepos))),
+        DumpHashKey::Marker(buffer, bytepos) => HashKey::Marker(Box::new((*buffer, *bytepos))),
         DumpHashKey::Overlay {
             buffer,
             start,
             end,
             plist,
-        } => HashKey::Overlay(Box::new((
-            buffer,
-            start,
-            end,
-            load_hash_key_owned(decoder, *plist),
+        } => {
+            let plist = std::mem::replace(plist.as_mut(), DumpHashKey::Nil);
+            HashKey::Overlay(Box::new((
+                *buffer,
+                *start,
+                *end,
+                load_hash_key_owned(decoder, plist),
+            )))
+        }
+        DumpHashKey::BoolVector { nbits, words } => HashKey::BoolVector(Box::new((
+            *nbits as usize,
+            std::mem::take(words).into_boxed_slice(),
         ))),
-        DumpHashKey::BoolVector { nbits, words } => {
-            HashKey::BoolVector(Box::new((nbits as usize, words.into_boxed_slice())))
+        DumpHashKey::SymbolWithPos(sym, pos) => {
+            let sym = std::mem::replace(sym.as_mut(), DumpHashKey::Nil);
+            let pos = std::mem::replace(pos.as_mut(), DumpHashKey::Nil);
+            HashKey::SymbolWithPos(
+                Box::new(load_hash_key_owned(decoder, sym)),
+                Box::new(load_hash_key_owned(decoder, pos)),
+            )
         }
-        DumpHashKey::SymbolWithPos(sym, pos) => HashKey::SymbolWithPos(
-            Box::new(load_hash_key_owned(decoder, *sym)),
-            Box::new(load_hash_key_owned(decoder, *pos)),
-        ),
-        DumpHashKey::Cycle(index) => HashKey::Cycle(index),
+        DumpHashKey::Cycle(index) => HashKey::Cycle(*index),
         DumpHashKey::StringContent(bytes, schars) => {
-            HashKey::string_content(&bytes, schars as usize)
+            HashKey::string_content(std::mem::take(bytes).as_slice(), *schars as usize)
         }
-        DumpHashKey::Text(text) => HashKey::Text(text.into_boxed_str()),
+        DumpHashKey::Text(text) => HashKey::Text(std::mem::take(text).into_boxed_str()),
     }
+}
+
+fn load_equal_cons_owned(
+    decoder: &mut LoadDecoder,
+    car: &mut DumpHashKey,
+    cdr: &mut DumpHashKey,
+) -> HashKey {
+    let mut cars = vec![load_hash_key_owned_in_place(decoder, car)];
+    let mut node = std::mem::replace(cdr, DumpHashKey::Nil);
+    let tail = loop {
+        // End the borrow of `node` before assigning the next cdr into it.
+        let rest = match &mut node {
+            DumpHashKey::EqualCons(next_car, next_cdr) => {
+                cars.push(load_hash_key_owned_in_place(decoder, next_car.as_mut()));
+                Some(std::mem::replace(next_cdr.as_mut(), DumpHashKey::Nil))
+            }
+            _ => None,
+        };
+        match rest {
+            Some(rest) => node = rest,
+            None => break load_hash_key_owned_in_place(decoder, &mut node),
+        }
+    };
+    let mut loaded = tail;
+    while let Some(car) = cars.pop() {
+        loaded = HashKey::EqualCons(Box::new(car), Box::new(loaded));
+    }
+    loaded
 }
 
 fn load_byte_code_key_part_owned(

@@ -161,6 +161,52 @@ fn heap_object_codec_round_trips_representative_objects() {
     assert_eq!(format!("{decoded:?}"), format!("{objects:?}"));
 }
 
+/// `write_hash_key` and `read_hash_key` walk a cdr spine in a loop, and
+/// `DumpHashKey`'s Drop does too. The chain is built here, so it is not
+/// capped by the equal-table insert budget. One million conses overflows the
+/// recursive codec; a hundred thousand still fits the 8MB test stack.
+/// The loop pushes the last index onto the outside of the spine, so the
+/// head car is 0 and the last car is 999_999.
+#[test]
+fn codec_round_trips_a_one_million_element_list_key() {
+    let mut key = DumpHashKey::Nil;
+    for i in (0..1_000_000).rev() {
+        key = DumpHashKey::EqualCons(Box::new(DumpHashKey::Int(i)), Box::new(key));
+    }
+    let mut bytes = Vec::new();
+    write_hash_key(&mut bytes, &key).expect("write hash key");
+    assert_eq!(bytes.len(), 1_000_000 * 10 + 1);
+    let mut cursor = Cursor::new(&bytes);
+    let read = cursor.read_hash_key().expect("read hash key");
+    assert!(cursor.is_empty());
+    let mut node = &read;
+    let mut count = 0_u32;
+    let mut first = None;
+    let mut last = 0_i64;
+    loop {
+        match node {
+            DumpHashKey::EqualCons(car, cdr) => {
+                let DumpHashKey::Int(n) = car.as_ref() else {
+                    panic!("car should be a fixnum");
+                };
+                if first.is_none() {
+                    first = Some(*n);
+                }
+                last = *n;
+                count += 1;
+                node = cdr.as_ref();
+            }
+            DumpHashKey::Nil => break,
+            _ => panic!("tail should be nil"),
+        }
+    }
+    assert_eq!(count, 1_000_000);
+    assert_eq!(first, Some(0));
+    assert_eq!(last, 999_999);
+    drop(key);
+    drop(read);
+}
+
 #[test]
 fn heap_object_codec_rejects_bad_tag() {
     let bytes = [u8::MAX];
