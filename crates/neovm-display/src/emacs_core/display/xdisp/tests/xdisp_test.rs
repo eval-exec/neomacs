@@ -8036,6 +8036,203 @@ fn window_text_pixel_size_reports_gnus_negative_width_for_a_retracted_from_row()
     );
 }
 
+/// GNU `handle_single_display_spec` (`src/xdisp.c:6380-6475`) consumes the
+/// text covered by `(left-fringe BITMAP [FACE])` and `(right-fringe BITMAP
+/// [FACE])` even on non-window/batch/TTY frames (and when BITMAP is nil or
+/// unknown), contributing zero inline width and zero baseline height
+/// (`src/xdisp.c:32397-32405`).  Specs without a cons cdr such as
+/// `(left-fringe)` or `(left-fringe . left-arrow)` fail `CONSP (XCDR (spec))`
+/// and leave the covered text intact.
+#[test]
+fn test_window_text_pixel_size_consumes_fringe_display_specs() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let measure_text_prop = |text: &str, start: i64, end: i64, spec: Value| -> (i64, i64) {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert(text);
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                sym("display"),
+                spec,
+            ],
+        )
+        .expect("put-text-property");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    let left_arrow = Value::list(vec![sym("left-fringe"), sym("left-arrow")]);
+    let right_arrow_bold = Value::list(vec![sym("right-fringe"), sym("right-arrow"), sym("bold")]);
+    let list_wrapped = Value::list(vec![left_arrow]);
+    let vector_wrapped = Value::vector(vec![
+        Value::list(vec![sym("raise"), Value::make_float(0.5)]),
+        left_arrow,
+    ]);
+    let fringe_nil = Value::list(vec![sym("left-fringe"), Value::NIL]);
+    let fringe_unknown = Value::list(vec![sym("left-fringe"), sym("no-such-bitmap-xyz")]);
+    let fringe_int = Value::list(vec![sym("left-fringe"), Value::fixnum(123)]);
+    let fringe_no_cdr = Value::list(vec![sym("left-fringe")]);
+    let fringe_dotted = Value::cons(sym("left-fringe"), sym("left-arrow"));
+    let space3 = Value::list(vec![sym("space"), sym(":width"), Value::fixnum(3)]);
+    let fringe_then_space = Value::list(vec![left_arrow, space3]);
+    let space_then_fringe = Value::list(vec![space3, left_arrow]);
+    let when_expr_t = Value::cons(
+        sym("when"),
+        Value::cons(
+            Value::list(vec![sym("eq"), Value::fixnum(1), Value::fixnum(1)]),
+            left_arrow,
+        ),
+    );
+    let when_expr_nil = Value::cons(
+        sym("when"),
+        Value::cons(
+            Value::list(vec![sym("eq"), Value::fixnum(1), Value::fixnum(2)]),
+            left_arrow,
+        ),
+    );
+    let when_t = Value::cons(sym("when"), Value::cons(Value::T, left_arrow));
+    let disable_eval_fringe = Value::list(vec![sym("disable-eval"), left_arrow]);
+    let disable_eval_when_t = Value::list(vec![sym("disable-eval"), when_t]);
+    let disable_eval_when_expr = Value::list(vec![sym("disable-eval"), when_expr_t]);
+
+    assert_eq!(measure_text_prop("hello", 1, 2, left_arrow), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, right_arrow_bold), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, list_wrapped), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, vector_wrapped), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 3, fringe_nil), (3, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, fringe_unknown), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, fringe_int), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, fringe_no_cdr), (5, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, fringe_dotted), (5, 1));
+    assert_eq!(measure_text_prop("ab", 1, 3, left_arrow), (0, 0));
+    assert_eq!(measure_text_prop("ab\n", 1, 3, left_arrow), (0, 1));
+    assert_eq!(measure_text_prop("ab\ncd", 1, 4, left_arrow), (2, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, fringe_then_space), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, space_then_fringe), (7, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, when_expr_t), (4, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, when_expr_nil), (5, 1));
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, disable_eval_fringe),
+        (4, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, disable_eval_when_t),
+        (4, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, disable_eval_when_expr),
+        (5, 1)
+    );
+
+    // Overlay `display` and overlay `before-string` carrying `((left-fringe ...))`
+    // (diff-hl's exact shape).
+    {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert("hello");
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(1), Value::fixnum(3)],
+        )
+        .expect("make-overlay");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![ov, sym("display"), left_arrow],
+        )
+        .expect("overlay-put");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            ),
+            (3, 1)
+        );
+    }
+
+    for (buf_text, expected) in [("hello", (5, 1)), ("", (0, 0))] {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        if !buf_text.is_empty() {
+            eval.edit
+                .buffers
+                .get_mut(buf_id)
+                .expect("buffer")
+                .insert(buf_text);
+        }
+        let before = Value::string("XX");
+        set_string_text_properties_for_value(
+            before,
+            vec![StringTextPropertyRun {
+                start: 0,
+                end: 2,
+                plist: Value::list(vec![sym("display"), list_wrapped]),
+            }],
+        );
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(1), Value::fixnum(1)],
+        )
+        .expect("make-overlay");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![ov, sym("before-string"), before],
+        )
+        .expect("overlay-put");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            ),
+            expected,
+            "overlay before-string fringe spec with buf_text={buf_text:?}"
+        );
+    }
+}
+
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_test.rs"]
 mod mode_line_min_width_boundary_test;

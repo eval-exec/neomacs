@@ -18,7 +18,10 @@ pub(super) struct TextMeasurement {
 }
 
 impl TextMeasurement {
-    fn fallback(self, eval: &neovm_eval::emacs_core::eval::Context) -> RegionTextMetrics {
+    fn fallback(
+        self,
+        eval: &mut neovm_eval::emacs_core::eval::Context,
+    ) -> Result<RegionTextMetrics, Flow> {
         region_text_metrics_with_display(
             eval,
             self.frame,
@@ -85,7 +88,7 @@ impl TextMeasurement {
                 },
             );
             let Some(snapshot) = query_geometry(prefix)? else {
-                return Ok(self.fallback(eval));
+                return self.fallback(eval);
             };
             snapshot
                 .point_for_buffer_pos(from)
@@ -110,7 +113,7 @@ impl TextMeasurement {
             },
         );
         let Some(snapshot) = query_geometry(query)? else {
-            return Ok(self.fallback(eval));
+            return self.fallback(eval);
         };
         let origin = snapshot.point_for_buffer_pos(from);
         let origin_row = origin.as_ref().map_or(0, |point| point.row);

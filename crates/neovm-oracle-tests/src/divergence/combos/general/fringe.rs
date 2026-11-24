@@ -323,3 +323,74 @@ fn divergence_fringe_mode_customization() {
         expect,
     );
 }
+
+#[test]
+fn divergence_fringe_display_measurement_batch() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((4 . 1) (4 . 1) (4 . 1) (4 . 1) (3 . 1) (4 . 1) (4 . 1) (5 . 1) (5 . 1) (0 . 0) (0 . 1) (2 . 1) (3 . 1) (5 . 1) (0 . 0) (4 . 1) (7 . 1) (4 . 1) (5 . 1) (4 . 1) (4 . 1) (5 . 1) 0 2 2)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((measure
+       (lambda (setup)
+         (with-temp-buffer
+           (funcall setup)
+           (switch-to-buffer (current-buffer))
+           (window-text-pixel-size)))))
+  (list
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(left-fringe left-arrow))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(right-fringe right-arrow bold))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((left-fringe left-arrow)))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display [(raise 0.5) (left-fringe left-arrow)])))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 3 'display '(left-fringe nil))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(left-fringe no-such-bitmap-xyz))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(left-fringe 123))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(left-fringe))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(left-fringe . left-arrow))))
+   (funcall measure (lambda () (insert "ab")
+                      (put-text-property 1 3 'display '(left-fringe left-arrow))))
+   (funcall measure (lambda () (insert "ab\n")
+                      (put-text-property 1 3 'display '(left-fringe left-arrow))))
+   (funcall measure (lambda () (insert "ab\ncd")
+                      (put-text-property 1 4 'display '(left-fringe left-arrow))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 3)))
+                        (overlay-put ov 'display '(left-fringe left-arrow)))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1)))
+                        (overlay-put ov 'before-string
+                                     (propertize "XX" 'display '((left-fringe left-arrow)))))))
+   (funcall measure (lambda ()
+                      (let ((ov (make-overlay 1 1)))
+                        (overlay-put ov 'before-string
+                                     (propertize "XX" 'display '((left-fringe left-arrow)))))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((left-fringe left-arrow) (space :width 3)))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((space :width 3) (left-fringe left-arrow)))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(when (eq 1 1) left-fringe left-arrow))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(when (eq 1 2) left-fringe left-arrow))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(disable-eval (left-fringe left-arrow)))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(disable-eval (when t left-fringe left-arrow)))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(disable-eval (when (eq 1 1) left-fringe left-arrow)))))
+   (string-pixel-width (propertize "ab" 'display '(left-fringe left-arrow)))
+   (string-pixel-width (concat (propertize "ab" 'display '((right-fringe nil))) "cd"))
+   (string-pixel-width (propertize "ab" 'display '(left-fringe)))))"#,
+        expect,
+    );
+}
