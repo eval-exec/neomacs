@@ -790,9 +790,11 @@ pub(super) fn owner_cons_reserve_drop_and_forget_keep_collection_excluded<K, W>(
     }
 }
 
-/// L6.5 row. An admitted era holds a cons reserve and the collection session
-/// runs. It returns that book and then collects. It does not reach
-/// `assert_no_owner_cons_reserves`.
+/// L6.5 session row. An admitted era holds a cons reserve and
+/// `collect_stopped` runs. The session returns that book and then collects.
+/// It does not reach `assert_no_owner_cons_reserves`. An ordinary
+/// `TaggedHeap::collect` while a lease is live is
+/// [`owner_cons_reserve_ordinary_gc_refuses_a_live_lease`].
 pub(super) fn owner_cons_reserve_main_gc_returns_the_book_then_collects<K, W>(
     roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
     world_roots: W,
@@ -833,6 +835,127 @@ pub(super) fn owner_cons_reserve_main_gc_returns_the_book_then_collects<K, W>(
                 "the ordinary entry left no owner cons reserve"
             );
         });
+        complete(stopped);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_string()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        String::from("non-string panic")
+    }
+}
+
+/// Ordinary `TaggedHeap::collect` while a lease still has an open run.
+///
+/// The request must refuse at `assert_no_owner_cons_reserves` and leave the
+/// book returnable. It must not rewind the block under the open run. Routing
+/// that request through the stop session is still owed, so production grants
+/// stay gated on it. This row is red on 9c6133fae3: the infallible entry
+/// returns the lease, `close_for_stop` sticks on `InvalidReserve`, and the
+/// owner cursor and the free list hand out the same cell.
+pub(super) fn owner_cons_reserve_ordinary_gc_refuses_a_live_lease<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    _world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    use crate::tagged::header::{ConsCdrWord, ConsWord};
+    use std::mem::size_of;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        let refused = with_stopped_legacy_heap(&era, &stopped, |heap| {
+            let mut reserve = OwnerEraReserve::new();
+            let mut region = OwnerAllocRegion::new();
+            reserve
+                .grant_at_stop(&stopped, heap, true, MeasuredInterval::zero())
+                .unwrap();
+            reserve.carve_cons(heap, &mut region).unwrap();
+            let handed_addr = region.take_cons_cell().unwrap();
+            let handed = reserve_tests::handed_cons(handed_addr);
+            reserve.note_cons_taken(1);
+            let tail_bytes = reserve.open_cons_tail_bytes();
+            assert!(tail_bytes >= size_of::<ConsCell>(), "the run has a tail");
+            let tail_addr = handed_addr + size_of::<ConsCell>();
+            let tail_cells = tail_bytes / size_of::<ConsCell>();
+            // SAFETY: the tail is this run's exclusive unhanded cells. Sweep
+            // writes a free link into each unmarked cell.
+            unsafe {
+                for index in 0..tail_cells {
+                    (tail_addr as *mut ConsCell).add(index).write(ConsCell {
+                        car: ConsWord::new(Value::NIL),
+                        cdr_or_next: ConsCdrWord::new(Value::NIL),
+                    });
+                }
+            }
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                heap.collect(std::iter::once(handed));
+            }));
+            match outcome {
+                Err(payload) => {
+                    // `&payload` is the box. Downcast sees that wrapper, not
+                    // the `&str` the assert actually panicked with.
+                    let text = panic_text(&*payload);
+                    assert!(
+                        text.contains(
+                            "collection requires explicit return of every owner cons reserve"
+                        ),
+                        "ordinary GC refused for another reason: {text}"
+                    );
+                    assert!(
+                        reserve.holds_reserve(),
+                        "a refusal must leave the lease in the table"
+                    );
+                    assert!(
+                        region.take_cons_cell() == Some(tail_addr),
+                        "a refusal must leave the owner cursor on its tail"
+                    );
+                    // The probe handed one more cell. Account it, then close.
+                    reserve.note_cons_taken(1);
+                    reserve.close_for_stop(heap, &mut region).unwrap();
+                    reserve.return_unused_before_sweep(&stopped, heap).unwrap();
+                    true
+                }
+                Ok(()) => {
+                    let close = reserve.close_for_stop(heap, &mut region);
+                    let next = if region.is_closed() {
+                        None
+                    } else {
+                        region.take_cons_cell()
+                    };
+                    let fresh = heap.alloc_cons(Value::NIL, Value::NIL);
+                    let fresh_addr = fresh.as_cons_ptr().map(|cell| cell as usize);
+                    panic!(
+                        "ordinary GC reclaimed a live open lease: close={close:?} next={next:#x?} fresh={fresh_addr:#x?} tail={tail_addr:#x} holds={}",
+                        reserve.holds_reserve()
+                    );
+                }
+            }
+        });
+        assert!(
+            refused,
+            "ordinary GC with a live lease must refuse before reclaiming it"
+        );
+        stopped.trace(|_, _| Ok(())).unwrap();
         complete(stopped);
         let (collector, keeper) = era.finish().unwrap();
         drop(collector);

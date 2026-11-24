@@ -601,8 +601,11 @@ impl TaggedHeap {
         self.cons_allocator.owner_reserved_blocks() != 0
     }
 
-    /// Backstop for collector entries that cannot return a refusal. It must
-    /// precede their first mutation; fallible admission uses the predicate.
+    /// Backstop for an ordinary collector entry. Those entries hold only
+    /// `&mut TaggedHeap`, so they must not return a lease: the owner may
+    /// still be handing the run out. The stopped session returns leases
+    /// under `AllStopped`. Routing an ordinary request through that session
+    /// is still owed, and production grants stay gated on it.
     pub(in crate::tagged::gc) fn assert_no_owner_cons_reserves(&self) {
         assert!(
             !self.has_owner_cons_reserves(),
@@ -610,18 +613,11 @@ impl TaggedHeap {
         );
     }
 
-    /// Ordinary infallible entry: return every leased book, then keep the
-    /// assert as the backstop the routed path does not hit.
+    /// Return every leased range. Only the stopped session calls this.
     ///
-    /// The fallible session walks the same table before it collects. A
-    /// poisoned allocator leaves the count outstanding and that session
-    /// stays Busy, so the same stop can retry. This walk is what makes a
-    /// forgotten or abandoned book recoverable.
-    pub(in crate::tagged::gc) fn discharge_owner_cons_leases_for_collection(&mut self) {
-        self.return_leased_owner_cons_reserves();
-        self.assert_no_owner_cons_reserves();
-    }
-
+    /// A poisoned allocator leaves the count outstanding. A forgotten or
+    /// abandoned book is recoverable on the next stop while the allocator
+    /// is healthy.
     pub(in crate::tagged::gc) fn return_leased_owner_cons_reserves(&mut self) {
         if !self.has_owner_cons_reserves() || self.cons_allocator.is_poisoned() {
             return;

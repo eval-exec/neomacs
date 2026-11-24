@@ -219,6 +219,7 @@ pub enum ConsAllocationCase {
     OwnerConsReserveAMovedBlockTailIsNotRewound,
     OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed,
     OwnerConsReserveMainGcReturnsTheBookThenCollects,
+    OwnerConsReserveOrdinaryGcRefusesALiveLease,
 }
 
 impl ConsAllocationCase {
@@ -261,6 +262,7 @@ impl ConsAllocationCase {
         Self::OwnerConsReserveAMovedBlockTailIsNotRewound,
         Self::OwnerConsReserveAnOldStoreKeepsTheOwnerConsAndTheUnrootedConsIsReclaimed,
         Self::OwnerConsReserveMainGcReturnsTheBookThenCollects,
+        Self::OwnerConsReserveOrdinaryGcRefusesALiveLease,
     ];
 }
 
@@ -424,6 +426,12 @@ pub(crate) fn run_cons_allocation_test<K, W>(
         }
         ConsAllocationCase::OwnerConsReserveMainGcReturnsTheBookThenCollects => {
             owner_reserve_cases::owner_cons_reserve_main_gc_returns_the_book_then_collects(
+                roots_era,
+                world_roots,
+            );
+        }
+        ConsAllocationCase::OwnerConsReserveOrdinaryGcRefusesALiveLease => {
+            owner_reserve_cases::owner_cons_reserve_ordinary_gc_refuses_a_live_lease(
                 roots_era,
                 world_roots,
             );

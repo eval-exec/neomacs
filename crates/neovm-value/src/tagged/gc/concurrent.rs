@@ -135,7 +135,7 @@ impl TaggedHeap {
     /// every load transient (the stop-the-world first cycle promotes inside
     /// `complete_collection`).
     pub fn finish_first_partition_cycle(&mut self) {
-        self.discharge_owner_cons_leases_for_collection();
+        self.assert_no_owner_cons_reserves();
         if !self.partition_dump || self.dump_blackened || !self.first_cycle_concurrent {
             self.first_cycle_concurrent = false;
             return;
@@ -168,7 +168,7 @@ impl TaggedHeap {
     /// the explicit collection could never free them.
     #[doc(hidden)]
     pub fn begin_stw_collection(&mut self) {
-        self.discharge_owner_cons_leases_for_collection();
+        self.assert_no_owner_cons_reserves();
         assert!(
             !self.concurrent_mark_running,
             "collection requires an explicit successful marker finish"
@@ -213,7 +213,7 @@ impl TaggedHeap {
     /// `launch_concurrent_mark`. No Steele owner-tracking: the concurrent SATB
     /// barrier (keyed on `concurrent_mark_running`) preserves the snapshot.
     pub(super) fn raw_concurrent_begin(&mut self, proof: &facade_mark::ConcurrentMarkStageProof) {
-        self.discharge_owner_cons_leases_for_collection();
+        self.assert_no_owner_cons_reserves();
         debug_assert!(proof.matches(self));
         if tagged_heap_is_current(self) {
             TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.set(false));
@@ -301,7 +301,7 @@ impl TaggedHeap {
         &mut self,
         proof: &facade_mark::ConcurrentMarkStageProof,
     ) {
-        self.discharge_owner_cons_leases_for_collection();
+        self.assert_no_owner_cons_reserves();
         debug_assert!(proof.matches(self));
         assert!(
             !self.concurrent_mark_running,

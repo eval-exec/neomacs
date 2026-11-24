@@ -198,6 +198,7 @@ shells! {
     owner_cons_reserve_refuses_every_foreign_heap_operation => OwnerConsReserveRefusesEveryForeignHeapOperation,
     owner_cons_reserve_drop_and_forget_keep_collection_excluded => OwnerConsReserveDropAndForgetKeepCollectionExcluded,
     owner_cons_reserve_main_gc_returns_the_book_then_collects => OwnerConsReserveMainGcReturnsTheBookThenCollects,
+    owner_cons_reserve_ordinary_gc_refuses_a_live_lease => OwnerConsReserveOrdinaryGcRefusesALiveLease,
     owner_cons_reserve_two_idle_stops_hold_no_reserve => OwnerConsReserveTwoIdleStopsHoldNoReserve,
     owner_cons_reserve_pacing_charges_carved_cells_and_subtracts_the_open_tail => OwnerConsReservePacingChargesCarvedCellsAndSubtractsTheOpenTail,
     owner_cons_reserve_the_cap_is_a_reserve_miss => OwnerConsReserveTheCapIsAReserveMiss,

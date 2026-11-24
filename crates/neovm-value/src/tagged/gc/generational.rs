@@ -348,7 +348,7 @@ impl TaggedHeap {
     #[inline(never)]
     #[doc(hidden)]
     pub fn complete_minor_collection(&mut self) {
-        self.discharge_owner_cons_leases_for_collection();
+        self.assert_no_owner_cons_reserves();
         assert!(self.generational.cycle == GenerationCycle::Minor);
         self.close_alloc_regions();
         let bytes_before = self.live_bytes;
