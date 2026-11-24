@@ -532,13 +532,13 @@ impl Drop for RunLoopDepthGuard {
 }
 
 #[cfg(test)]
-fn reset_run_loop_max_depth() {
+pub(crate) fn reset_run_loop_max_depth() {
     RUN_LOOP_DEPTH.with(|depth| depth.set(0));
     RUN_LOOP_MAX_DEPTH.with(|maximum| maximum.set(0));
 }
 
 #[cfg(test)]
-fn run_loop_max_depth() -> usize {
+pub(crate) fn run_loop_max_depth() -> usize {
     RUN_LOOP_MAX_DEPTH.with(std::cell::Cell::get)
 }
 
@@ -5026,7 +5026,11 @@ impl<'a> Vm<'a> {
             // name. The checked frame still runs the rest of the loop. Latch
             // another transfer only while the leaf that just deopted is
             // cached; a retired leaf (the float widening) is free to re-enter
-            // at the next header.
+            // at the next header. Each re-entry is one more `run_loop` on
+            // the Rust stack, and it happens only after `invalidate_for_reopt`
+            // retired the leaf. That stops at `max_reopts + 4`, when the
+            // level reaches Interpreter and the next probe is a refusal
+            // that latches this frame.
             let latch = crate::emacs_core::jit::cache::osr_entry_cached(func, target);
             Vm::from_context(ctx).run_resumed_frame_latched(
                 func,

@@ -671,6 +671,48 @@ fn osr_deopt_without_invalidation_latches() {
     force_reopt_for_test(None);
 }
 
+/// Each retired precise deopt resumes on a new `run_loop`. `note_reopt`
+/// allows at most `max_reopts + 4` invalidations before the level is
+/// Interpreter and the next probe latches, so the nested drivers stop
+/// inside that cap. `force_deopt` makes every re-entered leaf retire again.
+#[test]
+fn osr_retired_reentry_nests_within_the_reopt_cap() {
+    force_deopt_for_test(true);
+    force_reopt_for_test(Some(ReoptKnobs::stress()));
+    let mut ev = Context::new(crate::test_utils::unit_runtime());
+    let (n, k) = (Value::make_int(2_500), Value::make_int(700));
+    crate::emacs_core::jit::force_osr_for_test(false);
+    let want = TestVm::from_context(&mut ev)
+        .execute(&osr_switch(), vec![n, k])
+        .expect("interp run")
+        .as_float();
+    crate::emacs_core::jit::force_osr_for_test(true);
+    let f = osr_switch();
+    f.jit_runtime().set_hot_for_test();
+    crate::emacs_core::jit::test_support::prepare_osr(&mut ev, &f, OSR_HEADER);
+    crate::emacs_core::bytecode::vm::reset_run_loop_max_depth();
+    let got = TestVm::from_context(&mut ev)
+        .execute(&f, vec![n, k])
+        .expect("OSR run")
+        .as_float();
+    crate::emacs_core::jit::force_osr_for_test(false);
+    let cap = usize::from(ReoptKnobs::stress().max_reopts) + 4;
+    let depth = crate::emacs_core::bytecode::vm::run_loop_max_depth();
+    assert_eq!(got, want, "OSR vs interp");
+    assert!(
+        usize::from(f.jit_runtime().reopt_count()) <= cap,
+        "invalidations {}",
+        f.jit_runtime().reopt_count()
+    );
+    assert!(
+        (2..=1 + cap).contains(&depth),
+        "resumed frames {depth}, cap {}",
+        1 + cap
+    );
+    force_deopt_for_test(false);
+    force_reopt_for_test(None);
+}
+
 /// An OSR entry guard that keeps refusing the live stack at the header
 /// reopens recording at the first refusal and retires the OSR leaf at the
 /// site limit, so the next transfer compiles against what the loop records.
