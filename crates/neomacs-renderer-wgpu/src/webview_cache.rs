@@ -116,8 +116,8 @@ impl WgpuWebViewCache {
         if !self
             .import_formats
             .contains(neomacs_display_protocol::DmaBufFormat {
-                fourcc: buffer.fourcc,
-                modifier: buffer.modifier,
+                fourcc: buffer.fourcc(),
+                modifier: buffer.modifier(),
             })
         {
             return Err(retained_frame);

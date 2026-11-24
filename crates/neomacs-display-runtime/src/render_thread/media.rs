@@ -392,9 +392,15 @@ impl RenderApp {
                 fds[index] = Some(file.into());
             }
 
-            let buffer = DmaBufBuffer::new(
-                fds, strides, offsets, num_planes, width, height, fourcc, modifier,
-            );
+            // SAFETY: `fds`, `strides`, `offsets`, dimensions, `fourcc`, and
+            // `modifier` come directly from the ready WPE `DmaBufFrame`, whose
+            // rendering fence already signalled above and whose native lease
+            // stays alive until the renderer's GPU copy retires.
+            let buffer = unsafe {
+                DmaBufBuffer::new(
+                    fds, strides, offsets, num_planes, width, height, fourcc, modifier,
+                )
+            };
 
             // Ownership of the complete frame crosses into the renderer. Its
             // opaque WPE lease cannot be released until the exact GPU copy
