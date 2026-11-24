@@ -167,6 +167,8 @@ mod replace_sort;
 mod saving_insert;
 #[path = "scroll_bar_tty.rs"]
 mod scroll_bar_tty;
+// TTY seam oracle: ignored; NEOMACS_SEAM_BASELINE=capture|compare.
+mod seam_baseline;
 #[path = "search.rs"]
 mod search;
 #[path = "send_string_to_terminal.rs"]
