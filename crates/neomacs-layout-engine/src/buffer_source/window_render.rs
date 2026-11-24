@@ -758,12 +758,12 @@ fn shorter_face_line_at_window_start<B: crate::neovm_bridge::LayoutBufferView>(
             window_start.get().max(0) as usize,
         )),
     )?;
-    let font_size = face_spec_font_size(&spec, default_face.font_size, font_sizing)?;
+    let (font_size, family) = face_spec_probe(&spec, default_face.font_size, font_sizing)?;
     metrics
         .vertical_metrics_for_face_probe(
             'X',
             crate::font::metrics::RealizedFaceFontSelection::new(
-                default_face.font_family.as_ref(),
+                family.as_deref().unwrap_or(default_face.font_family.as_ref()),
                 default_face.font_weight,
                 default_face.italic,
                 font_size,
@@ -772,19 +772,19 @@ fn shorter_face_line_at_window_start<B: crate::neovm_bridge::LayoutBufferView>(
         .map(|measured| measured.line_height)
 }
 
-fn face_spec_font_size(
+fn face_spec_probe(
     spec: &neovm_core::emacs_core::Value,
     inherited_px: f32,
     font_sizing: crate::font::sizing::FontSizing,
-) -> Option<f32> {
-    if let Some(size) = height_in_face_plist(spec, inherited_px, font_sizing) {
-        return Some(size);
+) -> Option<(f32, Option<String>)> {
+    if let Some(found) = probe_in_face_plist(spec, inherited_px, font_sizing) {
+        return Some(found);
     }
     if spec.is_cons() && !is_face_keyword(spec.cons_car()) {
         let mut cursor = *spec;
         while cursor.is_cons() {
-            if let Some(size) = face_spec_font_size(&cursor.cons_car(), inherited_px, font_sizing) {
-                return Some(size);
+            if let Some(found) = face_spec_probe(&cursor.cons_car(), inherited_px, font_sizing) {
+                return Some(found);
             }
             cursor = cursor.cons_cdr();
         }
@@ -792,14 +792,16 @@ fn face_spec_font_size(
     None
 }
 
-fn height_in_face_plist(
+fn probe_in_face_plist(
     spec: &neovm_core::emacs_core::Value,
     inherited_px: f32,
     font_sizing: crate::font::sizing::FontSizing,
-) -> Option<f32> {
+) -> Option<(f32, Option<String>)> {
     if !spec.is_cons() || !is_face_keyword(spec.cons_car()) {
         return None;
     }
+    let mut height_px = None;
+    let mut family = None;
     let mut cursor = *spec;
     while cursor.is_cons() {
         let key = cursor.cons_car();
@@ -807,20 +809,26 @@ fn height_in_face_plist(
         if !rest.is_cons() {
             return None;
         }
-        if is_height_keyword(key) {
-            let value = rest.cons_car();
+        let value = rest.cons_car();
+        if height_px.is_none() && is_height_keyword(key) {
             if let Some(tenths) = value.as_fixnum() {
                 let tenths = i32::try_from(tenths).ok()?;
-                return Some(font_sizing.face_height_to_layout_pixels(tenths));
+                height_px = Some(font_sizing.face_height_to_layout_pixels(tenths));
+            } else if let Some(factor) = value.as_float() {
+                height_px = Some(inherited_px * factor as f32);
+            } else {
+                return None;
             }
-            if let Some(factor) = value.as_float() {
-                return Some(inherited_px * factor as f32);
+        } else if family.is_none() && is_family_keyword(key) {
+            if let Some(name) = value.as_utf8_str()
+                && !name.is_empty()
+            {
+                family = Some(name.to_owned());
             }
-            return None;
         }
         cursor = rest.cons_cdr();
     }
-    None
+    height_px.map(|px| (px, family))
 }
 
 /// Probe-only keyword test. Out of line, and it does not call
@@ -853,6 +861,16 @@ fn is_height_keyword(value: neovm_core::emacs_core::Value) -> bool {
         return false;
     };
     neovm_core::emacs_core::intern::lookup_interned(":height") == Some(id)
+}
+
+/// Probe-only `:family` test. Same non-interning rule as [`is_height_keyword`].
+#[cold]
+#[inline(never)]
+fn is_family_keyword(value: neovm_core::emacs_core::Value) -> bool {
+    let Some(id) = value.as_bare_symbol_id() else {
+        return false;
+    };
+    neovm_core::emacs_core::intern::lookup_interned(":family") == Some(id)
 }
 
 #[cfg(test)]

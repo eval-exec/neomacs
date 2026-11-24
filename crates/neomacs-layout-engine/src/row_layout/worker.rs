@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
-const MAX_ROWS: usize = 64;
+pub(crate) const MAX_ROWS: usize = 64;
 pub(crate) const MAX_PROGRAMS: usize = 64;
 const MAX_BYTES: usize = 64 * 1024;
 const MAX_GLYPHS: usize = 16 * 1024;

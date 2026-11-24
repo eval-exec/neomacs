@@ -259,14 +259,7 @@ impl ScrollCoverage {
                 return Ok(false);
             };
             rows.truncate(last + 1);
-            let capacity = admission
-                .retained
-                .matrix
-                .rows
-                .iter()
-                .skip(admission.row_base)
-                .filter(|row| !RetainedWindowMatrix::is_chrome_role(row.role))
-                .count();
+            let capacity = crate::row_layout::worker::MAX_ROWS;
             let mut height = 0.0;
             let keep = rows
                 .iter()
@@ -288,16 +281,10 @@ impl ScrollCoverage {
             };
             admission.retained.key.window_start = char_pos.get() as i64;
         }
-        // Small-font rows can reach the matrix's row limit before its pixel
-        // bottom. Match both bounds of the canonical viewport walk.
-        let capacity = admission
-            .retained
-            .matrix
-            .rows
-            .iter()
-            .skip(admission.row_base)
-            .filter(|row| !RetainedWindowMatrix::is_chrome_role(row.role))
-            .count();
+        // Shorter faces can fit more rows into the text body than the default
+        // frame-font line height implies. Allow up to the worker's row cap so
+        // prepared viewports fill the same pixel height as canonical layout.
+        let capacity = crate::row_layout::worker::MAX_ROWS;
         let mut height = 0.0;
         let visible = rows
             .iter()
@@ -316,6 +303,16 @@ impl ScrollCoverage {
         let complete_viewport = !bridge && (fills_viewport || visible == capacity);
         if !bridge {
             rows.truncate(visible);
+        }
+        let needed_matrix_rows = admission.row_base + rows.len();
+        if admission.retained.matrix.rows.len() < needed_matrix_rows {
+            admission.retained.matrix.rows.resize_with(needed_matrix_rows, || {
+                let mut row = neomacs_display_protocol::glyph_matrix::GlyphRow::new(
+                    neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text,
+                );
+                row.enabled = false;
+                neomacs_display_protocol::glyph_matrix::MatrixRow::new(row)
+            });
         }
         let body = position_buffer_rows(
             rows,
@@ -1378,6 +1375,19 @@ impl LayoutEngine {
                     metrics.row_height(),
                 ));
             }
+        }
+        let body_height = capture.retained.display_snapshot.regions.text_body.height;
+        if let Some(shortest) = faces
+            .iter()
+            .map(|face| face.metrics.line_height_px())
+            .filter(|height| *height >= 1.0 && *height + 1.0 < key.char_height)
+            .reduce(f32::min)
+        {
+            let widened = (body_height / shortest)
+                .ceil()
+                .min(crate::row_layout::worker::MAX_PROGRAMS as f32)
+                as usize;
+            capture.row_count = capture.row_count.max(widened);
         }
         for face in &faces {
             let mut rendered = face.render_face();

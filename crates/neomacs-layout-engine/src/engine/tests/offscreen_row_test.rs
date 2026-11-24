@@ -1190,6 +1190,13 @@ fn worker_page_is_rejected_after_category_symbol_properties_change() {
 }
 
 #[test]
+fn worker_shorter_face_page_fills_viewport_beyond_frame_font_rows() {
+    for face in ["(:height 70)", "(:family \"serif\" :height 70)"] {
+        first_visit_with_setup(Some(face), "ordinary offscreen text\n", None, 0, 2, None);
+    }
+}
+
+#[test]
 fn worker_prepares_right_truncated_rows_matching_fresh_layout() {
     let line = format!("{}\n", "ordinary offscreen text ".repeat(6));
     first_visit_with_setup(None, &line, None, 0, 2, Some("(setq truncate-lines t)"));
