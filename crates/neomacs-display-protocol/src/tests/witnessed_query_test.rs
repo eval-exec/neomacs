@@ -21,11 +21,14 @@ use std::path::{Path, PathBuf};
 /// Every published `&self` method whose parameters name a raw coordinate pair,
 /// as `file::method` -> why it is not a hit test in disguise.
 ///
-/// Empty on purpose. An entry here is a claim that a caller cannot use the
-/// method to resolve a pointer against a presentation; if that is hard to
-/// argue, the method should take a witnessed point instead.
+/// An entry here is a claim that a caller cannot use the method to resolve a
+/// pointer against a presentation. If that is hard to argue, the method should
+/// take a witnessed point instead.
 fn allowlist() -> &'static [(&'static str, &'static str)] {
-    &[]
+    &[(
+        "frame_glyphs.rs::covered_runs",
+        "stipple coverage geometry: it tiles a bitmap over a rectangle and returns foreground quads, and it does not name a presentation or resolve a pointer",
+    )]
 }
 
 fn crate_root() -> PathBuf {
