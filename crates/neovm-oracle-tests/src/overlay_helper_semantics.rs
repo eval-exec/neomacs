@@ -77,3 +77,29 @@ fn oracle_prop_gnu_remove_overlays_deletes_moves_and_splits_matching_overlays() 
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_gnu_equal_before_string_overlays_both_count_in_window_text_pixel_size() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // Two distinct overlays at the same endpoints with equal-text before-strings
+    // compare `equal` (Lisp `equal` ignores string text properties) while being
+    // distinct objects (`eq` is nil). Both before-strings must contribute to
+    // `window-text-pixel-size` (3 + 3 + 5 = 11), not be deduplicated by `equal`.
+    let form = r#"
+(with-temp-buffer
+  (insert "hello")
+  (let ((a (make-overlay 1 1))
+        (b (make-overlay 1 1)))
+    (overlay-put a 'before-string (propertize "abc" 'face 'bold))
+    (overlay-put b 'before-string (propertize "abc" 'face 'italic))
+    (switch-to-buffer (current-buffer))
+    (list :equal (equal a b)
+          :eq (eq a b)
+          :wtps (window-text-pixel-size nil 1 6)
+          :n (length (overlays-in 1 2)))))
+"#;
+
+    let expect = expect_test::expect![[r#""OK (:equal t :eq nil :wtps (11 . 1) :n 2)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
