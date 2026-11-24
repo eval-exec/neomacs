@@ -148,9 +148,11 @@ fn a_forced_idle_redisplay_lays_out_a_change_made_after_the_last_layout() {
 /// up-to-date X11 matrix is reused. On the pinned linux-gtk3 oracle that row
 /// stays `(17 0 0 0)` across `(put 'idle-category 'face '(:height 200))`;
 /// `(overlay-put OVERLAY 'face '(:height 300))` moves the same row to
-/// `(49 0 0 0)`. `Ffset` likewise sets no redisplay flag (`data.c:901-930`),
-/// so the function epoch stays out of the idle signature. An unrelated
-/// `event-kind` put is not a layout input either.
+/// `(49 0 0 0)` because that write bumps `OVERLAY_MODIFF`. `Ffset` likewise
+/// sets no redisplay flag (`data.c:901-930`), so the function epoch stays
+/// out of the idle signature. An unrelated `event-kind` put is not a layout
+/// input either. The overlay-face write is this row's positive control: a
+/// frozen idle signature must not pass it.
 #[test]
 fn category_symbol_writes_invalidate_idle_redisplay() {
     let _policy = RedisplayHookPolicyGuard::legacy();
@@ -172,6 +174,13 @@ fn category_symbol_writes_invalidate_idle_redisplay() {
         layouts.get(),
         1,
         "event metadata is not a layout dependency"
+    );
+    eval.eval_str("(progn (overlay-put (car (overlays-at 1)) 'face '(:height 300)) (redisplay))")
+        .unwrap();
+    assert_eq!(
+        layouts.get(),
+        2,
+        "an overlay face write bumps OVERLAY_MODIFF and must lay out"
     );
 }
 
