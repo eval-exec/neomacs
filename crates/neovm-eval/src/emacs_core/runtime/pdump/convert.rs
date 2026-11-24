@@ -1320,8 +1320,11 @@ impl<'a> LoadDecoder<'a> {
         }
     }
 
+    /// # Safety
+    /// `ptr` must point to a valid, exclusively accessible mapped [`StringObj`]
+    /// whose storage sidecar can be verified or installed for `data`.
     #[doc(hidden)]
-    pub fn install_mapped_string_sidecars(
+    pub unsafe fn install_mapped_string_sidecars(
         &self,
         ptr: *mut StringObj,
         data: &DumpByteData,
@@ -1491,7 +1494,8 @@ impl<'a> LoadDecoder<'a> {
         #[cfg(debug_assertions)]
         {
             let data = DumpByteData::Mapped(byte_span);
-            self.install_mapped_string_sidecars(ptr, &data)?;
+            // SAFETY: `ptr` is the live mapped `StringObj` resolved above.
+            unsafe { self.install_mapped_string_sidecars(ptr, &data)? };
         }
         #[cfg(not(debug_assertions))]
         let _ = byte_span;
@@ -1829,7 +1833,8 @@ impl<'a> LoadDecoder<'a> {
                         debug_assert_eq!((*ptr).data.schars(), *size);
                         debug_assert_eq!((*ptr).data.size_byte(), *size_byte);
                     }
-                    self.install_mapped_string_sidecars(ptr, data)?;
+                    // SAFETY: `ptr` is the live mapped `StringObj` resolved above.
+                    unsafe { self.install_mapped_string_sidecars(ptr, data)? };
                     unsafe { Value::from_string_ptr(ptr) }
                 } else {
                     let string = self.load_dump_string(data, *size, *size_byte)?;

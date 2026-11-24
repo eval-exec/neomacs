@@ -2078,9 +2078,9 @@ pub(super) fn call_spec_finish(
             crate::emacs_core::bytecode::vm::release_bytecode_frame(ctx, budget_restore);
         }
         let outcome = match outcome {
-            NativeCallOutcome::Fallback => {
+            NativeCallOutcome::Fallback => unsafe {
                 Vm::interp_fallback_native(std::ptr::from_mut(ctx), bc, callee, args_ptr, nargs)
-            }
+            },
             o => o,
         };
         ctx.depth -= 1;
@@ -2243,8 +2243,9 @@ fn call_spec_slow(
                     // does (`cache::pin_redefined_function`) -- and
                     // `Vm::from_context`'s eager cache zero-fill was a
                     // measured per-call tax.
-                    match Vm::call_armed_callee_native(ctx, called, target, slot, args_ptr, nargs)
-                    {
+                    match unsafe {
+                        Vm::call_armed_callee_native(ctx, called, target, slot, args_ptr, nargs)
+                    } {
                         Some(o) => o,
                         // The strict call runs `target`, which the epoch
                         // proof says the symbol names, so it resolves

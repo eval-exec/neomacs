@@ -770,8 +770,9 @@ pub(crate) unsafe extern "C" fn neovm_jit_call(
                 && ctx_ref.maybe_quit_hot_ok()
                 // SAFETY: `args_ptr` is the generated code's call-args slot,
                 // holding `nargs` words for the whole call.
-                && let Some(outcome) =
+                && let Some(outcome) = unsafe {
                     Vm::call_armed_bytecode_value_native(ctx_ref, func_val, args_ptr, nargs)
+                }
             {
                 return native_call_status(outcome, out);
             }
@@ -832,7 +833,8 @@ fn neovm_jit_call_general(
             // code.
             if nargs >= 2
                 && func_val.as_bare_symbol_id() == Some(Vm::apply_builtin_id())
-                && let Some(outcome) = Vm::call_apply_native(ctx_ref, func_val, args_ptr, nargs)
+                && let Some(outcome) =
+                    unsafe { Vm::call_apply_native(ctx_ref, func_val, args_ptr, nargs) }
             {
                 return native_call_status(outcome, out);
             }

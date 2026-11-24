@@ -1661,7 +1661,7 @@ impl Context {
                 // #776: the drain above finalized any in-flight automatic
                 // cycle, so apply its retired-process batch before this
                 // explicit collection takes a fresh one.
-                self.finish_automatic_retired_process_cycle(heap_ptr);
+                unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
                 // Pin frame objects named by bare ids (queued input, the last
                 // event frame, mouse position) before this collection can
                 // reclaim a deleted frame. The pins are ordinary roots.
@@ -1808,7 +1808,7 @@ impl Context {
                     MarkPhase::Idle => {
                         // #776: settle the previous cycle before deciding this
                         // one; an abandoned batch is restored here.
-                        self.finish_automatic_retired_process_cycle(heap_ptr);
+                        unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
                         // A retired process record is decided by a major: a
                         // generational minor treats a promoted object as black
                         // and would keep the dead process's fields until a
@@ -1829,7 +1829,7 @@ impl Context {
                         // A major (forced or naturally due) arms every record;
                         // a minor arms none and keeps decided records in the
                         // ordinary root walk, as before #776.
-                        self.begin_automatic_retired_process_cycle(heap_ptr, !minor);
+                        unsafe { self.begin_automatic_retired_process_cycle(heap_ptr, !minor) };
                         if stress_cycle {
                             // A fresh automatic stress cycle is synchronous. Choose its
                             // generation before advancing the next-cycle stride; an
@@ -1860,7 +1860,7 @@ impl Context {
                             (*heap_ptr).complete_minor_collection();
                             // The minor's termination ran the reclaim; this
                             // branch returns without the completion block.
-                            self.finish_automatic_retired_process_cycle(heap_ptr);
+                            unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
                             return Ok(self.bank_gc_cycle_time(start));
                         } else {
                             let concurrent_kind = if (*heap_ptr).should_run_concurrent() {
@@ -1883,7 +1883,7 @@ impl Context {
                             // census. Keep the incomplete cycle for explicit
                             // owner recovery rather than tracing foreign roots.
                             // No cycle started, so restore the batch we took.
-                            self.finish_automatic_retired_process_cycle(heap_ptr);
+                            unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
                             return Ok(self.bank_gc_cycle_time(start));
                         }
                         Err(
@@ -1948,7 +1948,7 @@ impl Context {
             // #776: this call finished the automatic cycle (synchronous STW,
             // stress cycle, or the last deferred-sweep slice of a concurrent
             // cycle), so apply the retired-process batch it owned.
-            self.finish_automatic_retired_process_cycle(heap_ptr);
+            unsafe { self.finish_automatic_retired_process_cycle(heap_ptr) };
         }
         if !cycle_completed {
             return Ok(self.bank_gc_cycle_time(start));
@@ -2012,7 +2012,14 @@ impl Context {
     /// `deleted_processes` and are skipped by the ordinary root trace, so a
     /// field written while Lisp ran during the mark is only reachable through
     /// this refresh.
-    fn refresh_armed_retired_process_fields(&self, heap: *mut neovm_value::tagged::gc::TaggedHeap) {
+    ///
+    /// # Safety
+    /// `heap` must point to this `Context`'s live [`TaggedHeap`] while the
+    /// caller holds the exclusive GC-driver extent.
+    unsafe fn refresh_armed_retired_process_fields(
+        &self,
+        heap: *mut neovm_value::tagged::gc::TaggedHeap,
+    ) {
         let Some(ids) = self.automatic_retired_processes.as_ref() else {
             return;
         };
@@ -2034,7 +2041,11 @@ impl Context {
     /// Context until [`Self::finish_automatic_retired_process_cycle`] applies
     /// the completed cycle's result. The caller settles a stale batch from an
     /// abandoned cycle first, so records are never lost or armed twice.
-    fn begin_automatic_retired_process_cycle(
+    ///
+    /// # Safety
+    /// `heap` must point to this `Context`'s live [`TaggedHeap`] while the
+    /// caller holds the exclusive GC-driver extent.
+    unsafe fn begin_automatic_retired_process_cycle(
         &mut self,
         heap: *mut neovm_value::tagged::gc::TaggedHeap,
         arm_all: bool,
@@ -2058,7 +2069,11 @@ impl Context {
     ///
     /// Also called before a new automatic cycle takes a batch, which restores
     /// an abandoned cycle's records and disarms its maps.
-    fn finish_automatic_retired_process_cycle(
+    ///
+    /// # Safety
+    /// `heap` must point to this `Context`'s live [`TaggedHeap`] while the
+    /// caller holds the exclusive GC-driver extent and no collection borrow is active.
+    unsafe fn finish_automatic_retired_process_cycle(
         &mut self,
         heap: *mut neovm_value::tagged::gc::TaggedHeap,
     ) {
@@ -2418,7 +2433,7 @@ impl Context {
         // changed a reached process's sentinel/filter/plist. Re-snapshot the
         // armed fields now, before the termination's ephemeron fixpoint
         // decides them against this cycle's marks.
-        self.refresh_armed_retired_process_fields(heap_ptr);
+        unsafe { self.refresh_armed_retired_process_fields(heap_ptr) };
         let term_t0 = std::time::Instant::now();
         let (roots_us, drain_us);
         let (ctxroots_breakdown, newsyms_us);

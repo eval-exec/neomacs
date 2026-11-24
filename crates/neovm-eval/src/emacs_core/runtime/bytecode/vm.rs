@@ -8686,8 +8686,10 @@ impl<'a> Vm<'a> {
     /// `maybe_quit` already returned Ok (which does not collect) and nothing
     /// allocates on a lisp heap before the callee's entry reads its args.
     ///
-    /// SAFETY: `args_ptr` addresses `nargs` valid tagged words (the caller's
-    /// call-args slot, populated immediately before the spec shim was called).
+    /// # Safety
+    /// `args_ptr` must address `nargs` valid tagged words (the caller's
+    /// call-args slot, populated immediately before the spec shim was called)
+    /// and remain valid for the entire call.
     ///
     /// Only ever called from the JIT spec shim (`jit::compile`, itself
     /// `#[cfg(feature = "jit")]`) and references `jit::compile`/`jit::cache`
@@ -8699,7 +8701,7 @@ impl<'a> Vm<'a> {
     /// measured ~22 Ir/call tax the armed path must not pay. Only the cold
     /// defensive deopt fallback below builds a `Vm`.
     #[doc(hidden)]
-    pub(crate) fn call_armed_callee_native(
+    pub(crate) unsafe fn call_armed_callee_native(
         ctx: &mut crate::emacs_core::eval::Context,
         called: Value,
         callee: Value,
@@ -8725,9 +8727,12 @@ impl<'a> Vm<'a> {
             match unsafe { crate::emacs_core::jit::cache::resolve_spec_call_leaf(ctx_ptr, bc) }? {
                 crate::emacs_core::jit::cache::SpecCallLeaf::Armable(ready) => ptr = ready,
                 crate::emacs_core::jit::cache::SpecCallLeaf::RetainedUpgrade(leaf) => {
-                    return Self::run_retained_upgrade_from_spec(
-                        ctx, called, callee, bc, &leaf, args_ptr, nargs,
-                    );
+                    // SAFETY: forwarded from caller.
+                    return unsafe {
+                        Self::run_retained_upgrade_from_spec(
+                            ctx, called, callee, bc, &leaf, args_ptr, nargs,
+                        )
+                    };
                 }
             }
             // Arm the shim's fast-path key with the leaf: this site's
@@ -8803,26 +8808,33 @@ impl<'a> Vm<'a> {
             crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT
                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
-        Self::run_leaf_native_to_native(
-            ctx,
-            called,
-            callee,
-            bc,
-            leaf,
-            args_ptr,
-            nargs,
-            CalleeFrameArgs::CallerSlot,
-        )
+        // SAFETY: forwarded from caller.
+        unsafe {
+            Self::run_leaf_native_to_native(
+                ctx,
+                called,
+                callee,
+                bc,
+                leaf,
+                args_ptr,
+                nargs,
+                CalleeFrameArgs::CallerSlot,
+            )
+        }
     }
 
     /// Pending upgrades retain executable T1 without publishing it into the
     /// spec slot. Keep this rare route out of the ordinary arming path; the
     /// owning handle survives any replacement during the activation.
+    ///
+    /// # Safety
+    /// `args_ptr` must address `nargs` valid tagged words that remain valid
+    /// for the entire call.
     #[cfg(feature = "jit")]
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub(crate) fn run_retained_upgrade_from_spec(
+    pub(crate) unsafe fn run_retained_upgrade_from_spec(
         ctx: &mut crate::emacs_core::eval::Context,
         called: Value,
         callee: Value,
@@ -8836,16 +8848,19 @@ impl<'a> Vm<'a> {
             crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT
                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
-        Self::run_leaf_native_to_native(
-            ctx,
-            called,
-            callee,
-            bc,
-            leaf,
-            args_ptr,
-            nargs,
-            CalleeFrameArgs::CallerSlot,
-        )
+        // SAFETY: forwarded from caller.
+        unsafe {
+            Self::run_leaf_native_to_native(
+                ctx,
+                called,
+                callee,
+                bc,
+                leaf,
+                args_ptr,
+                nargs,
+                CalleeFrameArgs::CallerSlot,
+            )
+        }
     }
 
     /// Native-to-native call of a callee that is ALREADY a bytecode value —
@@ -8874,11 +8889,12 @@ impl<'a> Vm<'a> {
     /// `None` = not fast-pathable (debugger armed, not bytecode, no armed
     /// leaf, wrong arity); the caller must take the strict path.
     ///
-    /// SAFETY: `args_ptr` addresses `nargs` valid tagged words (the caller's
-    /// native call-args slot), valid for the whole call.
+    /// # Safety
+    /// `args_ptr` must address `nargs` valid tagged words (the caller's native
+    /// call-args slot) that remain valid for the entire call.
     #[cfg(feature = "jit")]
     #[doc(hidden)]
-    pub(crate) fn call_armed_bytecode_value_native(
+    pub(crate) unsafe fn call_armed_bytecode_value_native(
         ctx: &mut crate::emacs_core::eval::Context,
         callee: Value,
         args_ptr: *const i64,
@@ -8895,16 +8911,19 @@ impl<'a> Vm<'a> {
         // SAFETY: `armed_leaf_for_native_call` returns a leaf armed under the
         // current `leaf_slot_epoch` — see its own contract.
         let leaf = unsafe { &*ptr };
-        Self::run_leaf_native_to_native(
-            ctx,
-            callee,
-            callee,
-            bc,
-            leaf,
-            args_ptr,
-            nargs,
-            CalleeFrameArgs::CallerSlot,
-        )
+        // SAFETY: forwarded from caller.
+        unsafe {
+            Self::run_leaf_native_to_native(
+                ctx,
+                callee,
+                callee,
+                bc,
+                leaf,
+                args_ptr,
+                nargs,
+                CalleeFrameArgs::CallerSlot,
+            )
+        }
     }
 
     /// `(apply F ARG... LIST)` from compiled code where F is a bytecode object
@@ -8921,12 +8940,13 @@ impl<'a> Vm<'a> {
     /// circular or longer than the spread buffer, or an arity the leaf
     /// rejects — each of which the builtin handles (and signals) as before.
     ///
-    /// SAFETY: `args_ptr` addresses `nargs >= 2` valid tagged words, the
-    /// caller's native call-args slot, valid for the whole call.
+    /// # Safety
+    /// `args_ptr` must address `nargs >= 2` valid tagged words (the caller's
+    /// native call-args slot) that remain valid for the entire call.
     #[cfg(feature = "jit")]
     #[inline(never)]
     #[doc(hidden)]
-    pub(crate) fn call_apply_native(
+    pub(crate) unsafe fn call_apply_native(
         ctx: &mut crate::emacs_core::eval::Context,
         apply: Value,
         args_ptr: *const i64,
@@ -9003,16 +9023,20 @@ impl<'a> Vm<'a> {
         // The spread is this frame's local: the callee's frame records a copy
         // of it, so a contained panic that unwinds through here cannot leave
         // a frame reading a freed buffer.
-        let outcome = Self::run_leaf_native_to_native(
-            ctx,
-            function,
-            function,
-            bc,
-            leaf,
-            spread_ptr,
-            count,
-            CalleeFrameArgs::Local,
-        )
+        // SAFETY: `spread_ptr` addresses `count` initialized tagged words on
+        // this stack frame, live for the whole call.
+        let outcome = unsafe {
+            Self::run_leaf_native_to_native(
+                ctx,
+                function,
+                function,
+                bc,
+                leaf,
+                spread_ptr,
+                count,
+                CalleeFrameArgs::Local,
+            )
+        }
         .expect("an accepted arity runs");
         if ctx.pop_native_backtrace_frame(bt_count) {
             return Some(outcome);
@@ -9050,8 +9074,9 @@ impl<'a> Vm<'a> {
     /// kept alive by the symbol's function cell, and past a redefinition by
     /// the frame (`jit::cache::pin_redefined_function`).
     ///
-    /// SAFETY: `args_ptr` addresses `nargs` valid tagged words that stay valid
-    /// for the whole call (the caller's own native call-args slot).
+    /// # Safety
+    /// `args_ptr` must address `nargs` valid tagged words that stay valid for
+    /// the entire call (the caller's own native call-args slot or local buffer).
     ///
     /// `#[inline(always)]` is load-bearing, not a hint. Extracting this body
     /// out of `call_armed_callee_native` as a plain `fn` cost the speculated
@@ -9065,7 +9090,7 @@ impl<'a> Vm<'a> {
     #[cfg(feature = "jit")]
     #[inline(always)]
     #[doc(hidden)]
-    pub(crate) fn run_leaf_native_to_native(
+    pub(crate) unsafe fn run_leaf_native_to_native(
         ctx: &mut crate::emacs_core::eval::Context,
         frame_function: Value,
         callee: Value,
@@ -9161,8 +9186,11 @@ impl<'a> Vm<'a> {
         /// both call shims, so folding this body in with it cost `flet` 2.3%
         /// and `listlen-tc` 0.3% — benchmarks that never take this branch at
         /// all.
+        /// # Safety
+        /// `ctx_ptr` must point to the dormant owner-thread `Context`, and
+        /// `args_ptr` must address `nargs` valid tagged words for the whole call.
         #[inline(never)]
-        fn marshal_and_run(
+        unsafe fn marshal_and_run(
             ctx_ptr: *mut crate::emacs_core::eval::Context,
             bc: &ByteCodeFunction,
             callee: Value,
@@ -9218,9 +9246,9 @@ impl<'a> Vm<'a> {
                 leaf,
                 slots.as_ptr(),
             ) {
-                NativeCallOutcome::Fallback => {
+                NativeCallOutcome::Fallback => unsafe {
                     Vm::interp_fallback_native(ctx_ptr, bc, callee, args_ptr, nargs)
-                }
+                },
                 o => o,
             }
         }
@@ -9234,13 +9262,13 @@ impl<'a> Vm<'a> {
                 match crate::emacs_core::jit::cache::run_resolved_leaf_native(
                     ctx_ptr, bc, callee, leaf, args_ptr,
                 ) {
-                    NativeCallOutcome::Fallback => {
+                    NativeCallOutcome::Fallback => unsafe {
                         Vm::interp_fallback_native(ctx_ptr, bc, callee, args_ptr, nargs)
-                    }
+                    },
                     o => o,
                 }
             } else {
-                marshal_and_run(ctx_ptr, bc, callee, leaf, args_ptr, nargs)
+                unsafe { marshal_and_run(ctx_ptr, bc, callee, leaf, args_ptr, nargs) }
             }
         };
         ctx.depth -= 1;
@@ -9285,11 +9313,14 @@ impl<'a> Vm<'a> {
     /// the interpreter frame's arguments. Cold, and a plain fn rather than a
     /// closure -- the closure's environment setup was a measured per-call
     /// cost on the hot path that never takes this branch.
+    /// # Safety
+    /// `ctx_ptr` must point to the dormant owner-thread `Context`, and
+    /// `args_ptr` must address `nargs` valid tagged words for the whole call.
     #[cfg(feature = "jit")]
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub(crate) fn interp_fallback_native(
+    pub(crate) unsafe fn interp_fallback_native(
         ctx_ptr: *mut crate::emacs_core::eval::Context,
         bc: &ByteCodeFunction,
         callee: Value,
