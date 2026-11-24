@@ -468,6 +468,23 @@ macro_rules! era_operations {
                 self.core.stop()
             }
 
+            /// Main-thread GC request. See [`EraCore::request_collection`].
+            #[cold]
+            pub fn request_collection(
+                &self,
+                stopped: &mut AllStopped<'_>,
+                roots: impl FnOnce(
+                    &K,
+                    &mut AllStopped<'_>,
+                    &mut Vec<crate::tagged::value::TaggedValue>,
+                ) -> Result<
+                    Vec<*mut *mut crate::tagged::header::MarkerObj>,
+                    RendezvousError,
+                >,
+            ) -> Result<CollectionReport, CollectionError> {
+                self.core.request_collection(stopped, roots)
+            }
+
             pub fn rendezvous(&self) -> Rendezvous<'_> {
                 self.core.rendezvous()
             }

@@ -413,6 +413,29 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             .shutdown_admission())
     }
 
+    /// Main-thread GC request under the current stop.
+    ///
+    /// Resume refuses a live owner-cons lease, so this request runs before
+    /// the catalog is detached again. It enters the stop session, which
+    /// returns every leased book before any collector entry. A direct
+    /// `TaggedHeap::collect` still hits the backstop, including while an
+    /// owner run is open.
+    #[cold]
+    pub(super) fn request_collection(
+        &self,
+        stopped: &mut AllStopped<'_>,
+        roots: impl FnOnce(
+            &K,
+            &mut AllStopped<'_>,
+            &mut Vec<TaggedValue>,
+        )
+            -> Result<Vec<*mut *mut crate::tagged::header::MarkerObj>, RendezvousError>,
+    ) -> Result<CollectionReport, CollectionError> {
+        // The lease return stays inside `collect_stopped_kind`, before the
+        // registry gate. This request does not walk the table itself.
+        self.collect_stopped(stopped, roots)
+    }
+
     #[cold]
     pub(super) fn collect_stopped(
         &self,

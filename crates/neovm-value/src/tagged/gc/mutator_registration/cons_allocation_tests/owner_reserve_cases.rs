@@ -832,14 +832,65 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+/// An admitted era holds a closed cons reserve under the current stop.
+/// Resume refuses that lease, so the main thread requests a GC here.
+/// The request must return the lease and collect through the stop
+/// session. It must not reach `assert_no_owner_cons_reserves`.
+pub(super) fn owner_cons_reserve_ordinary_request_routes_through_stop<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        let mut reserve = OwnerEraReserve::new();
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            reserve
+                .grant_at_stop(&stopped, heap, true, MeasuredInterval::zero())
+                .unwrap();
+        });
+        assert!(
+            reserve.holds_reserve(),
+            "the closed book is still outstanding"
+        );
+        // Resume refuses a live lease, so the request runs under this stop,
+        // before the catalog is detached again.
+        let result = era.request_collection(&mut stopped, world_roots);
+        assert!(
+            result.is_ok(),
+            "the main-thread request routes through the stop session: {result:?}"
+        );
+        assert!(
+            !reserve.holds_reserve(),
+            "the session returned the closed lease before collecting"
+        );
+        complete(stopped);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
 /// Ordinary `TaggedHeap::collect` while a lease still has an open run.
 ///
-/// The request must refuse at `assert_no_owner_cons_reserves` and leave the
-/// book returnable. It must not rewind the block under the open run. Routing
-/// that request through the stop session is still owed, so production grants
-/// stay gated on it. This row is red on 9c6133fae3: the infallible entry
-/// returns the lease, `close_for_stop` sticks on `InvalidReserve`, and the
-/// owner cursor and the free list hand out the same cell.
+/// The direct entry must refuse at `assert_no_owner_cons_reserves` and
+/// leave the book returnable. It must not rewind the block under the open
+/// run. A closed book uses `request_collection`, which enters the stop
+/// session. This row is red on 9c6133fae3: the infallible entry returns
+/// the lease, `close_for_stop` sticks on `InvalidReserve`, and the owner
+/// cursor and the free list hand out the same cell.
 pub(super) fn owner_cons_reserve_ordinary_gc_refuses_a_live_lease<K, W>(
     roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
     _world_roots: W,

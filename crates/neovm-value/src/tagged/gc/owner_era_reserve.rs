@@ -608,11 +608,11 @@ impl TaggedHeap {
         self.cons_allocator.owner_reserved_blocks() != 0
     }
 
-    /// Backstop for an ordinary collector entry. Those entries hold only
+    /// Backstop for a direct collector entry. Those entries hold only
     /// `&mut TaggedHeap`, so they must not return a lease: the owner may
-    /// still be handing the run out. The stopped session returns leases
-    /// under `AllStopped`. Routing an ordinary request through that session
-    /// is still owed, and production grants stay gated on it.
+    /// still be handing the run out. The main-thread request is
+    /// `EraCore::request_collection`, which enters the stop session.
+    /// `grant_at_stop` stays test-gated until a production grant is enabled.
     pub(in crate::tagged::gc) fn assert_no_owner_cons_reserves(&self) {
         assert!(
             !self.has_owner_cons_reserves(),
