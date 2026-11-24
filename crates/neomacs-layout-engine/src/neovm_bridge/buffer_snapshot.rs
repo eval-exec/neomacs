@@ -50,33 +50,7 @@ fn parse_overlay_source_mode(value: Option<&std::ffi::OsStr>) -> OverlaySourceMo
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    static TEST_OVERLAY_SOURCE_OVERRIDE: std::cell::Cell<Option<OverlaySourceMode>> =
-        const { std::cell::Cell::new(None) };
-}
-
-#[cfg(test)]
-pub(crate) fn with_overlay_source_mode_for_test<R>(
-    mode: OverlaySourceMode,
-    f: impl FnOnce() -> R,
-) -> R {
-    struct Reset(Option<OverlaySourceMode>);
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            TEST_OVERLAY_SOURCE_OVERRIDE.with(|slot| slot.set(self.0));
-        }
-    }
-    let previous = TEST_OVERLAY_SOURCE_OVERRIDE.with(|slot| slot.replace(Some(mode)));
-    let _reset = Reset(previous);
-    f()
-}
-
 pub(crate) fn overlay_source_mode() -> OverlaySourceMode {
-    #[cfg(test)]
-    if let Some(override_mode) = TEST_OVERLAY_SOURCE_OVERRIDE.with(|slot| slot.get()) {
-        return override_mode;
-    }
     static MODE: OnceLock<OverlaySourceMode> = OnceLock::new();
     *MODE.get_or_init(|| {
         parse_overlay_source_mode(std::env::var_os("NEOMACS_LAYOUT_OVERLAY_SOURCE").as_deref())
@@ -149,7 +123,7 @@ pub(crate) struct LayoutBufferSnapshot {
 impl LayoutBufferSnapshot {
     #[cfg(test)]
     pub fn from_buffer(buffer: &Buffer) -> Self {
-        Self::capture_buffer(buffer, None, None, None, None, false)
+        Self::capture_buffer(buffer, None, None, None, None, overlay_source_mode())
     }
 
     /// Project a query's source boundary without narrowing the live buffer.
@@ -179,9 +153,9 @@ impl LayoutBufferSnapshot {
         visible: Option<(usize, usize)>,
         overlay_span: Option<(usize, usize)>,
         root_retainer: Option<&OwnedRootRetainer>,
-        force_captured: bool,
+        overlay_source: OverlaySourceMode,
     ) -> Self {
-        let use_live = !force_captured && overlay_source_mode() == OverlaySourceMode::Live;
+        let use_live = overlay_source == OverlaySourceMode::Live;
         let (overlays, overlay_view_span, overlay_roots) = if use_live {
             // Live view reads the buffer's generation-stamped Arc core directly:
             // whole-buffer coverage, zero copies, zero view entries, zero roots.
@@ -282,7 +256,7 @@ impl LayoutBufferSnapshot {
             target,
             SymbolMode::Bare,
             None,
-            false,
+            overlay_source_mode(),
         )
     }
 
@@ -308,13 +282,14 @@ impl LayoutBufferSnapshot {
             target,
             symbol_mode,
             Some(root_retainer),
-            false,
+            overlay_source_mode(),
         )
     }
 
-    /// Capture for a window, optionally forcing the captured overlay fallback
-    /// after a repeated live-view staleness retry.
-    pub fn from_buffer_for_window_with_symbols_and_fallback(
+    /// Capture for a window using an explicit [`OverlaySourceMode`] (for
+    /// bounded captured fallback after repeated live-view staleness, or tests
+    /// exercising both modes without process/thread-local state).
+    pub fn from_buffer_for_window_with_symbols_and_source(
         buffer: &Buffer,
         vars: VariableView<'_>,
         visible: Option<(usize, usize)>,
@@ -322,7 +297,7 @@ impl LayoutBufferSnapshot {
         target: crate::display_property::DisplayPropertyTarget,
         symbol_mode: SymbolMode,
         root_retainer: &OwnedRootRetainer,
-        force_captured_overlays: bool,
+        overlay_source: OverlaySourceMode,
     ) -> Self {
         Self::capture_window_with_symbols(
             buffer,
@@ -332,7 +307,7 @@ impl LayoutBufferSnapshot {
             target,
             symbol_mode,
             Some(root_retainer),
-            force_captured_overlays,
+            overlay_source,
         )
     }
 
@@ -345,7 +320,7 @@ impl LayoutBufferSnapshot {
         target: crate::display_property::DisplayPropertyTarget,
         symbol_mode: SymbolMode,
         root_retainer: Option<&OwnedRootRetainer>,
-        force_captured_overlays: bool,
+        overlay_source: OverlaySourceMode,
     ) -> Self {
         let obarray = vars.obarray();
         let mut snapshot = Self::capture_buffer(
@@ -354,7 +329,7 @@ impl LayoutBufferSnapshot {
             visible,
             overlay_span,
             root_retainer,
-            force_captured_overlays,
+            overlay_source,
         );
         snapshot.display_target = target;
         snapshot.category_symbol_plists = match &snapshot.overlays {

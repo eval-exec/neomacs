@@ -468,13 +468,8 @@ fn overlay_face_wins_over_text_face_properties() {
 /// while recording 0 copies, 0 view entries, 0 roots, and nonzero live records.
 #[test]
 fn live_overlay_source_fontification_mutations_match_gnu() {
-    let stats_dir = std::env::temp_dir().join(format!(
-        "neomacs-tui-live-overlay-stats-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::create_dir_all(&stats_dir);
-    let stats_path = stats_dir.join("layout-stats.log");
-    let _ = std::fs::remove_file(&stats_path);
+    let stats_dir = tempfile::tempdir().expect("live overlay stats tempdir");
+    let stats_path = stats_dir.path().join("layout-stats.log");
 
     let (mut gnu, mut neo) = boot_pair_with_envs(
         "",
@@ -601,5 +596,4 @@ fn live_overlay_source_fontification_mutations_match_gnu() {
         saw_live_records,
         "expected nonzero overlay_live_records in stats:\n{stats_text}"
     );
-    let _ = std::fs::remove_dir_all(&stats_dir);
 }

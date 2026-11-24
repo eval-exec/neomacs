@@ -1777,6 +1777,10 @@ where
     }
 
     fn restart(&mut self) {
+        // Release any held `core.read()` guard on the previous endpoint cursor
+        // before `active_property_overlays_at` acquires `intervals.read()`
+        // (`intervals -> core` lock order).
+        self.endpoints = OverlayEndpointRecords::empty().peekable();
         self.active = if self.bounds.is_empty() {
             ActivePropertyOverlays::new()
         } else {

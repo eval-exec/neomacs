@@ -12,13 +12,13 @@
 use std::cell::Cell;
 use std::sync::{Arc, OnceLock};
 
-use parking_lot::{RwLock, RwLockReadGuard};
+use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use super::overlay_bplus::{
     OrderedFilterMask, OrderedFilteredRecord, OrderedRecordRelocation, OrderedShiftRecord,
-    OrderedShiftTree, OrderedTreeQuery,
+    OrderedShiftTree, OrderedTreeMatches, OrderedTreeQuery,
 };
 use super::overlay_order::GnuOverlayOrder;
 use neovm_value::heap_types::OverlayData;
@@ -382,14 +382,59 @@ fn overlay_indexed_property_mask(overlay: Value) -> OrderedFilterMask {
 }
 
 #[derive(Clone, Copy)]
-struct EndpointRangeQuery {
+struct DirectEndpointRangeQuery {
+    bounds: EmacsByteRange,
+    property_filter: OverlayPropertyFilter,
+}
+
+impl OrderedTreeQuery<EndpointRecord> for DirectEndpointRangeQuery {
+    #[inline]
+    fn subtree_may_match(
+        self,
+        minimum: EmacsBytePos,
+        maximum: EmacsBytePos,
+        _maximum_end: EmacsBytePos,
+    ) -> bool {
+        minimum < self.bounds.end() && maximum > self.bounds.start()
+    }
+
+    #[inline]
+    fn record_matches(self, record: EndpointRecord) -> bool {
+        self.bounds.start() < record.key.position
+            && record.key.position < self.bounds.end()
+            && self.property_filter.record_may_match(record.property_mask)
+    }
+
+    #[inline]
+    fn subtree_filter_may_match(self, filter_mask: OrderedFilterMask) -> bool {
+        self.property_filter.subtree_may_match(filter_mask)
+    }
+
+    #[inline]
+    fn maximum_end_is_too_small(self, maximum_end: EmacsBytePos) -> bool {
+        maximum_end <= self.bounds.start()
+    }
+
+    #[inline]
+    fn minimum_start_is_too_large(self, minimum_start: EmacsBytePos) -> bool {
+        minimum_start >= self.bounds.end()
+    }
+
+    #[cfg(test)]
+    fn record_subtree_visit(self) {
+        super::overlay::record_endpoint_search_node_visit();
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LiveEndpointRangeQuery {
     bounds: EmacsByteRange,
     property_filter: OverlayPropertyFilter,
     after_key: Option<EndpointKey>,
     before_key: Option<EndpointKey>,
 }
 
-impl OrderedTreeQuery<EndpointRecord> for EndpointRangeQuery {
+impl OrderedTreeQuery<EndpointRecord> for LiveEndpointRangeQuery {
     fn subtree_may_match(
         self,
         minimum: EmacsBytePos,
@@ -441,7 +486,6 @@ pub(super) struct OverlayEndpoint {
     pub(super) position: EmacsBytePos,
     pub(super) overlay: Value,
     pub(super) kind: EndpointKind,
-    key: EndpointKey,
 }
 
 const ENDPOINT_CHUNK_SIZE: usize = 64;
@@ -452,38 +496,40 @@ enum EndpointScanDirection {
     Reverse,
 }
 
-/// Guard-free chunked endpoint stream. Each chunk takes a short `core.read()`
-/// guard, checks the generation stamp when serving a live view, copies up to
+/// Guard-free chunked endpoint stream for `LiveOverlayView`. Each chunk takes
+/// a short `core.read()` guard, checks the generation stamp, copies up to
 /// `ENDPOINT_CHUNK_SIZE` matching endpoints, and releases the guard before
-/// yielding. No `RwLockReadGuard` ever outlives a call, so callers can inspect
-/// overlay ranges or restart sweeps without holding `core` across `intervals`.
-pub(super) struct OverlayEndpointRecords<'a> {
+/// yielding. No `RwLockReadGuard` ever outlives a call.
+pub(super) struct LiveEndpointRecords<'a> {
     intervals: &'a Arc<RwLock<IntervalBPlusTree>>,
     core: &'a Arc<RwLock<OverlayIndexCore>>,
-    live: Option<(&'a Cell<bool>, u64)>,
+    stale: &'a Cell<bool>,
+    stamp: u64,
     bounds: EmacsByteRange,
     property_filter: OverlayPropertyFilter,
     direction: EndpointScanDirection,
     cursor_key: Option<EndpointKey>,
-    buffer: SmallVec<[OverlayEndpoint; ENDPOINT_CHUNK_SIZE]>,
+    buffer: SmallVec<[(OverlayEndpoint, EndpointKey); ENDPOINT_CHUNK_SIZE]>,
     index: usize,
     exhausted: bool,
 }
 
-impl<'a> OverlayEndpointRecords<'a> {
+impl<'a> LiveEndpointRecords<'a> {
     fn new(
         intervals: &'a Arc<RwLock<IntervalBPlusTree>>,
         core: &'a Arc<RwLock<OverlayIndexCore>>,
-        live: Option<(&'a Cell<bool>, u64)>,
+        stale: &'a Cell<bool>,
+        stamp: u64,
         bounds: EmacsByteRange,
         property_filter: OverlayPropertyFilter,
         direction: EndpointScanDirection,
     ) -> Self {
-        let exhausted = !publish_endpoints_for(intervals, core, live);
+        let exhausted = !publish_endpoints_for(intervals, core, Some((stale, stamp)));
         Self {
             intervals,
             core,
-            live,
+            stale,
+            stamp,
             bounds,
             property_filter,
             direction,
@@ -498,21 +544,17 @@ impl<'a> OverlayEndpointRecords<'a> {
         if self.exhausted {
             return;
         }
-        if let Some((stale, _)) = self.live
-            && stale.get()
-        {
+        if self.stale.get() {
             self.exhausted = true;
             return;
         }
-        if !publish_endpoints_for(self.intervals, self.core, self.live) {
+        if !publish_endpoints_for(self.intervals, self.core, Some((self.stale, self.stamp))) {
             self.exhausted = true;
             return;
         }
         let core = self.core.read();
-        if let Some((stale, stamp)) = self.live
-            && core.generation != stamp
-        {
-            stale.set(true);
+        if core.generation != self.stamp {
+            self.stale.set(true);
             self.exhausted = true;
             return;
         }
@@ -521,13 +563,13 @@ impl<'a> OverlayEndpointRecords<'a> {
             return;
         };
         let query = match self.direction {
-            EndpointScanDirection::Forward => EndpointRangeQuery {
+            EndpointScanDirection::Forward => LiveEndpointRangeQuery {
                 bounds: self.bounds,
                 property_filter: self.property_filter,
                 after_key: self.cursor_key,
                 before_key: None,
             },
-            EndpointScanDirection::Reverse => EndpointRangeQuery {
+            EndpointScanDirection::Reverse => LiveEndpointRangeQuery {
                 bounds: self.bounds,
                 property_filter: self.property_filter,
                 after_key: None,
@@ -536,11 +578,15 @@ impl<'a> OverlayEndpointRecords<'a> {
         };
         self.buffer.clear();
         self.index = 0;
-        let map_record = |record: EndpointRecord| OverlayEndpoint {
-            position: record.key.position,
-            overlay: record.overlay,
-            kind: record.kind,
-            key: record.key,
+        let map_record = |record: EndpointRecord| {
+            (
+                OverlayEndpoint {
+                    position: record.key.position,
+                    overlay: record.overlay,
+                    kind: record.kind,
+                },
+                record.key,
+            )
         };
         match self.direction {
             EndpointScanDirection::Forward => {
@@ -559,30 +605,64 @@ impl<'a> OverlayEndpointRecords<'a> {
             }
         }
         drop(core);
-        if self.live.is_some() {
-            super::overlay::note_overlay_live_records_visited(self.buffer.len());
-        }
+        super::overlay::note_overlay_live_records_visited(self.buffer.len());
         if self.buffer.len() < ENDPOINT_CHUNK_SIZE {
             self.exhausted = true;
         } else {
-            self.cursor_key = self.buffer.last().map(|endpoint| endpoint.key);
+            self.cursor_key = self.buffer.last().map(|&(_, key)| key);
         }
     }
-}
 
-impl Iterator for OverlayEndpointRecords<'_> {
-    type Item = OverlayEndpoint;
-
-    fn next(&mut self) -> Option<Self::Item> {
+    #[inline]
+    fn next_item(&mut self) -> Option<OverlayEndpoint> {
         if self.index >= self.buffer.len() {
             self.refill();
             if self.index >= self.buffer.len() {
                 return None;
             }
         }
-        let item = self.buffer[self.index];
+        let item = self.buffer[self.index].0;
         self.index += 1;
         Some(item)
+    }
+}
+
+/// Endpoint cursor shared by `OverlayList` (single-pass direct B+ tree
+/// traversal under one mapped `core.read()` guard) and `LiveOverlayView`
+/// (guard-free chunked stream with per-chunk generation checks).
+pub(super) enum OverlayEndpointRecords<'a> {
+    Direct(
+        OrderedTreeMatches<
+            MappedRwLockReadGuard<'a, OrderedShiftTree<EndpointRecord>>,
+            EndpointRecord,
+            DirectEndpointRangeQuery,
+        >,
+    ),
+    Live(Box<LiveEndpointRecords<'a>>),
+    Empty,
+}
+
+impl OverlayEndpointRecords<'_> {
+    #[inline]
+    pub(super) fn empty() -> Self {
+        Self::Empty
+    }
+}
+
+impl Iterator for OverlayEndpointRecords<'_> {
+    type Item = OverlayEndpoint;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Direct(records) => records.next().map(|record| OverlayEndpoint {
+                position: record.key.position,
+                overlay: record.overlay,
+                kind: record.kind,
+            }),
+            Self::Live(live) => live.next_item(),
+            Self::Empty => None,
+        }
     }
 }
 
@@ -713,6 +793,17 @@ fn materialize_overlay_position(overlay: Value, range: EmacsByteRange) {
 /// Every core writer updates endpoints/keys and advances `generation` inside
 /// one `write_core_lock` critical section, after any `intervals` edit has
 /// finished, so a reader cannot pair a new generation with pre-edit state.
+///
+/// Parallel-VM / E-spine precondition: `write_core_lock` is atomic for `core`
+/// only; interval-tree edits in `attach`, `remap`, `adjust_for_insert`, and
+/// `adjust_for_delete` run in separate `intervals.write()` sections before the
+/// core bump. Today `Value` is thread-confined (`!Send + !Sync`) and
+/// `LiveOverlayView` holds `Cell<bool>`, so reader and writer are strictly
+/// serialized on the evaluator thread and cannot observe a mid-edit interval
+/// tree under the old stamp. Before any cross-thread reader of
+/// `LiveOverlayIndex` is introduced, writers must either hold
+/// `intervals.write()` across the core bump (as `move_to` already does) or
+/// protect interval+core edits with an odd/even seqlock generation.
 #[derive(Debug)]
 struct OverlayIndexCore {
     /// Published lazily. The property masks consulted by
@@ -1022,14 +1113,15 @@ impl LiveOverlayIndex {
         property_filter: OverlayPropertyFilter,
         stale: &'a Cell<bool>,
     ) -> OverlayEndpointRecords<'a> {
-        OverlayEndpointRecords::new(
+        OverlayEndpointRecords::Live(Box::new(LiveEndpointRecords::new(
             &self.intervals,
             &self.core,
-            Some((stale, self.stamp)),
+            stale,
+            self.stamp,
             bounds,
             property_filter,
             EndpointScanDirection::Forward,
-        )
+        )))
     }
 
     pub(super) fn endpoint_records_strictly_within_reverse<'a>(
@@ -1038,15 +1130,48 @@ impl LiveOverlayIndex {
         property_filter: OverlayPropertyFilter,
         stale: &'a Cell<bool>,
     ) -> OverlayEndpointRecords<'a> {
-        OverlayEndpointRecords::new(
+        OverlayEndpointRecords::Live(Box::new(LiveEndpointRecords::new(
             &self.intervals,
             &self.core,
-            Some((stale, self.stamp)),
+            stale,
+            self.stamp,
             bounds,
             property_filter,
             EndpointScanDirection::Reverse,
-        )
+        )))
     }
+}
+
+#[inline(always)]
+fn direct_property_key_bloom_bit(bits: usize) -> u64 {
+    #[cfg(target_pointer_width = "64")]
+    const MULT: usize = 0x9E37_79B9_7F4A_7C15;
+    #[cfg(not(target_pointer_width = "64"))]
+    const MULT: usize = 0x9E37_79B9;
+    let shift = usize::BITS - 6;
+    1u64 << ((bits.wrapping_mul(MULT) >> shift) & 63)
+}
+
+const DIRECT_PROPERTY_KEYS_INLINE_CAP: usize = 8;
+
+type DirectPropertyKeyCache = (u64, [usize; DIRECT_PROPERTY_KEYS_INLINE_CAP], u8);
+
+fn snapshot_direct_property_key_cache(keys: &FxHashMap<usize, usize>) -> DirectPropertyKeyCache {
+    let mut bloom = 0u64;
+    let mut inline = [0usize; DIRECT_PROPERTY_KEYS_INLINE_CAP];
+    let len = if keys.len() <= DIRECT_PROPERTY_KEYS_INLINE_CAP {
+        for (idx, &k) in keys.keys().enumerate() {
+            bloom |= direct_property_key_bloom_bit(k);
+            inline[idx] = k;
+        }
+        keys.len() as u8
+    } else {
+        for &k in keys.keys() {
+            bloom |= direct_property_key_bloom_bit(k);
+        }
+        u8::MAX
+    };
+    (bloom, inline, len)
 }
 
 #[derive(Debug)]
@@ -1058,6 +1183,12 @@ pub(super) struct OverlayIndex {
     /// `intervals`; this field stores only identity and tree shape.
     gnu_order: GnuOverlayOrder<OverlayIdentity>,
     core: Arc<RwLock<OverlayIndexCore>>,
+    /// Lock-free owner-side cache of `core.direct_property_keys` so the
+    /// default (`OverlayList`) `may_contain_property` path pays no `core.read()`
+    /// lock or HashMap probe for absent keys or when <= 8 distinct keys exist.
+    direct_property_key_bloom: u64,
+    direct_property_keys_inline: [usize; DIRECT_PROPERTY_KEYS_INLINE_CAP],
+    direct_property_keys_inline_len: u8,
 }
 
 impl OverlayIndex {
@@ -1070,6 +1201,36 @@ impl OverlayIndex {
                 direct_property_keys: FxHashMap::default(),
                 generation: 0,
             })),
+            direct_property_key_bloom: 0,
+            direct_property_keys_inline: [0; DIRECT_PROPERTY_KEYS_INLINE_CAP],
+            direct_property_keys_inline_len: 0,
+        }
+    }
+
+    fn apply_direct_property_key_cache(&mut self, cache: DirectPropertyKeyCache) {
+        self.direct_property_key_bloom = cache.0;
+        self.direct_property_keys_inline = cache.1;
+        self.direct_property_keys_inline_len = cache.2;
+    }
+
+    fn sync_direct_property_key_cache(&mut self, keys: &FxHashMap<usize, usize>) {
+        self.apply_direct_property_key_cache(snapshot_direct_property_key_cache(keys));
+    }
+
+    #[inline]
+    fn note_direct_property_key_added(&mut self, key: usize) {
+        self.direct_property_key_bloom |= direct_property_key_bloom_bit(key);
+        let len = self.direct_property_keys_inline_len as usize;
+        if len <= DIRECT_PROPERTY_KEYS_INLINE_CAP {
+            if self.direct_property_keys_inline[..len].contains(&key) {
+                return;
+            }
+            if len < DIRECT_PROPERTY_KEYS_INLINE_CAP {
+                self.direct_property_keys_inline[len] = key;
+                self.direct_property_keys_inline_len = (len + 1) as u8;
+            } else {
+                self.direct_property_keys_inline_len = u8::MAX;
+            }
         }
     }
 
@@ -1158,6 +1319,9 @@ impl OverlayIndex {
         // A later handle write would invalidate an enclosing read capture.
         set_overlay_position_handle(overlay, &self.intervals);
         let keys = overlay_direct_property_keys(overlay);
+        for &key in &keys {
+            self.note_direct_property_key_added(key);
+        }
         self.write_core(|core| {
             core.add_property_keys(&keys);
             if let Some(endpoints) = core.endpoints.get_mut() {
@@ -1225,6 +1389,7 @@ impl OverlayIndex {
                 *direct_property_keys.entry(key).or_default() += 1;
             }
         }
+        self.sync_direct_property_key_cache(&direct_property_keys);
         self.write_core(|core| {
             core.endpoints = OnceLock::new();
             core.direct_property_keys = direct_property_keys;
@@ -1241,7 +1406,7 @@ impl OverlayIndex {
             "indexed overlay missing from GNU order mirror"
         );
         materialize_overlay_position(overlay, range);
-        self.write_core(|core| {
+        let cache = self.write_core(|core| {
             core.remove_property_keys(&keys);
             if let Some(endpoints) = core.endpoints.get_mut() {
                 assert_eq!(
@@ -1253,7 +1418,9 @@ impl OverlayIndex {
                     Some(range.end())
                 );
             }
+            snapshot_direct_property_key_cache(&core.direct_property_keys)
         });
+        self.apply_direct_property_key_cache(cache);
         Some(range)
     }
 
@@ -1794,7 +1961,7 @@ impl OverlayIndex {
         }
         // Apply evaporated key removals, endpoint updates, and the generation
         // bump in one critical section after all interval edits have finished.
-        self.write_core(|core| {
+        let cache = self.write_core(|core| {
             for keys in &evaporated_keys {
                 core.remove_property_keys(keys);
             }
@@ -1815,7 +1982,12 @@ impl OverlayIndex {
                     assert!(endpoints.insert(new_range.end(), EndpointKind::End, overlay));
                 }
             }
+            (!evaporated_keys.is_empty())
+                .then(|| snapshot_direct_property_key_cache(&core.direct_property_keys))
         });
+        if let Some(cache) = cache {
+            self.apply_direct_property_key_cache(cache);
+        }
         effects
     }
 
@@ -1880,6 +2052,7 @@ impl OverlayIndex {
         }
         self.intervals = Arc::new(RwLock::new(IntervalBPlusTree::new()));
         self.gnu_order = GnuOverlayOrder::new();
+        self.apply_direct_property_key_cache((0, [0; DIRECT_PROPERTY_KEYS_INLINE_CAP], 0));
         self.write_core(|core| {
             core.endpoints = OnceLock::new();
             core.direct_property_keys.clear();
@@ -2019,12 +2192,18 @@ impl OverlayIndex {
         overlays
     }
 
+    #[inline]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn may_contain_property(&self, property: Value) -> bool {
-        self.core
-            .read()
-            .direct_property_keys
-            .contains_key(&property.bits())
+        let bits = property.bits();
+        if (self.direct_property_key_bloom & direct_property_key_bloom_bit(bits)) == 0 {
+            return false;
+        }
+        let len = self.direct_property_keys_inline_len as usize;
+        if len <= DIRECT_PROPERTY_KEYS_INLINE_CAP {
+            return self.direct_property_keys_inline[..len].contains(&bits);
+        }
+        self.core.read().direct_property_keys.contains_key(&bits)
     }
 
     pub(super) fn endpoint_records_strictly_within(
@@ -2032,14 +2211,21 @@ impl OverlayIndex {
         bounds: EmacsByteRange,
         property_filter: OverlayPropertyFilter,
     ) -> OverlayEndpointRecords<'_> {
-        OverlayEndpointRecords::new(
-            &self.intervals,
-            &self.core,
-            None,
-            bounds,
-            property_filter,
-            EndpointScanDirection::Forward,
-        )
+        let _ = publish_endpoints_for(&self.intervals, &self.core, None);
+        let records = RwLockReadGuard::map(self.core.read(), |core| {
+            &core
+                .endpoints
+                .get()
+                .expect("overlay endpoints published before direct scan")
+                .records
+        });
+        OverlayEndpointRecords::Direct(OrderedShiftTree::matches_owned(
+            records,
+            DirectEndpointRangeQuery {
+                bounds,
+                property_filter,
+            },
+        ))
     }
 
     pub(super) fn endpoint_records_strictly_within_reverse(
@@ -2047,14 +2233,21 @@ impl OverlayIndex {
         bounds: EmacsByteRange,
         property_filter: OverlayPropertyFilter,
     ) -> OverlayEndpointRecords<'_> {
-        OverlayEndpointRecords::new(
-            &self.intervals,
-            &self.core,
-            None,
-            bounds,
-            property_filter,
-            EndpointScanDirection::Reverse,
-        )
+        let _ = publish_endpoints_for(&self.intervals, &self.core, None);
+        let records = RwLockReadGuard::map(self.core.read(), |core| {
+            &core
+                .endpoints
+                .get()
+                .expect("overlay endpoints published before reverse direct scan")
+                .records
+        });
+        OverlayEndpointRecords::Direct(OrderedShiftTree::matches_owned_reverse(
+            records,
+            DirectEndpointRangeQuery {
+                bounds,
+                property_filter,
+            },
+        ))
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2085,15 +2278,22 @@ impl OverlayIndex {
             );
             overlay_direct_property_keys(overlay)
         });
-        self.write_core(|core| {
-            if let (Some(previous), Some(new_keys)) = (previous, new_keys) {
+        let cache = self.write_core(|core| {
+            let keys_changed = if let (Some(previous), Some(new_keys)) = (previous, new_keys) {
                 core.remove_property_keys(&previous.keys);
                 core.add_property_keys(&new_keys);
-            }
+                true
+            } else {
+                false
+            };
             if let Some(endpoints) = core.endpoints.get_mut() {
                 endpoints.refresh_overlay_property_mask(overlay);
             }
+            keys_changed.then(|| snapshot_direct_property_key_cache(&core.direct_property_keys))
         });
+        if let Some(cache) = cache {
+            self.apply_direct_property_key_cache(cache);
+        }
     }
 
     /// Record the one pair prepended to an already-resolved member by
@@ -2102,11 +2302,10 @@ impl OverlayIndex {
     /// between that resolution and this update. Existing-key writes change
     /// neither key counts nor endpoint classes.
     pub(super) fn overlay_property_key_added_to_member(&mut self, overlay: Value, property: Value) {
+        let bits = property.bits();
+        self.note_direct_property_key_added(bits);
         self.write_core(|core| {
-            *core
-                .direct_property_keys
-                .entry(property.bits())
-                .or_default() += 1;
+            *core.direct_property_keys.entry(bits).or_default() += 1;
             if let Some(endpoints) = core.endpoints.get_mut() {
                 endpoints.add_overlay_property_key(overlay, property);
             }
@@ -2222,7 +2421,19 @@ impl OverlayIndex {
                 *expected_keys.entry(key).or_insert(0usize) += 1;
             }
         }
-        assert_eq!(self.core.read().direct_property_keys, expected_keys);
+        let actual_keys = self.core.read().direct_property_keys.clone();
+        assert_eq!(actual_keys, expected_keys);
+        let (expected_bloom, _, expected_len) = snapshot_direct_property_key_cache(&expected_keys);
+        assert_eq!(self.direct_property_key_bloom, expected_bloom);
+        assert_eq!(self.direct_property_keys_inline_len, expected_len);
+        if (expected_len as usize) <= DIRECT_PROPERTY_KEYS_INLINE_CAP {
+            for &key in expected_keys.keys() {
+                assert!(
+                    self.direct_property_keys_inline[..expected_len as usize].contains(&key),
+                    "inline direct_property_keys cache missing key {key:#x}"
+                );
+            }
+        }
     }
 }
 

@@ -965,6 +965,10 @@ pub struct LayoutEngine {
     /// Instrumentation from the most recent `layout_frame_rust` pass: the
     /// relaid-row-count gate metric (spec §7). Reset per frame.
     layout_stats: LayoutStats,
+    /// Test-only override for the overlay source mode (`Captured` vs `Live`),
+    /// avoiding process-global or thread-local test state.
+    #[cfg(test)]
+    overlay_source_override: Option<super::neovm_bridge::OverlaySourceMode>,
 }
 
 /// Ownership of the numeric body observation's read journal.
@@ -1999,6 +2003,8 @@ impl LayoutEngine {
             frame_other_windows_changed: false,
             allow_below_reuse: true,
             layout_stats: LayoutStats::default(),
+            #[cfg(test)]
+            overlay_source_override: None,
         }
     }
 
@@ -2045,7 +2051,32 @@ impl LayoutEngine {
             frame_other_windows_changed: false,
             allow_below_reuse: true,
             layout_stats: LayoutStats::default(),
+            #[cfg(test)]
+            overlay_source_override: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_overlay_source_mode_for_test(
+        &mut self,
+        mode: super::neovm_bridge::OverlaySourceMode,
+    ) {
+        self.overlay_source_override = Some(mode);
+    }
+
+    #[inline]
+    fn effective_overlay_source_mode(
+        &self,
+        force_captured: bool,
+    ) -> super::neovm_bridge::OverlaySourceMode {
+        if force_captured {
+            return super::neovm_bridge::OverlaySourceMode::Captured;
+        }
+        #[cfg(test)]
+        if let Some(mode) = self.overlay_source_override {
+            return mode;
+        }
+        super::neovm_bridge::overlay_source_mode()
     }
 
     /// Disable cosmic-text font measurement (TTY mode).
@@ -7201,7 +7232,9 @@ impl LayoutEngine {
                 } else {
                     self.overlay_view_char_span_for(params, buffer)
                 };
-                super::neovm_bridge::LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_fallback(
+                let overlay_source =
+                    self.effective_overlay_source_mode(overlay_view_force_captured);
+                super::neovm_bridge::LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_source(
                     buffer,
                     evaluator.variables(),
                     Some(visible_char_bound(params)),
@@ -7209,7 +7242,7 @@ impl LayoutEngine {
                     display_target,
                     evaluator.symbol_mode(),
                     &evaluator.owned_root_retainer(),
-                    overlay_view_force_captured,
+                    overlay_source,
                 )
                 .with_accessible_end(neovm_core::buffer::CharPos0::new(
                     params.accessible_end_charpos().get().max(0) as usize,

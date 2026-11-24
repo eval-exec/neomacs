@@ -64,14 +64,36 @@ fn overlay_source_mode_defaults_to_captured_and_honors_live_env() {
     assert_eq!(overlay_source_mode(), OverlaySourceMode::Captured);
 }
 
+struct ScopedTempDir(std::path::PathBuf);
+
+impl ScopedTempDir {
+    fn new(prefix: &str) -> Self {
+        let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let dir = base.join(format!("{prefix}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scoped test tempdir");
+        Self(dir)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for ScopedTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn live_overlay_snapshot_counts_zero_copies_entries_roots_and_nonzero_live_records() {
-    let dir =
-        std::env::temp_dir().join(format!("neomacs-live-overlay-stats-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("live overlay stats tempdir");
+    let dir = ScopedTempDir::new("neomacs-live-overlay-stats");
     // SAFETY: nextest runs each test in its own process, before OnceLocks initialize.
     unsafe {
-        std::env::set_var("NEOMACS_LAYOUT_STATS_FILE", dir.join("stats"));
+        std::env::set_var("NEOMACS_LAYOUT_STATS_FILE", dir.path().join("stats"));
         std::env::set_var("NEOMACS_LAYOUT_OVERLAY_SOURCE", "live");
     }
     assert_eq!(overlay_source_mode(), OverlaySourceMode::Live);
@@ -162,9 +184,9 @@ fn live_overlay_view_survives_fontification_delete_and_gc_without_deref() {
     .unwrap();
 
     let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
-    let snapshot = with_overlay_source_mode_for_test(OverlaySourceMode::Live, || {
+    let snapshot = {
         let buffer = eval.buffer_manager().get(buffer_id).unwrap();
-        LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+        LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_source(
             buffer,
             eval.variables(),
             Some((0, 64)),
@@ -172,8 +194,9 @@ fn live_overlay_view_survives_fontification_delete_and_gc_without_deref() {
             crate::display_property::DisplayPropertyTarget::Terminal,
             eval.symbol_mode(),
             &eval.owned_root_retainer(),
+            OverlaySourceMode::Live,
         )
-    });
+    };
 
     let pre = snapshot
         .layout_overlays()

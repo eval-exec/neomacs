@@ -29,10 +29,8 @@ pub(crate) use divider_corners::{
 mod borrowed_buffer;
 mod buffer_snapshot;
 pub(crate) use borrowed_buffer::BorrowedLayoutBuffer;
-pub(crate) use buffer_snapshot::LayoutBufferSnapshot;
 use buffer_snapshot::capture_string_composition_rules;
-#[cfg(test)]
-pub(crate) use buffer_snapshot::{OverlaySourceMode, with_overlay_source_mode_for_test};
+pub(crate) use buffer_snapshot::{LayoutBufferSnapshot, OverlaySourceMode, overlay_source_mode};
 
 #[cfg(test)]
 #[path = "neovm_bridge/tests/property_keys_support.rs"]

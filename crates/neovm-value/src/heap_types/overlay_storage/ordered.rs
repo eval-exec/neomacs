@@ -813,6 +813,16 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         OrderedTreeMatches::new(tree, query)
     }
 
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn matches_owned_reverse<T, Q>(tree: T, query: Q) -> OrderedTreeMatches<T, R, Q>
+    where
+        T: Deref<Target = Self>,
+        Q: OrderedTreeQuery<R>,
+    {
+        OrderedTreeMatches::new_reverse(tree, query)
+    }
+
     /// Visit every matching record without constructing resumable iterator
     /// state.  Materialized Lisp queries consume the complete result in one
     /// call, so a bounded recursive walk avoids copying the fixed frame stack

@@ -5,7 +5,31 @@
 //!   live-retry -> captured fallback without looping.
 
 use super::*;
-use crate::neovm_bridge::{OverlaySourceMode, with_overlay_source_mode_for_test};
+use crate::neovm_bridge::OverlaySourceMode;
+
+struct ScopedTempDir(std::path::PathBuf);
+
+impl ScopedTempDir {
+    fn new(prefix: &str) -> Self {
+        let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let dir = base.join(format!("{prefix}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scoped test tempdir");
+        Self(dir)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for ScopedTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 fn paint_frame(state: &neomacs_display_protocol::glyph_matrix::FrameDisplayState) -> Vec<String> {
     let mut result = Vec::new();
@@ -63,9 +87,8 @@ fn run_fontification_overlay_mutation(mode: OverlaySourceMode) -> Vec<String> {
     .unwrap();
     let before_gc = eval.eval_str("gcs-done").unwrap().as_int().unwrap();
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
-    with_overlay_source_mode_for_test(mode, || {
-        engine.layout_frame_rust(&mut eval, frame);
-    });
+    engine.set_overlay_source_mode_for_test(mode);
+    engine.layout_frame_rust(&mut eval, frame);
     assert_eq!(
         eval.eval_str("live-test-ran").unwrap(),
         Value::T,
@@ -123,9 +146,8 @@ fn run_chrome_one_shot_overlay_mutation(
     .unwrap();
     let before_gc = eval.eval_str("gcs-done").unwrap().as_int().unwrap();
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
-    with_overlay_source_mode_for_test(mode, || {
-        engine.layout_frame_rust(&mut eval, frame);
-    });
+    engine.set_overlay_source_mode_for_test(mode);
+    engine.layout_frame_rust(&mut eval, frame);
     assert!(
         eval.eval_str("gcs-done").unwrap().as_int().unwrap() > before_gc,
         "chrome callback must have completed GC"
@@ -137,9 +159,7 @@ fn run_chrome_one_shot_overlay_mutation(
             .as_ref()
             .expect("first layout frame must complete"),
     );
-    with_overlay_source_mode_for_test(mode, || {
-        engine.layout_frame_rust(&mut eval, frame);
-    });
+    engine.layout_frame_rust(&mut eval, frame);
     let frame2 = paint_frame(
         engine
             .last_frame_display_state
@@ -214,9 +234,8 @@ fn run_composition_stale_scenario(
     let _ = std::fs::remove_file(stats_path);
     neovm_core::buffer::overlay::reset_overlay_layout_stats();
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
-    with_overlay_source_mode_for_test(mode, || {
-        engine.layout_frame_rust(&mut eval, frame);
-    });
+    engine.set_overlay_source_mode_for_test(mode);
+    engine.layout_frame_rust(&mut eval, frame);
     let state = engine
         .last_frame_display_state
         .as_ref()
@@ -235,9 +254,8 @@ fn run_composition_stale_scenario(
 
 #[test]
 fn live_overlay_composition_stale_retries_live_then_falls_back_to_captured() {
-    let dir = std::env::temp_dir().join(format!("neomacs-live-fallback-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("stats tempdir");
-    let stats_path = dir.join("stats");
+    let dir = ScopedTempDir::new("neomacs-live-fallback");
+    let stats_path = dir.path().join("stats");
     // SAFETY: nextest runs each test in its own process, before OnceLocks initialize.
     unsafe {
         std::env::set_var("NEOMACS_LAYOUT_STATS_FILE", &stats_path);

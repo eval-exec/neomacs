@@ -256,13 +256,35 @@ fn live_view_becomes_stale_after_writes_and_returns_empty_safely() {
     );
 }
 
+struct ScopedTempDir(std::path::PathBuf);
+
+impl ScopedTempDir {
+    fn new(prefix: &str) -> Self {
+        let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let dir = base.join(format!("{prefix}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scoped test tempdir");
+        Self(dir)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for ScopedTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn live_view_records_zero_copies_zero_view_entries_and_nonzero_live_records() {
     crate::test_utils::init_test_tracing();
-    let stats_path = std::env::temp_dir().join(format!(
-        "neomacs-live-view-stats-{}.log",
-        std::process::id()
-    ));
+    let stats_dir = ScopedTempDir::new("neomacs-live-view-stats");
+    let stats_path = stats_dir.path().join("stats.log");
     // SAFETY: nextest runs each test in its own process, before `ENABLED` is initialized.
     unsafe {
         std::env::set_var("NEOMACS_LAYOUT_STATS_FILE", &stats_path);
