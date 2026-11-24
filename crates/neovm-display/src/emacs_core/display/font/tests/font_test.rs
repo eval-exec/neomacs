@@ -1723,6 +1723,84 @@ fn internal_char_font_preserves_the_full_emacs_character_domain_to_the_host() {
     }
 }
 
+#[test]
+fn internal_char_font_nil_position_does_not_rebuild_the_face_table_per_call() {
+    // `(internal-char-font nil CH)` is the `char-displayable-p` path magit
+    // hits once per section ellipsis. GNU realizes the default face from the
+    // frame cache and rebuilds only after a face change. Walking every Lisp
+    // face on each call is the #829 gap.
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    reset_frame_lisp_face_table_rebuilds();
+    const CALLS: u64 = 8;
+    for _ in 0..CALLS {
+        internal_char_font(&mut eval, vec![Value::NIL, Value::fixnum(0x2026)]).unwrap();
+    }
+    let rebuilds = frame_lisp_face_table_rebuilds();
+    assert!(
+        rebuilds <= 1,
+        "{CALLS} nil-position internal-char-font calls rebuilt the face table {rebuilds} times"
+    );
+}
+
+#[test]
+fn internal_char_font_uses_the_default_face_after_a_face_attribute_change() {
+    // GNU `Finternal_char_font` reads the realized default face, so a
+    // `set-face-attribute` on `default` changes the font object on the next
+    // nil-position call (`:height 240` moves the opened size; the glyph code
+    // stays). The full table walk must still not run once per call.
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    eval.set_display_host(Box::new(FontAtDisplayHost {
+        matched: Some(resolved_font_match(
+            "Noto Sans Mono CJK SC",
+            None,
+            Some("NotoSansMonoCJKsc-Regular"),
+            Some(0x2A),
+            FontPxProbeResult {
+                pixel_size: 15,
+                height: 16,
+                ascent: 12,
+                descent: 4,
+                max_width: 9,
+                space_width: 8,
+                average_width: 8,
+            },
+            None,
+        )),
+        ..Default::default()
+    }));
+    let ch = Value::fixnum(i64::from('好' as u32));
+    reset_frame_lisp_face_table_rebuilds();
+    let before = internal_char_font(&mut eval, vec![Value::NIL, ch]).unwrap();
+    let before_height = font_get(vec![before.cons_car(), Value::keyword(":height")]).unwrap();
+    builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("default"),
+            Value::keyword(":height"),
+            Value::fixnum(240),
+        ],
+    )
+    .unwrap();
+    let after = internal_char_font(&mut eval, vec![Value::NIL, ch]).unwrap();
+    let after_height = font_get(vec![after.cons_car(), Value::keyword(":height")]).unwrap();
+    assert_ne!(before_height, after_height);
+    assert_eq!(after_height, Value::fixnum(240));
+    assert_eq!(before.cons_cdr(), Value::fixnum(0x2A));
+    assert_eq!(after.cons_cdr(), Value::fixnum(0x2A));
+    for _ in 0..7 {
+        internal_char_font(&mut eval, vec![Value::NIL, ch]).unwrap();
+    }
+    let rebuilds = frame_lisp_face_table_rebuilds();
+    assert!(
+        rebuilds <= 1,
+        "face-attribute change must not restore a per-call rebuild ({rebuilds})"
+    );
+}
+
 // -----------------------------------------------------------------------
 // Face builtins
 // -----------------------------------------------------------------------

@@ -4353,6 +4353,17 @@ pub(crate) fn font_at(
     Ok(Value::NIL)
 }
 
+/// The frame face table redisplay already realized. A hit is the cached
+/// `FrameFaceRealizationCache` for this face-change generation; a miss
+/// rebuilds once inside that same prepare. This is not a second cache.
+fn realized_frame_face_table(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    frame_id: FrameId,
+) -> crate::face::FaceTable {
+    eval.sync_runtime_faces_for_frame(frame_id);
+    eval.face_table().clone()
+}
+
 /// `(internal-char-font POSITION &optional CH)` -- the `(FONT-OBJECT . GLYPH-CODE)`
 /// that `describe-char` uses for its "display:" line and character-code-property
 /// section. A non-nil POSITION resolves the face in a window displaying the
@@ -4385,7 +4396,7 @@ pub(crate) fn internal_char_font(
         if !has_window_system {
             return Ok(Value::NIL);
         }
-        let face_table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, true);
+        let face_table = realized_frame_face_table(eval, frame_id);
         let default_face = face_table.resolve("default");
         (frame_id, character, default_face)
     } else {
@@ -4447,7 +4458,7 @@ pub(crate) fn internal_char_font(
             return Ok(Value::NIL);
         }
 
-        let face_table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, true);
+        let face_table = realized_frame_face_table(eval, frame_id);
         let buffer = eval
             .edit
             .buffers

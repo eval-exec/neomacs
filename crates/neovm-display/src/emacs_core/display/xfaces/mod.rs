@@ -2408,6 +2408,37 @@ pub(crate) fn runtime_face_from_lisp_face_vector_resolved(
     face
 }
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static FRAME_LISP_FACE_TABLE_REBUILDS: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+/// Count entries to the full Lisp-face-table walk. Redisplay's cache hit
+/// does not come through here; `internal-char-font` on the parent does, once
+/// per call.
+#[cfg(any(test, feature = "test-support"))]
+fn note_frame_lisp_face_table_rebuild() {
+    FRAME_LISP_FACE_TABLE_REBUILDS.with(|count| {
+        count.set(count.get().saturating_add(1));
+    });
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+#[inline(always)]
+fn note_frame_lisp_face_table_rebuild() {}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn reset_frame_lisp_face_table_rebuilds() {
+    FRAME_LISP_FACE_TABLE_REBUILDS.with(|count| count.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn frame_lisp_face_table_rebuilds() -> u64 {
+    FRAME_LISP_FACE_TABLE_REBUILDS.with(|count| count.get())
+}
+
 /// Materialize a frame's authoritative Lisp face specifications into an
 /// isolated runtime table.  This is a derived value: callers may use it for a
 /// Lisp query or install it as redisplay's cache, but must never mutate it as
@@ -2417,6 +2448,7 @@ pub(crate) fn runtime_face_table_from_frame_lisp_faces(
     frame_id: FrameId,
     preserve_default_baseline: bool,
 ) -> crate::face::FaceTable {
+    note_frame_lisp_face_table_rebuild();
     runtime_face_table_from_frame_lisp_faces_resolved(
         eval,
         frame_id,
