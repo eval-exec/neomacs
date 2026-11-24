@@ -5777,6 +5777,10 @@ fn register_workspace_carrier_tls() {
 }
 
 fn main() {
+    // SAFETY: process entry before any runtime threads are spawned.
+    unsafe {
+        neomacs_webview::configure_before_threads();
+    }
     register_workspace_carrier_tls();
     neomacs_display_runtime::macos_bundle_runtime::configure_before_threads();
     #[cfg(feature = "gc-memory-telemetry")]

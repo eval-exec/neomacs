@@ -509,6 +509,28 @@ fn pick_render_node(mut nodes: Vec<(String, String)>) -> Option<String> {
         .map(|(name, _)| name)
 }
 
+/// Select and export the WPE DRM render node into the process environment
+/// before any worker threads exist.
+///
+/// WebKit's web process is spawned as a child process and inherits
+/// `WPE_DRM_DEVICE` / `WPE_DRM_RENDER_NODE` from the parent environment.
+/// Mutating the environment on the reactor thread races concurrent C
+/// `getenv`/`environ` readers on other threads, so this must run once while
+/// the process is still single-threaded.
+///
+/// # Safety
+/// The caller must ensure no other threads exist in the current process.
+pub(crate) unsafe fn configure_before_threads() {
+    if let Some(path) = select_wpe_device() {
+        // SAFETY: caller guarantees this process is single-threaded.
+        unsafe {
+            std::env::set_var("WPE_DRM_DEVICE", &path);
+            std::env::set_var("WPE_DRM_RENDER_NODE", &path);
+        }
+        tracing::info!("neomacs-webview: pre-thread WPE DRM device = {path}");
+    }
+}
+
 impl WpeRuntime {
     unsafe fn new(
         config: WebViewSystemConfig,
@@ -520,20 +542,13 @@ impl WpeRuntime {
         // and on multi-GPU machines it can pick the node whose buffers the
         // importer cannot import (gbm_bo_import failure in
         // AcceleratedBackingStore, then a WebKit crash).  Resolve the device
-        // explicitly: WPE_DRM_RENDER_NODE / WPE_DRM_DEVICE overrides first,
-        // then the automatic policy below.
+        // explicitly (read-only: `WPE_DRM_RENDER_NODE` / `WPE_DRM_DEVICE`
+        // overrides first, then udev).  Pre-thread callers export those keys
+        // via `configure_before_threads` so WebKit's child process inherits
+        // the same node without mutating the environment from this thread.
         let selected_device = select_wpe_device();
         let backend = match &selected_device {
             Some(path) => {
-                // Export the decision so WebKit's web process — a child of
-                // this process — inherits the same node for its own buffer
-                // allocation instead of inferring one itself.
-                // SAFETY: the reactor owns this process's environment; the
-                // spawn happens before any other thread reads these keys.
-                unsafe {
-                    std::env::set_var("WPE_DRM_DEVICE", path);
-                    std::env::set_var("WPE_DRM_RENDER_NODE", path);
-                }
                 tracing::info!("WpeRuntime: WPE DRM device = {path}");
                 WpeBackend::new_with_device(std::ptr::null_mut(), Some(path))
             }
