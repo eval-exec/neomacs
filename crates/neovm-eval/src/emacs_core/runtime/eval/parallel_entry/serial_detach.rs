@@ -9,7 +9,11 @@
 //! 1. the owner's host bindings swap out (`park_owner`, GNU's
 //!    `unbind_for_thread_switch`, src/thread.c:95-99). This writes buffer
 //!    storage, so the heap must still be installed;
-//! 2. the carrier TLS goes down (`park_carrier_tls`): the heap slot, its
+//! 2. when a Green runtime exists, the warm carrier and the World's
+//!    carried state leave this thread (`stow_serial_world_state`). A Sim
+//!    World has no runtime and skips. This is the same stow a Green finish
+//!    runs, inside this detach, not a second one;
+//! 3. the carrier TLS goes down (`park_carrier_tls`): the heap slot, its
 //!    hot-path mirrors and every heap-pointer record are null, so a
 //!    collection while the owner is detached cannot meet a stale pointer on
 //!    this thread.
@@ -19,17 +23,21 @@
 //! thread, any number dormant. It then clears the deferred caches
 //! (`reset_carrier_tls`), as a reused Green carrier does, because a
 //! collection while the owner was detached may have freed what they named.
-//! Last, it reinstalls the owner's TLS and swaps its host bindings back in
-//! (`resume_owner`).
+//! It reinstalls the owner's TLS and swaps its host bindings back in
+//! (`resume_owner`), and only then puts the carried world and the warm
+//! carrier back, so `setup_thread_locals` does not overwrite them.
 //!
-//! Scope: [`DetachedTls`] covers the carrier's heap-pointer TLS only. The
-//! World-carried pieces (`green::carried::CarriedState`: processes, sqlite,
-//! undo, terminal, and the rest of that roster), the thread-manager roster
-//! and the GC-census roster stay up. L6.4's `end_serial` takes those down.
+//! Scope: [`DetachedTls`] covers the carrier's heap-pointer TLS only.
+//! A serial owner is not entered on the thread manager and is not a
+//! mutator-census entry, so this detach removes nothing from those rosters.
+//! The World's owner slab stays registered: `trace_owner_slabs` traces every
+//! owner whether or not it is running. A later activation that registers
+//! this Context on either roster removes it in this same detach, before the
+//! detach returns.
 //!
 //! The proofs are `!Send`: each one is a fact about this OS thread. They are
 //! produced together and consumed together, so a half-detached owner cannot
-//! exist, and a panic between the two steps aborts the process. Only
+//! exist, and a panic between these steps aborts the process. Only
 //! [`SerialHost`] reaches the two steps, and only `OwnerSerialState` can call
 //! it, so a proof always lies beside its own Context in that state's
 //! `DormantContext`. It is dropped only together with that Context, and
@@ -98,8 +106,9 @@ impl Drop for AbortOnPanic {
 
 impl Context {
     /// Take this owner off its OS thread at the end of a serial turn: refuse
-    /// unless its own heap is the installed one, else host bindings out
-    /// first, then the carrier TLS down.
+    /// unless its own heap is the installed one, else host bindings out,
+    /// then the carried world (when a Green runtime exists), then the
+    /// carrier TLS down.
     #[cold]
     #[inline(never)]
     fn detach_serial_owner(&mut self) -> Result<DetachedOwner, HostRefusal> {
@@ -108,6 +117,7 @@ impl Context {
         }
         let _abort = AbortOnPanic("detach");
         let parked = self.park_owner();
+        self.stow_serial_world_state();
         park_carrier_tls();
         Ok(DetachedOwner {
             host: DetachedHostBindings { parked },
@@ -119,7 +129,8 @@ impl Context {
 
     /// Put this owner back on the OS thread for the next serial turn: refuse
     /// while another Context's heap is installed here, else clear the
-    /// deferred caches, then return the owner's TLS and host bindings.
+    /// deferred caches, return the owner's TLS and host bindings, then the
+    /// carried world.
     #[cold]
     #[inline(never)]
     fn reattach_serial_owner(
@@ -136,6 +147,7 @@ impl Context {
         } = detached;
         reset_carrier_tls();
         self.resume_owner(host.parked);
+        self.unstow_serial_world_state();
         Ok(())
     }
 }

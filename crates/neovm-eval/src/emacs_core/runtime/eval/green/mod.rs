@@ -216,6 +216,56 @@ impl Context {
         Ok(baton)
     }
 
+    /// The World's carried state and the warm carrier leave this OS thread
+    /// with a serial detach. A Sim World has no Green runtime, so it skips.
+    /// `OwnerCarried::take` finishes before the runtime slot is borrowed
+    /// again: the take needs `&mut self`.
+    pub(crate) fn stow_serial_world_state(&mut self) {
+        if self.green_runtime_ref().is_none() {
+            return;
+        }
+        let warm = owner_carried::OwnerCarried::take(self);
+        let runtime = self.green_runtime_ref();
+        let runtime = runtime
+            .as_ref()
+            .expect("a Green runtime was present at the start of this stow");
+        {
+            let mut slot = runtime.owner_carried.borrow_mut();
+            assert!(slot.is_none(), "the warm carrier is in two places");
+            *slot = Some(warm);
+        }
+        runtime.carried.borrow_mut().stow();
+    }
+
+    /// The reverse of [`Self::stow_serial_world_state`], after
+    /// `resume_owner`: `setup_thread_locals` must not overwrite the restored
+    /// carriers. A Sim World skips.
+    pub(crate) fn unstow_serial_world_state(&mut self) {
+        let warm = {
+            let runtime = self.green_runtime_ref();
+            let Some(runtime) = runtime.as_ref() else {
+                return;
+            };
+            runtime.carried.borrow_mut().unstow();
+            runtime.owner_carried.borrow_mut().take()
+        };
+        if let Some(warm) = warm {
+            warm.put(self);
+        }
+    }
+
+    /// `(carried holds the world, warm carrier is stowed)`. `None` when this
+    /// World has no Green runtime. The serial detach's row reads it.
+    #[cfg(test)]
+    pub(crate) fn serial_world_parked_for_test(&self) -> Option<(bool, bool)> {
+        let runtime = self.green_runtime_ref();
+        let runtime = runtime.as_ref()?;
+        Some((
+            runtime.carried.borrow().holds_world(),
+            runtime.owner_carried.borrow().is_some(),
+        ))
+    }
+
     /// A further owner of the World BATON belongs to, on this OS thread,
     /// which holds the Baton: its own execution state over the World's
     /// views, starting in the creator's current buffer, with the World's

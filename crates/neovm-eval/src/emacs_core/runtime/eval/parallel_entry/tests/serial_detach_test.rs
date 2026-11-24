@@ -5,7 +5,7 @@ use super::HostRefusal;
 use crate::emacs_core::eval::parallel_entry::serial_turn::{
     OwnerSerialState, SerialTurn, TurnRefusal,
 };
-use crate::emacs_core::eval::{Context, SpecBinding};
+use crate::emacs_core::eval::{Context, SpecBinding, ThreadingMode};
 use crate::emacs_core::print::print_value;
 use neovm_value::intern::{SymId, intern};
 use neovm_value::value::Value;
@@ -78,6 +78,30 @@ fn reattach(ev: &mut Context, detached: super::DetachedOwner) {
 /// Inside a turn: the thread allocates into this owner's heap.
 fn owns_the_thread(ev: &mut Context) -> bool {
     neovm_value::tagged::gc::tagged_heap_is_current(&ev.tagged_heap)
+}
+
+#[test]
+fn l64_detach_stows_the_world_carriers_and_reattach_returns_them() {
+    let mut ev =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    let _baton = ev.start_green_runtime().expect("start the Green runtime");
+    assert_eq!(
+        ev.serial_world_parked_for_test(),
+        Some((false, false)),
+        "a started runtime holds placeholders; the thread still has the world"
+    );
+    let detached = detach(&mut ev);
+    assert_eq!(
+        ev.serial_world_parked_for_test(),
+        Some((true, true)),
+        "the same detach stows the carried world and the warm carrier"
+    );
+    reattach(&mut ev, detached);
+    assert_eq!(
+        ev.serial_world_parked_for_test(),
+        Some((false, false)),
+        "reattach puts both back on this thread"
+    );
 }
 
 #[test]
