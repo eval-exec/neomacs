@@ -10,7 +10,7 @@
 use crate::error::LispCondition;
 use crate::error::{EvalResult, Flow, signal};
 use crate::error::{expect_args, expect_max_args, expect_min_args};
-use crate::intern::resolve_sym_lisp_string;
+use crate::intern::{RecordedSymbolName, recorded_symbol_name, resolve_sym_lisp_string};
 use crate::tagged::SymbolMode;
 use crate::tagged::gc::with_tagged_heap;
 use crate::value::positions::{CharLen, CharPos0, CharRange};
@@ -394,14 +394,56 @@ pub fn knuth_hash_index(hash: u32, bits: u32) -> usize {
     ((product as u64) >> (32 - bits)) as usize
 }
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static SYMBOL_EQUAL_HASH_NAME_VALIDATIONS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn note_symbol_equal_hash_name_validation() {
+    SYMBOL_EQUAL_HASH_NAME_VALIDATIONS.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+fn note_symbol_equal_hash_name_validation() {}
+
+#[cfg(any(test, feature = "test-support"))]
+fn reset_symbol_equal_hash_name_validations() {
+    SYMBOL_EQUAL_HASH_NAME_VALIDATIONS.with(|count| count.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn symbol_equal_hash_name_validations() -> usize {
+    SYMBOL_EQUAL_HASH_NAME_VALIDATIONS.with(|count| count.get())
+}
+
 fn hash_symbol_name_for_equal(id: crate::intern::SymId, hasher: &mut DefaultHasher) {
     // UTF-8 names keep the `&str` hash the fallback used before. A raw-byte
-    // name has no `&str`, so it hashes its bytes and does not panic.
-    let name = resolve_sym_lisp_string(id);
-    if let Some(text) = name.as_utf8_str() {
-        text.hash(hasher);
-    } else {
-        name.as_bytes().hash(hasher);
+    // name hashes its bytes. After this thread records the name, both views
+    // come from that record, so a repeat does not call `from_utf8`.
+    match recorded_symbol_name(id) {
+        Some(RecordedSymbolName::Utf8(text)) => {
+            text.hash(hasher);
+        }
+        Some(RecordedSymbolName::Raw(bytes)) => {
+            bytes.hash(hasher);
+        }
+        None => {
+            note_symbol_equal_hash_name_validation();
+            let name = resolve_sym_lisp_string(id);
+            match recorded_symbol_name(id) {
+                Some(RecordedSymbolName::Utf8(text)) => text.hash(hasher),
+                Some(RecordedSymbolName::Raw(_)) => name.as_bytes().hash(hasher),
+                None => {
+                    if let Some(text) = name.as_utf8_str() {
+                        text.hash(hasher);
+                    } else {
+                        name.as_bytes().hash(hasher);
+                    }
+                }
+            }
+        }
     }
 }
 

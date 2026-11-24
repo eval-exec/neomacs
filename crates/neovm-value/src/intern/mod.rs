@@ -2718,6 +2718,40 @@ fn thread_local_resolve(id: SymId) -> Option<&'static str> {
     Some(unsafe { std::str::from_utf8_unchecked(name.as_bytes()) })
 }
 
+/// A symbol name this thread has already classified.
+///
+/// `Utf8` was accepted by `as_utf8_str` at record time. `Raw` is a name that
+/// is not UTF-8. Neither arm scans the bytes again.
+#[derive(Clone, Copy)]
+pub(crate) enum RecordedSymbolName {
+    Utf8(&'static str),
+    Raw(&'static [u8]),
+}
+
+/// The recorded name, if this thread has classified `id`.
+///
+/// A hit does not call `from_utf8` and does not read the symbol registry.
+#[inline]
+pub(crate) fn recorded_symbol_name(id: SymId) -> Option<RecordedSymbolName> {
+    ensure_thread_local_cache_epoch_current();
+    if let Some(text) = thread_local_resolve(id) {
+        return Some(RecordedSymbolName::Utf8(text));
+    }
+    thread_local_recorded_raw_name(id).map(|name| RecordedSymbolName::Raw(name.as_bytes()))
+}
+
+#[inline]
+fn thread_local_recorded_raw_name(id: SymId) -> Option<&'static LispString> {
+    SYMBOL_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let entry = cache.get(id.0 as usize)?;
+        match (entry.name, entry.utf8) {
+            (Some(name), Some(false)) => Some(name),
+            _ => None,
+        }
+    })
+}
+
 #[inline]
 fn thread_local_resolve_lisp_string(id: SymId) -> Option<&'static LispString> {
     SYMBOL_CACHE.with(|cache| {
