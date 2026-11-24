@@ -172,7 +172,8 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
         // matrix row. Only a still-visible row with actual source/EOB work is
         // a capacity overflow; an acquisition horizon is a separate outcome.
         let has_row_work = self.progress.byte_idx() < text.len()
-            || (self.progress.charpos() == loop_context.accessible_end()
+            || (self.progress.byte_idx() == text.len()
+                && self.progress.charpos() == loop_context.accessible_end()
                 && text.last() == Some(&b'\n'));
         if has_row_work
             && loop_context.glyph_matrix_capacity_exhausted(&self.row_build.row_geometry)

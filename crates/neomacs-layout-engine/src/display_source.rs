@@ -616,6 +616,11 @@ impl DisplaySourceTextPosition {
         self.byte_idx = byte_idx;
     }
 
+    pub(crate) fn advance_to(&mut self, byte_idx: usize, charpos: i64) {
+        self.byte_idx = byte_idx;
+        self.charpos = charpos;
+    }
+
     pub(crate) fn advance_charpos_by_one(&mut self) {
         self.charpos = self.charpos.saturating_add(1);
     }

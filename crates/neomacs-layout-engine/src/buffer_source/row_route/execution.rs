@@ -726,6 +726,7 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                                 return Err(());
                             }
                             replacement_context.apply_completed_string(
+                                buffer,
                                 session.finish(outcome.end_position()),
                                 &mut self.progress,
                                 self.row_carryover.line_numbers,

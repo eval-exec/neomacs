@@ -11236,6 +11236,7 @@ fn buffer_display_property_replacement_outcome_applies_walk_state_and_cursor() {
             DisplayPropertyReplacementCursorPolicy::FaceChar,
         ),
         skip_to: 4,
+        skip_to_byte_idx: None,
     };
     let mut byte_idx = "a".len();
     let mut charpos = 1;
@@ -11269,6 +11270,82 @@ fn buffer_display_property_replacement_outcome_applies_walk_state_and_cursor() {
     assert_eq!(cursor.byte_idx, "a".len());
     assert_eq!(cursor.col, 1);
     assert_eq!(cursor.slot_width, Some(8.0));
+}
+
+#[test]
+fn buffer_display_property_replacement_outcome_jumps_directly_when_byte_end_is_known() {
+    // Raw unibyte binary payload (as in `image-mode` for a GIF buffer): bytes
+    // >= 0xC0 would confuse UTF-8 decoding and scanning megabytes byte by byte
+    // stalls animation (#823). With `skip_to_byte_idx` known from the Emacs
+    // byte span, the walk jumps in O(1).
+    let raw_gif_like: &[u8] = &[0x47, 0x49, 0x46, 0xC0, 0xFF, 0xE0, 0x80, 0x3B];
+    let outcome = BufferDisplayPropertyTextReplacementOutcome {
+        replacement: DisplayPropertyReplacementAppendOutcome::new(
+            DisplayRowPosition::new(0.0, 0),
+            DisplayRowPosition::new(480.0, 60),
+            DisplayPropertyReplacementCursorPolicy::FaceChar,
+        ),
+        skip_to: raw_gif_like.len() as i64,
+        skip_to_byte_idx: Some(raw_gif_like.len()),
+    };
+    let mut byte_idx = 0usize;
+    let mut charpos = 0i64;
+    let mut x = 0.0;
+    let mut col = 0usize;
+    let active_face = test_active_face_state(FaceId::new(7), 8.0);
+    let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
+    let mut cursor_info = CursorCaptureState::new();
+    {
+        let mut progress =
+            DisplaySourceProgressState::new(&mut byte_idx, &mut charpos, &mut x, &mut col);
+        outcome.apply_to_progress_and_cursor(
+            raw_gif_like,
+            &mut progress,
+            &mut cursor_info,
+            &active_face,
+            &geometry,
+            0,
+            0,
+            &mut LineNumberRenderState::new(false, 1, 0),
+        );
+    }
+    assert_eq!(byte_idx, raw_gif_like.len());
+    assert_eq!(charpos, raw_gif_like.len() as i64);
+    assert_eq!(x, 480.0);
+    assert_eq!(col, 60);
+
+    // Jumping past a bounded viewport copy (`skip_to_byte_idx > text.len()`)
+    // advances directly to the replacement's true end without retrying copies
+    // across megabytes of covered buffer text (#823).
+    let beyond_horizon = BufferDisplayPropertyTextReplacementOutcome {
+        replacement: DisplayPropertyReplacementAppendOutcome::new(
+            DisplayRowPosition::new(0.0, 0),
+            DisplayRowPosition::new(480.0, 60),
+            DisplayPropertyReplacementCursorPolicy::FaceChar,
+        ),
+        skip_to: 19_335_521,
+        skip_to_byte_idx: Some(19_335_521),
+    };
+    let mut byte_idx = 0usize;
+    let mut charpos = 0i64;
+    let mut x = 0.0;
+    let mut col = 0usize;
+    {
+        let mut progress =
+            DisplaySourceProgressState::new(&mut byte_idx, &mut charpos, &mut x, &mut col);
+        beyond_horizon.apply_to_progress_and_cursor(
+            raw_gif_like,
+            &mut progress,
+            &mut CursorCaptureState::new(),
+            &active_face,
+            &geometry,
+            0,
+            0,
+            &mut LineNumberRenderState::new(false, 1, 0),
+        );
+    }
+    assert_eq!(byte_idx, 19_335_521);
+    assert_eq!(charpos, 19_335_521);
 }
 
 #[test]

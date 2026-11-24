@@ -616,6 +616,7 @@ impl<'rows, 'request, 'emit, 'surface, 'face, FS: crate::neovm_bridge::FaceServi
             match outcome.stop() {
                 DisplayReplacementStringRowStop::SourceExhausted => {
                     replacement_context.apply_completed_string(
+                        buffer,
                         session.finish(outcome.end_position()),
                         &mut self.state.progress,
                         self.state.row_carryover.line_numbers,
@@ -626,6 +627,7 @@ impl<'rows, 'request, 'emit, 'surface, 'face, FS: crate::neovm_bridge::FaceServi
                     if self.params.wrap_mode == crate::types::LineWrapMode::Truncate =>
                 {
                     replacement_context.apply_completed_string(
+                        buffer,
                         session.finish(outcome.end_position()),
                         &mut self.state.progress,
                         self.state.row_carryover.line_numbers,
@@ -648,6 +650,7 @@ impl<'rows, 'request, 'emit, 'surface, 'face, FS: crate::neovm_bridge::FaceServi
                     }
                     if !session.has_remaining_text() {
                         replacement_context.apply_completed_string(
+                            buffer,
                             session.finish(self.state.progress.row_position()),
                             &mut self.state.progress,
                             self.state.row_carryover.line_numbers,

@@ -661,6 +661,10 @@ impl BufferDisplayPropertyReplacementItem {
         self.start_byte_pos.get().checked_sub(text_start_byte)
     }
 
+    pub(crate) fn end_byte_idx(&self, text_start_byte: usize) -> Option<usize> {
+        self.end_byte_pos.get().checked_sub(text_start_byte)
+    }
+
     pub(crate) fn source_anchor(
         &self,
         text_start_byte: usize,
