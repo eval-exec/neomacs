@@ -209,6 +209,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `(dyn FnMut(TaggedValue, u32) -> Option<GlyphTextMetrics> + 'static): Send`
            which is required by `neovm_core::Context: Send`
+           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, u64, u64, i64) -> Option<(u32, u64)> + 'static): Send`
+           which is required by `neovm_core::Context: Send`
            `*const i64: Send`
            which is required by `neovm_core::Context: Send`
            `*const u8: Send`
