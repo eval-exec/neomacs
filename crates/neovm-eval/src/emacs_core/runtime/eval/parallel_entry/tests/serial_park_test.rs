@@ -10,6 +10,7 @@ use super::super::serial_ticket::{
 use super::super::serial_turn::{OwnerSerialState, TurnRefusal};
 use super::{
     Grant, KeeperPort, ParkedSerial, PortRefusal, SerialHome, TurnStartRefusal, begin_turn,
+    verify_serial_host_heap,
 };
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
@@ -342,4 +343,76 @@ fn e52_a_resume_while_another_owners_turn_is_live_gives_the_ticket_back() {
         .expect("the thread is free");
     assert_eq!(turn.with_world(|ev| eval(ev, "sp-state")), "1");
     turn.end(&mut port).ok().expect("the host detaches");
+}
+
+#[test]
+fn l64_activation_closure_verifies_host_heap_on_begin_and_resume() {
+    let (mut state, mut port) = dormant(7);
+    let real_heap = port.home.heap;
+    let candidate =
+        neovm_value::tagged::gc::HeapIdentity::from_legacy_word(1).expect("nonzero foreign heap");
+    let foreign_heap = if candidate == real_heap {
+        neovm_value::tagged::gc::HeapIdentity::from_legacy_word(2).expect("nonzero foreign heap")
+    } else {
+        candidate
+    };
+    assert_ne!(foreign_heap, real_heap);
+
+    // Mismatch at begin_turn: verify_serial_host_heap refuses with WrongHeap,
+    // gives the ticket back through its seat, and never installs a heap.
+    let grant = port.request_turn().ok().expect("grant 1");
+    let home = port.home;
+    let why = match begin_turn(
+        &mut state,
+        home,
+        grant,
+        &mut port,
+        verify_serial_host_heap(foreign_heap),
+    ) {
+        Ok(_) => panic!("mismatched host heap must be refused in activation"),
+        Err(refusal) => refusal,
+    };
+    assert_eq!(why, TurnStartRefusal::Activate(ReceiveReason::WrongHeap));
+    assert_eq!(
+        port.seen.last(),
+        Some(&Seen::GiveBack(1)),
+        "refused activation returns the ticket through its seat"
+    );
+    assert!(names_no_heap(), "refused activation leaves TLS down");
+
+    // Matching host heap enters the turn, parks, refuses a foreign host heap on
+    // resume, and then resumes cleanly with the real host heap.
+    let grant = port.request_turn().ok().expect("grant 2");
+    let mut turn = begin_turn(
+        &mut state,
+        home,
+        grant,
+        &mut port,
+        verify_serial_host_heap(real_heap),
+    )
+    .ok()
+    .expect("matching host heap activates the turn");
+    assert_eq!(turn.with_world(|ev| eval(ev, "sp-state")), "1");
+    let parked = turn.park("condvar", &mut port).ok().expect("park");
+    assert!(names_no_heap(), "park takes the heap back down");
+
+    let (parked, why) = match parked.resume(&mut port, verify_serial_host_heap(foreign_heap)) {
+        Ok(_) => panic!("mismatched host heap must be refused on resume"),
+        Err(refused) => refused,
+    };
+    assert_eq!(why, TurnStartRefusal::Activate(ReceiveReason::WrongHeap));
+    assert_eq!(
+        port.seen.last(),
+        Some(&Seen::GiveBack(3)),
+        "refused resume activation returns the ticket through its seat"
+    );
+    assert!(names_no_heap(), "refused resume leaves TLS down");
+
+    let mut turn = parked
+        .resume(&mut port, verify_serial_host_heap(real_heap))
+        .ok()
+        .expect("matching host heap resumes the parked turn");
+    assert_eq!(turn.with_world(|ev| eval(ev, "sp-state")), "1");
+    turn.end(&mut port).ok().expect("the host detaches");
+    assert!(names_no_heap(), "end takes the heap back down");
 }

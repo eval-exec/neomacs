@@ -253,13 +253,6 @@ impl LocalSerialOwner {
 
     /// Verify that the received ticket's loaned heap matches the dormant
     /// host's heap identity before reattaching it. Does not install any heap.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "L6.4 activation verifies the loaned heap against the dormant Context before reattach"
-        )
-    )]
     pub(crate) fn verify_host_heap(&self, host_heap: HeapIdentity) -> Result<(), ReceiveReason> {
         self.received.loan.verify_heap(host_heap)
     }

@@ -169,10 +169,32 @@ fn give_back(mut seat: SerialDestination, local: LocalSerialOwner, port: &mut im
     }
 }
 
+/// Step (a) of SERIAL-TURN-CONTEXT r1 point 2: verify that the received
+/// ticket's local serial heap loan matches the dormant host's heap identity
+/// before `OwnerSerialState::begin` / `ParkedTurn::resume` runs steps (b)-(d)
+/// (reattach: heap TLS install, frame/slab/buffer, and carried/warm World
+/// restore). Refuses a mismatch with [`ReceiveReason::WrongHeap`] without
+/// touching TLS.
+#[cold]
+#[inline(never)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "E5.3, E5.4 and E6-P pass this closure to begin_turn and ParkedSerial::resume; the rows call it now"
+    )
+)]
+pub(crate) fn verify_serial_host_heap(
+    host_heap: HeapIdentity,
+) -> impl FnOnce(&mut LocalSerialOwner) -> Result<(), ReceiveReason> {
+    move |local| local.verify_host_heap(host_heap)
+}
+
 /// Begin a turn on a grant. `home` names the owner and the era heap; the
 /// grant supplies the publication generation and the stop epoch.
-/// ACTIVATE is the heap loan into the received owner (pentry's activation in
-/// production; the rows' standalone owners need none).
+/// ACTIVATE is the heap loan check on the received owner
+/// ([`verify_serial_host_heap`] in production; the standalone rows pass a
+/// no-op).
 #[cold]
 #[inline(never)]
 #[cfg_attr(
