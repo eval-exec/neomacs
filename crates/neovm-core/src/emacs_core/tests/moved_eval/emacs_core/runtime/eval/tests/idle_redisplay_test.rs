@@ -139,6 +139,18 @@ fn a_forced_idle_redisplay_lays_out_a_change_made_after_the_last_layout() {
     assert_eq!(layouts.get(), 2, "now idle, the forced redisplay skips");
 }
 
+/// A category symbol's `face` is consulted only while a glyph row is built.
+///
+/// GNU `Fput` stores the plist and sets no redisplay flag (`fns.c:2729-2737`).
+/// `lookup_char_property` follows `category` to `(get SYMBOL PROP)` when the
+/// row is generated (`intervals.c:1711-1727`). `window_outdated` is only the
+/// buffer and overlay modification counts (`window.c:231-236`), so an
+/// up-to-date X11 matrix is reused. On the pinned linux-gtk3 oracle that row
+/// stays `(17 0 0 0)` across `(put 'idle-category 'face '(:height 200))`;
+/// `(overlay-put OVERLAY 'face '(:height 300))` moves the same row to
+/// `(49 0 0 0)`. `Ffset` likewise sets no redisplay flag (`data.c:901-930`),
+/// so the function epoch stays out of the idle signature. An unrelated
+/// `event-kind` put is not a layout input either.
 #[test]
 fn category_symbol_writes_invalidate_idle_redisplay() {
     let _policy = RedisplayHookPolicyGuard::legacy();
@@ -147,14 +159,18 @@ fn category_symbol_writes_invalidate_idle_redisplay() {
     assert_eq!(layouts.get(), 1);
     eval.eval_str("(progn (put 'idle-category 'face '(:height 200)) (redisplay))")
         .unwrap();
-    assert_eq!(layouts.get(), 2, "category face mutation must repaint");
+    assert_eq!(
+        layouts.get(),
+        1,
+        "category face mutation leaves an up-to-date matrix idle"
+    );
     eval.eval_str("(redisplay)").unwrap();
-    assert_eq!(layouts.get(), 2, "unchanged category must remain idle");
+    assert_eq!(layouts.get(), 1, "unchanged category must remain idle");
     eval.eval_str("(progn (put 'unrelated-wheel-event 'event-kind 'mouse-click) (redisplay))")
         .unwrap();
     assert_eq!(
         layouts.get(),
-        2,
+        1,
         "event metadata is not a layout dependency"
     );
 }
