@@ -5234,6 +5234,10 @@ impl FaceResolver {
         )
     }
 
+    pub(crate) fn font_sizing(&self) -> FontSizing {
+        self.font_sizing
+    }
+
     pub fn new_with_font_sizing(
         face_table: &FaceTable,
         default_fg: u32,

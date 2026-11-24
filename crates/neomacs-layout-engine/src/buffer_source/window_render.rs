@@ -550,12 +550,13 @@ where
             && params.measurement_pixels.is_none()
             && params.source_extent == crate::types::WindowSourceExtent::Viewport
         {
-            let face_line = state.with_face_services(|_resolver, font_metrics| {
+            let face_line = state.with_face_services(|resolver, font_metrics| {
                 let metrics = font_metrics.as_mut()?;
                 shorter_face_line_at_window_start(
                     buffer,
                     resolved_window_start,
                     default_resolved,
+                    resolver.resolver().font_sizing(),
                     metrics,
                 )
             });
@@ -742,6 +743,7 @@ fn shorter_face_line_at_window_start<B: crate::neovm_bridge::LayoutBufferView>(
     buffer: &B,
     window_start: ResolvedWindowStart,
     default_face: &crate::neovm_bridge::ResolvedFace,
+    font_sizing: crate::font::sizing::FontSizing,
     metrics: &mut crate::font::metrics::FontMetricsService,
 ) -> Option<f32> {
     use neovm_core::emacs_core::Value;
@@ -756,7 +758,7 @@ fn shorter_face_line_at_window_start<B: crate::neovm_bridge::LayoutBufferView>(
             window_start.get().max(0) as usize,
         )),
     )?;
-    let font_size = face_spec_font_size(&spec, default_face.font_size)?;
+    let font_size = face_spec_font_size(&spec, default_face.font_size, font_sizing)?;
     metrics
         .vertical_metrics_for_face_probe(
             'X',
@@ -770,14 +772,18 @@ fn shorter_face_line_at_window_start<B: crate::neovm_bridge::LayoutBufferView>(
         .map(|measured| measured.line_height)
 }
 
-fn face_spec_font_size(spec: &neovm_core::emacs_core::Value, inherited_px: f32) -> Option<f32> {
-    if let Some(size) = height_in_face_plist(spec, inherited_px) {
+fn face_spec_font_size(
+    spec: &neovm_core::emacs_core::Value,
+    inherited_px: f32,
+    font_sizing: crate::font::sizing::FontSizing,
+) -> Option<f32> {
+    if let Some(size) = height_in_face_plist(spec, inherited_px, font_sizing) {
         return Some(size);
     }
     if spec.is_cons() && !is_face_keyword(spec.cons_car()) {
         let mut cursor = *spec;
         while cursor.is_cons() {
-            if let Some(size) = face_spec_font_size(&cursor.cons_car(), inherited_px) {
+            if let Some(size) = face_spec_font_size(&cursor.cons_car(), inherited_px, font_sizing) {
                 return Some(size);
             }
             cursor = cursor.cons_cdr();
@@ -786,7 +792,11 @@ fn face_spec_font_size(spec: &neovm_core::emacs_core::Value, inherited_px: f32) 
     None
 }
 
-fn height_in_face_plist(spec: &neovm_core::emacs_core::Value, inherited_px: f32) -> Option<f32> {
+fn height_in_face_plist(
+    spec: &neovm_core::emacs_core::Value,
+    inherited_px: f32,
+    font_sizing: crate::font::sizing::FontSizing,
+) -> Option<f32> {
     if !spec.is_cons() || !is_face_keyword(spec.cons_car()) {
         return None;
     }
@@ -801,9 +811,7 @@ fn height_in_face_plist(spec: &neovm_core::emacs_core::Value, inherited_px: f32)
             let value = rest.cons_car();
             if let Some(tenths) = value.as_fixnum() {
                 let tenths = i32::try_from(tenths).ok()?;
-                return Some(crate::font::sizing::face_height_to_gnu_x11_fallback_pixels(
-                    tenths,
-                ));
+                return Some(font_sizing.face_height_to_layout_pixels(tenths));
             }
             if let Some(factor) = value.as_float() {
                 return Some(inherited_px * factor as f32);

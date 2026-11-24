@@ -3244,7 +3244,28 @@ fn backward_preparation_follows_a_published_bridge_without_viewport_motion() {
     check_fractional_reversal_prepared_edge(false, true);
 }
 
+#[test]
+fn cocoa_shorter_face_fills_viewport_and_publishes_backward_bridge() {
+    check_fractional_reversal_prepared_edge_with_sizing(
+        false,
+        true,
+        crate::font::sizing::FontSizing::gnu_cocoa(),
+    );
+}
+
 fn check_fractional_reversal_prepared_edge(idle: bool, extend_again: bool) {
+    check_fractional_reversal_prepared_edge_with_sizing(
+        idle,
+        extend_again,
+        crate::font::sizing::FontSizing::native_gui(),
+    );
+}
+
+fn check_fractional_reversal_prepared_edge_with_sizing(
+    idle: bool,
+    extend_again: bool,
+    sizing: crate::font::sizing::FontSizing,
+) {
     let line = "ordinary offscreen text\n";
     let (mut eval, frame, buffer, window) = incr_editing_frame(&line.repeat(400), 800, 600);
     eval.frame_manager_mut()
@@ -3281,6 +3302,7 @@ fn check_fractional_reversal_prepared_edge(idle: bool, extend_again: bool) {
     };
     hide(&mut eval, 8);
     let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.set_font_sizing(sizing);
     engine.layout_frame_rust(&mut eval, frame);
     engine.maintain_scroll_coverage(&eval);
     let mut prepared_start = origin - line.len();
@@ -3411,6 +3433,7 @@ fn check_fractional_reversal_prepared_edge(idle: bool, extend_again: bool) {
     }
     assert_eq!(visible, selected_window_layout_trace(&eval, &engine, frame));
     let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+    fresh.set_font_sizing(sizing);
     fresh.layout_frame_rust(&mut eval, frame);
     assert_eq!(visible, selected_window_layout_trace(&eval, &fresh, frame));
 }
