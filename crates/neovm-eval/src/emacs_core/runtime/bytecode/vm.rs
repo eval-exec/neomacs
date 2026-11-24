@@ -5845,9 +5845,13 @@ impl<'a> Vm<'a> {
                                     "verified bytecode exceeded its proven max_stack"
                                 );
                                 // The proof covers this StackRef's depth. The
-                                // checked driver keeps the range test.
+                                // checked driver keeps the range test. The
+                                // bound is the frame, not the absolute
+                                // `bc_buf` length: `after_dup_len` still
+                                // counts the caller's prefix. `len > frame_base`
+                                // above, so the subtraction cannot wrap.
                                 if !VERIFIED
-                                    && (offset > after_dup_len
+                                    && (offset > after_dup_len - frame_base
                                         || after_dup_len >= frame_base + func.max_stack().get())
                                 {
                                     // SAFETY: len < frame_base + max_stack checked above.

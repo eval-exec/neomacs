@@ -221,6 +221,99 @@ fn vm_unverified_listn_signals_without_popping_caller_slots() {
     assert!(err.cons_cdr().cons_cdr().is_nil());
 }
 
+/// Dup;StackRef;Lss;GotoIfNil on the checked driver must use the frame
+/// depth. An absolute `bc_buf` length lets StackRef name the caller slot
+/// and steer the branch. The unfused StackRef signals instead.
+///
+/// The caller leaves `[4242, callee]` and the nested frame starts at that
+/// length. The callee pushes 5000 (frame depth 1). Fused StackRef(3) is
+/// offset 4: past the frame (depth 2 after the imagined dup) but not past
+/// the absolute buffer length 4, so the index is the caller's 4242.
+/// `5000 < 4242` is false, and the fused branch would return 7. The body
+/// stays unverified. The caller catches `error` and returns that slot.
+#[test]
+fn vm_fused_dup_stackref_does_not_read_caller_slots() {
+    crate::test_utils::init_test_tracing();
+    let mut bad = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    let top_idx = bad.add_constant(Value::fixnum(5000));
+    let taken_idx = bad.add_constant(Value::fixnum(7));
+    // 0 const 5000
+    // 1 dup
+    // 2 stack-ref 3   offset 4, the caller's 4242
+    // 3 lss
+    // 4 goto-if-nil 6
+    // 5 return
+    // 6 const 7
+    // 7 return
+    bad.set_ops(vec![
+        Op::Constant(top_idx),
+        Op::Dup,
+        Op::StackRef(3),
+        Op::Lss,
+        Op::GotoIfNil(6),
+        Op::Return,
+        Op::Constant(taken_idx),
+        Op::Return,
+    ]);
+    bad.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
+    bad.set_lexical(false);
+    bad.seal_hand_assembled_ops_for_test();
+    assert!(
+        !bad.executes_verified_ops(),
+        "out-of-frame StackRef must stay on the checked driver"
+    );
+    let bad = Value::make_bytecode(bad);
+
+    let mut eval = Context::new_vm_runtime_harness(crate::test_utils::unit_runtime());
+    let mut caller = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    let keep_idx = caller.add_constant(Value::fixnum(4242));
+    let bad_idx = caller.add_constant(bad);
+    caller.set_ops(vec![
+        Op::Constant(keep_idx),
+        Op::PushConditionCase(6),
+        Op::Constant(bad_idx),
+        Op::Call(0),
+        Op::Pop,
+        Op::Return,
+        Op::StackRef(1),
+        Op::List(2),
+        Op::Return,
+    ]);
+    caller.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
+    caller.set_lexical(false);
+
+    let result = {
+        let mut vm = new_vm(&mut eval);
+        vm.execute(&caller, vec![])
+    };
+    let Ok(value) = result else {
+        panic!("fused StackRef past the frame must be a caught error, got {result:?}");
+    };
+    assert!(
+        value.is_cons(),
+        "fused StackRef past the frame must be a caught error, got {}",
+        crate::emacs_core::print::print_value(&value)
+    );
+    assert_eq!(
+        value.cons_cdr().cons_car(),
+        Value::fixnum(4242),
+        "caller slot must survive, got {}",
+        crate::emacs_core::print::print_value(&value)
+    );
+    assert_eq!(
+        value.cons_car().cons_cdr().cons_car().as_utf8_str(),
+        Some("Invalid byte-code")
+    );
+}
+
 /// The same frame rule as listN, for every unchecked N-ary pop.
 fn assert_sealed_underflow_preserves_caller(op: Op) {
     let mut bad = ByteCodeFunction::new(LambdaParams {
