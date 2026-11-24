@@ -60,6 +60,7 @@ mod publication;
 #[cfg(test)]
 mod publication_owner_seam;
 mod publication_roots;
+pub use super::heap_ref::{HeapMut, HeapRef};
 #[doc(hidden)]
 pub use cache_root_scan::CacheRootScan;
 

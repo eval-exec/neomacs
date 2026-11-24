@@ -29,10 +29,13 @@ fn key(heap: HeapIdentity, owner: u64) -> MutatorKey {
 }
 
 fn publish_table(catalog: &ConsCatalog, owner: MutatorKey) {
-    let object = Box::new(HashTableObj {
-        header: VecLikeHeader::new(VecLikeType::HashTable),
-        table: LispHashTable::new_with_options(HashTableTest::Eq, 4, None, 1.5, 0.8125),
-    });
+    let object = Box::new(HashTableObj::new(LispHashTable::new_with_options(
+        HashTableTest::Eq,
+        4,
+        None,
+        1.5,
+        0.8125,
+    )));
     let table = catalog.link_hash_table(owner, object).unwrap();
     assert_ne!(table, TaggedValue::NIL);
     // No collection can occur while the sole fixture owns live numeric runs.

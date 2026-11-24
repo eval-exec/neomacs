@@ -780,7 +780,202 @@ fn place_anchored_payload_readers_are_not_static() {
     let problems = place_anchor_problems(&source, "neovm-value/src/value/mod.rs", true);
     assert!(
         problems.is_empty(),
-        "P1.1 readers must be place-anchored:\n{}",
+        "P1.1-P1.4 readers must be place-anchored:\n{}",
+        problems.join("\n")
+    );
+}
+
+/// Phase 1c.0 allocator-never-collects guard: token-free allocation is sound
+/// under `HeapRef<'h>` only because allocation entry points never collect,
+/// sweep, or move existing objects. If a future allocator calls a collection
+/// or sweep entry (even inside `unsafe fn`), this guard fails and allocation
+/// must start taking `&mut HeapMut`.
+const ALLOCATOR_SOURCE_FILES: &[&str] = &[
+    "neovm-value/src/tagged/gc/allocation.rs",
+    "neovm-value/src/tagged/gc/alloc_region.rs",
+    "neovm-value/src/tagged/gc/cons_allocator.rs",
+    "neovm-value/src/tagged/gc/owner_alloc_region.rs",
+];
+
+fn is_allocator_forbidden_call(name: &str, arg_count: usize) -> bool {
+    name == "collect_exact"
+        || (name == "collect" && arg_count == 1)
+        || is_sweep_method(name)
+        || name.starts_with("gc_safe_point")
+        || name.starts_with("gc_collect_")
+        || name == "finish_concurrent_mark"
+}
+
+struct AllocatorScanner<'a> {
+    file: &'a str,
+    excluded: u32,
+    function: Vec<String>,
+    violations: Vec<Violation>,
+}
+
+impl<'a> AllocatorScanner<'a> {
+    fn new(file: &'a str) -> Self {
+        Self {
+            file,
+            excluded: 0,
+            function: Vec::new(),
+            violations: Vec::new(),
+        }
+    }
+
+    fn enter_item(&mut self, name: &str, attrs: &[Attribute], body: impl FnOnce(&mut Self)) {
+        let excluded = production_excluded(attrs);
+        if excluded {
+            self.excluded += 1;
+        }
+        self.function.push(name.to_owned());
+        body(self);
+        self.function.pop();
+        if excluded {
+            self.excluded -= 1;
+        }
+    }
+
+    fn note_violation(&mut self, call: &str, line: usize) {
+        if self.excluded > 0 {
+            return;
+        }
+        self.violations.push(Violation {
+            file: self.file.to_owned(),
+            line,
+            function: self
+                .function
+                .last()
+                .cloned()
+                .unwrap_or_else(|| "<module>".to_owned()),
+            call: call.to_owned(),
+        });
+    }
+}
+
+impl<'ast> Visit<'ast> for AllocatorScanner<'_> {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        self.enter_item(&item.ident.to_string(), &item.attrs, |scanner| {
+            visit::visit_item_mod(scanner, item);
+        });
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        self.enter_item(&item.sig.ident.to_string(), &item.attrs, |scanner| {
+            visit::visit_item_fn(scanner, item);
+        });
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+        self.enter_item("<impl>", &item.attrs, |scanner| {
+            visit::visit_item_impl(scanner, item);
+        });
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        self.enter_item(&item.sig.ident.to_string(), &item.attrs, |scanner| {
+            visit::visit_impl_item_fn(scanner, item);
+        });
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let name = call.method.to_string();
+        if is_allocator_forbidden_call(&name, call.args.len()) {
+            self.note_violation(&name, call.method.span().start().line);
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let Expr::Path(path) = &*call.func
+            && let Some(segment) = path.path.segments.last()
+        {
+            let name = segment.ident.to_string();
+            // For bare `collect` path calls, require `TaggedHeap::collect` / `Self::collect`
+            // (2 args including self) or `collect_exact` / sweep / safepoint names.
+            let forbidden = if name == "collect" {
+                heap_path_method(&path.path).is_some()
+            } else {
+                is_allocator_forbidden_call(&name, call.args.len())
+            };
+            if forbidden {
+                self.note_violation(&name, path.path.span().start().line);
+            }
+        }
+        visit::visit_expr_call(self, call);
+    }
+}
+
+fn allocator_collection_problems(source: &str, file: &str) -> Vec<String> {
+    let syntax = syn::parse_file(source).unwrap_or_else(|error| panic!("parse {file}: {error}"));
+    let mut scanner = AllocatorScanner::new(file);
+    scanner.visit_file(&syntax);
+    scanner
+        .violations
+        .into_iter()
+        .map(|v| format!("{}:{}: `{}` calls `{}`", v.file, v.line, v.function, v.call))
+        .collect()
+}
+
+#[test]
+fn allocation_guard_flags_collect_inside_allocator() {
+    let bad = allocator_collection_problems(
+        r#"
+        impl TaggedHeap {
+            pub fn alloc_vector(&mut self) {
+                unsafe { self.collect_exact(std::iter::empty()); }
+            }
+            pub unsafe fn alloc_user_ptr(&mut self) {
+                self.begin_stw_collection();
+            }
+        }
+        "#,
+        "neovm-value/src/tagged/gc/allocation.rs",
+    )
+    .join("\n");
+    assert!(
+        bad.contains("`alloc_vector` calls `collect_exact`"),
+        "guard must flag safe allocator collecting: {bad}"
+    );
+    assert!(
+        bad.contains("`alloc_user_ptr` calls `begin_stw_collection`"),
+        "guard must flag unsafe allocator sweeping: {bad}"
+    );
+
+    let clean = allocator_collection_problems(
+        r#"
+        impl TaggedHeap {
+            pub fn alloc_cons(&mut self) -> Vec<i32> {
+                [1, 2].into_iter().collect()
+            }
+        }
+        "#,
+        "neovm-value/src/tagged/gc/allocation.rs",
+    );
+    assert!(
+        clean.is_empty(),
+        "Iterator::collect must not false-positive: {clean:?}"
+    );
+}
+
+#[test]
+fn allocation_entry_points_never_collect() {
+    let files = architecture_production_source_roots::production_source_files();
+    let mut seen = 0usize;
+    let mut problems = Vec::new();
+    for target in ALLOCATOR_SOURCE_FILES {
+        let file = files
+            .iter()
+            .find(|file| file.workspace_relative() == *target)
+            .unwrap_or_else(|| panic!("missing allocator file {target}"));
+        seen += 1;
+        let source = std::fs::read_to_string(&file.path).expect("read allocator source");
+        problems.extend(allocator_collection_problems(&source, target));
+    }
+    assert_eq!(seen, ALLOCATOR_SOURCE_FILES.len());
+    assert!(
+        problems.is_empty(),
+        "allocator entry points must never collect or sweep:\n{}",
         problems.join("\n")
     );
 }

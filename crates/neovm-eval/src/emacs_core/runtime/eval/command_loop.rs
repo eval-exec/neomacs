@@ -2751,7 +2751,7 @@ impl Context {
     #[inline]
     #[doc(hidden)]
     pub fn lisp_string(&self, value: Value) -> Option<&neovm_value::heap_types::LispString> {
-        value.lisp_string_in(&self.tagged_heap)
+        value.lisp_string_in(self.tagged_heap.heap_ref())
     }
 
     /// [`Context::lisp_string`] with GNU's `CHECK_STRING` signal — the

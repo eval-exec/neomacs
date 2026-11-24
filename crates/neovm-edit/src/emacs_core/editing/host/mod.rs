@@ -221,6 +221,12 @@ pub trait EditHost {
     /// error — that is the safety property the API exists for. M3b.
     fn expect_lisp_string<'a>(&'a self, value: Value) -> Result<&'a LispString, Flow>;
 
+    /// Mint a shared heap capability token tied to `&self` (Phase 1c).
+    fn heap_ref(&self) -> neovm_value::tagged::gc::HeapRef<'_>;
+
+    /// Mint an exclusive heap capability token tied to `&mut self` (Phase 1c).
+    fn heap_mut(&mut self) -> neovm_value::tagged::gc::HeapMut<'_>;
+
     /// GNU's native error template path: doprnt translation with
     /// `text-quoting-style` applied (eval.c:2285-2287 through
     /// doprnt.c:493-499), returning the signalled `Flow`. The

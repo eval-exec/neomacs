@@ -51,6 +51,7 @@ use crate::tagged::value::{TAG_BITS, TAG_MASK, TaggedValue};
 /// 64-bit) encoding type and payload via tag bits.  Pattern matching uses
 /// `value.kind()` → `ValueKind`.
 pub type Value = TaggedValue;
+pub use crate::tagged::heap_ref::{HeapMut, HeapRef};
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 #[doc(hidden)]
@@ -3740,12 +3741,10 @@ impl TaggedValue {
     /// — a `Copy` word with no borrow to track. Those need an explicit root
     /// (DIVERGENCES.md 161/162's `InFlightRoots`), not a lifetime.
     #[inline]
-    pub fn lisp_string_in(self, heap: &crate::tagged::gc::TaggedHeap) -> Option<&LispString> {
-        let _ = heap;
-        // SAFETY: the anchor is `heap`. Reaching a collection needs `&mut
-        // Context`, which owns the heap, so this borrow cannot coexist with
-        // one -- a stronger anchor than `as_lisp_string`'s place, which is the
-        // whole reason this function exists.
+    pub fn lisp_string_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispString> {
+        // SAFETY: the anchor is `heap`. Reaching a collection, teardown, or
+        // bulk replacement needs `&mut Context` / `&mut TaggedHeap` / `&mut HeapMut`,
+        // so this borrow cannot coexist with one.
         unsafe { self.as_lisp_string_reanchored() }
     }
 
@@ -3773,10 +3772,7 @@ impl TaggedValue {
     /// (`builtins/treesit.rs`, `E0502` ×3 on `eval.buffers`), and 185 §2 is
     /// this.
     #[inline]
-    pub fn expect_lisp_string_in(
-        self,
-        heap: &crate::tagged::gc::TaggedHeap,
-    ) -> Result<&LispString, Flow> {
+    pub fn expect_lisp_string_in<'h>(self, heap: HeapRef<'h>) -> Result<&'h LispString, Flow> {
         self.lisp_string_in(heap).ok_or_else(|| {
             signal(
                 crate::error::LispCondition::WrongTypeArgument,
@@ -4067,6 +4063,7 @@ impl TaggedValue {
     ///
     /// Tied to this `Value` place. A later collection does not conflict with
     /// this borrow.
+    #[inline]
     pub fn as_vector_data(&self) -> Option<&LispValueSlice> {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::Vector {
@@ -4405,6 +4402,364 @@ impl TaggedValue {
     /// See [`mutate::set_string_byte_same_char_count`].
     pub fn set_string_byte_same_char_count(self, byte_pos: usize, byte: u8) -> bool {
         mutate::set_string_byte_same_char_count(self, byte_pos, byte)
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 1c: HeapRef-anchored payload readers and HeapMut-gated bulk mutators
+    // -----------------------------------------------------------------------
+
+    /// Borrow the closure slot vector for a Lambda or Macro, anchored to `heap`.
+    #[inline]
+    pub fn closure_slots_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
+        let header = self.as_veclike_ptr()?;
+        match unsafe { (*header).type_tag } {
+            VecLikeType::Lambda => {
+                let ptr = header as *const LambdaObj;
+                Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            }
+            VecLikeType::Macro => {
+                let ptr = header as *const MacroObj;
+                Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            }
+            _ => None,
+        }
+    }
+
+    /// Borrow parsed closure parameters, anchored to `heap`.
+    #[inline]
+    pub fn closure_params_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LambdaParams> {
+        let cell = self.closure_parsed_params_cell()?;
+        Some(cell.get_or_init(|| {
+            let arglist = self.closure_slot(CLOSURE_ARGLIST).unwrap_or(Value::NIL);
+            parse_lambda_params_from_value(&arglist)
+                .unwrap_or_else(|_| LambdaParams::simple(vec![]))
+        }))
+    }
+
+    /// Borrow the xwidget payload, anchored to `heap`.
+    #[inline]
+    pub fn xwidget_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h XwidgetObj> {
+        if self.is_xwidget() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const XwidgetObj;
+            Some(unsafe { &*ptr })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow the xwidget-view payload, anchored to `heap`.
+    #[inline]
+    pub fn xwidget_view_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h XwidgetViewObj> {
+        if self.is_xwidget_view() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const XwidgetViewObj;
+            Some(unsafe { &*ptr })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow marker data, anchored to `heap`.
+    #[inline]
+    pub fn marker_data_in<'h>(
+        self,
+        _heap: HeapRef<'h>,
+    ) -> Option<&'h crate::heap_types::LispMarker> {
+        if self.is_marker() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const MarkerObj;
+            Some(unsafe { &(*ptr).data })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow overlay data, anchored to `heap`.
+    #[inline]
+    pub fn overlay_data_in<'h>(
+        self,
+        _heap: HeapRef<'h>,
+    ) -> Option<&'h crate::heap_types::OverlayData> {
+        if self.is_overlay() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const OverlayObj;
+            Some(unsafe { &(*ptr).data })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow vector elements, anchored to `heap`.
+    #[inline]
+    pub fn vector_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::Vector {
+            let ptr = header as *const VectorObj;
+            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow a packed bool-vector, anchored to `heap`.
+    #[inline]
+    pub fn bool_vector_obj_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h BoolVectorObj> {
+        if self.is_bool_vector_obj() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const BoolVectorObj;
+            Some(unsafe { &*ptr })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow a GNU-shaped char-table object, anchored to `heap`.
+    #[inline]
+    pub fn char_table_obj_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h CharTableObj> {
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::CharTable {
+            let ptr = header as *const CharTableObj;
+            Some(unsafe { &*ptr })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow a GNU-shaped sub-char-table object, anchored to `heap`.
+    #[inline]
+    pub fn sub_char_table_obj_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h SubCharTableObj> {
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::SubCharTable {
+            let ptr = header as *const SubCharTableObj;
+            Some(unsafe { &*ptr })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow record elements, anchored to `heap`.
+    #[inline]
+    pub fn record_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::Record {
+            let ptr = header as *const RecordObj;
+            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow tree-sitter node slots, anchored to `heap`.
+    #[inline]
+    #[doc(hidden)]
+    pub fn treesit_node_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::TsNode {
+            let ptr = header as *const RecordObj;
+            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow opened-font pseudovector data, anchored to `heap`.
+    #[inline]
+    #[doc(hidden)]
+    pub fn font_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h FontObjectData> {
+        if self.is_font_object() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const FontObj;
+            Some(unsafe { &(*ptr).data })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow window-configuration slots, anchored to `heap`.
+    #[inline]
+    pub fn window_configuration_data_in<'h>(
+        self,
+        _heap: HeapRef<'h>,
+    ) -> Option<&'h LispValueSlice> {
+        if self.is_window_configuration() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const RecordObj;
+            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow a hash table, anchored to `heap`.
+    #[inline]
+    pub fn hash_table_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispHashTable> {
+        if self.is_hash_table() {
+            let ptr = self.as_veclike_ptr().unwrap() as *mut HashTableObj;
+            unsafe {
+                if (*ptr).table.needs_hydration() {
+                    self.hydrate_hash_table_for_access(ptr);
+                }
+                Some(&(*ptr).table)
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Replace closure slots under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn replace_closure_slots_in(self, _heap: &mut HeapMut<'_>, slots: Vec<Value>) -> bool {
+        mutate::replace_closure_slots(self, slots)
+    }
+
+    /// Mutate xwidget data under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_xwidget_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut XwidgetObj) -> R,
+    ) -> Option<R> {
+        mutate::with_xwidget_mut(self, f)
+    }
+
+    /// Mutate xwidget-view data under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_xwidget_view_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut XwidgetViewObj) -> R,
+    ) -> Option<R> {
+        mutate::with_xwidget_view_mut(self, f)
+    }
+
+    /// Mutate marker data under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_marker_data_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut crate::heap_types::LispMarker) -> R,
+    ) -> Option<R> {
+        mutate::with_marker_data_mut(self, f)
+    }
+
+    /// Mutate overlay data under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_overlay_data_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut crate::heap_types::OverlayData) -> R,
+    ) -> Option<R> {
+        mutate::with_overlay_data_mut(self, f)
+    }
+
+    /// Mutate vector elements under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_vector_data_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut Vec<Value>) -> R,
+    ) -> Option<R> {
+        mutate::with_vector_data_mut(self, f)
+    }
+
+    /// Replace vector elements under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn replace_vector_data_in(self, _heap: &mut HeapMut<'_>, values: Vec<Value>) -> bool {
+        mutate::replace_vector_data(self, values)
+    }
+
+    /// Mutate packed bool-vector bits under exclusive [`HeapMut`] capability.
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn with_bool_vector_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut BoolVectorObj) -> R,
+    ) -> Option<R> {
+        mutate::with_bool_vector_mut(self, f)
+    }
+
+    /// Mutate char-table slots under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_char_table_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut mutate::CharTableWrite<'_>) -> R,
+    ) -> Option<R> {
+        mutate::with_char_table_write(self, f)
+    }
+
+    /// Mutate sub-char-table slots under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_sub_char_table_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut mutate::SubCharTableWrite<'_>) -> R,
+    ) -> Option<R> {
+        mutate::with_sub_char_table_write(self, f)
+    }
+
+    /// Mutate record elements under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_record_data_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut Vec<Value>) -> R,
+    ) -> Option<R> {
+        mutate::with_record_data_mut(self, f)
+    }
+
+    /// Replace record elements under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn replace_record_data_in(self, _heap: &mut HeapMut<'_>, values: Vec<Value>) -> bool {
+        mutate::replace_record_data(self, values)
+    }
+
+    /// Mutate a hash table under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_hash_table_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut LispHashTable) -> R,
+    ) -> Option<R> {
+        mutate::with_hash_table_mut(self, f)
+    }
+
+    /// Mutate an obarray under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_obarray_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut ObarrayObj) -> R,
+    ) -> Option<R> {
+        self.with_obarray_mut(f)
+    }
+
+    /// Fixture-only string edits under exclusive [`HeapMut`] capability.
+    #[inline]
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_lisp_string_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut LispString) -> R,
+    ) -> Option<R> {
+        mutate::with_lisp_string_mut(self, f)
+    }
+
+    /// Edit string bytes in place under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn with_string_bytes_mut_in<R>(
+        self,
+        _heap: &mut HeapMut<'_>,
+        f: impl FnOnce(&mut [u8]) -> R,
+    ) -> Option<R> {
+        mutate::with_string_bytes_mut(self, f)
+    }
+
+    /// Clear string contents under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn clear_string_contents_in(self, _heap: &mut HeapMut<'_>) -> bool {
+        mutate::clear_string_contents(self)
+    }
+
+    /// Clear string intervals under exclusive [`HeapMut`] capability.
+    #[inline]
+    pub fn clear_string_intervals_in(self, _heap: &mut HeapMut<'_>) -> bool {
+        mutate::clear_string_intervals(self)
     }
 
     /// Convert to hash key based on the hash table test.

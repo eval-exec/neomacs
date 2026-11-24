@@ -191,6 +191,18 @@ impl Context {
         &self.tagged_heap
     }
 
+    /// Mint a shared [`neovm_value::tagged::gc::HeapRef`] tied to `&self`.
+    #[inline(always)]
+    pub fn heap_ref(&self) -> neovm_value::tagged::gc::HeapRef<'_> {
+        self.tagged_heap.heap_ref()
+    }
+
+    /// Mint an exclusive [`neovm_value::tagged::gc::HeapMut`] tied to `&mut self`.
+    #[inline(always)]
+    pub fn heap_mut(&mut self) -> neovm_value::tagged::gc::HeapMut<'_> {
+        self.tagged_heap.heap_mut()
+    }
+
     /// R-b (PC11-F f2): mutable tagged-heap view, for fixture setup that
     /// allocates (`alloc_cons`) or sets heap policy. Live callers are the
     /// re-homed value era fixtures.

@@ -3582,7 +3582,7 @@ pub fn builtin_treesit_parse_string(
     // leaving the disjoint `eval.buffers` mutations below alone.  This is
     // DIVERGENCES.md 175 §5's one measured false positive of
     // `Context::lisp_string`, landed rather than reverted.
-    let text = args[0].expect_lisp_string_in(&eval.tagged_heap)?;
+    let text = args[0].expect_lisp_string_in(eval.tagged_heap.heap_ref())?;
     let name = format!(" *treesit-parse-string-{}*", eval.treesit.roots().len() + 1);
     let buffer_id = eval
         .edit

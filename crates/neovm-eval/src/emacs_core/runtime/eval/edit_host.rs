@@ -320,6 +320,14 @@ impl EditHost for Context {
         Context::expect_lisp_string(self, value)
     }
 
+    fn heap_ref(&self) -> neovm_value::tagged::gc::HeapRef<'_> {
+        Context::heap_ref(self)
+    }
+
+    fn heap_mut(&mut self) -> neovm_value::tagged::gc::HeapMut<'_> {
+        Context::heap_mut(self)
+    }
+
     /// GNU eval.c:2285-2287 routes native error templates through doprnt;
     /// doprnt.c:493-499 translates quotes according to text-quoting-style.
     /// Body moved verbatim from text/coding's inherent `impl Context`
