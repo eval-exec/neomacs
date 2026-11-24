@@ -735,6 +735,9 @@ impl OwnedSourceBackendClosed {
 mod bootstrap;
 mod keeper_service;
 
+/// The keeper era the L6.7 driver serves on.
+pub(in crate::emacs_core::eval::parallel_entry) use keeper_service::KeeperEra;
+
 /// The live-era fixture the bootstrap rows and the E5.2 rows share.
 #[cfg(test)]
 pub(in crate::emacs_core::eval::parallel_entry) use bootstrap::era_fixture;

@@ -75,13 +75,27 @@ impl Grant {
 
 /// Why the keeper did not grant a requested turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "L6.7's port refuses a request; the rows do now")
-)]
 pub(crate) enum PortRefusal {
     /// The era was poisoned; no further grant will come.
     Poisoned,
+    /// The keeper could not finish its stop within its bound. Nothing was
+    /// lent and nothing is poisoned: publish again and request again.
+    Retry,
+}
+
+/// The owner's hold on one lent ticket (L6.7 K7). It is armed while the
+/// ticket is out and disarmed right after the ticket goes back. A guard that
+/// drops armed means the ticket was lost: the port's guard reports that to
+/// the keeper, which poisons, because only a Rust unwind or a leaked turn
+/// can drop it armed. A Lisp signal ends the turn normally.
+pub(crate) trait LendGuard {
+    /// The ticket went back to the keeper.
+    fn disarm(self);
+}
+
+/// The unit-test ports lend with no keeper to tell.
+impl LendGuard for () {
+    fn disarm(self) {}
 }
 
 /// The owner's side of the serial ring.
@@ -90,21 +104,26 @@ pub(crate) enum PortRefusal {
 /// processed by the keeper before a later request from the same owner, so
 /// the request never meets the owner's previous ring entry.
 pub(crate) trait KeeperPort {
+    /// The guard over one lent ticket.
+    type LendGuard: LendGuard;
     /// Give a finished turn's ticket back to the keeper.
     fn give_back(&mut self, returned: ReturnedSerialTicket);
     /// Publish this owner's image, commit a request at the ring tail under
-    /// that publication, and wait, NativeStopped, for the grant.
-    fn request_turn(&mut self) -> Result<Grant, PortRefusal>;
+    /// that publication, and wait, NativeStopped, for the grant. The guard
+    /// is armed: the ticket is out from here until it goes back.
+    fn request_turn(&mut self) -> Result<(Grant, Self::LendGuard), PortRefusal>;
     /// A granted ticket this owner could not receive goes back unopened.
     fn refuse(&mut self, ticket: StoppedSerialTicket, reason: ReceiveReason);
 }
 
-/// A turn in progress: the E5.1 turn and the seat that received its ticket.
+/// A turn in progress: the E5.1 turn, the seat that received its ticket,
+/// and the armed guard over that ticket.
 #[must_use = "a serial turn must end or park"]
-pub(crate) struct LiveSerial<'t, C: SerialHost> {
+pub(crate) struct LiveSerial<'t, C: SerialHost, G: LendGuard = ()> {
     turn: SerialTurn<'t, C, LocalSerialOwner>,
     seat: SerialDestination,
     home: SerialHome,
+    guard: G,
 }
 
 /// A parked turn. It holds no ticket: only the parked E5.1 turn and the
@@ -131,25 +150,30 @@ pub(crate) enum TurnStartRefusal<R, A> {
 /// refusal sends the ticket back unopened; an activation refusal gives the
 /// received owner back through its seat. Activation owns its own undo:
 /// nothing is half-activated when it refuses.
-fn receive<R, A>(
+fn receive<P: KeeperPort, R, A>(
     home: SerialHome,
     grant: Grant,
-    port: &mut impl KeeperPort,
+    guard: P::LendGuard,
+    port: &mut P,
     activate: impl FnOnce(&mut LocalSerialOwner) -> Result<(), A>,
-) -> Result<(SerialDestination, LocalSerialOwner), TurnStartRefusal<R, A>> {
+) -> Result<(SerialDestination, LocalSerialOwner, P::LendGuard), TurnStartRefusal<R, A>> {
     let mut seat = SerialDestination::new(grant.expected(home));
     let mut local = match seat.receive_serial(grant.ticket) {
         Ok(received) => received.guard(),
         Err(refusal) => {
             let reason = refusal.reason;
             port.refuse(refusal.ticket, reason);
+            guard.disarm();
             return Err(TurnStartRefusal::Receive(reason));
         }
     };
+    // An unwind out of `activate` drops `guard` armed: the keeper learns the
+    // ticket is lost instead of waiting for it.
     match activate(&mut local) {
-        Ok(()) => Ok((seat, local)),
+        Ok(()) => Ok((seat, local, guard)),
         Err(refusal) => {
             give_back(seat, local, port);
+            guard.disarm();
             Err(TurnStartRefusal::Activate(refusal))
         }
     }
@@ -201,18 +225,24 @@ pub(crate) fn verify_serial_host_heap(
     not(test),
     expect(dead_code, reason = "E5.3, E5.4 and E6-P call it; the rows do now")
 )]
-pub(crate) fn begin_turn<'t, C: SerialHost, A>(
+pub(crate) fn begin_turn<'t, C: SerialHost, P: KeeperPort, A>(
     state: &'t mut OwnerSerialState<C, LocalSerialOwner>,
     home: SerialHome,
-    grant: Grant,
-    port: &mut impl KeeperPort,
+    (grant, guard): (Grant, P::LendGuard),
+    port: &mut P,
     activate: impl FnOnce(&mut LocalSerialOwner) -> Result<(), A>,
-) -> Result<LiveSerial<'t, C>, TurnStartRefusal<C::Refusal, A>> {
-    let (seat, local) = receive(home, grant, port, activate)?;
+) -> Result<LiveSerial<'t, C, P::LendGuard>, TurnStartRefusal<C::Refusal, A>> {
+    let (seat, local, guard) = receive(home, grant, guard, port, activate)?;
     match state.begin(local) {
-        Ok(turn) => Ok(LiveSerial { turn, seat, home }),
+        Ok(turn) => Ok(LiveSerial {
+            turn,
+            seat,
+            home,
+            guard,
+        }),
         Err((local, refusal)) => {
             give_back(seat, local, port);
+            guard.disarm();
             Err(TurnStartRefusal::Turn(refusal))
         }
     }
@@ -222,7 +252,7 @@ pub(crate) fn begin_turn<'t, C: SerialHost, A>(
     not(test),
     expect(dead_code, reason = "E5.3, E5.4 and E6-P call it; the rows do now")
 )]
-impl<'t, C: SerialHost> LiveSerial<'t, C> {
+impl<'t, C: SerialHost, G: LendGuard> LiveSerial<'t, C, G> {
     /// Lend the owner's Context to BODY (E5.1 `with_world`).
     pub(crate) fn with_world<R>(&mut self, body: impl for<'g> FnOnce(&'g mut C) -> R) -> R {
         self.turn.with_world(body)
@@ -232,14 +262,31 @@ impl<'t, C: SerialHost> LiveSerial<'t, C> {
     /// A host that refuses to detach keeps the turn live.
     #[cold]
     #[inline(never)]
-    pub(crate) fn end(self, port: &mut impl KeeperPort) -> Result<(), (Self, C::Refusal)> {
-        let LiveSerial { turn, seat, home } = self;
+    pub(crate) fn end<P: KeeperPort<LendGuard = G>>(
+        self,
+        port: &mut P,
+    ) -> Result<(), (Self, C::Refusal)> {
+        let LiveSerial {
+            turn,
+            seat,
+            home,
+            guard,
+        } = self;
         match turn.end() {
             Ok(local) => {
                 give_back(seat, local, port);
+                guard.disarm();
                 Ok(())
             }
-            Err((turn, refusal)) => Err((LiveSerial { turn, seat, home }, refusal)),
+            Err((turn, refusal)) => Err((
+                LiveSerial {
+                    turn,
+                    seat,
+                    home,
+                    guard,
+                },
+                refusal,
+            )),
         }
     }
 
@@ -249,18 +296,33 @@ impl<'t, C: SerialHost> LiveSerial<'t, C> {
     #[cold]
     #[inline(never)]
     #[allow(clippy::type_complexity)]
-    pub(crate) fn park<W>(
+    pub(crate) fn park<W, P: KeeperPort<LendGuard = G>>(
         self,
         wait: W,
-        port: &mut impl KeeperPort,
+        port: &mut P,
     ) -> Result<ParkedSerial<'t, C, W>, (Self, W, C::Refusal)> {
-        let LiveSerial { turn, seat, home } = self;
+        let LiveSerial {
+            turn,
+            seat,
+            home,
+            guard,
+        } = self;
         match turn.park(wait) {
             Ok((parked, local)) => {
                 give_back(seat, local, port);
+                guard.disarm();
                 Ok(ParkedSerial { parked, home })
             }
-            Err((turn, wait, refusal)) => Err((LiveSerial { turn, seat, home }, wait, refusal)),
+            Err((turn, wait, refusal)) => Err((
+                LiveSerial {
+                    turn,
+                    seat,
+                    home,
+                    guard,
+                },
+                wait,
+                refusal,
+            )),
         }
     }
 }
@@ -282,14 +344,14 @@ impl<'t, C: SerialHost, W> ParkedSerial<'t, C, W> {
     #[cold]
     #[inline(never)]
     #[allow(clippy::type_complexity)]
-    pub(crate) fn resume<A>(
+    pub(crate) fn resume<P: KeeperPort, A>(
         self,
-        port: &mut impl KeeperPort,
+        port: &mut P,
         activate: impl FnOnce(&mut LocalSerialOwner) -> Result<(), A>,
-    ) -> Result<LiveSerial<'t, C>, (Self, TurnStartRefusal<C::Refusal, A>)> {
+    ) -> Result<LiveSerial<'t, C, P::LendGuard>, (Self, TurnStartRefusal<C::Refusal, A>)> {
         let ParkedSerial { parked, home } = self;
-        let grant = match port.request_turn() {
-            Ok(grant) => grant,
+        let (grant, guard) = match port.request_turn() {
+            Ok(granted) => granted,
             Err(refusal) => {
                 return Err((
                     ParkedSerial { parked, home },
@@ -297,14 +359,20 @@ impl<'t, C: SerialHost, W> ParkedSerial<'t, C, W> {
                 ));
             }
         };
-        let (seat, local) = match receive(home, grant, port, activate) {
+        let (seat, local, guard) = match receive(home, grant, guard, port, activate) {
             Ok(received) => received,
             Err(refusal) => return Err((ParkedSerial { parked, home }, refusal)),
         };
         match parked.resume(local) {
-            Ok(turn) => Ok(LiveSerial { turn, seat, home }),
+            Ok(turn) => Ok(LiveSerial {
+                turn,
+                seat,
+                home,
+                guard,
+            }),
             Err((parked, local, refusal)) => {
                 give_back(seat, local, port);
+                guard.disarm();
                 Err((
                     ParkedSerial { parked, home },
                     TurnStartRefusal::Turn(refusal),

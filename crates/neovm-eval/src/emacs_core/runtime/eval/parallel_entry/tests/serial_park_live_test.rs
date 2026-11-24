@@ -96,13 +96,15 @@ struct LivePort<'era> {
 }
 
 impl KeeperPort for LivePort<'_> {
+    type LendGuard = ();
+
     fn give_back(&mut self, returned: ReturnedSerialTicket) {
         self.to_keeper
             .send(ToKeeper::GiveBack(self.owner, returned))
             .expect("the keeper is serving");
     }
 
-    fn request_turn(&mut self) -> Result<Grant, PortRefusal> {
+    fn request_turn(&mut self) -> Result<(Grant, ()), PortRefusal> {
         let mutator = &mut self.mutator;
         if self.native {
             retry_native("leave native to publish again", || {
@@ -118,11 +120,14 @@ impl KeeperPort for LivePort<'_> {
             .send(ToKeeper::Request(self.owner, receipt))
             .expect("the keeper is serving");
         match self.grants.recv_timeout(BOUND) {
-            Ok(ToOwner(ticket, epoch)) => Ok(Grant {
-                ticket,
-                generation,
-                epoch,
-            }),
+            Ok(ToOwner(ticket, epoch)) => Ok((
+                Grant {
+                    ticket,
+                    generation,
+                    epoch,
+                },
+                (),
+            )),
             Err(error) => panic!("owner {}: no grant within the bound: {error}", self.owner),
         }
     }
@@ -716,4 +721,272 @@ fn e52_live_another_owners_real_ticket_is_refused_and_both_come_back() {
             assert_eq!(owner.join().expect("O"), "6", "O resumed its own turn");
         });
     });
+}
+
+// ---------------------------------------------------------------------------
+// L6.7a: the same owners against the product keeper driver and port.
+// ---------------------------------------------------------------------------
+
+use super::super::keeper_driver::{
+    Breach, ChannelLend, ChannelPort, Driver, DriverEnd, GrantMsg, KeeperMsg, LendDrop,
+};
+
+/// What one owner thread takes for the driver rows.
+struct DriverKit<'era> {
+    permit: MutatorPermit<'era>,
+    home: SerialHome,
+    inbox: mpsc::Sender<KeeperMsg>,
+    grants: mpsc::Receiver<GrantMsg>,
+}
+
+impl<'era> DriverKit<'era> {
+    /// The owner's standalone Context, kept dormant, and its product port.
+    fn start(self) -> (State, SerialHome, ChannelPort<'era>) {
+        let mut ev = Context::new(crate::test_utils::unit_runtime());
+        eval(
+            &mut ev,
+            "(progn (defvar sp-live 0) (setq sp-live 1) (defvar sp-bound nil))",
+        );
+        let state = OwnerSerialState::new(self.home.owner, Box::new(ev))
+            .ok()
+            .expect("a freshly built Context detaches");
+        let port = ChannelPort::new(
+            self.home.owner,
+            activate(self.permit, self.home.heap, self.home.owner),
+            self.inbox,
+            self.grants,
+        );
+        (state, self.home, port)
+    }
+
+    /// Run SCRIPT, then exit and retire on a live era.
+    fn run<R>(self, script: impl FnOnce(&mut State, SerialHome, &mut ChannelPort<'era>) -> R) -> R {
+        let (mut state, home, mut port) = self.start();
+        let out = script(&mut state, home, &mut port);
+        retire(port.exit());
+        out
+    }
+}
+
+/// Enroll OWNER with the driver on the keeper thread; the permit crosses.
+fn enroll_driver<'k>(
+    era: &'k KeeperEra<'_, '_>,
+    driver: &mut Driver<'k, '_, '_>,
+    inbox: &mpsc::Sender<KeeperMsg>,
+    owner: u64,
+) -> DriverKit<'k> {
+    let permit = era.register(owner, 0).expect("register the owner");
+    let (grants_tx, grants) = mpsc::sync_channel(1);
+    driver.enroll(owner, permit.key(), grants_tx);
+    DriverKit {
+        permit,
+        home: SerialHome {
+            owner,
+            heap: era.heap_identity(),
+        },
+        inbox: inbox.clone(),
+        grants,
+    }
+}
+
+/// Request a turn on the product port and run FORM in it.
+fn driver_turn<'t>(
+    state: &'t mut State,
+    home: SerialHome,
+    port: &mut ChannelPort<'_>,
+    form: &str,
+) -> super::LiveSerial<'t, Context, ChannelLend> {
+    let granted = port
+        .request_turn()
+        .ok()
+        .expect("the driver grants the request");
+    let mut turn = begin_turn(state, home, granted, port, standalone)
+        .ok()
+        .expect("the grant begins");
+    turn.with_world(|ev| eval(ev, form));
+    turn
+}
+
+/// C3 + D-1. Two owners, one turn each: the driver lends both through its
+/// own stops and drains when both have exited.
+#[test]
+fn l67a_driver_lends_each_owner_a_turn_and_drains() {
+    with_live_era("l67a-drain", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let o = enroll_driver(era, &mut driver, &inbox, O);
+        let b = enroll_driver(era, &mut driver, &inbox, B);
+        drop(inbox);
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let first = scope.spawn(move || {
+                o.run(|state, home, port| {
+                    let mut turn = driver_turn(state, home, port, "(setq sp-live 31)");
+                    let seen = turn.with_world(|ev| eval(ev, "sp-live"));
+                    turn.end(port).ok().expect("the host detaches");
+                    seen
+                })
+            });
+            let second = scope.spawn(move || {
+                b.run(|state, home, port| {
+                    let mut turn = driver_turn(state, home, port, "(setq sp-live 32)");
+                    let seen = turn.with_world(|ev| eval(ev, "sp-live"));
+                    turn.end(port).ok().expect("the host detaches");
+                    seen
+                })
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            assert_eq!(first.join().expect("O"), "31");
+            assert_eq!(second.join().expect("B"), "32");
+        });
+    });
+}
+
+/// C3 (R1/R4 on the product port). O parks and its ticket goes back; it
+/// re-requests at once and resumes in a later stop with its state intact.
+#[test]
+fn l67a_driver_resumes_a_parked_turn_in_a_later_stop() {
+    with_live_era("l67a-park", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let o = enroll_driver(era, &mut driver, &inbox, O);
+        drop(inbox);
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let owner = scope.spawn(move || {
+                o.run(|state, home, port| {
+                    let turn = driver_turn(state, home, port, "(setq sp-live 33)");
+                    let parked = turn.park(Wake("fired"), port).ok().expect("parks");
+                    let mut turn = parked
+                        .resume(port, standalone)
+                        .ok()
+                        .expect("the next grant resumes");
+                    let seen = turn.with_world(|ev| eval(ev, "sp-live"));
+                    turn.end(port).ok().expect("the host detaches");
+                    seen
+                })
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            assert_eq!(owner.join().expect("O"), "33");
+        });
+    });
+}
+
+/// D-9 (lead #13898). A Lisp signal ends only that turn, as GNU's
+/// run_thread records it and keeps the world running (thread.c:818,
+/// :753-758). The turn ends normally, nothing is poisoned, and the owner
+/// queued behind is granted and completes.
+#[test]
+fn l67a_a_lisp_signal_ends_only_that_turn() {
+    with_live_era("l67a-signal", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let o = enroll_driver(era, &mut driver, &inbox, O);
+        let b = enroll_driver(era, &mut driver, &inbox, B);
+        drop(inbox);
+        let (begun_tx, begun_rx) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let signalling = scope.spawn(move || {
+                o.run(|state, home, port| {
+                    let granted = port.request_turn().ok().expect("granted");
+                    let mut turn = begin_turn(state, home, granted, port, standalone)
+                        .ok()
+                        .expect("begins");
+                    // B requests only now, so it is queued behind O's turn.
+                    begun_tx.send(()).expect("tell B");
+                    let error = turn.with_world(|ev| eval(ev, "(signal 'error '(\"boom\"))"));
+                    turn.end(port).ok().expect("the turn ends normally");
+                    error
+                })
+            });
+            let after = scope.spawn(move || {
+                begun_rx.recv_timeout(BOUND).expect("O's turn began");
+                b.run(|state, home, port| {
+                    let mut turn = driver_turn(state, home, port, "(setq sp-live 34)");
+                    let seen = turn.with_world(|ev| eval(ev, "sp-live"));
+                    turn.end(port).ok().expect("the host detaches");
+                    seen
+                })
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained, "nothing was poisoned");
+            assert!(
+                signalling.join().expect("O").starts_with("ERR"),
+                "the signal escaped the form"
+            );
+            assert_eq!(after.join().expect("B"), "34", "the next owner ran");
+        });
+    });
+}
+
+/// D-4 (K7). O unwinds from a Rust panic inside its turn while it holds the
+/// ticket. Its lend guard reports the lost ticket; the driver poisons the
+/// era, and the other owner's request is answered `Poisoned`.
+#[test]
+fn l67a_an_owner_unwinding_mid_turn_poisons_and_wakes_the_rest() {
+    let Some(mut source) = ready() else {
+        return;
+    };
+    source.lexenv = Value::string("l67a-unwind");
+    let (_shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |era| {
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let o = enroll_driver(era, &mut driver, &inbox, O);
+            let b = enroll_driver(era, &mut driver, &inbox, B);
+            drop(inbox);
+            let (begun_tx, begun_rx) = mpsc::channel::<()>();
+            let (idle_tx, idle_rx) = mpsc::channel::<()>();
+            std::thread::scope(|scope| {
+                let unwinding = scope.spawn(move || {
+                    let (mut state, home, mut port) = o.start();
+                    // O asks only once B is NativeStopped and cannot hold O's
+                    // stop open.
+                    idle_rx.recv_timeout(BOUND).expect("B is idle");
+                    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut turn =
+                            driver_turn(&mut state, home, &mut port, "(setq sp-live 35)");
+                        // B requests only once O holds the ticket.
+                        begun_tx.send(()).expect("tell B");
+                        turn.with_world(|_ev| panic!("an invariant break inside the turn"));
+                    }));
+                    assert!(caught.is_err(), "the turn unwound");
+                    // The era is poisoned; the mutator is dropped, not retired.
+                    drop(port.exit());
+                });
+                let queued = scope.spawn(move || {
+                    let (_state, _home, mut port) = b.start();
+                    // NativeStopped while it waits, so O's stop does not wait
+                    // on it.
+                    port.publish_idle().expect("B publishes");
+                    idle_tx.send(()).expect("tell O");
+                    begun_rx.recv_timeout(BOUND).expect("O holds the ticket");
+                    let answer = port.request_turn().map(|_granted| ());
+                    drop(port.exit());
+                    answer
+                });
+                let end = driver.run();
+                unwinding.join().expect("O's thread");
+                let answer = queued.join().expect("B's thread");
+                tx.send((end, answer)).expect("send the outcome");
+            });
+        });
+        drop(outcome);
+    });
+    let (end, answer) = rx.recv().expect("the keeper outcome");
+    service.join().expect("keeper service thread");
+    assert_eq!(
+        end,
+        DriverEnd::Poisoned(Breach::Abandoned {
+            owner: O,
+            cause: LendDrop::Unwound,
+        })
+    );
+    assert_eq!(
+        answer,
+        Err(PortRefusal::Poisoned),
+        "B learns the era is poisoned"
+    );
 }

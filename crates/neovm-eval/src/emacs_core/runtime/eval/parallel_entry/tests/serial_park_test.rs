@@ -76,12 +76,14 @@ fn nonzero(n: u64) -> NonZeroU64 {
 }
 
 impl KeeperPort for FakePort {
+    type LendGuard = ();
+
     fn give_back(&mut self, returned: ReturnedSerialTicket) {
         self.seen
             .push(Seen::GiveBack(returned.identity().epoch.get()));
     }
 
-    fn request_turn(&mut self) -> Result<Grant, PortRefusal> {
+    fn request_turn(&mut self) -> Result<(Grant, ()), PortRefusal> {
         if let Some(refusal) = self.refuse_next.take() {
             return Err(refusal);
         }
@@ -102,11 +104,14 @@ impl KeeperPort for FakePort {
             Some(Fault::Generation) => cut.generation = nonzero(self.generation - 1),
             Some(Fault::Owner(owner)) => cut.owner = owner,
         }
-        Ok(Grant {
-            ticket: StoppedSerialTicket::transport(cut),
-            generation,
-            epoch,
-        })
+        Ok((
+            Grant {
+                ticket: StoppedSerialTicket::transport(cut),
+                generation,
+                epoch,
+            },
+            (),
+        ))
     }
 
     fn refuse(&mut self, ticket: StoppedSerialTicket, reason: ReceiveReason) {

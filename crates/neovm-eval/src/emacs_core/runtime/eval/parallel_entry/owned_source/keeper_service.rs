@@ -12,12 +12,11 @@ use neovm_value::tagged::gc::heap_transfer::{
     HeapTransferCompletion, RetainedTransferFailure, ScopedEraError, ScopedEraFailure,
     TransferError,
 };
-#[cfg(test)]
 use std::num::NonZeroU64;
 
-use neovm_value::tagged::gc::{AllStopped, ParallelHeapEra, RendezvousError};
+use neovm_value::tagged::gc::{AllStopped, MutatorKey, ParallelHeapEra, RendezvousError};
 #[cfg(test)]
-use neovm_value::tagged::gc::{HeapIdentity, MutatorKey, MutatorPermit, RegistrationError};
+use neovm_value::tagged::gc::{HeapIdentity, MutatorPermit, RegistrationError};
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::thread::ThreadId;
@@ -74,6 +73,46 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
     )]
     pub(crate) fn stop(&self) -> Result<AllStopped<'_>, RendezvousError> {
         self.era.stop()
+    }
+
+    /// L6.7 K4: commit one serial request at the ring's tail.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the L6.7 driver calls it; no production spawner yet"
+        )
+    )]
+    pub(crate) fn enqueue_serial(
+        &self,
+        owner: MutatorKey,
+        generation: NonZeroU64,
+    ) -> Result<(), RendezvousError> {
+        self.era.enqueue_serial(owner, generation)
+    }
+
+    /// L6.7 K6: cancel `owner`'s queued request.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the L6.7 driver calls it; no production spawner yet"
+        )
+    )]
+    pub(crate) fn cancel_serial(&self, owner: MutatorKey) -> Result<(), RendezvousError> {
+        self.era.cancel_serial(owner)
+    }
+
+    /// L6.7 K7: poison the era on a proven invariant break.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the L6.7 driver calls it; no production spawner yet"
+        )
+    )]
+    pub(crate) fn poison_era(&self) -> Result<(), RendezvousError> {
+        self.era.poison_era()
     }
 
     /// Heap the service thread registers a mutator permit against.

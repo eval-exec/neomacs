@@ -10,9 +10,12 @@
 use neovm_value::tagged::gc::heap_transfer::{
     PublishedOwner, StopScope, StoppedInterval, UnenteredReservation,
 };
-use neovm_value::tagged::gc::{AllStopped, AllStoppedFailure, RendezvousError};
+use neovm_value::tagged::gc::{
+    AllStopped, AllStoppedFailure, MutatorKey, RendezvousError, SerialGrant,
+};
 use std::cell::Cell;
 use std::marker::PhantomData;
+use std::num::NonZeroU64;
 use std::rc::Rc;
 
 type KeeperStop<'s> = PhantomData<fn(&'s mut ()) -> &'s mut ()>;
@@ -150,6 +153,32 @@ impl<'s, 'era> StoppedKeeper<'s, 'era> {
         })
     }
 
+    /// The ring head under this stop: owner and queued generation.
+    pub(crate) fn serial_head(&self) -> Result<Option<(MutatorKey, NonZeroU64)>, RendezvousError> {
+        self.interval.serial_head()
+    }
+
+    /// Serial requests queued or granted under this stop (the K4 batch bound).
+    pub(crate) fn serial_ring_len(&self) -> Result<usize, RendezvousError> {
+        self.interval.serial_ring_len()
+    }
+
+    /// L6.7 K3: grant the ring head to `request`'s owner, only when the head
+    /// is that owner at the publication the request carries.
+    pub(crate) fn grant_for(
+        &mut self,
+        request: &KeeperReadyRequest<'s>,
+    ) -> Result<Option<SerialGrant>, RendezvousError> {
+        let (owner, generation, _) = request.owner.serial_facts();
+        self.interval
+            .grant_serial_head(|key, queued| key.owner() == owner && queued == generation)
+    }
+
+    /// Finish the traced stop with nothing lent.
+    pub(crate) fn complete_traced(self) -> Result<(), AllStoppedFailure<'era>> {
+        self.interval.complete_traced()
+    }
+
     /// Consume this keeper. The suspended state has no lend method.
     pub fn lend_serial(
         self,
@@ -215,6 +244,41 @@ impl<'s, 'era> SuspendedKeeper<'s, 'era> {
 
 #[allow(dead_code)]
 impl<'s, 'era> RestoredKeeper<'s, 'era> {
+    /// Re-check a publication against this stop. Not a heap loan.
+    pub(crate) fn ready_request(
+        &self,
+        owner: PublishedOwner,
+    ) -> Result<KeeperReadyRequest<'s>, RendezvousError> {
+        self.export.reservation.validate_owner(&owner)?;
+        Ok(KeeperReadyRequest {
+            owner,
+            stop: PhantomData,
+            local: PhantomData,
+        })
+    }
+
+    /// The ring head under this stop: owner and queued generation.
+    pub(crate) fn serial_head(&self) -> Result<Option<(MutatorKey, NonZeroU64)>, RendezvousError> {
+        self.export.reservation.serial_head()
+    }
+
+    /// L6.7 K3: grant the ring head to `request`'s owner, as on
+    /// [`StoppedKeeper::grant_for`]. The previous ticket is back.
+    pub(crate) fn grant_for(
+        &mut self,
+        request: &KeeperReadyRequest<'s>,
+    ) -> Result<Option<SerialGrant>, RendezvousError> {
+        let (owner, generation, _) = request.owner.serial_facts();
+        self.export
+            .reservation
+            .grant_serial_head(|key, queued| key.owner() == owner && queued == generation)
+    }
+
+    /// Retire the grant whose ticket came back, exactly once.
+    pub(crate) fn retire(&mut self, grant: SerialGrant) -> Result<(), RendezvousError> {
+        self.export.reservation.retire_serial_grant(grant)
+    }
+
     pub fn lend_next(
         self,
         request: KeeperReadyRequest<'s>,
