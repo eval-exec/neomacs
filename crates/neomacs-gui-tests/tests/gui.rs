@@ -28,6 +28,9 @@ mod close_confirmation;
 #[path = "coding_detection.rs"]
 mod coding_detection;
 
+#[path = "category_cursor_oracle.rs"]
+mod category_cursor_oracle;
+
 #[path = "coding_save.rs"]
 mod coding_save;
 
