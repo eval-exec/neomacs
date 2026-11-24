@@ -894,11 +894,15 @@ impl TaggedValue {
         }
     }
 
-    /// Extract raw cons cell pointer without tag check.
+    /// Extract raw cons cell pointer. Panics if this is not a cons.
+    ///
+    /// A caller that has already tested [`Self::is_cons`] does not pay for
+    /// this check: it is the same tag compare, and the dominating branch
+    /// deletes it.
     #[inline(always)]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn xcons_ptr(self) -> *const ConsCell {
-        debug_assert!(self.is_cons());
+        assert!(self.is_cons(), "cons accessor requires a cons");
         super::collection_reads::observe(self);
         (self.0 & !TAG_MASK) as *const ConsCell
     }
@@ -979,7 +983,9 @@ impl TaggedValue {
     #[inline(always)]
     #[doc(hidden)]
     pub fn cons_car_unobserved(self) -> Self {
-        debug_assert!(self.is_cons());
+        // Same tag compare as the caller's `is_cons` test. On that path the
+        // branch deletes; a bare call panics instead of reading a wild word.
+        assert!(self.is_cons(), "cons accessor requires a cons");
         // An admitted cons has exact tag TAG_CONS. Subtracting it
         // recovers the same aligned base and permits a field displacement.
         unsafe {
@@ -993,7 +999,9 @@ impl TaggedValue {
     #[inline(always)]
     #[doc(hidden)]
     pub fn cons_cdr_unobserved(self) -> Self {
-        debug_assert!(self.is_cons());
+        // Same tag compare as the caller's `is_cons` test. On that path the
+        // branch deletes; a bare call panics instead of reading a wild word.
+        assert!(self.is_cons(), "cons accessor requires a cons");
         // An admitted cons has exact tag TAG_CONS. Subtracting it
         // recovers the same aligned base and permits a field displacement.
         unsafe { (*(self.0.wrapping_sub(TAG_CONS) as *const ConsCell)).cdr() }
