@@ -356,13 +356,11 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
                     epoch, acked,
                     "the worker's wait and the keeper stop share one epoch"
                 );
-                let (len, head, granted) = keeper
-                    .serial_stop_priority_for_test()
+                // Only the keeper's own grant call issues a turn, inside its
+                // traced stop (L6.7 K3); opening the stop grants nothing.
+                let (len, head) = keeper
+                    .serial_ring_head_for_test()
                     .expect("read the ring while the stop is open");
-                assert_eq!(
-                    granted, None,
-                    "a stop does not grant a queued serial request"
-                );
                 assert_eq!((len, head), (1, Some(queued)), "the stop keeps the head");
                 stopped
                     .trace(|_stopped, _proof| Ok(()))
@@ -441,21 +439,17 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
                         .complete_traced()
                         .expect("complete the traced epoch after the ticket returned");
                 });
-                // Grant after the epoch is Idle. A grant during Stopping is
-                // `ring_stop_priority_keeps_order_and_defers_the_grant`: this
-                // `stop` does not return while the phase is Stopping. The
-                // product ring that issues the grant is L6.7.
-                let (len, head, granted) = keeper
-                    .serial_stop_priority_for_test()
-                    .expect("grant the queued head after the epoch");
-                assert_eq!(
-                    (len, head, granted),
-                    (1, Some(queued), Some(queued)),
-                    "the queued head is granted once the stop has completed"
-                );
+                // The lend above never granted the probe request: a turn is
+                // granted only by the keeper's grant call inside its stop
+                // (L6.7 K3; the Idle grant was deleted at L6.7b b2). It is
+                // still queued after the epoch, and retires once.
+                let (len, head) = keeper
+                    .serial_ring_head_for_test()
+                    .expect("read the ring after the epoch");
+                assert_eq!((len, head), (1, Some(queued)), "the probe is still queued");
                 keeper
                     .retire_serial_head_for_test(queued)
-                    .expect("retire the granted probe request");
+                    .expect("retire the queued probe request");
                 let mut reopened = keeper
                     .stop()
                     .expect("the same keeper stops again after the lend");

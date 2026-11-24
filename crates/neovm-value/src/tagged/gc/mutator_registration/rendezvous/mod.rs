@@ -482,24 +482,6 @@ pub(super) fn enqueue_serial_for_test(
     Ok(gate.rendezvous.enqueue_serial(owner, generation)?.get())
 }
 
-/// Ring length, head id, and whether a grant is issued now. Stopping and
-/// Tracing return no grant and leave the ring unchanged.
-#[cfg(any(test, feature = "test-support"))]
-pub(super) fn serial_stop_priority_for_test(
-    registry: &Registry,
-) -> Result<(usize, Option<u64>, Option<u64>), RendezvousError> {
-    let mut gate = registry.lock()?;
-    gate.rendezvous.live()?;
-    let len = gate.rendezvous.ring_len();
-    let head = gate.rendezvous.ring_head().map(|id| id.get());
-    let members = membership(&gate)?;
-    let granted = gate
-        .rendezvous
-        .try_grant_head(&members, |_| true)?
-        .map(|id| id.get());
-    Ok((len, head, granted))
-}
-
 /// Head of the live ring, without granting it.
 #[cfg(any(test, feature = "test-support"))]
 pub(super) fn serial_ring_head_for_test(

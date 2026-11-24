@@ -41,7 +41,7 @@ fn main() {
     for expected in [
         "pub(crate) struct State",
         "fn enqueue_serial",
-        "fn try_grant_head",
+        "fn grant_head_in_stop",
         "fn retire_serial",
     ] {
         assert!(

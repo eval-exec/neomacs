@@ -206,57 +206,20 @@ fn running(keys: &[MutatorKey]) -> Vec<(MutatorKey, Mode)> {
     keys.iter().map(|key| (*key, Mode::Running)).collect()
 }
 
+/// A stop that activates while requests are queued keeps their order and
+/// loses none of them; the grant itself happens only once the stop is
+/// traced (`ring_grant_in_stop_needs_the_callers_tracing_epoch`).
 #[test]
-fn ring_grants_in_commit_order_and_only_once() {
+fn ring_stop_activation_keeps_order_and_every_requester() {
     let mut state = State::new();
     let keys = ring_keys();
     let generation = ring_generation();
     let a = state.enqueue_serial(keys[0], generation).unwrap();
-    let b = state.enqueue_serial(keys[1], generation).unwrap();
-    let c = state.enqueue_serial(keys[2], generation).unwrap();
-    let members = running(&keys);
-
-    assert_eq!(state.ring_head(), Some(a));
-    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(a));
-    assert_eq!(
-        state.try_grant_head(&members, |_| true).unwrap(),
-        None,
-        "a granted head is not regranted"
-    );
-    state.retire_serial(a).unwrap();
-    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(b));
-    state.retire_serial(b).unwrap();
-    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(c));
-    assert_eq!(state.ring_len(), 1);
-}
-
-#[test]
-fn ring_stop_priority_keeps_order_and_defers_the_grant() {
-    let mut state = State::new();
-    let keys = ring_keys();
-    let generation = ring_generation();
-    let a = state.enqueue_serial(keys[0], generation).unwrap();
-    let b = state.enqueue_serial(keys[1], generation).unwrap();
-    let members = running(&keys);
-
-    // A GC stop activates while both requests are queued.
-    let _epoch = requested(&mut state, &members);
+    let _b = state.enqueue_serial(keys[1], generation).unwrap();
+    let _epoch = requested(&mut state, &running(&keys));
     assert!(matches!(state.phase, Phase::Stopping(_)));
     assert_eq!(state.ring_head(), Some(a), "the stop does not reorder");
     assert_eq!(state.ring_len(), 2, "the stop loses no requester");
-    assert_eq!(
-        state.try_grant_head(&members, |_| true).unwrap(),
-        None,
-        "no grant during Stopping"
-    );
-
-    // Unit shortcut back to Idle: the ring itself was untouched, so the first
-    // commit still grants first.
-    state.phase = Phase::Idle;
-    state.frozen.clear();
-    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(a));
-    state.retire_serial(a).unwrap();
-    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(b));
 }
 
 #[test]
@@ -277,122 +240,6 @@ fn ring_request_id_wrap_is_a_typed_refusal() {
         state.enqueue_serial(keys[1], ring_generation()),
         Err(RendezvousError::Generation)
     );
-}
-
-#[test]
-fn ring_poison_while_granted_retires_exactly_once() {
-    let mut state = State::new();
-    let keys = ring_keys();
-    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
-    let members = running(&keys);
-    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(a));
-    state.poison();
-    assert_eq!(
-        state.try_grant_head(&members, |_| true),
-        Err(RendezvousError::Poisoned)
-    );
-    assert_eq!(
-        state.enqueue_serial(keys[1], ring_generation()),
-        Err(RendezvousError::Poisoned)
-    );
-    assert_eq!(state.ring_head(), Some(a), "the granted ticket is retained");
-    assert_eq!(state.ring_len(), 1);
-    state.retire_serial(a).unwrap();
-    assert_eq!(state.ring_len(), 0);
-    assert_eq!(
-        state.retire_serial(a),
-        Err(RendezvousError::Identity),
-        "a second retire is a typed refusal"
-    );
-}
-
-#[test]
-fn ring_grants_once_during_draining_resumes() {
-    let mut state = State::new();
-    let keys = ring_keys();
-    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
-    let b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
-    state.phase = Phase::DrainingResumes;
-    assert!(state.debt.is_empty());
-    let members = running(&keys);
-    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(a));
-    assert_eq!(
-        state.try_grant_head(&members, |_| true).unwrap(),
-        None,
-        "no double grant while the head is Granted"
-    );
-    state.retire_serial(a).unwrap();
-    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(b));
-}
-
-#[test]
-fn ring_holds_the_head_when_the_owner_is_not_ready() {
-    let mut state = State::new();
-    let keys = ring_keys();
-    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
-    let b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
-    let members = running(&keys);
-    assert_eq!(
-        state
-            .try_grant_head(&members, |entry| !entry.is_owner(keys[0]))
-            .unwrap(),
-        None,
-        "an unready head is not skipped"
-    );
-    assert_eq!(state.ring_head(), Some(a));
-    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(a));
-    state.retire_serial(a).unwrap();
-    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(b));
-}
-
-#[test]
-fn ring_defers_grant_while_a_stop_is_queued() {
-    let mut state = State::new();
-    let keys = ring_keys();
-    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
-    let members = running(&keys);
-
-    // A draining-resume epoch queues the pending stop; the serial grant must
-    // not jump ahead of it (a pending stop must win).
-    state.phase = Phase::DrainingResumes;
-    assert_eq!(state.request(&members), Ok(Request::Queued));
-    assert!(state.queued);
-    assert_eq!(
-        state.try_grant_head(&members, |_| true).unwrap(),
-        None,
-        "a pending stop defers the serial grant"
-    );
-    assert_eq!(state.ring_head(), Some(a));
-
-    // The stop resumes once debt is drained; the queued marker clears and the
-    // first commit grants.
-    state.queued = false;
-    state.phase = Phase::Idle;
-    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(a));
-}
-
-#[test]
-fn ring_stop_activation_leaves_a_granted_turn_as_a_participant() {
-    let mut state = State::new();
-    let keys = ring_keys();
-    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
-    let members = running(&keys);
-    assert_eq!(state.try_grant_head(&members, |_| true).unwrap(), Some(a));
-
-    // A stop may activate while the serial turn is out: that owner is a frozen
-    // stop participant and must ACK/park at its next poll.
-    let epoch = requested(&mut state, &members);
-    assert_eq!(state.epoch, epoch.get());
-    assert_eq!(state.ring_head_granted, Some(a));
-    assert_eq!(
-        state.try_grant_head(&members, |_| true).unwrap(),
-        None,
-        "no second serial grant once the stop is active"
-    );
-    // The granted ticket is still retirable (unit shortcut; the keeper would
-    // do this on the turn's return).
-    state.retire_serial(a).unwrap();
-    assert_eq!(state.ring_head_granted, None);
 }
 
 #[test]
@@ -493,6 +340,11 @@ fn ring_grant_in_stop_refuses_after_poison_and_keeps_retire() {
         state.grant_head_in_stop(epoch, |_| true),
         Err(RendezvousError::Poisoned)
     );
+    assert_eq!(
+        state.enqueue_serial(keys[1], ring_generation()),
+        Err(RendezvousError::Poisoned)
+    );
+    assert_eq!(state.ring_head(), Some(a), "the granted ticket is retained");
     state.retire_serial(a).unwrap();
     assert_eq!(state.retire_serial(a), Err(RendezvousError::Identity));
     assert_eq!(state.ring_len(), 0);
@@ -554,6 +406,14 @@ fn ring_complete_refuses_while_a_grant_is_out() {
     );
     state.retire_serial(a).unwrap();
     state.complete(epoch, &stopped).unwrap();
+    let b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    assert_eq!(state.phase, Phase::DrainingResumes);
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |_| true),
+        Err(RendezvousError::Publication),
+        "no grant once the stop completed: the Idle/DrainingResumes grant is gone (b2)"
+    );
+    assert_eq!(state.ring_head(), Some(b));
 }
 
 /// L6.7b b1 (lead #14000): the Baton group is one ring client. Its entry

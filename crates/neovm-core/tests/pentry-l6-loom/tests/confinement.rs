@@ -21,7 +21,7 @@ fn copied_control_uses_the_sync_seam_and_keeps_the_ring() {
         "enum RingPhase",
         "struct RingEntry",
         "fn enqueue_serial",
-        "fn try_grant_head",
+        "fn grant_head_in_stop",
         "fn retire_serial",
         "fn ring_head",
         "fn ring_len",

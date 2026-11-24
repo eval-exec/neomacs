@@ -15,12 +15,15 @@ workspace). It checks the L6 serial-request ring on the **product**
   park/wake (`gate.rs`/`mod.rs` and the ring-predicate condvar) is **not**
   copied here; L6.7 carries that copy so L1/L3/L7 become product evidence
   under 6052/6091.
-* `ring` — Loom rows:
+* `ring` — Loom rows. Every grant happens inside the keeper's traced stop
+  (`grant_head_in_stop`, L6.7 K3); each keeper step takes a stop, grants,
+  retires and completes it:
   (a) N requesters + keeper: grants follow commit order and no committed
   requester is lost;
   (b) a queued requester cancelled by owner exit is retired exactly once, the
   surviving requester grants once, and no id duplicates;
-  (c) two keepers racing during `DrainingResumes` produce exactly one grant.
+  (c) two grant calls racing inside one traced stop produce exactly one grant
+  (the Idle/`DrainingResumes` grant this row raced was deleted at L6.7b b2).
 * `confinement` — the copied source stands alone and keeps the L6 ring API.
 
 ## Run it

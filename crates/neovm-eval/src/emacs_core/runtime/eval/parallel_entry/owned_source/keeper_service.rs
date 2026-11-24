@@ -158,14 +158,6 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
         self.era.enqueue_serial_for_test(owner, generation)
     }
 
-    /// `(ring length, head id, grant issued now)` while this stop is open.
-    #[cfg(test)]
-    pub(crate) fn serial_stop_priority_for_test(
-        &self,
-    ) -> Result<(usize, Option<u64>, Option<u64>), RendezvousError> {
-        self.era.serial_stop_priority_for_test()
-    }
-
     /// Head of the queued ring. Does not grant it.
     #[cfg(test)]
     pub(crate) fn serial_ring_head_for_test(

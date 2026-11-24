@@ -3,6 +3,9 @@
 //! L6 ring control under Loom. The product `rendezvous/control.rs` is copied
 //! into OUT_DIR by build.rs; these tests drive that real state machine under a
 //! Loom Mutex/Condvar. The model supplies the two product vocabulary types.
+//! A grant happens only inside the keeper's traced stop (L6.7 K3;
+//! `grant_head_in_stop`), so each keeper step here takes a stop, grants the
+//! head, retires it, and completes the stop.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MutatorKey {
@@ -28,7 +31,7 @@ mod control {
     include!(concat!(env!("OUT_DIR"), "/control.rs"));
 }
 
-use control::{Mode, Phase, RequestId, State};
+use control::{Mode, Request, RequestId, State};
 use loom::sync::atomic::{AtomicUsize, Ordering};
 use loom::sync::{Arc, Condvar, Mutex};
 use std::num::NonZeroU64;
@@ -47,6 +50,30 @@ fn generation() -> NonZeroU64 {
 
 fn running(keys: &[MutatorKey]) -> Vec<(MutatorKey, Mode)> {
     keys.iter().map(|k| (*k, Mode::Running)).collect()
+}
+
+/// The same members once each has stopped natively (no resume debt).
+fn stopped(members: &[(MutatorKey, Mode)]) -> Vec<(MutatorKey, Mode)> {
+    members
+        .iter()
+        .map(|(k, _)| (*k, Mode::NativeStopped))
+        .collect()
+}
+
+/// Take a stop over MEMBERS and trace it: the only place a grant happens.
+fn traced_stop(s: &mut State, members: &[(MutatorKey, Mode)]) -> NonZeroU64 {
+    let epoch = match s.request(members).unwrap() {
+        Request::Active(epoch) => epoch,
+        Request::Queued => panic!("an Idle ring activates the stop"),
+    };
+    s.begin_trace(epoch, &stopped(members)).unwrap();
+    epoch
+}
+
+/// Complete the stop and drain back to Idle.
+fn finish_stop(s: &mut State, epoch: NonZeroU64, members: &[(MutatorKey, Mode)]) {
+    s.complete(epoch, &stopped(members)).unwrap();
+    assert!(s.finish_debt(&stopped(members)).unwrap(), "back to Idle");
 }
 
 /// (a) N requesters plus a keeper: grants follow commit order and no committed
@@ -81,11 +108,13 @@ fn grant_order_is_commit_order() {
             while committed_len.load(Ordering::SeqCst) <= granted.len() {
                 s = wake.wait(s).unwrap();
             }
+            let epoch = traced_stop(&mut s, &members);
             let id = s
-                .try_grant_head(&members, |_| true)
+                .grant_head_in_stop(epoch, |_| true)
                 .unwrap()
                 .expect("a committed head is grantable");
             s.retire_serial(id).unwrap();
+            finish_stop(&mut s, epoch, &members);
             granted.push(id);
         }
         for handle in handles {
@@ -167,10 +196,12 @@ fn cancel_while_queued_retires_once_and_the_other_grants() {
             if s.ring_len() == 0 {
                 break;
             }
-            if let Some(id) = s.try_grant_head(&members, |_| true).unwrap() {
+            let epoch = traced_stop(&mut s, &members);
+            if let Some(id) = s.grant_head_in_stop(epoch, |_| true).unwrap() {
                 s.retire_serial(id).unwrap();
                 granted.push(id);
             }
+            finish_stop(&mut s, epoch, &members);
         }
         for handle in handles {
             handle.join().unwrap();
@@ -193,26 +224,27 @@ fn cancel_while_queued_retires_once_and_the_other_grants() {
     });
 }
 
-/// (c) two keepers race for the head during DrainingResumes: exactly one grant.
+/// (c) two grant calls race for the head inside one traced stop: exactly one
+/// grant (one turn out at a time). The Idle/DrainingResumes grant this row
+/// used to race was deleted at L6.7b b2.
 #[test]
-fn grant_is_single_during_draining_resumes() {
+fn grant_is_single_inside_one_stop() {
     loom::model(|| {
+        let members = running(&[key(0), key(1)]);
         let state = Arc::new(Mutex::new(State::new()));
-        {
+        let epoch = {
             let mut s = state.lock().unwrap();
             s.enqueue_serial(key(0), generation()).unwrap();
-            s.phase = Phase::DrainingResumes;
-        }
-        let members = running(&[key(0), key(1)]);
+            traced_stop(&mut s, &members)
+        };
         let results = Arc::new(Mutex::new(Vec::new()));
         let mut handles = Vec::new();
         for _ in 0..2 {
             let state = Arc::clone(&state);
             let results = Arc::clone(&results);
-            let members = members.clone();
             handles.push(loom::thread::spawn(move || {
                 let mut s = state.lock().unwrap();
-                let granted = s.try_grant_head(&members, |_| true).unwrap().is_some();
+                let granted = s.grant_head_in_stop(epoch, |_| true).unwrap().is_some();
                 results.lock().unwrap().push(granted);
             }));
         }

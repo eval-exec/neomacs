@@ -204,12 +204,10 @@ impl State {
         self.activate(membership).map(Request::Active)
     }
 
-    /// Start a stop epoch. A parallel owner's grant is issued only inside the
-    /// keeper's own stop and retired before that stop completes (`complete`
-    /// refuses while one is out). An Idle `try_grant_head` grant may still be
-    /// out here: its owner is a frozen stop participant, and once the phase
-    /// leaves Idle no new Idle grant is issued. That grant blocks this stop's
-    /// `complete` until it is retired (lead #13911 M1).
+    /// Start a stop epoch. Every grant is issued only inside the keeper's own
+    /// traced stop (`grant_head_in_stop`) and retired before that stop
+    /// completes (`complete` refuses while one is out, lead #13911 M1), so no
+    /// grant is out when a stop starts.
     pub(in crate::tagged::gc) fn activate(
         &mut self,
         membership: Membership<'_>,
@@ -294,55 +292,6 @@ impl State {
         });
         self.next_request = next;
         Ok(id)
-    }
-
-    /// Grant the head exactly once. A stop (Stopping/Tracing) defers the grant
-    /// without touching the ring; DrainingResumes may grant when no resume debt
-    /// or Resuming member remains. `ready` is the keeper's publication check;
-    /// an unready head is never skipped.
-    ///
-    /// Not the parallel owners' grant: since L6.7a (lead #13898) their turn
-    /// is granted only by `grant_head_in_stop`, under the keeper's own stop.
-    /// This Idle/DrainingResumes grant stays as a candidate for the L6.7b
-    /// Baton-group entry. `complete` refuses while any grant is out, so a
-    /// stop that starts while this grant is out cannot complete until the
-    /// grant is retired: L6.7b retires its turn before its owner ACKs a stop,
-    /// or moves the grant under the stop.
-    pub(in crate::tagged::gc) fn try_grant_head(
-        &mut self,
-        membership: Membership<'_>,
-        ready: impl FnOnce(&RingEntry) -> bool,
-    ) -> Result<Option<RequestId>, RendezvousError> {
-        self.live()?;
-        // A pending stop wins: `request()` sets `queued` while a stop waits for
-        // resume debt to drain, and no serial grant may be issued ahead of it.
-        if self.queued {
-            return Ok(None);
-        }
-        if self.ring_head_granted.is_some() {
-            return Ok(None);
-        }
-        match self.phase {
-            Phase::Idle | Phase::DrainingResumes => {}
-            Phase::Stopping(_) | Phase::Tracing(_) => return Ok(None),
-            Phase::Poisoned => return Err(RendezvousError::Poisoned),
-        }
-        if !self.debt.is_empty() || membership.iter().any(|(_, mode)| *mode == Mode::Resuming) {
-            return Ok(None);
-        }
-        let Some(head) = self.serial_ring.front() else {
-            return Ok(None);
-        };
-        if head.phase != RingPhase::Queued || !ready(head) {
-            return Ok(None);
-        }
-        let id = head.id();
-        self.serial_ring
-            .front_mut()
-            .expect("front observed above")
-            .phase = RingPhase::Granted;
-        self.ring_head_granted = Some(id);
-        Ok(Some(id))
     }
 
     /// Grant the head inside the caller's own stop (L6.7 K3). A serial turn

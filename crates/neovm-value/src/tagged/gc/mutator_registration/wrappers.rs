@@ -712,15 +712,6 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
         super::rendezvous::enqueue_serial_for_test(self.core.registry(), owner, generation)
     }
 
-    /// `(ring length, head id, grant issued now)`. A stop issues no grant.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn serial_stop_priority_for_test(
-        &self,
-    ) -> Result<(usize, Option<u64>, Option<u64>), RendezvousError> {
-        super::rendezvous::serial_stop_priority_for_test(self.core.registry())
-    }
-
     /// Head of the live ring. This does not grant it.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
