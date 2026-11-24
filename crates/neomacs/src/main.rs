@@ -5172,7 +5172,12 @@ fn maybe_start_diagnostics(
 
 /// Bootstrap the requested runtime and retain native hosting when graphical
 /// clients may need it, independently of the initial Lisp frame's frontend.
-pub fn run(mode: RuntimeMode) {
+///
+/// # Safety
+/// The caller must invoke this from process entry while the process is still
+/// single-threaded (required by `std::env::set_var` and `daemon::prepare`'s
+/// `std::env::remove_var` / `libc::fork`).
+pub unsafe fn run(mode: RuntimeMode) {
     let process_started_at = Instant::now();
     let process_args = std::env::args_os().collect::<Vec<_>>();
 
@@ -5248,10 +5253,13 @@ pub fn run(mode: RuntimeMode) {
 
     // Fork before tracing, display, evaluator, or worker threads exist. The
     // original invocation exits only when Lisp calls daemon-initialized.
-    let daemon_notifier = daemon::prepare(startup.daemon.as_ref()).unwrap_or_else(|error| {
-        eprintln!("neomacs: {error}");
-        std::process::exit(1);
-    });
+    // SAFETY: `run`'s caller guarantees the process is single-threaded, and no
+    // threads have been spawned in `run` yet.
+    let daemon_notifier =
+        unsafe { daemon::prepare(startup.daemon.as_ref()) }.unwrap_or_else(|error| {
+            eprintln!("neomacs: {error}");
+            std::process::exit(1);
+        });
 
     // Collapse after daemon::prepare so the post-fork serving process benefits;
     // the pre-fork parent would waste it. --help/--version already exited, so
@@ -5777,12 +5785,13 @@ fn register_workspace_carrier_tls() {
 }
 
 fn main() {
-    // SAFETY: process entry before any runtime threads are spawned.
+    // SAFETY: first statements at process entry before any runtime threads are
+    // spawned (required by `std::env::set_var` in bundle/webview init).
     unsafe {
+        neomacs_display_runtime::macos_bundle_runtime::configure_before_threads();
         neomacs_webview::configure_before_threads();
     }
     register_workspace_carrier_tls();
-    neomacs_display_runtime::macos_bundle_runtime::configure_before_threads();
     #[cfg(feature = "gc-memory-telemetry")]
     neovm_core::tagged::gc::memory_telemetry::set_allocator_sampler(gc_memory_allocator::sample);
 
@@ -5802,7 +5811,11 @@ fn main() {
     // and so run this line too -- they must, because `fresh-build` drives them
     // across a tree whose `.elc` are mid-recompile.
     neovm_core::emacs_core::load::announce_shipped_editor_process();
-    run(runtime_mode_from_argv(std::env::args()));
+    // SAFETY: still single-threaded at process entry; no threads exist before
+    // `run` performs its early env/fork initialization.
+    unsafe {
+        run(runtime_mode_from_argv(std::env::args()));
+    }
 }
 
 // ---------------------------------------------------------------------------
