@@ -1842,6 +1842,8 @@ fn regexp_one_half_dense_scan_enters_contiguous_engine_without_batch_setup() {
                     "crossing must exercise the real generic preparation and probes: {work:?}"
                 );
                 let crossing_skip_with = work.skip_with_entries;
+                let crossing_with_readers = work.with_readers_entries;
+                let crossing_prefix_slice = work.prefix_slice_cache_entries;
                 assert_eq!(control.gap_position_lisp(), parked);
 
                 let text = format!("{miss} ## {miss}");
@@ -1888,6 +1890,14 @@ fn regexp_one_half_dense_scan_enters_contiguous_engine_without_batch_setup() {
                             work.skip_with_entries, 0,
                             "a one-half window must not enter skip_with: {work:?}"
                         );
+                        assert_eq!(
+                            work.with_readers_entries, 0,
+                            "a one-half window must stay on the contiguous cache: {work:?}"
+                        );
+                        assert_eq!(
+                            work.prefix_slice_cache_entries, 0,
+                            "a one-half window must not enter the PrefixSlice cache: {work:?}"
+                        );
                         assert!(
                             work.calls >= 256 && work.rejected >= 256,
                             "the slice must execute warmed prefix rejections: {work:?}"
@@ -1903,6 +1913,14 @@ fn regexp_one_half_dense_scan_enters_contiguous_engine_without_batch_setup() {
                 assert_eq!(
                     crossing_skip_with, 0,
                     "a real split must reach the haystack without the skip_with closure: {crossing_skip_with}"
+                );
+                assert_eq!(
+                    crossing_with_readers, 0,
+                    "a real split must reach the haystack without the reader closure: {crossing_with_readers}"
+                );
+                assert!(
+                    crossing_prefix_slice > 0,
+                    "a real split must enter the PrefixSlice cache: {crossing_prefix_slice}"
                 );
             })
         })

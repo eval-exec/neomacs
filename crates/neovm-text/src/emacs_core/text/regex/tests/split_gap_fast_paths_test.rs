@@ -967,6 +967,25 @@ fn split_gap_cold_promotion_admits_prefix_batches_once_per_search() {
     });
 }
 
+/// The generic reader still counts an entry. Search tests can then treat
+/// a zero as "this path did not enter it," including a real gap split.
+#[test]
+fn with_readers_entry_counter_records_the_generic_fallback() {
+    let pattern = regex_compile("a", false, false).unwrap();
+    dfa::with_first_step(true, || {
+        dfa::with_dfa_mode(dfa::DfaMode::On, || {
+            let Some(mut lease) = dfa::DfaLease::acquire(&pattern, &DefaultSyntaxLookup, 1) else {
+                panic!("a cold pattern still yields a lease");
+            };
+            let before = prefix_storage_probe();
+            let skipped = lease.enter_with_readers_for_probe(&pattern, &DefaultSyntaxLookup);
+            let work = prefix_storage_probe().since(before);
+            assert_eq!(work.with_readers_entries, 1, "{work:?}");
+            assert!(skipped.is_none());
+        })
+    });
+}
+
 /// The closure wrapper still counts an entry. Search tests can then treat
 /// a zero as "this path did not enter it," including a real gap split.
 #[test]

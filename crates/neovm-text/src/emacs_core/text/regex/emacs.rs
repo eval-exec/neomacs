@@ -1534,6 +1534,12 @@ pub(crate) struct PrefixStorageProbe {
     /// Entries into `try_inline_first_step_skip_with`. The segmented
     /// candidate probe must stay at zero: that wrapper is the closure ABI.
     pub(crate) skip_with_entries: u64,
+    /// Entries into `cached_prefix_rejection_with_readers`. The generic
+    /// Haystack fallback. A PrefixSlice candidate must stay at zero.
+    pub(crate) with_readers_entries: u64,
+    /// Entries into the monomorphic PrefixSlice cache. A real gap split
+    /// hits this path; a one-half window does not.
+    pub(crate) prefix_slice_cache_entries: u64,
 }
 #[cfg(test)]
 impl PrefixStorageProbe {
@@ -1556,6 +1562,9 @@ impl PrefixStorageProbe {
             contiguous_cache_entries: self.contiguous_cache_entries
                 - before.contiguous_cache_entries,
             skip_with_entries: self.skip_with_entries - before.skip_with_entries,
+            with_readers_entries: self.with_readers_entries - before.with_readers_entries,
+            prefix_slice_cache_entries: self.prefix_slice_cache_entries
+                - before.prefix_slice_cache_entries,
         }
     }
 }
@@ -1568,7 +1577,8 @@ thread_local! {
             rejected: 0, undecided: 0, rejected_bytes: 0,
             batch_checks: 0, batch_prepares: 0, batch_advances: 0,
             contiguous_search_entries: 0, contiguous_cache_entries: 0,
-            skip_with_entries: 0 })
+            skip_with_entries: 0, with_readers_entries: 0,
+            prefix_slice_cache_entries: 0 })
     };
 }
 #[cfg(test)]
@@ -1626,6 +1636,22 @@ fn note_skip_with_entry() {
     PREFIX_STORAGE_PROBE.with(|slot| {
         let mut counts = slot.get();
         counts.skip_with_entries += 1;
+        slot.set(counts);
+    });
+}
+#[cfg(test)]
+fn note_with_readers_entry() {
+    PREFIX_STORAGE_PROBE.with(|slot| {
+        let mut counts = slot.get();
+        counts.with_readers_entries += 1;
+        slot.set(counts);
+    });
+}
+#[cfg(test)]
+fn note_prefix_slice_cache_entry() {
+    PREFIX_STORAGE_PROBE.with(|slot| {
+        let mut counts = slot.get();
+        counts.prefix_slice_cache_entries += 1;
         slot.set(counts);
     });
 }

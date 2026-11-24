@@ -2171,6 +2171,160 @@ impl ExistenceDfa {
         )
     }
 
+    /// PrefixSlice candidates index their admitted bytes directly. Decision
+    /// order matches `cached_prefix_rejection_with_readers`. The generic
+    /// reader stays the Haystack fallback, so a split that already holds a
+    /// slice does not enter that closure.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn cached_prefix_rejection_prefix_slice(
+        &self,
+        pattern: &CompiledPattern,
+        input: &PrefixSlice<'_>,
+        text_len: usize,
+        p: usize,
+        stop: usize,
+        point: usize,
+        overflow_free_span: usize,
+    ) -> Option<usize> {
+        #[cfg(test)]
+        super::note_prefix_slice_cache_entry();
+        #[cfg(test)]
+        let mut storage_probe = super::PrefixProbeGuard::enter();
+        // Establish memory safety first. The remaining guards apply only
+        // once an existing DEAD entry could actually reject this candidate.
+        if p >= text_len {
+            return None;
+        }
+        let class = self.classes.byte_class[input.byte(p) as usize];
+        if class == UNKNOWN_CLASS {
+            return None;
+        }
+        let prev_mask = self.prev_mask.0;
+        let reads_prev_syntax = prev_mask & !(Facts::EDGE.0 | Facts::NEWLINE.0) != 0;
+        let facts = if prev_mask == 0 {
+            // No assertion reads the previous character: use start[0]
+            // without inspecting point zero or the preceding byte.
+            0
+        } else if p == 0 {
+            Facts::EDGE.0
+        } else if !reads_prev_syntax {
+            // EDGE and newline facts do not depend on syntax or decoding.
+            if input.byte(p - 1) == b'\n' {
+                Facts::NEWLINE.0
+            } else {
+                0
+            }
+        } else {
+            let byte = input.byte(p - 1);
+            if pattern.target_multibyte && byte >= 0x80 {
+                return None;
+            }
+            let prev_class = self.classes.byte_class[byte as usize];
+            if prev_class != UNKNOWN_CLASS {
+                self.classes.facts(prev_class).0
+            } else {
+                let facts = self.classes.byte_facts[byte as usize];
+                if facts == NO_FACTS {
+                    return None;
+                }
+                facts
+            }
+        };
+        let start = self.start[(facts & prev_mask) as usize];
+        if start == 0 {
+            return None;
+        }
+        let mut row = start << self.stride_shift;
+        // Test only the first byte's eligibility here. Since p < text_len
+        // and the probe cap is positive, p < saturating_add(p, cap) already
+        // holds; p < saturating_add(p, overflow_free_span) means span > 0.
+        // Point limits the first byte only when point == p, not point < p.
+        if p >= stop
+            || p >= self.search.read_limit
+            || overflow_free_span == 0
+            || (self.has_at_dot && point == p)
+        {
+            return None;
+        }
+        if self.search.positional {
+            // The current class is a base-table class. Previous word/symbol
+            // facts require base syntax at p - 1 too, in the same known run.
+            let from = if p > 0 && reads_prev_syntax { p - 1 } else { p };
+            if from < self.plain.start || p >= self.plain.end {
+                return None;
+            }
+        }
+        let stride = 1u32 << self.stride_shift;
+        let transition = |row: u32, class: u8| {
+            let at = row as usize + class as usize;
+            debug_assert!(at < self.trans.len());
+            // SAFETY: as in `run`, cached rows have a complete stride and
+            // known byte classes are below that stride. This path mutates
+            // neither rows nor classes.
+            unsafe { *self.trans.get_unchecked(at) }
+        };
+        // A first-transition rejection needs neither tail bounds nor chunk
+        // setup. Reuse the class already read.
+        let next = transition(row, class);
+        if next == DEAD {
+            #[cfg(test)]
+            {
+                storage_probe.rejected = Some(0);
+            }
+            return Some(0);
+        }
+        if next < stride {
+            return None;
+        }
+        row = next;
+        // Only a live first transition needs the remaining bounded prefix.
+        // Every further byte stays before stop, frontier, point's special
+        // closure and the end of already established plain syntax.
+        let mut limit = stop
+            .min(text_len)
+            .min(self.search.read_limit)
+            .min(p.saturating_add(CACHED_PREFIX_BYTES))
+            .min(p.saturating_add(overflow_free_span));
+        if self.has_at_dot && point >= p {
+            limit = limit.min(point);
+        }
+        if self.search.positional {
+            limit = limit.min(self.plain.end);
+        }
+        let mut d = p + 1;
+        if d >= limit {
+            return None;
+        }
+        // One physical half. The second chunk stays empty: a PrefixSlice
+        // does not cross the gap it was admitted inside.
+        let (first, second) = (input.tail(d, limit), &[][..]);
+        for chunk in [first, second] {
+            for &byte in chunk {
+                #[cfg(test)]
+                super::note_prefix_storage(true, false, false, false, false);
+                let class = self.classes.byte_class[byte as usize];
+                if class == UNKNOWN_CLASS {
+                    return None;
+                }
+                let next = transition(row, class);
+                if next == DEAD {
+                    #[cfg(test)]
+                    {
+                        storage_probe.rejected = Some(d - p);
+                    }
+                    return Some(d - p);
+                }
+                if next < stride {
+                    return None;
+                }
+                row = next;
+                d += 1;
+            }
+        }
+        None
+    }
+
     /// Shared cached-state decisions; byte storage and global coordinates are
     /// separate. A slice reader is admitted only by its candidate batch.
     #[allow(clippy::too_many_arguments)]
@@ -2185,6 +2339,8 @@ impl ExistenceDfa {
         point: usize,
         overflow_free_span: usize,
     ) -> Option<usize> {
+        #[cfg(test)]
+        super::note_with_readers_entry();
         #[cfg(test)]
         let mut storage_probe = super::PrefixProbeGuard::enter();
         // Establish memory safety first. The remaining guards apply only
@@ -3487,11 +3643,10 @@ impl<'p> DfaLease<'p> {
         {
             return false;
         }
-        let Some(consumed) = live.dfa.cached_prefix_rejection_with_readers(
+        let Some(consumed) = live.dfa.cached_prefix_rejection_prefix_slice(
             pattern,
+            input,
             text_len,
-            |at| input.byte(at),
-            |start, end| (input.tail(start, end), &[]),
             pos,
             stop,
             point,
@@ -3532,15 +3687,8 @@ impl<'p> DfaLease<'p> {
         }
         let span = live.overflow_free_span;
         let consumed = match prepare() {
-            Some(input) => live.dfa.cached_prefix_rejection_with_readers(
-                pattern,
-                text_len,
-                |at| input.byte(at),
-                |start, end| (input.tail(start, end), &[]),
-                pos,
-                stop,
-                point,
-                span,
+            Some(input) => live.dfa.cached_prefix_rejection_prefix_slice(
+                pattern, &input, text_len, pos, stop, point, span,
             ),
             None => live
                 .dfa
@@ -3554,6 +3702,33 @@ impl<'p> DfaLease<'p> {
         live.note(Exists::No { consumed });
         self.skipped += 1;
         true
+    }
+
+    /// One entry of the generic reader. Product PrefixSlice searches do not
+    /// call this. The test counter sits on the entry so a zero from a split
+    /// is a path that did not enter it.
+    #[cfg(test)]
+    pub(super) fn enter_with_readers_for_probe(
+        &mut self,
+        pattern: &CompiledPattern,
+        syntax: &dyn SyntaxLookup,
+    ) -> Option<usize> {
+        if !matches!(*self.slot, DfaSlot::Live(_)) {
+            self.build(pattern, syntax);
+        }
+        let DfaSlot::Live(live) = &mut *self.slot else {
+            return None;
+        };
+        live.dfa.cached_prefix_rejection_with_readers(
+            pattern,
+            0,
+            |_| 0,
+            |_, _| (&[], &[]),
+            0,
+            1,
+            0,
+            1,
+        )
     }
 
     /// One entry of the old closure wrapper. Product searches do not call
