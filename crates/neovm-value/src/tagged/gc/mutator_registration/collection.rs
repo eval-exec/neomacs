@@ -532,6 +532,8 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             if heap.has_owner_cons_reserves() {
                 return Err(RendezvousError::Publication);
             }
+            #[cfg(any(test, feature = "test-support"))]
+            self.registry().drain_retired_owner_cons_after_full_walk();
         }
         let registry = self.registry();
         let (keys, entries) = {

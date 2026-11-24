@@ -112,6 +112,9 @@ impl ConsAllocatorOwner {
     }
 
     /// Take the leases recorded under one registration. Others stay, in order.
+    ///
+    /// Asserts that every matching lease has a closed book before removing any
+    /// entry so a failed assertion leaves the lease table intact.
     #[cfg(any(test, feature = "test-support"))]
     pub(super) fn take_owner_cons_leases_for_registration(
         &mut self,
@@ -121,6 +124,14 @@ impl ConsAllocatorOwner {
             .0
             .as_deref_mut()
             .expect("allocator owner is initialized");
+        for lease in &allocator.owner_cons_leases {
+            if lease.registration == Some(registration) {
+                assert!(
+                    !lease.open_run.load(Ordering::Acquire),
+                    "reclaim_owner_cons_registration requires a closed owner cons book"
+                );
+            }
+        }
         let mut taken = Vec::new();
         let mut index = 0;
         while index < allocator.owner_cons_leases.len() {
@@ -1153,6 +1164,9 @@ pub(super) struct OwnerConsLease {
     /// stay on the full-table stop walk.
     #[cfg(any(test, feature = "test-support"))]
     pub(super) registration: Option<std::num::NonZeroU64>,
+    /// Set while the owning book holds an open carved run (`open_cons.is_some()`).
+    /// Cleared after `close_for_stop` refunds the unhanded tail into `carve_at`.
+    pub(super) open_run: AtomicBool,
     /// `Mutex` so the closed book stays `Sync`. The stop protocol is the real
     /// exclusion: the keeper runs only while the owner is stopped.
     pub(super) blocks: Mutex<Vec<OwnerConsRange>>,

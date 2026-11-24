@@ -386,6 +386,16 @@ struct ParkLine {
     wake: std::sync::Condvar,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Default)]
+struct OwnerConsRetireQueue {
+    /// Registration-tagged leases currently tracked by this era. Weak handles
+    /// stay alive while the heap lease table (or a live book) holds the `Arc`.
+    leased: FxHashMap<NonZeroU64, Vec<std::sync::Weak<super::cons_allocator::OwnerConsLease>>>,
+    /// Retired registrations whose closed leases await keeper reclaim.
+    retired: Vec<NonZeroU64>,
+}
+
 struct Registry {
     heap: HeapIdentity,
     world: HeapIdentity,
@@ -401,29 +411,136 @@ struct Registry {
     root_epoch: super::FacadeEpochRetention,
     cons_catalog: super::cons_storage::ConsCatalog,
     symbols: symbol_authority::SymbolSidecar,
-    /// Registrations `retire_rooted` handed to the keeper. The owner thread
-    /// has no heap loan, so the blocks are returned by
-    /// `EraCore::reclaim_retired_owner_cons`.
+    /// Registration-tagged leases and retired registrations handed to the
+    /// keeper. The owner thread has no heap loan, so blocks are returned by
+    /// `EraCore::reclaim_retired_owner_cons` or the next full stop walk.
     #[cfg(any(test, feature = "test-support"))]
-    retired_owner_cons: std::sync::Mutex<Vec<std::num::NonZeroU64>>,
+    owner_cons_retire: std::sync::Mutex<OwnerConsRetireQueue>,
 }
 
 impl Registry {
-    /// Record one registration whose cons lease the keeper should return.
+    /// Track a registration-tagged lease so `retire_rooted` can check that its
+    /// book is closed and queue only owners that hold a lease.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn note_owner_cons_lease_grant(
+        &self,
+        registration: NonZeroU64,
+        lease: std::sync::Weak<super::cons_allocator::OwnerConsLease>,
+    ) -> Result<(), super::ReserveError> {
+        let mut queue = self
+            .owner_cons_retire
+            .lock()
+            .map_err(|_| super::ReserveError::CollectorBusy)?;
+        if !queue.leased.contains_key(&registration) {
+            queue
+                .leased
+                .try_reserve(1)
+                .map_err(|_| super::ReserveError::Capacity)?;
+        }
+        let list = queue.leased.entry(registration).or_default();
+        list.try_reserve(1)
+            .map_err(|_| super::ReserveError::Capacity)?;
+        list.push(lease);
+        Ok(())
+    }
+
+    /// Remove a lease returned explicitly by `return_unused_before_sweep`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn note_owner_cons_lease_returned(&self, registration: NonZeroU64, owner_key: u64) {
+        let Ok(mut queue) = self.owner_cons_retire.lock() else {
+            return;
+        };
+        if let Some(list) = queue.leased.get_mut(&registration) {
+            list.retain(|weak| {
+                weak.upgrade().is_some_and(|lease| {
+                    lease.owner_key != owner_key
+                        && !lease
+                            .blocks
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .is_empty()
+                })
+            });
+            if list.is_empty() {
+                queue.leased.remove(&registration);
+            }
+        }
+    }
+
+    /// Refuse retirement if this registration still holds an open cons run.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn check_owner_cons_closed(
+        &self,
+        registration: NonZeroU64,
+    ) -> Result<(), RegistrationError> {
+        let queue = self
+            .owner_cons_retire
+            .lock()
+            .map_err(|_| RegistrationError::Poisoned)?;
+        if let Some(list) = queue.leased.get(&registration) {
+            for weak in list {
+                if let Some(lease) = weak.upgrade() {
+                    if lease.open_run.load(Ordering::Acquire) {
+                        return Err(RegistrationError::OpenRegion);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Record one retiring registration if it still holds a closed cons lease.
+    ///
+    /// Refuses with `OpenRegion` when any lease under `registration` still has
+    /// an open run. Owners with no live lease are not enqueued.
     #[cfg(any(test, feature = "test-support"))]
     pub(super) fn note_retired_owner_cons(
         &self,
         registration: std::num::NonZeroU64,
     ) -> Result<(), RegistrationError> {
         let mut queue = self
-            .retired_owner_cons
+            .owner_cons_retire
             .lock()
             .map_err(|_| RegistrationError::Poisoned)?;
+        let Some(list) = queue.leased.get_mut(&registration) else {
+            return Ok(());
+        };
+        for weak in list.iter() {
+            if let Some(lease) = weak.upgrade() {
+                if lease.open_run.load(Ordering::Acquire) {
+                    return Err(RegistrationError::OpenRegion);
+                }
+            }
+        }
+        list.retain(|weak| {
+            weak.upgrade().is_some_and(|lease| {
+                !lease
+                    .blocks
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .is_empty()
+            })
+        });
+        if list.is_empty() {
+            queue.leased.remove(&registration);
+            return Ok(());
+        }
         queue
+            .retired
             .try_reserve(1)
             .map_err(|_| RegistrationError::Capacity)?;
-        queue.push(registration);
+        queue.retired.push(registration);
         Ok(())
+    }
+
+    /// Clear queued retirements and lease records after a full stop walk
+    /// returned every lease on the heap.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn drain_retired_owner_cons_after_full_walk(&self) {
+        if let Ok(mut queue) = self.owner_cons_retire.lock() {
+            queue.retired.clear();
+            queue.leased.clear();
+        }
     }
 
     fn validate(
@@ -703,7 +820,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                     cons_catalog: super::cons_storage::ConsCatalog::new(heap),
                     symbols,
                     #[cfg(any(test, feature = "test-support"))]
-                    retired_owner_cons: std::sync::Mutex::new(Vec::new()),
+                    owner_cons_retire: std::sync::Mutex::new(OwnerConsRetireQueue::default()),
                 })),
                 _thread: PhantomData,
             },
@@ -806,46 +923,90 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
     /// `Sync`, so the keeper calls this on its own thread while the collector
     /// is free. A poisoned allocator puts the registration back on the queue.
     /// Leases granted without a registration stay for the full-table stop walk.
+    ///
+    /// # Exclusion outside `AllStopped`
+    ///
+    /// This runs without a stop proof and relies on two invariants:
+    /// 1. It requires `collector.try_borrow_mut()` with `collector.as_mut()`
+    ///    present. Whenever the cons catalog is installed,
+    ///    `transfer_cons_storage(install)` has moved the collector into
+    ///    `suspended_cons`, so reclaim sees `None`, re-queues the pending
+    ///    registrations, and returns `Busy` without touching placeholder cons
+    ///    fields.
+    /// 2. `ConsCatalog::install` and `resume_cons_storage` refuse with
+    ///    `OwnerReserveHeld` while any owner-cons lease is live, so whenever a
+    ///    lease exists to reclaim, serial cons storage belongs exclusively to
+    ///    the keeper. Each lease holds whole blocks (`mint_cons_block` takes
+    ///    blocks with `next_index == 0` or fresh blocks), so other running
+    ///    owners only bump their own `OwnerAllocRegion` cursors inside their
+    ///    own disjoint leased blocks, while the retiring owner already passed
+    ///    `Mode::NativeStopped` and closed its book before `retire_rooted`.
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn reclaim_retired_owner_cons(&self) -> Result<(), RegistrationError> {
-        if std::thread::current().id() != self.registry().keeper_thread {
+        self.reclaim_retired_owner_cons_as(std::thread::current().id())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn reclaim_retired_owner_cons_as(
+        &self,
+        caller: std::thread::ThreadId,
+    ) -> Result<(), RegistrationError> {
+        if caller != self.registry().keeper_thread {
             return Err(RegistrationError::WrongThread);
         }
         let pending = {
             let mut queue = self
                 .registry()
-                .retired_owner_cons
+                .owner_cons_retire
                 .lock()
                 .map_err(|_| RegistrationError::Poisoned)?;
-            std::mem::take(&mut *queue)
+            std::mem::take(&mut queue.retired)
         };
         if pending.is_empty() {
             return Ok(());
         }
-        if self.collector.try_borrow_mut().is_err() {
-            self.requeue_retired_owner_cons(pending)?;
-            return Err(RegistrationError::Busy);
-        }
-        let mut deferred = Vec::new();
-        {
-            let mut collector_ref = self
-                .collector
-                .try_borrow_mut()
-                .map_err(|_| RegistrationError::Busy)?;
-            let Some(active) = collector_ref.as_mut() else {
-                drop(collector_ref);
+        let mut collector_ref = match self.collector.try_borrow_mut() {
+            Ok(guard) => guard,
+            Err(_) => {
                 self.requeue_retired_owner_cons(pending)?;
                 return Err(RegistrationError::Busy);
-            };
-            let heap = active.registration_heap_mut();
-            for registration in pending {
-                if !heap.reclaim_owner_cons_registration(registration) {
-                    deferred.push(registration);
-                }
+            }
+        };
+        let Some(active) = collector_ref.as_mut() else {
+            drop(collector_ref);
+            self.requeue_retired_owner_cons(pending)?;
+            return Err(RegistrationError::Busy);
+        };
+        debug_assert!(
+            self.suspended_cons
+                .try_borrow()
+                .is_ok_and(|suspended| suspended.is_none()),
+            "keeper-held collector excludes an installed cons catalog"
+        );
+        let heap = active.registration_heap_mut();
+        let mut reclaimed = Vec::new();
+        let mut deferred = Vec::new();
+        for registration in pending {
+            if heap.reclaim_owner_cons_registration(registration) {
+                reclaimed.push(registration);
+            } else {
+                deferred.push(registration);
             }
         }
-        if !deferred.is_empty() {
-            self.requeue_retired_owner_cons(deferred)?;
+        drop(collector_ref);
+        if !reclaimed.is_empty() || !deferred.is_empty() {
+            let mut queue = self
+                .registry()
+                .owner_cons_retire
+                .lock()
+                .map_err(|_| RegistrationError::Poisoned)?;
+            for registration in reclaimed {
+                queue.leased.remove(&registration);
+            }
+            if !deferred.is_empty() {
+                deferred.append(&mut queue.retired);
+                queue.retired = deferred;
+            }
         }
         Ok(())
     }
@@ -857,12 +1018,22 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
     ) -> Result<(), RegistrationError> {
         let mut queue = self
             .registry()
-            .retired_owner_cons
+            .owner_cons_retire
             .lock()
             .map_err(|_| RegistrationError::Poisoned)?;
-        front.append(&mut *queue);
-        *queue = front;
+        front.append(&mut queue.retired);
+        queue.retired = front;
         Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn retired_owner_cons_len_for_test(&self) -> usize {
+        self.registry()
+            .owner_cons_retire
+            .lock()
+            .expect("retired owner cons queue")
+            .retired
+            .len()
     }
 
     /// Explicit teardown performs no collection or implicit owner resumption.
@@ -885,6 +1056,14 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         self.registry().symbols.functions.finish_ready()?;
         if self.suspended_cons.get_mut().is_some() {
             return Err(RegistrationError::OpenRegion);
+        }
+        if self
+            .collector
+            .get_mut()
+            .as_mut()
+            .is_some_and(|collector| collector.registration_heap_mut().has_owner_cons_reserves())
+        {
+            return Err(RegistrationError::OwnerReserveHeld);
         }
         use crate::tagged::transport::{ParallelRootBatchError, RootBatchError};
 

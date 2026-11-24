@@ -318,11 +318,15 @@ impl OwnerEraReserve {
         let lease = Arc::new(OwnerConsLease {
             owner_key: heap.cons_allocator.mint_owner_cons_key(),
             registration,
+            open_run: std::sync::atomic::AtomicBool::new(false),
             blocks: std::sync::Mutex::new(Vec::new()),
         });
         lock_blocks(&lease)
             .try_reserve(cons_blocks)
             .map_err(|_| ReserveError::Capacity)?;
+        if let Some(reg) = registration {
+            stopped.note_owner_cons_lease_grant(reg, Arc::downgrade(&lease))?;
+        }
         self.heap = Some(heap.heap_identity());
         self.cons = Some(Arc::clone(&lease));
         heap.cons_allocator
@@ -362,6 +366,9 @@ impl OwnerEraReserve {
         let Some(lease) = self.cons.as_ref() else {
             return Ok(());
         };
+        if lease.open_run.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(ReserveError::RegionOpen);
+        }
         let count = lock_blocks(lease).len();
         if count == 0 {
             // The keeper already returned this lease.
@@ -375,11 +382,17 @@ impl OwnerEraReserve {
         // or return a partially discharged range twice.
         let cons = take_blocks(lease);
         let owner_key = lease.owner_key;
+        #[cfg(any(test, feature = "test-support"))]
+        let registration = lease.registration;
         for block in &cons {
             return_cons_block(heap, block);
         }
         heap.cons_allocator.return_owner_reserved_blocks(count);
         heap.cons_allocator.remove_owner_cons_lease(owner_key);
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(registration) = registration {
+            stopped.note_owner_cons_lease_returned(registration, owner_key);
+        }
         Ok(())
     }
 
@@ -399,6 +412,11 @@ impl OwnerEraReserve {
         };
         region.install_granted_cons(addr, n, ConsRegionSource::BlockTail { block: block_index });
         heap.charge_conses(n);
+        if let Some(lease) = self.cons.as_ref() {
+            lease
+                .open_run
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
         self.open_cons = Some(OpenCons {
             slot,
             start,
@@ -489,6 +507,9 @@ impl OwnerEraReserve {
             return;
         };
         lock_blocks(lease)[open.slot].carve_at = open.start + handed;
+        lease
+            .open_run
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -680,9 +701,10 @@ impl TaggedHeap {
     /// Return one registration's closed lease and discharge its count.
     ///
     /// Other leases stay. A poisoned allocator changes nothing and returns
-    /// false so the caller can keep the registration queued. An open run is
-    /// not represented here: the book must already be closed, and the unused
-    /// tail is returned the same way `return_cons_block` returns a closed book.
+    /// false so the caller can keep the registration queued. `retire_rooted`
+    /// refuses an open cons run with `RegistrationError::OpenRegion`, and
+    /// `take_owner_cons_leases_for_registration` asserts that every matching
+    /// lease is closed before taking or rewinding its blocks.
     #[cfg(any(test, feature = "test-support"))]
     pub(in crate::tagged::gc) fn reclaim_owner_cons_registration(
         &mut self,

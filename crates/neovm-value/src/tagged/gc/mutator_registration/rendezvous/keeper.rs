@@ -218,6 +218,26 @@ impl<'era> AllStopped<'era> {
         self.registry.gate_is_held_by_current_thread()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub(in crate::tagged::gc) fn note_owner_cons_lease_grant(
+        &self,
+        registration: NonZeroU64,
+        lease: std::sync::Weak<crate::tagged::gc::cons_allocator::OwnerConsLease>,
+    ) -> Result<(), crate::tagged::gc::ReserveError> {
+        self.registry
+            .note_owner_cons_lease_grant(registration, lease)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(in crate::tagged::gc) fn note_owner_cons_lease_returned(
+        &self,
+        registration: NonZeroU64,
+        owner_key: u64,
+    ) {
+        self.registry
+            .note_owner_cons_lease_returned(registration, owner_key);
+    }
+
     /// Cold look at the gate this stop already holds. The body cannot finish
     /// the epoch or take a heap loan. The keeper-thread check is the same
     /// predicate `stop` used to mint this guard.

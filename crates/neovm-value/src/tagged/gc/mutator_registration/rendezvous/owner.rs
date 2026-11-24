@@ -223,6 +223,10 @@ impl<'era> Mutator<'era> {
         roots: &[SharedRoot],
     ) -> Result<(), RootedRetireFailure<'era>> {
         let result = (|| {
+            // Refuse before transitioning mode if this registration still
+            // holds an open owner-cons run.
+            self.registry
+                .check_owner_cons_closed(self.entry.key.registration)?;
             // Every Running/Resuming entry access shares the canonical gate.
             // An ungated mode probe could make another owner's post-restore
             // membership census fail Busy after its image had already moved.
@@ -241,8 +245,9 @@ impl<'era> Mutator<'era> {
             if e.rendezvous.mode != Mode::NativeStopped {
                 return Err(RendezvousError::Busy);
             }
-            // The owner thread cannot borrow the collector. The keeper returns
-            // this registration's lease in `reclaim_retired_owner_cons`.
+            // The owner thread cannot borrow the collector. Refuse if a cons
+            // run is still open, skip owners that hold no lease, and queue
+            // closed leases for `reclaim_retired_owner_cons`.
             self.registry
                 .note_retired_owner_cons(self.entry.key.registration)?;
             e.rendezvous.retiring = true;

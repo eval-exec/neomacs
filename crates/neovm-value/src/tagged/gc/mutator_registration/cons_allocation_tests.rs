@@ -227,6 +227,12 @@ pub enum ConsAllocationCase {
     OwnerConsReserveResumeOfALiveLeaseIsNotBusy,
     OwnerConsReserveSessionReturnKeepsHandedCellAndReclaimsTail,
     OwnerConsReserveRetireRootedReclaimsOneRegistration,
+    OwnerConsReserveRetireQueueHygieneSkipsUnleasedAndDrainsAtStop,
+    OwnerConsReserveRetireRequiresClosedBookAndReclaimsCarvedTail,
+    OwnerConsReserveFinishRefusesLiveLeaseUntilReclaimed,
+    OwnerConsReserveReclaimBusyRequeuesForLaterApply,
+    OwnerConsReserveReclaimPoisonedAllocatorRequeues,
+    OwnerConsReserveReclaimRefusesWrongThread,
 }
 
 impl ConsAllocationCase {
@@ -277,6 +283,12 @@ impl ConsAllocationCase {
         Self::OwnerConsReserveResumeOfALiveLeaseIsNotBusy,
         Self::OwnerConsReserveSessionReturnKeepsHandedCellAndReclaimsTail,
         Self::OwnerConsReserveRetireRootedReclaimsOneRegistration,
+        Self::OwnerConsReserveRetireQueueHygieneSkipsUnleasedAndDrainsAtStop,
+        Self::OwnerConsReserveRetireRequiresClosedBookAndReclaimsCarvedTail,
+        Self::OwnerConsReserveFinishRefusesLiveLeaseUntilReclaimed,
+        Self::OwnerConsReserveReclaimBusyRequeuesForLaterApply,
+        Self::OwnerConsReserveReclaimPoisonedAllocatorRequeues,
+        Self::OwnerConsReserveReclaimRefusesWrongThread,
     ];
 }
 
@@ -487,6 +499,34 @@ pub(crate) fn run_cons_allocation_test<K, W>(
             owner_reserve_cases::owner_cons_reserve_retire_rooted_reclaims_one_registration(
                 roots_era,
             );
+        }
+        ConsAllocationCase::OwnerConsReserveRetireQueueHygieneSkipsUnleasedAndDrainsAtStop => {
+            owner_reserve_cases::owner_cons_reserve_retire_queue_hygiene_skips_unleased_and_drains_at_stop(
+                roots_era,
+                world_roots,
+            );
+        }
+        ConsAllocationCase::OwnerConsReserveRetireRequiresClosedBookAndReclaimsCarvedTail => {
+            owner_reserve_cases::owner_cons_reserve_retire_requires_closed_book_and_reclaims_carved_tail(
+                roots_era,
+                world_roots,
+            );
+        }
+        ConsAllocationCase::OwnerConsReserveFinishRefusesLiveLeaseUntilReclaimed => {
+            owner_reserve_cases::owner_cons_reserve_finish_refuses_live_lease_until_reclaimed(
+                roots_era,
+            );
+        }
+        ConsAllocationCase::OwnerConsReserveReclaimBusyRequeuesForLaterApply => {
+            owner_reserve_cases::owner_cons_reserve_reclaim_busy_requeues_for_later_apply(
+                roots_era,
+            );
+        }
+        ConsAllocationCase::OwnerConsReserveReclaimPoisonedAllocatorRequeues => {
+            owner_reserve_cases::owner_cons_reserve_reclaim_poisoned_allocator_requeues(roots_era);
+        }
+        ConsAllocationCase::OwnerConsReserveReclaimRefusesWrongThread => {
+            owner_reserve_cases::owner_cons_reserve_reclaim_refuses_wrong_thread(roots_era);
         }
         ConsAllocationCase::OwnerConsReserveGrantsOnlyConsStorage => {
             owner_reserve_cases::owner_cons_reserve_grants_only_cons_storage(roots_era);

@@ -57,9 +57,12 @@ pub(super) fn owner_cons_reserve_refuses_use_after_heap_drop<K>(
         }));
         stopped.trace(|_, _| Ok(())).unwrap();
         complete(stopped);
-        let (collector, keeper) = era.finish().unwrap();
-        drop(collector);
-        drop(keeper);
+        // A live lease refuses finish so it cannot outlive its era cleanly;
+        // dropping the failed era abandons heap A while keeping the book live
+        // so the second heap exercises the use-after-heap-drop refusal.
+        let failure = era.finish().unwrap_err();
+        assert_eq!(failure.reason, RegistrationError::OwnerReserveHeld);
+        drop(failure);
     });
     // This call has returned through the core fixture, so A's actual Context
     // has dropped before the second Context/World can be constructed.
@@ -1345,6 +1348,516 @@ pub(super) fn owner_cons_reserve_retire_rooted_reclaims_one_registration<K>(
             );
         }
         retire(owner_b);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+/// C-R1 queue hygiene: retiring an owner that never held a lease (or already
+/// returned its lease explicitly) must not enqueue an entry, and a full stop
+/// walk drains any queued retired registrations once all leases are returned.
+pub(super) fn owner_cons_reserve_retire_queue_hygiene_skips_unleased_and_drains_at_stop<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut unleased = activate(era.register(1751, 0).unwrap(), era.heap_identity(), 1751);
+        unleased.enter_native(&[]).unwrap();
+        retire(unleased);
+        assert_eq!(
+            era.core.retired_owner_cons_len_for_test(),
+            0,
+            "retiring an owner without a lease must not grow the retired queue"
+        );
+
+        let mut returned_owner =
+            activate(era.register(1752, 0).unwrap(), era.heap_identity(), 1752);
+        let mut abandoned_owner =
+            activate(era.register(1753, 0).unwrap(), era.heap_identity(), 1753);
+        let reg_returned = returned_owner.key().registration;
+        let reg_abandoned = abandoned_owner.key().registration;
+        returned_owner.enter_native(&[]).unwrap();
+        abandoned_owner.enter_native(&[]).unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            let mut book_returned = OwnerEraReserve::new();
+            let mut book_abandoned = OwnerEraReserve::new();
+            book_returned
+                .grant_at_stop_for_registration(
+                    &stopped,
+                    heap,
+                    true,
+                    MeasuredInterval::zero(),
+                    reg_returned,
+                )
+                .unwrap();
+            book_abandoned
+                .grant_at_stop_for_registration(
+                    &stopped,
+                    heap,
+                    true,
+                    MeasuredInterval::zero(),
+                    reg_abandoned,
+                )
+                .unwrap();
+            book_returned
+                .return_unused_before_sweep(&stopped, heap)
+                .unwrap();
+            std::mem::forget(book_abandoned.into_closed().unwrap());
+        });
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+
+        retire(returned_owner);
+        assert_eq!(
+            era.core.retired_owner_cons_len_for_test(),
+            0,
+            "retiring an owner whose lease was already returned must not enqueue"
+        );
+
+        retire(abandoned_owner);
+        assert_eq!(
+            era.core.retired_owner_cons_len_for_test(),
+            1,
+            "retiring an owner with an abandoned lease queues its registration"
+        );
+
+        // Skip `reclaim_retired_owner_cons`; the full stop walk returns the
+        // lease and must also drain the retired queue.
+        let mut stopped = era.stop().unwrap();
+        era.collect_stopped(&mut stopped, world_roots).unwrap();
+        assert_eq!(
+            era.core.retired_owner_cons_len_for_test(),
+            0,
+            "the full stop walk must drain retired registrations once leases clear"
+        );
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            assert!(!heap.has_owner_cons_reserves());
+        });
+        complete(stopped);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+/// C-R2: `retire_rooted` must refuse an open owner-cons book with
+/// `OpenRegion`. Once closed, retiring reclaims only the unhanded tail after
+/// handed cells, leaving the rooted cell alive across GC and another
+/// registration's lease untouched.
+pub(super) fn owner_cons_reserve_retire_requires_closed_book_and_reclaims_carved_tail<K, W>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    use crate::tagged::transport::SharedRoot;
+
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut owner_a = activate(era.register(1761, 0).unwrap(), era.heap_identity(), 1761);
+        let mut owner_b = activate(era.register(1762, 0).unwrap(), era.heap_identity(), 1762);
+        let reg_a = owner_a.key().registration;
+        let reg_b = owner_b.key().registration;
+        owner_a.enter_native(&[]).unwrap();
+        owner_b.enter_native(&[]).unwrap();
+
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        let mut book_a = OwnerEraReserve::new();
+        let mut region_a = OwnerAllocRegion::new();
+        let (root, block_a, block_b, handed_addr) =
+            with_stopped_legacy_heap(&era, &stopped, |heap| {
+                let mut book_b = OwnerEraReserve::new();
+                book_a
+                    .grant_at_stop_for_registration(
+                        &stopped,
+                        heap,
+                        true,
+                        MeasuredInterval::zero(),
+                        reg_a,
+                    )
+                    .unwrap();
+                book_b
+                    .grant_at_stop_for_registration(
+                        &stopped,
+                        heap,
+                        true,
+                        MeasuredInterval::zero(),
+                        reg_b,
+                    )
+                    .unwrap();
+                book_a.carve_cons(heap, &mut region_a).unwrap();
+                let handed_addr = region_a.take_cons_cell().unwrap();
+                let handed = reserve_tests::handed_cons(handed_addr);
+                // SAFETY: `handed_addr` is the cell just handed out from this run.
+                unsafe {
+                    (*(handed_addr as *mut ConsCell)).set_car(Value::fixnum(1761));
+                }
+                book_a.note_cons_taken(1);
+                assert!(
+                    book_a.open_cons_tail_bytes() > 0,
+                    "an unhanded tail remains"
+                );
+                let block_a = book_a.first_leased_block_for_test();
+                let block_b = book_b.first_leased_block_for_test();
+                std::mem::forget(book_b.into_closed().unwrap());
+                // SAFETY: `handed` is an initialized cons cell owned by this stopped
+                // heap; registering its root keeps it alive across the later GC.
+                let root = unsafe { SharedRoot::new(heap, handed) };
+                (root, block_a, block_b, handed_addr)
+            });
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+
+        // Retiring while `book_a` still has an open carved run must refuse.
+        let failure = match owner_a.retire_rooted(&[]) {
+            Err(failure) => failure,
+            Ok(()) => panic!("retire_rooted must refuse an open owner-cons book"),
+        };
+        assert_eq!(
+            failure.reason,
+            RendezvousError::Registration(RegistrationError::OpenRegion),
+            "retire_rooted with an open cons book must report OpenRegion"
+        );
+        assert_eq!(
+            era.core.retired_owner_cons_len_for_test(),
+            0,
+            "a refused retire must not queue the registration"
+        );
+        let owner_a = failure.into_owner();
+
+        // Close the book, abandon the closed reserve, and retire normally.
+        let mut stopped = era.stop().unwrap();
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            book_a.close_for_stop(heap, &mut region_a).unwrap();
+        });
+        std::mem::forget(book_a.into_closed().unwrap());
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+
+        retire(owner_a);
+        era.core.reclaim_retired_owner_cons().unwrap();
+        {
+            let mut collector = era.core.collector.borrow_mut();
+            let heap = collector.as_mut().unwrap().registration_heap_mut();
+            assert_eq!(
+                (
+                    heap.cons_allocator.owner_reserved_blocks(),
+                    heap.cons_allocator.owner_cons_registrations_for_test(),
+                    heap.cons_blocks[block_a].next_index,
+                    heap.cons_blocks[block_b].next_index,
+                ),
+                (
+                    1,
+                    vec![Some(reg_b)],
+                    1,
+                    crate::tagged::gc::CONS_BLOCK_SIZE as u16,
+                ),
+                "retire reclaim must rewind A's tail to the handed cell and keep B"
+            );
+        }
+
+        // Collect at a stop (which also returns B's lease) and confirm the
+        // handed cell from A's retired block survived GC.
+        let mut stopped = era.stop().unwrap();
+        era.collect_stopped(&mut stopped, world_roots).unwrap();
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            let value = root.materialize(heap).unwrap().value();
+            assert_eq!(value.cons_car(), Value::fixnum(1761));
+            assert_eq!(heap.cons_blocks[block_a].next_index, 1);
+            let fresh = heap.alloc_cons(Value::NIL, Value::NIL);
+            assert_ne!(
+                fresh.as_cons_ptr().map(|cell| cell as usize),
+                Some(handed_addr),
+                "the surviving cell from the retired block must not be reallocated"
+            );
+        });
+        complete(stopped);
+        retire(owner_b);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+/// C-R4: `finish`/`prepare_finish` must refuse while any owner-cons lease is
+/// live so a lease cannot outlive its era and match a reused registration id.
+pub(super) fn owner_cons_reserve_finish_refuses_live_lease_until_reclaimed<K>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+) where
+    K: EraKeeper + std::fmt::Debug,
+{
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut owner = activate(era.register(1771, 0).unwrap(), era.heap_identity(), 1771);
+        let reg = owner.key().registration;
+        owner.enter_native(&[]).unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        with_stopped_legacy_heap(&era, &stopped, |heap| {
+            let mut book = OwnerEraReserve::new();
+            book.grant_at_stop_for_registration(
+                &stopped,
+                heap,
+                true,
+                MeasuredInterval::zero(),
+                reg,
+            )
+            .unwrap();
+            std::mem::forget(book.into_closed().unwrap());
+        });
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+        retire(owner);
+
+        let era = match era.finish() {
+            Err(failure) => {
+                assert_eq!(
+                    failure.reason,
+                    RegistrationError::OwnerReserveHeld,
+                    "finish with a live owner-cons lease must report OwnerReserveHeld"
+                );
+                failure.into_era()
+            }
+            Ok((collector, keeper)) => {
+                drop(collector);
+                drop(keeper);
+                panic!("finish must refuse while an owner-cons lease is still live");
+            }
+        };
+
+        era.core.reclaim_retired_owner_cons().unwrap();
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+/// LOW row: `reclaim_retired_owner_cons` returns `Busy` and re-queues pending
+/// registrations both when the collector cell is borrowed and when it is `None`.
+pub(super) fn owner_cons_reserve_reclaim_busy_requeues_for_later_apply<K>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+) where
+    K: EraKeeper + std::fmt::Debug,
+{
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut owner = activate(era.register(1781, 0).unwrap(), era.heap_identity(), 1781);
+        let reg = owner.key().registration;
+        owner.enter_native(&[]).unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        let block_a = with_stopped_legacy_heap(&era, &stopped, |heap| {
+            let mut book = OwnerEraReserve::new();
+            book.grant_at_stop_for_registration(
+                &stopped,
+                heap,
+                true,
+                MeasuredInterval::zero(),
+                reg,
+            )
+            .unwrap();
+            let block_a = book.first_leased_block_for_test();
+            std::mem::forget(book.into_closed().unwrap());
+            block_a
+        });
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+        retire(owner);
+        assert_eq!(era.core.retired_owner_cons_len_for_test(), 1);
+
+        // Path 1: collector cell is borrowed.
+        {
+            let _borrowed = era.core.collector.borrow();
+            assert_eq!(
+                era.core.reclaim_retired_owner_cons(),
+                Err(RegistrationError::Busy),
+                "a borrowed collector must return Busy and re-queue"
+            );
+        }
+        assert_eq!(era.core.retired_owner_cons_len_for_test(), 1);
+
+        // Path 2: collector option is None.
+        let parked = era.core.collector.borrow_mut().take().unwrap();
+        let none_result = era.core.reclaim_retired_owner_cons();
+        *era.core.collector.borrow_mut() = Some(parked);
+        assert_eq!(
+            none_result,
+            Err(RegistrationError::Busy),
+            "an absent collector must return Busy and re-queue"
+        );
+        assert_eq!(era.core.retired_owner_cons_len_for_test(), 1);
+
+        // Once the collector is available, the re-queued registration reclaims.
+        era.core.reclaim_retired_owner_cons().unwrap();
+        assert_eq!(era.core.retired_owner_cons_len_for_test(), 0);
+        {
+            let mut collector = era.core.collector.borrow_mut();
+            let heap = collector.as_mut().unwrap().registration_heap_mut();
+            assert!(!heap.has_owner_cons_reserves());
+            assert_eq!(heap.cons_blocks[block_a].next_index, 0);
+        }
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+/// LOW row: when the cons allocator is poisoned, `reclaim_retired_owner_cons`
+/// leaves the lease intact and re-queues the registration; clearing poison
+/// lets a subsequent reclaim discharge it.
+pub(super) fn owner_cons_reserve_reclaim_poisoned_allocator_requeues<K>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+) where
+    K: EraKeeper + std::fmt::Debug,
+{
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut owner = activate(era.register(1782, 0).unwrap(), era.heap_identity(), 1782);
+        let reg = owner.key().registration;
+        owner.enter_native(&[]).unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        let block_a = with_stopped_legacy_heap(&era, &stopped, |heap| {
+            let mut book = OwnerEraReserve::new();
+            book.grant_at_stop_for_registration(
+                &stopped,
+                heap,
+                true,
+                MeasuredInterval::zero(),
+                reg,
+            )
+            .unwrap();
+            let block_a = book.first_leased_block_for_test();
+            std::mem::forget(book.into_closed().unwrap());
+            block_a
+        });
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+        retire(owner);
+
+        {
+            let mut collector = era.core.collector.borrow_mut();
+            collector
+                .as_mut()
+                .unwrap()
+                .registration_heap_mut()
+                .cons_allocator
+                .poison_storage_for_test();
+        }
+        era.core.reclaim_retired_owner_cons().unwrap();
+        assert_eq!(
+            era.core.retired_owner_cons_len_for_test(),
+            1,
+            "poisoned allocator must re-queue the registration"
+        );
+        {
+            let mut collector = era.core.collector.borrow_mut();
+            let heap = collector.as_mut().unwrap().registration_heap_mut();
+            assert_eq!(heap.cons_allocator.owner_reserved_blocks(), 1);
+            assert_eq!(
+                heap.cons_blocks[block_a].next_index,
+                crate::tagged::gc::CONS_BLOCK_SIZE as u16
+            );
+            heap.cons_allocator.clear_storage_poison_for_test();
+        }
+
+        era.core.reclaim_retired_owner_cons().unwrap();
+        assert_eq!(era.core.retired_owner_cons_len_for_test(), 0);
+        {
+            let mut collector = era.core.collector.borrow_mut();
+            let heap = collector.as_mut().unwrap().registration_heap_mut();
+            assert!(!heap.has_owner_cons_reserves());
+            assert_eq!(heap.cons_blocks[block_a].next_index, 0);
+        }
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+/// LOW row: calling reclaim with a non-keeper thread identity returns
+/// `WrongThread` without draining the queue or touching the lease.
+pub(super) fn owner_cons_reserve_reclaim_refuses_wrong_thread<K>(
+    roots_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, RootsFixture)),
+) where
+    K: EraKeeper + std::fmt::Debug,
+{
+    roots_era(&mut |era, _inputs| {
+        era.start_cons_storage().unwrap();
+        let mut owner = activate(era.register(1783, 0).unwrap(), era.heap_identity(), 1783);
+        let reg = owner.key().registration;
+        owner.enter_native(&[]).unwrap();
+        let mut stopped = era.stop().unwrap();
+        era.return_cons_storage(&stopped).unwrap();
+        let block_a = with_stopped_legacy_heap(&era, &stopped, |heap| {
+            let mut book = OwnerEraReserve::new();
+            book.grant_at_stop_for_registration(
+                &stopped,
+                heap,
+                true,
+                MeasuredInterval::zero(),
+                reg,
+            )
+            .unwrap();
+            let block_a = book.first_leased_block_for_test();
+            std::mem::forget(book.into_closed().unwrap());
+            block_a
+        });
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+        retire(owner);
+
+        let other_thread = std::thread::spawn(|| std::thread::current().id())
+            .join()
+            .unwrap();
+        assert_ne!(other_thread, std::thread::current().id());
+        assert_eq!(
+            era.core.reclaim_retired_owner_cons_as(other_thread),
+            Err(RegistrationError::WrongThread),
+            "a non-keeper thread id must be refused with WrongThread"
+        );
+        assert_eq!(
+            era.core.retired_owner_cons_len_for_test(),
+            1,
+            "WrongThread must leave the retired queue intact"
+        );
+        {
+            let mut collector = era.core.collector.borrow_mut();
+            let heap = collector.as_mut().unwrap().registration_heap_mut();
+            assert_eq!(heap.cons_allocator.owner_reserved_blocks(), 1);
+            assert_eq!(
+                heap.cons_blocks[block_a].next_index,
+                crate::tagged::gc::CONS_BLOCK_SIZE as u16
+            );
+        }
+
+        era.core.reclaim_retired_owner_cons().unwrap();
+        assert_eq!(era.core.retired_owner_cons_len_for_test(), 0);
         let (collector, keeper) = era.finish().unwrap();
         drop(collector);
         drop(keeper);
