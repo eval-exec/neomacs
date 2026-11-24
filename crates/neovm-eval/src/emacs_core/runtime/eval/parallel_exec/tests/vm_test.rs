@@ -13,13 +13,16 @@ use super::effective::{
 use super::engine::{CoreOutcome, EngineFault, RecordStack, apply_one};
 use super::frames::{
     BindStack, ExitFlags, FrameArena, FrameId, HandlerKind, HandlerMark, HandlerRecord,
-    HandlerStack, InterpFrame, OperandCursor, OwnerHandler, OwnerRecord, OwnerRecordMark, Pc,
-    PollBudget, RootGroup, SerialHandlerToken, SerialRecordToken, SlotRecord,
+    HandlerStack, InterpFrame, OperandCursor, OwnerHandler, OwnerRecord, OwnerRecordMark,
+    OwnerScanJoin, Pc, PollBudget, RootGroup, SerialHandlerToken, SerialRecordToken, SlotRecord,
+};
+use super::poll_tests::{
+    OWNER, activate, collect, end_epoch, finish, lend, recv, request_stop, retire, retry,
 };
 use super::vm::{
-    ArithOps, ArithRefusal, EscapeCompletion, EscapeStack, EscapeWhy, HandlerDelta, RecordDelta,
-    VmEscape, VmEscapeRequest, VmExec, VmOutcome, VmPlain, VmPoll, VmProgram, VmSealed,
-    static_stack_effect,
+    ArithOps, ArithRefusal, EscapeCompletion, EscapeStack, EscapeWhy, HandlerDelta, NumericClass,
+    RecordDelta, VmEscape, VmEscapeRequest, VmExec, VmOutcome, VmPlain, VmPoll, VmProgram,
+    VmSealed, static_stack_effect,
 };
 use crate::emacs_core::builtins::{
     builtin_car_1, builtin_car_safe_1, builtin_cdr_1, builtin_cdr_safe_1, builtin_div, builtin_mul,
@@ -28,7 +31,10 @@ use crate::emacs_core::builtins::{
 use crate::emacs_core::bytecode::decode::verify_stack_effects;
 use crate::emacs_core::bytecode::{ArithGenericKind, ByteCodeFunction, Op, StackDepth, Vm};
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::eval::world::poll::PollOutcome;
+use crate::emacs_core::eval::world::poll::{
+    PollOutcome, poll_region_refill, poll_serial_request, poll_vm_back_edge, poll_vm_call,
+};
+use crate::emacs_core::eval::world::serial_gate::stop_for_test;
 use crate::emacs_core::format_eval_result;
 use crate::emacs_core::subr::effect_schema::{
     ArithOperands, ParallelArm, PlainVarAccess, ReturnDisposition, SealedAuthority, WorldSplit,
@@ -39,12 +45,18 @@ use neovm_value::error::{EvalResult, Flow, LispCondition, expect_args, signal};
 use neovm_value::forward::TlsIndex;
 use neovm_value::intern::{NIL_SYM_ID, SymId};
 use neovm_value::tagged::SymbolMode;
-use neovm_value::tagged::gc::RendezvousError;
+use neovm_value::tagged::gc::{
+    Mutator, NumericAllocError, RegistrationError, Rendezvous, RendezvousError, TaggedHeap,
+};
+use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::{LambdaParams, Value, symbol_id};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::rc::Rc;
+use std::sync::{Arc, Barrier, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------- doubles
 
@@ -54,6 +66,8 @@ enum PollEdge {
     VmBackEdge,
     VmCall,
     SerialRequest,
+    /// The driver's refill at an instruction boundary (V5).
+    VmRefill,
 }
 
 struct RecordingPoll {
@@ -62,6 +76,10 @@ struct RecordingPoll {
     segments: Vec<Vec<Value>>,
     /// A one-shot refusal at one edge.
     refusal: Option<(PollEdge, RendezvousError)>,
+    /// The stopped grant's stand-in (V5): the arith double's reserve, and
+    /// the amount each refill edge mints into it, in order; past the list
+    /// every edge mints one.
+    grant: Option<(Rc<Cell<usize>>, Vec<usize>)>,
 }
 
 impl RecordingPoll {
@@ -70,7 +88,14 @@ impl RecordingPoll {
             edges: Vec::new(),
             segments: Vec::new(),
             refusal: None,
+            grant: None,
         }
+    }
+
+    /// The refill edges mint `amounts` into `budget`, in order.
+    fn refilling(mut self, budget: Rc<Cell<usize>>, amounts: Vec<usize>) -> Self {
+        self.grant = Some((budget, amounts));
+        self
     }
 
     fn refusing_on(edge: PollEdge, error: RendezvousError) -> Self {
@@ -88,6 +113,18 @@ impl RecordingPoll {
             let (_, error) = self.refusal.take().expect("checked just above");
             return Err(error);
         }
+        if edge == PollEdge::VmRefill
+            && let Some((budget, amounts)) = &self.grant
+        {
+            let index = self
+                .edges
+                .iter()
+                .filter(|edge| **edge == PollEdge::VmRefill)
+                .count()
+                - 1;
+            let amount = amounts.get(index).copied().unwrap_or(1);
+            budget.set(budget.get() + amount);
+        }
         Ok(PollOutcome::Continue)
     }
 }
@@ -103,6 +140,14 @@ impl VmPoll for RecordingPoll {
 
     fn serial_request(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError> {
         self.poll(PollEdge::SerialRequest, arena)
+    }
+
+    fn vm_refill(
+        &mut self,
+        arena: &FrameArena,
+        _class: NumericClass,
+    ) -> Result<PollOutcome, RendezvousError> {
+        self.poll(PollEdge::VmRefill, arena)
     }
 }
 
@@ -468,6 +513,10 @@ struct HarnessArith {
     calls: Vec<(ArithGenericKind, Vec<Value>)>,
     /// The floats allocated for results, in order.
     float_slots: Vec<f64>,
+    /// The owner's float reserve (V5): the results this port may still
+    /// allocate. Shared with the poll double, which stands for the stopped
+    /// grant and refills it. `usize::MAX` is unbounded.
+    budget: Rc<Cell<usize>>,
 }
 
 impl HarnessArith {
@@ -475,13 +524,34 @@ impl HarnessArith {
         Self {
             calls: Vec::new(),
             float_slots: Vec::new(),
+            budget: Rc::new(Cell::new(usize::MAX)),
         }
     }
 
+    /// A port over a reserve of `budget` float results.
+    fn with_budget(budget: &Rc<Cell<usize>>) -> Self {
+        Self {
+            budget: budget.clone(),
+            ..Self::new()
+        }
+    }
+
+    /// One float allocation: refused when the reserve is dry, and only
+    /// then - the caller has already decided every operand.
+    fn take_float(&mut self) -> Result<(), ArithRefusal> {
+        let left = self.budget.get();
+        if left == 0 {
+            return Err(ArithRefusal::Exhausted(NumericClass::Float));
+        }
+        self.budget.set(left - 1);
+        Ok(())
+    }
+
     /// A float result: one allocation through the owner's float slot.
-    fn float(&mut self, value: f64) -> Value {
+    fn float(&mut self, value: f64) -> Result<Value, ArithRefusal> {
+        self.take_float()?;
         self.float_slots.push(value);
-        Value::make_float(value)
+        Ok(Value::make_float(value))
     }
 }
 
@@ -558,6 +628,7 @@ impl ArithOps for HarnessArith {
             (ArithGenericKind::Mul, _) => {
                 let value = builtin_mul(operands).map_err(ArithRefusal::Flow)?;
                 if value.is_float() {
+                    self.take_float()?;
                     self.float_slots.push(value.xfloat());
                 }
                 Ok(value)
@@ -565,6 +636,7 @@ impl ArithOps for HarnessArith {
             (ArithGenericKind::Div, _) => {
                 let value = builtin_div(operands).map_err(ArithRefusal::Flow)?;
                 if value.is_float() {
+                    self.take_float()?;
                     self.float_slots.push(value.xfloat());
                 }
                 Ok(value)
@@ -588,17 +660,17 @@ impl ArithOps for HarnessArith {
                 Vm::arith_integer_fast(kind, operands).ok_or_else(unsupported)
             }
             // Fixnums and floats from here: GNU's float arms.
-            (ArithGenericKind::Add, [a, b]) => Ok(self.float(number(a)? + number(b)?)),
-            (ArithGenericKind::Sub, [a, b]) => Ok(self.float(number(a)? - number(b)?)),
-            (ArithGenericKind::Add1, [a]) => Ok(self.float(1.0 + number(a)?)),
-            (ArithGenericKind::Sub1, [a]) => Ok(self.float(-1.0 + number(a)?)),
+            (ArithGenericKind::Add, [a, b]) => Ok(self.float(number(a)? + number(b)?)?),
+            (ArithGenericKind::Sub, [a, b]) => Ok(self.float(number(a)? - number(b)?)?),
+            (ArithGenericKind::Add1, [a]) => Ok(self.float(1.0 + number(a)?)?),
+            (ArithGenericKind::Sub1, [a]) => Ok(self.float(-1.0 + number(a)?)?),
             // GNU `Fminus` on one integer negates in the integers: a bignum
             // at `most-negative-fixnum`, where `make_int` promotes.
             (ArithGenericKind::Negate, [a]) => {
                 if let Some(x) = a.as_fixnum() {
                     return x.checked_neg().map(Value::make_int).ok_or_else(unsupported);
                 }
-                Ok(self.float(-number(a)?))
+                Ok(self.float(-number(a)?)?)
             }
             // GNU `minmax_driver` (data.c:3462-3474): `accum = args[0]`, and
             // the next operand `val` replaces it only when
@@ -969,7 +1041,17 @@ fn signal_key(flow: &Flow) -> (String, Vec<Value>) {
     (data.symbol_name().to_string(), data.data.clone())
 }
 
-fn done_value(engine: &mut Harness, outcome: VmOutcome) -> Value {
+fn done_value<'era, E, S, A, V, P>(
+    engine: &mut VmExec<'era, E, S, A, V, P>,
+    outcome: VmOutcome,
+) -> Value
+where
+    E: VmEscape,
+    S: VmSealed,
+    A: ArithOps,
+    V: VmPlain,
+    P: VmPoll,
+{
     match outcome {
         VmOutcome::Done { pending } => engine.take(pending).expect("done root"),
         VmOutcome::Signaled(flow) => panic!("signaled {}", signal_key(&flow).0),
@@ -2313,6 +2395,259 @@ fn vm_a_return_under_a_watched_owner_record_takes_the_serial_cleanup() {
         "no record survives; no double restore"
     );
     assert!(lifos(engine.arena()).0.is_empty());
+    assert_clear(&engine);
+}
+
+/// A V5 engine: the arith port over `budget` float results, the poll double
+/// minting `grants` into it at each refill edge (one past the list).
+fn refill_harness(
+    budget: &Rc<Cell<usize>>,
+    grants: Vec<usize>,
+) -> VmExec<'static, RecordingEscape, HarnessVmSealed, HarnessArith, HarnessPlain, RecordingPoll> {
+    VmExec::new(
+        &(),
+        RecordingEscape::new(),
+        HarnessVmSealed,
+        HarnessArith::with_budget(budget),
+        HarnessPlain::new(),
+        RecordingPoll::new().refilling(budget.clone(), grants),
+    )
+}
+
+/// The float loop: acc = 1.5 under a list of four nils; each iteration
+/// cdrs the list, adds 1.5 to the acc through StackRef/StackSet, and jumps
+/// back while the rest is a cons (`GotoIfNotNil`, bytecode.c's Bgoto-if-
+/// not-nil). Four adds, three taken back edges; the final StackRef puts acc
+/// on top for the Return. `StackRef n` reads `1 + n` from the top and
+/// `StackSet n` replaces the slot `n` below the popped top (the serial arms).
+fn float_loop() -> Vec<Op> {
+    vec![
+        Op::Constant(0),
+        Op::Constant(1),
+        Op::StackRef(0),
+        Op::Cdr,
+        Op::StackSet(1),
+        Op::StackRef(1),
+        Op::Constant(0),
+        Op::Add,
+        Op::StackSet(2),
+        Op::StackRef(0),
+        Op::GotoIfNotNil(2),
+        Op::StackRef(1),
+        Op::Return,
+    ]
+}
+
+/// The loop's constants: 1.5 and a list of four nils. A `Context` first:
+/// a cons and a float allocate on the thread's heap.
+fn float_loop_constants(ctx: &mut Context) -> Vec<Value> {
+    let _ = ctx;
+    let list = Value::cons(
+        Value::NIL,
+        Value::cons(
+            Value::NIL,
+            Value::cons(Value::NIL, Value::cons(Value::NIL, Value::NIL)),
+        ),
+    );
+    vec![Value::make_float(1.5), list]
+}
+
+#[test]
+fn vm_an_exhausted_float_result_refills_at_the_boundary_and_the_same_op_re_executes() {
+    // V5 (peer #12095 C2, #12100): the port's reserve is dry, so arith()
+    // refuses with Exhausted AFTER its operand checks and before anything is
+    // touched. The step leaves the op un-executed at its instruction
+    // boundary - pc, operands and frame as they were - and the driver takes
+    // ONE refill edge, the publish/stop/restore body's stand-in here, which
+    // grants. Then the SAME op re-executes from its start with the same
+    // operands, and no escape was taken on the way.
+    let mut ctx = context();
+    let budget = Rc::new(Cell::new(0));
+    let ops = plain_program(vec![Op::Constant(0), Op::Constant(1), Op::Add]);
+    let constants = [Value::make_float(1.5), Value::make_float(2.5)];
+    let mut engine = refill_harness(&budget, vec![1]);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    let done = done_value(&mut engine, outcome);
+    assert_eq!(done.xfloat(), 4.0);
+    let poll = engine.poll_handler();
+    assert_eq!(
+        poll.edges,
+        vec![PollEdge::VmRefill],
+        "one refill edge, nothing else"
+    );
+    assert_eq!(
+        poll.segments[0],
+        vec![constants[0], constants[1]],
+        "the operands are intact at the refill: nothing was consumed"
+    );
+    let calls = &engine.arith_handler().calls;
+    assert_eq!(calls.len(), 2, "the op ran from its start once per attempt");
+    assert_eq!(calls[0], calls[1], "with the same kind and operands");
+    assert_eq!(engine.escape_handler().requests.len(), 0, "no escape");
+    assert_eq!(budget.get(), 0, "the grant was spent by the retried op");
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_refused_refill_poll_faults_and_the_op_never_executes() {
+    // The refill edge is a poll: a refusal is the poll fault, and the op
+    // that asked for the refill does not run against a dry reserve.
+    let mut ctx = context();
+    let budget = Rc::new(Cell::new(0));
+    let ops = plain_program(vec![Op::Constant(0), Op::Constant(1), Op::Add]);
+    let constants = [Value::make_float(1.5), Value::make_float(2.5)];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::new(),
+        HarnessVmSealed,
+        HarnessArith::with_budget(&budget),
+        HarnessPlain::new(),
+        RecordingPoll::refusing_on(PollEdge::VmRefill, RendezvousError::Publication),
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert!(
+        matches!(
+            outcome,
+            VmOutcome::Fault(EngineFault::Poll(RendezvousError::Publication))
+        ),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        engine.arith_handler().calls.len(),
+        1,
+        "the refused attempt alone"
+    );
+    assert!(
+        engine.arith_handler().float_slots.is_empty(),
+        "nothing was allocated"
+    );
+    assert_eq!(engine.escape_handler().requests.len(), 0);
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_float_loop_with_reserve_never_refills_and_polls_every_back_edge() {
+    // The tail-reuse twin (my #12246): once the owner holds a reserve, a
+    // float loop's allocations are claims against it - the driver sees no
+    // refill edge at all, and polls only at the taken back edges.
+    let mut ctx = context();
+    let budget = Rc::new(Cell::new(4));
+    let ops = float_loop();
+    let constants = float_loop_constants(&mut ctx);
+    let mut engine = refill_harness(&budget, vec![1]);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    let done = done_value(&mut engine, outcome);
+    assert_eq!(done.xfloat(), 1.5 + 4.0 * 1.5);
+    assert_eq!(engine.poll_handler().edges, vec![PollEdge::VmBackEdge; 3]);
+    assert_eq!(engine.arith_handler().calls.len(), 4, "each add ran once");
+    assert_eq!(budget.get(), 0, "four claims, no refill");
+    assert_eq!(
+        engine.escape_handler().requests.len(),
+        0,
+        "the cdrs ran owner-locally"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_exhausted_comes_only_after_the_operand_checks() {
+    // The port decides a marker or a wrong type before it looks at its
+    // reserve (peer #12095 C2): a dry reserve never turns a marker operand
+    // into a refill, nor a wrong type into one.
+    let mut ctx = context();
+    let budget = Rc::new(Cell::new(0));
+    let ops = plain_program(vec![Op::Constant(0), Op::Constant(1), Op::Add]);
+    // A marker: the ONE escape, as ever.
+    let marker = make_marker_value(None, None, false);
+    let mut engine = refill_harness(&budget, vec![1]);
+    let outcome = engine.run(
+        &mut ctx,
+        program_with(&ops, &[marker, Value::make_float(2.5)]),
+    );
+    done_value(&mut engine, outcome);
+    assert_eq!(
+        engine.escape_handler().requests.len(),
+        1,
+        "the marker escape"
+    );
+    assert!(matches!(
+        engine.escape_handler().requests[0].why,
+        EscapeWhy::World(WorldSplit::Arith(ArithOperands::MarkerInvolved))
+    ));
+    assert_eq!(
+        engine.poll_handler().edges,
+        vec![PollEdge::SerialRequest],
+        "no refill edge"
+    );
+    // A wrong type: the builtin's Flow, a signal, no refill.
+    let mut engine = refill_harness(&budget, vec![1]);
+    let outcome = engine.run(
+        &mut ctx,
+        program_with(&ops, &[Value::NIL, Value::make_float(2.5)]),
+    );
+    assert!(matches!(outcome, VmOutcome::Signaled(_)), "{outcome:?}");
+    assert!(engine.poll_handler().edges.is_empty(), "no poll at all");
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_refill_that_mints_nothing_polls_again_until_granted() {
+    // The driver does not assume the refill made progress (#12162, #12221):
+    // a grant of 0 leaves the reserve dry, the op refuses again, and the
+    // edge polls once more - pc and operands unchanged at every attempt -
+    // until a grant lands. Here two grants mint nothing on the way.
+    let mut ctx = context();
+    let budget = Rc::new(Cell::new(0));
+    let ops = plain_program(vec![Op::Constant(0), Op::Constant(1), Op::Add]);
+    let constants = [Value::make_float(1.5), Value::make_float(2.5)];
+    let mut engine = refill_harness(&budget, vec![0, 0, 1]);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    let done = done_value(&mut engine, outcome);
+    assert_eq!(done.xfloat(), 4.0);
+    assert_eq!(engine.poll_handler().edges, vec![PollEdge::VmRefill; 3]);
+    let calls = &engine.arith_handler().calls;
+    assert_eq!(calls.len(), 4, "three refusals, then the run");
+    assert!(
+        calls.windows(2).all(|pair| pair[0] == pair[1]),
+        "the same operands every time"
+    );
+    let segments = &engine.poll_handler().segments;
+    assert!(
+        segments.windows(2).all(|pair| pair[0] == pair[1]),
+        "the segment never moved"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_float_loop_over_a_short_reserve_refills_mid_loop_and_keeps_its_accumulator() {
+    // The refill lands between two iterations of a loop: the back edges
+    // and the refill edges interleave, the accumulator below the operands
+    // is untouched by the refill, and the loop's result is exact.
+    let mut ctx = context();
+    let budget = Rc::new(Cell::new(2));
+    let ops = float_loop();
+    let constants = float_loop_constants(&mut ctx);
+    let mut engine = refill_harness(&budget, vec![1, 1]);
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    let done = done_value(&mut engine, outcome);
+    assert_eq!(done.xfloat(), 1.5 + 4.0 * 1.5);
+    assert_eq!(
+        engine.poll_handler().edges,
+        vec![
+            PollEdge::VmBackEdge,
+            PollEdge::VmBackEdge,
+            PollEdge::VmRefill,
+            PollEdge::VmBackEdge,
+            PollEdge::VmRefill,
+        ],
+        "two refills, each after a back edge and before the next iteration's add"
+    );
+    assert_eq!(
+        engine.arith_handler().calls.len(),
+        6,
+        "four ran, two refused first"
+    );
     assert_clear(&engine);
 }
 
@@ -5735,4 +6070,1194 @@ fn vm_unbind_ties_the_serial_vm_on_the_same_programs() {
             }
         }
     }
+}
+
+// ----------------------------------------- V5 real-era poll wiring rows
+
+const OWNER_B: u64 = OWNER + 10;
+
+fn retry_reg<T>(label: &str, mut op: impl FnMut() -> Result<T, RegistrationError>) -> T {
+    let start = Instant::now();
+    let deadline = Duration::from_secs(30);
+    loop {
+        match op() {
+            Ok(value) => return value,
+            Err(RegistrationError::Busy) if start.elapsed() < deadline => thread::yield_now(),
+            Err(error) => panic!("{label}: {error:?}"),
+        }
+    }
+}
+
+fn era_owns(
+    era: &crate::emacs_core::eval::world::WorldProofEra<'_>,
+    stopped: &neovm_value::tagged::gc::AllStopped<'_>,
+    bits: usize,
+) -> bool {
+    era.with_stopped_heap_for_test(stopped, |heap| {
+        // SAFETY: `bits` is the tagged word of a value allocated on this era's heap.
+        heap.owns_heap_value_for_test(unsafe { Value::from_bits(bits) })
+    })
+    .expect("stopped heap")
+}
+
+struct EraVmFixture {
+    heap: usize,
+    nil_root: SharedRoot,
+    words: Vec<usize>,
+    roots: Vec<SharedRoot>,
+}
+
+fn era_vm_setup(
+    context: &mut Context,
+    build: impl FnOnce(&mut Context) -> Vec<Value>,
+) -> EraVmFixture {
+    context.set_gc_stress_for_test(false);
+    context.tagged_heap.set_gc_threshold(usize::MAX);
+    context.tagged_heap.close_alloc_regions();
+    let values = build(context);
+    // SAFETY: setup is the sole serial mutator on this era's Context.
+    let nil_root = unsafe { SharedRoot::new(&context.tagged_heap, Value::NIL) };
+    let mut words = Vec::with_capacity(values.len());
+    let mut roots = Vec::with_capacity(values.len());
+    for value in values {
+        words.push(value.bits());
+        // SAFETY: same sole-mutator setup; roots keep constants alive until
+        // the test drops them after the owner publishes its operand segment.
+        roots.push(unsafe { SharedRoot::new(&context.tagged_heap, value) });
+    }
+    EraVmFixture {
+        heap: context.tagged_heap.heap_root().as_ptr() as usize,
+        nil_root,
+        words,
+        roots,
+    }
+}
+
+fn finish_with_cons_storage(era: crate::emacs_core::eval::world::WorldProofEra<'_>) {
+    let stopped = retry("final stop", || stop_for_test(&era));
+    retry_reg("final return cons storage", || {
+        era.return_cons_storage(&stopped)
+    });
+    let mut ticket = lend(&era, stopped);
+    collect(&mut ticket);
+    end_epoch(ticket);
+    finish(era);
+}
+
+struct VmEraGate {
+    edge: PollEdge,
+    skip: usize,
+    reached: mpsc::Sender<()>,
+    go: mpsc::Receiver<()>,
+}
+
+/// The real V5 poll wiring behind [`VmPoll`]: calls `poll_vm_back_edge`,
+/// `poll_vm_call`, `poll_serial_request` and `poll_region_refill` against a
+/// real [`Mutator`], enforces the `#12246` `close_all_runs` publish contract
+/// before `poll_region_refill`, and records every published `publish_scan`
+/// batch so rows assert directly on the published words.
+struct VmEraPoll<'era> {
+    owner: Rc<RefCell<Option<Mutator<'era>>>>,
+    heap: usize,
+    rendezvous: Rendezvous<'era>,
+    edges: Vec<PollEdge>,
+    published_batches: Vec<Vec<usize>>,
+    build_calls: usize,
+    back_edge_builds: usize,
+    call_builds: usize,
+    serial_builds: usize,
+    refill_builds: usize,
+    close_calls: usize,
+    gate: Option<VmEraGate>,
+    pre_refill_hook: Option<Box<dyn FnOnce()>>,
+}
+
+impl<'era> VmEraPoll<'era> {
+    fn new(owner: Mutator<'era>, heap: usize, rendezvous: Rendezvous<'era>) -> Self {
+        Self {
+            owner: Rc::new(RefCell::new(Some(owner))),
+            heap,
+            rendezvous,
+            edges: Vec::new(),
+            published_batches: Vec::new(),
+            build_calls: 0,
+            back_edge_builds: 0,
+            call_builds: 0,
+            serial_builds: 0,
+            refill_builds: 0,
+            close_calls: 0,
+            gate: None,
+            pre_refill_hook: None,
+        }
+    }
+
+    fn owner_handle(&self) -> Rc<RefCell<Option<Mutator<'era>>>> {
+        self.owner.clone()
+    }
+
+    fn take_owner(&self) -> Mutator<'era> {
+        self.owner
+            .borrow_mut()
+            .take()
+            .expect("owner still resident")
+    }
+
+    fn with_gate(
+        mut self,
+        edge: PollEdge,
+        skip: usize,
+        reached: mpsc::Sender<()>,
+        go: mpsc::Receiver<()>,
+    ) -> Self {
+        self.gate = Some(VmEraGate {
+            edge,
+            skip,
+            reached,
+            go,
+        });
+        self
+    }
+
+    fn with_pre_refill_hook(mut self, hook: impl FnOnce() + 'static) -> Self {
+        self.pre_refill_hook = Some(Box::new(hook));
+        self
+    }
+
+    fn run_gate(&mut self, edge: PollEdge) {
+        let Some(gate) = self.gate.as_mut() else {
+            return;
+        };
+        if gate.edge != edge {
+            return;
+        }
+        if gate.skip > 0 {
+            gate.skip -= 1;
+            return;
+        }
+        let Some(gate) = self.gate.take() else {
+            return;
+        };
+        gate.reached.send(()).expect("gate reached");
+        recv(&gate.go);
+    }
+
+    fn publish_arena(
+        arena: &FrameArena,
+        heap: usize,
+        published_batches: &mut Vec<Vec<usize>>,
+        build_calls: &mut usize,
+        edge_builds: &mut usize,
+    ) -> Result<Vec<SharedRoot>, RendezvousError> {
+        *build_calls += 1;
+        *edge_builds += 1;
+        // SAFETY: `heap` is the era provenance root captured before
+        // admission. `publish_scan` only reads the arena, and the keeper
+        // cannot sweep while this owner is inside `Mutator::poll`.
+        let heap = unsafe { &*(heap as *const TaggedHeap) };
+        let mut batch = Vec::new();
+        arena.publish_scan(heap, &mut batch)?;
+        published_batches.push(batch.iter().map(SharedRoot::parallel_word).collect());
+        Ok(batch)
+    }
+}
+
+impl VmPoll for VmEraPoll<'_> {
+    fn vm_back_edge(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError> {
+        self.edges.push(PollEdge::VmBackEdge);
+        let heap = self.heap;
+        let published = &mut self.published_batches;
+        let builds = &mut self.build_calls;
+        let edge_builds = &mut self.back_edge_builds;
+        let outcome = {
+            let mut guard = self.owner.borrow_mut();
+            let owner = guard.as_mut().expect("owner resident");
+            poll_vm_back_edge(owner, || {
+                Self::publish_arena(arena, heap, published, builds, edge_builds)
+            })
+        };
+        self.run_gate(PollEdge::VmBackEdge);
+        outcome
+    }
+
+    fn vm_call(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError> {
+        self.edges.push(PollEdge::VmCall);
+        let heap = self.heap;
+        let published = &mut self.published_batches;
+        let builds = &mut self.build_calls;
+        let edge_builds = &mut self.call_builds;
+        let outcome = {
+            let mut guard = self.owner.borrow_mut();
+            let owner = guard.as_mut().expect("owner resident");
+            poll_vm_call(owner, || {
+                Self::publish_arena(arena, heap, published, builds, edge_builds)
+            })
+        };
+        self.run_gate(PollEdge::VmCall);
+        outcome
+    }
+
+    fn serial_request(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError> {
+        self.edges.push(PollEdge::SerialRequest);
+        let heap = self.heap;
+        let published = &mut self.published_batches;
+        let builds = &mut self.build_calls;
+        let edge_builds = &mut self.serial_builds;
+        let outcome = {
+            let mut guard = self.owner.borrow_mut();
+            let owner = guard.as_mut().expect("owner resident");
+            poll_serial_request(owner, || {
+                Self::publish_arena(arena, heap, published, builds, edge_builds)
+            })
+        };
+        self.run_gate(PollEdge::SerialRequest);
+        outcome
+    }
+
+    fn vm_refill(
+        &mut self,
+        arena: &FrameArena,
+        _class: NumericClass,
+    ) -> Result<PollOutcome, RendezvousError> {
+        self.edges.push(PollEdge::VmRefill);
+        if let Some(hook) = self.pre_refill_hook.take() {
+            hook();
+        }
+        let heap = self.heap;
+        let rendezvous = self.rendezvous;
+        let published = &mut self.published_batches;
+        let builds = &mut self.build_calls;
+        let edge_builds = &mut self.refill_builds;
+        let close_calls = &mut self.close_calls;
+        let outcome = {
+            let mut guard = self.owner.borrow_mut();
+            let owner = guard.as_mut().expect("owner resident");
+            // Publish contract (#12246): `RunAccess::close_all_runs` runs
+            // unconditionally before publication. A registration failure
+            // (poisoned, wrong thread, stale) faults before anything is
+            // published; `Busy` means a peer already moved the phase out of
+            // Idle (any prior `RunAccess` closed on drop, and `publish_roots`
+            // re-checks closed runs before accepting the image).
+            match owner.run_access() {
+                Ok(mut run) => {
+                    *close_calls += 1;
+                    run.close_all_runs()
+                        .map_err(RendezvousError::Registration)?;
+                }
+                Err(RegistrationError::Busy) => {}
+                Err(error) => return Err(RendezvousError::Registration(error)),
+            }
+            poll_region_refill(owner, rendezvous, || {
+                Self::publish_arena(arena, heap, published, builds, edge_builds)
+            })
+        };
+        self.run_gate(PollEdge::VmRefill);
+        outcome
+    }
+}
+
+/// Real-era arithmetic port backed by `RunAccess::float_into` and
+/// `RunAccess::close_all_runs` (gcpace N2). Operand checks precede any
+/// allocation; an empty pool maps `NumericAllocError::Exhausted` directly
+/// to `ArithRefusal::Exhausted` with nothing consumed.
+struct EraArith<'era> {
+    owner: Rc<RefCell<Option<Mutator<'era>>>>,
+    nil_root: SharedRoot,
+    result_slot: SharedRoot,
+    calls: Vec<(ArithGenericKind, Vec<Value>)>,
+    float_allocs: Vec<f64>,
+    close_calls: usize,
+}
+
+impl<'era> EraArith<'era> {
+    fn new(owner: Rc<RefCell<Option<Mutator<'era>>>>, nil_root: SharedRoot) -> Self {
+        Self {
+            owner,
+            result_slot: nil_root.clone(),
+            nil_root,
+            calls: Vec::new(),
+            float_allocs: Vec::new(),
+            close_calls: 0,
+        }
+    }
+
+    fn alloc_float(&mut self, sum: f64) -> Result<Value, ArithRefusal> {
+        let mut guard = self.owner.borrow_mut();
+        let owner = guard.as_mut().expect("owner resident");
+        // After a multi-owner stop completes, the first waking owner can observe
+        // `Phase::DrainingResumes` (`RegistrationError::Busy`) until its peers
+        // finish `restore_wait`. Wait for `Phase::Idle` before claiming from the
+        // numeric pool rather than mistaking resume drain for exhaustion.
+        let start = Instant::now();
+        let deadline = Duration::from_secs(30);
+        let mut run = loop {
+            match owner.run_access() {
+                Ok(run) => break run,
+                Err(RegistrationError::Busy) if start.elapsed() < deadline => thread::yield_now(),
+                Err(_) => return Err(unsupported()),
+            }
+        };
+        match run.float_into(sum, &mut self.result_slot) {
+            Ok(()) => {
+                let bits = self.result_slot.parallel_word();
+                self.close_calls += 1;
+                run.close_all_runs().expect("close_all_runs after float");
+                drop(run);
+                // Clear the scratch SharedRoot so only FrameArena's operand
+                // segment roots the allocated float at the next safepoint.
+                self.result_slot = self.nil_root.clone();
+                self.float_allocs.push(sum);
+                // SAFETY: `bits` is the tagged word of the float just
+                // initialized in this era's numeric storage.
+                Ok(unsafe { Value::from_bits(bits) })
+            }
+            Err(NumericAllocError::Exhausted(class)) => {
+                self.close_calls += 1;
+                run.close_all_runs()
+                    .expect("close_all_runs after Exhausted");
+                Err(ArithRefusal::Exhausted(class))
+            }
+            Err(NumericAllocError::Registration(_)) => {
+                let _ = run.close_all_runs();
+                Err(unsupported())
+            }
+        }
+    }
+}
+
+impl ArithOps for EraArith<'_> {
+    fn arith(&mut self, kind: ArithGenericKind, operands: &[Value]) -> Result<Value, ArithRefusal> {
+        self.calls.push((kind, operands.to_vec()));
+        let integer_only = kind == ArithGenericKind::Rem;
+        let predicate = if integer_only {
+            "integer-or-marker-p"
+        } else {
+            "number-or-marker-p"
+        };
+        for value in operands {
+            if value.is_marker() {
+                return Err(ArithRefusal::MarkerInvolved);
+            }
+            if !(value.is_fixnum() || value.is_bignum() || (value.is_float() && !integer_only)) {
+                return Err(ArithRefusal::Flow(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol(predicate), *value],
+                )));
+            }
+        }
+        let integers = operands
+            .iter()
+            .all(|value| value.is_fixnum() || value.is_bignum());
+        if integers && kind.integer_op().is_some() {
+            return Vm::arith_integer_fast(kind, operands).ok_or_else(unsupported);
+        }
+        match (kind, operands) {
+            (ArithGenericKind::Add, [a, b]) => self.alloc_float(number(a)? + number(b)?),
+            (ArithGenericKind::Sub, [a, b]) => self.alloc_float(number(a)? - number(b)?),
+            (ArithGenericKind::Add1, [a]) => self.alloc_float(1.0 + number(a)?),
+            (ArithGenericKind::Sub1, [a]) => self.alloc_float(-1.0 + number(a)?),
+            _ => Err(unsupported()),
+        }
+    }
+}
+
+#[test]
+fn vm_wired_fast_path_builds_no_batch() {
+    // VM-EXECUTOR-DESIGN §9 V5 / §10: an owner-local backward-branch loop on
+    // an admissible phase word calls `poll_vm_back_edge` once per taken back
+    // edge and never invokes the slow-path `publish_scan` closure.
+    Context::with_test_collection_era(
+        |context| {
+            era_vm_setup(context, |_ctx| {
+                let list = Value::cons(
+                    Value::NIL,
+                    Value::cons(
+                        Value::NIL,
+                        Value::cons(Value::NIL, Value::cons(Value::NIL, Value::NIL)),
+                    ),
+                );
+                vec![Value::fixnum(10), list]
+            })
+        },
+        |era, fixture| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let heap_addr = fixture.heap;
+            let words = fixture.words.clone();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let constants: Vec<Value> = words
+                        .iter()
+                        .map(|&bits| unsafe { Value::from_bits(bits) })
+                        .collect();
+                    let ops = vec![
+                        Op::Constant(0),
+                        Op::Constant(1),
+                        Op::Cdr,
+                        Op::Dup,
+                        Op::GotoIfNotNil(2),
+                        Op::Pop,
+                        Op::Return,
+                    ];
+                    let mut engine = VmExec::new(
+                        &(),
+                        RecordingEscape::new(),
+                        HarnessVmSealed,
+                        HarnessArith::new(),
+                        HarnessPlain::new(),
+                        VmEraPoll::new(owner, heap_addr, rendezvous),
+                    );
+                    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+                    let done = done_value(&mut engine, outcome);
+                    assert_eq!(done, Value::fixnum(10));
+                    assert_eq!(engine.escape_handler().requests.len(), 0);
+                    let poll = engine.into_poll();
+                    assert_eq!(poll.edges, vec![PollEdge::VmBackEdge; 3]);
+                    assert_eq!(
+                        poll.build_calls, 0,
+                        "the admissible fast path must not build a publish batch"
+                    );
+                    assert_eq!(poll.back_edge_builds, 0);
+                    retire(poll.take_owner());
+                });
+            });
+            drop(fixture);
+            finish(era);
+        },
+    );
+}
+
+#[test]
+fn vm_wired_back_edge_publishes_the_segment_and_parks() {
+    // VM-EXECUTOR-DESIGN §9 V5 / §10: `poll_vm_back_edge` parks against the
+    // real keeper; the published batch contains the live operand cons (7 . 9);
+    // setup drops its own SharedRoots BEFORE `collect` so ONLY the published
+    // VM operand segment keeps the cons alive through GC; after resume the
+    // frame continues and returns the identical bits with car/cdr intact.
+    Context::with_test_collection_era(
+        |context| {
+            era_vm_setup(context, |_ctx| {
+                let payload = Value::cons(Value::fixnum(7), Value::fixnum(9));
+                let list = Value::cons(
+                    Value::NIL,
+                    Value::cons(Value::NIL, Value::cons(Value::NIL, Value::NIL)),
+                );
+                vec![payload, list]
+            })
+        },
+        |era, mut fixture| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let heap_addr = fixture.heap;
+            let words = fixture.words.clone();
+            let payload_bits = words[0];
+            let (gate_tx, gate_rx) = mpsc::channel();
+            let (gate_go_tx, gate_go_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let constants: Vec<Value> = words
+                        .iter()
+                        .map(|&bits| unsafe { Value::from_bits(bits) })
+                        .collect();
+                    let ops = vec![
+                        Op::Constant(0),
+                        Op::Constant(1),
+                        Op::Cdr,
+                        Op::Dup,
+                        Op::GotoIfNotNil(2),
+                        Op::Pop,
+                        Op::Return,
+                    ];
+                    let mut engine = VmExec::new(
+                        &(),
+                        RecordingEscape::new(),
+                        HarnessVmSealed,
+                        HarnessArith::new(),
+                        HarnessPlain::new(),
+                        VmEraPoll::new(owner, heap_addr, rendezvous).with_gate(
+                            PollEdge::VmBackEdge,
+                            0,
+                            gate_tx,
+                            gate_go_rx,
+                        ),
+                    );
+                    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+                    let done = done_value(&mut engine, outcome);
+                    let done_bits = done.bits();
+                    let car_cdr = (done.cons_car().as_fixnum(), done.cons_cdr().as_fixnum());
+                    let poll = engine.into_poll();
+                    done_tx
+                        .send((
+                            done_bits,
+                            car_cdr,
+                            poll.edges.clone(),
+                            poll.build_calls,
+                            poll.back_edge_builds,
+                            poll.published_batches.clone(),
+                        ))
+                        .expect("done report");
+                    retire(poll.take_owner());
+                });
+                recv(&gate_rx);
+                request_stop(rendezvous);
+                gate_go_tx.send(()).expect("gate go");
+                let stopped = retry("stop", || stop_for_test(&era));
+                // Drop setup's SharedRoots before collection so only the VM's
+                // published operand segment roots the live payload cons.
+                fixture.roots.clear();
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                assert!(
+                    era_owns(&era, ticket.stopped_proof(), payload_bits),
+                    "the published VM operand must survive real GC"
+                );
+                end_epoch(ticket);
+                let (done_bits, car_cdr, edges, builds, back_edge_builds, batches) = recv(&done_rx);
+                assert_eq!(done_bits, payload_bits, "eq by bits after resume");
+                assert_eq!(car_cdr, (Some(7), Some(9)));
+                assert_eq!(edges, vec![PollEdge::VmBackEdge; 2]);
+                assert_eq!(builds, 1);
+                assert_eq!(back_edge_builds, 1);
+                assert_eq!(batches.len(), 1);
+                assert!(
+                    batches[0].contains(&payload_bits),
+                    "the published batch must contain the live operand cons"
+                );
+            });
+            drop(fixture);
+            finish(era);
+        },
+    );
+}
+
+#[test]
+fn vm_wired_call_edge_order_is_vm_call_then_serial_request() {
+    // VM-EXECUTOR-DESIGN §9 V5 / §10: `Op::Call(1)` runs `poll_vm_call` then
+    // `poll_serial_request`. With a stop active before the call, `poll_vm_call`
+    // parks, publishes the live operand cons (11 . 13), real GC runs with
+    // setup roots dropped, then after resume `poll_serial_request` runs fast
+    // and the escape receives the surviving operand.
+    Context::with_test_collection_era(
+        |context| {
+            era_vm_setup(context, |_ctx| {
+                let payload = Value::cons(Value::fixnum(11), Value::fixnum(13));
+                vec![Value::fixnum(1), payload]
+            })
+        },
+        |era, mut fixture| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let heap_addr = fixture.heap;
+            let words = fixture.words.clone();
+            let payload_bits = words[1];
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (go_tx, go_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let constants: Vec<Value> = words
+                        .iter()
+                        .map(|&bits| unsafe { Value::from_bits(bits) })
+                        .collect();
+                    let ops = vec![Op::Constant(0), Op::Constant(1), Op::Call(1), Op::Return];
+                    let escape = RecordingEscape::with_script(vec![Some(completion(
+                        &Op::Call(1),
+                        vec![constants[1]],
+                    ))]);
+                    let mut engine = VmExec::new(
+                        &(),
+                        escape,
+                        HarnessVmSealed,
+                        HarnessArith::new(),
+                        HarnessPlain::new(),
+                        VmEraPoll::new(owner, heap_addr, rendezvous),
+                    );
+                    ready_tx.send(()).expect("ready");
+                    recv(&go_rx);
+                    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+                    let done = done_value(&mut engine, outcome);
+                    let done_bits = done.bits();
+                    let car_cdr = (done.cons_car().as_fixnum(), done.cons_cdr().as_fixnum());
+                    let escaped_seg_bits: Vec<usize> = engine.escape_handler().segments[0]
+                        .iter()
+                        .map(|v| v.bits())
+                        .collect();
+                    let poll = engine.into_poll();
+                    done_tx
+                        .send((
+                            done_bits,
+                            car_cdr,
+                            escaped_seg_bits,
+                            poll.edges.clone(),
+                            poll.build_calls,
+                            poll.call_builds,
+                            poll.serial_builds,
+                            poll.published_batches.clone(),
+                        ))
+                        .expect("done report");
+                    retire(poll.take_owner());
+                });
+                recv(&ready_rx);
+                request_stop(rendezvous);
+                go_tx.send(()).expect("go");
+                let stopped = retry("stop", || stop_for_test(&era));
+                fixture.roots.clear();
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                assert!(
+                    era_owns(&era, ticket.stopped_proof(), payload_bits),
+                    "the published call operand must survive real GC"
+                );
+                end_epoch(ticket);
+                let (
+                    done_bits,
+                    car_cdr,
+                    escaped_seg_bits,
+                    edges,
+                    builds,
+                    call_builds,
+                    serial_builds,
+                    batches,
+                ) = recv(&done_rx);
+                assert_eq!(done_bits, payload_bits);
+                assert_eq!(car_cdr, (Some(11), Some(13)));
+                assert!(escaped_seg_bits.contains(&payload_bits));
+                assert_eq!(edges, vec![PollEdge::VmCall, PollEdge::SerialRequest]);
+                assert_eq!(builds, 1);
+                assert_eq!(call_builds, 1, "poll_vm_call parked");
+                assert_eq!(serial_builds, 0, "poll_serial_request stayed fast");
+                assert_eq!(batches.len(), 1);
+                assert!(batches[0].contains(&payload_bits));
+            });
+            drop(fixture);
+            finish(era);
+        },
+    );
+}
+
+#[test]
+fn vm_wired_serial_request_publishes_the_segment_and_parks() {
+    // VM-EXECUTOR-DESIGN §10: a non-call World escape parks inside
+    // `poll_serial_request`, publishes the live operand cons (17 . 19), keeps
+    // it alive across real GC with setup roots dropped, and hands the
+    // identical bits to the escape handler after resume.
+    Context::with_test_collection_era(
+        |context| {
+            era_vm_setup(context, |_ctx| {
+                let payload = Value::cons(Value::fixnum(17), Value::fixnum(19));
+                vec![payload]
+            })
+        },
+        |era, mut fixture| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let heap_addr = fixture.heap;
+            let words = fixture.words.clone();
+            let payload_bits = words[0];
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (go_tx, go_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let constants: Vec<Value> = words
+                        .iter()
+                        .map(|&bits| unsafe { Value::from_bits(bits) })
+                        .collect();
+                    let ops = vec![Op::Constant(0), Op::Concat(1), Op::Return];
+                    let escape = RecordingEscape::with_script(vec![Some(completion(
+                        &Op::Concat(1),
+                        vec![constants[0]],
+                    ))]);
+                    let mut engine = VmExec::new(
+                        &(),
+                        escape,
+                        HarnessVmSealed,
+                        HarnessArith::new(),
+                        HarnessPlain::new(),
+                        VmEraPoll::new(owner, heap_addr, rendezvous),
+                    );
+                    ready_tx.send(()).expect("ready");
+                    recv(&go_rx);
+                    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+                    let done = done_value(&mut engine, outcome);
+                    let done_bits = done.bits();
+                    let car_cdr = (done.cons_car().as_fixnum(), done.cons_cdr().as_fixnum());
+                    let poll = engine.into_poll();
+                    done_tx
+                        .send((
+                            done_bits,
+                            car_cdr,
+                            poll.edges.clone(),
+                            poll.build_calls,
+                            poll.serial_builds,
+                            poll.published_batches.clone(),
+                        ))
+                        .expect("done report");
+                    retire(poll.take_owner());
+                });
+                recv(&ready_rx);
+                request_stop(rendezvous);
+                go_tx.send(()).expect("go");
+                let stopped = retry("stop", || stop_for_test(&era));
+                fixture.roots.clear();
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                assert!(
+                    era_owns(&era, ticket.stopped_proof(), payload_bits),
+                    "the published escape operand must survive real GC"
+                );
+                end_epoch(ticket);
+                let (done_bits, car_cdr, edges, builds, serial_builds, batches) = recv(&done_rx);
+                assert_eq!(done_bits, payload_bits);
+                assert_eq!(car_cdr, (Some(17), Some(19)));
+                assert_eq!(edges, vec![PollEdge::SerialRequest]);
+                assert_eq!(builds, 1);
+                assert_eq!(serial_builds, 1);
+                assert_eq!(batches.len(), 1);
+                assert!(batches[0].contains(&payload_bits));
+            });
+            drop(fixture);
+            finish(era);
+        },
+    );
+}
+
+#[test]
+fn vm_wired_refill_closes_runs_parks_mints_and_re_executes_float_add() {
+    // End-to-end V5 contract (#12095 C2, #12100, #12161, #12221, #12246):
+    // real `EraArith` over `RunAccess::float_into` hits `Exhausted(Float)` on
+    // the empty pool, closes all runs, emits `Step::Refill(Float)` with pc and
+    // operands intact, parks through `poll_region_refill`, the keeper runs
+    // `return_cons_storage` -> `collect` -> `resume_cons_storage` (minting the
+    // float pool with no serial ticket / ring unchanged), and the SAME `Add`
+    // re-executes and allocates 4.0 on the era heap.
+    Context::with_test_collection_era(
+        |context| {
+            era_vm_setup(context, |_ctx| {
+                vec![Value::make_float(1.5), Value::make_float(2.5)]
+            })
+        },
+        |era, fixture| {
+            era.start_cons_storage().expect("start cons storage");
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let heap_addr = fixture.heap;
+            let nil_root = fixture.nil_root.clone();
+            let words = fixture.words.clone();
+            let (word0, word1) = (words[0], words[1]);
+            let (refill_tx, refill_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let constants: Vec<Value> = words
+                        .iter()
+                        .map(|&bits| unsafe { Value::from_bits(bits) })
+                        .collect();
+                    let ops = plain_program(vec![Op::Constant(0), Op::Constant(1), Op::Add]);
+                    let poll = VmEraPoll::new(owner, heap_addr, rendezvous).with_pre_refill_hook(
+                        move || {
+                            refill_tx.send(()).expect("refill entered");
+                        },
+                    );
+                    let arith = EraArith::new(poll.owner_handle(), nil_root);
+                    let mut engine = VmExec::new(
+                        &(),
+                        RecordingEscape::new(),
+                        HarnessVmSealed,
+                        arith,
+                        HarnessPlain::new(),
+                        poll,
+                    );
+                    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+                    let done = done_value(&mut engine, outcome);
+                    let done_bits = done.bits();
+                    let done_float = done.xfloat();
+                    let calls = engine.arith_handler().calls.clone();
+                    let arith_closes = engine.arith_handler().close_calls;
+                    let escapes = engine.escape_handler().requests.len();
+                    let poll = engine.into_poll();
+                    done_tx
+                        .send((
+                            done_bits,
+                            done_float,
+                            calls.len(),
+                            calls[0] == calls[1],
+                            arith_closes,
+                            escapes,
+                            poll.edges.clone(),
+                            poll.refill_builds,
+                            poll.close_calls,
+                            poll.published_batches.clone(),
+                        ))
+                        .expect("done report");
+                    retire(poll.take_owner());
+                });
+                recv(&refill_rx);
+                let stopped = retry("refill stop", || stop_for_test(&era));
+                retry_reg("return cons storage", || era.return_cons_storage(&stopped));
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                retry_reg("resume cons storage", || {
+                    era.resume_cons_storage(ticket.stopped_proof())
+                });
+                end_epoch(ticket);
+                let (
+                    done_bits,
+                    done_float,
+                    call_count,
+                    same_operands,
+                    arith_closes,
+                    escapes,
+                    edges,
+                    refill_builds,
+                    poll_closes,
+                    batches,
+                ) = recv(&done_rx);
+                assert_eq!(done_float, 4.0);
+                assert_eq!(call_count, 2, "refused once, then re-executed");
+                assert!(same_operands, "same kind and operands on retry");
+                assert!(arith_closes >= 2, "close_all_runs ran on refusal and claim");
+                assert!(poll_closes >= 1, "vm_refill enforced close_all_runs");
+                assert_eq!(escapes, 0, "no serial escape");
+                assert_eq!(edges, vec![PollEdge::VmRefill]);
+                assert_eq!(refill_builds, 1);
+                assert_eq!(batches.len(), 1);
+                assert!(batches[0].contains(&word0));
+                assert!(batches[0].contains(&word1));
+                let _ = done_bits;
+            });
+            drop(fixture);
+            finish_with_cons_storage(era);
+        },
+    );
+}
+
+#[test]
+fn vm_wired_float_loop_reuses_settled_tail_across_back_edge_polls() {
+    // Real-era tail-reuse twin (#12161, #12242, #12246): after the initial
+    // empty-pool refill mints one float page, every iteration closes its run
+    // via `close_all_runs` and polls `poll_vm_back_edge`, yet iterations 2..4
+    // claim the settled partial tail inline with ZERO additional refills and
+    // ZERO slow-path back-edge publications.
+    Context::with_test_collection_era(
+        |context| {
+            era_vm_setup(context, |_ctx| {
+                let list = Value::cons(
+                    Value::NIL,
+                    Value::cons(
+                        Value::NIL,
+                        Value::cons(Value::NIL, Value::cons(Value::NIL, Value::NIL)),
+                    ),
+                );
+                vec![Value::make_float(1.5), list]
+            })
+        },
+        |era, fixture| {
+            era.start_cons_storage().expect("start cons storage");
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let heap_addr = fixture.heap;
+            let nil_root = fixture.nil_root.clone();
+            let words = fixture.words.clone();
+            let (refill_tx, refill_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let constants: Vec<Value> = words
+                        .iter()
+                        .map(|&bits| unsafe { Value::from_bits(bits) })
+                        .collect();
+                    let ops = float_loop();
+                    let poll = VmEraPoll::new(owner, heap_addr, rendezvous).with_pre_refill_hook(
+                        move || {
+                            refill_tx.send(()).expect("refill entered");
+                        },
+                    );
+                    let arith = EraArith::new(poll.owner_handle(), nil_root);
+                    let mut engine = VmExec::new(
+                        &(),
+                        RecordingEscape::new(),
+                        HarnessVmSealed,
+                        arith,
+                        HarnessPlain::new(),
+                        poll,
+                    );
+                    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+                    let done = done_value(&mut engine, outcome);
+                    let done_float = done.xfloat();
+                    let call_count = engine.arith_handler().calls.len();
+                    let allocs = engine.arith_handler().float_allocs.clone();
+                    let poll = engine.into_poll();
+                    done_tx
+                        .send((
+                            done_float,
+                            call_count,
+                            allocs,
+                            poll.edges.clone(),
+                            poll.refill_builds,
+                            poll.back_edge_builds,
+                        ))
+                        .expect("done report");
+                    retire(poll.take_owner());
+                });
+                // Exactly one stop services the whole 4-iteration loop.
+                recv(&refill_rx);
+                let stopped = retry("single refill stop", || stop_for_test(&era));
+                retry_reg("return cons storage", || era.return_cons_storage(&stopped));
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                retry_reg("resume cons storage", || {
+                    era.resume_cons_storage(ticket.stopped_proof())
+                });
+                end_epoch(ticket);
+                let (done_float, call_count, allocs, edges, refill_builds, back_edge_builds) =
+                    recv(&done_rx);
+                assert_eq!(done_float, 1.5 + 4.0 * 1.5);
+                assert_eq!(call_count, 5, "one initial refusal + four adds");
+                assert_eq!(allocs, vec![3.0, 4.5, 6.0, 7.5]);
+                assert_eq!(
+                    edges,
+                    vec![
+                        PollEdge::VmRefill,
+                        PollEdge::VmBackEdge,
+                        PollEdge::VmBackEdge,
+                        PollEdge::VmBackEdge,
+                    ],
+                    "one refill for the empty pool, zero further refills across settled tails"
+                );
+                assert_eq!(refill_builds, 1);
+                assert_eq!(back_edge_builds, 0);
+            });
+            drop(fixture);
+            finish_with_cons_storage(era);
+        },
+    );
+}
+
+#[test]
+fn vm_wired_refill_two_requesters_one_stop_both_claim_without_second_stop() {
+    // Peer #12221 row 1 (and #12100 row 3): two parallel owners hit an empty
+    // float pool and record their requests before the stop. ONE stopped
+    // collection + `resume_cons_storage` mints enough pages for both; both
+    // resume, re-execute their `Op::Add`, and finish without a second stop
+    // and with zero serial tickets queued.
+    Context::with_test_collection_era(
+        |context| {
+            era_vm_setup(context, |_ctx| {
+                vec![
+                    Value::make_float(1.5),
+                    Value::make_float(2.5),
+                    Value::make_float(3.5),
+                    Value::make_float(4.0),
+                ]
+            })
+        },
+        |era, fixture| {
+            era.start_cons_storage().expect("start cons storage");
+            let permit_a = era.register(OWNER, 0).expect("register A");
+            let permit_b = era.register(OWNER_B, 0).expect("register B");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let heap_addr = fixture.heap;
+            let nil_a = fixture.nil_root.clone();
+            let nil_b = fixture.nil_root.clone();
+            let words_a = vec![fixture.words[0], fixture.words[1]];
+            let words_b = vec![fixture.words[2], fixture.words[3]];
+            let barrier = Arc::new(Barrier::new(2));
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (done_a_tx, done_a_rx) = mpsc::channel();
+            let (done_b_tx, done_b_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                let spawn_owner =
+                    |permit,
+                     owner_id,
+                     words: Vec<usize>,
+                     nil_root: SharedRoot,
+                     barrier: Arc<Barrier>,
+                     ready_tx: mpsc::Sender<()>,
+                     done_tx: mpsc::Sender<(f64, usize, Vec<PollEdge>)>| {
+                        scope.spawn(move || {
+                            let owner = activate(permit, heap, owner_id);
+                            let mut ctx = Context::new(unit_runtime());
+                            let constants: Vec<Value> = words
+                                .iter()
+                                .map(|&bits| unsafe { Value::from_bits(bits) })
+                                .collect();
+                            let ops =
+                                plain_program(vec![Op::Constant(0), Op::Constant(1), Op::Add]);
+                            let poll = VmEraPoll::new(owner, heap_addr, rendezvous)
+                                .with_pre_refill_hook(move || {
+                                    // Both owners have already recorded their C5
+                                    // request count under the catalog gate before
+                                    // either enters `poll_region_refill`.
+                                    if barrier.wait().is_leader() {
+                                        ready_tx.send(()).expect("both exhausted");
+                                    }
+                                });
+                            let arith = EraArith::new(poll.owner_handle(), nil_root);
+                            let mut engine = VmExec::new(
+                                &(),
+                                RecordingEscape::new(),
+                                HarnessVmSealed,
+                                arith,
+                                HarnessPlain::new(),
+                                poll,
+                            );
+                            let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+                            let done = done_value(&mut engine, outcome);
+                            let calls = engine.arith_handler().calls.len();
+                            let poll = engine.into_poll();
+                            done_tx
+                                .send((done.xfloat(), calls, poll.edges.clone()))
+                                .expect("done");
+                            retire(poll.take_owner());
+                        });
+                    };
+                spawn_owner(
+                    permit_a,
+                    OWNER,
+                    words_a,
+                    nil_a,
+                    Arc::clone(&barrier),
+                    ready_tx.clone(),
+                    done_a_tx,
+                );
+                spawn_owner(
+                    permit_b, OWNER_B, words_b, nil_b, barrier, ready_tx, done_b_tx,
+                );
+                recv(&ready_rx);
+                let stopped = retry("shared refill stop", || stop_for_test(&era));
+                retry_reg("return cons storage", || era.return_cons_storage(&stopped));
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                retry_reg("resume cons storage", || {
+                    era.resume_cons_storage(ticket.stopped_proof())
+                });
+                end_epoch(ticket);
+                let (val_a, calls_a, edges_a) = recv(&done_a_rx);
+                let (val_b, calls_b, edges_b) = recv(&done_b_rx);
+                assert_eq!(val_a, 4.0);
+                assert_eq!(val_b, 7.5);
+                assert_eq!(calls_a, 2);
+                assert_eq!(calls_b, 2);
+                assert_eq!(edges_a, vec![PollEdge::VmRefill], "A took one stop only");
+                assert_eq!(edges_b, vec![PollEdge::VmRefill], "B took one stop only");
+            });
+            drop(fixture);
+            finish_with_cons_storage(era);
+        },
+    );
+}
+
+#[test]
+fn vm_wired_refill_poisoned_era_surfaces_poll_fault_and_never_loops() {
+    // Peer #12221 row 2 & #12246 close-fault contract: when the era is
+    // poisoned before publication, `vm_refill` fails at `close_all_runs` /
+    // `run_access` before anything is published (`build_calls == 0`), and the
+    // driver surfaces `Fault(EngineFault::Poll(Registration(Poisoned)))`
+    // immediately instead of looping `Step::Refill`.
+    Context::with_test_collection_era(
+        |context| {
+            era_vm_setup(context, |_ctx| {
+                vec![Value::make_float(1.5), Value::make_float(2.5)]
+            })
+        },
+        |era, fixture| {
+            era.start_cons_storage().expect("start cons storage");
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let heap_addr = fixture.heap;
+            let nil_root = fixture.nil_root.clone();
+            let words = fixture.words.clone();
+            let (exhausted_tx, exhausted_rx) = mpsc::channel();
+            let (poisoned_tx, poisoned_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let constants: Vec<Value> = words
+                        .iter()
+                        .map(|&bits| unsafe { Value::from_bits(bits) })
+                        .collect();
+                    let ops = plain_program(vec![Op::Constant(0), Op::Constant(1), Op::Add]);
+                    let poll = VmEraPoll::new(owner, heap_addr, rendezvous).with_pre_refill_hook(
+                        move || {
+                            exhausted_tx.send(()).expect("exhausted");
+                            recv(&poisoned_rx);
+                        },
+                    );
+                    let arith = EraArith::new(poll.owner_handle(), nil_root);
+                    let mut engine = VmExec::new(
+                        &(),
+                        RecordingEscape::new(),
+                        HarnessVmSealed,
+                        arith,
+                        HarnessPlain::new(),
+                        poll,
+                    );
+                    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+                    let is_poison_fault = matches!(
+                        outcome,
+                        VmOutcome::Fault(EngineFault::Poll(RendezvousError::Registration(
+                            RegistrationError::Poisoned
+                        )))
+                    );
+                    let calls = engine.arith_handler().calls.len();
+                    let allocs = engine.arith_handler().float_allocs.len();
+                    let is_idle = engine.is_idle();
+                    let poll = engine.into_poll();
+                    let edges = poll.edges.clone();
+                    let builds = poll.build_calls;
+                    // Era is already poisoned; drop the owner without retiring.
+                    drop(poll.take_owner());
+                    done_tx
+                        .send((is_poison_fault, calls, allocs, is_idle, edges, builds))
+                        .expect("done");
+                });
+                recv(&exhausted_rx);
+                // Dropping an unretired active owner poisons the era's registry.
+                let poison_permit = era.register(OWNER_B, 0).expect("register poisoner");
+                let poisoner = activate(poison_permit, heap, OWNER_B);
+                drop(poisoner);
+                assert!(era.registry_poisoned_for_test());
+                poisoned_tx.send(()).expect("poisoned");
+                let (is_poison_fault, calls, allocs, is_idle, edges, builds) = recv(&done_rx);
+                assert!(
+                    is_poison_fault,
+                    "poisoned era must surface Fault(Poll(Registration(Poisoned)))"
+                );
+                assert_eq!(calls, 1, "must not loop Step::Refill on poison");
+                assert_eq!(allocs, 0);
+                assert!(is_idle, "unwound to Idle");
+                assert_eq!(edges, vec![PollEdge::VmRefill]);
+                assert_eq!(
+                    builds, 0,
+                    "close/registration failure faults before publish"
+                );
+            });
+            assert!(era.registry_poisoned_for_test());
+            drop(fixture);
+            drop(era);
+        },
+    );
 }

@@ -40,12 +40,12 @@ pub(crate) fn poll_interp_back_edge(
     owner.poll(roots)
 }
 
+/// Called by the E4 VM executor (V5) at every taken backward branch. The
+/// executor is harness-only until E6-P wires it, so the compiler still sees
+/// this as dead; the attribute retires with that production caller.
 #[cfg_attr(
     not(test),
-    expect(
-        dead_code,
-        reason = "waiting for the parallel bytecode VM executor (E4 §5 VM roster)"
-    )
+    expect(dead_code, reason = "the harness-only E4 VM executor calls this")
 )]
 pub(crate) fn poll_vm_back_edge(
     owner: &mut Mutator<'_>,
@@ -54,12 +54,13 @@ pub(crate) fn poll_vm_back_edge(
     owner.poll(roots)
 }
 
+/// Called by the E4 VM executor (V5) before `Call`, `Apply`, `CallBuiltin`
+/// and `CallBuiltinSym` (GNU `Bcall`'s `maybe_quit`, bytecode.c:781). The
+/// executor is harness-only until E6-P wires it, so the compiler still
+/// sees this as dead; the attribute retires with that production caller.
 #[cfg_attr(
     not(test),
-    expect(
-        dead_code,
-        reason = "waiting for the parallel bytecode VM executor (E4 §5 VM roster)"
-    )
+    expect(dead_code, reason = "the harness-only E4 VM executor calls this")
 )]
 pub(crate) fn poll_vm_call(
     owner: &mut Mutator<'_>,

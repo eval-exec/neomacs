@@ -185,6 +185,24 @@ pub(crate) trait VmPoll {
     fn vm_call(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError>;
 
     fn serial_request(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError>;
+
+    /// The driver's refill at an instruction boundary (V5; peer #12100,
+    /// #12241, #12246): the publish contract is `RunAccess::close_all_runs`
+    /// unconditionally -> publish (`poll_region_refill`) -> the stopped
+    /// grant (`resume_cons_storage` mints the class pool on demand,
+    /// gcpace's N2) -> restore the generation -> reacquire. A close failure
+    /// is registration-invariant only and faults before anything is
+    /// published. No serial ticket, no Baton. Production cons grants stay
+    /// gated on L6.5 routing serial GC through the stop session (#13084,
+    /// #13088). One call per [`Step::Refill`]; `Ok` means the same pc may
+    /// re-dispatch, and the caller does not assume progress - an `Err` is
+    /// the poll fault and ends the run. Publication rule as on every poll:
+    /// nothing of the owner's stays borrowed across it.
+    fn vm_refill(
+        &mut self,
+        arena: &FrameArena,
+        class: NumericClass,
+    ) -> Result<PollOutcome, RendezvousError>;
 }
 
 /// The sealed cons authorities this slice runs through the serial core:
@@ -215,6 +233,11 @@ pub(crate) trait VmSealed {
     ) -> CoreOutcome;
 }
 
+/// The numeric class an allocation was refused for (V5; E4 item4 C2).
+/// Re-exported from `neovm_value::tagged::gc` so the VM and `RunAccess`
+/// share one canonical type.
+pub(crate) use neovm_value::tagged::gc::NumericClass;
+
 /// Why the owner-local arithmetic port produced no value.
 #[derive(Debug)]
 pub(crate) enum ArithRefusal {
@@ -224,6 +247,13 @@ pub(crate) enum ArithRefusal {
     /// The builtin's `Flow`: a wrong-type operand, an integer zero divisor
     /// (§2.4).
     Flow(Flow),
+    /// The owner's reserve for `class` is exhausted (V5). Produced only
+    /// after every operand check - a marker or a wrong type is decided
+    /// first - and before anything is touched: the step leaves the op
+    /// un-executed at its instruction boundary, and the driver refills
+    /// (E4 item4 C2, peer #12095/#12100; the pool is gcpace's N2). The
+    /// port never polls or publishes itself; a refusal is not a fault.
+    Exhausted(NumericClass),
 }
 
 /// The owner-local arithmetic port (E4-DESIGN R6; the approved `ArithOps`
@@ -429,6 +459,12 @@ pub(crate) enum VmOutcome {
 
 enum Step {
     Continue,
+    /// The op is un-executed at its instruction boundary, pc and operands
+    /// unchanged, because the port's reserve for `class` is exhausted
+    /// (V5). The driver refills through [`VmPoll::vm_refill`] - publish,
+    /// the stopped grant, restore, reacquire - and the same pc
+    /// re-dispatches.
+    Refill(NumericClass),
     Stop(VmOutcome),
 }
 
@@ -536,6 +572,12 @@ where
         &self.poll
     }
 
+    /// Release the poll capability. An owner-backed impl returns its
+    /// [`Mutator`](neovm_value::tagged::gc::Mutator) so the caller retires it.
+    pub(crate) fn into_poll(self) -> P {
+        self.poll
+    }
+
     pub(crate) fn arena(&self) -> &FrameArena {
         &self.arena
     }
@@ -605,6 +647,16 @@ where
         loop {
             match self.step(ctx, program) {
                 Step::Continue => {}
+                Step::Refill(class) => {
+                    // The poll is the V5 publish/stop/restore body; it must
+                    // not be assumed to make progress (a poisoned or
+                    // empty-handed resume refuses again, and that refusal
+                    // is the poll fault here, never a silent loop: the
+                    // production poll blocks until granted or errors).
+                    if let Err(error) = self.poll.vm_refill(&self.arena, class) {
+                        return self.settle(VmOutcome::Fault(EngineFault::Poll(error)));
+                    }
+                }
                 Step::Stop(outcome) => return self.settle(outcome),
             }
         }
@@ -1018,6 +1070,9 @@ where
         let args = &self.arena.operand_segment(operands)[len - consumed..];
         match self.arith.arith(kind, args) {
             Ok(value) => Self::stop(self.store(frame, branch_pc, len - consumed, &[value])),
+            // Nothing was consumed: `args` borrows the segment and the
+            // store never ran, so pc, operands and frame are as they were.
+            Err(ArithRefusal::Exhausted(class)) => Step::Refill(class),
             Err(ArithRefusal::Flow(flow)) => Step::Stop(VmOutcome::Signaled(flow)),
             Err(ArithRefusal::MarkerInvolved) => self.escape(
                 op,
