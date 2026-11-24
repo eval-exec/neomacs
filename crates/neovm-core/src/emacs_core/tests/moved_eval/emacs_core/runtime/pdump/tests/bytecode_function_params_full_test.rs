@@ -50,6 +50,7 @@ fn p6_pdump_round_trip_preserves_mapped_and_descriptor_parameter_modes() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("parameter-modes.pdump");
     dump_to_file(&context, &path).unwrap();
+    drop(context);
     let mut loaded = load_from_dump(&path).unwrap();
     let result = loaded
         .eval_str(

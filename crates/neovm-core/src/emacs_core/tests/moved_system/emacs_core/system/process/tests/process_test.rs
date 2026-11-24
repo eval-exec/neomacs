@@ -15584,6 +15584,7 @@ fn signal_process_reads_an_integer_as_an_os_pid_like_gnu() {
             }
         }
     }
+    drop(_ctx);
 
     let sh = find_bin("sh");
     let result = eval_one(&format!(

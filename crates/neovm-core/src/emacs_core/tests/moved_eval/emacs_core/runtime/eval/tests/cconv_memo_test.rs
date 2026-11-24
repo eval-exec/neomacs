@@ -971,6 +971,7 @@ fn lexical_binding_of_the_current_buffer_is_part_of_the_key() {
     let mut off = startup(CconvMemoMode::Off);
     eval_ok(&mut off, form);
     let expected = printed(&mut off, probe);
+    drop(off);
     let mut on = startup(CconvMemoMode::On);
     eval_ok(&mut on, form);
     assert_eq!(printed(&mut on, probe), expected);
@@ -1062,6 +1063,7 @@ fn creation_near_the_depth_limit_matches_the_lisp() {
         expected.contains("ok") && expected.contains("excessive-lisp-nesting"),
         "{expected}"
     );
+    drop(off);
     let mut on = startup(CconvMemoMode::On);
     eval_ok(&mut on, setup);
     eval_ok(&mut on, "(cm-deep 0)");
@@ -1278,6 +1280,7 @@ fn fast_untrimmed_path_builds_what_the_lisp_builds() {
         "{}",
         fast.cconv_memo_report()
     );
+    drop(fast);
     let mut verify = startup_fast(CconvMemoMode::Verify);
     assert_eq!(untrimmed_transcript(&mut verify), expected);
     assert!(
@@ -1375,11 +1378,13 @@ fn verify_soak_on_gnu_sources() {
         "{report}"
     );
     tracing::info!("verify soak: {report}");
+    drop(verify);
 
     let mut off = startup(CconvMemoMode::Off);
     eval_ok(&mut off, load);
     let expected = printed(&mut off, work);
     assert_eq!(verified, expected);
+    drop(off);
     let mut on = startup_fast(CconvMemoMode::On);
     eval_ok(&mut on, load);
     assert_eq!(printed(&mut on, work), expected);

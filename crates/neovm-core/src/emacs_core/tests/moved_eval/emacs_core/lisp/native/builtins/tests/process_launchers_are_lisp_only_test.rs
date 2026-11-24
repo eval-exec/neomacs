@@ -297,6 +297,7 @@ fn no_rust_subr_is_registered_for_the_four_names() {
         );
     }
     // And the booted runtime still answers through them.
+    drop(_eval);
     assert_eq!(runtime_startup_eval_one("(fboundp 'start-process)"), "OK t",);
     let _ = runtime_startup_context();
 }

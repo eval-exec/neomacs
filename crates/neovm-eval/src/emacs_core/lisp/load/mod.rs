@@ -7140,12 +7140,11 @@ pub fn bootstrap_evaluator_cached_at_path(
                 bootstrap_time,
             );
             let reload_start = std::time::Instant::now();
-            // A reload that fails after installing its own heap has dropped
-            // that heap and replaced the thread's charset/fontset registries
-            // and terminal, so the in-memory evaluator must be re-activated
-            // before it is used.
-            let live_runtime = pdump::snapshot_active_runtime(&mut eval);
-            match pdump::load_from_dump_with_proof(dump_path, proof) {
+            // Park `eval` before loading so the heap slot is empty (rt A3).
+            // On Ok, drop the parked `eval` and return the reloaded image.
+            // On Err, the failed loader's `TaggedHeap::drop` empties the slot
+            // and `resume()` reactivates `eval`.
+            match reload_written_bootstrap_dump(eval, dump_path, proof) {
                 Ok(mut loaded) => {
                     finalize_or_log(
                         &mut loaded,
@@ -7159,11 +7158,11 @@ pub fn bootstrap_evaluator_cached_at_path(
                     );
                     return Ok(loaded);
                 }
-                Err(e) => {
+                Err((resumed_eval, e)) => {
                     tracing::warn!(
                         "pdump: failed to reload freshly written bootstrap image ({e}), using in-memory bootstrap"
                     );
-                    pdump::restore_active_runtime(&mut eval, &live_runtime);
+                    eval = resumed_eval;
                 }
             }
         }
@@ -7178,6 +7177,34 @@ pub fn bootstrap_evaluator_cached_at_path(
         "pdump in-memory fallback finalize failed",
     )?;
     Ok(eval)
+}
+
+/// Park `eval`, load the freshly written dump at `dump_path`, and either drop
+/// the parked `eval` (on `Ok`) or resume it on the empty slot (on `Err`).
+pub(crate) fn reload_written_bootstrap_dump(
+    eval: crate::emacs_core::eval::Context,
+    dump_path: &Path,
+    proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
+) -> Result<
+    crate::emacs_core::eval::Context,
+    (
+        crate::emacs_core::eval::Context,
+        crate::emacs_core::pdump::DumpError,
+    ),
+> {
+    let parked_eval = eval.park();
+    match crate::emacs_core::pdump::load_from_dump_with_proof(dump_path, proof) {
+        Ok(loaded) => {
+            drop(parked_eval);
+            Ok(loaded)
+        }
+        Err(err) => {
+            let eval = parked_eval
+                .resume()
+                .expect("failed pdump load leaves the heap slot empty");
+            Err((eval, err))
+        }
+    }
 }
 
 /// Expand `~/` prefix to the HOME directory, matching GNU Emacs's

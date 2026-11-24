@@ -51,6 +51,7 @@ fn test_pdump_bytecode_round_trips_image_resident() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("bcarena.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let mut restored = load_from_dump(&dump_path).expect("load should succeed");
 
     let post = restored
@@ -115,6 +116,7 @@ fn test_pdump_rejects_stub_layout_witness_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("witness-mismatch.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     // The witness is the LAST u64 of the header; corrupting it models an
     // image dumped by a binary whose ByteCodeFunction layout differs. The
@@ -191,6 +193,7 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("lazy.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
     let func = loaded

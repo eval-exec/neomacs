@@ -1347,6 +1347,7 @@ fn current_column_long_line_approximation_gates() {
         .as_int()
         .expect("fixnum");
     assert_eq!(below, 40_007, "below the threshold GNU scans the line");
+    drop(ev);
 
     // Distance 150000 > threshold, but the variable is nil: exact.
     let (mut ev, _buffer) = long_line_with_tab(200_000, 150_001);
@@ -1356,6 +1357,7 @@ fn current_column_long_line_approximation_gates() {
         .as_int()
         .expect("fixnum");
     assert_eq!(nil_threshold, 150_007, "nil disables the approximation");
+    drop(ev);
 
     // Flag clear (line below the threshold): exact even past the distance.
     let mut ev = crate::test_utils::runtime_startup_context();
@@ -1491,6 +1493,7 @@ fn move_to_column_long_truncated_fast_path_gates() {
         wrapped_point, 149_994,
         "untruncated lines take the exact walk"
     );
+    drop(ev);
 
     // Truncated but the buffer flag is clear.
     let (mut ev, _buffer) = long_line_scan_buffer(200_000, true, false);
@@ -1503,6 +1506,7 @@ fn move_to_column_long_truncated_fast_path_gates() {
         flag_clear_point, 149_994,
         "no shortcut without the long-line flag"
     );
+    drop(ev);
 
     // Truncated with the flag, goal at or below large-hscroll-threshold.
     let (mut ev, _buffer) = long_line_scan_buffer(200_000, true, true);
@@ -1559,6 +1563,7 @@ fn current_column_1_long_truncated_fast_path_like_gnu() {
         "current_column_1 takes the one-column-per-character shortcut"
     );
     assert_eq!(work, 0, "the shortcut must not decode the line");
+    drop(ev);
 
     // Control: a buffer that never had an interval tree -> current_column's
     // simple backward scan, which counts the TAB.

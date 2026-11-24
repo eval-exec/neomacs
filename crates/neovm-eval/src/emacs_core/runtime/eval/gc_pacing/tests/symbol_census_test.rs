@@ -62,8 +62,10 @@ fn gc_rows_symbols_exclude_image_births_after_pdump_reconstruction() {
         neovm_value::intern::make_uninterned_symbol("gc-row-image-symbol");
     }
     collect_symbol_row(&mut source);
-    let mut restored = crate::emacs_core::pdump::clone_active_evaluator(&mut source)
+    let restored = crate::emacs_core::pdump::clone_active_evaluator(&mut source)
         .expect("symbol-row snapshot reconstruction");
+    drop(source);
+    let mut restored = restored.resume().expect("resume restored evaluator");
     assert_eq!(collect_symbol_row(&mut restored), SEED_SYMBOL_COUNT);
     let before = collect_symbol_row(&mut restored);
     for _ in 0..3 {

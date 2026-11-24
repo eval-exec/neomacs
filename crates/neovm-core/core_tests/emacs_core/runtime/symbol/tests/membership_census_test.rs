@@ -35,9 +35,11 @@ fn pdump_restored_context_has_no_lisp_visible_non_members() {
     crate::test_utils::init_test_tracing();
     let template = crate::emacs_core::load_boot::create_bootstrap_evaluator_cached()
         .expect("bootstrap template should succeed");
+    let proof = template.hooks_installed();
     let snapshot = crate::emacs_core::pdump::snapshot_evaluator(&template);
+    drop(template);
     let restored =
-        crate::emacs_core::pdump::restore_snapshot(&snapshot, template.hooks_installed())
+        crate::emacs_core::pdump::restore_snapshot(&snapshot, proof)
             .expect("pdump restore should succeed");
     assert_clean(&restored, "pdump-restored Context");
 }

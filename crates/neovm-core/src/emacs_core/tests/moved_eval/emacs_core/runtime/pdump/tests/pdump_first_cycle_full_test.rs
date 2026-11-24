@@ -27,6 +27,7 @@ fn the_stop_the_world_first_cycle_traces_each_image_veclike_once() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("premark.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
     let vector = loaded
         .obarray()

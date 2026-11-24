@@ -183,3 +183,206 @@ fn eval_value_door(ctx: &mut Context) {
 fn eval_str_each_door(ctx: &mut Context) {
     let _ = ctx.eval_str_each("1");
 }
+
+#[test]
+fn pdump_restore_snapshot_and_load_refuse_over_live_foreign_heap() {
+    let mut active = Context::new(crate::test_utils::unit_runtime());
+    active
+        .eval_str("(setq pdump-refusal-token 99)")
+        .expect("bind on active context");
+    let active_id = active.tagged_heap().tagged_heap_identity();
+    let proof = active.hooks_installed();
+    let snapshot = crate::emacs_core::pdump::snapshot_active_evaluator(&mut active);
+
+    let refused = catch_unwind(AssertUnwindSafe(|| {
+        let _ = crate::emacs_core::pdump::restore_snapshot(&snapshot, proof);
+    }));
+    let text = panic_text(refused.expect_err("restore_snapshot must refuse over a live heap"));
+    assert!(
+        text.contains("dormant Context"),
+        "restore_snapshot refusal must name dormant Context, got {text}"
+    );
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(active_id),
+        "refused restore_snapshot must leave the active heap installed"
+    );
+
+    let dump_path = std::env::temp_dir().join(format!(
+        "neomacs-pdump-refusal-{}-{}.pdmp",
+        std::process::id(),
+        active_id
+    ));
+    crate::emacs_core::pdump::dump_to_file(&active, &dump_path).expect("write test dump");
+    let refused_load = catch_unwind(AssertUnwindSafe(|| {
+        let _ = crate::emacs_core::pdump::load_from_dump_with_proof(&dump_path, proof);
+    }));
+    let _ = std::fs::remove_file(&dump_path);
+    let load_text = panic_text(
+        refused_load.expect_err("load_from_dump_with_proof must refuse over a live heap"),
+    );
+    assert!(
+        load_text.contains("dormant Context"),
+        "load_from_dump_with_proof refusal must name dormant Context, got {load_text}"
+    );
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(active_id),
+        "refused load_from_dump_with_proof must leave the active heap installed"
+    );
+    assert_eq!(
+        active
+            .eval_str("pdump-refusal-token")
+            .expect("active context stays usable after refused pdump loads"),
+        Value::fixnum(99)
+    );
+}
+
+#[test]
+fn pdump_clone_keeps_source_active_and_not_dormant() {
+    let mut source = Context::new(crate::test_utils::unit_runtime());
+    source
+        .eval_str("(setq pdump-clone-source-token 11)")
+        .expect("bind on source");
+    let source_id = source.tagged_heap().tagged_heap_identity();
+
+    // 1. clone_active_evaluator returns a ParkedContext and keeps source active.
+    let cloned = crate::emacs_core::pdump::clone_active_evaluator(&mut source)
+        .expect("clone_active_evaluator should succeed");
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(source_id),
+        "clone_active_evaluator must leave source installed, not dormant"
+    );
+    let cons = source
+        .apply(
+            Value::symbol("cons"),
+            vec![Value::fixnum(1), Value::fixnum(2)],
+        )
+        .expect("source.apply must allocate on source's own heap");
+    assert!(
+        source.tagged_heap().owns_heap_value_for_test(cons),
+        "source.apply after clone must allocate in source's heap (#12898 E1)"
+    );
+
+    // 2. Resuming the clone refuses while source is still installed and
+    // preserves the ParkedContext inside the error for retry.
+    let err = match cloned.resume() {
+        Err(error) => error,
+        Ok(_) => panic!("resume must refuse while source is installed"),
+    };
+    assert_eq!(format!("{err:?}"), "HeapInstalled");
+    assert_eq!(current_tagged_heap_identity(), Some(source_id));
+    let cloned = err.into_parked();
+
+    // 3. clone_evaluator(&Context) also returns a ParkedContext and keeps
+    // source active.
+    let cloned_imm = crate::emacs_core::pdump::clone_evaluator(&source)
+        .expect("clone_evaluator should succeed");
+    assert_eq!(current_tagged_heap_identity(), Some(source_id));
+    assert_eq!(
+        source
+            .eval_str("pdump-clone-source-token")
+            .expect("source stays usable after clone_evaluator"),
+        Value::fixnum(11)
+    );
+
+    // 4. Parking source lets the clones resume one at a time.
+    let parked_source = source.park_for_test();
+    let mut cloned = cloned.resume().expect("resume after parking source");
+    assert_ne!(current_tagged_heap_identity(), Some(source_id));
+    assert_eq!(
+        cloned
+            .eval_str("pdump-clone-source-token")
+            .expect("resumed clone evaluates"),
+        Value::fixnum(11)
+    );
+    drop(cloned);
+
+    let mut cloned_imm = cloned_imm.resume().expect("resume immutable clone");
+    assert_eq!(
+        cloned_imm
+            .eval_str("pdump-clone-source-token")
+            .expect("resumed immutable clone evaluates"),
+        Value::fixnum(11)
+    );
+    drop(cloned_imm);
+
+    let mut source = parked_source.resume_for_test().expect("resume source");
+    assert_eq!(current_tagged_heap_identity(), Some(source_id));
+    assert_eq!(
+        source
+            .eval_str("pdump-clone-source-token")
+            .expect("source evaluates after resume"),
+        Value::fixnum(11)
+    );
+}
+
+#[test]
+fn pdump_clone_evaluator_refuses_under_foreign_heap() {
+    let source = Context::new(crate::test_utils::unit_runtime());
+    let foreign =
+        neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
+    let foreign_id = foreign.tagged_heap_identity();
+    // SAFETY: `foreign` and `source` both outlive `nest`.
+    let nest = unsafe { NestedTaggedHeapInstall::install_bare(foreign.root()) };
+    let refused = catch_unwind(AssertUnwindSafe(|| {
+        let _ = crate::emacs_core::pdump::clone_evaluator(&source);
+    }));
+    let text = panic_text(refused.expect_err("clone_evaluator must refuse under a foreign heap"));
+    assert!(
+        text.contains("dormant Context"),
+        "clone_evaluator refusal must name dormant Context, got {text}"
+    );
+    assert_eq!(current_tagged_heap_identity(), Some(foreign_id));
+    drop(nest);
+}
+
+#[test]
+fn pdump_reload_written_bootstrap_dump_round_trips_ok_and_err() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let good_path = dir.path().join("good.pdmp");
+    let bad_path = dir.path().join("bad.pdmp");
+    std::fs::write(&bad_path, b"not a valid pdump image").expect("write bad dump");
+
+    // Err path: failed reload drops its partial heap and resumes the original eval.
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.eval_str("(setq reload-roundtrip-token 77)")
+        .expect("bind on original eval");
+    let orig_id = eval.tagged_heap().tagged_heap_identity();
+    let proof = eval.hooks_installed();
+    let (mut eval, _err) =
+        match crate::emacs_core::load::reload_written_bootstrap_dump(eval, &bad_path, proof) {
+            Err(pair) => pair,
+            Ok(_) => panic!("corrupt dump must fail reload"),
+        };
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(orig_id),
+        "failed reload must resume the original Context"
+    );
+    assert_eq!(
+        eval.eval_str("reload-roundtrip-token")
+            .expect("resumed eval stays usable"),
+        Value::fixnum(77)
+    );
+
+    // Ok path: valid reload parks eval, loads the new Context, and drops parked eval.
+    crate::emacs_core::pdump::dump_to_file(&eval, &good_path).expect("dump valid image");
+    let mut loaded =
+        match crate::emacs_core::load::reload_written_bootstrap_dump(eval, &good_path, proof) {
+            Ok(loaded) => loaded,
+            Err((_, err)) => panic!("valid dump must reload cleanly: {err}"),
+        };
+    assert_ne!(
+        current_tagged_heap_identity(),
+        Some(orig_id),
+        "successful reload installs the reloaded heap"
+    );
+    assert_eq!(
+        loaded
+            .eval_str("reload-roundtrip-token")
+            .expect("reloaded eval preserves binding"),
+        Value::fixnum(77)
+    );
+}

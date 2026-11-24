@@ -283,8 +283,10 @@ fn lazy_prewarm_marks_pdump_stubs_without_materializing_them() {
     let dump_path = dir.path().join("lazy-stubs.pdump");
     crate::emacs_core::pdump::dump_to_file(&ctx, &dump_path).expect("dump");
     crate::emacs_core::eval::restore_scratch_gc_roots(scratch);
+    let proof = ctx.hooks_installed();
+    drop(ctx);
     let mut loaded =
-        crate::emacs_core::pdump::load_from_dump_with_proof(&dump_path, ctx.hooks_installed())
+        crate::emacs_core::pdump::load_from_dump_with_proof(&dump_path, proof)
             .expect("load");
 
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");

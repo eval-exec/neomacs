@@ -7872,8 +7872,8 @@ mod gc_tls_ownership_tests;
 #[path = "tests/dormant_context_eval_test.rs"]
 mod dormant_context_eval_tests;
 
-#[cfg(any(test, feature = "test-support"))]
 pub mod parked_context;
+pub use parked_context::{ParkResumeError, ParkedContext};
 
 // The debug leaf guard: GC safe points, Lisp entries and binding pushes
 // refuse to run under a leaf builtin, and leaves leave state untouched.

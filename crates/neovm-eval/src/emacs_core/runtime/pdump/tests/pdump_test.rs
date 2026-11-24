@@ -86,10 +86,12 @@ fn dumped_gnu_bytecode_does_not_duplicate_derived_instructions() {
 fn restore_snapshot_rejects_non_keymap_selected_global_map() {
     crate::test_utils::init_test_tracing();
     let template = Context::new(crate::test_utils::unit_runtime());
+    let proof = template.hooks_installed();
     let mut snapshot = snapshot_evaluator(&template);
+    drop(template);
     snapshot.current_global_map = types::DumpValue::Int(42);
 
-    let result = restore_snapshot(&snapshot, template.hooks_installed());
+    let result = restore_snapshot(&snapshot, proof);
     match result {
         Err(DumpError::DeserializationError(message)) => {
             assert!(
@@ -113,6 +115,8 @@ fn test_clone_active_evaluator_preserves_in_progress_require_and_load_state() {
         ));
 
     let cloned = clone_active_evaluator(&mut eval).expect("clone should succeed");
+    drop(eval);
+    let cloned = cloned.resume().expect("resume cloned evaluator");
 
     assert_eq!(cloned.require_stack, vec![intern("cl-macs")]);
     assert_eq!(
@@ -238,8 +242,9 @@ fn pdump_round_trip_preserves_last_window_start_lisp_position() {
         .expect("dumped current buffer");
     assert_eq!(dumped.last_window_start, Some(7));
 
-    let loaded =
-        restore_snapshot(&dump, eval.hooks_installed()).expect("restore snapshot should succeed");
+    let proof = eval.hooks_installed();
+    drop(eval);
+    let loaded = restore_snapshot(&dump, proof).expect("restore snapshot should succeed");
     let restored = loaded
         .edit
         .buffers
@@ -340,9 +345,11 @@ fn baked_stub_template_is_deterministic_and_reads_back_as_stub() {
 fn test_restore_snapshot_preserves_core_subr_callable_surface() {
     crate::test_utils::init_test_tracing();
     let template = Context::new(crate::test_utils::unit_runtime());
+    let proof = template.hooks_installed();
     let snapshot = snapshot_evaluator(&template);
+    drop(template);
 
-    let mut restored = restore_snapshot(&snapshot, template.hooks_installed())
+    let mut restored = restore_snapshot(&snapshot, proof)
         .expect("restored snapshot should succeed");
     let forms = crate::emacs_core::value_reader::read_all(
         r#"(list (funcall 'cons 1 2)
@@ -372,9 +379,11 @@ fn test_restore_snapshot_preserves_lone_uninterned_symbol_identity() {
     template
         .obarray
         .set_symbol_value("compat-pdump-uninterned-holder", Value::from_sym_id(solo));
+    let proof = template.hooks_installed();
     let snapshot = snapshot_evaluator(&template);
+    drop(template);
 
-    let restored = restore_snapshot(&snapshot, template.hooks_installed())
+    let restored = restore_snapshot(&snapshot, proof)
         .expect("restored snapshot should succeed");
     let held = restored
         .obarray
@@ -409,9 +418,11 @@ fn test_restore_snapshot_preserves_raw_unibyte_symbol_name_storage() {
         Value::from_sym_id(canonical),
     );
     template.obarray.ensure_interned_global_id(canonical);
+    let proof = template.hooks_installed();
     let snapshot = snapshot_evaluator(&template);
+    drop(template);
 
-    let restored = restore_snapshot(&snapshot, template.hooks_installed())
+    let restored = restore_snapshot(&snapshot, proof)
         .expect("restored snapshot should succeed");
 
     for (holder, should_be_canonical) in [
@@ -443,9 +454,11 @@ fn test_restore_snapshot_preserves_subr_name_identity_via_name_atoms() {
     template
         .obarray
         .set_symbol_value("compat-pdump-subr-holder", subr);
+    let proof = template.hooks_installed();
     let snapshot = snapshot_evaluator(&template);
+    drop(template);
 
-    let restored = restore_snapshot(&snapshot, template.hooks_installed())
+    let restored = restore_snapshot(&snapshot, proof)
         .expect("restored snapshot should succeed");
     let held = restored
         .obarray
@@ -474,9 +487,11 @@ fn test_restore_snapshot_does_not_report_file_based_pdump_session() {
     template
         .eval_sub(setup[0])
         .expect("setup hook should evaluate");
+    let proof = template.hooks_installed();
     let snapshot = snapshot_evaluator(&template);
+    drop(template);
 
-    let mut restored = restore_snapshot(&snapshot, template.hooks_installed())
+    let mut restored = restore_snapshot(&snapshot, proof)
         .expect("restored snapshot should succeed");
     assert_eq!(
         restored
@@ -515,7 +530,9 @@ fn test_pdump_rejects_corrupt_runtime_managers_section() {
 fn test_restore_snapshot_rejects_duplicate_obarray_symbol_slots() {
     crate::test_utils::init_test_tracing();
     let template = Context::new(crate::test_utils::unit_runtime());
+    let proof = template.hooks_installed();
     let mut snapshot = snapshot_evaluator(&template);
+    drop(template);
     let duplicate = snapshot
         .obarray
         .symbols
@@ -524,7 +541,7 @@ fn test_restore_snapshot_rejects_duplicate_obarray_symbol_slots() {
         .expect("snapshot should contain at least one symbol");
     snapshot.obarray.symbols.push(duplicate);
 
-    let result = restore_snapshot(&snapshot, template.hooks_installed());
+    let result = restore_snapshot(&snapshot, proof);
     match result {
         Err(DumpError::DeserializationError(message)) => {
             assert!(
@@ -545,14 +562,16 @@ fn test_restore_snapshot_rejects_duplicate_obarray_symbol_slots() {
 fn test_restore_snapshot_rejects_global_member_without_symbol_entry() {
     crate::test_utils::init_test_tracing();
     let template = Context::new(crate::test_utils::unit_runtime());
+    let proof = template.hooks_installed();
     let dangling = neovm_value::intern::make_uninterned_symbol("compat-pdump-missing-global");
     let mut snapshot = snapshot_evaluator(&template);
+    drop(template);
     snapshot
         .obarray
         .global_members
         .push(DumpSymId(dangling.to_raw()));
 
-    let result = restore_snapshot(&snapshot, template.hooks_installed());
+    let result = restore_snapshot(&snapshot, proof);
     match result {
         Err(DumpError::DeserializationError(message)) => {
             assert!(
@@ -580,6 +599,7 @@ fn test_failed_load_after_symbol_table_leaves_interner_usable() {
     let dir = tempfile::tempdir().unwrap();
     let good = dir.path().join("good.pdump");
     dump_to_file(&eval, &good).expect("dump should succeed");
+    drop(eval);
 
     // Corrupt the object-starts payload ON DISK (that section parses right
     // after the symbol table, so the failure lands exactly in the danger

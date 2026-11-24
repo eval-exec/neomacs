@@ -16258,6 +16258,7 @@ fn set_buffer_multibyte_records_gnu_style_undo_entry() {
             Value::T,
         ]
     );
+    drop(eval);
 
     // Replaying it is lisp/simple.el's `primitive-undo' -- GNU has no C
     // version and neither do we -- so the round trip is asked of the loaded

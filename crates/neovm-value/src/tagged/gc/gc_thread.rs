@@ -1977,6 +1977,46 @@ pub fn installed_slot_is_armed_test_fallback() -> bool {
     }
 }
 
+/// Cold refusal when a caller tries to install a live heap over another live
+/// heap on the same thread (rt A3).
+///
+/// No Lisp allocation: static string only.
+#[cold]
+#[inline(never)]
+fn refuse_foreign_heap_install() -> ! {
+    panic!(
+        "dormant Context: a second Context cannot be constructed while another heap is installed on this thread"
+    );
+}
+
+/// Refuse with a cold panic if a real (non-test-fallback) heap is already
+/// installed on this thread.
+#[doc(hidden)]
+pub fn refuse_if_live_heap_installed() {
+    if tagged_heap_is_installed() && !installed_slot_is_armed_test_fallback() {
+        refuse_foreign_heap_install();
+    }
+}
+
+/// Install `root` if the slot is empty, already names `root`, or holds the
+/// armed test-fallback heap; otherwise refuse with a cold panic.
+///
+/// # Safety
+///
+/// Same contract as [`set_tagged_heap_root`].
+#[doc(hidden)]
+pub unsafe fn install_tagged_heap_root_refusing_foreign(root: std::ptr::NonNull<TaggedHeap>) {
+    let current = TAGGED_HEAP.with(|slot| slot.get());
+    if !current.is_null()
+        && current != root.as_ptr()
+        && !installed_slot_is_armed_test_fallback()
+    {
+        refuse_foreign_heap_install();
+    }
+    // SAFETY: caller upholds `set_tagged_heap_root`'s contract.
+    unsafe { set_tagged_heap_root(root) };
+}
+
 /// Save the installed heap, install `root`, and restore the saved slot on drop.
 ///
 /// This is the only overwrite of a live slot besides `set_tagged_heap_root`
@@ -1988,6 +2028,7 @@ pub fn installed_slot_is_armed_test_fallback() -> bool {
 /// Drop restores only when the slot still names the heap this scope installed.
 /// A later installer keeps its slot.
 #[cfg(any(test, feature = "test-support"))]
+#[must_use]
 pub struct NestedTaggedHeapInstall<'a> {
     previous: Option<std::ptr::NonNull<TaggedHeap>>,
     installed: std::ptr::NonNull<TaggedHeap>,
@@ -2020,10 +2061,11 @@ impl<'a> NestedTaggedHeapInstall<'a> {
     /// # Safety
     ///
     /// `root` must be a live [`super::AliasableBox`] root owned on this thread
-    /// until [`Self::end`] or [`Drop::drop`] completes. No reference into
-    /// `root` may be live during this call (mirror refresh forms `&mut`). Any
-    /// displaced previous root must remain live until this scope ends or drops,
-    /// with no reference into it live during restoration.
+    /// until [`Self::end`] or [`Drop::drop`] completes. Forgetting the scope
+    /// (`std::mem::forget`) extends that liveness obligation indefinitely. No
+    /// reference into `root` may be live during this call (mirror refresh
+    /// forms `&mut`). Any displaced previous root must remain live until this
+    /// scope ends or drops, with no reference into it live during restoration.
     pub unsafe fn install(root: std::ptr::NonNull<TaggedHeap>) -> Self {
         let previous = TAGGED_HEAP.with(|slot| std::ptr::NonNull::new(slot.get()));
         // SAFETY: caller guarantees `root` is a live AliasableBox root with no

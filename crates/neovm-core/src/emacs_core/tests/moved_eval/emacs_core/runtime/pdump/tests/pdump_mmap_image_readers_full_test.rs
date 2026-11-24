@@ -35,6 +35,7 @@ fn file_pdump_loads_heap_string_bytes_from_mmap_image() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("mapped-string.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let image = mmap_image::load_image(&dump_path).expect("load raw mmap image");
     let heap_section = image
@@ -84,6 +85,7 @@ fn mapped_pdump_string_bytes_copy_only_on_mutation() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("copy-on-mutation.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let loaded = load_from_dump(&dump_path).expect("load should succeed");
     let value = loaded
@@ -120,6 +122,7 @@ fn file_pdump_preserves_immovable_string_size_byte() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("immovable-string.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let loaded = load_from_dump(&dump_path).expect("load should succeed");
     let value = loaded
@@ -143,6 +146,7 @@ fn file_pdump_preserves_rodata_string_with_static_relocation() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("rodata-string.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let loaded = load_from_dump(&dump_path).expect("load should succeed");
     let value = loaded
@@ -186,6 +190,7 @@ fn file_pdump_loads_string_text_props_from_mmap_object() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("mapped-string-props.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let image = mmap_image::load_image(&dump_path).expect("load raw mmap image");
     let object_extra_payload = image
         .section(mmap_image::DumpSectionKind::ObjectExtra)
@@ -246,6 +251,7 @@ fn file_pdump_loads_vector_slots_from_mmap_image() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("mapped-vector.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
     let value = loaded
@@ -302,6 +308,7 @@ fn file_pdump_loads_record_object_from_mmap_image() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("mapped-record.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
     let value = loaded
@@ -355,6 +362,7 @@ fn file_pdump_loads_lambda_object_from_mmap_image() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("mapped-lambda.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
     let value = loaded
@@ -409,6 +417,7 @@ fn file_pdump_loads_cons_cells_from_mmap_image() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("mapped-cons.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
     let value = loaded
@@ -462,6 +471,7 @@ fn file_pdump_loads_float_objects_from_mmap_image() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("mapped-float.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
     let value = loaded
@@ -502,6 +512,7 @@ fn file_pdump_loads_marker_object_from_mmap_image() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("mapped-marker.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
     let value = loaded
@@ -555,6 +566,7 @@ fn file_pdump_loads_overlay_object_from_mmap_image() {
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("mapped-overlay.pdump");
     dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
     let value = loaded

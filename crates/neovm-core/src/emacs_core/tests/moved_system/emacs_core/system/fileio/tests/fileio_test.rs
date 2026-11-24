@@ -471,6 +471,7 @@ fn auto_save_failure_time_survives_a_pdump_round_trip() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dump_path = dir.path().join("auto-save-failure-time.pdump");
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
     let loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
     assert_eq!(
@@ -4049,6 +4050,7 @@ fn test_builtin_substitute_in_file_name() {
     let result =
         builtin_substitute_in_file_name(&mut ev, vec![Value::string("$HOME/foo")]).unwrap();
     assert_eq!(result.as_utf8_str(), Some("$HOME/foo"));
+    drop(ev);
 
     let values = bootstrap_eval(
         r#"
@@ -6033,6 +6035,7 @@ fn test_eval_fileio_relative_paths_respect_default_directory() {
     )
     .unwrap();
     assert_eq!(std::fs::read_to_string(&out_str).unwrap(), "neo");
+    drop(eval_write);
 
     let mut eval_find = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
     let rendered = format_eval_result(&eval_find.eval_str(&format!(

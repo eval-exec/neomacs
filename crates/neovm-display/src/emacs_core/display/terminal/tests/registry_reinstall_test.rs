@@ -93,7 +93,6 @@ fn deleted_terminal_stays_dead_after_another_contexts_pdump_restore() {
     let mut other = Context::new(crate::test_utils::unit_runtime());
     let restored = clone_active_evaluator(&mut other).expect("restore another Context's pdump");
     let other = other.park_for_test();
-    let restored = restored.park_for_test();
     let mut original = parked_original.resume_for_test().expect("resume original");
     assert_deleted_terminal(&mut original, deleted);
     drop(restored);

@@ -64,6 +64,7 @@ fn bytecode_slot_objects_round_trip_with_their_identity() {
     dump_to_file(&ctx, &dump_path).expect("dump should succeed");
     // The dumping heap's values must not be scanned by the loaded heap.
     crate::emacs_core::eval::restore_scratch_gc_roots(scratch_base);
+    drop(ctx);
     let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
 
     assert_eq!(

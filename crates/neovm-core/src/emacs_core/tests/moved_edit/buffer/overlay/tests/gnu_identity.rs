@@ -9,9 +9,11 @@ fn gde_overlay_restored_live_identity_preserves_the_creation_serial() {
         .eval_str("(progn (insert \"abcd\") (setq gde-restored-overlay (make-overlay 2 4)))")
         .expect("live overlay");
     let original_serial = overlay_identity_key(original);
+    let proof = eval.hooks_installed();
     let snapshot = crate::emacs_core::pdump::snapshot_evaluator(&eval);
+    drop(eval);
     let mut restored =
-        crate::emacs_core::pdump::restore_snapshot(&snapshot, eval.hooks_installed())
+        crate::emacs_core::pdump::restore_snapshot(&snapshot, proof)
             .expect("restore context containing a live overlay");
     let relocated = restored
         .eval_str("gde-restored-overlay")

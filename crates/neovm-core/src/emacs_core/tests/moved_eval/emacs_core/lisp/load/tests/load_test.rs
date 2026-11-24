@@ -745,6 +745,7 @@ fn dump_emacs_portable_writes_reloadable_snapshot() {
         vec![Value::string(dump_path.to_string_lossy().into_owned())],
     )
     .expect("dump-emacs-portable should succeed");
+    drop(eval);
 
     let loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading dumped snapshot should succeed");
@@ -776,6 +777,7 @@ fn dump_emacs_portable_overwrites_existing_target() {
         vec![Value::string(dump_path.to_string_lossy().into_owned())],
     )
     .expect("second dump-emacs-portable should overwrite");
+    drop(eval);
 
     let loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading overwritten snapshot should succeed");
@@ -811,6 +813,7 @@ fn dump_emacs_portable_expands_relative_target_against_default_directory() {
         dump_path.exists(),
         "dump-emacs-portable should expand relative names against default-directory"
     );
+    drop(eval);
 
     let loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading relative dump snapshot should succeed");
@@ -946,6 +949,7 @@ fn dump_emacs_portable_succeeds_after_finalizer_is_collected() {
         vec![Value::string(dump_path.to_string_lossy().into_owned())],
     )
     .expect("dump-emacs-portable should succeed once the finalizer is collected");
+    drop(eval);
 
     let loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading the post-finalizer snapshot should succeed");
@@ -1592,6 +1596,7 @@ fn runtime_image_loader_falls_back_to_fingerprinted_candidate_when_primary_is_mi
     eval.set_variable("runtime-image-candidate-test-var", Value::fixnum(42));
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path)
         .expect("write fingerprinted runtime image");
+    drop(eval);
 
     let loaded = load_runtime_image_with_features_for_executable(
         RuntimeImageRole::Final,
@@ -1630,6 +1635,7 @@ fn runtime_image_loader_stops_on_primary_fingerprint_mismatch() {
     fresh.set_variable("runtime-image-candidate-test-var", Value::fixnum(2));
     crate::emacs_core::pdump::dump_to_file(&fresh, &fallback)
         .expect("write fallback runtime image");
+    drop(fresh);
 
     let err = match load_runtime_image_with_features_for_executable(
         RuntimeImageRole::Final,
@@ -3628,6 +3634,7 @@ fn pdump_roundtrip_preserves_partial_bootstrap_subr_prefix_maps() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dump_path = dir.path().join("partial-subr-prefixes.pdump");
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    drop(eval);
 
     let mut loaded =
         crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
@@ -16438,6 +16445,7 @@ fn runtime_image_loads_from_path_exec_when_nothing_sits_beside_the_executable() 
         &libexec.join(RuntimeImageRole::Final.fingerprinted_image_file_name()),
     )
     .expect("write archlib runtime image");
+    drop(eval);
 
     let loaded = load_runtime_image_with_features_for_executable(
         RuntimeImageRole::Final,
@@ -16467,6 +16475,7 @@ fn final_runtime_image_activation_restores_the_gnu_eval_depth() {
     let mut eval = crate::test_utils::new_context();
     eval.set_variable("max-lisp-eval-depth", Value::fixnum(4200));
     crate::emacs_core::pdump::dump_to_file(&eval, &image).expect("write final runtime image");
+    drop(eval);
 
     let loaded = load_runtime_image_with_features_for_executable(
         RuntimeImageRole::Final,
@@ -16689,6 +16698,7 @@ fn dump_emacs_portable_keeps_an_existing_targets_mode() {
         & 0o777;
     assert_eq!(mode, 0o600, "an existing 0600 dump must stay 0600");
     // The path really holds the new dump, not the stale bytes.
+    drop(eval);
     crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading the redump should succeed");
 }
@@ -16722,6 +16732,7 @@ fn dump_emacs_portable_writes_through_a_symlink() {
         std::fs::read_link(&link).expect("read link"),
         std::path::PathBuf::from("real.pdump")
     );
+    drop(eval);
     crate::emacs_core::load_boot::load_from_dump(&target)
         .expect("the symlink target must hold the new dump");
 }
@@ -16751,6 +16762,7 @@ fn dump_emacs_portable_creates_through_a_dangling_symlink() {
             .is_symlink(),
         "the dangling symlink must survive the dump"
     );
+    drop(eval);
     crate::emacs_core::load_boot::load_from_dump(&target)
         .expect("the created link target must hold the dump");
 }
@@ -16850,6 +16862,7 @@ fn dump_emacs_portable_drops_setuid_like_gnu() {
         mode, expected,
         "the kernel's setid write rule decides the final mode (GNU non-root 4755 -> 0755)"
     );
+    drop(eval);
     crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading the redump should succeed");
 }
