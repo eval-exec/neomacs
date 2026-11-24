@@ -1,4 +1,5 @@
 //! Cons reserve proofs using the actual stopped World fixtures.
+#![cfg(any(test, feature = "test-support"))]
 
 use super::*;
 use crate::tagged::gc::CONS_BLOCK_BYTES;

@@ -154,6 +154,8 @@ pub enum CollectionCase {
     SerialHeapRestorationReclaimsFormerOwnerRootsAfterResume,
     ShouldCollectStoppedTracksPublishedDebtWithoutConsumingTrace,
     StoppedSummariesRejectsZeroEpochOutsidePreStopNative,
+    CollectRequestedAfterTraceRefusesEarlyWithoutWorldWalk,
+    ShouldCollectStoppedCountsKeeperHeapSerialDebt,
 }
 
 impl CollectionCase {
@@ -167,6 +169,8 @@ impl CollectionCase {
         Self::SerialHeapRestorationReclaimsFormerOwnerRootsAfterResume,
         Self::ShouldCollectStoppedTracksPublishedDebtWithoutConsumingTrace,
         Self::StoppedSummariesRejectsZeroEpochOutsidePreStopNative,
+        Self::CollectRequestedAfterTraceRefusesEarlyWithoutWorldWalk,
+        Self::ShouldCollectStoppedCountsKeeperHeapSerialDebt,
     ];
 }
 
@@ -245,6 +249,12 @@ pub(crate) fn run_collection_test<K, W>(
         }
         CollectionCase::StoppedSummariesRejectsZeroEpochOutsidePreStopNative => {
             stopped_summaries_rejects_zero_epoch_outside_pre_stop_native(graph_era);
+        }
+        CollectionCase::CollectRequestedAfterTraceRefusesEarlyWithoutWorldWalk => {
+            collect_requested_after_trace_refuses_early_without_world_walk(graph_era);
+        }
+        CollectionCase::ShouldCollectStoppedCountsKeeperHeapSerialDebt => {
+            should_collect_stopped_counts_keeper_heap_serial_debt(graph_pair_era, world_roots);
         }
     }
 }
@@ -885,6 +895,127 @@ fn stopped_summaries_rejects_zero_epoch_outside_pre_stop_native<K>(
         owner.leave_native().unwrap();
         retire(owner);
         drop(graph.0);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+/// Lead #13986 (a4.2 condition N3): calling `collect_requested` on an already
+/// traced `AllStopped` must refuse `RendezvousError::Publication` at the top of
+/// `collect_stopped_kind`, before returning owner-cons leases, finishing root
+/// readers, or invoking the World-root walk closure.
+fn collect_requested_after_trace_refuses_early_without_world_walk<K>(
+    graph_era: &mut dyn FnMut(i64, &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, Graph)),
+) where
+    K: EraKeeper + std::fmt::Debug,
+{
+    graph_era(810, &mut |era, graph| {
+        let mut owner = era
+            .register(810, 1)
+            .unwrap()
+            .activate(era.heap_identity(), 810)
+            .unwrap();
+        owner.enter_native(std::slice::from_ref(&graph.0)).unwrap();
+
+        let mut stopped = era.stop().unwrap();
+        stopped.trace_serial().unwrap();
+
+        let mut world_walk_ran = false;
+        // SAFETY: closure never executes on an already-traced stop.
+        let result = unsafe {
+            era.collect_requested(&mut stopped, |_, _, _| {
+                world_walk_ran = true;
+                Ok(Vec::new())
+            })
+        };
+        assert_eq!(
+            result,
+            Err(RendezvousError::Publication),
+            "collect_requested after trace_serial must refuse with Publication"
+        );
+        assert!(
+            !world_walk_ran,
+            "collect_requested must refuse an already-traced stop before running the World walk"
+        );
+        complete(stopped);
+
+        owner.leave_native().unwrap();
+        retire(owner);
+        drop(graph.0);
+        let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+/// Lead #13986 (a4.2 pacer condition): `should_collect_stopped` must include
+/// the keeper heap's own `bytes_since_gc()` (serial-turn allocation debt) in
+/// addition to published images, and `collect_requested` must collect cleanly
+/// and reset both debt sources so `should_collect_stopped` returns `false` and
+/// `era.finish()` succeeds.
+fn should_collect_stopped_counts_keeper_heap_serial_debt<K, W>(
+    graph_pair_era: &mut dyn FnMut(&mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, (Graph, Graph))),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    graph_pair_era(&mut |era, (keep, garbage)| {
+        let garbage_words = garbage.1;
+        drop(garbage.0);
+
+        let mut owner = era
+            .register(811, 1)
+            .unwrap()
+            .activate(era.heap_identity(), 811)
+            .unwrap();
+        owner.enter_native(std::slice::from_ref(&keep.0)).unwrap();
+        drop(keep.0);
+
+        let mut stopped = era.stop().unwrap();
+        let threshold = era.gc_threshold_for_test(&stopped).unwrap();
+        let baseline = stopped
+            .summaries()
+            .unwrap()
+            .census()
+            .unwrap()
+            .bytes_since_gc;
+        assert!(baseline < threshold);
+        assert_eq!(era.should_collect_stopped(&mut stopped), Ok(false));
+
+        // Charge ONLY the keeper heap's own `bytes_since_gc` (zero peer debt).
+        era.charge_serial_bytes_for_test(&stopped, threshold - baseline)
+            .unwrap();
+        assert_eq!(
+            era.should_collect_stopped(&mut stopped),
+            Ok(true),
+            "keeper heap serial-turn debt reaching threshold must trigger collection"
+        );
+        // SAFETY: `world_roots` is the core shell's canonical Baton World-root walk.
+        let report = unsafe { era.collect_requested(&mut stopped, world_roots) }.unwrap();
+        assert!(report.major);
+        assert_eq!(report.frozen_owners, 1);
+        assert_eq!(report.frozen_root_words, 1);
+        assert_owned(&era, &stopped, &keep.1, true);
+        assert_owned(&era, &stopped, &garbage_words, false);
+        assert_eq!(
+            era.should_collect_stopped(&mut stopped),
+            Ok(false),
+            "collection resets both keeper heap and published bytes_since_gc"
+        );
+        complete(stopped);
+
+        owner.leave_native().unwrap();
+        retire(owner);
         let (collector, keeper) = era.finish().unwrap();
         drop(collector);
         drop(keeper);

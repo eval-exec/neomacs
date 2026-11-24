@@ -57,6 +57,11 @@ impl RegistrationCensus {
 pub struct StoppedSummaries<'era> {
     registry: &'era Registry,
     gate: RegistryGuard<'era>,
+    /// True when minted through `AllStopped::summaries` (`under_stop`), where
+    /// unactivated `StartingStopped` permits outside `gate.rendezvous.frozen`
+    /// have no image and zero debt, matching `verify_stopped` and
+    /// `ImageSession::take`.
+    under_stop: bool,
     _thread: PhantomData<Rc<()>>,
 }
 
@@ -84,26 +89,48 @@ impl<'era> StoppedSummaries<'era> {
         {
             return Err(RegistrationError::WrongThread);
         }
-        Self::from_gate(registry, gate)
+        Self::from_gate(registry, gate, false)
     }
 
     /// The census taken by the keeper under its stop (`AllStopped::summaries`).
     pub(super) fn under_stop(registry: &'era Registry) -> Result<Self, RegistrationError> {
         let gate = registry.lock_for_keeper()?;
-        Self::from_gate(registry, gate)
+        Self::from_gate(registry, gate, true)
+    }
+
+    fn is_unactivated_under_stop(
+        gate: &RegistryState,
+        entry: &MutatorEntry,
+        state: &EntryState,
+    ) -> bool {
+        entry.key.owner != 0
+            && !gate.rendezvous.frozen.contains(&entry.key)
+            && state.phase == EntryPhase::Starting
+            && state.rendezvous.mode == rendezvous::Mode::StartingStopped
+            && state.image.is_none()
+            && !state.run_loan
+            && !state.worker_loan
+            && !entry.admitted()
     }
 
     fn from_gate(
         registry: &'era Registry,
         gate: RegistryGuard<'era>,
+        under_stop: bool,
     ) -> Result<Self, RegistrationError> {
-        // Do not filter out Running, Starting, loaned or missing entries.
+        // Outside a stop, do not filter out Running, Starting, loaned or
+        // missing entries. Under a stop, an unactivated `StartingStopped`
+        // permit outside `frozen` has never run, holds no image, and has zero
+        // debt (matching `verify_stopped` and `ImageSession::take`).
         for entry in &gate.entries {
             if entry.cancelled_start.load(Ordering::Acquire) {
                 continue;
             }
             registry.validate(&gate, entry.key)?;
             let state = lock_entry(registry, entry)?;
+            if under_stop && Self::is_unactivated_under_stop(&gate, entry, &state) {
+                continue;
+            }
             if !matches!(
                 state.phase,
                 EntryPhase::Frozen | EntryPhase::Published | EntryPhase::Retiring
@@ -137,6 +164,7 @@ impl<'era> StoppedSummaries<'era> {
         Ok(Self {
             registry,
             gate,
+            under_stop,
             _thread: PhantomData,
         })
     }
@@ -153,6 +181,9 @@ impl<'era> StoppedSummaries<'era> {
                 continue;
             }
             let state = lock_entry(self.registry, entry)?;
+            if self.under_stop && Self::is_unactivated_under_stop(&self.gate, entry, &state) {
+                continue;
+            }
             let image = state.image.as_ref().ok_or(RegistrationError::Publication)?;
             visit(entry.key, state.phase, image);
         }

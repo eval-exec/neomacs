@@ -448,6 +448,10 @@ impl<'era> AllStopped<'era> {
         self.epoch
     }
 
+    pub(in crate::tagged::gc::mutator_registration) fn is_traced(&self) -> bool {
+        self.traced
+    }
+
     pub(in crate::tagged::gc::mutator_registration) fn heap_identity(
         &self,
     ) -> crate::tagged::gc::HeapIdentity {

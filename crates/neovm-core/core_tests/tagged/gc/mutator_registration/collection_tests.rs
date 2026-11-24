@@ -187,6 +187,8 @@ shells! {
     serial_heap_restoration_reclaims_former_owner_roots_after_resume => SerialHeapRestorationReclaimsFormerOwnerRootsAfterResume,
     should_collect_stopped_tracks_published_debt_without_consuming_trace => ShouldCollectStoppedTracksPublishedDebtWithoutConsumingTrace,
     stopped_summaries_rejects_zero_epoch_outside_pre_stop_native => StoppedSummariesRejectsZeroEpochOutsidePreStopNative,
+    collect_requested_after_trace_refuses_early_without_world_walk => CollectRequestedAfterTraceRefusesEarlyWithoutWorldWalk,
+    should_collect_stopped_counts_keeper_heap_serial_debt => ShouldCollectStoppedCountsKeeperHeapSerialDebt,
 }
 
 #[test]

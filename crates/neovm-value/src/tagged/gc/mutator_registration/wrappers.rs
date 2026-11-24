@@ -495,6 +495,88 @@ macro_rules! era_operations {
                 self.core.should_collect_stopped(stopped)
             }
 
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn charge_serial_bytes_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+                bytes: usize,
+            ) -> Result<(), CollectionError> {
+                self.core.charge_serial_bytes_for_test(stopped, bytes)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn set_gc_threshold_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+                threshold: usize,
+            ) -> Result<(), CollectionError> {
+                self.core.set_gc_threshold_for_test(stopped, threshold)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn gc_threshold_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+            ) -> Result<usize, CollectionError> {
+                self.core.gc_threshold_for_test(stopped)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn gc_collections_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+            ) -> Result<usize, CollectionError> {
+                self.core.gc_collections_for_test(stopped)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn owns_heap_word_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+                word: usize,
+            ) -> Result<bool, CollectionError> {
+                self.core.owns_heap_word_for_test(stopped, word)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn grant_closed_owner_cons_lease_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+                key: super::MutatorKey,
+            ) -> Result<(), CollectionError> {
+                self.core
+                    .grant_closed_owner_cons_lease_for_test(stopped, key)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn poison_cons_allocator_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+            ) -> Result<(), CollectionError> {
+                self.core.poison_cons_allocator_for_test(stopped)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn has_owner_cons_reserves_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+            ) -> Result<bool, CollectionError> {
+                self.core.has_owner_cons_reserves_for_test(stopped)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
+            pub fn retired_owner_cons_len_for_test(&self) -> usize {
+                self.core.retired_owner_cons_len_for_test()
+            }
             /// Main-thread GC request. See [`EraCore::collect_requested`].
             ///
             /// # Safety

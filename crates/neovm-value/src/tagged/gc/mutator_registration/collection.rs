@@ -397,6 +397,154 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn charge_serial_bytes_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        bytes: usize,
+    ) -> Result<(), CollectionError> {
+        self.check_collection(stopped)?;
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        let heap = collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut();
+        let state = heap.current_mutator_gc_mut();
+        state.bytes_since_gc = state.bytes_since_gc.saturating_add(bytes);
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn set_gc_threshold_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        threshold: usize,
+    ) -> Result<(), CollectionError> {
+        self.check_collection(stopped)?;
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut()
+            .set_gc_threshold(threshold);
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn gc_threshold_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<usize, CollectionError> {
+        self.with_stopped_heap_for_test(stopped, |heap| heap.gc_threshold())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn gc_collections_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<usize, CollectionError> {
+        self.with_stopped_heap_for_test(stopped, |heap| heap.gc_collections())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn owns_heap_word_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        word: usize,
+    ) -> Result<bool, CollectionError> {
+        self.with_stopped_heap_for_test(stopped, |heap| {
+            // SAFETY: test observation bit pattern from an object allocated on this heap.
+            heap.owns_heap_value_for_test(unsafe { TaggedValue::from_bits(word) })
+        })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn grant_closed_owner_cons_lease_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        key: MutatorKey,
+    ) -> Result<(), CollectionError> {
+        self.check_collection(stopped)?;
+        let legacy_entry = {
+            let gate = self.registry().lock_for_keeper()?;
+            Arc::clone(
+                gate.entries
+                    .iter()
+                    .find(|entry| entry.key.owner == 0)
+                    .ok_or(RendezvousError::Publication)?,
+            )
+        };
+        let legacy = entry_state(&legacy_entry)?
+            .image
+            .take()
+            .ok_or(RendezvousError::Publication)?;
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        let heap = collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut();
+        if let Err(failure) = legacy.restore_legacy(heap) {
+            let _ = entry_state(&legacy_entry).map(|mut s| s.image = Some(failure.image));
+            return Err(RegistrationError::from(failure.error).into());
+        }
+        let mut book = super::super::OwnerEraReserve::new();
+        let granted = book.grant_at_stop_for_registration(
+            stopped,
+            heap,
+            true,
+            super::super::MeasuredInterval::zero(),
+            key.registration,
+        );
+        heap.close_alloc_regions();
+        let refrozen = PublishedGcImage::from_legacy(heap).map_err(RegistrationError::from)?;
+        let mut state = entry_state(&legacy_entry)?;
+        debug_assert!(state.image.is_none());
+        state.image = Some(refrozen);
+        drop(state);
+        granted.map_err(|_| RendezvousError::Publication)?;
+        std::mem::forget(
+            book.into_closed()
+                .map_err(|_| RendezvousError::Publication)?,
+        );
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn poison_cons_allocator_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<(), CollectionError> {
+        self.check_collection(stopped)?;
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut()
+            .cons_allocator
+            .poison_storage_for_test();
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn has_owner_cons_reserves_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<bool, CollectionError> {
+        self.with_stopped_heap_for_test(stopped, |heap| heap.has_owner_cons_reserves())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn shutdown_admission_stopped_for_test(
         &self,
         stopped: &AllStopped<'_>,
@@ -417,17 +565,18 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
     /// heap's GC threshold (`bytes_since_gc >= gc_threshold`).
     ///
     /// Reads the stopped census through `AllStopped::summaries` (F1
-    /// `lock_for_keeper`, never transient gate `Busy`) and drops that gate
-    /// guard before borrowing `self.collector`. Does not call `stopped.trace`,
-    /// so the caller can follow a `true` result with `collect_requested` on
-    /// the same `AllStopped`.
+    /// `lock_for_keeper`, never transient gate `Busy`), drops that gate guard
+    /// before borrowing `self.collector`, and adds the keeper heap's own
+    /// `bytes_since_gc()` so serial-turn allocation debt also triggers
+    /// collection. Does not call `stopped.trace`, so the caller can follow a
+    /// `true` result with `collect_requested` on the same `AllStopped`.
     #[cold]
     pub(super) fn should_collect_stopped(
         &self,
         stopped: &mut AllStopped<'_>,
     ) -> Result<bool, RendezvousError> {
         self.check_collection(stopped)?;
-        let bytes_since_gc = {
+        let published_bytes = {
             let summaries = stopped.summaries()?;
             summaries.census()?.bytes_since_gc
         };
@@ -435,12 +584,12 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             .collector
             .try_borrow_mut()
             .map_err(|_| RendezvousError::Busy)?;
-        let threshold = collector
+        let heap = collector
             .as_mut()
             .ok_or(RendezvousError::Publication)?
-            .registration_heap_mut()
-            .gc_threshold();
-        Ok(bytes_since_gc >= threshold)
+            .registration_heap_mut();
+        let bytes_since_gc = published_bytes.saturating_add(heap.bytes_since_gc());
+        Ok(bytes_since_gc >= heap.gc_threshold())
     }
 
     /// Stop-session entry for a main-thread GC request.
@@ -504,6 +653,9 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             -> Result<Vec<*mut *mut crate::tagged::header::MarkerObj>, RendezvousError>,
     ) -> Result<CollectionReport, MinorCollectionError> {
         self.check_collection(stopped)?;
+        if stopped.is_traced() {
+            return Err(RendezvousError::Publication.into());
+        }
         {
             let mut slot = self
                 .collector
@@ -542,6 +694,12 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         >,
     ) -> Result<CollectionReport, CollectionError> {
         self.check_collection(stopped)?;
+        // Refuse an already-traced stop before returning owner-cons leases,
+        // draining retired queues, finishing root readers, or running the
+        // World-root walk (lead #13986 N3).
+        if stopped.is_traced() {
+            return Err(RendezvousError::Publication);
+        }
         // Return every leased book before root readers, World callbacks, or
         // image transfer. A leftover count is permanent. Poison skips the
         // return. A non-poison leftover is the mid-return unwind wedge: the
@@ -723,9 +881,10 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
             })
             .collect();
         // Recover the serial owner's original young payload before any
-        // legacy collector method asks its inline registry to resolve it.
+        // legacy collector method asks its inline registry to resolve it,
+        // folding any live serial-turn GC facts accrued directly on `heap`.
         let legacy = images.images[0].1.take().expect("frozen serial image");
-        if let Err(failure) = legacy.restore_legacy(heap) {
+        if let Err(failure) = legacy.restore_legacy_for_collection(heap) {
             images.images[0].1 = Some(failure.image);
             return Err(RegistrationError::from(failure.error).into());
         }

@@ -52,6 +52,23 @@ const HEAP_METHODS: &[&str] = &[
 const INSTALL: &str = "set_tagged_heap_root";
 const TLS_HEAP_ACCESS: &str = "with_tagged_heap";
 
+/// Era-level unsafe collection entries defined inside `era_operations!` in
+/// `mutator_registration/wrappers.rs` (lead #13986 N2).
+const ERA_COLLECT_METHODS: &[&str] = &[
+    "collect_stopped_with",
+    "collect_stopped_minor_with",
+    "collect_requested",
+];
+
+const ERA_WRAPPERS_FILE: &str = "neovm-value/src/tagged/gc/mutator_registration/wrappers.rs";
+
+/// Safe production functions allowed to wrap an era-level unsafe collection
+/// entry by supplying the canonical Baton World-root walk.
+const ERA_COLLECT_SAFE_CALLERS: &[(&str, &str)] = &[(
+    "neovm-eval/src/emacs_core/runtime/eval/parallel_entry/owned_source/keeper_service.rs",
+    "collect_requested",
+)];
+
 /// Safe production functions that already own a sweep cycle. The pair is
 /// file plus function, so another `run` does not inherit the allowance.
 const SWEEP_SAFE_CALLERS: &[(&str, &str)] = &[
@@ -93,6 +110,7 @@ struct Violation {
 
 struct Survey {
     definitions: Vec<Definition>,
+    era_definitions: Vec<Definition>,
     violations: Vec<Violation>,
     tls_token_violations: Vec<Violation>,
 }
@@ -118,6 +136,7 @@ impl<'a> Scanner<'a> {
             function: Vec::new(),
             survey: Survey {
                 definitions: Vec::new(),
+                era_definitions: Vec::new(),
                 violations: Vec::new(),
                 tls_token_violations: Vec::new(),
             },
@@ -167,6 +186,54 @@ impl<'a> Scanner<'a> {
         SWEEP_SAFE_CALLERS
             .iter()
             .any(|(file, name)| *file == self.file && *name == function)
+    }
+
+    fn era_collect_caller_allowed(&self) -> bool {
+        let Some(function) = self.function.last() else {
+            return false;
+        };
+        ERA_COLLECT_SAFE_CALLERS
+            .iter()
+            .any(|(file, name)| *file == self.file && *name == function)
+    }
+
+    fn scan_era_macro_tokens(&mut self, stream: proc_macro2::TokenStream) {
+        use proc_macro2::TokenTree;
+        let tokens: Vec<TokenTree> = stream.into_iter().collect();
+        for (i, token) in tokens.iter().enumerate() {
+            match token {
+                TokenTree::Group(group) => self.scan_era_macro_tokens(group.stream()),
+                TokenTree::Ident(ident) if ident == "fn" => {
+                    let Some(TokenTree::Ident(name_ident)) = tokens.get(i + 1) else {
+                        continue;
+                    };
+                    let name_str = name_ident.to_string();
+                    let Some(expected) = ERA_COLLECT_METHODS
+                        .iter()
+                        .copied()
+                        .find(|method| *method == name_str)
+                    else {
+                        continue;
+                    };
+                    let prev_unsafe = i > 0
+                        && matches!(&tokens[i - 1], TokenTree::Ident(prev) if prev == "unsafe");
+                    let is_pub = (prev_unsafe
+                        && i >= 2
+                        && matches!(&tokens[i - 2], TokenTree::Ident(p) if p == "pub"))
+                        || (!prev_unsafe
+                            && i >= 1
+                            && matches!(&tokens[i - 1], TokenTree::Ident(p) if p == "pub"));
+                    if is_pub {
+                        self.survey.era_definitions.push(Definition {
+                            name: expected,
+                            file: self.file.to_owned(),
+                            unsafe_fn: prev_unsafe,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn note_call(&mut self, call: &str, line: usize) {
@@ -265,13 +332,31 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
         );
     }
 
+    fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
+        if self.excluded == 0
+            && !production_excluded(&item.attrs)
+            && self.file == ERA_WRAPPERS_FILE
+            && item.mac.path.is_ident("macro_rules")
+            && item.ident.as_ref().is_some_and(|id| id == "era_operations")
+        {
+            self.scan_era_macro_tokens(item.mac.tokens.clone());
+        }
+        visit::visit_item_macro(self, item);
+    }
+
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let name = call.method.to_string();
         // `collect` / `collect_exact` must not appear in any safe function.
         // Sweep names share that rule except for the two cycle owners.
+        // Era-level unsafe collection wrappers share that rule except for
+        // the canonical Baton World-root adapter (`ERA_COLLECT_SAFE_CALLERS`).
         let sweep = is_sweep_method(&name);
+        let era_collect = ERA_COLLECT_METHODS.contains(&name.as_str());
         let collect = name == "collect_exact" || (name == "collect" && call.args.len() == 1);
-        if collect || (sweep && !self.sweep_caller_allowed()) {
+        if collect
+            || (sweep && !self.sweep_caller_allowed())
+            || (era_collect && !self.era_collect_caller_allowed())
+        {
             self.note_call(&name, call.method.span().start().line);
         }
         if self.in_with_tagged_heap_arg > 0 && matches!(name.as_str(), "heap_mut" | "heap_ref") {
@@ -423,6 +508,7 @@ fn survey_file(source: &str, file: &str) -> Survey {
 fn survey_production() -> Survey {
     let mut survey = Survey {
         definitions: Vec::new(),
+        era_definitions: Vec::new(),
         violations: Vec::new(),
         tls_token_violations: Vec::new(),
     };
@@ -434,6 +520,7 @@ fn survey_production() -> Survey {
             .unwrap_or_else(|error| panic!("read {}: {error}", file.path.display()));
         let one = survey_file(&source, &display_path(&file));
         survey.definitions.extend(one.definitions);
+        survey.era_definitions.extend(one.era_definitions);
         survey.violations.extend(one.violations);
         survey.tls_token_violations.extend(one.tls_token_violations);
     }
@@ -488,9 +575,37 @@ fn capability_problems(survey: &Survey) -> Vec<String> {
     problems
 }
 
+fn era_collect_problems(survey: &Survey) -> Vec<String> {
+    let mut problems = Vec::new();
+    for &name in ERA_COLLECT_METHODS {
+        let found = survey
+            .era_definitions
+            .iter()
+            .filter(|definition| definition.name == name)
+            .collect::<Vec<_>>();
+        match found.as_slice() {
+            [one] if one.unsafe_fn => {}
+            [one] => problems.push(format!(
+                "era wrapper `{name}` is a safe pub fn at {}; it must be pub unsafe fn",
+                one.file
+            )),
+            [] => problems.push(format!(
+                "era wrapper `{name}` has no production definition in {ERA_WRAPPERS_FILE}"
+            )),
+            many => problems.push(format!(
+                "era wrapper `{name}` has {} definitions in {ERA_WRAPPERS_FILE}",
+                many.len()
+            )),
+        }
+    }
+    problems
+}
+
 #[test]
 fn no_safe_pub_path_reaches_collect() {
-    let problems = capability_problems(&survey_production());
+    let survey = survey_production();
+    let mut problems = capability_problems(&survey);
+    problems.extend(era_collect_problems(&survey));
     assert!(
         problems.is_empty(),
         "a safe production path reaches collection:\n{}",
@@ -1428,5 +1543,60 @@ fn allocation_entry_points_never_collect() {
         problems.is_empty(),
         "allocator entry points (and their transitive GC callees) must never collect or sweep:\n{}",
         problems.join("\n")
+    );
+}
+
+#[test]
+fn heap_capability_guard_flags_a_safe_era_collect_method_or_caller() {
+    let safe_def = survey_file(
+        r#"
+        macro_rules! era_operations {
+            ($era:ident) => {
+                impl $era {
+                    pub unsafe fn collect_stopped_with(&self) {}
+                    pub unsafe fn collect_stopped_minor_with(&self) {}
+                    pub fn collect_requested(&self) {}
+                }
+            };
+        }
+        "#,
+        ERA_WRAPPERS_FILE,
+    );
+    let def_problems = era_collect_problems(&safe_def).join("\n");
+    assert!(
+        def_problems.contains("era wrapper `collect_requested` is a safe pub fn"),
+        "safe era wrapper must fail: {def_problems}"
+    );
+
+    let safe_caller = survey_file(
+        r#"
+        pub fn bypass(era: &Era, stopped: &mut Stop) {
+            unsafe { era.collect_requested(stopped, |_, _, _| Ok(Vec::new())); }
+        }
+        "#,
+        "neovm-eval/src/emacs_core/runtime/eval/parallel_entry/keeper_driver.rs",
+    );
+    let caller_problems = capability_problems(&safe_caller).join("\n");
+    assert!(
+        caller_problems.contains("safe `bypass` calls `collect_requested`"),
+        "unallowlisted safe caller of collect_requested must fail: {caller_problems}"
+    );
+
+    let allowed_caller = survey_file(
+        r#"
+        pub(crate) fn collect_requested(era: &Era, stopped: &mut Stop) {
+            unsafe { era.collect_requested(stopped, |_, _, _| Ok(Vec::new())); }
+        }
+        "#,
+        "neovm-eval/src/emacs_core/runtime/eval/parallel_entry/owned_source/keeper_service.rs",
+    );
+    let allowed_violations: Vec<_> = allowed_caller
+        .violations
+        .iter()
+        .map(|v| format!("{}:{}", v.function, v.call))
+        .collect();
+    assert!(
+        allowed_violations.is_empty(),
+        "canonical KeeperEra::collect_requested adapter must stay allowed: {allowed_violations:?}"
     );
 }

@@ -292,6 +292,58 @@ impl Facts {
         cold.satb_string_preimage_addrs = self.string_preimage_addrs;
         (self.roots, self.region_stats)
     }
+
+    fn merge_into_heap(self, heap: &mut TaggedHeap) {
+        let hot = heap.current_mutator_gc_mut();
+        hot.allocated_count = hot.allocated_count.saturating_add(self.allocated_count);
+        for (dst, src) in hot.memory_use_counts.iter_mut().zip(self.memory_use_counts) {
+            *dst = dst.wrapping_add(src);
+        }
+        hot.bytes_since_gc = hot.bytes_since_gc.saturating_add(self.bytes_since_gc);
+        hot.bytes_banked_at_resets = hot
+            .bytes_banked_at_resets
+            .saturating_add(self.bytes_banked_at_resets);
+        hot.pacing.promoted_since_major = hot
+            .pacing
+            .promoted_since_major
+            .saturating_add(self.pacing.promoted_since_major);
+        hot.pacing.minors_since_major = hot
+            .pacing
+            .minors_since_major
+            .saturating_add(self.pacing.minors_since_major);
+        hot.pacing.stress_cycles_since_major = hot
+            .pacing
+            .stress_cycles_since_major
+            .saturating_add(self.pacing.stress_cycles_since_major);
+        hot.remset
+            .extend(self.remset.into_iter().map(MarkWord::value));
+        hot.r_mapped_seen.extend(self.mapped_seen);
+        hot.black_born
+            .extend(self.black_headers.into_iter().map(|addr| addr as *mut _));
+        hot.black_born_regions.extend(self.black_regions);
+        hot.major_symbol_preimages.extend(self.symbol_preimages);
+        hot.major_cons_writes
+            .extend(self.cons_writes.into_iter().map(MarkWord::value));
+        hot.remembered_cache.fill(0);
+        let cold = heap.current_mutator_satb_mut();
+        cold.satb_snapshotted_owners.extend(self.snapshotted_owners);
+        cold.satb_string_preimage_addrs
+            .extend(self.string_preimage_addrs);
+        macro_rules! add_stats { ($($field:ident),* $(,)?) => { $(heap.region_stats.$field = heap.region_stats.$field.saturating_add(self.region_stats.$field);)* }; }
+        add_stats!(
+            cons_refills,
+            cons_cells_granted,
+            cons_short_runs,
+            cons_from_free_list,
+            cons_from_block_tail,
+            cons_from_fresh_block,
+            cons_tail_closes,
+            float_refills,
+            float_slots_granted,
+            float_short_runs,
+            float_tail_closes
+        );
+    }
 }
 
 impl OwnerGcState {
@@ -659,6 +711,54 @@ impl PublishedGcImage {
         let (_, stats) = facts.restore(&mut hot, heap.current_mutator_satb_mut());
         *heap.current_mutator_gc_mut() = hot;
         heap.region_stats = stats;
+        Ok(())
+    }
+
+    /// Like [`Self::restore_legacy`], but folds any live serial-turn GC facts
+    /// accrued directly on `heap` (e.g. `bytes_since_gc` from serial turns
+    /// while entry 0 was frozen) into the restored legacy state instead of
+    /// refusing with `DestinationOccupied`.
+    pub(in crate::tagged::gc) fn restore_legacy_for_collection(
+        self,
+        heap: &mut TaggedHeap,
+    ) -> Result<(), RestoreImageFailure> {
+        if empty_destination(heap.current_mutator_gc(), heap.current_mutator_satb(), &[]) {
+            return self.restore_legacy(heap);
+        }
+        let result = validate_closed(
+            heap.current_mutator_gc(),
+            heap.current_mutator_satb(),
+            &heap.jit,
+            &heap.region_book,
+            &OwnerAllocRegion::new(),
+        )
+        .and_then(|()| {
+            if !self.facts.roots.is_empty() {
+                Err(ImageError::ExecutionRoots)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(error) = result {
+            return Err(RestoreImageFailure { error, image: self });
+        }
+        let stats = std::mem::take(&mut heap.region_stats);
+        let mut live_hot = std::mem::replace(heap.current_mutator_gc_mut(), MutatorGcState::new());
+        let serial_delta = Facts::take(
+            &mut live_hot,
+            heap.current_mutator_satb_mut(),
+            Vec::new(),
+            stats,
+        );
+        if let Err(failure) = self.restore_legacy(heap) {
+            let mut restored_hot = MutatorGcState::new();
+            let (_, restored_stats) =
+                serial_delta.restore(&mut restored_hot, heap.current_mutator_satb_mut());
+            *heap.current_mutator_gc_mut() = restored_hot;
+            heap.region_stats = restored_stats;
+            return Err(failure);
+        }
+        serial_delta.merge_into_heap(heap);
         Ok(())
     }
 
