@@ -1314,7 +1314,11 @@ pub const DISPLAY_AFFECTING_GLOBAL_VARS: &[&str] = &[
     "show-trailing-whitespace",
     "indicate-empty-lines",
     "overlay-arrow-position",
-    "overlay-arrow-string",
+    // Not `overlay-arrow-string`. GNU's bare redisplay keeps the old glyphs
+    // (`xdisp.c:20557-20563`, `:20920-20931`, `:18135`): the attested frames
+    // stay on "=>" until `force-window-update`. Position stays in this list
+    // until a marker-move probe exists. `body_redisplay` still escalates a
+    // forced update.
     "ctl-arrow",
     "glyphless-char-display",
     "nobreak-char-display",

@@ -26804,6 +26804,33 @@ fn display_affecting_var_set_bumps_display_var_change_count() {
     );
 }
 
+/// `setq` of `overlay-arrow-string` must not wake a retained row.
+///
+/// GNU's bare redisplay keeps the old arrow glyphs: `try_cursor_movement`
+/// reuses the matrix (`xdisp.c:20920-20931`) and `update_overlay_arrows`
+/// records the new string (`xdisp.c:18135`). Attested frames stay on `"=>"`
+/// until `force-window-update` (md5 `a826e3eae03c3b50534d180e994824a9`).
+/// `overlay-arrow-position` stays on the display-var list until a marker-move
+/// probe exists.
+#[test]
+fn overlay_arrow_string_setq_does_not_bump_display_var_change_count() {
+    let mut eval = crate::test_utils::new_context();
+    let before = eval.display_var_change_count_for_test();
+    eval.eval_str("(setq overlay-arrow-string \">>>\")")
+        .expect("setq overlay-arrow-string");
+    assert_eq!(
+        eval.display_var_change_count_for_test(),
+        before,
+        "overlay-arrow-string must not bump display_var_change_count"
+    );
+    eval.eval_str("(setq overlay-arrow-position nil)")
+        .expect("setq overlay-arrow-position");
+    assert!(
+        eval.display_var_change_count_for_test() > before,
+        "overlay-arrow-position stays a display-var wake"
+    );
+}
+
 /// PS-T1 1a: `with_gc_inhibited` must rebalance `gc_inhibit_depth` when the
 /// inhibited closure panics — the manual increment/decrement pair leaked the
 /// increment on unwind, disabling safe-point GC for the rest of the session
