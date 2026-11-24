@@ -78,13 +78,15 @@ fn native_reference_candidates(
                 .iter()
                 .copied()
                 .take(8)
-                .filter_map(listed_font_from_raw_pattern)
+                .filter_map(|pattern| unsafe { listed_font_from_raw_pattern(pattern) })
                 .collect(),
             ReferenceSelection::Covering(ch) => patterns
                 .iter()
                 .copied()
-                .filter(|pattern| super::raw_pattern_supports_any_char(*pattern, &[ch as u32]))
-                .filter_map(listed_font_from_raw_pattern)
+                .filter(|pattern| unsafe {
+                    super::raw_pattern_supports_any_char(*pattern, &[ch as u32])
+                })
+                .filter_map(|pattern| unsafe { listed_font_from_raw_pattern(pattern) })
                 .collect(),
         }
     })
@@ -845,11 +847,11 @@ fn isolated_native_defaults_preserve_explicit_language_and_dpi() {
         );
         owner.apply_defaults(&pattern).expect("fixture defaults");
         assert_eq!(
-            super::raw_pattern_string(pattern.0, fontconfig::FC_LANG).as_deref(),
+            unsafe { super::raw_pattern_string(pattern.0, fontconfig::FC_LANG) }.as_deref(),
             Some("zh-cn")
         );
         assert_eq!(
-            super::raw_pattern_double(pattern.0, fontconfig_sys::constants::FC_DPI),
+            unsafe { super::raw_pattern_double(pattern.0, fontconfig_sys::constants::FC_DPI) },
             Some(168.0)
         );
     });

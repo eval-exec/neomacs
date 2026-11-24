@@ -1234,7 +1234,8 @@ unsafe fn capture_dmabuf(
     height: u32,
     formats: &neomacs_display_protocol::DmaBufImportFormats,
 ) -> Option<CapturedFrame> {
-    let dmabuf_info = buffer_dmabuf_info(buffer)?;
+    // SAFETY: `capture_dmabuf`'s caller guarantees `buffer` is a live `WPEBuffer`.
+    let dmabuf_info = unsafe { buffer_dmabuf_info(buffer) }?;
     if !formats.contains(neomacs_display_protocol::DmaBufFormat {
         fourcc: dmabuf_info.fourcc,
         modifier: dmabuf_info.modifier,

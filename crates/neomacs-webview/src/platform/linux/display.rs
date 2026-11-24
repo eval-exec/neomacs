@@ -157,8 +157,12 @@ impl Drop for WpePlatformDisplay {
 
 /// Check if a WPEBuffer is a DMA-BUF buffer and return its info
 ///
-/// Returns (fourcc, n_planes, modifier, fd, stride, offset) if it's a DMA-BUF buffer
-pub fn buffer_dmabuf_info(buffer: *mut plat::WPEBuffer) -> Option<DmaBufInfo> {
+/// Returns (fourcc, n_planes, modifier, fd, stride, offset) if it's a DMA-BUF buffer.
+///
+/// # Safety
+/// `buffer` must be null or a valid, live `WPEBuffer` GObject instance for the
+/// duration of the call.
+pub unsafe fn buffer_dmabuf_info(buffer: *mut plat::WPEBuffer) -> Option<DmaBufInfo> {
     unsafe {
         if buffer.is_null() {
             return None;

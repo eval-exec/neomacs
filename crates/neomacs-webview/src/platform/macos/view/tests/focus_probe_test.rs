@@ -1,10 +1,13 @@
 use super::*;
 
 fn classify_number(number: &Retained<NSNumber>) -> FocusProbe {
-    classify_focus_probe(
-        Retained::as_ptr(number).cast::<AnyObject>().cast_mut(),
-        ptr::null_mut(),
-    )
+    // SAFETY: `number` is a live retained NSNumber for the duration of this call.
+    unsafe {
+        classify_focus_probe(
+            Retained::as_ptr(number).cast::<AnyObject>().cast_mut(),
+            ptr::null_mut(),
+        )
+    }
 }
 
 #[test]
