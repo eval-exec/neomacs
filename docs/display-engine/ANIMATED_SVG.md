@@ -51,7 +51,10 @@ Three concerns, strictly separated:
 Frames are published through the image sequence cache
 (`image_sequence.rs::resolve_svg`), so computed animation shares the
 64 MiB sequence budget, LRU eviction, and retirement fencing with authored
-animation. `MediaClock` (display-protocol) is the presentation-time ⇄
+animation that is decoded whole (WebP, APNG). A GIF is not decoded whole: its
+source keeps a decoder position and the last composed frame
+(`image_sequence/gif_stream.rs`, GNU's `anim_cache`), and the budget evicts
+such streams instead of refusing them. `MediaClock` (display-protocol) is the presentation-time ⇄
 document-time mapping the pacing increment will drive.
 
 ### The SMIL subset

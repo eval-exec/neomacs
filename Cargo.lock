@@ -4130,6 +4130,7 @@ dependencies = [
  "flate2",
  "fontdb",
  "freetype-rs",
+ "gif",
  "image",
  "image-extras",
  "imagesize 0.15.0",

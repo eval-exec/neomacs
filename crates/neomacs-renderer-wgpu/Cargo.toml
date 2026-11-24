@@ -34,6 +34,7 @@ bytemuck.workspace = true
 pollster.workspace = true
 ash.workspace = true
 image.workspace = true
+gif.workspace = true
 png.workspace = true
 zune-jpeg.workspace = true
 imagesize.workspace = true

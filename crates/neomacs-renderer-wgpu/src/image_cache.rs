@@ -1128,6 +1128,26 @@ impl ImageCache {
         sequence: ImageSequenceId,
         sink: Option<&mut dyn FnMut(DecodedBand)>,
     ) -> Option<DecodedPixels> {
+        // A resident GIF stream already owns its source bytes (`anim_cache` in
+        // GNU `gif_load`, src/image.c:9889-9902): step it directly without
+        // re-reading a multi-megabyte file from disk on every `:index` tick.
+        if let Some(resolution) = sequence_cache.resolve_resident_gif(sequence, frame) {
+            match resolution {
+                ImageSequenceResolution::Frame(frame) => {
+                    let (width, height) = frame.dimensions();
+                    let (rgba, embedded) = frame.into_parts();
+                    return NativePixels {
+                        extent: ImageNativeExtent::new(width, height),
+                        mask: classify_alpha(&rgba),
+                        rgba,
+                        embedded,
+                    }
+                    .realize_bitmap(size, rotation, realization, mask);
+                }
+                ImageSequenceResolution::MissingFrame => return None,
+                ImageSequenceResolution::NotAnimated => {}
+            }
+        }
         // The bytes the decode will read, owned here and handed to the decode
         // chain by handle: `std::fs::read` gives the buffer, `EncodedBytes`
         // moves it, and the fallbacks below still have the handle they need.

@@ -353,9 +353,10 @@ mod tests {
                 for (index, extent, color) in
                     [(0, (2, 1), [255, 0, 0, 255]), (1, (3, 2), [0, 255, 0, 255])]
                 {
+                    let encoded = neomacs_display_protocol::EncodedBytes::copy_of(&data);
                     let resolved = cache.resolve(
                         neomacs_display_protocol::ImageSequenceId::new(901).unwrap(),
-                        &data,
+                        &encoded,
                         ImageFrameIndex::new(index),
                     );
                     let crate::image_sequence::ImageSequenceResolution::Frame(frame) = resolved
