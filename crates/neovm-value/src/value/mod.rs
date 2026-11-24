@@ -4124,7 +4124,10 @@ impl TaggedValue {
     }
 
     /// Borrow a GNU-shaped char-table object.
-    pub fn as_char_table_obj(self) -> Option<&'static CharTableObj> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_char_table_obj(&self) -> Option<&CharTableObj> {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::CharTable {
             let ptr = header as *const CharTableObj;
@@ -4144,7 +4147,10 @@ impl TaggedValue {
     }
 
     /// Borrow a GNU-shaped sub-char-table object.
-    pub fn as_sub_char_table_obj(self) -> Option<&'static SubCharTableObj> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_sub_char_table_obj(&self) -> Option<&SubCharTableObj> {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::SubCharTable {
             let ptr = header as *const SubCharTableObj;
@@ -4253,8 +4259,11 @@ impl TaggedValue {
     }
 
     /// Get hash table reference.
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
     #[inline]
-    pub fn as_hash_table(self) -> Option<&'static LispHashTable> {
+    pub fn as_hash_table(&self) -> Option<&LispHashTable> {
         if self.is_hash_table() {
             let ptr = self.as_veclike_ptr().unwrap() as *mut HashTableObj;
             // Lazy dump hydration happens through the raw pointer BEFORE the
