@@ -16,7 +16,7 @@ use super::super::{
     EraCore, EraKeeper, MutatorEntry, MutatorKey, RegistrationError, Registry, RegistryGuard,
     RegistryState,
 };
-use super::control::{Mode, Phase};
+use super::control::{Mode, Phase, RingClient};
 use super::{
     RendezvousError, StoppedRootAdmission, entry_state, finish_debt, membership, request,
     verify_stopped, wait, wait_timeout,
@@ -542,10 +542,18 @@ impl<'era> AllStopped<'era> {
             .map_err(registration_error)?;
         self.validate(&gate)?;
         let mut owner = None;
-        let granted = gate.rendezvous.grant_head_in_stop(self.epoch, |entry| {
-            owner = Some(entry.owner());
-            ready(entry.owner(), entry.generation())
-        })?;
+        let granted =
+            gate.rendezvous
+                .grant_head_in_stop(self.epoch, |entry| match entry.client() {
+                    RingClient::Owner { key, generation } => {
+                        owner = Some(key);
+                        ready(key, generation)
+                    }
+                    // A Baton-group turn is not an owner's ticket. Until L6.7b
+                    // b3 gives the keeper its route, the head stays in place,
+                    // as an unready head does.
+                    RingClient::BatonGroup => false,
+                })?;
         Ok(granted.zip(owner).map(|(id, owner)| SerialGrant {
             id,
             owner,
@@ -558,10 +566,15 @@ impl<'era> AllStopped<'era> {
     #[doc(hidden)]
     pub fn serial_head(&self) -> Result<Option<(MutatorKey, NonZeroU64)>, RendezvousError> {
         self.with_stopped_gate(|_registry, gate| {
-            Ok(gate
-                .rendezvous
+            // A Baton-group head has no owner route until L6.7b b3; it
+            // refuses rather than reading as an empty ring.
+            gate.rendezvous
                 .ring_head_entry()
-                .map(|entry| (entry.owner(), entry.generation())))
+                .map(|entry| match entry.client() {
+                    RingClient::Owner { key, generation } => Ok((key, generation)),
+                    RingClient::BatonGroup => Err(RendezvousError::Identity),
+                })
+                .transpose()
         })
     }
 

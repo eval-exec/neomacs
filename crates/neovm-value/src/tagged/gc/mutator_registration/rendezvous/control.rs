@@ -56,14 +56,27 @@ pub(in crate::tagged::gc) enum RingPhase {
     Granted,
 }
 
-/// One committed serial request. The owner has already published its image and
-/// root lease before enqueueing (L6 condition b); `generation` names that
-/// publication and is re-validated by the keeper before a grant (via `ready`).
+/// Who a ring entry serves (L6.7b, lead #14000). The Baton group, main and
+/// every Baton thread, is ONE client however many Baton threads it has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tagged::gc) enum RingClient {
+    /// A parallel owner. It published its image and root lease before
+    /// enqueueing (L6 condition b); `generation` names that publication, and
+    /// the keeper re-validates it before the grant (via `ready`).
+    Owner {
+        key: MutatorKey,
+        generation: NonZeroU64,
+    },
+    /// The Baton group. It has no owner image, so nothing beyond the stop is
+    /// checked before its grant.
+    BatonGroup,
+}
+
+/// One committed serial request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::tagged::gc) struct RingEntry {
     id: RequestId,
-    owner: MutatorKey,
-    generation: NonZeroU64,
+    client: RingClient,
     phase: RingPhase,
 }
 
@@ -72,16 +85,16 @@ impl RingEntry {
         self.id
     }
 
-    pub(in crate::tagged::gc) const fn owner(self) -> MutatorKey {
-        self.owner
-    }
-
-    pub(in crate::tagged::gc) const fn generation(self) -> NonZeroU64 {
-        self.generation
+    pub(in crate::tagged::gc) const fn client(self) -> RingClient {
+        self.client
     }
 
     pub(in crate::tagged::gc) const fn phase(self) -> RingPhase {
         self.phase
+    }
+
+    fn is_owner(self, owner: MutatorKey) -> bool {
+        matches!(self.client, RingClient::Owner { key, .. } if key == owner)
     }
 }
 
@@ -216,11 +229,39 @@ impl State {
         generation: NonZeroU64,
     ) -> Result<RequestId, RendezvousError> {
         self.live()?;
-        // One entry per client: the Baton group is one ring client (L6 c), and
-        // a leftover entry would let one owner hold two serial positions.
-        if self.serial_ring.iter().any(|entry| entry.owner() == owner) {
+        // One entry per client: a leftover entry would let one owner hold two
+        // serial positions.
+        if self.serial_ring.iter().any(|entry| entry.is_owner(owner)) {
             return Err(RendezvousError::Identity);
         }
+        self.push(RingClient::Owner {
+            key: owner,
+            generation,
+        })
+    }
+
+    /// Commit the Baton group's request at the tail (L6.7b). The group is one
+    /// client, so a second entry while one is queued or granted is a typed
+    /// refusal; the group's waking threads share the one entry.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "L6.7b b3 is the production caller")
+    )]
+    pub(in crate::tagged::gc) fn enqueue_baton_group(
+        &mut self,
+    ) -> Result<RequestId, RendezvousError> {
+        self.live()?;
+        if self
+            .serial_ring
+            .iter()
+            .any(|entry| entry.client() == RingClient::BatonGroup)
+        {
+            return Err(RendezvousError::Identity);
+        }
+        self.push(RingClient::BatonGroup)
+    }
+
+    fn push(&mut self, client: RingClient) -> Result<RequestId, RendezvousError> {
         self.serial_ring
             .try_reserve(1)
             .map_err(|_| RendezvousError::Capacity)?;
@@ -231,8 +272,7 @@ impl State {
         let id = RequestId(NonZeroU64::new(next).ok_or(RendezvousError::Generation)?);
         self.serial_ring.push_back(RingEntry {
             id,
-            owner,
-            generation,
+            client,
             phase: RingPhase::Queued,
         });
         self.next_request = next;
@@ -344,7 +384,7 @@ impl State {
         let Some(index) = self
             .serial_ring
             .iter()
-            .position(|entry| entry.owner() == owner && entry.phase() == RingPhase::Queued)
+            .position(|entry| entry.is_owner(owner) && entry.phase() == RingPhase::Queued)
         else {
             return Err(RendezvousError::Identity);
         };
