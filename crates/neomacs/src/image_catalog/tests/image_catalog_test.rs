@@ -845,3 +845,64 @@ fn tiff_pages_keep_independent_known_geometry() {
         Some(ImageLayoutExtent::new(3, 2))
     );
 }
+
+#[test]
+fn animation_bookkeeping_mutations_hit_existing_catalog_entry_for_file_and_data() {
+    use neovm_core::emacs_core::image_catalog::{EncodedBytes, ImageDataSource};
+
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
+    let metadata = Arc::new(ImageRenderState::default());
+    let catalog = test_catalog(cmd_tx, None, metadata, None);
+
+    let make_data_request = |tardiness: f64| {
+        let spec = IMAGE_SPEC_TEST_CONTEXT.with(|_| {
+            Value::list(vec![
+                Value::symbol("image"),
+                Value::keyword(":type"),
+                Value::symbol("gif"),
+                Value::keyword(":data"),
+                Value::string("GIF89a"),
+                Value::keyword(":index"),
+                Value::fixnum(0),
+                Value::keyword(":animate-tardiness"),
+                Value::make_float(tardiness),
+            ])
+        });
+        let items = list_to_vec(&spec).expect("test data spec is a list");
+        ImageResolveRequest {
+            spec: ImageSpecIdentity::from_lisp_spec(&spec).expect("data spec identity"),
+            identity: image_load_identity(&spec, &items),
+            source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::copy_of(
+                b"GIF89a",
+            ))),
+            size: ImageSizeSpec::default(),
+            rotation: Default::default(),
+            colors: ImageColorContext::default(),
+            mask: Default::default(),
+            animation: ImageAnimationPolicy::disabled(),
+            frame: ImageFrameIndex::new(0),
+            realization: Default::default(),
+        }
+    };
+
+    let first = match lookup(&catalog, make_data_request(0.0)) {
+        ImageLookup::Pending(pending) => pending.load(),
+        other => panic!("expected initial pending load, got {other:?}"),
+    };
+    let second = match lookup(&catalog, make_data_request(0.45)) {
+        ImageLookup::Pending(pending) => pending.load(),
+        other => panic!("expected cache hit on mutated :animate-tardiness, got {other:?}"),
+    };
+    assert_eq!(
+        first, second,
+        "mutating :animate-tardiness on a :data image must hit the same catalog entry"
+    );
+    let mut queued_loads = 0;
+    while cmd_rx.try_recv().is_ok() {
+        queued_loads += 1;
+    }
+    assert_eq!(
+        queued_loads, 1,
+        "mutating :animate-tardiness must not schedule a second load command"
+    );
+}

@@ -42,7 +42,10 @@
         (kill-emacs 0)
       ;; Metadata and the initial GPU presentation must arrive before the
       ;; ordinary image.el timers are allowed to change either image.
-      (mapc #'image-animate neomacs-svg-images)
+      ;; Bind the displayed buffer because `timer-event-handler' restores
+      ;; `current-buffer' after `neomacs-svg-start' returns.
+      (with-current-buffer "*svg-animation*"
+        (mapc #'image-animate neomacs-svg-images))
       (setq neomacs-svg-deadline (+ (float-time) 12))
       (run-at-time 0.05 nil #'neomacs-svg-await-final)))
    (t (run-at-time 0.05 nil #'neomacs-svg-await-presentation stage))))

@@ -38,7 +38,12 @@
    ((file-exists-p (expand-file-name (concat stage ".ack") neomacs-svg-control))
     (if (equal stage "final") (kill-emacs 0)
       (advice-add 'image-show-frame :before #'neomacs-svg-record-frame)
-      (image-animate neomacs-svg-image nil t)
+      ;; `timer-event-handler' wraps timers in `save-current-buffer', so
+      ;; `current-buffer' reverted to `*scratch*' after `neomacs-svg-intro-start'.
+      ;; Bind the displayed buffer so `image-animate' records it as
+      ;; `:animate-buffer' for `force-window-update'.
+      (with-current-buffer "*svg-introduction*"
+        (image-animate neomacs-svg-image nil t))
       (setq neomacs-svg-deadline (+ (float-time) 12))
       (run-at-time 0.05 nil #'neomacs-svg-intro-await-cycle)))
    (t (run-at-time 0.05 nil #'neomacs-svg-intro-await-presentation stage))))

@@ -143,7 +143,7 @@ pub enum ImageResolveSource {
 
 static_assertions::assert_impl_all!(ImageResolveSource: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub struct ImageResolveRequest {
     /// Full Lisp-spec identity. Parsed fields below are the materialization
     /// recipe; they are intentionally not used as a substitute for the spec.
@@ -171,8 +171,40 @@ pub struct ImageResolveRequest {
     /// Derived from the same specification the rest of this request is, so it
     /// cannot disagree with it; it travels here rather than being recomputed
     /// at the failure site because only this side can print a `:data` image's
-    /// specification the way GNU does.
+    /// specification the way GNU does. Excluded from cache-key equality and
+    /// hashing because `:data` diagnostic text prints `:animate-*` bookkeeping
+    /// that GNU `filter_image_spec` excludes from the cache key (#823).
     pub identity: ImageLoadIdentity,
+}
+
+impl PartialEq for ImageResolveRequest {
+    fn eq(&self, other: &Self) -> bool {
+        self.spec == other.spec
+            && self.source == other.source
+            && self.size == other.size
+            && self.rotation == other.rotation
+            && self.colors == other.colors
+            && self.mask == other.mask
+            && self.frame == other.frame
+            && self.animation == other.animation
+            && self.realization == other.realization
+    }
+}
+
+impl Eq for ImageResolveRequest {}
+
+impl std::hash::Hash for ImageResolveRequest {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.spec.hash(state);
+        self.source.hash(state);
+        self.size.hash(state);
+        self.rotation.hash(state);
+        self.colors.hash(state);
+        self.mask.hash(state);
+        self.frame.hash(state);
+        self.animation.hash(state);
+        self.realization.hash(state);
+    }
 }
 
 static_assertions::assert_impl_all!(ImageResolveRequest: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
