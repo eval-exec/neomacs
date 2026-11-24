@@ -366,7 +366,8 @@ fn generational_pacing_real_minor_credits_promotion_and_major_resets_after_recla
     let child = heap.alloc_string(LispString::from_utf8("minor promotion credit"));
     push_scratch_gc_root(child);
     let child_addr = TaggedHeap::value_heap_addr(child).unwrap();
-    let child_bytes = TaggedHeap::object_bytes_from_header(child_addr as *const GcHeader);
+    let child_bytes =
+        unsafe { TaggedHeap::object_bytes_from_header(child_addr as *const GcHeader) };
     assert!(crate::tagged::mutate::set_cons_car(owner, child));
     heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);

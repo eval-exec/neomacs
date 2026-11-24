@@ -832,7 +832,8 @@ impl LispString {
         ptr: *const u8,
         len: usize,
     ) -> Result<(), String> {
-        self.validate_storage_install(ptr, len)?;
+        // SAFETY: `lookup_static_rodata` returns a NUL-terminated static slice of `len` bytes.
+        unsafe { self.validate_storage_install(ptr, len)? };
         self.data = ptr;
         self.storage_capacity = 0;
         Ok(())
@@ -855,13 +856,16 @@ impl LispString {
         let ptr = lookup_static_rodata(key, len).ok_or_else(|| {
             format!("static rodata string key {key:#x} length {len} is not registered")
         })?;
-        self.validate_storage_install(ptr, len)?;
+        // SAFETY: `lookup_static_rodata` returns a NUL-terminated static slice of `len` bytes.
+        unsafe { self.validate_storage_install(ptr, len)? };
         self.data = ptr;
         self.storage_capacity = 0;
         Ok(())
     }
 
-    fn validate_storage_install(&self, ptr: *const u8, len: usize) -> Result<(), String> {
+    /// # Safety
+    /// `ptr` must address `len + 1` initialized bytes (including the trailing NUL).
+    unsafe fn validate_storage_install(&self, ptr: *const u8, len: usize) -> Result<(), String> {
         if ptr.is_null() {
             return Err("LispString storage pointer is null".into());
         }

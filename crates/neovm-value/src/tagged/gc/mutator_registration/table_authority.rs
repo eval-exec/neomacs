@@ -75,7 +75,10 @@ pub(crate) struct UserTestHold {
 }
 
 impl UserTestHold {
-    fn take(table: *mut HashTableObj) -> Result<Self, RegistrationError> {
+    /// # Safety
+    /// `table` must point to a live, rooted [`HashTableObj`] that outlives the
+    /// returned [`UserTestHold`].
+    unsafe fn take(table: *mut HashTableObj) -> Result<Self, RegistrationError> {
         // SAFETY: the pointer came from a lease mint, which validated the
         // object; the byte is table-level metadata, not storage contents.
         let depth = unsafe { &(*table).test_depth };
@@ -339,7 +342,8 @@ impl TableRef<'_> {
     /// table) before running the callback, then let this Drop release the
     /// count when the window closes.
     pub(crate) fn hold_user_test(&self) -> Result<UserTestHold, RegistrationError> {
-        UserTestHold::take(self.table)
+        // SAFETY: `self` is a live lease over a rooted `HashTableObj`.
+        unsafe { UserTestHold::take(self.table) }
     }
 }
 

@@ -571,7 +571,7 @@ impl TaggedHeap {
             }
         }
         for object in &self.mapped_veclike_objects {
-            let payload = Self::veclike_payload_layout(object.header);
+            let payload = unsafe { Self::veclike_payload_layout(object.header) };
             if payload.owned {
                 mapped.copied_veclike_payloads += 1;
                 mapped.copied_veclike_capacity_bytes = mapped
@@ -581,10 +581,12 @@ impl TaggedHeap {
         }
 
         let mut boxed = Vec::new();
-        self.note_boxed_list_layout(self.all_objects, &mut boxed);
-        self.note_boxed_list_layout(self.tenured_objects, &mut boxed);
-        self.note_boxed_list_layout(self.generational.old_objects, &mut boxed);
-        self.note_boxed_list_layout(self.generational.old_sweep_pending, &mut boxed);
+        unsafe {
+            self.note_boxed_list_layout(self.all_objects, &mut boxed);
+            self.note_boxed_list_layout(self.tenured_objects, &mut boxed);
+            self.note_boxed_list_layout(self.generational.old_objects, &mut boxed);
+            self.note_boxed_list_layout(self.generational.old_sweep_pending, &mut boxed);
+        }
         boxed.sort_by_key(|layout| std::cmp::Reverse(layout.known_bytes));
 
         let page_backing_bytes = cons

@@ -177,7 +177,9 @@ impl ConsBlock {
     /// (`mark_cell_offset`): an allocation region pre-marked black at grant,
     /// or its unused tail unmarked at close. Needs no `&mut` block, so a
     /// region names its block by address alone.
-    pub(super) fn mark_run_at(base: usize, start: usize, n: usize, set: bool) {
+    /// # Safety
+    /// `base` must be a live cons block base and `start + n <= CONS_BLOCK_SIZE`.
+    pub(super) unsafe fn mark_run_at(base: usize, start: usize, n: usize, set: bool) {
         // SAFETY: the allocation region names an owned block held live for
         // the duration of its extent. Its tail ranges stay inside the cells.
         unsafe { ConsBlockTrailer::from_block_base(base) }.mark_run(start, n, set);

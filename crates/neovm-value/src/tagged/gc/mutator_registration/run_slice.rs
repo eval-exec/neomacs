@@ -115,13 +115,9 @@ impl<'brand> RunSlice<'brand, '_> {
         result: &mut SliceRoot<'brand>,
         bits: usize,
     ) -> Result<(), RegistrationError> {
-        let value = unsafe {
-            /* SAFETY: value-internal construction from a real Value */
-            TaggedValue::from_bits(bits)
-        };
-        if !(value.is_fixnum() || value.is_nil() || value.is_t()) {
+        let Some(value) = TaggedValue::try_immediate_from_bits(bits) else {
             return Err(RegistrationError::Publication);
-        }
+        };
         write_slot(result, value);
         Ok(())
     }
@@ -209,8 +205,14 @@ impl<'brand> RunSlice<'brand, '_> {
         slot_value(root).bits()
     }
 
+    /// # Safety
+    /// `bits` must encode a valid `TaggedValue` owned by this slice's heap.
     #[cfg(any(test, feature = "test-support"))]
-    pub(super) fn plant_word_for_test(&mut self, result: &mut SliceRoot<'brand>, bits: usize) {
+    pub(super) unsafe fn plant_word_for_test(
+        &mut self,
+        result: &mut SliceRoot<'brand>,
+        bits: usize,
+    ) {
         write_slot(result, unsafe { TaggedValue::from_bits(bits) });
     }
 

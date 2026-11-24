@@ -76,15 +76,19 @@ impl TaggedHeap {
     /// major skip the cold recording path with one flag branch. The cold
     /// helper checks the concurrent phase because major scope includes sweep.
     #[inline]
-    pub(super) fn note_black_born(&mut self, header: *mut GcHeader) {
+    /// # Safety
+    /// `header` must point to a live, initialized `GcHeader` allocated on this heap.
+    pub(super) unsafe fn note_black_born(&mut self, header: *mut GcHeader) {
         if self.generational.major_in_progress {
-            self.record_black_born_major(header);
+            unsafe { self.record_black_born_major(header) };
         }
     }
 
     #[cold]
     #[inline(never)]
-    fn record_black_born_major(&mut self, header: *mut GcHeader) {
+    /// # Safety
+    /// `header` must point to a live, initialized `GcHeader` allocated on this heap.
+    unsafe fn record_black_born_major(&mut self, header: *mut GcHeader) {
         // Keep the concurrent-phase test out of the ordinary allocation
         // path: with GEN0, the major flag alone rejects this cold helper.
         if !self.concurrent_mark_running {

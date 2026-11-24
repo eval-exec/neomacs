@@ -371,8 +371,10 @@ impl TaggedHeap {
         self.generational.cycle == GenerationCycle::Minor
     }
 
+    /// # Safety
+    /// `header` must point to a valid, live [`GcHeader`] owned by this heap.
     #[inline]
-    pub(super) fn note_minor_survivor(&mut self, header: *mut GcHeader) {
+    pub(super) unsafe fn note_minor_survivor(&mut self, header: *mut GcHeader) {
         if self.generational.enabled && !unsafe { (*header).tenured } {
             self.generational.promo.push(header);
         }
@@ -424,7 +426,7 @@ impl TaggedHeap {
                     debug_assert!(header.is_marked_at(self.mark_parity));
                     header.promote_to_old_generation();
                     let image_resident = header.flags.image_resident();
-                    let bytes = self.collector_object_bytes(ptr);
+                    let bytes = unsafe { self.collector_object_bytes(ptr) };
                     // Image provenance excludes this storage even before a
                     // partition cycle makes it permanent. Runtime hash
                     // backing joins the completed census separately.

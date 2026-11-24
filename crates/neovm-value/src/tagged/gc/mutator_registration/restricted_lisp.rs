@@ -1397,7 +1397,7 @@ fn exec<'brand>(
                 let src = home_index(src, homes.len())?;
                 let dst = home_index(dst, homes.len())?;
                 let bits = home_bits(slice, &homes[src]);
-                slice.plant_word_for_test(&mut homes[dst], bits);
+                unsafe { slice.plant_word_for_test(&mut homes[dst], bits) };
                 machine.pc += 1;
             }
             Op::Add { dst, a, b } => {
@@ -1871,7 +1871,7 @@ fn plant_words<'era>(
         }
         for &(slot, bits) in words {
             let index = home_index(slot, homes.len())?;
-            slice.plant_word_for_test(&mut homes[index], bits);
+            unsafe { slice.plant_word_for_test(&mut homes[index], bits) };
         }
         Ok(())
     })
@@ -1902,7 +1902,7 @@ fn run_cb<'era>(
                 if machine.pc == 0 {
                     for &(slot, bits) in args {
                         let index = home_index(slot, homes.len())?;
-                        slice.plant_word_for_test(&mut homes[index], bits);
+                        unsafe { slice.plant_word_for_test(&mut homes[index], bits) };
                     }
                 }
                 exec(slice, &mut homes, ops, &mut machine, 0, None, 0)

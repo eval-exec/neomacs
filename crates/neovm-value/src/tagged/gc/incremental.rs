@@ -807,7 +807,7 @@ impl TaggedHeap {
             // first-cycle window of the type sim) before being classified.
             let addr = ptr as usize;
             if (addr >= self.dump_addr_lo && addr < self.dump_addr_hi)
-                || !self.owns_live_veclike_object(ptr as *const u8)
+                || !unsafe { self.owns_live_veclike_object(ptr as *const u8) }
             {
                 if self.mark_mapped_veclike(ptr) {
                     #[cfg(any(test, feature = "test-support"))]
@@ -2012,7 +2012,7 @@ impl TaggedHeap {
                     },
                     VecLikeType::Sqlite => {
                         if self.deferring_native_reclaims() {
-                            self.push_deferred_sqlite(ptr as *mut SqliteObj);
+                            unsafe { self.push_deferred_sqlite(ptr as *mut SqliteObj) };
                             return;
                         }
                         if mode == ReclamationMode::Explicit || !cfg!(feature = "sqlite") {
@@ -2041,7 +2041,7 @@ impl TaggedHeap {
                     VecLikeType::UserPtr => {
                         let up = ptr as *mut UserPtrObj;
                         if self.deferring_native_reclaims() {
-                            self.push_deferred_user_ptr(up);
+                            unsafe { self.push_deferred_user_ptr(up) };
                             return;
                         }
                         if mode == ReclamationMode::Explicit {
@@ -2065,7 +2065,7 @@ impl TaggedHeap {
                     VecLikeType::ModuleFunction => {
                         let mf = ptr as *mut ModuleFunctionObj;
                         if self.deferring_native_reclaims() {
-                            self.push_deferred_module_function(mf);
+                            unsafe { self.push_deferred_module_function(mf) };
                             return;
                         }
                         if mode == ReclamationMode::Explicit {
@@ -2203,8 +2203,11 @@ impl TaggedHeap {
     /// ownership test that still hashed (P5: 0.9% of instructions). The
     /// general oracle keeps the probe, which is exact even for a dangling
     /// address.
+    /// # Safety
+    /// `ptr` must point to a live veclike object whose leading [`GcHeader`] is
+    /// readable when `ptr` is not on a heap chunk.
     #[inline(always)]
-    pub(super) fn owns_live_veclike_object(&self, ptr: *const u8) -> bool {
+    pub(super) unsafe fn owns_live_veclike_object(&self, ptr: *const u8) -> bool {
         let Some(map) = self.chunk_map.as_ref() else {
             return self.owns_veclike_object_by_registry(ptr);
         };

@@ -31,7 +31,7 @@ fn last(heap: &TaggedHeap) -> CensusRecord {
 
 fn object_bytes(value: TaggedValue) -> usize {
     let addr = TaggedHeap::value_heap_addr(value).expect("a heap object");
-    TaggedHeap::object_bytes_from_header(addr as *const GcHeader)
+    unsafe { TaggedHeap::object_bytes_from_header(addr as *const GcHeader) }
 }
 
 const CELL: usize = size_of::<ConsCell>();

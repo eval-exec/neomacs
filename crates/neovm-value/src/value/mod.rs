@@ -4300,7 +4300,9 @@ impl TaggedValue {
     // outlining the already-hydrated read adds work to every gethash/puthash.
     #[cold]
     #[inline(never)]
-    fn hydrate_hash_table_for_access(self, ptr: *mut HashTableObj) {
+    /// # Safety
+    /// `ptr` must point to a live, initialized `HashTableObj` owned by the current heap.
+    unsafe fn hydrate_hash_table_for_access(self, ptr: *mut HashTableObj) {
         // A parked structural key without a snapshot can be reconstructed as
         // a fresh heap object. Remember the owner before creating that edge.
         if unsafe { with_tagged_heap(|heap| heap.tagged_heap_generational_enabled()) } {

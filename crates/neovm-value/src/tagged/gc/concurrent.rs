@@ -1046,18 +1046,20 @@ impl TaggedHeap {
         } else if let Some(ptr) = owner.gc_veclike_ptr() {
             // Match ordinary gray enumeration: register weak tables, strongly
             // log only their custom closures, and let weak fixpoint handle KV.
-            if let Some(children) = self.register_weak_hash_table_for_sweep(ptr) {
+            if let Some(children) = unsafe { self.register_weak_hash_table_for_sweep(ptr) } {
                 for child in children {
                     self.push_satb_child(child);
                 }
             } else {
-                Self::for_each_veclike_child(
-                    self.collector_tables(),
-                    ptr as *mut VecLikeHeader,
-                    &mut mark_sweep::VisitChild(|child| {
-                        self.push_satb_child(child);
-                    }),
-                );
+                unsafe {
+                    Self::for_each_veclike_child(
+                        self.collector_tables(),
+                        ptr as *mut VecLikeHeader,
+                        &mut mark_sweep::VisitChild(|child| {
+                            self.push_satb_child(child);
+                        }),
+                    );
+                }
             }
         } else if let Some(ptr) = owner.gc_string_ptr() {
             // SAFETY: this is the owner's pre-store interval table, retained

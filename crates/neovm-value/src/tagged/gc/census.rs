@@ -338,7 +338,7 @@ impl TaggedHeap {
                 } {
                     return;
                 }
-                let bytes = self.collector_object_bytes(header);
+                let bytes = unsafe { self.collector_object_bytes(header) };
                 let addr = header as usize;
                 if prev.contains(&addr) {
                     record.old_survivors.add_object(bytes);
@@ -387,7 +387,7 @@ impl TaggedHeap {
             }
             record
                 .promoted_dead
-                .add_object(self.collector_object_bytes(header));
+                .add_object(unsafe { self.collector_object_bytes(header) });
         }
         census.prev_objects = now;
         census.young_last_objects = young_now;
@@ -426,13 +426,15 @@ impl TaggedHeap {
             let (car, cdr) = unsafe { ((*ptr).load_car(), (*ptr).load_cdr()) };
             count += usize::from(car.is_heap_object()) + usize::from(cdr.is_heap_object());
         } else if let Some(ptr) = owner.gc_veclike_ptr() {
-            Self::for_each_veclike_child(
-                self.collector_tables(),
-                ptr as *mut VecLikeHeader,
-                &mut VisitChild(|child: TaggedValue| {
-                    count += usize::from(child.is_heap_object());
-                }),
-            );
+            unsafe {
+                Self::for_each_veclike_child(
+                    self.collector_tables(),
+                    ptr as *mut VecLikeHeader,
+                    &mut VisitChild(|child: TaggedValue| {
+                        count += usize::from(child.is_heap_object());
+                    }),
+                );
+            }
         } else if let Some(ptr) = owner.gc_string_ptr() {
             // SAFETY: a live string (see the caller).
             let intervals = unsafe { (*ptr).data.intervals() };

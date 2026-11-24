@@ -268,7 +268,9 @@ impl<S: WorkerSymbolMarks> WorkerMarkLogs<S> {
 
     /// Generation bytes do not change until this worker has exited.
     #[inline]
-    fn note_promotion<const MAJOR: bool>(&mut self, header: *const GcHeader) {
+    /// # Safety
+    /// `header` must point to a live, initialized GC object header.
+    unsafe fn note_promotion<const MAJOR: bool>(&mut self, header: *const GcHeader) {
         if MAJOR && !unsafe { (*header).tenured } {
             self.result.promo.push(header as usize);
         }
@@ -301,7 +303,11 @@ impl<S: WorkerSymbolMarks> WorkerMarkLogs<S> {
 
 trait ClaimExtension {
     type Symbols: WorkerSymbolMarks;
-    fn try_mark<const MAJOR: bool>(
+
+    /// # Safety
+    /// `ptr` must point to a valid, live [`VecLikeHeader`] whose header and
+    /// payload are readable under the concurrent claim protocol of `job`.
+    unsafe fn try_mark<const MAJOR: bool>(
         &self,
         ptr: *const VecLikeHeader,
         job: &ConcurrentClaimJob,
@@ -315,7 +321,7 @@ struct LegacyClaims;
 impl ClaimExtension for LegacyClaims {
     type Symbols = FxHashSet<SymId>;
     #[inline(always)]
-    fn try_mark<const MAJOR: bool>(
+    unsafe fn try_mark<const MAJOR: bool>(
         &self,
         _ptr: *const VecLikeHeader,
         _job: &ConcurrentClaimJob,
@@ -717,7 +723,7 @@ fn concurrent_try_mark_string_major<S: WorkerSymbolMarks>(
     }
     if unsafe { (*ptr).header.mark_claim_at(job.parity) } {
         job.str_claimed.fetch_add(1, Ordering::Relaxed);
-        logs.note_promotion::<true>(ptr.cast());
+        unsafe { logs.note_promotion::<true>(ptr.cast()) };
     }
     true
 }
@@ -878,7 +884,7 @@ fn concurrent_try_mark_owned_with_symbols<
         // this cycle) — equally done.
         if unsafe { (*ptr).header.mark_claim_at(job.parity) } {
             job.float_claimed.fetch_add(1, Ordering::Relaxed);
-            logs.note_promotion::<MAJOR>(ptr.cast());
+            unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
         }
         return true;
     }
@@ -957,7 +963,7 @@ fn concurrent_try_mark_owned_with_symbols<
             }
             if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {
                 job.vec_claimed.fetch_add(1, Ordering::Relaxed);
-                logs.note_promotion::<MAJOR>(ptr.cast());
+                unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
             }
             return true;
         }
@@ -1039,7 +1045,7 @@ fn concurrent_try_mark_owned_with_symbols<
             }
             if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {
                 job.bc_claimed.fetch_add(1, Ordering::Relaxed);
-                logs.note_promotion::<MAJOR>(ptr.cast());
+                unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
                 // Fresh claim: gray-push the children (coverage leg (a)).
                 // Field reads are race-free per the immutability argument
                 // above (a fresh claim proves the object pre-dates the
@@ -1087,7 +1093,7 @@ fn concurrent_try_mark_owned_with_symbols<
             // coverage leg (c)): equally handled, nothing further owed.
             return true;
         }
-        if let Some(handled) = extension.try_mark::<MAJOR>(ptr, job, gray, logs) {
+        if let Some(handled) = unsafe { extension.try_mark::<MAJOR>(ptr, job, gray, logs) } {
             return handled;
         }
         // MAPPED (pdump) veclikes mark via the heap's side table
@@ -1133,7 +1139,7 @@ impl ClaimExtension for EnabledClaims {
     type Symbols = SymbolMarkBits;
 
     #[inline]
-    fn try_mark<const MAJOR: bool>(
+    unsafe fn try_mark<const MAJOR: bool>(
         &self,
         ptr: *const VecLikeHeader,
         job: &ConcurrentClaimJob,
@@ -1162,7 +1168,7 @@ impl ClaimExtension for EnabledClaims {
                         .as_ref()
                         .expect("Tier-H snapshot requires a cycle counter")
                         .fetch_add(1, Ordering::Relaxed);
-                    logs.note_promotion::<MAJOR>(ptr.cast());
+                    unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
                     // Complete this snapshot scan even if stop arrives now:
                     // a claimed header cannot be sent back for retracing.
                     #[cfg(any(test, feature = "test-support"))]
@@ -1201,7 +1207,7 @@ impl ClaimExtension for EnabledClaims {
                         .as_ref()
                         .expect("enabled leaf claims require a cycle counter")
                         .fetch_add(1, Ordering::Relaxed);
-                    logs.note_promotion::<MAJOR>(ptr.cast());
+                    unsafe { logs.note_promotion::<MAJOR>(ptr.cast()) };
                     if class == ChunkClass::SymbolWithPos {
                         // These fields have no post-publication setter. A
                         // fresh claim excludes births at this cycle parity:

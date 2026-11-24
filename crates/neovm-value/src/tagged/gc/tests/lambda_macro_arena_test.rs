@@ -507,7 +507,7 @@ fn lambda_sweep_live_bytes_track_variable_payload_sizes() {
 
     let expected_objects: usize = [l_big, l_small]
         .iter()
-        .map(|b| {
+        .map(|b| unsafe {
             TaggedHeap::object_bytes_from_header(b.as_veclike_ptr().unwrap() as *const GcHeader)
         })
         .sum::<usize>();

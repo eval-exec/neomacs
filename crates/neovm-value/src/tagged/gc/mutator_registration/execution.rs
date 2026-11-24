@@ -39,9 +39,8 @@ pub enum ImmediateResultError {
 impl ImmediateResult {
     #[doc(hidden)]
     pub fn from_word(bits: usize) -> Result<Self, ImmediateResultError> {
-        let value = unsafe {
-            /* SAFETY: value-internal construction from a real Value */
-            TaggedValue::from_bits(bits)
+        let Some(value) = TaggedValue::try_immediate_from_bits(bits) else {
+            return Err(ImmediateResultError::NotImmediate);
         };
         if value.is_nil() {
             Ok(Self::Nil)

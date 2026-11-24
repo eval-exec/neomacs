@@ -143,7 +143,10 @@ impl TaggedHeap {
         self.pending_native_destroys.is_some()
     }
 
-    pub(super) fn push_deferred_user_ptr(&mut self, object: *mut UserPtrObj) {
+    /// # Safety
+    /// `object` must be an exclusively owned, detached, initialized
+    /// [`UserPtrObj`] box ready for deferred reclamation.
+    pub(super) unsafe fn push_deferred_user_ptr(&mut self, object: *mut UserPtrObj) {
         let pending = self
             .pending_native_destroys
             .as_mut()
@@ -158,7 +161,10 @@ impl TaggedHeap {
         });
     }
 
-    pub(super) fn push_deferred_module_function(&mut self, object: *mut ModuleFunctionObj) {
+    /// # Safety
+    /// `object` must be an exclusively owned, detached, initialized
+    /// [`ModuleFunctionObj`] box ready for deferred reclamation.
+    pub(super) unsafe fn push_deferred_module_function(&mut self, object: *mut ModuleFunctionObj) {
         let pending = self
             .pending_native_destroys
             .as_mut()
@@ -173,7 +179,10 @@ impl TaggedHeap {
         });
     }
 
-    pub(super) fn push_deferred_sqlite(&mut self, object: *mut SqliteObj) {
+    /// # Safety
+    /// `object` must be an exclusively owned, detached, initialized
+    /// [`SqliteObj`] box ready for deferred reclamation.
+    pub(super) unsafe fn push_deferred_sqlite(&mut self, object: *mut SqliteObj) {
         let pending = self
             .pending_native_destroys
             .as_mut()

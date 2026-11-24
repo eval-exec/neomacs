@@ -416,7 +416,7 @@ fn concurrent_leaf_claims_keep_mapped_and_residual_box_symbol_positions_deferred
                 heap.register_mapped_veclike_object(object.cast(), size_of::<SymbolWithPosObj>())
             };
         } else {
-            heap.link_veclike(object.cast());
+            unsafe { heap.link_veclike(object.cast()) };
         }
         let value = unsafe { TaggedValue::from_veclike_ptr(object.cast()) };
         let job = job(&mut heap, false);

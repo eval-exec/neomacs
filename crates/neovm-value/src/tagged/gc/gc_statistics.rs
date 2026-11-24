@@ -136,7 +136,7 @@ impl TaggedHeap {
                 .count(),
             ..GcObjectCounts::default()
         };
-        let mut visit = |header| self.note_runtime_gc_object(header, &mut counts);
+        let mut visit = |header| unsafe { self.note_runtime_gc_object(header, &mut counts) };
         visit_arena(&self.string_arena, &mut visit);
         visit_arena(&self.float_arena, &mut visit);
         visit_arena(&self.vector_arena, &mut visit);
@@ -153,7 +153,9 @@ impl TaggedHeap {
         counts
     }
 
-    fn note_runtime_gc_object(&self, header: *const GcHeader, counts: &mut GcObjectCounts) {
+    /// # Safety
+    /// `header` must point to a live, initialized GC object header.
+    unsafe fn note_runtime_gc_object(&self, header: *const GcHeader, counts: &mut GcObjectCounts) {
         // SAFETY: arena allocation bits or exact Box ownership established a
         // live initialized header. Capture runs at stopped post-sweep
         // publication or before activation publishes this heap; no mutator

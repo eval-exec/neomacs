@@ -478,7 +478,9 @@ impl<T: PagedObject> ObjectPage<T> {
 
     /// Return `storage` (from `alloc_storage`, owned by no page) to the
     /// allocator.
-    pub(super) fn free_storage(storage: *mut u8) {
+    /// # Safety
+    /// `storage` must have been allocated with `Self::layout()` and not yet freed.
+    pub(super) unsafe fn free_storage(storage: *mut u8) {
         #[cfg(any(test, feature = "test-support"))]
         T::live_page_counter().fetch_sub(1, Ordering::Relaxed);
         unsafe { alloc::dealloc(storage, Self::layout()) };
@@ -649,7 +651,7 @@ impl<T: PagedObject> Drop for ObjectPage<T> {
         } else if std::mem::needs_drop::<T>() {
             self.drop_objects::<false>();
         }
-        Self::free_storage(self.storage);
+        unsafe { Self::free_storage(self.storage) };
     }
 }
 
@@ -1354,9 +1356,9 @@ impl<T: PagedObject> ObjectArena<T> {
                             // The first sweep precedes image promotion. Loader
                             // provenance already proves these survivors immortal;
                             // they must not enlarge gc-cons-percentage's census.
-                            live_bytes = live_bytes.saturating_add(
-                                TaggedHeap::object_bytes_from_header(slot as *const GcHeader),
-                            );
+                            live_bytes = live_bytes.saturating_add(unsafe {
+                                TaggedHeap::object_bytes_from_header(slot as *const GcHeader)
+                            });
                         }
                     } else {
                         // (3) Dead: evict from any class registry, drop the
@@ -1396,7 +1398,7 @@ impl<T: PagedObject> ObjectArena<T> {
     pub(super) fn release_empty_pages(&mut self) -> usize {
         let stale = self.spare_unused_floor.min(self.spare_storage.len());
         for storage in self.spare_storage.drain(..stale) {
-            ObjectPage::<T>::free_storage(storage);
+            unsafe { ObjectPage::<T>::free_storage(storage) };
         }
         self.spare_unused_floor = self.spare_storage.len();
 
@@ -1555,7 +1557,7 @@ impl<T: PagedObject> ObjectArena<T> {
 impl<T: PagedObject> Drop for ObjectArena<T> {
     fn drop(&mut self) {
         for storage in self.spare_storage.drain(..) {
-            ObjectPage::<T>::free_storage(storage);
+            unsafe { ObjectPage::<T>::free_storage(storage) };
         }
     }
 }

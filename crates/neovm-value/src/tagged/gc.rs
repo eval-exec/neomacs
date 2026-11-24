@@ -1957,7 +1957,9 @@ impl TaggedHeap {
         size_of::<ObarrayObj>().saturating_add(Self::lisp_value_vec_storage_bytes(&obj.buckets))
     }
 
-    fn object_bytes_from_header(header: *const GcHeader) -> usize {
+    /// # Safety
+    /// `header` must point to a live, initialized GC object header.
+    unsafe fn object_bytes_from_header(header: *const GcHeader) -> usize {
         unsafe {
             match (*header).kind {
                 HeapObjectKind::String => Self::string_object_bytes(&*(header as *const StringObj)),
@@ -2151,7 +2153,9 @@ impl TaggedHeap {
         stats
     }
 
-    fn boxed_class(header: *const GcHeader) -> &'static str {
+    /// # Safety
+    /// `header` must point to a live, initialized GC object header.
+    unsafe fn boxed_class(header: *const GcHeader) -> &'static str {
         unsafe {
             match (*header).kind {
                 HeapObjectKind::String => "string",
@@ -2197,13 +2201,15 @@ impl TaggedHeap {
         }
     }
 
-    fn note_boxed_list_layout(
+    /// # Safety
+    /// `header` must be null or the head of a valid linked list of initialized GC objects.
+    unsafe fn note_boxed_list_layout(
         &self,
         mut header: *const GcHeader,
         stats: &mut Vec<BoxedKindLayoutStats>,
     ) {
         while !header.is_null() {
-            let class = Self::boxed_class(header);
+            let class = unsafe { Self::boxed_class(header) };
             let index = stats
                 .iter()
                 .position(|item| item.class == class)
@@ -2218,7 +2224,7 @@ impl TaggedHeap {
             item.objects += 1;
             item.known_bytes = item
                 .known_bytes
-                .saturating_add(self.collector_object_bytes(header));
+                .saturating_add(unsafe { self.collector_object_bytes(header) });
             unsafe {
                 item.tenured_objects += usize::from((*header).tenured);
                 header = (*header).gc_link();
@@ -2288,7 +2294,9 @@ impl TaggedHeap {
     }
 
     /// Link a veclike object into the all_objects list.
-    fn link_veclike(&mut self, header: *mut VecLikeHeader) {
+    /// # Safety
+    /// `header` must point to a freshly allocated, initialized `VecLikeHeader`.
+    unsafe fn link_veclike(&mut self, header: *mut VecLikeHeader) {
         unsafe {
             (*header).gc.next = self.all_objects;
             (*header).gc.flags = (*header).gc.flags.with_boxed();

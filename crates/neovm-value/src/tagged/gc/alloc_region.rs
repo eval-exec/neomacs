@@ -302,7 +302,7 @@ impl TaggedHeap {
         };
         let color = if self.allocates_black() {
             let base = ConsBlock::block_base_for_ptr(first);
-            ConsBlock::mark_run_at(base, ConsBlock::index_of_ptr(first), n, true);
+            unsafe { ConsBlock::mark_run_at(base, ConsBlock::index_of_ptr(first), n, true) };
             self.note_black_cons_region_start(first);
             RegionColor::Black
         } else {
@@ -586,7 +586,7 @@ impl TaggedHeap {
         let base = ConsBlock::block_base_for_ptr(first);
         let start = ConsBlock::index_of_ptr(first);
         if self.region_book.cons_color() == RegionColor::Black {
-            ConsBlock::mark_run_at(base, start, unused, false);
+            unsafe { ConsBlock::mark_run_at(base, start, unused, false) };
         }
         if let ConsRegionSource::BlockTail { block } = source
             && let Some(owner) = self.cons_blocks.get_mut(block)

@@ -382,12 +382,16 @@ fn sweep_live_bytes_track_variable_payload_sizes() {
 
     let expected_objects: usize = [s_big, s_small]
         .iter()
-        .map(
-            |s| TaggedHeap::object_bytes_from_header(s.as_string_ptr().unwrap() as *const GcHeader),
-        )
+        .map(|s| unsafe {
+            TaggedHeap::object_bytes_from_header(s.as_string_ptr().unwrap() as *const GcHeader)
+        })
         .sum::<usize>()
-        + TaggedHeap::object_bytes_from_header(v_big.as_veclike_ptr().unwrap() as *const GcHeader)
-        + TaggedHeap::object_bytes_from_header(f.as_float_ptr().unwrap() as *const GcHeader);
+        + unsafe {
+            TaggedHeap::object_bytes_from_header(v_big.as_veclike_ptr().unwrap() as *const GcHeader)
+        }
+        + unsafe {
+            TaggedHeap::object_bytes_from_header(f.as_float_ptr().unwrap() as *const GcHeader)
+        };
     let expected = expected_objects + cons_count * size_of::<ConsCell>();
 
     // Eager (finalize_collection) recompute site.

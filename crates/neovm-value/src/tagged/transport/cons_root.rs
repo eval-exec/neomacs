@@ -127,7 +127,8 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
         source: &SharedRoot,
     ) -> Result<crate::tagged::gc::OwnerRootSlot<'era>, RegistrationError> {
         source.validate(self, ConsRootSeal { _private: () })?;
-        self.admit_root_slot(SharedRoot::word(source), ConsRootSeal { _private: () })
+        // SAFETY: `source` was validated against `self`'s heap immediately above.
+        unsafe { self.admit_root_slot(SharedRoot::word(source), ConsRootSeal { _private: () }) }
     }
 }
 

@@ -244,7 +244,7 @@ fn major_keeps_permanent_payload_and_its_ordinary_old_child() {
     // inventory includes its page slot plus the old cons.
     assert_eq!(
         heap.generational.old_bytes,
-        size_of::<ConsCell>() + heap.collector_object_bytes(header_ptr(code)),
+        size_of::<ConsCell>() + unsafe { heap.collector_object_bytes(header_ptr(code)) },
     );
 }
 
@@ -477,8 +477,8 @@ fn late_dump_partition_visits_old_objects_and_consumes_stale_r_safely() {
     assert_eq!(
         heap.generational.old_bytes,
         size_of::<ConsCell>()
-            + heap.collector_object_bytes(header_ptr(live))
-            + heap.collector_object_bytes(header_ptr(vector)),
+            + unsafe { heap.collector_object_bytes(header_ptr(live)) }
+            + unsafe { heap.collector_object_bytes(header_ptr(vector)) },
     );
 }
 

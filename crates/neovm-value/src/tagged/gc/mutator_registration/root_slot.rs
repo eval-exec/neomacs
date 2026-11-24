@@ -186,7 +186,10 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     }
 
     /// Only the sealed transport bridge can admit a live source word.
-    pub(crate) fn admit_root_slot(
+    ///
+    /// # Safety
+    /// `word` must encode a live `TaggedValue` belonging to this run's heap.
+    pub(crate) unsafe fn admit_root_slot(
         &mut self,
         word: usize,
         _: ConsRootSeal,

@@ -63,7 +63,7 @@ fn miriub3_eager_sweep_preserves_young_and_old_survivors() {
             .marked
             .store(UNMARKED_AT_REST, Ordering::Relaxed);
     }
-    let young_bytes = heap.collector_object_bytes(headers[1]);
+    let young_bytes = unsafe { heap.collector_object_bytes(headers[1]) };
     assert_eq!(heap.sweep_objects(), young_bytes);
     assert_eq!(heap.non_cons_object_addrs.len(), 3);
     assert_eq!(heap.all_objects, headers[1]);
@@ -2951,7 +2951,7 @@ fn finalizer_doomed_on_stw_collection_queues_and_keeps_function() {
     let fin_ptr = finalizer.as_veclike_ptr().unwrap();
     // The verifier enumeration must cover the function slot
     // (`collect_veclike_children` stays a superset of `trace_veclike`).
-    let children = heap.collect_veclike_children(fin_ptr as *mut VecLikeHeader);
+    let children = unsafe { heap.collect_veclike_children(fin_ptr as *mut VecLikeHeader) };
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].0, function.0);
 
@@ -3555,7 +3555,7 @@ fn owned_subr_storage_is_deallocated_by_its_exact_layout() {
     let (value, ptr) = (ownership_host().leaked_subr)();
     // The cfg(test) adapter returns an unregistered allocation whose only
     // owner is this fixture; unlike the static tests, transfer it to the heap.
-    heap.link_veclike(ptr.cast::<VecLikeHeader>());
+    unsafe { heap.link_veclike(ptr.cast::<VecLikeHeader>()) };
     assert!(heap.non_cons_object_addrs.contains(&(ptr as usize)));
     assert_eq!(value.as_subr_id(), Some(crate::intern::SymId(1)));
     // Drop's existing exclusive owned sweep must use the fixed exact Layout.

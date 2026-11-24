@@ -911,7 +911,7 @@ fn bytecode_sweep_live_bytes_track_variable_payload_sizes() {
 
     let expected_objects: usize = [b_big, b_small]
         .iter()
-        .map(|b| {
+        .map(|b| unsafe {
             TaggedHeap::object_bytes_from_header(b.as_veclike_ptr().unwrap() as *const GcHeader)
         })
         .sum::<usize>();
@@ -1312,7 +1312,7 @@ fn bytecode_shared_gnu_bytes_survive_the_sweep_of_either_holder() {
 
     let proto = heap.alloc_bytecode(proto_fn);
     let instance = heap.alloc_bytecode(instance_fn);
-    let per_object = |b: TaggedValue| {
+    let per_object = |b: TaggedValue| unsafe {
         TaggedHeap::object_bytes_from_header(b.as_veclike_ptr().unwrap() as *const GcHeader)
     };
     assert_eq!(per_object(proto), per_object(instance));
@@ -1394,8 +1394,8 @@ fn bytecode_instance_reads_back_as_the_prototype_with_its_own_pool() {
     let cloned = heap.alloc_bytecode(clone);
     assert_eq!(instance_bytes, heap.bytes_since_gc() - before);
     assert_eq!(
-        TaggedHeap::object_bytes_from_header(bc_ptr(instance) as *const GcHeader),
-        TaggedHeap::object_bytes_from_header(bc_ptr(cloned) as *const GcHeader),
+        unsafe { TaggedHeap::object_bytes_from_header(bc_ptr(instance) as *const GcHeader) },
+        unsafe { TaggedHeap::object_bytes_from_header(bc_ptr(cloned) as *const GcHeader) },
     );
 
     assert_eq!(instance.veclike_type(), Some(VecLikeType::ByteCode));

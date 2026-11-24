@@ -104,7 +104,8 @@ fn independent_parameter_child_survives(collection: Collection) {
         TaggedValue::symbol("p6-independent-parameter")
     );
     assert_eq!(observable_arglist.cons_car().as_fixnum(), Some(91));
-    let children = heap.collect_veclike_children(owner.as_veclike_ptr().unwrap().cast_mut());
+    let children =
+        unsafe { heap.collect_veclike_children(owner.as_veclike_ptr().unwrap().cast_mut()) };
     assert!(children.contains(&parameter_list));
     assert!(children.contains(&observable_arglist));
 }

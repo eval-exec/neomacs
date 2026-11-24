@@ -611,6 +611,27 @@ impl TaggedValue {
         self.0 & FIXNUM_CHECK_MASK == FIXNUM_CHECK_VALUE
     }
 
+    /// Whether a raw tagged word carries the fixnum tag bits.
+    #[inline(always)]
+    pub const fn bits_are_fixnum(bits: usize) -> bool {
+        bits & FIXNUM_CHECK_MASK == FIXNUM_CHECK_VALUE
+    }
+
+    /// Decode an immediate tagged word (`nil`, `t`, or a fixnum) without
+    /// ever constructing a heap pointer from arbitrary bits.
+    #[inline]
+    pub const fn try_immediate_from_bits(bits: usize) -> Option<Self> {
+        if bits == Self::NIL.0 {
+            Some(Self::NIL)
+        } else if bits == Self::T.0 {
+            Some(Self::T)
+        } else if Self::bits_are_fixnum(bits) {
+            Some(Self(bits, PhantomData))
+        } else {
+            None
+        }
+    }
+
     /// Check if this value is a symbol.
     /// In GNU Emacs, keywords are symbols (interned with `:` prefix).
     /// Check if this value is a symbol. Keywords are symbols (name starts

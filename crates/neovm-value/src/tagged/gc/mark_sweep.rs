@@ -564,7 +564,7 @@ impl TaggedHeap {
             .map(|o| o.header)
             .collect();
         for ptr in veclike {
-            if self.veclike_has_young_child(ptr) {
+            if unsafe { self.veclike_has_young_child(ptr) } {
                 let value = unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) };
                 self.remember_owner(value);
             }
@@ -618,7 +618,7 @@ impl TaggedHeap {
             out
         };
         for header in tenured {
-            self.remember_tenured_owner_if_collectible_children(header);
+            unsafe { self.remember_tenured_owner_if_collectible_children(header) };
         }
         // -- PAGE-TENURED objects (stage 3): the arenas' tenured slots are on
         //    no intrusive list, so the walk above never sees them. They MUST
@@ -636,7 +636,8 @@ impl TaggedHeap {
         //    oracle — retired pages included — so `record_heap_write` keeps
         //    remembering mutated page-tenured owners. --
         for header in self.collect_tenured_page_slot_headers() {
-            self.remember_tenured_owner_if_collectible_children(header);
+            // SAFETY: `collect_tenured_page_slot_headers` returns live allocated page slots.
+            unsafe { self.remember_tenured_owner_if_collectible_children(header) };
         }
     }
 
@@ -649,12 +650,20 @@ impl TaggedHeap {
     /// (or mapped) owner never traces again, and an ordinary-old owner is
     /// black during a minor (GEN1), so a missed edge would let the sweep free
     /// a live child.
-    pub(super) fn remember_tenured_owner_if_collectible_children(&mut self, header: *mut GcHeader) {
+    ///
+    /// # Safety
+    /// `header` must point to a live, initialized GC object owned by this heap
+    /// while the mutator world is stopped for collector inspection.
+    pub(super) unsafe fn remember_tenured_owner_if_collectible_children(
+        &mut self,
+        header: *mut GcHeader,
+    ) {
         let kind = unsafe { (*header).kind };
         let has_collectible = match kind {
-            HeapObjectKind::VecLike => self.veclike_has_young_child(header as *mut VecLikeHeader),
-            HeapObjectKind::String => self
-                .heap_object_children(header)
+            HeapObjectKind::VecLike => unsafe {
+                self.veclike_has_young_child(header as *mut VecLikeHeader)
+            },
+            HeapObjectKind::String => unsafe { self.heap_object_children(header) }
                 .iter()
                 .any(|c| self.permanent_child_needs_trace(*c)),
             HeapObjectKind::Float => false,
@@ -677,17 +686,23 @@ impl TaggedHeap {
     /// ([`Self::is_heap_young`]). Visits the children in place: collecting
     /// them into a vector per owner cost an allocation and a push per child
     /// for each of the ~12K image veclikes the first cycle's promotion scans.
-    fn veclike_has_young_child(&self, ptr: *mut VecLikeHeader) -> bool {
+    ///
+    /// # Safety
+    /// `ptr` must point to a live, initialized veclike object whose payload is
+    /// readable under collector exclusivity.
+    unsafe fn veclike_has_young_child(&self, ptr: *mut VecLikeHeader) -> bool {
         let mut young = false;
-        Self::for_each_veclike_child(
-            self.collector_tables(),
-            ptr,
-            &mut VisitChild(|child| {
-                if !young && self.permanent_child_needs_trace(child) {
-                    young = true;
-                }
-            }),
-        );
+        unsafe {
+            Self::for_each_veclike_child(
+                self.collector_tables(),
+                ptr,
+                &mut VisitChild(|child| {
+                    if !young && self.permanent_child_needs_trace(child) {
+                        young = true;
+                    }
+                }),
+            );
+        }
         young
     }
 
@@ -958,7 +973,8 @@ impl TaggedHeap {
                 // verifier never sees an unmarked weak child. This mirrors GNU's
                 // `mark_object` PVEC_HASH_TABLE (alloc.c): weak tables register
                 // themselves and do NOT mark their contents.
-                if let Some(weak_children) = self.register_weak_hash_table_for_sweep(ptr) {
+                if let Some(weak_children) = unsafe { self.register_weak_hash_table_for_sweep(ptr) }
+                {
                     for child in weak_children {
                         self.mark_or_push_child(child, origin);
                     }
@@ -968,13 +984,15 @@ impl TaggedHeap {
                     // dump-partition verifier require every heap child of a
                     // permanent owner to be marked, or it is swept while still
                     // referenced (UAF).
-                    Self::for_each_veclike_child(
-                        self.collector_tables(),
-                        ptr as *mut VecLikeHeader,
-                        &mut VisitChild(|child| {
-                            self.mark_or_push_child(child, origin);
-                        }),
-                    );
+                    unsafe {
+                        Self::for_each_veclike_child(
+                            self.collector_tables(),
+                            ptr as *mut VecLikeHeader,
+                            &mut VisitChild(|child| {
+                                self.mark_or_push_child(child, origin);
+                            }),
+                        );
+                    }
                 }
             }
         } else if owner.is_string()
@@ -1130,7 +1148,7 @@ impl TaggedHeap {
             .collect();
         for (ptr, ty) in veclike {
             let owner = format!("{ty:?}");
-            for child in self.collect_veclike_children(ptr) {
+            for child in unsafe { self.collect_veclike_children(ptr) } {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     record(&owner, child);
                 }
@@ -1201,7 +1219,7 @@ impl TaggedHeap {
             } else {
                 format!("tenured:{kind:?}@{header:p}")
             };
-            let children: Vec<TaggedValue> = self.heap_object_children(header);
+            let children: Vec<TaggedValue> = unsafe { self.heap_object_children(header) };
             for child in children {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     record(&owner, child);
@@ -1228,7 +1246,7 @@ impl TaggedHeap {
             } else {
                 format!("tenured-page:{kind:?}@{header:p}")
             };
-            for child in self.heap_object_children(header) {
+            for child in unsafe { self.heap_object_children(header) } {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     record(&owner, child);
                 }
@@ -1304,7 +1322,7 @@ impl TaggedHeap {
         };
         for header in young {
             let kind = unsafe { (*header).kind };
-            let children: Vec<TaggedValue> = self.heap_object_children(header);
+            let children: Vec<TaggedValue> = unsafe { self.heap_object_children(header) };
             let owner = format!("young:{kind:?}");
             for child in children {
                 if child.is_heap_object() && !self.is_value_marked(child) {
@@ -1323,7 +1341,7 @@ impl TaggedHeap {
         for header in self.collect_young_marked_page_slot_headers() {
             let kind = unsafe { (*header).kind };
             let owner = format!("young-page:{kind:?}");
-            for child in self.heap_object_children(header) {
+            for child in unsafe { self.heap_object_children(header) } {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     *violations.entry(owner.clone()).or_insert(0) += 1;
                     sample.get_or_insert(child.0);
@@ -1370,9 +1388,15 @@ impl TaggedHeap {
     /// Direct heap children of any owned non-cons object by header, for the
     /// verifiers and the promotion-time permanents scan: veclike slots,
     /// string text-property interval roots, floats none.
-    pub(super) fn heap_object_children(&self, header: *mut GcHeader) -> Vec<TaggedValue> {
+    ///
+    /// # Safety
+    /// `header` must point to a live, initialized GC object owned by this heap
+    /// whose payload is readable without concurrent mutation.
+    pub(super) unsafe fn heap_object_children(&self, header: *mut GcHeader) -> Vec<TaggedValue> {
         match unsafe { (*header).kind } {
-            HeapObjectKind::VecLike => self.collect_veclike_children(header as *mut VecLikeHeader),
+            HeapObjectKind::VecLike => unsafe {
+                self.collect_veclike_children(header as *mut VecLikeHeader)
+            },
             HeapObjectKind::String => {
                 let mut roots = Vec::new();
                 let intervals = unsafe { (*(header as *const StringObj)).data.intervals() };
@@ -1482,7 +1506,10 @@ impl TaggedHeap {
     /// mark never re-touches because it is permanent-black — still be swept every
     /// full collection, matching GNU (whose non-generational mark re-encounters
     /// every live weak table every GC and rebuilds `weak_hash_tables`).
-    pub(super) fn register_weak_hash_table_for_sweep(
+    /// # Safety
+    /// `ptr` must point to a live, initialized veclike object and the heap must
+    /// be exclusively owned for marking.
+    pub(super) unsafe fn register_weak_hash_table_for_sweep(
         &mut self,
         ptr: *const VecLikeHeader,
     ) -> Option<Vec<TaggedValue>> {
@@ -1522,10 +1549,18 @@ impl TaggedHeap {
     ///
     /// `test-support` publishes this read so a core test can check the same
     /// edge the collector walks. Product builds keep it `pub(super)`.
+    ///
+    /// # Safety
+    /// `ptr` must point to a live, initialized veclike object whose slots are
+    /// readable without concurrent mutation.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(super) fn collect_veclike_children(&self, ptr: *mut VecLikeHeader) -> Vec<TaggedValue> {
+    pub(super) unsafe fn collect_veclike_children(
+        &self,
+        ptr: *mut VecLikeHeader,
+    ) -> Vec<TaggedValue> {
         let mut out = Vec::new();
-        Self::for_each_veclike_child(self.collector_tables(), ptr, &mut out);
+        // SAFETY: forwarded from caller.
+        unsafe { Self::for_each_veclike_child(self.collector_tables(), ptr, &mut out) };
         out
     }
 
@@ -1533,7 +1568,12 @@ impl TaggedHeap {
     /// without collecting them: the remembered-set rescan and the SATB log
     /// visit ~80K children twice per cycle, and building a vector per owner
     /// cost more than the visits (jemalloc growth was most of it).
-    pub(super) fn for_each_veclike_child(
+    ///
+    /// # Safety
+    /// `ptr` must point to a live, initialized veclike object matching its
+    /// `type_tag`, and `tables` must remain valid for inspecting hash tables
+    /// during the visit.
+    pub(super) unsafe fn for_each_veclike_child(
         tables: collector_tables::CollectorTables,
         ptr: *mut VecLikeHeader,
         sink: &mut impl ChildSink,
