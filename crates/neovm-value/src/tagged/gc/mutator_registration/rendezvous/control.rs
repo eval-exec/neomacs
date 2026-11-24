@@ -240,6 +240,11 @@ impl State {
     /// without touching the ring; DrainingResumes may grant when no resume debt
     /// or Resuming member remains. `ready` is the keeper's publication check;
     /// an unready head is never skipped.
+    ///
+    /// Not the parallel owners' grant: since L6.7a (lead #13898) their turn
+    /// is granted only by `grant_head_in_stop`, under the keeper's own stop.
+    /// This Idle/DrainingResumes grant stays as a candidate for the L6.7b
+    /// Baton-group entry.
     pub(in crate::tagged::gc) fn try_grant_head(
         &mut self,
         membership: Membership<'_>,

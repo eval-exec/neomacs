@@ -1187,6 +1187,64 @@ fn keeper_reentering_an_entry_it_holds_refuses_at_once_body<
     });
 }
 
+/// L6.7 K3. The keeper grants the serial head inside its own traced stop:
+/// not before the trace, once per ticket, and the grant retires once.
+fn keeper_grants_the_serial_head_only_inside_its_traced_stop_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1941, 1).unwrap();
+        let key = permit.key();
+        let registry = era.registry();
+        let input = vec![roots[0].clone()];
+        let generation = NonZeroU64::new(7).unwrap();
+        thread::scope(|scope| {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (owner, _entry) =
+                native_owner_for_keeper_rows(scope, heap, permit, 1941, input, release_rx);
+            let queued = retry(|| super::enqueue_serial_for_test(registry, key, generation));
+            let mut stopped = retry(|| era.stop());
+            let early = stopped
+                .grant_serial_head(|_, _| true)
+                .map(|grant| grant.is_some());
+            trace_owners(&mut stopped, &[key]);
+            let mut seen = None;
+            let grant = stopped
+                .grant_serial_head(|owner, published| {
+                    seen = Some((owner, published));
+                    true
+                })
+                .unwrap();
+            let again = stopped
+                .grant_serial_head(|_, _| true)
+                .map(|grant| grant.is_some());
+            let retired = grant.map(|grant| stopped.retire_serial_grant(grant));
+            let head_after = super::serial_ring_head_for_test(registry);
+            complete(stopped);
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert!(queued > 0);
+            assert_eq!(
+                early,
+                Err(RendezvousError::Publication),
+                "no grant before the trace"
+            );
+            assert_eq!(seen, Some((key, generation)), "ready sees the queued facts");
+            assert_eq!(again, Ok(false), "one ticket out");
+            assert_eq!(retired, Some(Ok(())), "the grant retires once");
+            assert_eq!(
+                head_after,
+                Ok((0, None)),
+                "the ring is empty after the retire"
+            );
+        });
+        finish_era(era);
+    });
+}
+
 fn a6_ht_b9_table_scope_gate_contention_retries_before_job_body<
     K: EraKeeper + std::fmt::Debug + 'static,
 >(
@@ -1550,6 +1608,9 @@ pub(crate) fn run_rooted_mutator_case<K: EraKeeper + std::fmt::Debug + 'static>(
         }
         RootedRendezvousCase::KeeperReenteringAnEntryItHoldsRefusesAtOnce => {
             keeper_reentering_an_entry_it_holds_refuses_at_once_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop => {
+            keeper_grants_the_serial_head_only_inside_its_traced_stop_body(rooted_era)
         }
     }
 }

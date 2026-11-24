@@ -56,6 +56,16 @@ pub struct AllStopped<'era> {
     _thread: PhantomData<Rc<()>>,
 }
 
+/// One serial grant issued under a keeper's stop (L6.7 K3). Opaque and
+/// keeper-thread confined; `AllStopped::retire_serial_grant` consumes it.
+#[must_use = "retire the grant once its ticket has come back"]
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct SerialGrant {
+    id: super::control::RequestId,
+    _thread: PhantomData<Rc<()>>,
+}
+
 impl fmt::Debug for AllStopped<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AllStopped")
@@ -334,6 +344,50 @@ impl<'era> AllStopped<'era> {
         self.traced = true;
         attempt.finished = true;
         Ok(result)
+    }
+
+    /// L6.7 K3: grant the serial ring's head inside this stop. Only the
+    /// keeper, only after `trace`, and only for this stop's epoch. One
+    /// ticket is out at a time and an unready head is never skipped.
+    /// `ready` sees
+    /// the head's owner key and the publication generation it was queued
+    /// under. The `&mut` borrow keeps `trace` and `complete` out while the
+    /// grant is decided.
+    #[doc(hidden)]
+    pub fn grant_serial_head(
+        &mut self,
+        ready: impl FnOnce(MutatorKey, NonZeroU64) -> bool,
+    ) -> Result<Option<SerialGrant>, RendezvousError> {
+        keeper(self.registry)?;
+        // `stop` already moved the ring's phase to Tracing, so the ring
+        // cannot tell a traced stop from an untraced one: this proof can.
+        if !self.traced {
+            return Err(RendezvousError::Publication);
+        }
+        let mut gate = self
+            .registry
+            .lock_for_keeper()
+            .map_err(registration_error)?;
+        self.validate(&gate)?;
+        let granted = gate
+            .rendezvous
+            .grant_head_in_stop(self.epoch, |entry| ready(entry.owner(), entry.generation()))?;
+        Ok(granted.map(|id| SerialGrant {
+            id,
+            _thread: PhantomData,
+        }))
+    }
+
+    /// Retire a grant after its ticket came back. Consuming the grant makes
+    /// the retire exactly once by construction.
+    #[doc(hidden)]
+    pub fn retire_serial_grant(&mut self, grant: SerialGrant) -> Result<(), RendezvousError> {
+        keeper(self.registry)?;
+        let mut gate = self
+            .registry
+            .lock_for_keeper()
+            .map_err(registration_error)?;
+        gate.rendezvous.retire_serial(grant.id)
     }
 
     fn entry(&self, key: MutatorKey) -> Result<Arc<MutatorEntry>, RendezvousError> {

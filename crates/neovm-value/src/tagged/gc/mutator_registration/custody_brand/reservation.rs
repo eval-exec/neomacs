@@ -48,6 +48,25 @@ impl<'s, 'era> UnenteredReservation<'s, 'era> {
         self.interval.validate_owner(owner)
     }
 
+    /// L6.7 K3: grant the serial ring's head inside this stop. The keeper
+    /// driver grants between lends; no lend is out while it decides.
+    #[doc(hidden)]
+    pub fn grant_serial_head(
+        &mut self,
+        ready: impl FnOnce(super::super::MutatorKey, std::num::NonZeroU64) -> bool,
+    ) -> Result<Option<super::super::rendezvous::SerialGrant>, super::super::RendezvousError> {
+        self.interval.grant_serial_head(ready)
+    }
+
+    /// Retire a grant issued under this stop, exactly once.
+    #[doc(hidden)]
+    pub fn retire_serial_grant(
+        &mut self,
+        grant: super::super::rendezvous::SerialGrant,
+    ) -> Result<(), super::super::RendezvousError> {
+        self.interval.retire_serial_grant(grant)
+    }
+
     /// Finish the already-traced epoch. This reservation does not collect,
     /// loan the heap, or hand out the stopped proof.
     #[doc(hidden)]

@@ -73,6 +73,24 @@ impl<'s, 'era> StoppedInterval<'s, 'era> {
         self.stopped.epoch()
     }
 
+    /// L6.7 K3: grant the serial ring's head inside this stop.
+    #[doc(hidden)]
+    pub fn grant_serial_head(
+        &mut self,
+        ready: impl FnOnce(super::super::MutatorKey, std::num::NonZeroU64) -> bool,
+    ) -> Result<Option<super::super::rendezvous::SerialGrant>, RendezvousError> {
+        self.stopped.grant_serial_head(ready)
+    }
+
+    /// Retire a grant issued under this stop, exactly once.
+    #[doc(hidden)]
+    pub fn retire_serial_grant(
+        &mut self,
+        grant: super::super::rendezvous::SerialGrant,
+    ) -> Result<(), RendezvousError> {
+        self.stopped.retire_serial_grant(grant)
+    }
+
     /// Move this proof into the dormant reservation. Not a second mint.
     #[doc(hidden)]
     pub fn into_unentered(self) -> super::reservation::UnenteredReservation<'s, 'era> {

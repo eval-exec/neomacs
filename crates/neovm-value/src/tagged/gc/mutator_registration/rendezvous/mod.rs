@@ -10,6 +10,7 @@ mod sync;
 pub use control::{Mode, Phase, Request};
 pub use keeper::AllStopped;
 pub use keeper::AllStoppedFailure;
+pub use keeper::SerialGrant;
 pub use owner::PollOutcome;
 pub use owner::RootedRetireFailure;
 pub use resume::ResumeGcImage;

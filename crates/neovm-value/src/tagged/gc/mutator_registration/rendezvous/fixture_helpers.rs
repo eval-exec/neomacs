@@ -70,6 +70,7 @@ pub enum RootedRendezvousCase {
     KeeperWorldRootCheckWaitsOutABriefGateHolder,
     KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
     KeeperReenteringAnEntryItHoldsRefusesAtOnce,
+    KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop,
 }
 
 impl RootedRendezvousCase {
@@ -119,6 +120,7 @@ impl RootedRendezvousCase {
         Self::KeeperWorldRootCheckWaitsOutABriefGateHolder,
         Self::KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
         Self::KeeperReenteringAnEntryItHoldsRefusesAtOnce,
+        Self::KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop,
     ];
 }
 

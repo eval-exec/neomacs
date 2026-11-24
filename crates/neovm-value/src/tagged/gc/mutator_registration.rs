@@ -135,7 +135,7 @@ pub use native_extent::NativeRoots;
 pub use rendezvous::Rendezvous;
 pub use rendezvous::ResumeGcImage;
 pub use rendezvous::{AllStopped, Mode, Phase, PollOutcome, RendezvousError, Request, Snapshot};
-pub use rendezvous::{AllStoppedFailure, ResumeGcImageFailure, RootedRetireFailure};
+pub use rendezvous::{AllStoppedFailure, ResumeGcImageFailure, RootedRetireFailure, SerialGrant};
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use rendezvous::{OwnerRootAdmission, StoppedRootAdmission};
 

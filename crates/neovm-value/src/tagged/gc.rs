@@ -2673,7 +2673,7 @@ pub use mutator_registration::{
 };
 pub use mutator_registration::{
     AllStoppedFailure, MutatorEntry, MutatorFinishFailure, MutatorStartFailure, NativeReturn,
-    RegistrationCensus, ResumeGcImageFailure, RootedRetireFailure, StoppedSummaries,
+    RegistrationCensus, ResumeGcImageFailure, RootedRetireFailure, SerialGrant, StoppedSummaries,
     YoungWorkerLoan,
 };
 pub use mutator_registration::{
