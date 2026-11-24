@@ -248,8 +248,12 @@ impl TaggedHeap {
     /// residual major after a worker joins or an unpublished capture drops.
     #[cold]
     #[inline(never)]
+    /// # Safety
+    ///
+    /// Starts a minor cycle that later frees unmarked young objects. The
+    /// caller has stopped every mutator and holds the only live heap borrow.
     #[doc(hidden)]
-    pub fn begin_minor_collection(&mut self) -> Result<(), MinorCollectionAdmissionError> {
+    pub unsafe fn begin_minor_collection(&mut self) -> Result<(), MinorCollectionAdmissionError> {
         // Admission precedes EVERY mutation, even for a GEN0 heap. Joining a
         // worker alone does not finish its major's residual mark or sweep.
         self.check_minor_admission()?;
@@ -346,14 +350,20 @@ impl TaggedHeap {
     /// tracing a survivor and setting its generation bit.
     #[cold]
     #[inline(never)]
+    /// # Safety
+    ///
+    /// Promotes survivors and starts the sweep that frees the rest. The
+    /// caller holds the only live heap borrow from the matching
+    /// [`Self::begin_minor_collection`].
     #[doc(hidden)]
-    pub fn complete_minor_collection(&mut self) {
+    pub unsafe fn complete_minor_collection(&mut self) {
         self.assert_no_owner_cons_reserves();
         assert!(self.generational.cycle == GenerationCycle::Minor);
         self.close_alloc_regions();
         let bytes_before = self.live_bytes;
         self.incremental_drain_all();
-        self.incremental_finish(bytes_before, std::time::Instant::now());
+        // SAFETY: this entry owns the minor cycle's sweep.
+        unsafe { self.incremental_finish(bytes_before, std::time::Instant::now()) };
     }
 
     #[inline]

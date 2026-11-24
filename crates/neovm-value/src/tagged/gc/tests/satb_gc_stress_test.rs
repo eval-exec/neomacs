@@ -92,8 +92,8 @@ fn finish(heap: &mut TestHeap, payloads: &[TaggedValue]) {
         );
     }
     let bytes = heap.live_bytes();
-    heap.incremental_finish(bytes, Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes, Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     check_survivors(heap, payloads);
 }
 
@@ -306,7 +306,7 @@ fn satb_gc_root_feed_publish_is_only_a_pacing_optimization() {
     assert!(heap.is_value_marked(x));
     heap.verify_incremental_tricolor();
     let bytes = heap.live_bytes();
-    heap.incremental_finish(bytes, Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes, Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     check_survivors(&heap, &[x]);
 }

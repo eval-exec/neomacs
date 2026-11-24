@@ -1323,6 +1323,8 @@ unsafe extern "C" fn module_make_user_ptr(
         if !module_function_begin(env) {
             return std::ptr::null_mut();
         }
+        // SAFETY: the emacs-module ABI gives `fin` ownership of `ptr`.
+        // This `unsafe extern "C"` entry is that contract.
         let val =
             neovm_value::tagged::gc::with_tagged_heap(|h| unsafe { h.alloc_user_ptr(ptr, fin) });
         lisp_to_value(env, val)
@@ -2026,6 +2028,8 @@ unsafe extern "C" fn module_make_function(
                 }
             }
         };
+        // SAFETY: the emacs-module ABI passes `subr` as a live `emacs_function`
+        // and `data` that outlives every later invocation.
         let val = neovm_value::tagged::gc::with_tagged_heap(|h| unsafe {
             h.alloc_module_function(
                 min_arity,

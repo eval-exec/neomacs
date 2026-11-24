@@ -21,7 +21,7 @@ fn serial_and_stopped_seeds_yield_the_same_doomed_finalizer_function() {
     unsafe { heap.begin_collection() };
     let serial_roots = assert_doomed_function_was_seeded(&heap, function);
 
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     let stopped_roots = assert_doomed_function_was_seeded(&heap, function);
 
     assert_eq!(

@@ -549,8 +549,8 @@ fn major_symbol_generic_cons_write_retraces_current_children_before_sweep() {
             heap.reseed_runtime_and_remembered_roots();
             heap.seed_root(owner);
             heap.incremental_drain_all();
-            heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
-            heap.finish_incremental_sweep_now();
+            heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
+            heap.finish_incremental_sweep_now_for_test();
             assert!(heap.owns_heap_value_for_test(owner));
             assert_eq!(heap.marked_symbols.contains(id(key)), enabled);
         }

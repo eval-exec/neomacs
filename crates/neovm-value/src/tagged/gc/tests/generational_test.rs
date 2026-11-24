@@ -100,10 +100,10 @@ fn generational_cons_card_lifecycle() {
     let roots = ScratchRoots::new();
     let owner = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     roots.keep(owner);
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.value_is_old_for_test(owner));
     assert!(crate::tagged::mutate::set_cons_car(
         owner,
@@ -115,11 +115,11 @@ fn generational_cons_card_lifecycle() {
     assert!(crate::tagged::mutate::set_cons_cdr(owner, child));
     assert!(heap.owner_card_is_dirty_for_test(owner));
     assert!(heap.current_mutator_gc().remset.is_empty());
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     assert!(heap.generational.r_seed.is_empty());
     heap.seed_root(owner);
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.owner_card_is_dirty_for_test(owner));
     assert!(heap.owns_string_object(child.as_string_ptr().unwrap().cast()));
     assert!(heap.value_is_old_for_test(child));
@@ -149,7 +149,7 @@ fn generational_mapped_and_permanent_logs_are_per_cycle() {
     heap.current_mutator_gc_mut()
         .remembered_cache
         .fill(permanent.bits());
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     assert!(
         heap.current_mutator_gc()
             .remembered_cache
@@ -157,8 +157,8 @@ fn generational_mapped_and_permanent_logs_are_per_cycle() {
             .all(|&bits| bits == 0)
     );
     assert_eq!(heap.generational.r_seed.len(), 2);
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!header(permanent).is_remembered());
     assert!(heap.current_mutator_gc().r_mapped_seen.is_empty());
     assert!(heap.generational.r_seed.is_empty());
@@ -215,12 +215,12 @@ fn generational_header_claim_is_unique_across_threads() {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 #[test]
@@ -292,9 +292,9 @@ fn minor_eager_box_promotion_precedes_sweep_window_stores() {
     let roots = ScratchRoots::new();
     let owner = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
     roots.keep(owner);
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
-    heap.complete_minor_collection();
+    heap.complete_minor_collection_for_test();
     assert!(heap.sweep_in_progress());
     assert!(header(owner).tenured);
     assert!(
@@ -310,7 +310,7 @@ fn minor_eager_box_promotion_precedes_sweep_window_stores() {
         );
     });
     assert_eq!(heap.current_mutator_gc().remset, [owner]);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(
         heap.generational.old_objects,
         header(owner) as *mut GcHeader
@@ -354,8 +354,8 @@ fn concurrent_major_promotes_mark_window_children_without_r() {
     heap.reseed_runtime_and_remembered_roots();
     heap.seed_root(owner);
     heap.incremental_drain_all();
-    heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.value_is_old_for_test(child));
     assert!(heap.current_mutator_gc().remset.is_empty());
     minor(&mut heap, &[]);
@@ -670,7 +670,7 @@ fn generational_partition_verifier_checks_old_box_children() {
             child,
         );
     }
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
     heap.incremental_drain_all();
     heap.verify_dump_partition();
@@ -689,7 +689,7 @@ fn generational_partition_verifier_checks_unmarked_old_cons_children() {
     // Deliberately bypass the barrier. The old cons will stay unmarked in the
     // next minor, so an ordinary mark-only owner walk cannot find this edge.
     unsafe { (*(owner.xcons_ptr() as *mut ConsCell)).set_car(child) };
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
     heap.incremental_drain_all();
     heap.verify_dump_partition();

@@ -154,8 +154,8 @@ fn census_runs_at_the_concurrent_termination() {
     heap.seed_root(mid);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     let record = last(&heap);
     assert_eq!(record.kind, CensusCycleKind::Concurrent);

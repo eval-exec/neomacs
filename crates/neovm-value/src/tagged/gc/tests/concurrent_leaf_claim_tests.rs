@@ -495,8 +495,8 @@ fn concurrent_cycle(heap: &mut TestHeap, roots: &[TaggedValue]) {
     }
     heap.incremental_drain_all();
     let live_bytes = heap.live_bytes();
-    heap.incremental_finish(live_bytes, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(live_bytes, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 fn concurrent_leaf_claims_preserve_weak_symbol_liveness_and_reclaim_dead_objects() {

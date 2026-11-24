@@ -222,7 +222,7 @@ fn minor_and_major_admissions_reject_each_independent_busy_state() {
                 );
                 assert_eq!(CollectionSnapshot::capture(busy.heap, &[root]), before);
                 assert_eq!(
-                    busy.heap.begin_minor_collection(),
+                    busy.heap.begin_minor_collection_for_test(),
                     Err(MinorCollectionAdmissionError::CollectorBusy),
                     "GEN1={enabled}, {state:?}"
                 );
@@ -266,7 +266,7 @@ fn reject_and_recover(
     ));
     assert_eq!(CollectionSnapshot::capture(heap, &[child, garbage]), before);
     assert_eq!(
-        heap.begin_minor_collection(),
+        heap.begin_minor_collection_for_test(),
         Err(MinorCollectionAdmissionError::CollectorBusy)
     );
     assert_eq!(CollectionSnapshot::capture(heap, &[child, garbage]), before);
@@ -322,7 +322,7 @@ fn minor_rejects_joined_major_without_changing_collection_state() {
             Err(ConcurrentMarkAdmissionError::CollectorBusy)
         ));
         assert_eq!(
-            heap.begin_minor_collection(),
+            heap.begin_minor_collection_for_test(),
             Err(MinorCollectionAdmissionError::CollectorBusy)
         );
         assert_eq!(
@@ -375,7 +375,7 @@ fn minor_rejects_quiescent_gen0_without_changing_collection_state() {
     let value = heap.alloc_float(11.5);
     let before = CollectionSnapshot::capture(&heap, &[value]);
     assert_eq!(
-        heap.begin_minor_collection(),
+        heap.begin_minor_collection_for_test(),
         Err(MinorCollectionAdmissionError::GenerationalDisabled)
     );
     assert_eq!(CollectionSnapshot::capture(&heap, &[value]), before);
@@ -387,10 +387,10 @@ fn minor_accepts_quiescent_gen1_and_completes() {
     let child = heap.alloc_float(9.5);
     let root = heap.alloc_cons(child, TaggedValue::NIL);
     let garbage = heap.alloc_float(10.5);
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(root);
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.mark_in_progress());
     assert!(!heap.sweep_in_progress());
     assert!(heap.value_is_old_for_test(root));
@@ -449,7 +449,7 @@ fn assert_both_admissions_preserve(heap: &mut TaggedHeap, headers: &[TaggedValue
     ));
     assert_eq!(CollectionSnapshot::capture(heap, headers), before);
     assert_eq!(
-        heap.begin_minor_collection(),
+        heap.begin_minor_collection_for_test(),
         Err(MinorCollectionAdmissionError::CollectorBusy)
     );
     assert_eq!(CollectionSnapshot::capture(heap, headers), before);

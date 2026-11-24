@@ -317,7 +317,7 @@ fn collection_clears_dirty_owner_tracking_at_begin() {
     // Completing the cycle leaves them clear (marking traces but writes no heap
     // slots, so the barrier records nothing).
     heap.seed_root(reachable);
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert_eq!(heap.dirty_owner_count(), 0);
     assert_eq!(heap.dirty_write_count(), 0);
 }

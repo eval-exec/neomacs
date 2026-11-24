@@ -852,8 +852,8 @@ fn concurrent_cycle(heap: &mut TaggedHeap, roots: &[Value]) {
     }
     let before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
 }
 

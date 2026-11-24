@@ -153,11 +153,11 @@ fn rows_owned_domain_idle_refuses_major_partial_and_deferred_without_count_chang
     heap.seed_root(root);
     heap.incremental_drain_all();
     let bytes = heap.live_bytes();
-    heap.incremental_finish(bytes, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
     assert_eq!(heap.gc_collections(), before);
     assert!(!heap.rows_observation_idle());
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.gc_collections() > before);
     assert!(heap.rows_observation_idle());
 }
@@ -168,15 +168,15 @@ fn rows_owned_domain_minor_to_deferred_handoff_has_no_idle_gap() {
     assert!(heap.tagged_heap_generational_enabled());
     let root = heap.alloc_vector(vec![TaggedValue::NIL]);
     let count = heap.gc_collections();
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     assert_eq!(heap.gc_collections(), count);
     assert!(!heap.rows_observation_idle());
     heap.seed_root(root);
-    heap.complete_minor_collection();
+    heap.complete_minor_collection_for_test();
     assert!(heap.sweep_in_progress());
     assert_eq!(heap.gc_collections(), count);
     assert!(!heap.rows_observation_idle());
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.gc_collections() > count);
     assert!(heap.rows_observation_idle());
 }

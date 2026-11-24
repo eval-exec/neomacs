@@ -710,7 +710,8 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         let bytes_before = heap.live_bytes();
         let started = std::time::Instant::now();
         match captured {
-            YoungCapture::Major => heap.begin_stw_collection(),
+            // SAFETY: the stopped job holds the heap loan and has joined markers.
+            YoungCapture::Major => unsafe { heap.begin_stw_collection() },
             YoungCapture::Minor(capture) => heap
                 .begin_parallel_minor_collection(capture, self._proof)
                 .map_err(minor_admission)?,
@@ -770,8 +771,11 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
                 );
             }
             GenerationCycle::Minor => {
-                heap.complete_minor_collection();
-                heap.finish_incremental_sweep_now();
+                // SAFETY: this stopped job owns the minor cycle it just began.
+                unsafe {
+                    heap.complete_minor_collection();
+                    heap.finish_incremental_sweep_now();
+                }
             }
         }
         facade_mark::CollectorQuiescence::check(heap).map_err(|_| RendezvousError::Publication)?;

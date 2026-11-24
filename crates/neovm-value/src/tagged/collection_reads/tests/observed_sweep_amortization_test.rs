@@ -85,10 +85,10 @@ fn sweep_contract(garbage_stride: usize, max_rebuilds: usize) {
     }
     heap.incremental_drain_all();
     let bytes_before = heap.live_bytes();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     let started = std::time::Instant::now();
     let mut slices = 0usize;
-    while !heap.incremental_sweep_slice(1) {
+    while !heap.incremental_sweep_slice_for_test(1) {
         slices += 1;
     }
     let elapsed = started.elapsed();

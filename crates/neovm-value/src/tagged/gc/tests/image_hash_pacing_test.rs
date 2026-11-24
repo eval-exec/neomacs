@@ -39,11 +39,11 @@ fn backing(heap: &TaggedHeap, value: TaggedValue) -> usize {
 }
 
 fn full(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_collection();
+    heap.complete_collection_for_test();
 }
 
 fn deferred_first(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
@@ -62,8 +62,8 @@ fn deferred_first(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
         heap.seed_root(root);
     }
     heap.incremental_drain_all();
-    heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     heap.finish_first_partition_cycle();
 }
 
@@ -115,12 +115,12 @@ fn image_hash_pacing_counts_owned_backing_before_and_after_promotion() {
             let grown_expected = baseline + runtime_bytes + grown_image_bytes + mapped_bytes;
             assert_eq!(heap.live_bytes(), grown_expected, "grown dump backing");
             if generational {
-                heap.begin_minor_collection().unwrap();
+                heap.begin_minor_collection_for_test().unwrap();
                 for &root in &roots {
                     heap.seed_root(root);
                 }
-                heap.complete_minor_collection();
-                heap.finish_incremental_sweep_now();
+                heap.complete_minor_collection_for_test();
+                heap.finish_incremental_sweep_now_for_test();
                 assert_eq!(heap.live_bytes(), grown_expected, "minor image census");
             }
             full(&mut heap, &[image, mapped_value]);
@@ -307,10 +307,10 @@ fn image_hash_pacing_minor_first_excludes_stamped_header_and_pending() {
             !heap.partition_dump,
             "no mapped registration in this fixture"
         );
-        heap.begin_minor_collection().unwrap();
+        heap.begin_minor_collection_for_test().unwrap();
         heap.seed_root(image);
-        heap.complete_minor_collection();
-        heap.finish_incremental_sweep_now();
+        heap.complete_minor_collection_for_test();
+        heap.finish_incremental_sweep_now_for_test();
         assert_eq!(
             heap.live_bytes(),
             0,
@@ -321,10 +321,10 @@ fn image_hash_pacing_minor_first_excludes_stamped_header_and_pending() {
             .unwrap();
         let bytes = backing(&heap, image);
         assert!(bytes > 0);
-        heap.begin_minor_collection().unwrap();
+        heap.begin_minor_collection_for_test().unwrap();
         heap.seed_root(image);
-        heap.complete_minor_collection();
-        heap.finish_incremental_sweep_now();
+        heap.complete_minor_collection_for_test();
+        heap.finish_incremental_sweep_now_for_test();
         assert_eq!(
             heap.live_bytes(),
             bytes,
@@ -352,12 +352,12 @@ fn image_hash_pacing_minor_census_visits_only_registered_tables() {
     // Windows are residual Boxes, unlike ordinary arena vectors: the old
     // census really did filter every one of these unrelated owned headers.
     roots.extend((0..50_000).map(|id| heap.alloc_window(id)));
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in &roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(
         heap.image_hash_census_visited_for_test(),
         2,

@@ -25,8 +25,8 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
 }
 
@@ -164,8 +164,8 @@ fn parity_two_cycle_lambda_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(spine);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         heap.owns_non_cons_object(b_ptr),
         "allocate-black lambda must survive the cycle it was born in",
@@ -196,8 +196,8 @@ fn parity_two_cycle_lambda_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(b);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         !heap.owns_non_cons_object(g1_ptr),
         "idle-born garbage lambda must be reclaimed by the next cycle",
@@ -280,8 +280,8 @@ fn deferred_lambda_resolves_at_termination_body(verify: bool) {
     heap.seed_root(list);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     for (i, b) in lambdas.iter().enumerate() {
         assert!(
@@ -446,11 +446,14 @@ fn lambda_reuse_within_one_cooperative_sweep_window() {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
 
     // Slice 1 (budget 1): sweeps lambda page 0 only.
-    assert!(!heap.incremental_sweep_slice(1), "3 pages need >1 slice");
+    assert!(
+        !heap.incremental_sweep_slice_for_test(1),
+        "3 pages need >1 slice"
+    );
     assert!(heap.sweep_in_progress());
     heap.assert_object_arenas_coherent();
 
@@ -470,7 +473,7 @@ fn lambda_reuse_within_one_cooperative_sweep_window() {
     }
     heap.assert_object_arenas_coherent();
 
-    while !heap.incremental_sweep_slice(1) {}
+    while !heap.incremental_sweep_slice_for_test(1) {}
     assert!(!heap.sweep_in_progress());
     heap.assert_object_arenas_coherent();
 
@@ -526,8 +529,8 @@ fn lambda_sweep_live_bytes_track_variable_payload_sizes() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(
         heap.live_bytes(),
         expected,

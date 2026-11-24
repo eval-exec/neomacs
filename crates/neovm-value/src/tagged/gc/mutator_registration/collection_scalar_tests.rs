@@ -75,7 +75,7 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
     assert_eq!(heap.current_mutator_gc().pacing.promoted_since_major, 10);
     let bytes = heap.live_bytes();
     let started = std::time::Instant::now();
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     heap.seed_root(live);
     heap.mark_all();
     heap.finalize_collection(0, bytes, started);
@@ -125,7 +125,7 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
     // A later stopped cycle with no new allocations must not bank twice.
     let started = std::time::Instant::now();
     let bytes = heap.live_bytes();
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     heap.seed_root(live);
     heap.mark_all();
     heap.finalize_collection(0, bytes, started);

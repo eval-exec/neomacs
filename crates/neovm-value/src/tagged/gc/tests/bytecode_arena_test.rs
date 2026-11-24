@@ -31,8 +31,8 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
 }
 
@@ -191,8 +191,8 @@ fn parity_two_cycle_bytecode_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(spine); // b deliberately NOT seeded
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         heap.owns_non_cons_object(b_ptr),
         "allocate-black bytecode must survive the cycle it was born in",
@@ -224,8 +224,8 @@ fn parity_two_cycle_bytecode_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(b);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     // No allocations since the sweep: the ownership probes below cannot
     // be confused by slot reuse.
     assert!(
@@ -349,8 +349,8 @@ fn deferred_bytecode_resolves_at_termination_body(verify: bool) {
     heap.seed_root(list);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     for (i, b) in bytecodes.iter().enumerate() {
         assert!(
@@ -659,8 +659,8 @@ fn concurrent_mid_cycle_bytecode_in_reused_slot_keeps_child_alive() {
     heap.incremental_drain_all();
     // Runs verify_dump_partition + verify_incremental_tricolor (armed
     // above): a black b_new with a white C would panic here.
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     // C survived its birth-cycle severing (SATB), with payload intact.
     assert_eq!(
@@ -831,11 +831,14 @@ fn bytecode_reuse_within_one_cooperative_sweep_window() {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
 
     // Slice 1 (budget 1): sweeps bytecode page 0 only.
-    assert!(!heap.incremental_sweep_slice(1), "3 pages need >1 slice");
+    assert!(
+        !heap.incremental_sweep_slice_for_test(1),
+        "3 pages need >1 slice"
+    );
     assert!(heap.sweep_in_progress());
     heap.assert_object_arenas_coherent();
 
@@ -856,7 +859,7 @@ fn bytecode_reuse_within_one_cooperative_sweep_window() {
     heap.assert_object_arenas_coherent();
 
     // Drain the rest; reallocated slots are born-at-parity survivors.
-    while !heap.incremental_sweep_slice(1) {}
+    while !heap.incremental_sweep_slice_for_test(1) {}
     assert!(!heap.sweep_in_progress());
     heap.assert_object_arenas_coherent();
 
@@ -932,8 +935,8 @@ fn bytecode_sweep_live_bytes_track_variable_payload_sizes() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(
         heap.live_bytes(),
         expected,
@@ -1488,8 +1491,8 @@ fn bytecode_instance_born_mid_mark_survives_and_traces_its_pool() {
     heap.seed_root(proto); // the instance deliberately NOT seeded
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         heap.owns_non_cons_object(instance_ptr),
         "allocate-black instance must survive the cycle it was born in",

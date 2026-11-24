@@ -50,7 +50,9 @@ impl TaggedHeap {
     /// The caller has exclusive use of this heap: no alias from
     /// `with_tagged_heap` or a mutation guard is live, and `roots` names
     /// every value that must survive. Safe code collects through
-    /// `Context::gc_collect_exact`, which holds `&mut Context`.
+    /// `Context::gc_collect_exact`, which holds `&mut Context`. That safe
+    /// entry is sound only after Phase 1 stops handing out `&'static`
+    /// payload borrows. Until then a Rust local can keep a freed object.
     pub unsafe fn collect(&mut self, roots: impl Iterator<Item = TaggedValue>) {
         // SAFETY: `collect` forwards the caller's exclusive heap and roots.
         unsafe { self.collect_exact(roots) }
@@ -62,22 +64,70 @@ impl TaggedHeap {
     ///
     /// Same contract as [`Self::collect`].
     pub unsafe fn collect_exact(&mut self, roots: impl Iterator<Item = TaggedValue>) {
-        self.begin_stw_collection();
-        for root in roots {
-            self.seed_root(root);
+        // SAFETY: the caller of this unsafe entry supplied the roots and
+        // holds the heap. `seed_root` does not free; the two sweep entries do.
+        unsafe {
+            self.begin_stw_collection();
+            for root in roots {
+                self.seed_root(root);
+            }
+            self.complete_collection();
         }
-        self.complete_collection();
     }
 
     /// Test-support collection. Production code uses [`Self::collect_exact`].
     ///
     /// Compiled only on the test-support surface, so a production build has
-    /// no safe path to `collect`.
+    /// no safe path to `collect`. This wrapper is deliberately unsound: it
+    /// does not protect an unrooted `&'static` borrow the test still holds.
     #[cfg(any(test, feature = "test-support"))]
     pub fn collect_rooted(&mut self, roots: impl Iterator<Item = TaggedValue>) {
-        // SAFETY: test-support is the fixture capability. The caller owns
-        // this heap and supplies the roots the test keeps.
+        // Test-only. Not a discharge of `collect_exact`'s safety contract.
         unsafe { self.collect_exact(roots) }
+    }
+
+    /// Test-only sweep entries. Same deliberate unsoundness as [`Self::collect_rooted`].
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn begin_stw_collection_for_test(&mut self) {
+        unsafe { self.begin_stw_collection() }
+    }
+
+    /// Test-only. Does not protect an unrooted borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn complete_collection_for_test(&mut self) {
+        unsafe { self.complete_collection() }
+    }
+
+    /// Test-only. Does not protect an unrooted borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn begin_minor_collection_for_test(
+        &mut self,
+    ) -> Result<(), super::generational::MinorCollectionAdmissionError> {
+        unsafe { self.begin_minor_collection() }
+    }
+
+    /// Test-only. Does not protect an unrooted borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn complete_minor_collection_for_test(&mut self) {
+        unsafe { self.complete_minor_collection() }
+    }
+
+    /// Test-only. Does not protect an unrooted borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn incremental_finish_for_test(&mut self, bytes_before: usize, pause: std::time::Instant) {
+        unsafe { self.incremental_finish(bytes_before, pause) }
+    }
+
+    /// Test-only. Does not protect an unrooted borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn incremental_sweep_slice_for_test(&mut self, budget: usize) -> bool {
+        unsafe { self.incremental_sweep_slice(budget) }
+    }
+
+    /// Test-only. Does not protect an unrooted borrow.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn finish_incremental_sweep_now_for_test(&mut self) {
+        unsafe { self.finish_incremental_sweep_now() }
     }
 
     /// # Safety
@@ -1752,8 +1802,13 @@ impl TaggedHeap {
         self.last_runtime_seed_us = seed_t0.elapsed().as_micros() as u64;
     }
 
+    /// # Safety
+    ///
+    /// Sweeps and frees unmarked objects. The caller has finished marking
+    /// and holds the only live heap borrow. No pointer the sweep can free
+    /// is live across the call.
     #[doc(hidden)]
-    pub fn complete_collection(&mut self) {
+    pub unsafe fn complete_collection(&mut self) {
         self.assert_no_owner_cons_reserves();
         assert!(
             !self.concurrent_mark_running,

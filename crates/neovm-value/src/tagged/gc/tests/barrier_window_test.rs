@@ -318,8 +318,8 @@ fn the_window_is_republished_at_every_writer_of_its_inputs() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(published_barrier_window(), wider, "after the sweep");
 
     // Installing another heap re-derives its window; reinstalling this one

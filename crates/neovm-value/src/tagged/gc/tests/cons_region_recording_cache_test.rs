@@ -38,12 +38,12 @@ fn counts(heap: &TaggedHeap) -> (u64, usize, usize, usize) {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     heap.gc_threshold = usize::MAX / 4;
 }
 
@@ -377,8 +377,8 @@ fn recording_cache_black_grants_log_only_handed_prefixes_and_refund_marks() {
     );
     // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
     unsafe { heap.set_concurrent_active_for_test(false) };
-    heap.complete_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         cells
             .iter()
@@ -440,7 +440,9 @@ fn recording_cache_faults_cannot_be_hidden_by_prior_recording() {
         let _fault = ConsAllocatorFaultGuard::inject(ConsAllocatorFault::CorruptAvailable);
         corrupt.alloc_cons(TaggedValue::fixnum(7069), TaggedValue::NIL);
     }
-    let rejected = catch_unwind(AssertUnwindSafe(|| corrupt.begin_minor_collection()));
+    let rejected = catch_unwind(AssertUnwindSafe(|| {
+        corrupt.begin_minor_collection_for_test()
+    }));
     assert!(
         rejected.is_err(),
         "the repeated grant must still reach the real canonical fault site"

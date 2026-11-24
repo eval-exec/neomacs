@@ -23,8 +23,8 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
 }
 
@@ -222,8 +222,8 @@ fn parity_two_cycle_record_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(spine);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         heap.owns_non_cons_object(b_ptr),
         "allocate-black record must survive the cycle it was born in",
@@ -251,8 +251,8 @@ fn parity_two_cycle_record_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(b);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         !heap.owns_non_cons_object(g1_ptr),
         "idle-born garbage record must be reclaimed by the next cycle",
@@ -331,8 +331,8 @@ fn deferred_record_resolves_at_termination_body(verify: bool) {
     heap.seed_root(list);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     for (i, b) in records.iter().enumerate() {
         assert!(
@@ -470,9 +470,12 @@ fn record_reuse_within_one_cooperative_sweep_window() {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
-    assert!(!heap.incremental_sweep_slice(1), "3 pages need >1 slice");
+    assert!(
+        !heap.incremental_sweep_slice_for_test(1),
+        "3 pages need >1 slice"
+    );
 
     let mut reused = Vec::new();
     for i in 0..32 {
@@ -485,7 +488,7 @@ fn record_reuse_within_one_cooperative_sweep_window() {
     }
     heap.assert_object_arenas_coherent();
 
-    while !heap.incremental_sweep_slice(1) {}
+    while !heap.incremental_sweep_slice_for_test(1) {}
     assert!(!heap.sweep_in_progress());
     for (i, r) in reused.iter().enumerate() {
         assert!(heap.owns_non_cons_object(rec_ptr(*r)));
@@ -528,8 +531,8 @@ fn record_sweep_live_bytes_track_variable_payload_sizes() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(heap.live_bytes(), expected, "incremental site");
 }
 

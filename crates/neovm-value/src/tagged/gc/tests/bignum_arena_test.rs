@@ -35,8 +35,8 @@ fn finish_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
 }
 
@@ -278,8 +278,8 @@ fn deferred_bignum_resolves_at_termination_body(verify: bool) {
     heap.seed_root(holder);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     for (i, b) in bigs.iter().enumerate() {
         assert!(
@@ -454,9 +454,12 @@ fn bignum_reuse_within_one_cooperative_sweep_window() {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
-    assert!(!heap.incremental_sweep_slice(1), "3 pages need >1 slice");
+    assert!(
+        !heap.incremental_sweep_slice_for_test(1),
+        "3 pages need >1 slice"
+    );
 
     let reused: Vec<TaggedValue> = (0..32).map(|i| big(&mut heap, 1_000 + i)).collect();
     for r in &reused {
@@ -466,7 +469,7 @@ fn bignum_reuse_within_one_cooperative_sweep_window() {
     }
     heap.assert_object_arenas_coherent();
 
-    while !heap.incremental_sweep_slice(1) {}
+    while !heap.incremental_sweep_slice_for_test(1) {}
     assert!(!heap.sweep_in_progress());
     for (i, r) in reused.iter().enumerate() {
         assert!(heap.owns_non_cons_object(big_ptr(*r)));

@@ -48,7 +48,7 @@ fn concurrent_cycle_until_termination(
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
 }
 
 /// A dead vector marks its children through the Tier-B snapshot (floating
@@ -82,7 +82,7 @@ fn a_dead_vector_marks_its_children_only_through_the_snapshot() {
                     );
                 }
             }
-            heap.finish_incremental_sweep_now();
+            heap.finish_incremental_sweep_now_for_test();
             assert!(heap.is_value_marked(keep));
             clear_tagged_heap_if_installed(&heap);
         }
@@ -121,13 +121,13 @@ fn deferred_live_vectors_keep_their_children_across_mid_cycle_writes() {
         "the page vectors deferred to the termination: {:?}",
         stats.last_termination_kinds
     );
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     for value in [a, b, a_child, stored] {
         assert!(heap.is_value_marked(value), "{value:?}");
     }
     assert!(heap.owns_string_object(bulk.as_string_ptr().unwrap() as *const u8));
     // And the next cycle still traces them.
     concurrent_cycle_until_termination(&mut heap, &[root], |_| {});
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.is_value_marked(stored));
 }

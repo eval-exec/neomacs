@@ -646,8 +646,8 @@ mod tests {
         assert_eq!(heap.handshake.last_term_runtime_roots, start_roots + 1);
         let bytes_before = heap.live_bytes();
         heap.incremental_drain_all();
-        heap.incremental_finish(bytes_before, std::time::Instant::now());
-        heap.finish_incremental_sweep_now();
+        heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+        heap.finish_incremental_sweep_now_for_test();
         assert!(!heap.sweep_in_progress());
         assert!(heap.owns_heap_value_for_test(head));
         assert!(!heap.owns_heap_value_for_test(garbage));
@@ -846,8 +846,8 @@ mod tests {
         assert_eq!(heap.handshake.last_term_runtime_roots, start_roots + 2);
         let bytes_before = heap.live_bytes();
         heap.incremental_drain_all();
-        heap.incremental_finish(bytes_before, std::time::Instant::now());
-        heap.finish_incremental_sweep_now();
+        heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+        heap.finish_incremental_sweep_now_for_test();
         assert!(!heap.sweep_in_progress());
         assert!(
             heap.owns_heap_value_for_test(live),

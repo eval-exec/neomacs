@@ -87,6 +87,7 @@ impl TestHeapScope {
         let heap = crate::tagged::gc::AliasableBox::new(crate::tagged::gc::TaggedHeap::new());
         let root = heap.root();
         let previous = crate::tagged::gc::installed_tagged_heap_root_for_test_scope();
+        // SAFETY: this scope owns the AliasableBox and keeps it until Drop.
         unsafe { crate::tagged::gc::set_tagged_heap_root(root) };
         Self {
             previous,
@@ -109,6 +110,8 @@ impl Drop for TestHeapScope {
         match self.previous {
             // LIFO: the slot goes back to the outer/default installation,
             // re-deriving the TLS mirrors from that live root.
+            // SAFETY: `previous` is the root this scope displaced, still owned
+            // by the outer installer for the thread's life.
             Some(previous) => unsafe { crate::tagged::gc::set_tagged_heap_root(previous) },
             // No previous heap: uninstall this scope's heap through the
             // detach-then-pointer-checked-clear path, so the slot and every

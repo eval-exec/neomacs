@@ -222,8 +222,8 @@ fn mapped_chartable_promotion_retains_start_graph_heap_children() {
     heap.seed_root(table);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     heap.finish_first_partition_cycle();
 
     assert!(heap.owns_heap_value_for_test(head));

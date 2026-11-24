@@ -44,12 +44,12 @@ fn verified_heap() -> TaggedHeap {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -80,7 +80,7 @@ fn missed_barrier_is_detected_before_sweep(class: OwnerClass) {
     }
     let child = heap.alloc_string(LispString::from_utf8("missed-barrier-young-child"));
     let child_ptr = child.as_string_ptr().unwrap().cast();
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
     assert!(!heap.is_value_marked(child));
     // Inject after begin: the current-child backstop at cycle start must not
@@ -105,8 +105,10 @@ fn missed_barrier_is_detected_before_sweep(class: OwnerClass) {
     }
     assert_eq!(heap.remembered_log_len_for_test(), 0);
     assert!(!heap.partition_dump);
-    let panic = catch_unwind(AssertUnwindSafe(|| heap.complete_minor_collection()))
-        .expect_err("a missed old-to-young barrier must fail at minor termination");
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        heap.complete_minor_collection_for_test()
+    }))
+    .expect_err("a missed old-to-young barrier must fail at minor termination");
     let message = panic
         .downcast_ref::<String>()
         .map(String::as_str)

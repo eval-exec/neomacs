@@ -543,15 +543,15 @@ fn restored_batch_retirement_preserves_deferred_sweep_and_owner_roots() {
         // GEN0 uses the same deferred sweep after a full stopped-world mark.
         if heap.tagged_heap_generational_enabled() {
             assert!(!heap.value_is_old_for_test(parent));
-            heap.begin_minor_collection();
+            heap.begin_minor_collection_for_test();
         } else {
-            heap.begin_stw_collection();
+            heap.begin_stw_collection_for_test();
         }
         for root in roots(&heap) {
             heap.seed_root(root);
         }
         heap.incremental_drain_all();
-        heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
+        heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
         assert!(!heap.mark_in_progress());
         assert!(heap.sweep_in_progress());
 
@@ -568,7 +568,7 @@ fn restored_batch_retirement_preserves_deferred_sweep_and_owner_roots() {
         };
         assert!(roots(&heap).is_empty());
         assert!(heap.sweep_in_progress(), "retirement must not drain sweep");
-        heap.finish_incremental_sweep_now();
+        heap.finish_incremental_sweep_now_for_test();
         assert!(heap.owns_heap_value_for_test(parent));
         assert!(heap.owns_heap_value_for_test(child));
         assert!(!heap.owns_heap_value_for_test(garbage));

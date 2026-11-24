@@ -36,10 +36,10 @@ fn collect(heap: &mut TaggedHeap, owner: TaggedValue, collection: Collection) {
     match collection {
         Collection::Major => heap.collect_rooted(std::iter::once(owner)),
         Collection::Minor => {
-            heap.begin_minor_collection().unwrap();
+            heap.begin_minor_collection_for_test().unwrap();
             heap.seed_root(owner);
-            heap.complete_minor_collection();
-            heap.finish_incremental_sweep_now();
+            heap.complete_minor_collection_for_test();
+            heap.finish_incremental_sweep_now_for_test();
         }
         Collection::Incremental | Collection::Concurrent => {
             heap.concurrent_begin();
@@ -55,8 +55,8 @@ fn collect(heap: &mut TaggedHeap, owner: TaggedValue, collection: Collection) {
             }
             let bytes_before = heap.live_bytes();
             heap.incremental_drain_all();
-            heap.incremental_finish(bytes_before, std::time::Instant::now());
-            heap.finish_incremental_sweep_now();
+            heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+            heap.finish_incremental_sweep_now_for_test();
         }
     }
     assert!(!heap.mark_in_progress());

@@ -2545,6 +2545,8 @@ impl Context {
         // provenance root; installation and every later access derive from it.
         let tagged_heap =
             neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
+        // SAFETY: this Context owns the AliasableBox. The root stays live
+        // until the Context clears it, and no heap reference is live yet.
         unsafe { neovm_value::tagged::gc::set_tagged_heap_root(tagged_heap.root()) };
 
         // Clear any caches that hold heap-allocated Values (tagged pointers) from a

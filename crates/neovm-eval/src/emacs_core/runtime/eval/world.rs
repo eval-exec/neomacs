@@ -308,6 +308,8 @@ impl WorldView<neovm_value::tagged::gc::TaggedHeap> {
     /// root every access through the view derives from, so later `&mut`
     /// reborrows through the view cannot invalidate the installed pointer.
     pub(crate) fn install_tagged_heap(&self) {
+        // SAFETY: `self.ptr` is the World's AliasableBox provenance root.
+        // It lives as long as this view, and no heap reference is live across the install.
         unsafe { neovm_value::tagged::gc::set_tagged_heap_root(self.ptr) };
     }
 }

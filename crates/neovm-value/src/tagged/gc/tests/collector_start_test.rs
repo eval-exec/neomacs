@@ -86,8 +86,8 @@ fn concurrent_start_refusal(policy: ClaimPolicy) {
         heap.seed_root(root);
         heap.incremental_drain_all();
         let live_bytes = heap.live_bytes();
-        heap.incremental_finish(live_bytes, Instant::now());
-        heap.finish_incremental_sweep_now();
+        heap.incremental_finish_for_test(live_bytes, Instant::now());
+        heap.finish_incremental_sweep_now_for_test();
         assert!(heap.owns_heap_value_for_test(root));
         assert!(heap.owns_heap_value_for_test(child));
         assert_eq!(child.as_str_owned().unwrap(), "inline worker retained");

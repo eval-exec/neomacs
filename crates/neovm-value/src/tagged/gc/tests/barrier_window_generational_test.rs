@@ -10,10 +10,10 @@ fn promote_cons_until_old(heap: &mut TaggedHeap, owner: TaggedValue) {
         if heap.cons_age_is_old_for_test(owner) {
             break;
         }
-        heap.begin_minor_collection().unwrap();
+        heap.begin_minor_collection_for_test().unwrap();
         heap.seed_root(owner);
-        heap.complete_minor_collection();
-        heap.finish_incremental_sweep_now();
+        heap.complete_minor_collection_for_test();
+        heap.finish_incremental_sweep_now_for_test();
     }
     assert!(heap.cons_age_is_old_for_test(owner));
     assert_eq!(heap.cons_region_for_test(), (0, 0));

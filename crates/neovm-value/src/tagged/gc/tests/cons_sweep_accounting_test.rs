@@ -30,11 +30,11 @@ fn base(value: TaggedValue) -> usize {
 fn begin_deferred(heap: &mut TaggedHeap, cycle: DeferredCycle, roots: &[TaggedValue]) {
     match cycle {
         DeferredCycle::Minor => {
-            heap.begin_minor_collection().unwrap();
+            heap.begin_minor_collection_for_test().unwrap();
             for &root in roots {
                 heap.seed_root(root);
             }
-            heap.complete_minor_collection();
+            heap.complete_minor_collection_for_test();
         }
         DeferredCycle::Major => {
             // SAFETY: this fixture owns the sole heap writer and all roots;
@@ -47,14 +47,14 @@ fn begin_deferred(heap: &mut TaggedHeap, cycle: DeferredCycle, roots: &[TaggedVa
             // and deferred sweep path, without a timing-dependent worker.
             drop(capture);
             heap.incremental_drain_all();
-            heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
+            heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
         }
     }
     assert!(heap.sweep_in_progress());
 }
 
 fn finish(heap: &mut TaggedHeap, expected: usize) {
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
     assert_eq!(heap.cons_live_count_exact(), expected);
     assert_eq!(heap.allocated_count(), expected);
@@ -118,7 +118,7 @@ fn cons_sweep_accounting_keeps_reused_empty_candidate_and_then_releases_it() {
             last = cell;
         }
         begin_deferred(&mut heap, cycle, &[last]);
-        assert!(!heap.incremental_sweep_slice(1));
+        assert!(!heap.incremental_sweep_slice_for_test(1));
         assert_eq!(heap.sweep_cons_cursor, 1);
         let newborn = heap.alloc_cons(TaggedValue::fixnum(277), TaggedValue::NIL);
         assert_eq!(base(newborn), first_base);
@@ -197,8 +197,10 @@ fn cons_sweep_accounting_verifier_rejects_corrupt_completed_freed_count() {
     heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     begin_deferred(&mut heap, DeferredCycle::Minor, &[root]);
     let _fault = ConsAllocatorFaultGuard::inject(ConsAllocatorFault::CorruptCompletedSweepFreed);
-    let panic = catch_unwind(AssertUnwindSafe(|| heap.finish_incremental_sweep_now()))
-        .expect_err("the slow verify census must reject a wrong arithmetic recount");
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        heap.finish_incremental_sweep_now_for_test()
+    }))
+    .expect_err("the slow verify census must reject a wrong arithmetic recount");
     let message = panic
         .downcast_ref::<String>()
         .map(String::as_str)

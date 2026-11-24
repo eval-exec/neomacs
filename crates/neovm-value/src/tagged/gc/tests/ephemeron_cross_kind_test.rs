@@ -190,8 +190,8 @@ fn incremental_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 fn bootstrapped_heap() -> Box<TaggedHeap> {
@@ -296,7 +296,7 @@ fn refresh_retired_process_ephemeron_unions_the_arm_time_fields() {
     let current = heap.alloc_cons(TaggedValue::fixnum(0x777), TaggedValue::NIL);
     heap.arm_retired_process_ephemerons(vec![(process_id, vec![arm_time])]);
 
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     // The process object is reached, but the ephemeron fixpoint runs only at
     // termination.
     heap.seed_root(process_object);
@@ -325,5 +325,5 @@ fn refresh_retired_process_ephemeron_unions_the_arm_time_fields() {
         heap.is_value_marked(arm_time),
         "the union keeps the arm-time field: a replace would sweep it though Lisp owns it"
     );
-    heap.complete_collection();
+    heap.complete_collection_for_test();
 }

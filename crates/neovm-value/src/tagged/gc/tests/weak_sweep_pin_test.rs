@@ -114,7 +114,7 @@ fn serial_weak_sweep_keeps_a_value_reachable_from_a_later_key_weak_table() {
     insert(table_a, x, y);
     insert(table_b, z, y);
 
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     heap.seed_root(table_b);
     heap.seed_root(table_a);
     heap.seed_root(z);
@@ -132,7 +132,7 @@ fn serial_weak_sweep_keeps_a_value_reachable_from_a_later_key_weak_table() {
         ],
         "the value-weak table is recorded before the key-weak table"
     );
-    heap.complete_collection();
+    heap.complete_collection_for_test();
 
     assert_eq!(pairs(table_a), BTreeSet::from([(11, 12)]));
     assert_eq!(pairs(table_b), BTreeSet::from([(13, 12)]));

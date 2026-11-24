@@ -166,8 +166,13 @@ impl TaggedHeap {
     /// set. Finishing the armed cycle here instead (promote, then trace) would
     /// tenure the objects it allocated black during its mark, dead or not, so
     /// the explicit collection could never free them.
+    /// # Safety
+    ///
+    /// Starts a stop-the-world cycle whose later sweep frees unmarked
+    /// objects. The caller has joined any concurrent marker and holds the
+    /// only live heap borrow.
     #[doc(hidden)]
-    pub fn begin_stw_collection(&mut self) {
+    pub unsafe fn begin_stw_collection(&mut self) {
         self.assert_no_owner_cons_reserves();
         assert!(
             !self.concurrent_mark_running,

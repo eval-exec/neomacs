@@ -565,10 +565,12 @@ impl TaggedHeap {
             let bytes_before = self.live_bytes();
             let pause = std::time::Instant::now();
             self.incremental_drain_all();
-            self.incremental_finish(bytes_before, pause);
+            // SAFETY: quiescence joined the marker. This sweep frees unmarked objects.
+            unsafe { self.incremental_finish(bytes_before, pause) };
         }
         if self.sweep_in_progress {
-            self.finish_incremental_sweep_now();
+            // SAFETY: same quiescence. Drain the sweep before the image is reused.
+            unsafe { self.finish_incremental_sweep_now() };
         }
         self.finish_first_partition_cycle();
         self.close_alloc_regions();
@@ -919,7 +921,7 @@ mod tests {
         capture.heap_mut().seed_root(root);
         drop(capture);
         heap.incremental_drain_all();
-        heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
+        heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
         assert!(!heap.mark_in_progress && heap.sweep_in_progress);
         assert!(matches!(
             admit(&mut heap),

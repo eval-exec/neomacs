@@ -1478,6 +1478,11 @@ impl Context {
     /// catch. Callers that can propagate use [`Self::gc_collect_exact_flow`].
     /// This infallible form is the test/staging seam: it has no live catch to
     /// route to, so it refuses to lose a flow silently in debug builds.
+    ///
+    /// `&mut self` is the collection capability only for borrows taken from
+    /// this Context. Payload accessors still return `&'static` until Phase 1,
+    /// so a Rust local can keep an object this call frees. Rooting is precise
+    /// and does not scan the Rust stack.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn gc_collect_exact(&mut self) {
         if let Err(flow) = self.gc_collect_exact_flow() {

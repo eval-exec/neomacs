@@ -718,12 +718,12 @@ fn terminate_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
         heap.seed_root(root);
     }
     heap.incremental_drain_all();
-    heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
+    heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
 }
 
 fn finish_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     terminate_cycle(heap, roots);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 #[test]
@@ -821,7 +821,7 @@ fn tier_h_real_wrapper_retraces_done_table_and_releases_any_legacy_retirement_at
             "current-child retrace covers white insertion"
         );
         drop(snapshot);
-        heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
+        heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
         assert!(heap.concurrent_hash_snapshot().is_none());
         assert!(
             heap.current_concurrent_hash_mutator()
@@ -842,7 +842,7 @@ fn tier_h_real_wrapper_retraces_done_table_and_releases_any_legacy_retirement_at
             "snapshot child survives this cycle"
         );
         assert_eq!(weak.as_hash_table().unwrap().data.len(), 1);
-        heap.finish_incremental_sweep_now();
+        heap.finish_incremental_sweep_now_for_test();
         crate::tagged::mutate::with_hash_table_mut(owner, |table| table.data.clear());
         start_cycle(&mut heap, &roots);
         finish_cycle(&mut heap, &roots);
@@ -975,10 +975,10 @@ fn tier_h_old_table_remembers_young_child_for_next_minor() {
     let child = heap.alloc_record(vec![TaggedValue::fixnum(1401)]);
     insert(owner, TaggedValue::fixnum(2), child);
     assert!(heap.current_mutator_gc().remset.contains(&owner));
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.owns_heap_value_for_test(child));
     assert!(heap.value_is_old_for_test(child));
     crate::tagged::mutate::with_hash_table_mut(owner, |table| table.data.remove(&HashKey::Int(2)));

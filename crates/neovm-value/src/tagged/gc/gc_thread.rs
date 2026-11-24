@@ -1650,9 +1650,12 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
 /// # Safety
 ///
 /// `root` is the allocation's [`super::AliasableBox`] root, and the caller
-/// is the owner installing or resuming that heap on this thread. Construct,
-/// pdump, world activation and resume, the gc-thread fallback, and the
-/// facade marker all use this one function. There is no second installer.
+/// is the owner installing or resuming that heap on this thread. The root
+/// stays live until it is cleared or replaced: every later `with_tagged_heap`
+/// dereferences it. No reference into the heap is live during the call,
+/// because mirror refresh forms a `&mut` from the root. Construct, pdump,
+/// world activation and resume, the gc-thread fallback, and the facade
+/// marker all use this one function. There is no second installer.
 #[doc(hidden)]
 pub unsafe fn set_tagged_heap_root(root: std::ptr::NonNull<TaggedHeap>) {
     // SAFETY: the caller supplies the live allocation's root pointer.
@@ -2009,7 +2012,9 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
                     }
                     borrow.as_mut().unwrap().get_mut().root()
                 };
-                // SAFETY: the fallback owns the AliasableBox root it just created.
+                // SAFETY: the thread's fallback slot owns this AliasableBox root
+                // for the thread's life (ThreadExitLeak). It is created on the
+                // first call only. No heap reference is live here.
                 unsafe { set_tagged_heap_root(root) };
                 f(unsafe { &mut *root.as_ptr() })
             })

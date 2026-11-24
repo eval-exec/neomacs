@@ -30,8 +30,8 @@ fn finish_cycle(heap: &mut TestHeap, roots: &[TaggedValue]) {
     }
     heap.incremental_drain_all();
     let live_bytes = heap.live_bytes();
-    heap.incremental_finish(live_bytes, Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(live_bytes, Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 /// Inspect only the joined worker's owned handoff, then relay the entire
@@ -596,7 +596,7 @@ fn tier_h_actual_worker_first_write_before_and_after_claim_preserves_both_child_
             }
             drop(snapshot);
             let live_bytes = heap.live_bytes();
-            heap.incremental_finish(live_bytes, Instant::now());
+            heap.incremental_finish_for_test(live_bytes, Instant::now());
             assert!(heap.concurrent_hash_snapshot().is_none());
             assert_eq!(heap.last_concurrent_claim_counts().1, 1);
             assert!(
@@ -613,7 +613,7 @@ fn tier_h_actual_worker_first_write_before_and_after_claim_preserves_both_child_
                     .written_hash_owners
                     .is_empty()
             );
-            heap.finish_incremental_sweep_now();
+            heap.finish_incremental_sweep_now_for_test();
             for child in old_children
                 .iter()
                 .copied()

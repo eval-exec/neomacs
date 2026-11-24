@@ -6,11 +6,11 @@ use crate::value::{HashTableTest, LispHashTable};
 
 fn full(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     heap.request_gc_object_counts();
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     heap.publish_gc_object_counts_if_requested(0);
 }
 
@@ -68,8 +68,8 @@ fn string_gc_pacing_counts_collectible_survivors_not_image_residents() {
                     heap.seed_root(root);
                 }
                 heap.incremental_drain_all();
-                heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
-                heap.finish_incremental_sweep_now();
+                heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
+                heap.finish_incremental_sweep_now_for_test();
                 heap.finish_first_partition_cycle();
                 heap.publish_gc_object_counts_if_requested(0);
             } else {
@@ -89,12 +89,12 @@ fn string_gc_pacing_counts_collectible_survivors_not_image_residents() {
             full(&mut heap, &roots);
             assert_eq!(heap.live_bytes(), expected, "ordinary-old full census");
             if generational {
-                heap.begin_minor_collection().unwrap();
+                heap.begin_minor_collection_for_test().unwrap();
                 for &root in &roots {
                     heap.seed_root(root);
                 }
-                heap.complete_minor_collection();
-                heap.finish_incremental_sweep_now();
+                heap.complete_minor_collection_for_test();
+                heap.finish_incremental_sweep_now_for_test();
                 assert_eq!(heap.live_bytes(), expected, "ordinary-old minor census");
             }
             assert_eq!(heap.memory_use_counts_snapshot(), allocation_counts);

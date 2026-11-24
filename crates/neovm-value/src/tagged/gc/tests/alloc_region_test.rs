@@ -348,14 +348,14 @@ fn every_collector_entry_closes_the_region() {
     heap.incremental_drain_all();
     open(&mut heap);
     let bytes_before = heap.live_bytes();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     assert!(!heap.alloc_regions_open(), "incremental_finish");
     assert!(heap.sweep_in_progress());
     open(&mut heap);
-    heap.incremental_sweep_slice(0);
+    heap.incremental_sweep_slice_for_test(0);
     assert!(!heap.alloc_regions_open(), "incremental_sweep_slice");
     open(&mut heap);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.alloc_regions_open(), "finish_incremental_sweep");
     assert!(!heap.sweep_in_progress());
     assert_eq!(
@@ -406,10 +406,10 @@ fn allocation_across_a_concurrent_cycle_keeps_every_live_cons() {
     }
     heap.incremental_drain_all();
     let bytes_before = heap.live_bytes();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     while heap.sweep_in_progress() {
         keep(&mut heap, &mut live, 50);
-        heap.incremental_sweep_slice(1);
+        heap.incremental_sweep_slice_for_test(1);
     }
     let addrs: std::collections::HashSet<usize> = live.iter().map(|c| cell_addr(*c)).collect();
     assert_eq!(addrs.len(), live.len(), "a live cell was handed out twice");
@@ -610,10 +610,10 @@ fn float_allocation_across_a_concurrent_cycle_keeps_every_live_float() {
     heap.seed_root(root);
     heap.incremental_drain_all();
     let bytes_before = heap.live_bytes();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     while heap.sweep_in_progress() {
         keep(&mut heap, &mut live, 20);
-        heap.incremental_sweep_slice(1);
+        heap.incremental_sweep_slice_for_test(1);
     }
     let addrs: std::collections::HashSet<usize> = live.iter().map(|f| float_addr(*f)).collect();
     assert_eq!(addrs.len(), live.len(), "a live float's slot was reused");

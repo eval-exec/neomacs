@@ -132,8 +132,8 @@ fn gc_tls_hash_activation_follows_real_launch_join_and_termination() {
             heap.reseed_runtime_and_remembered_roots();
             heap.seed_root(owner);
             heap.incremental_drain_all();
-            heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
-            heap.finish_incremental_sweep_now();
+            heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
+            heap.finish_incremental_sweep_now_for_test();
             assert!(heap.concurrent_hash_snapshot().is_none());
             assert!(!concurrent_hash_mutation_active());
             drop(heap);
@@ -180,8 +180,8 @@ fn gc_tls_hash_activation_survives_displaced_heap_join_and_reinstallation() {
     assert!(!concurrent_hash_mutation_active());
     second.reseed_runtime_and_remembered_roots();
     second.incremental_drain_all();
-    second.incremental_finish(second.live_bytes(), std::time::Instant::now());
-    second.finish_incremental_sweep_now();
+    second.incremental_finish_for_test(second.live_bytes(), std::time::Instant::now());
+    second.finish_incremental_sweep_now_for_test();
     drop(second);
     assert!(!concurrent_hash_mutation_active());
 }

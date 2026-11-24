@@ -64,12 +64,12 @@ fn tenure(heap: &mut TaggedHeap, table: TaggedValue, roots: &[TaggedValue]) {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 /// `WEAK_ENTRY_VISITS` is process-global: the exact count relies on nextest

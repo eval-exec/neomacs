@@ -1,16 +1,27 @@
 //! No safe production path reaches `TaggedHeap` collection.
 //!
-//! `collect`, `collect_exact`, `set_tagged_heap_root`, `alloc_user_ptr`, and
-//! `alloc_module_function` are `unsafe fn`. A safe function, including one
-//! that hides the call in an `unsafe` block, must not call `collect` or
-//! `collect_exact`. `Context::gc_collect_exact` stays safe because it never
-//! names those entries: `&mut Context` is the capability. Test support calls
-//! `collect_rooted`, which is cfg'd out of production builds.
+//! `collect`, `collect_exact`, `set_tagged_heap_root`, `alloc_user_ptr`,
+//! `alloc_module_function`, and the sweep entries (`begin_stw_collection`,
+//! `complete_collection`, `begin_minor_collection`, `complete_minor_collection`,
+//! `incremental_finish`, `incremental_sweep_slice`,
+//! `finish_incremental_sweep_now`) are `unsafe fn`. `seed_root` stays safe:
+//! it does not free. A safe function, including one that hides the call in
+//! an `unsafe` block, must not call `collect` or `collect_exact`. The sweep
+//! entries are reached from `gc_collect_from_current_roots_body` inside the
+//! stop-the-world `unsafe` block; the compiler requires that block.
+//! `Context::gc_collect_exact` stays safe. `&mut Context` is the capability
+//! only after Phase 1 stops returning `&'static` payload borrows. Until then
+//! a Rust local can keep a freed object. Test support calls `collect_rooted`
+//! and the `*_for_test` sweep wrappers, which are cfg'd out of production
+//! builds and are deliberately unsound for unrooted borrows.
 //!
 //! The scan parses source syntax, not expanded macros or resolved types.
-//! `Iterator::collect` takes no arguments, so a one-argument `.collect` is
-//! the heap entry. Items whose `cfg` needs `test` or `test-support` are not
-//! production.
+//! `macro_rules` bodies, `<TaggedHeap>::method` (qself), renamed imports,
+//! and function pointers are invisible here; the compiler still requires
+//! `unsafe` at those calls. `Iterator::collect` takes no arguments, so a
+//! one-argument `.collect` is the heap entry. Items whose `cfg` needs `test`
+//! or `test-support` are not production. A child module declared
+//! `#[cfg(test)]` in its parent is still scanned, which can only false-positive.
 
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
@@ -23,6 +34,13 @@ const HEAP_METHODS: &[&str] = &[
     "collect_exact",
     "alloc_user_ptr",
     "alloc_module_function",
+    "begin_stw_collection",
+    "complete_collection",
+    "begin_minor_collection",
+    "complete_minor_collection",
+    "incremental_finish",
+    "incremental_sweep_slice",
+    "finish_incremental_sweep_now",
 ];
 
 const INSTALL: &str = "set_tagged_heap_root";
@@ -181,6 +199,11 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let name = call.method.to_string();
+        // Sweep entries are gated by being `unsafe fn`. A safe caller may
+        // reach them only inside an `unsafe` block, which is how
+        // `gc_collect_from_current_roots_body` drives a cycle. Call-path
+        // scanning stays on `collect` / `collect_exact`: those names must
+        // not appear in a safe function at all.
         if name == "collect_exact" || (name == "collect" && call.args.len() == 1) {
             self.note_call(&name, call.method.span().start().line);
         }
@@ -404,6 +427,13 @@ fn heap_capability_guard_flags_a_safe_collect_call() {
             pub unsafe fn collect_exact(&mut self, roots: impl Iterator<Item = i32>) {}
             pub unsafe fn alloc_user_ptr(&mut self) {}
             pub unsafe fn alloc_module_function(&mut self) {}
+            pub unsafe fn begin_stw_collection(&mut self) {}
+            pub unsafe fn complete_collection(&mut self) {}
+            pub unsafe fn begin_minor_collection(&mut self) {}
+            pub unsafe fn complete_minor_collection(&mut self) {}
+            pub unsafe fn incremental_finish(&mut self, _bytes: usize, _pause: i32) {}
+            pub unsafe fn incremental_sweep_slice(&mut self, _budget: usize) -> bool { true }
+            pub unsafe fn finish_incremental_sweep_now(&mut self) {}
             #[cfg(any(test, feature = "test-support"))]
             pub fn collect_rooted(&mut self, roots: impl Iterator<Item = i32>) {
                 unsafe { self.collect_exact(roots) }
@@ -432,6 +462,13 @@ fn heap_capability_guard_ignores_iterator_collect_and_test_modules() {
             pub unsafe fn collect_exact(&mut self, _roots: impl Iterator<Item = i32>) {}
             pub unsafe fn alloc_user_ptr(&mut self) {}
             pub unsafe fn alloc_module_function(&mut self) {}
+            pub unsafe fn begin_stw_collection(&mut self) {}
+            pub unsafe fn complete_collection(&mut self) {}
+            pub unsafe fn begin_minor_collection(&mut self) {}
+            pub unsafe fn complete_minor_collection(&mut self) {}
+            pub unsafe fn incremental_finish(&mut self, _bytes: usize, _pause: i32) {}
+            pub unsafe fn incremental_sweep_slice(&mut self, _budget: usize) -> bool { true }
+            pub unsafe fn finish_incremental_sweep_now(&mut self) {}
         }
         pub unsafe fn set_tagged_heap_root() {}
         fn production(values: &[i32]) -> Vec<i32> {

@@ -106,12 +106,12 @@ fn heap(on: bool) -> TestHeap {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 fn major(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
@@ -542,7 +542,7 @@ fn concurrent_major_promotes_worker_claims_black_births_before_deferred_sweep() 
     heap.seed_root(owner);
     heap.incremental_drain_all();
     let live_bytes = heap.live_bytes();
-    heap.incremental_finish(live_bytes, std::time::Instant::now());
+    heap.incremental_finish_for_test(live_bytes, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
     for value in [
         owner,
@@ -571,7 +571,7 @@ fn concurrent_major_promotes_worker_claims_black_births_before_deferred_sweep() 
 
     let sweep_born = heap.alloc_float(4.5);
     roots.keep(sweep_born);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.value_is_old_for_test(sweep_born));
     for value in [
         target,
@@ -715,8 +715,8 @@ fn major_explicit_first_partition_disarm_drops_completed_black_birth_logs() {
     heap.reseed_runtime_and_remembered_roots();
     heap.incremental_drain_all();
     let bytes_before = heap.live_bytes();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.first_cycle_concurrent);
     assert!(!heap.dump_blackened);
     assert!(!heap.concurrent_mark_running());
@@ -734,12 +734,12 @@ fn major_explicit_first_partition_disarm_drops_completed_black_birth_logs() {
     // Exactly the explicit-entry ordering: finish the prior sweep, then
     // disarm and run a fresh STW first partition. Calling the permanent
     // splice here instead would pin these unreachable births forever.
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     assert!(!heap.first_cycle_concurrent);
     assert!(heap.current_mutator_gc().black_born.is_empty());
     assert!(heap.current_mutator_gc().black_born_regions.is_empty());
     heap.seed_root(mapped);
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert!(heap.dump_blackened);
     assert!(!heap.mark_in_progress());
     assert!(!heap.sweep_in_progress());
@@ -889,7 +889,7 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
     heap.seed_root(table);
     heap.incremental_drain_all();
     let live_bytes = heap.live_bytes();
-    heap.incremental_finish(live_bytes, std::time::Instant::now());
+    heap.incremental_finish_for_test(live_bytes, std::time::Instant::now());
     assert!(
         heap.marked_symbols.contains(id),
         "fresh={fresh}/old={table_old}/car={car}/jit={jit}"
@@ -903,7 +903,7 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
         },
         symbol
     );
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
     assert_eq!(
         table
@@ -1132,9 +1132,9 @@ fn claimed_old_cons_heap_insertion_case(
     // This assertion fails before reclamation on the unfixed source. With the
     // repair, weak sweep keeps the inserted key and drops the unrelated control.
     let live_bytes = heap.live_bytes();
-    heap.incremental_finish(live_bytes, std::time::Instant::now());
+    heap.incremental_finish_for_test(live_bytes, std::time::Instant::now());
     assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.owns_heap_value_for_test(inserted));
     if let Some((payload, _, child, _)) = cold_graph {
         assert!(heap.owns_heap_value_for_test(child));

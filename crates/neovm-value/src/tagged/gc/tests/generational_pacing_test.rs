@@ -368,15 +368,15 @@ fn generational_pacing_real_minor_credits_promotion_and_major_resets_after_recla
     let child_addr = TaggedHeap::value_heap_addr(child).unwrap();
     let child_bytes = TaggedHeap::object_bytes_from_header(child_addr as *const GcHeader);
     assert!(crate::tagged::mutate::set_cons_car(owner, child));
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
-    heap.complete_minor_collection();
+    heap.complete_minor_collection_for_test();
     assert_eq!(heap.current_mutator_gc().pacing.minors_since_major, 0);
     assert_eq!(
         heap.current_mutator_gc().pacing.promoted_since_major,
         child_bytes
     );
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(heap.current_mutator_gc().pacing.minors_since_major, 1);
     assert_eq!(
         heap.generational.old_bytes_after_major,

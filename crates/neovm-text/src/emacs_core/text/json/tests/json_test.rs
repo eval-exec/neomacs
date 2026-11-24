@@ -834,8 +834,8 @@ fn parse_nested_hash_tables_during_concurrent_gen1_mark() {
     heap.reseed_runtime_and_remembered_roots();
     heap.seed_root(holder);
     heap.incremental_drain_all();
-    heap.incremental_finish(heap.live_bytes(), Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(heap.live_bytes(), Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!gc::concurrent_hash_mutation_active());
 
     for value in [

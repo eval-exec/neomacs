@@ -330,9 +330,9 @@ fn incremental_sweep_without_observed_reclamation_keeps_epoch_and_recent_hits() 
     }
     heap.incremental_drain_all();
     let bytes_before = heap.live_bytes();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     loop {
-        let done = heap.incremental_sweep_slice(1);
+        let done = heap.incremental_sweep_slice_for_test(1);
         assert_eq!(
             super::super::gc::collection_observation_epoch(),
             before,

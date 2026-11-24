@@ -105,8 +105,17 @@ impl TaggedHeap {
     /// The reclaim drains in bounded slices at later safe points
     /// (`incremental_sweep_slice`), so it is no longer part of the STW pause.
     /// Marking is complete here; the barrier is dropped.
+    /// # Safety
+    ///
+    /// Publishes mark termination and arms the sweep that frees unmarked
+    /// objects. Marking is already at a fixpoint. The caller holds the only
+    /// live heap borrow.
     #[doc(hidden)]
-    pub fn incremental_finish(&mut self, bytes_before: usize, _pause_t0: std::time::Instant) {
+    pub unsafe fn incremental_finish(
+        &mut self,
+        bytes_before: usize,
+        _pause_t0: std::time::Instant,
+    ) {
         self.assert_no_owner_cons_reserves();
         assert!(
             !self.concurrent_mark_running,
@@ -305,8 +314,12 @@ impl TaggedHeap {
     /// (and finalizes accounting) once the whole sweep is done. New conses
     /// allocated meanwhile are born black (see `alloc_cons`), so an unswept
     /// block never reclaims a live new cell.
+    /// # Safety
+    ///
+    /// Frees unmarked objects in this slice. The caller holds the only live
+    /// heap borrow, and no pointer this slice can free is live across the call.
     #[doc(hidden)]
-    pub fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
+    pub unsafe fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
         self.assert_no_owner_cons_reserves();
         assert!(
             !self.concurrent_mark_running,
@@ -506,11 +519,16 @@ impl TaggedHeap {
 
     /// Drive the deferred sweep to completion in one shot (forced GC, or before
     /// the next mark / a stop-the-world collection can begin).
+    /// # Safety
+    ///
+    /// Drains the sweep and frees every remaining unmarked object. The
+    /// caller holds the only live heap borrow.
     #[doc(hidden)]
-    pub fn finish_incremental_sweep_now(&mut self) {
+    pub unsafe fn finish_incremental_sweep_now(&mut self) {
         self.assert_no_owner_cons_reserves();
         while self.sweep_in_progress {
-            self.incremental_sweep_slice(usize::MAX);
+            // SAFETY: this entry is the draining sweep.
+            unsafe { self.incremental_sweep_slice(usize::MAX) };
         }
     }
 

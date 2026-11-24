@@ -97,16 +97,16 @@ fn native_parser_tag_survives(first: FirstCollection) {
 
 fn collect_minor_or_full(heap: &mut TaggedHeap, roots: Vec<Value>) {
     if heap.tagged_heap_generational_enabled() {
-        heap.begin_minor_collection()
+        heap.begin_minor_collection_for_test()
             .expect("fresh GEN1 heap admits a minor");
         for root in roots {
             heap.seed_root(root);
         }
-        heap.complete_minor_collection();
-        heap.finish_incremental_sweep_now();
+        heap.complete_minor_collection_for_test();
+        heap.finish_incremental_sweep_now_for_test();
     } else {
         // GEN0 refuses minors and preserves the edge through a full cycle.
-        assert!(heap.begin_minor_collection().is_err());
+        assert!(heap.begin_minor_collection_for_test().is_err());
         heap.collect_rooted(roots.into_iter());
     }
 }

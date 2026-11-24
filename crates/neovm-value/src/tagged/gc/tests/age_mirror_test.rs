@@ -59,12 +59,12 @@ fn verified_heap() -> TaggedHeap {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
@@ -127,7 +127,7 @@ fn a_freed_old_slot_reused_by_a_new_cons_reads_young_at_the_barrier() {
     let roots = ScratchRoots::new();
     roots.keep(keeper);
     heap.collect_rooted(std::iter::once(keeper));
-    heap.finish_incremental_sweep_now();
+    heap.finish_incremental_sweep_now_for_test();
     // The sweep hands freed cells back to allocation; find the old slot.
     let reused = (0..4 * CONS_BLOCK_SIZE)
         .map(|_| {

@@ -168,8 +168,8 @@ fn slot_stores_during_a_concurrent_mark_keep_both_values() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     assert_eq!(slot(record, 0), new_child);
     assert_eq!(slot(lambda, 0), new_closure_child);

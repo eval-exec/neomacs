@@ -139,7 +139,7 @@ fn heapborrow_r8_collector_scans_do_not_observe_lisp_reads() {
     let child = heap.alloc_cons(TaggedValue::fixnum(67), TaggedValue::NIL);
     let root = heap.alloc_cons(child, TaggedValue::NIL);
     let ((), certificate) = crate::tagged::collection_reads::capture(|| {
-        heap.begin_stw_collection();
+        heap.begin_stw_collection_for_test();
         heap.seed_root(root);
         // Exercise the mutator's termination drain, not collect_exact's
         // worker-thread mark (which has no active Lisp-read capture).
@@ -154,7 +154,7 @@ fn heapborrow_r8_collector_scans_do_not_observe_lisp_reads() {
         !crate::tagged::collection_reads::is_observed(child.bits()),
         "the collector must not mark a child as Lisp-observed"
     );
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert_eq!(root.cons_car().cons_car(), TaggedValue::fixnum(67));
 }
 
@@ -179,7 +179,7 @@ fn heapborrow_r8_vector_and_string_scans_do_not_observe_lisp_reads() {
     let text = heap.alloc_string(crate::heap_types::LispString::from_utf8("gc retained"));
     let root = heap.alloc_vector(vec![text]);
     let ((), certificate) = crate::tagged::collection_reads::capture(|| {
-        heap.begin_stw_collection();
+        heap.begin_stw_collection_for_test();
         heap.seed_root(root);
         heap.incremental_drain_all();
     });
@@ -187,7 +187,7 @@ fn heapborrow_r8_vector_and_string_scans_do_not_observe_lisp_reads() {
     for value in [root, text] {
         assert!(!crate::tagged::collection_reads::is_observed(value.bits()));
     }
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert_eq!(
         root.as_vector_data().unwrap()[0].as_str_owned().unwrap(),
         "gc retained"

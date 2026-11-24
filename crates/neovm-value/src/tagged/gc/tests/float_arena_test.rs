@@ -26,8 +26,8 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
 }
 
@@ -80,11 +80,14 @@ fn reuse_within_one_cooperative_sweep_window_body(verify: bool) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
 
     // Slice 1 (budget 1): sweeps float page 0 only — the window is open.
-    assert!(!heap.incremental_sweep_slice(1), "3 pages need >1 slice");
+    assert!(
+        !heap.incremental_sweep_slice_for_test(1),
+        "3 pages need >1 slice"
+    );
     assert!(heap.sweep_in_progress());
     heap.assert_object_arenas_coherent();
 
@@ -111,7 +114,7 @@ fn reuse_within_one_cooperative_sweep_window_body(verify: bool) {
     // Drain the rest. The reallocated slots were re-read from the LIVE
     // bitmap and born at the cycle parity, so the remaining slices must
     // not free them (no premature free) nor re-free their slots.
-    while !heap.incremental_sweep_slice(1) {}
+    while !heap.incremental_sweep_slice_for_test(1) {}
     assert!(!heap.sweep_in_progress());
     heap.assert_object_arenas_coherent();
 
@@ -188,8 +191,8 @@ fn parity_two_cycle_float_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(spine); // f deliberately NOT seeded
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         heap.owns_non_cons_object(f_ptr),
         "allocate-black float must survive the cycle it was born in",
@@ -221,8 +224,8 @@ fn parity_two_cycle_float_survival_and_reclaim_body(verify: bool) {
     heap.seed_root(f);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     // No allocations since the sweep: the ownership probes below cannot
     // be confused by slot reuse.
     assert!(
@@ -321,8 +324,8 @@ fn deferred_floats_resolve_at_termination_body(verify: bool) {
     heap.seed_root(list);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     for (i, f) in float_vals.iter().enumerate() {
         assert!(
@@ -910,7 +913,7 @@ fn a_deferred_sweep_finishes_while_the_mutator_opens_pages() {
     unsafe { heap.begin_collection() };
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     let mut slices = 0;
     let mut born = Vec::new();
     loop {
@@ -920,7 +923,7 @@ fn a_deferred_sweep_finishes_while_the_mutator_opens_pages() {
             born.push(heap.alloc_float(i as f64));
         }
         slices += 1;
-        if heap.incremental_sweep_slice(1) {
+        if heap.incremental_sweep_slice_for_test(1) {
             break;
         }
         assert!(

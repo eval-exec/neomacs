@@ -492,8 +492,8 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
 }
 
@@ -539,8 +539,8 @@ fn chunk_map_concurrent_cycles_keep_the_live_set_while_pages_grow() {
         heap.seed_root(fresh);
         let bytes_before = heap.live_bytes();
         heap.incremental_drain_all();
-        heap.incremental_finish(bytes_before, std::time::Instant::now());
-        heap.finish_incremental_sweep_now();
+        heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+        heap.finish_incremental_sweep_now_for_test();
         root = heap.alloc_cons(fresh, root);
         assert!(
             heap.owns_veclike_object(

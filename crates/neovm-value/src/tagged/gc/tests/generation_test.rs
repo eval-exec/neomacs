@@ -179,7 +179,7 @@ fn parity_alternates_and_rest_is_white_under_both() {
         "born at parity"
     );
     for parity in [MarkParity::One, MarkParity::Two] {
-        heap.begin_stw_collection();
+        heap.begin_stw_collection_for_test();
         heap.seed_root(v);
         heap.mark_all();
         assert_eq!(heap.mark_parity, parity);
@@ -188,7 +188,7 @@ fn parity_alternates_and_rest_is_white_under_both() {
             unsafe { (*header).is_marked_at(parity) },
             "traced at the new parity before sweep",
         );
-        heap.complete_collection();
+        heap.complete_collection_for_test();
         assert!(heap.owns_heap_value_for_test(v));
         if heap.tagged_heap_generational_enabled() {
             assert!(heap.value_is_old_for_test(v));

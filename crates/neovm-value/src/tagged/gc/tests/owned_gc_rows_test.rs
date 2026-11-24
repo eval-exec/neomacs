@@ -56,11 +56,11 @@ impl MappedFixture {
 
 fn full(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     heap.request_gc_object_counts();
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     heap.publish_gc_object_counts_if_requested(0);
 }
 
@@ -81,8 +81,8 @@ fn deferred_first(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
         heap.seed_root(root);
     }
     heap.incremental_drain_all();
-    heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(heap.live_bytes(), std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     heap.finish_first_partition_cycle();
     heap.publish_gc_object_counts_if_requested(0);
 }
@@ -146,12 +146,12 @@ fn owned_gc_rows_exclude_mapped_and_loader_image_residents() {
             assert_runtime_rows(heap.gc_object_counts());
             if generational {
                 heap.request_gc_object_counts();
-                heap.begin_minor_collection().unwrap();
+                heap.begin_minor_collection_for_test().unwrap();
                 for &root in &roots {
                     heap.seed_root(root);
                 }
-                heap.complete_minor_collection();
-                heap.finish_incremental_sweep_now();
+                heap.complete_minor_collection_for_test();
+                heap.finish_incremental_sweep_now_for_test();
                 heap.publish_gc_object_counts_if_requested(0);
                 assert_runtime_rows(heap.gc_object_counts());
             }

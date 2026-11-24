@@ -179,13 +179,13 @@ fn check_refused_cons_grant_refunded(source: RefusedGrantSource, access: Refused
     // Production begin/capture/promote/sweep and GEN1 verification must all
     // remain usable: neither a sole nor admitted allocator was poisoned, and
     // every pre-existing live cell plus the recovered newborn survives.
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in &prior {
         heap.seed_root(root);
     }
     heap.seed_root(recovered);
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.mark_in_progress);
     assert!(!heap.sweep_in_progress);
     assert!(!heap.alloc_regions_open());
