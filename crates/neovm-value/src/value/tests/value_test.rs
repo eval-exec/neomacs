@@ -663,6 +663,35 @@ fn equal_key_hundred_thousand_list_does_not_overflow() {
     });
 }
 
+fn rust_hash(value: &Value) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// GNU `internal_equal_cycle` treats `#1=(1 . #1#)` and `#2=(1 1 . #2#)` as
+/// equal. Rust `Hash` must agree, or a `HashMap` keyed by `Value` breaks.
+#[test]
+fn equal_cycle_shapes_share_a_rust_hash() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let one = Value::cons(Value::fixnum(1), Value::NIL);
+        one.set_cdr(one);
+        let two = Value::cons(Value::fixnum(1), Value::cons(Value::fixnum(1), Value::NIL));
+        two.cons_cdr().set_cdr(two);
+
+        assert!(!eq_value(&one, &two), "the two cycles are not eq");
+        assert!(
+            one == two,
+            "a one-cell cycle of 1 and a two-cell cycle of 1 are equal"
+        );
+        assert!(
+            rust_hash(&one) == rust_hash(&two),
+            "equal cycle shapes must share a Rust hash"
+        );
+    });
+}
+
 #[test]
 fn repeated_shallow_equal_avoids_cycle_tracking_overhead() {
     crate::test_utils::init_test_tracing();

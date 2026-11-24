@@ -306,9 +306,13 @@ impl PartialEq for TaggedValue {
 impl Eq for TaggedValue {}
 
 impl Hash for TaggedValue {
+    /// The bounded hash an `equal` table files this object under.
+    ///
+    /// Equal values hash alike, including circular lists whose cycle shapes
+    /// differ. Unequal values may collide. This is not the stored structural
+    /// [`crate::value::HashKey`].
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.to_hash_key(&crate::value::HashTableTest::Equal)
-            .hash(state);
+        crate::value::equal_value_hash(*self).hash(state);
     }
 }
 
