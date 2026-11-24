@@ -1,8 +1,32 @@
 //! Tests about the crate as a whole rather than one module.
 
+use std::ffi::OsStr;
+use std::path::Path;
+
 use super::*;
 
 mod process_test;
+
+#[test]
+fn neomacs_binary_prefers_neomacs_bin_then_neovm_binary_path() {
+    let workspace = Path::new("/workspace");
+    assert_eq!(
+        resolve_neomacs_binary(
+            Some(OsStr::new("/explicit/neomacs")),
+            Some(OsStr::new("/oracle/neomacs")),
+            workspace,
+        ),
+        Path::new("/explicit/neomacs")
+    );
+    assert_eq!(
+        resolve_neomacs_binary(None, Some(OsStr::new("/oracle/neomacs")), workspace),
+        Path::new("/oracle/neomacs")
+    );
+    assert_eq!(
+        resolve_neomacs_binary(None, None, workspace),
+        Path::new("/workspace/target/release/neomacs")
+    );
+}
 
 // ATTEST-MELPA-SPAWN: the MELPA runtime resolver must attest the binary it
 // spawns, so an ad-hoc filter over a MELPA-backed oracle family cannot spawn

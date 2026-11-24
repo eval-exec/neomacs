@@ -201,10 +201,11 @@ filter = 'test(oracle_prop_window_tree_survives_random_operation_sequences)'
 slow-timeout = { period = "1800s", terminate-after = 1 }
 
 # Native grammar cases provision pinned repositories and compile shared
-# libraries before running two editor probes. Match the cold package fixture
-# budget, ahead of the snapshot-oracle timeout below.
+# libraries before running two editor probes. The real JSON node row is the
+# same two-editor probe and measures about 97s, so it shares this budget
+# instead of the 60s single-form slot below.
 [[profile.default.overrides]]
-filter = 'package(neovm-oracle-tests) and test(~treesit_grammar_loading::)'
+filter = 'package(neovm-oracle-tests) and (test(~treesit_grammar_loading::) or test(=oracle_treesit_real_node::real_json_node_keeps_type_and_parser_through_gc_and_deletion))'
 slow-timeout = { period = "960s", terminate-after = 1 }
 
 # Oracle tests compare neomacs against GNU Emacs — single-form hangs
