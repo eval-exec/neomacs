@@ -4066,10 +4066,15 @@ pub struct Context {
     pub font_glyph_metrics_fn: Option<font_shape::FontGlyphMetricsFn>,
     /// Frontend-installed lookup of the face id redisplay sealed for a buffer
     /// position. `(font-at)` uses it so a fallback move recorded on that face
-    /// is the move `font-at` sees. Appended after the pinned layout: it is the
-    /// last Context field, so every earlier offset stays put.
+    /// is the move `font-at` sees. Appended after the pinned layout, so every earlier
+    /// offset stays put.
     #[allow(clippy::type_complexity)]
     pub realized_fontset_fn: Option<font_shape::RealizedFontsetFn>,
+    /// One frame whose bounded redisplay exhausted without a publishable
+    /// candidate. The transaction consumes the owned request after the
+    /// callback. This does not advance `accepted_serial` and does not publish
+    /// glyphs. Appended last so every earlier offset stays put.
+    no_safe_handled_frame: Option<neovm_value::display_vocab::FrameId>,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.

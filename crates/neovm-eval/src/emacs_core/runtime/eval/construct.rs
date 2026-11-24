@@ -2378,6 +2378,7 @@ impl Context {
             font_shape_fn: None,
             font_glyph_metrics_fn: None,
             realized_fontset_fn: None,
+            no_safe_handled_frame: None,
             gstring_shape_cache: world.global.gstring_shape_cache,
             display_idle_maintenance_fn: None,
             scroll_preview_fn: None,

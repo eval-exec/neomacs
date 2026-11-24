@@ -127,20 +127,24 @@ fn every_context_offset_is_mains() {
     // 16. No earlier offset moves.
     //
     // `realized_fontset_fn: Option<RealizedFontsetFn>` is the same kind of
-    // trailing box (16 bytes in both profiles) and is now the LAST Context
-    // field, so every field offset above and every JIT-baked offset are
+    // trailing box (16 bytes in both profiles) appended after the pinned
+    // layout, so every field offset above and every JIT-baked offset are
     // unchanged and only the Context total moves (debug 44712 -> 44728,
     // release 44704 -> 44720).
+    //
+    // `no_safe_handled_frame` is `Option<FrameId>` (16 bytes), appended after
+    // `realized_fontset_fn`. No earlier offset moves. With both trailing
+    // fields the totals are debug 44744 and release 44736.
     #[cfg(debug_assertions)]
     assert_eq!(
         size_of::<Context>(),
-        44728 + TEST_EXTRA,
+        44744 + TEST_EXTRA,
         "Context size (debug with test instrumentation)"
     );
     #[cfg(not(debug_assertions))]
     assert_eq!(
         size_of::<Context>(),
-        44720 + TEST_EXTRA,
+        44736 + TEST_EXTRA,
         "Context size (release with test instrumentation)"
     );
     let table: &[(usize, usize, &str)] = &[

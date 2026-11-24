@@ -965,6 +965,10 @@ pub struct LayoutEngine {
     /// Instrumentation from the most recent `layout_frame_rust` pass: the
     /// relaid-row-count gate metric (spec §7). Reset per frame.
     layout_stats: LayoutStats,
+    /// This redisplay's coordinator refused another retry. Queries do not set it.
+    convergence_exhausted: bool,
+    /// Set for a real redisplay, so a nested query cannot record NoSafe.
+    no_safe_on_exhaustion: bool,
 }
 
 /// Ownership of the numeric body observation's read journal.
@@ -1685,6 +1689,7 @@ impl LayoutEngine {
     }
 
     fn accept_frame_relayout_request(
+        &mut self,
         coordinator: &mut FrameLayoutCoordinator,
         evaluator: &mut neovm_core::emacs_core::Context,
         window_end_attempts: &mut FrameWindowEndAttempts,
@@ -1699,6 +1704,9 @@ impl LayoutEngine {
                     ?error,
                     "rejecting frame whose layout failed to converge"
                 );
+                if self.no_safe_on_exhaustion {
+                    self.convergence_exhausted = true;
+                }
                 window_end_attempts.reject_all(evaluator);
                 evaluator.retire_interaction_presentation(presentation_id);
                 false
@@ -1868,6 +1876,8 @@ impl LayoutEngine {
             frame_other_windows_changed: false,
             allow_below_reuse: true,
             layout_stats: LayoutStats::default(),
+            convergence_exhausted: false,
+            no_safe_on_exhaustion: false,
         }
     }
 
@@ -1914,6 +1924,8 @@ impl LayoutEngine {
             frame_other_windows_changed: false,
             allow_below_reuse: true,
             layout_stats: LayoutStats::default(),
+            convergence_exhausted: false,
+            no_safe_on_exhaustion: false,
         }
     }
 
@@ -2097,8 +2109,11 @@ impl LayoutEngine {
         purpose: LayoutPurpose,
     ) -> FrameLayoutAttempt {
         debug_assert!(purpose.query_window().is_none());
+        self.no_safe_on_exhaustion = purpose == LayoutPurpose::Redisplay;
+        self.convergence_exhausted = false;
         self.retire_removed_frame_owners(evaluator);
         if evaluator.redisplay_hook_flow_pending() {
+            self.no_safe_on_exhaustion = false;
             return FrameLayoutAttempt::Aborted;
         }
         self.layout_frame_rust_for_purpose_inner(
@@ -2109,15 +2124,27 @@ impl LayoutEngine {
             #[cfg(test)]
             None,
         );
+        self.no_safe_on_exhaustion = false;
         self.retire_removed_frame_owners(evaluator);
         if evaluator.has_mode_line_display_flow() || evaluator.redisplay_hook_flow_pending() {
+            self.convergence_exhausted = false;
             self.last_frame_display_state = None;
             return FrameLayoutAttempt::Aborted;
         }
         self.report_image_failures(evaluator);
-        self.last_frame_display_state
-            .take()
-            .map_or(FrameLayoutAttempt::Aborted, FrameLayoutAttempt::Prepared)
+        match self.last_frame_display_state.take() {
+            Some(state) => {
+                self.convergence_exhausted = false;
+                FrameLayoutAttempt::Prepared(state)
+            }
+            None => {
+                if self.convergence_exhausted && purpose == LayoutPurpose::Redisplay {
+                    evaluator.note_no_safe_handled_frame(frame_id);
+                }
+                self.convergence_exhausted = false;
+                FrameLayoutAttempt::Aborted
+            }
+        }
     }
 
     /// Report every image failure this pass observed.
@@ -2575,7 +2602,7 @@ impl LayoutEngine {
                         before: before_sync,
                         after: after_sync,
                     };
-                    if !Self::accept_frame_relayout_request(
+                    if !self.accept_frame_relayout_request(
                         &mut layout_coordinator,
                         evaluator,
                         &mut frame_window_end_attempts,
@@ -3241,7 +3268,7 @@ impl LayoutEngine {
                     assumed_height: tab_bar_height,
                     measured_height: actual_tab_bar_height,
                 };
-                if !Self::accept_frame_relayout_request(
+                if !self.accept_frame_relayout_request(
                     &mut layout_coordinator,
                     evaluator,
                     &mut frame_window_end_attempts,
@@ -3275,7 +3302,7 @@ impl LayoutEngine {
                     let request = FrameRelayoutRequest::LogicalInputsChanged {
                         window_id: DisplayWindowId::new(planned_params.window_id),
                     };
-                    if !Self::accept_frame_relayout_request(
+                    if !self.accept_frame_relayout_request(
                         &mut layout_coordinator,
                         evaluator,
                         &mut frame_window_end_attempts,
@@ -3314,7 +3341,7 @@ impl LayoutEngine {
                         let request = FrameRelayoutRequest::LogicalInputsChanged {
                             window_id: DisplayWindowId::new(planned_params.window_id),
                         };
-                        if !Self::accept_frame_relayout_request(
+                        if !self.accept_frame_relayout_request(
                             &mut layout_coordinator,
                             evaluator,
                             &mut frame_window_end_attempts,
@@ -3445,7 +3472,7 @@ impl LayoutEngine {
                             before: resolver_face_change_count,
                             after: current_face_change_count,
                         };
-                        if !Self::accept_frame_relayout_request(
+                        if !self.accept_frame_relayout_request(
                             &mut layout_coordinator,
                             evaluator,
                             &mut frame_window_end_attempts,
@@ -3613,7 +3640,7 @@ impl LayoutEngine {
                                     before: attempt_topology_generation,
                                     after: current_topology_generation,
                                 };
-                                if !Self::accept_frame_relayout_request(
+                                if !self.accept_frame_relayout_request(
                                     &mut layout_coordinator,
                                     evaluator,
                                     &mut frame_window_end_attempts,
@@ -3637,7 +3664,7 @@ impl LayoutEngine {
                                 let request = FrameRelayoutRequest::LogicalInputsChanged {
                                     window_id: DisplayWindowId::new(live_inputs.window.window_id),
                                 };
-                                if !Self::accept_frame_relayout_request(
+                                if !self.accept_frame_relayout_request(
                                     &mut layout_coordinator,
                                     evaluator,
                                     &mut frame_window_end_attempts,
@@ -3701,7 +3728,7 @@ impl LayoutEngine {
                             let request = FrameRelayoutRequest::LogicalInputsChanged {
                                 window_id: DisplayWindowId::new(live_inputs.window.window_id),
                             };
-                            if !Self::accept_frame_relayout_request(
+                            if !self.accept_frame_relayout_request(
                                 &mut layout_coordinator,
                                 evaluator,
                                 &mut frame_window_end_attempts,
@@ -3721,7 +3748,7 @@ impl LayoutEngine {
                             let request = FrameRelayoutRequest::DisplayWhenAnswerChanged {
                                 window_id: DisplayWindowId::new(live_inputs.window.window_id),
                             };
-                            if !Self::accept_frame_relayout_request(
+                            if !self.accept_frame_relayout_request(
                                 &mut layout_coordinator,
                                 evaluator,
                                 &mut frame_window_end_attempts,
@@ -3752,7 +3779,7 @@ impl LayoutEngine {
                             assumed,
                             measured,
                         };
-                        if !Self::accept_frame_relayout_request(
+                        if !self.accept_frame_relayout_request(
                             &mut layout_coordinator,
                             evaluator,
                             &mut frame_window_end_attempts,
@@ -4060,7 +4087,7 @@ impl LayoutEngine {
                                 let request = FrameRelayoutRequest::LogicalInputsChanged {
                                     window_id: DisplayWindowId::new(window.0 as i64),
                                 };
-                                if !Self::accept_frame_relayout_request(
+                                if !self.accept_frame_relayout_request(
                                     &mut layout_coordinator,
                                     evaluator,
                                     &mut frame_window_end_attempts,
@@ -4087,7 +4114,7 @@ impl LayoutEngine {
                                 allocated_height_px: resize.previous_height_px(),
                                 required_height_px,
                             };
-                            if !Self::accept_frame_relayout_request(
+                            if !self.accept_frame_relayout_request(
                                 &mut layout_coordinator,
                                 evaluator,
                                 &mut frame_window_end_attempts,
@@ -4133,7 +4160,7 @@ impl LayoutEngine {
                         before: resolver_face_change_count,
                         after,
                     };
-                    if !Self::accept_frame_relayout_request(
+                    if !self.accept_frame_relayout_request(
                         &mut layout_coordinator,
                         evaluator,
                         &mut frame_window_end_attempts,
@@ -4153,7 +4180,7 @@ impl LayoutEngine {
                     before: attempt_topology_generation,
                     after: current_topology_generation,
                 };
-                if !Self::accept_frame_relayout_request(
+                if !self.accept_frame_relayout_request(
                     &mut layout_coordinator,
                     evaluator,
                     &mut frame_window_end_attempts,
@@ -4188,7 +4215,7 @@ impl LayoutEngine {
                             })
                     })
             }) {
-                if !Self::accept_frame_relayout_request(
+                if !self.accept_frame_relayout_request(
                     &mut layout_coordinator,
                     evaluator,
                     &mut frame_window_end_attempts,
@@ -4215,7 +4242,7 @@ impl LayoutEngine {
             // attempt, so a difference here always carries real heights; the
             // sentinel 1 only reports a pre-open graphical minimum.
             if current_smallest_font_height != attempt_smallest_font_height {
-                if !Self::accept_frame_relayout_request(
+                if !self.accept_frame_relayout_request(
                     &mut layout_coordinator,
                     evaluator,
                     &mut frame_window_end_attempts,
@@ -4398,7 +4425,7 @@ impl LayoutEngine {
             // attempt, so a difference here always carries real heights; the
             // sentinel 1 only reports a pre-open graphical minimum.
             if current_smallest_font_height != attempt_smallest_font_height {
-                if !Self::accept_frame_relayout_request(
+                if !self.accept_frame_relayout_request(
                     &mut layout_coordinator,
                     evaluator,
                     &mut frame_window_end_attempts,
