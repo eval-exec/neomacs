@@ -154,7 +154,7 @@ fn a_forced_idle_redisplay_lays_out_a_change_made_after_the_last_layout() {
 /// input either. The overlay-face write is this row's positive control: a
 /// frozen idle signature must not pass it.
 #[test]
-fn category_symbol_writes_invalidate_idle_redisplay() {
+fn category_symbol_writes_leave_idle_redisplay_idle() {
     let _policy = RedisplayHookPolicyGuard::legacy();
     let (mut eval, layouts) = idle_context();
     eval.eval_str("(progn (put 'idle-category 'face '(:height 100)) (overlay-put (make-overlay 1 20) 'category 'idle-category) (redisplay))").unwrap();
