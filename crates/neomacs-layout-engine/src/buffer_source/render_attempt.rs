@@ -160,6 +160,7 @@ pub(crate) struct BufferSourceRenderAttemptContext<
     face_attempt: FrameFaceAttempt,
     window_snapshot: &'a mut Option<WindowPresentationSnapshot>,
     body_completion: BodyCompletionRequest<'a>,
+    chrome_eval_mode: crate::display_status_line::WindowChromeEvalMode<'a>,
 }
 
 /// Which live window state may be published by a completed row walk.
@@ -489,6 +490,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
         face_attempt: FrameFaceAttempt,
         window_snapshot: &'a mut Option<WindowPresentationSnapshot>,
         body_completion: BodyCompletionRequest<'a>,
+        chrome_eval_mode: crate::display_status_line::WindowChromeEvalMode<'a>,
     ) -> Self {
         Self {
             output: BufferSourceOutputState::from_parts(output, evaluator),
@@ -497,6 +499,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
             face_attempt,
             window_snapshot,
             body_completion,
+            chrome_eval_mode,
         }
     }
 
@@ -508,6 +511,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
         face_attempt: FrameFaceAttempt,
         window_snapshot: &'a mut Option<WindowPresentationSnapshot>,
         body_completion: BodyCompletionRequest<'a>,
+        chrome_eval_mode: crate::display_status_line::WindowChromeEvalMode<'a>,
     ) -> Self {
         Self::new(
             frame_output.text_window_output_target(),
@@ -517,6 +521,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
             face_attempt,
             window_snapshot,
             body_completion,
+            chrome_eval_mode,
         )
     }
 
@@ -531,6 +536,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
             face_attempt: self.face_attempt.clone(),
             window_snapshot: self.window_snapshot,
             body_completion: self.body_completion.reborrow(),
+            chrome_eval_mode: self.chrome_eval_mode.reborrow(),
         }
     }
 
@@ -562,6 +568,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
         FrameFaceAttempt,
         &'a mut Option<WindowPresentationSnapshot>,
         BodyCompletionRequest<'a>,
+        crate::display_status_line::WindowChromeEvalMode<'a>,
     ) {
         (
             self.output,
@@ -570,6 +577,7 @@ impl<'a, 'face, FS: crate::neovm_bridge::FaceServices>
             self.face_attempt,
             self.window_snapshot,
             self.body_completion,
+            self.chrome_eval_mode,
         )
     }
 }

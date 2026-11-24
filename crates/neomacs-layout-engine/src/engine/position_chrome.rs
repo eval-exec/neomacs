@@ -117,6 +117,7 @@ impl MeasuredPositionChrome {
             evaluator,
             services,
             None,
+            crate::display_status_line::WindowChromeEvalMode::Converging { captured: None },
         ));
         if evaluator.has_mode_line_display_flow() {
             return Err(MeasurementFailure::DeferredExit);
@@ -447,18 +448,20 @@ impl<'run> QueryRun<'run> {
                 Some(chrome)
             }
         };
-        self.engine.layout_frame_rust_with_face_services(
-            self.evaluator,
-            frame,
-            LayoutPurpose::SynchronousQuery {
-                window_id: window,
-                scope,
-            },
-            None,
-            #[cfg(test)]
-            None,
-            &rows_face_services::NoopFaceServiceFactory,
-            chrome,
-        )
+        self.engine
+            .layout_frame_rust_with_face_services(
+                self.evaluator,
+                frame,
+                LayoutPurpose::SynchronousQuery {
+                    window_id: window,
+                    scope,
+                },
+                None,
+                #[cfg(test)]
+                None,
+                &rows_face_services::NoopFaceServiceFactory,
+                chrome,
+            )
+            .into_query()
     }
 }

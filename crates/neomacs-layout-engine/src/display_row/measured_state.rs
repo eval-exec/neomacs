@@ -4,7 +4,7 @@ use neomacs_display_protocol::glyph_matrix::GlyphRow;
 use neomacs_display_protocol::types::{FaceId, Rect};
 use neovm_core::emacs_core::intern::WellKnown;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 // The shared `Line` suffix is domain-meaningful (tab/header/mode LINES); renaming
 // the variants would obscure intent, so the naming lint is allowed here.
 #[allow(clippy::enum_variant_names)]

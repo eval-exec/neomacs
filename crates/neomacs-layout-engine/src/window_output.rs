@@ -608,6 +608,7 @@ pub(crate) fn render_window_chrome_rows(
     request: WindowChromeRowsRenderRequest<'_, '_>,
     render_services: ChromeRowRenderServices<'_, '_>,
     memo: Option<&crate::incremental_layout::chrome_memo::ChromeMemo>,
+    eval_mode: crate::display_status_line::WindowChromeEvalMode<'_>,
 ) -> WindowChromeRowsRenderOutcome {
     request.render(&mut WindowChromeRowsRenderState::new(
         output,
@@ -615,6 +616,7 @@ pub(crate) fn render_window_chrome_rows(
         evaluator,
         render_services,
         memo,
+        eval_mode,
     ))
 }
 

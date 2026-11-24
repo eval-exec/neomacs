@@ -734,14 +734,13 @@ impl<'face, 'params> WindowChromeRowsRenderRequest<'face, 'params> {
             if kind == WindowChromeKind::TabLine && params.tab_line_height > 0.0 {
                 let (chrome_tab_policy, status_line_symbol_values) = inputs_for_row(kind);
                 let tab_line_y = regions.tab_line.map_or(regions.outer.y, |bounds| bounds.y);
-                let tab_line_text = eval_status_line_format_output(
-                    state.evaluator,
+                let tab_line_text = state.format_chrome_row_output(
                     WindowChromeKind::TabLine,
                     params.window_id,
                     params.buffer_id,
                     target_cols,
-                )
-                .unwrap_or_else(|| ModeLineDisplayOutput::from_root_string(Value::string("")));
+                    || ModeLineDisplayOutput::from_root_string(Value::string("")),
+                );
                 if state.evaluator.has_mode_line_display_flow() {
                     return WindowChromeRowsRenderOutcome::SourceInvalidated;
                 }
@@ -787,14 +786,13 @@ impl<'face, 'params> WindowChromeRowsRenderRequest<'face, 'params> {
                 let (chrome_tab_policy, status_line_symbol_values) = inputs_for_row(kind);
                 // The header line sits directly below the (measured) tab line.
                 let header_line_y = regions.outer.y + measured.tab_line_height;
-                let header_line_text = eval_status_line_format_output(
-                    state.evaluator,
+                let header_line_text = state.format_chrome_row_output(
                     WindowChromeKind::HeaderLine,
                     params.window_id,
                     params.buffer_id,
                     target_cols,
-                )
-                .unwrap_or_else(|| ModeLineDisplayOutput::from_root_string(Value::string("")));
+                    || ModeLineDisplayOutput::from_root_string(Value::string("")),
+                );
                 if state.evaluator.has_mode_line_display_flow() {
                     return WindowChromeRowsRenderOutcome::SourceInvalidated;
                 }
@@ -845,19 +843,18 @@ impl<'face, 'params> WindowChromeRowsRenderRequest<'face, 'params> {
                 // real height.
                 let mode_line_y = window_bottom - self.mode_line_height;
                 let mode_line_text = {
-                    let result = eval_status_line_format_output(
-                        state.evaluator,
+                    let result = state.format_chrome_row_output(
                         WindowChromeKind::ModeLine,
                         params.window_id,
                         params.buffer_id,
                         target_cols,
-                    )
-                    .unwrap_or_else(|| {
-                        ModeLineDisplayOutput::from_root_string(Value::string(format!(
-                            " {} ",
-                            self.buffer_name
-                        )))
-                    });
+                        || {
+                            ModeLineDisplayOutput::from_root_string(Value::string(format!(
+                                " {} ",
+                                self.buffer_name
+                            )))
+                        },
+                    );
                     tracing::debug!(
                         "mode-line eval result: {:?} (len={})",
                         result
@@ -912,7 +909,7 @@ impl<'face, 'params> WindowChromeRowsRenderRequest<'face, 'params> {
 
         WindowChromeRowsRenderOutcome::Rendered {
             metrics: measured,
-            lisp_admission: if final_row.is_none() {
+            lisp_admission: if final_row.is_none() || state.eval_mode.is_exhaustion_snapshot() {
                 crate::attempt_freshness::LayoutLispAdmission::NativeOnly
             } else {
                 crate::attempt_freshness::LayoutLispAdmission::MayHaveEntered
@@ -1361,6 +1358,43 @@ impl<'face> WindowChromeDisplayRowRequest<'face> {
     }
 }
 
+/// Plain-value cache of the most recent non-flow chrome outputs evaluated for
+/// each `(window, chrome kind)` during one logical frame attempt's converging
+/// passes. Values are rooted in the frame attempt's `ScratchGcRootScope`.
+pub(crate) type CapturedChromeOutputs = rustc_hash::FxHashMap<
+    (
+        neomacs_display_protocol::types::DisplayWindowId,
+        WindowChromeKind,
+    ),
+    ModeLineDisplayOutput,
+>;
+
+pub(crate) enum WindowChromeEvalMode<'a> {
+    Converging {
+        captured: Option<&'a mut CapturedChromeOutputs>,
+    },
+    ExhaustionSnapshot {
+        captured: &'a CapturedChromeOutputs,
+    },
+}
+
+impl WindowChromeEvalMode<'_> {
+    pub(crate) fn reborrow(&mut self) -> WindowChromeEvalMode<'_> {
+        match self {
+            Self::Converging { captured } => WindowChromeEvalMode::Converging {
+                captured: captured.as_deref_mut(),
+            },
+            Self::ExhaustionSnapshot { captured } => {
+                WindowChromeEvalMode::ExhaustionSnapshot { captured }
+            }
+        }
+    }
+
+    pub(crate) const fn is_exhaustion_snapshot(&self) -> bool {
+        matches!(self, Self::ExhaustionSnapshot { .. })
+    }
+}
+
 pub(crate) struct WindowChromeRowsRenderState<'state, 'services, 'face> {
     output: TextWindowOutputTarget<'state>,
     output_emitter: &'state mut WindowOutputEmitter,
@@ -1369,6 +1403,7 @@ pub(crate) struct WindowChromeRowsRenderState<'state, 'services, 'face> {
     /// `NEOMACS_CHROME_MEMO`: the previous frame's rows this frame's
     /// evaluations may render from.
     memo: Option<&'state ChromeMemo>,
+    eval_mode: WindowChromeEvalMode<'state>,
 }
 
 impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'face> {
@@ -1378,6 +1413,7 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
         evaluator: &'state mut Context,
         render_services: ChromeRowRenderServices<'services, 'face>,
         memo: Option<&'state ChromeMemo>,
+        eval_mode: WindowChromeEvalMode<'state>,
     ) -> Self {
         Self {
             output,
@@ -1385,6 +1421,62 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
             evaluator,
             render_services,
             memo,
+            eval_mode,
+        }
+    }
+
+    fn format_chrome_row_output(
+        &mut self,
+        kind: WindowChromeKind,
+        window_id: i64,
+        buffer_id: u64,
+        target_cols: usize,
+        fallback: impl FnOnce() -> ModeLineDisplayOutput,
+    ) -> ModeLineDisplayOutput {
+        let key = (
+            neomacs_display_protocol::types::DisplayWindowId::new(window_id),
+            kind,
+        );
+        match &mut self.eval_mode {
+            WindowChromeEvalMode::Converging { captured } => {
+                let output = eval_status_line_format_output(
+                    self.evaluator,
+                    kind,
+                    window_id,
+                    buffer_id,
+                    target_cols,
+                )
+                .unwrap_or_else(fallback);
+                if !self.evaluator.has_mode_line_display_flow()
+                    && let Some(captured) = captured.as_deref_mut()
+                {
+                    // Root the flattened string and every source span in the
+                    // enclosing frame-attempt ScratchGcRootScope so they
+                    // survive GC between converging retries and an eventual
+                    // ExhaustionSnapshot pass.
+                    neovm_core::emacs_core::eval::push_scratch_gc_root(output.value());
+                    for span in output.source_spans() {
+                        neovm_core::emacs_core::eval::push_scratch_gc_root(span.source());
+                    }
+                    captured.insert(key, output.clone());
+                }
+                output
+            }
+            WindowChromeEvalMode::ExhaustionSnapshot { captured } => {
+                if let Some(previous) = captured.get(&key) {
+                    record_chrome_generated(window_id, false);
+                    previous.clone()
+                } else {
+                    eval_status_line_format_output_inhibit_lisp(
+                        self.evaluator,
+                        kind,
+                        window_id,
+                        buffer_id,
+                        target_cols,
+                    )
+                    .unwrap_or_else(fallback)
+                }
+            }
         }
     }
 
@@ -1431,7 +1523,11 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
             self.evaluator,
             neovm_core::window::WindowId(request.window_id),
         );
-        let memo_mode = chrome_memo_mode();
+        let memo_mode = if self.eval_mode.is_exhaustion_snapshot() {
+            ChromeMemoMode::Off
+        } else {
+            chrome_memo_mode()
+        };
         let (memo_hit, source_bindings, primitive_reuse) = if memo_mode.enabled() {
             self.memoize_chrome_row(
                 &request,
@@ -1698,15 +1794,13 @@ pub(crate) fn eval_status_line_format_value(
         .map(ModeLineDisplayOutput::into_value)
 }
 
-fn eval_status_line_format_output(
+fn resolve_status_line_format_value(
     evaluator: &mut Context,
     kind: WindowChromeKind,
     window_id: i64,
     buffer_id: u64,
-    target_cols: usize,
-) -> Option<ModeLineDisplayOutput> {
+) -> Value {
     let format_var = kind.format_var();
-    let format_symbol = format_var.name();
     evaluator.setup_thread_locals();
     // GNU Emacs (xdisp.c:28187): format-mode-line reads the format
     // variable from the TARGET buffer, not the caller's current
@@ -1715,7 +1809,7 @@ fn eval_status_line_format_output(
     let window_format_value = evaluator
         .frame_manager()
         .window_parameter(WindowId(window_id as u64), &Value::symbol(format_var));
-    let format_value = window_format_value
+    window_format_value
         .filter(|value| !value.is_nil())
         .unwrap_or_else(|| {
             evaluator
@@ -1735,7 +1829,17 @@ fn eval_status_line_format_output(
                     )
                     .unwrap_or(Value::NIL)
                 })
-        });
+        })
+}
+
+fn eval_status_line_format_output(
+    evaluator: &mut Context,
+    kind: WindowChromeKind,
+    window_id: i64,
+    buffer_id: u64,
+    target_cols: usize,
+) -> Option<ModeLineDisplayOutput> {
+    let format_value = resolve_status_line_format_value(evaluator, kind, window_id, buffer_id);
     // GNU `display_mode_line` (xdisp.c:27911) runs the mode-line
     // walker in `MODE_LINE_DISPLAY` mode, which makes `%-` expand to
     // dashes filling the remaining row width. Our layout engine is the
@@ -1763,6 +1867,38 @@ fn eval_status_line_format_output(
         Value::make_buffer(BufferId(buffer_id)),
         target_cols,
     );
+    record_chrome_generated(
+        window_id,
+        neovm_core::emacs_core::xdisp::column_spec_consumed(),
+    );
+    if rendered
+        .value()
+        .as_runtime_string_owned()
+        .is_some_and(|s| !s.is_empty())
+    {
+        Some(rendered)
+    } else {
+        None
+    }
+}
+
+fn eval_status_line_format_output_inhibit_lisp(
+    evaluator: &mut Context,
+    kind: WindowChromeKind,
+    window_id: i64,
+    buffer_id: u64,
+    target_cols: usize,
+) -> Option<ModeLineDisplayOutput> {
+    let format_value = resolve_status_line_format_value(evaluator, kind, window_id, buffer_id);
+    neovm_core::emacs_core::xdisp::reset_column_spec_consumed();
+    let rendered =
+        neovm_core::emacs_core::xdisp::format_mode_line_for_display_with_sources_inhibit_lisp(
+            evaluator,
+            format_value,
+            Value::make_window(window_id as u64),
+            Value::make_buffer(BufferId(buffer_id)),
+            target_cols,
+        );
     record_chrome_generated(
         window_id,
         neovm_core::emacs_core::xdisp::column_spec_consumed(),

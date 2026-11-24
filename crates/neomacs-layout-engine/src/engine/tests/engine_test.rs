@@ -94,6 +94,8 @@ mod font_selection;
 mod active_hover_accuracy_test;
 #[path = "exhausted_presentation_test.rs"]
 mod exhausted_presentation_test;
+#[path = "exhaustion_safety_net_test.rs"]
+mod exhaustion_safety_net_test;
 #[path = "../../tests/engine_line_spacing_test.rs"]
 mod line_spacing;
 #[path = "no_op_chrome_source_test.rs"]

@@ -2607,13 +2607,54 @@ pub fn format_mode_line_for_display_with_sources(
     buffer: Value,
     target_cols: usize,
 ) -> ModeLineDisplayOutput {
+    format_mode_line_for_display_with_sources_policy(
+        eval,
+        format_val,
+        window,
+        buffer,
+        target_cols,
+        ModeLineEvalPolicy::AllowLisp,
+    )
+}
+
+/// Callback-inhibited variant of [`format_mode_line_for_display_with_sources`]:
+/// formats static strings, symbols, `%` specs, conditionals, and `:propertize`
+/// normally, while skipping `(:eval FORM)` (treating it as `nil`) so no Lisp
+/// runs during an exhaustion snapshot pass.
+pub fn format_mode_line_for_display_with_sources_inhibit_lisp(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    format_val: Value,
+    window: Value,
+    buffer: Value,
+    target_cols: usize,
+) -> ModeLineDisplayOutput {
+    format_mode_line_for_display_with_sources_policy(
+        eval,
+        format_val,
+        window,
+        buffer,
+        target_cols,
+        ModeLineEvalPolicy::InhibitLisp,
+    )
+}
+
+fn format_mode_line_for_display_with_sources_policy(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    format_val: Value,
+    window: Value,
+    buffer: Value,
+    target_cols: usize,
+    eval_policy: ModeLineEvalPolicy,
+) -> ModeLineDisplayOutput {
     if eval.has_mode_line_display_flow() {
         return ModeLineDisplayOutput::from_root_string(Value::string(""));
     }
     // GNU's enclosing window handler covers the safe evaluator's bindings
     // and unwind as well as its body. Register it before dispatch, so an
     // ordinary error cannot reach outer handler-bind callbacks or debugger.
-    let condition_stack_base = mode_line_flow_policy::enabled().then(|| {
+    let condition_stack_base = (eval_policy == ModeLineEvalPolicy::AllowLisp
+        && mode_line_flow_policy::enabled())
+    .then(|| {
         let base = eval.condition_stack_len();
         eval.push_condition_frame(
             neovm_eval::emacs_core::eval::ConditionFrame::ConditionCase {
@@ -2626,20 +2667,28 @@ pub fn format_mode_line_for_display_with_sources(
         );
         base
     });
-    let result = try_format_mode_line_for_display_with_sources(
-        eval,
-        format_val,
-        window,
-        buffer,
-        target_cols,
-    );
+    let result = {
+        let _display_scope = ModeLineDisplayScope::enter(&eval.mode_line_output_owner());
+        try_format_mode_line_display_with_policy(
+            eval,
+            format_val,
+            window,
+            buffer,
+            ModeLineDisplayDestination::Rows {
+                columns: DisplayColumn::new(target_cols),
+            },
+            eval_policy,
+        )
+    };
     if let Some(base) = condition_stack_base {
         eval.truncate_condition_stack(base);
     }
     match result {
         Ok(output) => output,
         Err(flow) => {
-            mode_line_flow_policy::handle_display_error(eval, flow);
+            if eval_policy == ModeLineEvalPolicy::AllowLisp {
+                mode_line_flow_policy::handle_display_error(eval, flow);
+            }
             ModeLineDisplayOutput::from_root_string(Value::string(""))
         }
     }
@@ -2656,7 +2705,7 @@ pub fn try_format_mode_line_for_display_with_sources(
     target_cols: usize,
 ) -> Result<ModeLineDisplayOutput, Flow> {
     let _display_scope = ModeLineDisplayScope::enter(&eval.mode_line_output_owner());
-    try_format_mode_line_display(
+    try_format_mode_line_display_with_policy(
         eval,
         format_val,
         window,
@@ -2664,6 +2713,7 @@ pub fn try_format_mode_line_for_display_with_sources(
         ModeLineDisplayDestination::Rows {
             columns: DisplayColumn::new(target_cols),
         },
+        ModeLineEvalPolicy::AllowLisp,
     )
 }
 
@@ -2703,6 +2753,13 @@ pub fn try_format_frame_title_for_display(
     .map(ModeLineDisplayOutput::into_value)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum ModeLineEvalPolicy {
+    #[default]
+    AllowLisp,
+    InhibitLisp,
+}
+
 #[derive(Clone, Copy)]
 enum ModeLineDisplayDestination {
     Rows { columns: DisplayColumn },
@@ -2715,6 +2772,7 @@ struct ModeLineRenderRequest<'input, T: mode_line_walk::WalkPolicy> {
     point_selection: mode_line_point::PointSelection,
     format: &'input Value,
     face: ModeLineFaceSpec,
+    eval_policy: ModeLineEvalPolicy,
 }
 
 #[inline(always)]
@@ -2729,6 +2787,7 @@ fn render_mode_line_target<T: mode_line_walk::WalkPolicy>(
         request.window,
         request.target,
     );
+    pctx.eval_policy = request.eval_policy;
     let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     pctx.point
         .enter_context(frames, buffers, request.point_selection);
@@ -2758,6 +2817,25 @@ fn try_format_mode_line_display(
     window: Value,
     buffer: Value,
     destination: ModeLineDisplayDestination,
+) -> Result<ModeLineDisplayOutput, Flow> {
+    try_format_mode_line_display_with_policy(
+        eval,
+        format_val,
+        window,
+        buffer,
+        destination,
+        ModeLineEvalPolicy::AllowLisp,
+    )
+}
+
+#[inline(always)]
+fn try_format_mode_line_display_with_policy(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    format_val: Value,
+    window: Value,
+    buffer: Value,
+    destination: ModeLineDisplayDestination,
+    eval_policy: ModeLineEvalPolicy,
 ) -> Result<ModeLineDisplayOutput, Flow> {
     let save_match_data = match destination {
         ModeLineDisplayDestination::Rows { .. } => true,
@@ -2869,6 +2947,7 @@ fn try_format_mode_line_display(
                     point_selection: mode_line_point::PointSelection::CurrentBuffer,
                     format: &format_val,
                     face: face_spec,
+                    eval_policy,
                 },
                 title_selection.as_mut(),
             ),
@@ -2880,6 +2959,7 @@ fn try_format_mode_line_display(
                     point_selection: mode_line_point::PointSelection::CurrentBuffer,
                     format: &format_val,
                     face: face_spec,
+                    eval_policy,
                 },
                 title_selection.as_mut(),
             ),
@@ -2957,6 +3037,7 @@ pub(crate) fn finish_format_mode_line_in_eval(
                     point_selection,
                     format: &format_val,
                     face: face_spec,
+                    eval_policy: ModeLineEvalPolicy::AllowLisp,
                 },
                 selection.as_mut(),
             )
@@ -3278,6 +3359,8 @@ struct ModeLinePercentContext<T: TargetPolicy = StoredTarget<'static>> {
     /// Context walks read live PT and the original window's shared counter;
     /// read-only split entry points retain their isolated native snapshot.
     point: mode_line_point::PointContext,
+    /// Whether `(:eval FORM)` executes Lisp or is treated as `nil`.
+    eval_policy: ModeLineEvalPolicy,
 }
 
 impl Default for ModeLinePercentContext<StoredTarget<'static>> {
@@ -3296,6 +3379,7 @@ impl<T: TargetPolicy> ModeLinePercentContext<T> {
             coding_frame: mode_line_coding::CodingFrame::WindowSystem,
             target,
             point: mode_line_point::PointContext::default(),
+            eval_policy: ModeLineEvalPolicy::AllowLisp,
         }
     }
 }

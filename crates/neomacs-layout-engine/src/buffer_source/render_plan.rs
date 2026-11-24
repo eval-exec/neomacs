@@ -107,6 +107,7 @@ fn render_or_retain_window_chrome(
     request: WindowChromeRowsRenderRequest<'_, '_>,
     render_services: ChromeRowRenderServices<'_, '_>,
     source: WindowChromeRowSource<'_>,
+    eval_mode: crate::display_status_line::WindowChromeEvalMode<'_>,
 ) -> Result<
     (
         WindowChromeMetrics,
@@ -142,6 +143,7 @@ fn render_or_retain_window_chrome(
         request,
         render_services,
         memo,
+        eval_mode,
     ) {
         WindowChromeRowsRenderOutcome::Rendered {
             metrics,
@@ -708,8 +710,15 @@ impl BufferSourceOutputSetup {
         request: WindowChromeRowsRenderRequest<'_, '_>,
         params: &WindowParams,
     ) -> BufferSourceRenderAttemptOutcome {
-        let (mut output, font_metrics, face_resolver, mut face_ids, _, mut body_completion) =
-            state.into_parts();
+        let (
+            mut output,
+            font_metrics,
+            face_resolver,
+            mut face_ids,
+            _,
+            mut body_completion,
+            chrome_eval_mode,
+        ) = state.into_parts();
         if !self.remeasure_chrome
             || !self.position_publication.remeasures_chrome()
             || neovm_core::emacs_core::xdisp::mode_line_display_active(output.evaluator())
@@ -743,6 +752,7 @@ impl BufferSourceOutputSetup {
             request,
             services,
             WindowChromeRowSource::Recompute,
+            chrome_eval_mode,
         );
         // This query needs chrome metrics, never a chrome-only presentation.
         // Discard its scratch grid on success and source invalidation alike;
@@ -907,6 +917,7 @@ impl BufferSourceOutputSetup {
             mut face_ids,
             window_snapshot,
             mut body_completion,
+            chrome_eval_mode,
         ) = state.into_parts();
         let retry_checkpoint = output.capture_retry_checkpoint();
         let effective_default_face =
@@ -1291,6 +1302,7 @@ impl BufferSourceOutputSetup {
                         retained_chrome.as_ref(),
                         chrome_memo.as_ref(),
                     ),
+                    chrome_eval_mode,
                 ) {
                     Ok(metrics) => metrics,
                     Err(changed) => return changed.into(),
@@ -1933,6 +1945,7 @@ impl BufferSourceOutputSetup {
                         retained_chrome.as_ref(),
                         chrome_memo.as_ref(),
                     ),
+                    chrome_eval_mode,
                 ) {
                     Ok(metrics) => metrics,
                     Err(changed) => return changed.into(),
@@ -2239,6 +2252,7 @@ impl BufferSourceOutputSetup {
             chrome_request,
             render_services.reborrow(),
             chrome_source,
+            chrome_eval_mode,
         ) {
             Ok(metrics) => metrics,
             Err(changed) => return changed.into(),

@@ -149,6 +149,7 @@ fn measure_then_capture_next_leaf(source: ChromeSource) {
             face_attempt,
             &mut snapshot,
             body_completion,
+            crate::display_status_line::WindowChromeEvalMode::Converging { captured: None },
         ),
         request,
         &params,

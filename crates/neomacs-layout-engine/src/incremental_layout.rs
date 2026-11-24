@@ -2596,6 +2596,9 @@ pub struct LayoutStats {
     /// (`NEOMACS_CHROME_MEMO`). They are still counted in
     /// `relaid_chrome_rows`: the mode line WAS evaluated.
     pub chrome_memo_hits: usize,
+    /// Number of callback-inhibited exhaustion-snapshot fallback passes run to
+    /// publish this frame (0 for every ordinary converging frame).
+    pub exhaustion_snapshot_passes: usize,
 }
 
 #[cfg(test)]
