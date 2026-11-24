@@ -8,7 +8,7 @@ use super::{
 };
 use neovm_core::buffer::{
     Buffer, BufferTextSnapshot, CharPos0, CharRange, EmacsByteLen, EmacsBytePos, EmacsByteRange,
-    overlay::{OverlayList, OverlaySnapshot},
+    overlay::{LiveOverlayView, OverlayRead, OverlaySnapshot},
 };
 use neovm_core::emacs_core::eval::VariableView;
 use neovm_core::emacs_core::owned_roots::{OwnedRootRetainer, OwnedRoots, OwnedTextPropertyRoots};
@@ -17,6 +17,7 @@ use neovm_core::emacs_core::symbol::Obarray;
 use neovm_core::emacs_core::{SymId, Value};
 use neovm_core::tagged::SymbolMode;
 use rustc_hash::FxHashMap;
+use std::sync::OnceLock;
 
 #[cfg(test)]
 #[path = "tests/snapshot_overlay_roots_test.rs"]
@@ -25,6 +26,68 @@ mod snapshot_overlay_roots_test;
 #[cfg(test)]
 #[path = "tests/snapshot_vars_category_roots_test.rs"]
 mod snapshot_vars_category_roots_test;
+
+#[cfg(test)]
+#[path = "tests/live_overlay_view_test.rs"]
+mod live_overlay_view_test;
+
+/// `NEOMACS_LAYOUT_OVERLAY_SOURCE`: selects how layout reads overlays.
+///
+/// | Value | Behavior |
+/// | --- | --- |
+/// | `captured` (default / unset) | Copy overlays into a captured `OverlaySnapshot` with native root lease. |
+/// | `live` | Read the buffer's live `OverlayIndex` under a generation stamp (`LiveOverlayView`), with zero overlay copies or root leases. |
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OverlaySourceMode {
+    Captured,
+    Live,
+}
+
+fn parse_overlay_source_mode(value: Option<&std::ffi::OsStr>) -> OverlaySourceMode {
+    match value.and_then(|v| v.to_str()) {
+        Some(raw) if raw.eq_ignore_ascii_case("live") => OverlaySourceMode::Live,
+        _ => OverlaySourceMode::Captured,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_OVERLAY_SOURCE_OVERRIDE: std::cell::Cell<Option<OverlaySourceMode>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_overlay_source_mode_for_test<R>(
+    mode: OverlaySourceMode,
+    f: impl FnOnce() -> R,
+) -> R {
+    struct Reset(Option<OverlaySourceMode>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_OVERLAY_SOURCE_OVERRIDE.with(|slot| slot.set(self.0));
+        }
+    }
+    let previous = TEST_OVERLAY_SOURCE_OVERRIDE.with(|slot| slot.replace(Some(mode)));
+    let _reset = Reset(previous);
+    f()
+}
+
+pub(crate) fn overlay_source_mode() -> OverlaySourceMode {
+    #[cfg(test)]
+    if let Some(override_mode) = TEST_OVERLAY_SOURCE_OVERRIDE.with(|slot| slot.get()) {
+        return override_mode;
+    }
+    static MODE: OnceLock<OverlaySourceMode> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        parse_overlay_source_mode(std::env::var_os("NEOMACS_LAYOUT_OVERLAY_SOURCE").as_deref())
+    })
+}
+
+#[derive(Clone)]
+enum SnapshotOverlays {
+    Captured(OverlaySnapshot),
+    Live(LiveOverlayView),
+}
 
 /// Immutable view for a walk on the evaluator thread.
 ///
@@ -46,7 +109,7 @@ pub(crate) struct LayoutBufferSnapshot {
     source_context_end: CharPos0,
     /// GNU `long_line_optimizations_p` at capture (`src/xdisp.c:20646`).
     long_line_optimizations: bool,
-    overlays: OverlaySnapshot,
+    overlays: SnapshotOverlays,
     // Clones retain this native lease independently of the buffer cache.
     // Test-only pure captures may omit it; the production constructor requires it.
     _overlay_roots: Option<OwnedRoots>,
@@ -86,7 +149,7 @@ pub(crate) struct LayoutBufferSnapshot {
 impl LayoutBufferSnapshot {
     #[cfg(test)]
     pub fn from_buffer(buffer: &Buffer) -> Self {
-        Self::capture_buffer(buffer, None, None, None, None)
+        Self::capture_buffer(buffer, None, None, None, None, false)
     }
 
     /// Project a query's source boundary without narrowing the live buffer.
@@ -116,34 +179,47 @@ impl LayoutBufferSnapshot {
         visible: Option<(usize, usize)>,
         overlay_span: Option<(usize, usize)>,
         root_retainer: Option<&OwnedRootRetainer>,
+        force_captured: bool,
     ) -> Self {
-        // `overlay_span` is the character span the walk consumed last time
-        // (plus margin), so the view covers what this walk can consume. A
-        // caller with no previous end keeps the whole-buffer view; the walk
-        // retries with that view if it consumes past a range view.
-        let (overlays, overlay_view_span) = match overlay_span {
-            Some((first, end)) => {
-                let total = buffer.total_char_end_pos().get();
-                let end = end.min(total);
-                let view = buffer.overlay_snapshot_in_char_span(first, end);
-                // A span that reaches the buffer end has nothing beyond it:
-                // do not arm the exhaustion retry for it.
-                let span =
-                    (end < total).then_some((CharPos0::new(first.min(end)), CharPos0::new(end)));
-                (view, span)
-            }
-            None => (buffer.overlays().snapshot(), None),
+        let use_live = !force_captured && overlay_source_mode() == OverlaySourceMode::Live;
+        let (overlays, overlay_view_span, overlay_roots) = if use_live {
+            // Live view reads the buffer's generation-stamped Arc core directly:
+            // whole-buffer coverage, zero copies, zero view entries, zero roots.
+            (
+                SnapshotOverlays::Live(buffer.overlays().live_view()),
+                None,
+                None,
+            )
+        } else {
+            // `overlay_span` is the character span the walk consumed last time
+            // (plus margin), so the view covers what this walk can consume. A
+            // caller with no previous end keeps the whole-buffer view; the walk
+            // retries with that view if it consumes past a range view.
+            let (captured, span) = match overlay_span {
+                Some((first, end)) => {
+                    let total = buffer.total_char_end_pos().get();
+                    let end = end.min(total);
+                    let view = buffer.overlay_snapshot_in_char_span(first, end);
+                    // A span that reaches the buffer end has nothing beyond it:
+                    // do not arm the exhaustion retry for it.
+                    let span = (end < total)
+                        .then_some((CharPos0::new(first.min(end)), CharPos0::new(end)));
+                    (view, span)
+                }
+                None => (buffer.overlays().snapshot(), None),
+            };
+            // Capture runs on this buffer's evaluator with no callback or GC
+            // between copying the overlays and registering their native lease.
+            // Tracing an overlay header also traces its copied plist spine.
+            let roots = root_retainer.map(|retainer| {
+                let dumped = captured.dump_overlays();
+                neovm_core::buffer::overlay::note_overlay_roots_retained(dumped.len());
+                retainer
+                    .retain(dumped)
+                    .expect("layout capture requires its live evaluator root registry")
+            });
+            (SnapshotOverlays::Captured(captured), span, roots)
         };
-        // Capture runs on this buffer's evaluator with no callback or GC
-        // between copying the overlays and registering their native lease.
-        // Tracing an overlay header also traces its copied plist spine.
-        let overlay_roots = root_retainer.map(|retainer| {
-            let dumped = overlays.dump_overlays();
-            neovm_core::buffer::overlay::note_overlay_roots_retained(dumped.len());
-            retainer
-                .retain(dumped)
-                .expect("layout capture requires its live evaluator root registry")
-        });
         let text_snapshot = buffer.text_snapshot();
         let text_property_roots = root_retainer.map(|retainer| {
             retainer
@@ -206,6 +282,7 @@ impl LayoutBufferSnapshot {
             target,
             SymbolMode::Bare,
             None,
+            false,
         )
     }
 
@@ -213,6 +290,7 @@ impl LayoutBufferSnapshot {
     ///
     /// `overlay_span` is the character span `(first, end)` the previous walk
     /// of this window consumed, or `None` for a whole-buffer overlay view.
+    #[cfg(test)]
     pub fn from_buffer_for_window_with_symbols(
         buffer: &Buffer,
         vars: VariableView<'_>,
@@ -230,9 +308,35 @@ impl LayoutBufferSnapshot {
             target,
             symbol_mode,
             Some(root_retainer),
+            false,
         )
     }
 
+    /// Capture for a window, optionally forcing the captured overlay fallback
+    /// after a repeated live-view staleness retry.
+    pub fn from_buffer_for_window_with_symbols_and_fallback(
+        buffer: &Buffer,
+        vars: VariableView<'_>,
+        visible: Option<(usize, usize)>,
+        overlay_span: Option<(usize, usize)>,
+        target: crate::display_property::DisplayPropertyTarget,
+        symbol_mode: SymbolMode,
+        root_retainer: &OwnedRootRetainer,
+        force_captured_overlays: bool,
+    ) -> Self {
+        Self::capture_window_with_symbols(
+            buffer,
+            vars,
+            visible,
+            overlay_span,
+            target,
+            symbol_mode,
+            Some(root_retainer),
+            force_captured_overlays,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn capture_window_with_symbols(
         buffer: &Buffer,
         vars: VariableView<'_>,
@@ -241,17 +345,34 @@ impl LayoutBufferSnapshot {
         target: crate::display_property::DisplayPropertyTarget,
         symbol_mode: SymbolMode,
         root_retainer: Option<&OwnedRootRetainer>,
+        force_captured_overlays: bool,
     ) -> Self {
         let obarray = vars.obarray();
-        let mut snapshot =
-            Self::capture_buffer(buffer, Some(vars), visible, overlay_span, root_retainer);
-        snapshot.display_target = target;
-        snapshot.category_symbol_plists = capture_layout_category_symbol_plists_from_overlays(
+        let mut snapshot = Self::capture_buffer(
             buffer,
-            &snapshot.overlays,
-            obarray,
-            snapshot.overlay_view_span,
+            Some(vars),
+            visible,
+            overlay_span,
+            root_retainer,
+            force_captured_overlays,
         );
+        snapshot.display_target = target;
+        snapshot.category_symbol_plists = match &snapshot.overlays {
+            SnapshotOverlays::Captured(overlays) => {
+                capture_layout_category_symbol_plists_from_overlays(
+                    buffer,
+                    &**overlays,
+                    obarray,
+                    snapshot.overlay_view_span,
+                )
+            }
+            SnapshotOverlays::Live(live) => capture_layout_category_symbol_plists_from_overlays(
+                buffer,
+                live,
+                obarray,
+                snapshot.overlay_view_span,
+            ),
+        };
         snapshot.automatic_composition_spans =
             capture_automatic_composition_spans(buffer, vars, &snapshot.vars, visible, symbol_mode);
         snapshot.string_composition_rules =
@@ -400,9 +521,9 @@ fn capture_layout_category_symbol_plists(
 /// Capture the category plists a layout walk can read. `overlays` is the
 /// walk's own view, so a window snapshot only visits the overlays it copied
 /// rather than every overlay in the buffer.
-fn capture_layout_category_symbol_plists_from_overlays(
+fn capture_layout_category_symbol_plists_from_overlays<O: OverlayRead + ?Sized>(
     buffer: &Buffer,
-    overlays: &OverlayList,
+    overlays: &O,
     obarray: &Obarray,
     span: Option<(CharPos0, CharPos0)>,
 ) -> FxHashMap<SymId, Value> {
@@ -702,7 +823,7 @@ mod category_capture_tests {
         let view = buffer.overlay_snapshot_in_char_span(0, 100);
         let bounded = capture_layout_category_symbol_plists_from_overlays(
             buffer,
-            &view,
+            &*view,
             eval.obarray(),
             Some((CharPos0::ZERO, CharPos0::new(100))),
         );
@@ -930,7 +1051,10 @@ impl LayoutBufferView for LayoutBufferSnapshot {
     }
 
     fn layout_overlays(&self) -> super::LayoutOverlays<'_> {
-        super::LayoutOverlays::Snapshot(&self.overlays)
+        match &self.overlays {
+            SnapshotOverlays::Captured(overlays) => super::LayoutOverlays::Snapshot(overlays),
+            SnapshotOverlays::Live(live) => super::LayoutOverlays::Live(live),
+        }
     }
 
     fn layout_overlay_view_end_char(&self) -> Option<CharPos0> {
@@ -938,7 +1062,17 @@ impl LayoutBufferView for LayoutBufferSnapshot {
     }
 
     fn layout_overlay_view_start_underflow(&self) -> bool {
-        self.overlays.overlay_view_query_underflowed()
+        match &self.overlays {
+            SnapshotOverlays::Captured(overlays) => overlays.overlay_view_query_underflowed(),
+            SnapshotOverlays::Live(_) => false,
+        }
+    }
+
+    fn layout_overlay_view_stale(&self) -> bool {
+        match &self.overlays {
+            SnapshotOverlays::Captured(_) => false,
+            SnapshotOverlays::Live(live) => live.is_stale(),
+        }
     }
 
     fn layout_automatic_composition_starting_at(&self, pos: CharPos0) -> Option<CharRange> {

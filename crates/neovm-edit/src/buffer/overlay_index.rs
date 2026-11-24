@@ -1098,6 +1098,7 @@ impl OverlayIndex {
         self.write_core(|_| ());
     }
 
+    #[cfg(test)]
     fn publish_endpoints(&self) {
         let _ = publish_endpoints_for(&self.intervals, &self.core, None);
     }

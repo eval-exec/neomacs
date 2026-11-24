@@ -1274,6 +1274,23 @@ impl BufferSourceOutputSetup {
                 );
             }
 
+            // Check overlay view usability as the body walk seals, before
+            // chrome Lisp: a range view may have underflowed/exhausted, or a
+            // live view may have gone stale before/during the body walk.
+            // Late chrome mutations do not rewind completed body rows (GNU
+            // `xdisp.c:21419-21483`), and chrome never reads `buffer.layout_overlays()`.
+            let window_end_char = redisplay_positions
+                .window_end_position()
+                .anchor()
+                .char_pos();
+            if let Some(reason) = buffer.layout_overlay_view_unusable(window_end_char) {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::OverlayViewUnusable(reason);
+            }
+
             // Chrome is re-walked unless the replay carries a retained chrome
             // plan — GNU's one-line optimization never reaches
             // `display_mode_lines` (xdisp.c:17572-17726). The permission is
@@ -1305,26 +1322,6 @@ impl BufferSourceOutputSetup {
                     Ok(metrics) => metrics,
                     Err(changed) => return changed.into(),
                 };
-            // The walk may have read before the window-range overlay view's
-            // start, or consumed at/past its end. Either answer comes from a
-            // subset. Nothing is installed yet; restore the checkpoint and
-            // retry the leaf once with the whole-buffer view.
-            if buffer.layout_overlay_view_start_underflow()
-                || buffer.layout_overlay_view_end_char().is_some_and(|end| {
-                    redisplay_positions
-                        .window_end_position()
-                        .anchor()
-                        .char_pos()
-                        .get()
-                        >= end.get()
-                })
-            {
-                crate::window_output::restore_text_window_retry_checkpoint(
-                    output.reborrow(),
-                    retry_checkpoint,
-                );
-                return BufferSourceRenderAttemptOutcome::OverlayViewExhausted;
-            }
             tail_context.finish_and_install(
                 TextWindowFinishState::new(output, output_emitter, evaluator),
                 measured_chrome_heights,
@@ -1909,6 +1906,20 @@ impl BufferSourceOutputSetup {
                 }
                 (chrome, _) => chrome,
             };
+            // Check overlay view usability as the body walk seals, before
+            // chrome Lisp: late chrome mutations do not rewind completed body
+            // rows, and chrome never reads `buffer.layout_overlays()`.
+            let window_end_char = redisplay_positions
+                .window_end_position()
+                .anchor()
+                .char_pos();
+            if let Some(reason) = buffer.layout_overlay_view_unusable(window_end_char) {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::OverlayViewUnusable(reason);
+            }
             let freshness_before_chrome = match freshness_before_window_chrome(
                 evaluator,
                 publish_request.frame_id(),
@@ -1934,27 +1945,6 @@ impl BufferSourceOutputSetup {
                     Ok(metrics) => metrics,
                     Err(changed) => return changed.into(),
                 };
-
-            // The walk may have read before the window-range overlay view's
-            // start, or consumed at/past its end. Either answer comes from a
-            // subset. Nothing is installed yet; restore the checkpoint and
-            // retry the leaf once with the whole-buffer view.
-            if buffer.layout_overlay_view_start_underflow()
-                || buffer.layout_overlay_view_end_char().is_some_and(|end| {
-                    redisplay_positions
-                        .window_end_position()
-                        .anchor()
-                        .char_pos()
-                        .get()
-                        >= end.get()
-                })
-            {
-                crate::window_output::restore_text_window_retry_checkpoint(
-                    output.reborrow(),
-                    retry_checkpoint,
-                );
-                return BufferSourceRenderAttemptOutcome::OverlayViewExhausted;
-            }
             tail_context.finish_and_install(
                 TextWindowFinishState::new(output, output_emitter, evaluator),
                 measured_chrome_heights,
@@ -2225,6 +2215,20 @@ impl BufferSourceOutputSetup {
         } else {
             WindowChromeRowSource::Recompute
         };
+        // Check overlay view usability as the body walk seals, before chrome
+        // Lisp: late chrome mutations do not rewind completed body rows, and
+        // chrome never reads `buffer.layout_overlays()`.
+        let window_end_char = redisplay_positions
+            .window_end_position()
+            .anchor()
+            .char_pos();
+        if let Some(reason) = buffer.layout_overlay_view_unusable(window_end_char) {
+            crate::window_output::restore_text_window_retry_checkpoint(
+                output.reborrow(),
+                retry_checkpoint,
+            );
+            return BufferSourceRenderAttemptOutcome::OverlayViewUnusable(reason);
+        }
         let freshness_before_chrome = match freshness_before_window_chrome(
             evaluator,
             publish_request.frame_id(),
@@ -2252,26 +2256,6 @@ impl BufferSourceOutputSetup {
         } else {
             crate::buffer_source::render_attempt::QueryRowCoverage::Complete
         };
-        // The walk may have read before the window-range overlay view's
-        // start, or consumed at/past its end. Either answer comes from a
-        // subset. Nothing is installed yet; restore the checkpoint and retry
-        // the leaf once with the whole-buffer view.
-        if buffer.layout_overlay_view_start_underflow()
-            || buffer.layout_overlay_view_end_char().is_some_and(|end| {
-                redisplay_positions
-                    .window_end_position()
-                    .anchor()
-                    .char_pos()
-                    .get()
-                    >= end.get()
-            })
-        {
-            crate::window_output::restore_text_window_retry_checkpoint(
-                output.reborrow(),
-                retry_checkpoint,
-            );
-            return BufferSourceRenderAttemptOutcome::OverlayViewExhausted;
-        }
         tail_context.finish_and_install(
             TextWindowFinishState::new(output, output_emitter, evaluator),
             measured_chrome_heights,

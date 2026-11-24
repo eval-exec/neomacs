@@ -11,6 +11,9 @@ mod sparse_fontify_query_test;
 #[path = "probe_row_engine_test.rs"]
 mod probe_row_engine_test;
 
+#[path = "live_overlay_engine_test.rs"]
+mod live_overlay_engine_test;
+
 /// A surface point in a presentation composed with nothing in motion.
 ///
 /// The production path builds the same value by mapping through the projection

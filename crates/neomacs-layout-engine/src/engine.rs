@@ -1164,10 +1164,12 @@ enum LeafLayoutAttempt {
     /// still overflows a profiling evaluator's stack well before the
     /// numeric budget is spent.
     Retry(Box<WindowLayoutRetry>),
-    /// The walk consumed at or past the window-range overlay view's end. The
-    /// attempt was answered from a subset and is discarded; the window loop
-    /// retries once with the whole-buffer overlay view.
-    OverlayViewExhausted,
+    /// The overlay view could not certify the attempt (a window-range view
+    /// exhausted/underflowed, or a live view went stale after a callback
+    /// mutated overlays). The attempt is discarded; the window loop retries
+    /// with the whole-buffer view or a fresh live view (falling back to
+    /// captured after one stale retry).
+    OverlayViewUnusable(crate::neovm_bridge::OverlayViewUnusable),
     /// The row walk painted an automatic composition whose shaped-gstring
     /// width the visible-range resolution pass did not reach, so the row
     /// would have measured the raw text instead of GNU's gstring width. The
@@ -3684,6 +3686,8 @@ impl LayoutEngine {
                 };
                 let mut viewport_retry_phase = ViewportResolutionPhase::Resolve;
                 let mut overlay_view_full = false;
+                let mut overlay_view_stale_retries: u8 = 0;
+                let mut overlay_view_force_captured = false;
                 // Automatic-composition resolution range widened by the
                 // previous attempt's post-walk coverage check, if any
                 // (`None` = the normal visible-range pass). `(0, usize::MAX)`
@@ -3730,6 +3734,7 @@ impl LayoutEngine {
                         visibility_retry_budget,
                         viewport_retry_phase.clone(),
                         overlay_view_full,
+                        overlay_view_force_captured,
                         automatic_composition_resolve,
                         cursor_only_replay.take(),
                         scroll_replay.take(),
@@ -3823,18 +3828,95 @@ impl LayoutEngine {
                             viewport_retry_phase = retry.viewport_resolution;
                             is_edit = false;
                         }
-                        LeafLayoutAttempt::OverlayViewExhausted => {
-                            // The attempt read a subset of the buffer's
-                            // overlays past the range view's end. It is
-                            // discarded; one more attempt uses the
-                            // whole-buffer view, which cannot exhaust.
-                            debug_assert!(
-                                !overlay_view_full,
-                                "whole-buffer overlay view reported exhaustion"
-                            );
-                            overlay_view_full = true;
-                            continue;
-                        }
+                        LeafLayoutAttempt::OverlayViewUnusable(reason) => match reason {
+                            crate::neovm_bridge::OverlayViewUnusable::Exhausted
+                            | crate::neovm_bridge::OverlayViewUnusable::Underflow => {
+                                // The attempt read a subset of the buffer's
+                                // overlays outside the range view's span. It is
+                                // discarded; one more attempt uses the
+                                // whole-buffer view, which cannot exhaust.
+                                debug_assert!(
+                                    !overlay_view_full,
+                                    "whole-buffer overlay view reported exhaustion/underflow"
+                                );
+                                overlay_view_full = true;
+                                continue;
+                            }
+                            crate::neovm_bridge::OverlayViewUnusable::Stale => {
+                                // A Lisp callback mutated overlays while a live
+                                // overlay view was active. Discard the attempt,
+                                // refresh live inputs, retry once with a fresh
+                                // live view, and fall back to a captured
+                                // whole-buffer snapshot on a second stale hit
+                                // so a mutating callback can never loop.
+                                if evaluator.has_mode_line_display_flow() {
+                                    frame_window_end_attempts.reject_all(evaluator);
+                                    evaluator.retire_interaction_presentation(presentation_id);
+                                    return FrameLayoutInnerOutcome::Aborted {
+                                        settle_no_safe: false,
+                                    };
+                                }
+                                let current_topology_generation =
+                                    evaluator.frame_manager().window_topology_generation();
+                                if current_topology_generation != attempt_topology_generation {
+                                    let request = FrameRelayoutRequest::WindowTopologyChanged {
+                                        before: attempt_topology_generation,
+                                        after: current_topology_generation,
+                                    };
+                                    request_frame_relayout!('frame_layout, request);
+                                }
+                                let Some(mut current) = collect_live_window_layout_inputs(
+                                    evaluator,
+                                    frame_id,
+                                    window_id,
+                                    window_path,
+                                    default_metrics.map(|metrics| metrics.ascent),
+                                    self.font_sizing,
+                                    &window_chrome_metrics,
+                                    layout_walk_purpose,
+                                ) else {
+                                    let request = FrameRelayoutRequest::LogicalInputsChanged {
+                                        window_id: DisplayWindowId::new(
+                                            live_inputs.window.window_id,
+                                        ),
+                                    };
+                                    request_frame_relayout!('frame_layout, request);
+                                };
+                                current.window.force_start |= consumed_force_start;
+                                live_inputs = current;
+                                window_geometry = WindowFrameGeometryRequest::new(
+                                    &live_inputs.window,
+                                    &live_inputs.frame,
+                                    live_inputs.main_area_bottom,
+                                    live_inputs.divider_corner,
+                                )
+                                .resolve();
+                                layout_box = WindowLayoutBox::resolve(
+                                    &live_inputs.window,
+                                    WindowChromeMetrics::from_params(&live_inputs.window),
+                                    WindowDividerLayout::resolve(
+                                        &live_inputs.window,
+                                        &live_inputs.frame,
+                                        window_geometry,
+                                    ),
+                                );
+                                position_publication = window_position_publication(
+                                    evaluator,
+                                    &live_inputs.window,
+                                    layout_walk_purpose,
+                                    live_inputs.source,
+                                );
+                                is_edit = false;
+                                prepass_recollect = PrepassRecollectState::Fresh;
+                                if overlay_view_stale_retries == 0 {
+                                    overlay_view_stale_retries = 1;
+                                } else {
+                                    overlay_view_force_captured = true;
+                                    overlay_view_full = true;
+                                }
+                                continue;
+                            }
+                        },
                         LeafLayoutAttempt::AutomaticCompositionUnresolved {
                             resolve_from,
                             resolve_through,
@@ -6664,6 +6746,9 @@ impl LayoutEngine {
         // A walk that consumed at or past a window-range overlay view must be
         // retried once with the whole-buffer view. `true` selects it.
         overlay_view_full: bool,
+        // After a repeated live-view staleness hit in one window attempt,
+        // fall back to a captured overlay snapshot to bound retries.
+        overlay_view_force_captured: bool,
         // A previous attempt's row walk painted an automatic composition
         // outside the visible-range resolution pass (`None` = no widening).
         // `Some(from, through)` resolves at least that range; `(0,
@@ -7116,7 +7201,7 @@ impl LayoutEngine {
                 } else {
                     self.overlay_view_char_span_for(params, buffer)
                 };
-                super::neovm_bridge::LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+                super::neovm_bridge::LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_fallback(
                     buffer,
                     evaluator.variables(),
                     Some(visible_char_bound(params)),
@@ -7124,6 +7209,7 @@ impl LayoutEngine {
                     display_target,
                     evaluator.symbol_mode(),
                     &evaluator.owned_root_retainer(),
+                    overlay_view_force_captured,
                 )
                 .with_accessible_end(neovm_core::buffer::CharPos0::new(
                     params.accessible_end_charpos().get().max(0) as usize,
@@ -7320,6 +7406,13 @@ impl LayoutEngine {
                 },
             );
             resolved_composition_range = Some(resolve_start..resolve_end);
+        }
+        // Automatic-composition rule resolution above may enter Lisp and mutate
+        // overlays. Reject a stale live overlay view before starting the walk.
+        if crate::neovm_bridge::LayoutBufferView::layout_overlay_view_stale(&layout_buffer) {
+            return LeafLayoutAttempt::OverlayViewUnusable(
+                crate::neovm_bridge::OverlayViewUnusable::Stale,
+            );
         }
         let buffer = &layout_buffer;
 
@@ -7575,7 +7668,7 @@ impl LayoutEngine {
             BufferSourceRenderAttemptOutcome::Skipped
             | BufferSourceRenderAttemptOutcome::LogicalInputsChanged
             | BufferSourceRenderAttemptOutcome::ChromeSourceInvalidated
-            | BufferSourceRenderAttemptOutcome::OverlayViewExhausted
+            | BufferSourceRenderAttemptOutcome::OverlayViewUnusable(_)
             | BufferSourceRenderAttemptOutcome::GlyphMatrixCapacityExhausted
             | BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { .. }
             | BufferSourceRenderAttemptOutcome::Retry { .. }
@@ -7602,6 +7695,7 @@ impl LayoutEngine {
                 freshness_after_leaf,
                 neovm_core::window::WindowLayoutLispBoundary::WindowChrome,
             ),
+            (BufferSourceRenderAttemptOutcome::OverlayViewUnusable(_), Some(_)) => true,
             (_, Some(freshness_after_leaf)) => {
                 freshness_after_leaf.as_ref() == freshness_after_fontification.as_ref()
             }
@@ -7986,11 +8080,11 @@ impl LayoutEngine {
                 reject_changed_cursor_sources(evaluator, &mut window_end_attempt, true);
                 return LeafLayoutAttempt::ChromeInputsChanged;
             }
-            BufferSourceRenderAttemptOutcome::OverlayViewExhausted => {
+            BufferSourceRenderAttemptOutcome::OverlayViewUnusable(reason) => {
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
                 }
-                return LeafLayoutAttempt::OverlayViewExhausted;
+                return LeafLayoutAttempt::OverlayViewUnusable(reason);
             }
             BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { boundary } => {
                 if let Some(attempt) = window_end_attempt.take() {

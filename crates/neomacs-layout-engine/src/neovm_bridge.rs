@@ -31,6 +31,8 @@ mod buffer_snapshot;
 pub(crate) use borrowed_buffer::BorrowedLayoutBuffer;
 pub(crate) use buffer_snapshot::LayoutBufferSnapshot;
 use buffer_snapshot::capture_string_composition_rules;
+#[cfg(test)]
+pub(crate) use buffer_snapshot::{OverlaySourceMode, with_overlay_source_mode_for_test};
 
 #[cfg(test)]
 #[path = "neovm_bridge/tests/property_keys_support.rs"]
@@ -63,7 +65,8 @@ use neovm_core::buffer::{
     Buffer, CharPos0, CharRange, EmacsByteLen, EmacsBytePos, EmacsByteRange, LispCharPos1,
     buffer::{BufferSlotInfo, lookup_buffer_slot_by_sym_id},
     overlay::{
-        OverlayList, OverlayPropertyAtPoint, OverlayPropertyFilter, OverlayPropertyResolver,
+        LiveOverlayView, OverlayList, OverlayPropertyAtPoint, OverlayPropertyFilter,
+        OverlayPropertyResolver, OverlayRead,
     },
 };
 use neovm_core::emacs_core::effect_profile::{
@@ -161,53 +164,112 @@ impl DisplayLineNumbersMode {
     }
 }
 
-/// Overlay view a layout attempt reads. The only variant is the captured
-/// list, and each method forwards to that list. There is no shared trait
-/// until a live view is a second implementor.
+/// Why a layout attempt's overlay view cannot certify the completed walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OverlayViewUnusable {
+    /// The walk consumed at or past a window-range overlay view's end.
+    Exhausted,
+    /// A query read below a window-range overlay view's captured start floor.
+    Underflow,
+    /// A live overlay view's generation stamp no longer matches the buffer's
+    /// live index (Lisp mutated overlays mid-attempt).
+    Stale,
+}
+
+enum LayoutOverlayIter<S, L> {
+    Snapshot(S),
+    Live(L),
+}
+
+impl<S, L> Iterator for LayoutOverlayIter<S, L>
+where
+    S: Iterator<Item = Value>,
+    L: Iterator<Item = Value>,
+{
+    type Item = Value;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Snapshot(iter) => iter.next(),
+            Self::Live(iter) => iter.next(),
+        }
+    }
+}
+
+/// Overlay view a layout attempt reads. Both variants implement [`OverlayRead`]
+/// and dispatch statically without trait objects.
 #[derive(Clone, Copy)]
 pub(crate) enum LayoutOverlays<'a> {
     Snapshot(&'a OverlayList),
+    Live(&'a LiveOverlayView),
 }
 
 impl<'a> LayoutOverlays<'a> {
-    fn list(self) -> &'a OverlayList {
+    pub(crate) fn is_empty(self) -> bool {
         match self {
-            Self::Snapshot(list) => list,
+            Self::Snapshot(list) => OverlayRead::is_empty(list),
+            Self::Live(live) => OverlayRead::is_empty(live),
         }
     }
-
-    pub(crate) fn is_empty(self) -> bool {
-        self.list().is_empty()
-    }
     pub(crate) fn may_contain_property(self, property: Value) -> bool {
-        self.list().may_contain_property(property)
+        match self {
+            Self::Snapshot(list) => OverlayRead::may_contain_property(list, property),
+            Self::Live(live) => OverlayRead::may_contain_property(live, property),
+        }
     }
     pub(crate) fn overlay_plist(self, overlay: Value) -> Option<Value> {
-        self.list().overlay_plist(overlay)
+        match self {
+            Self::Snapshot(list) => OverlayRead::overlay_plist(list, overlay),
+            Self::Live(live) => OverlayRead::overlay_plist(live, overlay),
+        }
     }
     pub(crate) fn overlay_get_named(self, overlay: Value, prop_name: Value) -> Option<Value> {
-        self.list().overlay_get_named(overlay, prop_name)
+        match self {
+            Self::Snapshot(list) => OverlayRead::overlay_get_named(list, overlay, prop_name),
+            Self::Live(live) => OverlayRead::overlay_get_named(live, overlay, prop_name),
+        }
     }
     pub(crate) fn overlay_applies_to_window(self, overlay: Value, window_id: Option<u64>) -> bool {
-        self.list().overlay_applies_to_window(overlay, window_id)
+        match self {
+            Self::Snapshot(list) => {
+                OverlayRead::overlay_applies_to_window(list, overlay, window_id)
+            }
+            Self::Live(live) => OverlayRead::overlay_applies_to_window(live, overlay, window_id),
+        }
     }
     pub(crate) fn overlay_start_emacs_byte_pos(self, overlay: Value) -> Option<EmacsBytePos> {
-        self.list().overlay_start_emacs_byte_pos(overlay)
+        match self {
+            Self::Snapshot(list) => OverlayRead::overlay_start_emacs_byte_pos(list, overlay),
+            Self::Live(live) => OverlayRead::overlay_start_emacs_byte_pos(live, overlay),
+        }
     }
     pub(crate) fn overlay_end_emacs_byte_pos(self, overlay: Value) -> Option<EmacsBytePos> {
-        self.list().overlay_end_emacs_byte_pos(overlay)
+        match self {
+            Self::Snapshot(list) => OverlayRead::overlay_end_emacs_byte_pos(list, overlay),
+            Self::Live(live) => OverlayRead::overlay_end_emacs_byte_pos(live, overlay),
+        }
     }
     pub(crate) fn overlays_at_emacs_byte_pos(self, pos: EmacsBytePos) -> Vec<Value> {
-        self.list().overlays_at_emacs_byte_pos(pos)
+        match self {
+            Self::Snapshot(list) => OverlayRead::overlays_at_emacs_byte_pos(list, pos),
+            Self::Live(live) => OverlayRead::overlays_at_emacs_byte_pos(live, pos),
+        }
     }
     pub(crate) fn overlays_in_emacs_byte_range(self, range: EmacsByteRange) -> Vec<Value> {
-        self.list().overlays_in_emacs_byte_range(range)
+        match self {
+            Self::Snapshot(list) => OverlayRead::overlays_in_emacs_byte_range(list, range),
+            Self::Live(live) => OverlayRead::overlays_in_emacs_byte_range(live, range),
+        }
     }
     pub(crate) fn next_boundary_after_emacs_byte_pos(
         self,
         pos: EmacsBytePos,
     ) -> Option<EmacsBytePos> {
-        self.list().next_boundary_after_emacs_byte_pos(pos)
+        match self {
+            Self::Snapshot(list) => OverlayRead::next_boundary_after_emacs_byte_pos(list, pos),
+            Self::Live(live) => OverlayRead::next_boundary_after_emacs_byte_pos(live, pos),
+        }
     }
     pub(crate) fn highest_priority_overlay_property_value_at_emacs_byte_pos(
         self,
@@ -215,33 +277,75 @@ impl<'a> LayoutOverlays<'a> {
         property: Value,
         window_id: Option<u64>,
     ) -> Option<Value> {
-        self.list()
-            .highest_priority_overlay_property_value_at_emacs_byte_pos(pos, property, window_id)
+        match self {
+            Self::Snapshot(list) => {
+                OverlayRead::highest_priority_overlay_property_value_at_emacs_byte_pos(
+                    list, pos, property, window_id,
+                )
+            }
+            Self::Live(live) => {
+                OverlayRead::highest_priority_overlay_property_value_at_emacs_byte_pos(
+                    live, pos, property, window_id,
+                )
+            }
+        }
     }
     pub(crate) fn sort_overlay_ids_by_priority_desc(self, overlay_ids: &mut [Value]) {
-        self.list().sort_overlay_ids_by_priority_desc(overlay_ids)
+        match self {
+            Self::Snapshot(list) => {
+                OverlayRead::sort_overlay_ids_by_priority_desc(list, overlay_ids)
+            }
+            Self::Live(live) => OverlayRead::sort_overlay_ids_by_priority_desc(live, overlay_ids),
+        }
     }
     pub(crate) fn sort_overlay_ids_by_priority_desc_with(
         self,
         overlay_ids: &mut [Value],
         priority_of: &dyn Fn(Value) -> Option<Value>,
     ) {
-        self.list()
-            .sort_overlay_ids_by_priority_desc_with(overlay_ids, priority_of)
+        match self {
+            Self::Snapshot(list) => {
+                OverlayRead::sort_overlay_ids_by_priority_desc_with(list, overlay_ids, priority_of)
+            }
+            Self::Live(live) => {
+                OverlayRead::sort_overlay_ids_by_priority_desc_with(live, overlay_ids, priority_of)
+            }
+        }
     }
     pub(crate) fn iter_overlays_at_emacs_byte_pos(
         self,
         pos: EmacsBytePos,
     ) -> impl Iterator<Item = Value> + 'a {
-        self.list().iter_overlays_at_emacs_byte_pos(pos)
+        match self {
+            Self::Snapshot(list) => {
+                LayoutOverlayIter::Snapshot(OverlayRead::iter_overlays_at_emacs_byte_pos(list, pos))
+            }
+            Self::Live(live) => {
+                LayoutOverlayIter::Live(OverlayRead::iter_overlays_at_emacs_byte_pos(live, pos))
+            }
+        }
     }
     pub(crate) fn iter_overlays_in_accessible_emacs_byte_range(
         self,
         range: EmacsByteRange,
         accessible_end: EmacsBytePos,
     ) -> impl Iterator<Item = Value> + 'a {
-        self.list()
-            .iter_overlays_in_accessible_emacs_byte_range(range, accessible_end)
+        match self {
+            Self::Snapshot(list) => LayoutOverlayIter::Snapshot(
+                OverlayRead::iter_overlays_in_accessible_emacs_byte_range(
+                    list,
+                    range,
+                    accessible_end,
+                ),
+            ),
+            Self::Live(live) => {
+                LayoutOverlayIter::Live(OverlayRead::iter_overlays_in_accessible_emacs_byte_range(
+                    live,
+                    range,
+                    accessible_end,
+                ))
+            }
+        }
     }
     pub(crate) fn resolve_overlay_property_at_emacs_byte_pos<R>(
         self,
@@ -252,8 +356,20 @@ impl<'a> LayoutOverlays<'a> {
     where
         R: OverlayPropertyResolver,
     {
-        self.list()
-            .resolve_overlay_property_at_emacs_byte_pos(pos, window_id, property_value)
+        match self {
+            Self::Snapshot(list) => OverlayRead::resolve_overlay_property_at_emacs_byte_pos(
+                list,
+                pos,
+                window_id,
+                property_value,
+            ),
+            Self::Live(live) => OverlayRead::resolve_overlay_property_at_emacs_byte_pos(
+                live,
+                pos,
+                window_id,
+                property_value,
+            ),
+        }
     }
 }
 
@@ -401,6 +517,32 @@ pub(crate) trait LayoutBufferView {
     /// the walk must be retried with the whole-buffer view.
     fn layout_overlay_view_start_underflow(&self) -> bool {
         false
+    }
+    /// True when a live overlay view detected a generation mismatch against
+    /// the owning buffer's overlay index.
+    fn layout_overlay_view_stale(&self) -> bool {
+        false
+    }
+    /// Check whether this overlay view can certify a completed walk up to
+    /// `window_end`. Returns the specific usability defect if the attempt must
+    /// be discarded and retried.
+    fn layout_overlay_view_unusable(
+        &self,
+        window_end: neovm_core::buffer::CharPos0,
+    ) -> Option<OverlayViewUnusable> {
+        if self.layout_overlay_view_stale() {
+            return Some(OverlayViewUnusable::Stale);
+        }
+        if self.layout_overlay_view_start_underflow() {
+            return Some(OverlayViewUnusable::Underflow);
+        }
+        if self
+            .layout_overlay_view_end_char()
+            .is_some_and(|end| window_end.get() >= end.get())
+        {
+            return Some(OverlayViewUnusable::Exhausted);
+        }
+        None
     }
     /// Automatic-composition span whose first character is `pos`.
     ///
