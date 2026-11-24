@@ -1123,6 +1123,70 @@ fn keeper_root_reader_waits_out_an_owner_moment_on_its_entry_body<
     });
 }
 
+/// The keeper's hold on an entry across a body is not an owner's moment:
+/// waiting cannot end it. A frozen entry held that way already refuses in
+/// `validate`. The World entry is not frozen, so a body that reaches it again
+/// must refuse at once instead of waiting itself out. Another entry is
+/// still reachable from that body.
+fn keeper_reentering_an_entry_it_holds_refuses_at_once_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    use super::super::test_fences::gate_contention_for_test;
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let registry = era.registry();
+        let world = {
+            let gate = retry(|| registry.lock().map_err(RendezvousError::from));
+            gate.entries
+                .iter()
+                .find(|entry| entry.key.owner == 0)
+                .map(|entry| entry.key)
+                .unwrap()
+        };
+
+        // No owner runs, so nothing else can hold the World entry.
+        let mut stopped = retry(|| era.stop());
+        let before = gate_contention_for_test();
+        let again = stopped
+            .with_owner_image_for_test(world, |_| stopped.with_owner_image_for_test(world, |_| ()))
+            .unwrap();
+        let met = gate_contention_for_test() - before;
+        let after = stopped.with_owner_image_for_test(world, |_| ());
+        trace_owners(&mut stopped, &[]);
+        complete(stopped);
+        assert_eq!(
+            again,
+            Err(RendezvousError::Publication),
+            "the keeper's own hold is not waited out"
+        );
+        assert_eq!(met, 0, "the refusal never met contention");
+        assert_eq!(after, Ok(()), "the hold ends with its body");
+
+        let permit = era.register(1940, 1).unwrap();
+        let key = permit.key();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (owner, _entry) =
+                native_owner_for_keeper_rows(scope, heap, permit, 1940, input, release_rx);
+            let mut stopped = retry(|| era.stop());
+            let other = stopped
+                .with_owner_image_for_test(world, |_| {
+                    stopped.with_owner_image_for_test(key, |_| ())
+                })
+                .unwrap();
+            trace_owners(&mut stopped, &[key]);
+            complete(stopped);
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(other, Ok(()), "another entry stays reachable");
+        });
+        finish_era(era);
+    });
+}
+
 fn a6_ht_b9_table_scope_gate_contention_retries_before_job_body<
     K: EraKeeper + std::fmt::Debug + 'static,
 >(
@@ -1483,6 +1547,9 @@ pub(crate) fn run_rooted_mutator_case<K: EraKeeper + std::fmt::Debug + 'static>(
         }
         RootedRendezvousCase::KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry => {
             keeper_root_reader_waits_out_an_owner_moment_on_its_entry_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperReenteringAnEntryItHoldsRefusesAtOnce => {
+            keeper_reentering_an_entry_it_holds_refuses_at_once_body(rooted_era)
         }
     }
 }

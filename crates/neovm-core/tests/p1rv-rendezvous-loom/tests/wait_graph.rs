@@ -13,7 +13,7 @@ use loom::sync::{Arc, Condvar, Mutex};
 use loom::thread;
 
 const WAIT_GRAPH_CYCLE: &str = "WAIT_GRAPH_CYCLE";
-const NODE_COUNT: usize = 5;
+const NODE_COUNT: usize = 6;
 
 #[derive(Clone, Copy)]
 #[repr(usize)]
@@ -23,6 +23,8 @@ enum Node {
     Baton,
     Control,
     Allocator,
+    /// One owner's registry entry: its published image and root batch.
+    Entry,
 }
 
 /// Actor -> resource means waiting; resource -> actor means held.
@@ -191,5 +193,113 @@ fn negative_owner_requests_and_waits_without_releasing_grant() {
         graph.lock().unwrap().declare(Node::Owner, Node::Keeper);
         keeper.join().unwrap();
         graph.lock().unwrap().assert_acyclic();
+    });
+}
+
+/// The stopped keeper's blocking waits (`lock_for_keeper` on the control
+/// gate, then the bounded owner-moment wait on an entry) close no cycle. An
+/// owner holds the gate, and its entry under it, only for a moment: it takes
+/// the entry with try_lock and waits on nothing while it holds either. The
+/// keeper waits for the entry only after it lets go of the gate. Its own hold
+/// on an entry across a body is not a moment: a second acquisition refuses
+/// without declaring a wait.
+#[test]
+fn keeper_waits_out_brief_gate_and_entry_holders() {
+    support::check(2, || {
+        let graph = Arc::new(Mutex::new(WaitGraph::default()));
+        let gate = Arc::new(Mutex::new(()));
+        let entry = Arc::new(Mutex::new(()));
+
+        let owner_graph = Arc::clone(&graph);
+        let owner_gate = Arc::clone(&gate);
+        let owner_entry = Arc::clone(&entry);
+        let owner = thread::spawn(move || {
+            let held_gate = owner_gate.lock().unwrap();
+            owner_graph.lock().unwrap().add(Node::Control, Node::Owner);
+            if let Ok(held_entry) = owner_entry.try_lock() {
+                let mut graph = owner_graph.lock().unwrap();
+                graph.add(Node::Entry, Node::Owner);
+                assert!(!graph.contains(Node::Owner, Node::Keeper));
+                graph.remove(Node::Entry, Node::Owner);
+                drop(graph);
+                drop(held_entry);
+            }
+            owner_graph
+                .lock()
+                .unwrap()
+                .remove(Node::Control, Node::Owner);
+            drop(held_gate);
+        });
+
+        // lock_for_keeper: the keeper holds nothing else while it waits.
+        graph.lock().unwrap().add(Node::Keeper, Node::Control);
+        let held_gate = gate.lock().unwrap();
+        {
+            let mut graph = graph.lock().unwrap();
+            graph.remove(Node::Keeper, Node::Control);
+            graph.add(Node::Control, Node::Keeper);
+            graph.remove(Node::Control, Node::Keeper);
+        }
+        drop(held_gate);
+
+        // The owner-moment wait, off the gate.
+        let held_entry = loop {
+            graph.lock().unwrap().add(Node::Keeper, Node::Entry);
+            match entry.try_lock() {
+                Ok(held) => break held,
+                Err(_) => thread::yield_now(),
+            }
+        };
+        {
+            let mut graph = graph.lock().unwrap();
+            graph.remove(Node::Keeper, Node::Entry);
+            graph.add(Node::Entry, Node::Keeper);
+            assert!(!graph.contains(Node::Control, Node::Keeper));
+            // A body reaches the same entry again: the keeper sees its own
+            // hold and refuses instead of adding Keeper -> Entry.
+            assert!(graph.contains(Node::Entry, Node::Keeper));
+            graph.remove(Node::Entry, Node::Keeper);
+            graph.assert_acyclic();
+        }
+        drop(held_entry);
+        owner.join().unwrap();
+    });
+}
+
+/// Wrong protocol: an owner holds RESOURCE while it waits on the keeper, and
+/// the keeper's blocking acquisition waits on RESOURCE.
+fn owner_holds_while_the_keeper_waits(resource: Node) {
+    support::negative(2, WAIT_GRAPH_CYCLE, move || {
+        let mut graph = WaitGraph::default();
+        graph.add(resource, Node::Owner);
+        let graph = Arc::new(Mutex::new(graph));
+        let keeper_graph = Arc::clone(&graph);
+        let keeper = thread::spawn(move || {
+            keeper_graph.lock().unwrap().declare(Node::Keeper, resource);
+        });
+        graph.lock().unwrap().declare(Node::Owner, Node::Keeper);
+        keeper.join().unwrap();
+        graph.lock().unwrap().assert_acyclic();
+    });
+}
+
+#[test]
+fn negative_owner_waits_for_the_keeper_holding_the_gate() {
+    owner_holds_while_the_keeper_waits(Node::Control);
+}
+
+#[test]
+fn negative_owner_waits_for_the_keeper_holding_its_entry() {
+    owner_holds_while_the_keeper_waits(Node::Entry);
+}
+
+/// Wrong protocol: the keeper holds an entry across a body and waits for
+/// that entry again instead of refusing.
+#[test]
+fn negative_keeper_waits_out_its_own_entry_hold() {
+    support::negative(1, WAIT_GRAPH_CYCLE, || {
+        let mut graph = WaitGraph::default();
+        graph.add(Node::Entry, Node::Keeper);
+        graph.add(Node::Keeper, Node::Entry);
     });
 }

@@ -360,7 +360,7 @@ impl<'era> AllStopped<'era> {
         let entry = self.entry(key)?;
         // No registry gate survives entry lookup. Root-table acquisition and
         // user code must never run while a control predicate mutex is held.
-        let state = super::wait_out_owner_moment(|| entry_state(&entry))?;
+        let state = super::keeper_hold(&entry)?;
         let roots = state.roots.as_ref().ok_or(RendezvousError::Publication)?;
         let admission = StoppedRootAdmission {
             identity: roots.identity(),
@@ -387,7 +387,7 @@ impl<'era> AllStopped<'era> {
         body: impl FnOnce(&mut PublishedGcImage) -> R,
     ) -> Result<R, RendezvousError> {
         let entry = self.entry(key)?;
-        let mut state = super::wait_out_owner_moment(|| entry_state(&entry))?;
+        let mut state = super::keeper_hold(&entry)?;
         let image = state.image.as_mut().ok_or(RendezvousError::Publication)?;
         let mut attempt = CallbackAttempt {
             registry: self.registry,
@@ -429,7 +429,7 @@ impl<'era> AllStopped<'era> {
         body: impl FnOnce(&PublishedGcImage) -> R,
     ) -> Result<R, RendezvousError> {
         let entry = self.entry(key)?;
-        let mut state = super::wait_out_owner_moment(|| entry_state(&entry))?;
+        let mut state = super::keeper_hold(&entry)?;
         let image = state.image.as_ref().ok_or(RendezvousError::Publication)?;
         let mut attempt = CallbackAttempt {
             registry: self.registry,

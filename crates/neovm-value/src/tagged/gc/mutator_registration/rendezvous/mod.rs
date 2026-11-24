@@ -280,8 +280,9 @@ pub(super) fn entry_state(
 
 /// An owner holds its entry only for a moment, under the gate. A keeper that
 /// meets that moment outside the gate retries it instead of refusing `Busy`.
-/// The retry is bounded: a hold this long is not an owner's moment (this
-/// thread may hold the entry itself), and it refuses `Busy` as before.
+/// The retry is bounded: a hold this long is not an owner's moment, and it
+/// refuses `Busy` as before. The keeper's own hold across a body never
+/// reaches this wait (`keeper_hold`).
 pub(super) fn wait_out_owner_moment<T>(
     mut attempt: impl FnMut() -> Result<T, RendezvousError>,
 ) -> Result<T, RendezvousError> {
@@ -300,6 +301,51 @@ pub(super) fn wait_out_owner_moment<T>(
             other => return other,
         }
     }
+}
+
+/// The stopped keeper's hold on one entry across a body it runs.
+pub(super) struct KeeperHold<'entry> {
+    entry: &'entry MutatorEntry,
+    state: MutexGuard<'entry, EntryState>,
+}
+
+impl std::ops::Deref for KeeperHold<'_> {
+    type Target = EntryState;
+    fn deref(&self) -> &EntryState {
+        &self.state
+    }
+}
+
+impl std::ops::DerefMut for KeeperHold<'_> {
+    fn deref_mut(&mut self) -> &mut EntryState {
+        &mut self.state
+    }
+}
+
+impl Drop for KeeperHold<'_> {
+    fn drop(&mut self) {
+        // Cleared before the guard field drops: the flag never outlives the
+        // keeper's guard.
+        self.entry
+            .keeper_held
+            .store(false, sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The stopped keeper takes ENTRY for a body it runs, waiting out an owner's
+/// moment. A body can reach the same entry again through its stop. That hold
+/// is the keeper's own and is not a moment, so waiting cannot end it: it
+/// refuses at once as `Publication`, the class `validate` gives the keeper's
+/// own hold on a frozen entry.
+pub(super) fn keeper_hold(entry: &MutatorEntry) -> Result<KeeperHold<'_>, RendezvousError> {
+    if entry.keeper_held.load(sync::atomic::Ordering::Relaxed) {
+        return Err(RendezvousError::Publication);
+    }
+    let state = wait_out_owner_moment(|| entry_state(entry))?;
+    entry
+        .keeper_held
+        .store(true, sync::atomic::Ordering::Relaxed);
+    Ok(KeeperHold { entry, state })
 }
 
 /// Every published root batch, current or retained, has no reader left.

@@ -133,6 +133,7 @@ shells! {
     a_broken_census_under_a_stop_is_not_busy => ABrokenCensusUnderAStopIsNotBusy,
     keeper_world_root_check_waits_out_a_brief_gate_holder => KeeperWorldRootCheckWaitsOutABriefGateHolder,
     keeper_root_reader_waits_out_an_owner_moment_on_its_entry => KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
+    keeper_reentering_an_entry_it_holds_refuses_at_once => KeeperReenteringAnEntryItHoldsRefusesAtOnce,
 }
 
 #[test]

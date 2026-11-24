@@ -297,6 +297,10 @@ pub struct MutatorEntry {
     cancelled_start: AtomicBool,
     /// Owner-written slice admission word (single writer: the owner thread).
     admission: AtomicU64,
+    /// Set while the stopped keeper holds `state` across a body it runs
+    /// (`rendezvous::keeper_hold`). Only the keeper thread writes or reads
+    /// it, so a set flag is exactly the keeper's own guard.
+    keeper_held: AtomicBool,
     state: Mutex<EntryState>,
 }
 
@@ -766,6 +770,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             young,
             cancelled_start: AtomicBool::new(false),
             admission: AtomicU64::new(AdmissionWord::OUT),
+            keeper_held: AtomicBool::new(false),
             state: Mutex::new(EntryState {
                 phase: EntryPhase::Frozen,
                 owner_thread: Some(std::thread::current().id()),
@@ -886,6 +891,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             young,
             cancelled_start: AtomicBool::new(false),
             admission: AtomicU64::new(AdmissionWord::OUT),
+            keeper_held: AtomicBool::new(false),
             state: Mutex::new(EntryState {
                 phase: EntryPhase::Starting,
                 owner_thread: None,

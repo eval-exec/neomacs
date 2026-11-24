@@ -69,6 +69,7 @@ pub enum RootedRendezvousCase {
     ABrokenCensusUnderAStopIsNotBusy,
     KeeperWorldRootCheckWaitsOutABriefGateHolder,
     KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
+    KeeperReenteringAnEntryItHoldsRefusesAtOnce,
 }
 
 impl RootedRendezvousCase {
@@ -117,6 +118,7 @@ impl RootedRendezvousCase {
         Self::ABrokenCensusUnderAStopIsNotBusy,
         Self::KeeperWorldRootCheckWaitsOutABriefGateHolder,
         Self::KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
+        Self::KeeperReenteringAnEntryItHoldsRefusesAtOnce,
     ];
 }
 

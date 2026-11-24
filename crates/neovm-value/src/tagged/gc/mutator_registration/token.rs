@@ -240,6 +240,7 @@ impl std::fmt::Debug for Mutator<'_> {
     }
 }
 
+#[must_use = "into_owner() to retry the finish; dropping poisons"]
 pub struct MutatorFinishFailure<'era> {
     pub reason: RegistrationError,
     owner: Mutator<'era>,
