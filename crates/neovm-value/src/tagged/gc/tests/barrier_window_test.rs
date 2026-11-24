@@ -138,7 +138,7 @@ fn partitioned_heap_owners(heap: &mut TaggedHeap) -> Owners {
         ImageStamp::Stamped
     );
     // The first partition cycle makes image residents permanent (tenured).
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.value_is_tenured(tenured_vector));
     assert!(heap.value_is_tenured(remembered_vector));
     // One write remembers this owner.
@@ -303,7 +303,7 @@ fn the_window_is_republished_at_every_writer_of_its_inputs() {
 
     let root = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
     // The first partition cycle is stop-the-world; the second is concurrent.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     heap.concurrent_begin();
     heap.seed_root(root);
     assert_eq!(published_barrier_window(), wider, "before the launch");
@@ -378,7 +378,7 @@ fn the_remembered_bit_is_set_exactly_when_the_owner_is_remembered() {
     for owner in [image, quiet, parent] {
         assert!(!header_remembered(owner), "{owner:?} starts unremembered");
     }
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
 
     // Promotion: the scan remembers the tenured owner holding a young cons.
     assert!(heap.value_is_tenured(parent));

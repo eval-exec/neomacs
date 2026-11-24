@@ -69,7 +69,7 @@ fn marker_page_span_oracle_freed_slot_exactness() {
     assert_eq!(heap.non_cons_object_addrs.len(), 0);
     assert!(heap.marker_arena.owns(mk_ptr(dead)));
     let m = heap.alloc_macro(vec![TaggedValue::fixnum(1); 4]);
-    heap.collect_exact([keep, keep2, m].into_iter());
+    heap.collect_rooted([keep, keep2, m].into_iter());
     let b_addr = mk_ptr(keep) as usize;
     assert!(heap.marker_arena.owns(b_addr as *const u8));
     assert!(heap.owns_non_cons_object(b_addr as *const u8));
@@ -101,7 +101,7 @@ fn marker_ownership_tracks_sweep() {
     assert!(heap.owns_non_cons_object(live_ptr));
     assert!(heap.owns_non_cons_object(dead_ptr));
     assert_eq!(heap.non_cons_object_addrs.len(), 0);
-    heap.collect_exact(std::iter::once(live));
+    heap.collect_rooted(std::iter::once(live));
     assert!(heap.marker_arena.owns(live_ptr));
     assert!(!heap.marker_arena.owns(dead_ptr));
     assert_eq!(heap.non_cons_object_addrs.len(), 0);
@@ -119,7 +119,7 @@ fn marker_freed_slot_is_reused_by_the_next_allocation() {
     let transient = mk(&mut heap, 1);
     let transient_ptr = mk_ptr(transient);
     let keep = mk(&mut heap, 2);
-    heap.collect_exact(std::iter::once(keep));
+    heap.collect_rooted(std::iter::once(keep));
     assert!(!heap.marker_arena.owns(transient_ptr));
     let next = mk(&mut heap, 3);
     assert_eq!(
@@ -143,7 +143,7 @@ fn parity_two_cycle_marker_survival_and_reclaim_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
     heap.concurrent_begin();
     heap.seed_root(spine);

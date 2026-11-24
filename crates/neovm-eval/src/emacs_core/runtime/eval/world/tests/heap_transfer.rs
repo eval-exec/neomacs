@@ -298,7 +298,7 @@ fn pentry_e2b_heap_transfer_installed_tls_refuses_without_constructing_local_loa
     with_prepared(|pending, transfer| {
         let unrelated =
             neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
-        neovm_value::tagged::gc::set_tagged_heap_root(unrelated.root());
+        unsafe { neovm_value::tagged::gc::set_tagged_heap_root(unrelated.root()) };
         let failure = match transfer.with_collector::<()>(|_| panic!("must refuse before callback"))
         {
             Ok((_, ())) => panic!("installed TLS accepted"),
@@ -716,7 +716,7 @@ fn pentry_e2b_heap_transfer_closed_source_foreign_tls_refusal_keeps_original_inp
     let expected = owner.parallel_heap_identity();
     let unrelated =
         neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
-    neovm_value::tagged::gc::set_tagged_heap_root(unrelated.root());
+    unsafe { neovm_value::tagged::gc::set_tagged_heap_root(unrelated.root()) };
     // SAFETY: the original source frames remain closed and retained. A
     // different TLS activation is introduced only to prove the refusal runs
     // before any heap dereference.

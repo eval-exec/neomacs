@@ -505,7 +505,7 @@ fn major_symbol_generic_cons_write_retraces_current_children_before_sweep() {
             let owner = roots.keep(heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL));
             // A real completed collection establishes ordinary-old status for
             // GEN1. GEN0 preserves its existing cons tracing behavior.
-            heap.collect_exact([owner].into_iter());
+            heap.collect_rooted([owner].into_iter());
             if enabled {
                 assert!(heap.value_is_old_for_test(owner));
             }

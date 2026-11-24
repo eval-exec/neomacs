@@ -22,7 +22,7 @@ fn mark_all_survives_repeated_start_refusal_and_recovers_on_next_request() {
     let plan = refusal_then_recovery(heap.heap_identity());
     let failures = collector_start_failures();
     for cycle in 0..4 {
-        heap.collect_exact([root].into_iter());
+        heap.collect_rooted([root].into_iter());
         assert_eq!(root.cons_car(), TaggedValue::fixnum(37));
         assert_eq!(collector_is_registered(heap.heap_identity()), cycle >= 2);
     }
@@ -117,7 +117,7 @@ fn inline_only_handle_retires_without_a_thread_to_join() {
         heap.heap_identity(),
         [SpawnOutcome::Unavailable(std::io::ErrorKind::WouldBlock)],
     );
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     plan.assert_consumed();
     assert!(matches!(
         collectors().get(&heap.heap_identity()),

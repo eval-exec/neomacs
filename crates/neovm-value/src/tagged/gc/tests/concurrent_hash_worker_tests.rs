@@ -868,7 +868,7 @@ fn tier_h_exact_inventory_tracks_current_boxes_and_ordinary_old_owners() {
         // A newly registered image requires its normal first-partition trace
         // and blackening. Complete that bootstrap before ordinary allocation:
         // these later Boxes must become ordinary-old, not image permanents.
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         assert!(heap.dump_blackened);
         assert!(!heap.is_partition_first_cycle());
         let child = heap.alloc_record(vec![TaggedValue::fixnum(2001)]);

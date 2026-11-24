@@ -153,7 +153,7 @@ fn reclaimed_endpoints_contract(kind: OwnerKind, generational: bool) {
         }
     }
 
-    heap.collect_exact(std::iter::once(middle));
+    heap.collect_rooted(std::iter::once(middle));
     assert!(!heap.owns_heap_value_for_test(first));
     assert!(heap.owns_heap_value_for_test(middle));
     assert!(!heap.owns_heap_value_for_test(last));
@@ -230,7 +230,7 @@ fn recent_read_reclamation_acknowledges_epoch_in_every_journal_mode() {
         capture(|| {
             owner.cons_car();
             let before = super::super::gc::collection_observation_epoch();
-            heap.collect_exact(std::iter::once(owner));
+            heap.collect_rooted(std::iter::once(owner));
             let after = super::super::gc::collection_observation_epoch();
             assert_ne!(before, after, "a real sweep must publish reclamation");
             assert_eq!(

@@ -85,7 +85,7 @@ fn bytecode_page_span_oracle_freed_slot_exactness() {
     assert_eq!(heap.non_cons_object_addrs.len(), 0);
     assert!(heap.bytecode_arena.owns(bc_ptr(dead)));
 
-    heap.collect_exact([keep, keep2, f].into_iter());
+    heap.collect_rooted([keep, keep2, f].into_iter());
 
     let b_addr = bc_ptr(keep) as usize;
     // Live slot bases answer owned (arena + union + veclike routing).
@@ -143,7 +143,7 @@ fn bytecode_ownership_tracks_sweep() {
     assert!(heap.bytecode_arena.owns(dead_ptr));
     assert_eq!(heap.non_cons_object_addrs.len(), 0);
 
-    heap.collect_exact(std::iter::once(live));
+    heap.collect_rooted(std::iter::once(live));
 
     assert!(heap.owns_non_cons_object(live_ptr));
     assert!(!heap.owns_non_cons_object(dead_ptr));
@@ -173,7 +173,7 @@ fn parity_two_cycle_bytecode_survival_and_reclaim_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     // Cycle 2: bytecode born MID-MARK (allocate-black at this cycle's
@@ -279,7 +279,7 @@ fn deferred_bytecode_resolves_at_termination_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     // A rooted cons list carrying bytecode cars whose constants carry a
@@ -540,7 +540,7 @@ fn concurrent_tenured_bytecode_dropped_not_claimed() {
     // The worker's tenured short-circuit is the permanent-image path.
     assert_eq!(heap.note_image_object(b), ImageStamp::Stamped);
     let root = heap.alloc_cons(b, TaggedValue::fixnum(0));
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let b_hdr = b.as_veclike_ptr().unwrap();
     assert!(
         unsafe { (*b_hdr).gc.tenured },
@@ -617,7 +617,7 @@ fn concurrent_mid_cycle_bytecode_in_reused_slot_keeps_child_alive() {
     let root = list;
     // Bootstrap STW cycle: blackens the fake dump (arming the
     // verifiers), promotes survivors, and frees b_dead's slot.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let pre_launch_bases: std::collections::HashSet<usize> = heap
         .bytecode_arena
         .pages
@@ -697,7 +697,7 @@ fn bytecode_freed_slot_garbage_never_read_body(verify: bool) {
     set_tagged_heap(&mut heap);
     if verify {
         arm_partition(&mut heap, true);
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
     }
 
     let mut bytecodes = Vec::new();
@@ -712,7 +712,7 @@ fn bytecode_freed_slot_garbage_never_read_body(verify: bool) {
         .map(|(_, v)| v.as_veclike_ptr().unwrap() as *mut ByteCodeObj)
         .collect();
 
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for &p in &dead_ptrs {
         assert!(!heap.owns_non_cons_object(p as *const u8));
     }
@@ -727,7 +727,7 @@ fn bytecode_freed_slot_garbage_never_read_body(verify: bool) {
 
     // A full cycle re-sweeps the page: the scribbled slots' bits are
     // clear, so no header is Drop-dispatched, size-read, or parity-read.
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for (i, k) in keep.iter().enumerate() {
         assert_eq!(bc_constant(*k, 0).as_fixnum(), Some(2 * i as i64));
     }
@@ -774,11 +774,11 @@ fn bytecode_freed_slot_garbage_never_read_body(verify: bool) {
     // rewritten — valid — vec pointers, not the scribble).
     let mut roots: Vec<TaggedValue> = keep.clone();
     roots.extend(reused.iter().copied());
-    heap.collect_exact(roots.iter().copied());
+    heap.collect_rooted(roots.iter().copied());
     for (i, r) in reused.iter().enumerate() {
         assert_eq!(bc_constant(*r, 0).as_fixnum(), Some(500 + i as i64));
     }
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for r in &reused {
         assert!(!heap.owns_non_cons_object(bc_ptr(*r)));
     }
@@ -918,7 +918,7 @@ fn bytecode_sweep_live_bytes_track_variable_payload_sizes() {
     assert!(expected_objects > 2 * size_of::<ByteCodeObj>() + 1_000 * size_of::<Op>() + 10_000);
 
     // Eager (finalize_collection) recompute site.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert_eq!(
         heap.live_bytes(),
         expected,
@@ -972,7 +972,7 @@ fn bytecode_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     }
 
     // First partition cycle: full trace + sweep, then promotion.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
 
     // Every paged survivor is tenured (the promotion page walk covers
@@ -1028,7 +1028,7 @@ fn bytecode_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     // whole, partial page tenured-skipped, payloads intact, and the
     // young child of the retired-page owner survives.
     for cycle in 0..2 {
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         for (i, b) in bytecodes.iter().enumerate() {
             assert!(
                 heap.owns_non_cons_object(bc_ptr(*b)),
@@ -1086,7 +1086,7 @@ fn bytecode_mixed_page_tenured_survive_alternating_parities_body(verify: bool) {
 
     // Promotion cycle: odd-indexed garbage swept first, survivors tenure
     // ⇒ a MIXED page.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     assert!(!heap.bytecode_arena.pages[0].retired);
 
@@ -1095,7 +1095,7 @@ fn bytecode_mixed_page_tenured_survive_alternating_parities_body(verify: bool) {
         for i in 0..5 {
             let _ = heap.alloc_bytecode(bytecode_fn(vec![TaggedValue::fixnum(-(i as i64))], 4, 16));
         }
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         for (i, b) in keep.iter().enumerate() {
             assert!(
                 heap.owns_non_cons_object(bc_ptr(*b)),
@@ -1149,7 +1149,7 @@ fn bytecode_payload_pages_freed_at_heap_drop_body(mid_mark: bool) {
 
         // Promotion + (partial-page) tenure happen before the drop;
         // retired/mixed pages must be freed by teardown too.
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         assert!(heap.dump_blackened);
         heap.assert_object_arenas_coherent();
 
@@ -1196,7 +1196,7 @@ fn bytecode_constants_test_seam_fires_write_barrier_body(verify: bool) {
 
     let b = heap.alloc_bytecode(bytecode_fn(vec![TaggedValue::fixnum(0)], 2, 0));
     let root = heap.alloc_cons(b, TaggedValue::fixnum(0));
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     // Runtime owner: ordinary old in GEN1; young (traced each collection)
     // in GEN0. The seam fires either way; GEN0 needs no remembered edge.
     assert_eq!(
@@ -1218,7 +1218,7 @@ fn bytecode_constants_test_seam_fires_write_barrier_body(verify: bool) {
     );
 
     for cycle in 0..2 {
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         assert_eq!(
             unsafe { (*young.xcons_ptr()).load_car() }.as_fixnum(),
             Some(4_242),
@@ -1258,7 +1258,7 @@ fn tenured_page_bytecode_keeps_young_cons_child_alive_body(verify: bool) {
 
     // Promotion: b is an ordinary-old runtime survivor (GEN1) or stays
     // young (GEN0); y stays young either way.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     assert_eq!(
         unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured },
@@ -1269,7 +1269,7 @@ fn tenured_page_bytecode_keeps_young_cons_child_alive_body(verify: bool) {
     // never re-traced; the child survives ONLY via the promotion-time
     // page-tenured remembered-set scan (which now walks bytecode pages).
     for cycle in 0..2 {
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         assert_eq!(
             unsafe { (*y.xcons_ptr()).load_car() }.as_fixnum(),
             Some(999),
@@ -1315,7 +1315,7 @@ fn bytecode_shared_gnu_bytes_survive_the_sweep_of_either_holder() {
     assert_eq!(per_object(proto), per_object(instance));
     assert!(per_object(instance) >= size_of::<ByteCodeObj>() + 4_096);
 
-    heap.collect_exact(std::iter::once(instance));
+    heap.collect_rooted(std::iter::once(instance));
     assert!(!heap.bytecode_arena.owns(bc_ptr(proto)));
     let obj = unsafe { &*(instance.as_veclike_ptr().unwrap() as *const ByteCodeObj) };
     let bytes = obj.data.gnu_bytecode_bytes.as_deref().unwrap();
@@ -1439,7 +1439,7 @@ fn bytecode_instance_reads_back_as_the_prototype_with_its_own_pool() {
 
     // The instance survives on its own, and the prototype's sweep leaves
     // everything the instance shares intact.
-    heap.collect_exact(std::iter::once(instance));
+    heap.collect_rooted(std::iter::once(instance));
     assert!(!heap.bytecode_arena.owns(bc_ptr(proto)));
     let i = bc_data(instance);
     assert_eq!(i.constants().as_slice(), pool.as_slice());
@@ -1465,7 +1465,7 @@ fn bytecode_instance_born_mid_mark_survives_and_traces_its_pool() {
         TaggedValue::fixnum(0),
         TaggedValue::fixnum(7),
     ]));
-    heap.collect_exact([spine, proto].into_iter());
+    heap.collect_rooted([spine, proto].into_iter());
     assert!(heap.should_run_concurrent());
 
     heap.concurrent_begin();
@@ -1532,7 +1532,7 @@ fn bytecode_instance_churn_through_collections() {
             let roots: Vec<TaggedValue> = std::iter::once(proto)
                 .chain(kept.iter().map(|&(v, _)| v))
                 .collect();
-            heap.collect_exact(roots.into_iter());
+            heap.collect_rooted(roots.into_iter());
             for &(v, n) in &kept {
                 assert_eq!(bc_constant(v, 0).cons_car().as_fixnum(), Some(n));
                 assert_eq!(bc_constant(v, 1).as_fixnum(), Some(-1));

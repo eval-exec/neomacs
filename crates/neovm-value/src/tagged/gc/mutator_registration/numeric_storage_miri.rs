@@ -202,7 +202,7 @@ fn two_owner_numeric_views_survive_catalog_mutation_and_retained_refreeze() {
         assert_eq!(roots.len(), 5);
         assert_eq!(frontiers(&heap.float_arena), [3, 2]);
         assert_eq!(frontiers(&heap.bignum_arena), [2, 2]);
-        heap.collect_exact(roots.iter().copied());
+        heap.collect_rooted(roots.iter().copied());
         assert_eq!(heap.float_arena.collect_allocated_slots().len(), 3);
         assert_eq!(heap.bignum_arena.collect_allocated_slots().len(), 2);
         assert_eq!(frontiers(&heap.float_arena), [3, 1]);
@@ -335,7 +335,7 @@ fn two_owner_numeric_views_survive_catalog_mutation_and_retained_refreeze() {
         assert_eq!(frontiers(&heap.float_arena), [4, 4]);
         assert_eq!(frontiers(&heap.bignum_arena), [2, 4]);
         drop(roots);
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         assert!(heap.float_arena.collect_allocated_slots().is_empty());
         assert!(heap.bignum_arena.collect_allocated_slots().is_empty());
     }

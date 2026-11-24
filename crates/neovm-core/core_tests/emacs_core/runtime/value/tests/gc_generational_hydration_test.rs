@@ -131,7 +131,7 @@ fn gc_generational_hydration_old_owner_keeps_key_through_minors_and_majors() {
     // Real full tracing reads the parked entries without materializing keys.
     // Unlike pending_permanent_table, this Box stays on the correct collector
     // list and acquires ordinary-old age through a real completed major.
-    heap.collect_exact(std::iter::once(owner));
+    heap.collect_rooted(std::iter::once(owner));
     assert!(heap.owns_heap_value_for_test(owner));
     assert!(heap.value_is_old_for_test(owner));
     {
@@ -170,13 +170,13 @@ fn gc_generational_hydration_old_owner_keeps_key_through_minors_and_majors() {
     // no recent R edge can repair a missed ordinary-old owner trace.
     for _ in 0..3 {
         assert_eq!(heap.remembered_log_len_for_test(), 0);
-        heap.collect_exact(std::iter::once(owner));
+        heap.collect_rooted(std::iter::once(owner));
         assert_owned_old_hydrated_key(&heap, owner, key_address);
         assert_eq!(heap.remembered_log_len_for_test(), 0);
     }
 
     drop(owner_root);
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     // Ownership queries only: neither dead payload is dereferenced, and no
     // further allocation can reuse either slot before these assertions.
     assert!(!heap.owns_heap_value_for_test(owner));

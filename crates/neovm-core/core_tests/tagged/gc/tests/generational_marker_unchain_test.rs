@@ -95,7 +95,7 @@ fn minor_unchains_young_dead_marker_and_keeps_old_chain_node() {
     // mark stays white even when a parity repeats (C2.6 supplies major reclaim).
     let mut parities = Vec::new();
     for _ in 0..3 {
-        heap.collect_exact(std::iter::once(old));
+        heap.collect_rooted(std::iter::once(old));
         parities.push(heap.mark_parity_for_test());
         assert_eq!(header(old).raw_mark(), UNMARKED_AT_REST);
     }

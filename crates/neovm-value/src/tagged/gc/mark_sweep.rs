@@ -44,17 +44,40 @@ impl TaggedHeap {
     /// Run a full mark-sweep garbage collection.
     ///
     /// `roots` must yield every reachable `TaggedValue`.
-    pub fn collect(&mut self, roots: impl Iterator<Item = TaggedValue>) {
-        self.collect_exact(roots);
+    ///
+    /// # Safety
+    ///
+    /// The caller has exclusive use of this heap: no alias from
+    /// `with_tagged_heap` or a mutation guard is live, and `roots` names
+    /// every value that must survive. Safe code collects through
+    /// `Context::gc_collect_exact`, which holds `&mut Context`.
+    pub unsafe fn collect(&mut self, roots: impl Iterator<Item = TaggedValue>) {
+        // SAFETY: `collect` forwards the caller's exclusive heap and roots.
+        unsafe { self.collect_exact(roots) }
     }
 
     /// Run a full mark-sweep collection using only the explicit roots provided.
-    pub fn collect_exact(&mut self, roots: impl Iterator<Item = TaggedValue>) {
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`Self::collect`].
+    pub unsafe fn collect_exact(&mut self, roots: impl Iterator<Item = TaggedValue>) {
         self.begin_stw_collection();
         for root in roots {
             self.seed_root(root);
         }
         self.complete_collection();
+    }
+
+    /// Test-support collection. Production code uses [`Self::collect_exact`].
+    ///
+    /// Compiled only on the test-support surface, so a production build has
+    /// no safe path to `collect`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn collect_rooted(&mut self, roots: impl Iterator<Item = TaggedValue>) {
+        // SAFETY: test-support is the fixture capability. The caller owns
+        // this heap and supplies the roots the test keeps.
+        unsafe { self.collect_exact(roots) }
     }
 
     /// # Safety

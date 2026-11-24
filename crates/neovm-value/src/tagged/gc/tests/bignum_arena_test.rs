@@ -109,7 +109,7 @@ fn bignum_page_span_oracle_freed_slot_exactness() {
     assert!(heap.bignum_arena.owns(big_ptr(dead)));
     let record = heap.alloc_record(vec![TaggedValue::fixnum(1); 4]);
     let boxed = heap.alloc_timer(7);
-    heap.collect_exact([keep, keep2, record, boxed].into_iter());
+    heap.collect_rooted([keep, keep2, record, boxed].into_iter());
 
     let b_addr = big_ptr(keep) as usize;
     assert!(heap.bignum_arena.owns(b_addr as *const u8));
@@ -159,7 +159,7 @@ fn bignum_alloc_leaves_registry_untouched() {
         "no bignum joined all_objects"
     );
     assert_eq!(heap.bignum_arena.pages.len(), 10);
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for (n, v) in keep.iter().enumerate() {
         assert_big(*v, n as i64 * 1000);
     }
@@ -181,7 +181,7 @@ fn parity_two_cycle_bignum_survival_and_reclaim_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
     heap.concurrent_begin();
     heap.seed_root(spine);
@@ -250,7 +250,7 @@ fn deferred_bignum_resolves_at_termination_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     let bigs: Vec<TaggedValue> = (0..300).map(|i| big(&mut heap, i)).collect();
@@ -319,7 +319,7 @@ fn satb_overwritten_bignum_survives_cycle_then_reclaims() {
         list = heap.alloc_cons(TaggedValue::fixnum(i), list);
     }
     let root = list;
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.should_run_concurrent());
 
     heap.concurrent_begin();
@@ -354,7 +354,7 @@ fn bignum_freed_slot_garbage_never_read_body(verify: bool) {
     set_tagged_heap(&mut heap);
     if verify {
         arm_partition(&mut heap, true);
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
     }
 
     let bigs: Vec<TaggedValue> = (0..100).map(|i| big(&mut heap, i)).collect();
@@ -366,7 +366,7 @@ fn bignum_freed_slot_garbage_never_read_body(verify: bool) {
         .map(|(_, v)| v.as_veclike_ptr().unwrap() as *mut BignumObj)
         .collect();
 
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for &p in &dead_ptrs {
         assert!(!heap.owns_non_cons_object(p as *const u8));
     }
@@ -376,7 +376,7 @@ fn bignum_freed_slot_garbage_never_read_body(verify: bool) {
     }
     heap.assert_object_arenas_coherent();
 
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for (i, k) in keep.iter().enumerate() {
         assert_big(*k, 2 * i as i64);
     }
@@ -407,8 +407,8 @@ fn bignum_freed_slot_garbage_never_read_body(verify: bool) {
 
     let mut roots: Vec<TaggedValue> = keep.clone();
     roots.extend(reused.iter().copied());
-    heap.collect_exact(roots.iter().copied());
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(roots.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for r in &reused {
         assert!(!heap.owns_non_cons_object(big_ptr(*r)));
     }
@@ -500,7 +500,7 @@ fn bignum_survivors_tenure_and_full_pages_retire_body(verify: bool) {
         assert_eq!(heap.note_image_object(b), ImageStamp::Stamped);
     }
 
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     for b in &bigs {
         assert!(unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured });
@@ -520,7 +520,7 @@ fn bignum_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     );
 
     for cycle in 0..2 {
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         for (i, b) in bigs.iter().enumerate() {
             assert!(
                 heap.owns_non_cons_object(big_ptr(*b)),
@@ -565,7 +565,7 @@ fn bignum_payload_pages_freed_at_heap_drop_body(mid_mark: bool) {
             "each 2^200 + i owns four limbs",
         );
         assert_eq!(stats.owned_payloads, 3_000);
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         let stats = bignum_layout(&mut heap);
         assert_eq!(stats.allocated_slots, 0);
         assert_eq!(
@@ -581,7 +581,7 @@ fn bignum_payload_pages_freed_at_heap_drop_body(mid_mark: bool) {
                 root = heap.alloc_cons(b, root);
             }
         }
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         assert!(heap.dump_blackened);
         heap.assert_object_arenas_coherent();
 
@@ -624,7 +624,7 @@ fn bignum_value_exact_after_slot_reuse() {
     let a = alloc_big(&mut heap, a_value.clone());
     let a_ptr = big_ptr(a);
     let keep = big(&mut heap, 9);
-    heap.collect_exact(std::iter::once(keep));
+    heap.collect_rooted(std::iter::once(keep));
     assert!(!heap.owns_non_cons_object(a_ptr));
 
     let b = alloc_big(&mut heap, b_value.clone());

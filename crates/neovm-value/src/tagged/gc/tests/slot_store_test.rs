@@ -150,7 +150,7 @@ fn slot_stores_during_a_concurrent_mark_keep_both_values() {
     let old_closure_child = heap.alloc_vector(vec![TaggedValue::fixnum(3)]);
     let lambda = heap.alloc_lambda(vec![old_closure_child, TaggedValue::NIL, TaggedValue::NIL]);
     let root = heap.alloc_cons(record, lambda);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.should_run_concurrent());
 
     heap.concurrent_begin();

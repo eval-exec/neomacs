@@ -132,7 +132,7 @@ fn name_atom_refs_strip_heap_properties_before_crossing_threads() {
 
     // The frozen atom kept only bytes, so its former property cannot keep the
     // heap object alive. Reading the atom on a foreign thread needs no heap.
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert!(!heap.owns_heap_value_for_test(payload));
     std::thread::spawn(move || {
         let borrowed: &LispString = atom.borrow();

@@ -74,7 +74,7 @@ fn sweep_one(weakness: HashTableWeakness) -> BTreeSet<(i64, i64)> {
     insert(table, strong_key, dead_value);
     insert(table, dead_key, strong_value);
     insert(table, neither_key, neither_value);
-    heap.collect_exact([table, both_key, both_value, strong_key, strong_value].into_iter());
+    heap.collect_rooted([table, both_key, both_value, strong_key, strong_value].into_iter());
     pairs(table)
 }
 

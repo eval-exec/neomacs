@@ -867,7 +867,7 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
     // so tagged dump references can resolve directly to live tagged objects.
     let tagged_heap =
         neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
-    neovm_value::tagged::gc::set_tagged_heap_root(tagged_heap.root());
+    unsafe { neovm_value::tagged::gc::set_tagged_heap_root(tagged_heap.root()) };
     decoder.preload_tagged_heap_with_value_fixup_section(value_fixups_section)?;
 
     // 3. Reset thread-local runtime caches before replaying semantic state.

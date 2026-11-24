@@ -628,7 +628,7 @@ mod tests {
     fn heapborrow_r5_clear_tls_preserves_collector_loan() {
         let heap = aliasable::AliasableBox::new(TaggedHeap::new());
         let root = heap.root();
-        set_tagged_heap_root(root);
+        unsafe { set_tagged_heap_root(root) };
         // SAFETY: sole stopped owner, no live mark or external roots. Clearing
         // TLS must compare only the root address while this loan is retained.
         let identity = heap.heap_identity();
@@ -894,7 +894,7 @@ mod tests {
         let exclusion = quiescent(&mut heap).exclude_concurrent_mark().unwrap();
         let state = Arc::as_ptr(heap.census.as_ref().unwrap().facade_mark.as_ref().unwrap());
         for _ in 0..2 {
-            heap.collect_exact(std::iter::once(root));
+            heap.collect_rooted(std::iter::once(root));
             assert!(heap.last_census_for_test().is_some());
             assert_eq!(
                 Arc::as_ptr(heap.census.as_ref().unwrap().facade_mark.as_ref().unwrap()),

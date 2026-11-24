@@ -634,7 +634,7 @@ fn garbage_collect_cons_row_reports_live_cells() {
 
     neovm_value::tagged::gc::with_tagged_heap(|heap| {
         heap.request_gc_object_counts();
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         heap.publish_gc_object_counts_if_requested(0);
     });
     let before = row_used();
@@ -643,7 +643,7 @@ fn garbage_collect_cons_row_reports_live_cells() {
     drop(unreachable);
     neovm_value::tagged::gc::with_tagged_heap(|heap| {
         heap.request_gc_object_counts();
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         heap.publish_gc_object_counts_if_requested(0);
     });
 

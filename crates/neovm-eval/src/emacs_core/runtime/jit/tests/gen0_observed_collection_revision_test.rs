@@ -869,7 +869,7 @@ fn gen0_observed_mark_survives_live_stw_and_concurrent_gc_cycles() {
         assert!(reads.expect("live owner read").unchanged());
         assert!(is_observed(owner.bits()));
         for _ in 0..2 {
-            heap.collect_exact(std::iter::once(owner));
+            heap.collect_rooted(std::iter::once(owner));
             assert!(is_observed(owner.bits()), "live STW survivor: {kind:?}");
         }
         concurrent_cycle(&mut heap, &[owner]);
@@ -893,7 +893,7 @@ fn gen0_observed_mark_clears_when_gc_frees_and_reuses_the_exact_slot() {
         let (_, reads) = capture(|| kind.read(doomed));
         let old_reads = reads.expect("observed owner before reclamation");
         assert!(is_observed(old_bits));
-        heap.collect_exact([keep, keep2].into_iter());
+        heap.collect_rooted([keep, keep2].into_iter());
         assert!(!heap.owns_heap_value_for_test(doomed));
         // The same-class neighbors retain this block/page's storage. The
         // non-observing query can inspect its cleared free-slot metadata.
@@ -923,7 +923,7 @@ fn gen0_observed_reused_address_republishes_before_recent_read_dedup() {
         let (_, reads) = capture(|| {
             kind.read(doomed);
             assert!(is_observed(old_bits));
-            heap.collect_exact([keep, keep2].into_iter());
+            heap.collect_rooted([keep, keep2].into_iter());
             assert!(!is_observed(old_bits));
             let reused = kind.allocate(&mut heap);
             assert_eq!(reused.bits(), old_bits);

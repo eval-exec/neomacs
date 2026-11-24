@@ -181,7 +181,7 @@ fn gen0_inline_slot_tenured_immediates_outside_window_keep_bookkeeping() {
     // the first partition cycle make it permanent; it stays outside the dump
     // span, so the inline store still takes the remembered gate.
     assert_eq!(heap.note_image_object(vector), ImageStamp::Stamped);
-    heap.collect_exact(std::iter::once(vector));
+    heap.collect_rooted(std::iter::once(vector));
     assert!(heap.is_tenured_for_test(vector));
     assert!(!heap.is_remembered_for_test(vector));
     assert!(!heap.barrier_window().covers(vector.bits() & !TAG_MASK));

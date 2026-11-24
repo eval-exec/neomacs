@@ -1646,8 +1646,15 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
 ///
 /// All production installers use this form. Root-owning test fixtures use it
 /// too; the legacy borrow installer is restricted to test builds.
+///
+/// # Safety
+///
+/// `root` is the allocation's [`super::AliasableBox`] root, and the caller
+/// is the owner installing or resuming that heap on this thread. Construct,
+/// pdump, world activation and resume, the gc-thread fallback, and the
+/// facade marker all use this one function. There is no second installer.
 #[doc(hidden)]
-pub fn set_tagged_heap_root(root: std::ptr::NonNull<TaggedHeap>) {
+pub unsafe fn set_tagged_heap_root(root: std::ptr::NonNull<TaggedHeap>) {
     // SAFETY: the caller supplies the live allocation's root pointer.
     if !tagged_heap_is_current(unsafe { root.as_ref() }) {
         super::super::collection_reads::reset_recent_reads_for_heap_installation();
@@ -2002,7 +2009,8 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
                     }
                     borrow.as_mut().unwrap().get_mut().root()
                 };
-                set_tagged_heap_root(root);
+                // SAFETY: the fallback owns the AliasableBox root it just created.
+                unsafe { set_tagged_heap_root(root) };
                 f(unsafe { &mut *root.as_ptr() })
             })
         }

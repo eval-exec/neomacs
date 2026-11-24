@@ -16,7 +16,7 @@ use neovm_value::tagged::value::TaggedValue;
 fn collect_with_shared_roots(heap: &mut TaggedHeap) {
     let mut roots = Vec::new();
     collect_shared_root_gc_roots(&heap, &mut roots);
-    heap.collect_exact(roots.into_iter());
+    heap.collect_rooted(roots.into_iter());
 }
 
 /// A root that keeps `heap`'s table alive, so retired cells stay observable:

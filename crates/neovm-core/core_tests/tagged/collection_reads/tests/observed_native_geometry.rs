@@ -106,7 +106,7 @@ fn observed_gc_rebuild_keeps_non_native_ledger_and_only_native_geometry() {
             TaggedValue::make_int(7)
         )
     });
-    heap.collect_exact([retained, reference].into_iter());
+    heap.collect_rooted([retained, reference].into_iter());
     assert!(heap.owns_heap_value_for_test(retained));
     assert!(heap.owns_heap_value_for_test(reference));
     assert!(!heap.owns_heap_value_for_test(discarded));

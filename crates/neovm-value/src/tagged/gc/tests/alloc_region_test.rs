@@ -112,7 +112,7 @@ fn a_free_list_region_is_one_adjacent_run() {
         .filter(|(i, _)| *i < 10 || *i == 20 || *i >= 40)
         .map(|(_, c)| *c)
         .collect();
-    heap.collect_exact(kept.iter().copied());
+    heap.collect_rooted(kept.iter().copied());
     assert!(
         !heap.alloc_regions_open(),
         "the collection closed the region"
@@ -166,7 +166,7 @@ fn closing_gives_the_unused_tail_back_where_it_came_from() {
         .filter(|(i, _)| !(3..8).contains(i))
         .map(|(_, c)| *c)
         .collect();
-    heap.collect_exact(kept.iter().copied());
+    heap.collect_rooted(kept.iter().copied());
     let before = free_list(&heap);
     let got = cons(&mut heap, 99);
     assert_eq!(cell_addr(got), cell_addr(cells[3]));
@@ -322,7 +322,7 @@ fn every_collector_entry_closes_the_region() {
     };
 
     open(&mut heap);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(!heap.alloc_regions_open(), "collect_exact");
 
     open(&mut heap);
@@ -381,7 +381,7 @@ fn allocation_across_a_concurrent_cycle_keeps_every_live_cons() {
             root = heap.alloc_cons(TaggedValue::fixnum(i), root);
         }
     }
-    heap.collect_exact(std::iter::once(root)); // the bootstrap cycle
+    heap.collect_rooted(std::iter::once(root)); // the bootstrap cycle
     let mut live: Vec<TaggedValue> = Vec::new();
     let keep = |heap: &mut TaggedHeap, live: &mut Vec<TaggedValue>, n: i64| {
         for i in 0..n {
@@ -430,7 +430,7 @@ fn allocation_across_a_concurrent_cycle_keeps_every_live_cons() {
     // Everything live survives a full collection too.
     let mut roots = live.clone();
     roots.push(root);
-    heap.collect_exact(roots.into_iter());
+    heap.collect_rooted(roots.into_iter());
     for &c in &live {
         let car = unsafe { (*c.as_cons_ptr().unwrap()).load_car() };
         assert!(car.is_fixnum(), "survived the stop-the-world cycle");
@@ -522,7 +522,7 @@ fn closing_a_float_region_gives_its_tail_back() {
         .filter(|(i, _)| !(4..10).contains(i))
         .map(|(_, f)| *f)
         .collect();
-    heap.collect_exact(kept.iter().copied());
+    heap.collect_rooted(kept.iter().copied());
     let page = &heap.float_arena.pages[0];
     assert_eq!(page.free_head, 9, "the page list descends from its top");
     let got = heap.alloc_float(99.0);
@@ -588,7 +588,7 @@ fn float_allocation_across_a_concurrent_cycle_keeps_every_live_float() {
             root = heap.alloc_cons(f, root);
         }
     }
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let mut live: Vec<TaggedValue> = Vec::new();
     let keep = |heap: &mut TaggedHeap, live: &mut Vec<TaggedValue>, n: usize| {
         for _ in 0..n {

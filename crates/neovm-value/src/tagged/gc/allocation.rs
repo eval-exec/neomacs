@@ -1002,7 +1002,14 @@ impl TaggedHeap {
     }
 
     /// Allocate a user-pointer object for dynamic module API.
-    pub fn alloc_user_ptr(
+    ///
+    /// # Safety
+    ///
+    /// `ptr` is null or owned by `finalizer`. The collector may call
+    /// `finalizer` with `ptr` once, on this heap's thread, after the object
+    /// is unreachable. The caller holds the only live `&mut` of this heap
+    /// across the call.
+    pub unsafe fn alloc_user_ptr(
         &mut self,
         ptr: *mut std::ffi::c_void,
         finalizer: EmacsFinalizer,
@@ -1020,7 +1027,14 @@ impl TaggedHeap {
     }
 
     /// Allocate a module-function object for dynamic module API.
-    pub fn alloc_module_function(
+    ///
+    /// # Safety
+    ///
+    /// `subr` and `data` stay valid for the object's life, and the caller
+    /// holds the only live `&mut` of this heap across the call. `documentation`
+    /// and `interactive_form` are stored into the new object before the call
+    /// returns.
+    pub unsafe fn alloc_module_function(
         &mut self,
         min_arity: isize,
         max_arity: isize,

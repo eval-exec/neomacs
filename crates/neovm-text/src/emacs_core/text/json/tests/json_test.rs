@@ -865,7 +865,7 @@ fn parse_nested_hash_tables_during_concurrent_gen1_mark() {
         Some(parsed),
     );
 
-    heap.collect(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     for value in [
         holder,
         parsed,
@@ -896,7 +896,7 @@ fn parse_nested_hash_error_releases_inactive_guard_before_collection() {
     }
     // This collector entry asserts that the complete inactive parser extent
     // unwound its debug guard, including the recursively nested object.
-    heap.collect(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
 }
 
 #[test]

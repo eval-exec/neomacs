@@ -5,7 +5,7 @@ use crate::tagged::gc::{
 
 fn fixture() -> AliasableBox<TaggedHeap> {
     let heap = AliasableBox::new(TaggedHeap::new());
-    set_tagged_heap_root(heap.root());
+    unsafe { set_tagged_heap_root(heap.root()) };
     heap
 }
 fn stopped(heap: &mut AliasableBox<TaggedHeap>) -> QuiescentCollector<'_> {
@@ -48,7 +48,7 @@ fn pentry_e2b_observation_actual_collector_roundtrip_and_sole_owner() {
         Err(SourceObservationError::EscapedOwner)
     );
     drop(collector);
-    set_tagged_heap_root(heap.root());
+    unsafe { set_tagged_heap_root(heap.root()) };
     let value = heap.alloc_cons(TaggedValue::fixnum(73), TaggedValue::NIL);
     assert_eq!(value.cons_car(), TaggedValue::fixnum(73));
 }

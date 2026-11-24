@@ -124,7 +124,7 @@ fn string_clone_and_reclamation_keep_observation_on_owner_only() {
     };
     let copy = heap.alloc_string(copy);
     assert!(!collection_observed(copy.bits()));
-    heap.collect_exact(std::iter::once(copy));
+    heap.collect_rooted(std::iter::once(copy));
     // Metadata lookup never dereferences this reclaimed owner's address.
     assert!(!crate::tagged::gc::collection_observed_metadata(
         owner.bits()

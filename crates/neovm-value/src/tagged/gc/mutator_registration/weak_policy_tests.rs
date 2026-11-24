@@ -168,7 +168,7 @@ fn permanent_mapped_and_callback_payloads_body<K: EraKeeper>(
         ));
     assert!(supported(heap).is_err());
     heap.mapped_veclike_objects.pop();
-    heap.alloc_user_ptr(std::ptr::null_mut(), None);
+    unsafe { heap.alloc_user_ptr(std::ptr::null_mut(), None) };
     // E3.2: user-ptr/module-function payloads are admitted; the stopped sweep
     // defers their finalizers to the post-stop drain.
     assert!(supported(heap).is_ok());

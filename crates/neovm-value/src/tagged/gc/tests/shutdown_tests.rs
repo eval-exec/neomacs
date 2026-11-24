@@ -36,15 +36,17 @@ unsafe extern "C" fn count_native_finalizer(data: *mut std::ffi::c_void) {
 
 fn allocate_counted_native_objects(heap: &mut TaggedHeap, count: &AtomicUsize) {
     let data = std::ptr::from_ref(count).cast_mut().cast();
-    heap.alloc_user_ptr(data, Some(count_native_finalizer));
-    let function = heap.alloc_module_function(
-        0,
-        0,
-        std::ptr::null(),
-        data,
-        TaggedValue::NIL,
-        TaggedValue::NIL,
-    );
+    unsafe { heap.alloc_user_ptr(data, Some(count_native_finalizer)) };
+    let function = unsafe {
+        heap.alloc_module_function(
+            0,
+            0,
+            std::ptr::null(),
+            data,
+            TaggedValue::NIL,
+            TaggedValue::NIL,
+        )
+    };
     // SAFETY: this test exclusively owns the initialized module function and
     // its data points to count, which outlives all synchronous reclamation.
     unsafe {
@@ -76,7 +78,7 @@ fn ordinary_sweep_runs_foreign_finalizers_once() {
     let count = AtomicUsize::new(0);
     let mut heap = TaggedHeap::new();
     allocate_counted_native_objects(&mut heap, &count);
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert_eq!(count.load(Ordering::Relaxed), 2);
     heap.shutdown().unwrap();
     assert_eq!(count.load(Ordering::Relaxed), 2);
@@ -90,7 +92,7 @@ fn stopped_native_deferral_defers_finalizers_until_the_drain() {
     let mut heap = TaggedHeap::new();
     allocate_counted_native_objects(&mut heap, &count);
     heap.begin_native_deferral_for_test();
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert_eq!(
         count.load(Ordering::Relaxed),
         0,
@@ -114,7 +116,7 @@ fn explicit_shutdown_after_a_stopped_deferral_runs_owed_finalizers_once() {
     let mut heap = TaggedHeap::new();
     allocate_counted_native_objects(&mut heap, &count);
     heap.begin_native_deferral_for_test();
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert_eq!(count.load(Ordering::Relaxed), 0);
     assert_eq!(heap.pending_native_destroy_count_for_test(), Some(2));
     heap.shutdown().unwrap();
@@ -129,7 +131,7 @@ fn undrained_native_deferral_never_runs_finalizers_on_heap_drop() {
     let mut heap = TaggedHeap::new();
     allocate_counted_native_objects(&mut heap, &count);
     heap.begin_native_deferral_for_test();
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert_eq!(heap.pending_native_destroy_count_for_test(), Some(2));
     drop(heap);
     assert_eq!(count.load(Ordering::Relaxed), 0);
@@ -155,7 +157,7 @@ fn explicit_shutdown_reclaims_all_intrusive_owner_lists_once() {
     let mut heap = TaggedHeap::new();
     let data = std::ptr::from_ref(&count).cast_mut().cast();
     for _ in 0..5 {
-        heap.alloc_user_ptr(data, Some(count_native_finalizer));
+        unsafe { heap.alloc_user_ptr(data, Some(count_native_finalizer)) };
     }
     let mut heads = [std::ptr::null_mut(); 5];
     let mut current = heap.all_objects;
@@ -250,7 +252,7 @@ fn failed_marker_finish_preserves_active_state_and_storage() {
             Err(MarkFinishError::MissingCompletion)
         ));
         let sweep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            heap.collect_exact(std::iter::empty());
+            heap.collect_rooted(std::iter::empty());
         }));
         assert!(sweep.is_err(), "failed completion must refuse reclamation");
         drop(heap);
@@ -273,7 +275,7 @@ fn poisoned_collector_queues_fail_finish_before_reclamation() {
     ));
     assert!(heap.concurrent_mark_running());
     let sweep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
     }));
     assert!(sweep.is_err());
     drop(heap);

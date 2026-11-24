@@ -491,6 +491,10 @@ mod architecture_oracle_form_empty_binding_guard_test;
 mod architecture_value_ref_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/heap_capability_guard_test.rs"]
+mod architecture_heap_capability_guard_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/inline_boundary_test.rs"]
 mod architecture_inline_boundary_test;
 

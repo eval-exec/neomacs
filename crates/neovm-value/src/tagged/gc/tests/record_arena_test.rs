@@ -88,16 +88,16 @@ fn treesit_node_keeps_its_parser_graph_through_serial_collection() {
     let dead_ptrs = [rec_ptr(dead.0), rec_ptr(dead.1), rec_ptr(dead.2)];
 
     // Root only the node; neither parser nor parser-child is a separate root.
-    heap.collect_exact(std::iter::once(live.0));
+    heap.collect_rooted(std::iter::once(live.0));
     assert_treesit_gc_graph(&heap, live, 73);
     for ptr in dead_ptrs {
         assert!(!heap.record_arena.owns(ptr), "unrooted control must die");
     }
-    heap.collect_exact(std::iter::once(live.0));
+    heap.collect_rooted(std::iter::once(live.0));
     assert_treesit_gc_graph(&heap, live, 73);
 
     let live_ptrs = [rec_ptr(live.0), rec_ptr(live.1), rec_ptr(live.2)];
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     for ptr in live_ptrs {
         assert!(
             !heap.record_arena.owns(ptr),
@@ -114,7 +114,7 @@ fn treesit_node_keeps_its_parser_graph_through_concurrent_collection() {
     let live = treesit_gc_graph(&mut heap, 73);
     // Complete the ordinary dump-less bootstrap before using the existing
     // admitted concurrent-collection seam.
-    heap.collect_exact(std::iter::once(live.0));
+    heap.collect_rooted(std::iter::once(live.0));
     assert!(heap.should_run_concurrent());
     let dead = treesit_gc_graph(&mut heap, 91);
     let dead_ptrs = [rec_ptr(dead.0), rec_ptr(dead.1), rec_ptr(dead.2)];
@@ -145,7 +145,7 @@ fn record_page_span_oracle_freed_slot_exactness() {
     assert_eq!(heap.non_cons_object_addrs.len(), 0);
     assert!(heap.record_arena.owns(rec_ptr(dead)));
 
-    heap.collect_exact([keep, keep2, v].into_iter());
+    heap.collect_rooted([keep, keep2, v].into_iter());
 
     let b_addr = rec_ptr(keep) as usize;
     assert!(heap.record_arena.owns(b_addr as *const u8));
@@ -184,7 +184,7 @@ fn record_ownership_tracks_sweep() {
     assert!(heap.owns_non_cons_object(dead_ptr));
     assert_eq!(heap.non_cons_object_addrs.len(), 0);
 
-    heap.collect_exact(std::iter::once(live));
+    heap.collect_rooted(std::iter::once(live));
 
     assert!(heap.record_arena.owns(live_ptr));
     assert!(!heap.record_arena.owns(dead_ptr));
@@ -206,7 +206,7 @@ fn parity_two_cycle_record_survival_and_reclaim_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     heap.concurrent_begin();
@@ -295,7 +295,7 @@ fn deferred_record_resolves_at_termination_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     let mut list = TaggedValue::fixnum(0);
@@ -366,7 +366,7 @@ fn record_freed_slot_garbage_never_read_body(verify: bool) {
     set_tagged_heap(&mut heap);
     if verify {
         arm_partition(&mut heap, true);
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
     }
 
     let mut records = Vec::new();
@@ -381,7 +381,7 @@ fn record_freed_slot_garbage_never_read_body(verify: bool) {
         .map(|(_, v)| v.as_veclike_ptr().unwrap() as *mut RecordObj)
         .collect();
 
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for &p in &dead_ptrs {
         assert!(!heap.owns_non_cons_object(p as *const u8));
     }
@@ -390,7 +390,7 @@ fn record_freed_slot_garbage_never_read_body(verify: bool) {
     }
     heap.assert_object_arenas_coherent();
 
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for (i, k) in keep.iter().enumerate() {
         assert_eq!(rec_slot(*k, 0).as_fixnum(), Some(2 * i as i64));
     }
@@ -422,8 +422,8 @@ fn record_freed_slot_garbage_never_read_body(verify: bool) {
 
     let mut roots: Vec<TaggedValue> = keep.clone();
     roots.extend(reused.iter().copied());
-    heap.collect_exact(roots.iter().copied());
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(roots.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for r in &reused {
         assert!(!heap.owns_non_cons_object(rec_ptr(*r)));
     }
@@ -519,7 +519,7 @@ fn record_sweep_live_bytes_track_variable_payload_sizes() {
     let expected = expected_objects + cons_count * size_of::<ConsCell>();
     assert!(expected_objects > 2 * size_of::<RecordObj>() + 2_000 * size_of::<TaggedValue>());
 
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert_eq!(heap.live_bytes(), expected, "eager site");
 
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
@@ -554,7 +554,7 @@ fn record_survivors_tenure_and_full_pages_retire_body(verify: bool) {
         assert_eq!(heap.note_image_object(b), ImageStamp::Stamped);
     }
 
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     for b in &records {
         assert!(unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured });
@@ -574,7 +574,7 @@ fn record_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     );
 
     for cycle in 0..2 {
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         for (i, b) in records.iter().enumerate() {
             assert!(
                 heap.owns_non_cons_object(rec_ptr(*b)),
@@ -612,7 +612,7 @@ fn record_mixed_page_tenured_survive_alternating_parities_body(verify: bool) {
             root = heap.alloc_cons(b, root);
         }
     }
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     assert!(!heap.record_arena.pages[0].retired);
 
@@ -620,7 +620,7 @@ fn record_mixed_page_tenured_survive_alternating_parities_body(verify: bool) {
         for i in 0..5 {
             let _ = heap.alloc_record(record_items(-(i as i64), TaggedValue::NIL, 4));
         }
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         for (i, b) in keep.iter().enumerate() {
             assert!(
                 heap.owns_non_cons_object(rec_ptr(*b)),
@@ -659,7 +659,7 @@ fn record_payload_pages_freed_at_heap_drop_body(mid_mark: bool) {
         }
         assert!(LIVE_RECORD_PAGES.load(Ordering::Relaxed) > before);
 
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         assert!(heap.dump_blackened);
         heap.assert_object_arenas_coherent();
 
@@ -701,7 +701,7 @@ fn tenured_page_record_keeps_young_cons_child_alive_body(verify: bool) {
     let b = heap.alloc_record(record_items(1, y, 4));
     let root = heap.alloc_cons(b, TaggedValue::fixnum(0));
 
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     // The runtime owner is ordinary old in GEN1; in GEN0 it stays young and
     // every full collection traces the child directly.
@@ -711,7 +711,7 @@ fn tenured_page_record_keeps_young_cons_child_alive_body(verify: bool) {
     );
 
     for cycle in 0..2 {
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         assert_eq!(
             unsafe { (*y.xcons_ptr()).load_car() }.as_fixnum(),
             Some(999),
@@ -756,7 +756,7 @@ fn window_configuration_shares_record_arena() {
 
     let tail = heap.alloc_cons(rec, TaggedValue::fixnum(0));
     let root = heap.alloc_cons(wc, tail);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.owns_non_cons_object(rec_ptr(wc)));
     assert!(heap.owns_non_cons_object(rec_ptr(rec)));
     assert_eq!(rec_slot(wc, 0).as_fixnum(), Some(42));
@@ -769,7 +769,7 @@ fn window_configuration_shares_record_arena() {
     // A dead window-configuration is reclaimed via the record page sweep.
     let dead_wc = heap.alloc_window_configuration(record_items(-1, TaggedValue::NIL, 4));
     let dead_ptr = rec_ptr(dead_wc);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(!heap.owns_non_cons_object(dead_ptr));
     heap.assert_object_arenas_coherent();
 }

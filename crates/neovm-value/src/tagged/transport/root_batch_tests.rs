@@ -62,12 +62,12 @@ fn reserved_storage_is_initialized_and_invisible_until_publication() {
     assert_eq!(control.payload.get().unwrap().words.as_ptr(), words_address);
     assert_eq!(roots(&heap), vec![value]);
 
-    heap.collect_exact(roots(&heap).into_iter());
+    heap.collect_rooted(roots(&heap).into_iter());
     assert!(heap.owns_heap_value_for_test(value));
     assert_eq!(value.cons_car(), TaggedValue::fixnum(7));
     lease.try_finish().unwrap();
     assert!(roots(&heap).is_empty());
-    heap.collect_exact(roots(&heap).into_iter());
+    heap.collect_rooted(roots(&heap).into_iter());
     // Membership checks never dereference the reclaimed cons.
     assert!(!heap.owns_heap_value_for_test(value));
 }
@@ -96,14 +96,14 @@ fn one_batch_keeps_transitive_children_and_filters_immediates() {
     reader.append_roots(&mut local);
     assert_eq!(local, vec![parent]);
     reader.finish().unwrap();
-    heap.collect_exact(roots(&heap).into_iter());
+    heap.collect_rooted(roots(&heap).into_iter());
     assert!(heap.owns_heap_value_for_test(parent));
     assert!(heap.owns_heap_value_for_test(child));
     assert!(!heap.owns_heap_value_for_test(garbage));
     assert_eq!(parent.cons_car(), child);
     assert_eq!(child.xfloat(), 2.5);
     lease.try_finish().unwrap();
-    heap.collect_exact(roots(&heap).into_iter());
+    heap.collect_rooted(roots(&heap).into_iter());
     assert!(!heap.owns_heap_value_for_test(parent));
     assert!(!heap.owns_heap_value_for_test(child));
 }
@@ -360,7 +360,7 @@ fn abandoned_reader_cannot_be_mistaken_for_explicit_completion() {
     let (lease, _) = failure.into_parts();
     drop(exclusion);
     assert!(heap.facade_mark_is_excluded());
-    heap.collect_exact(roots(&heap).into_iter());
+    heap.collect_rooted(roots(&heap).into_iter());
     assert!(heap.owns_heap_value_for_test(value));
     // Deliberately exercise the conservative incomplete Drop fallback. The
     // retained table and exclusion are intentional; there is no marker child
@@ -381,7 +381,7 @@ fn live_lease_drop_retains_registration_and_exclusion_without_retiring() {
     drop(lease);
     assert_eq!(control.state().unwrap(), SlotState::Live);
     assert!(heap.facade_mark_is_excluded());
-    heap.collect_exact(roots(&heap).into_iter());
+    heap.collect_rooted(roots(&heap).into_iter());
     assert!(heap.owns_heap_value_for_test(value));
     // SAFETY: this fixture is the exclusive heap owner, with no callbacks,
     // obarray/TLS aliases or unfinished synchronous collection extent.
@@ -493,7 +493,7 @@ fn restored_batch_reuses_control_payload_and_words_with_a_new_generation() {
         reader.append_roots(&mut read);
         assert_eq!(read, vec![value]);
         reader.finish().unwrap();
-        heap.collect_exact(roots(&heap).into_iter());
+        heap.collect_rooted(roots(&heap).into_iter());
         assert_eq!(value.cons_car(), TaggedValue::fixnum(index));
         prepared = lease.try_recycle().unwrap();
         assert!(roots(&heap).is_empty());
@@ -515,7 +515,7 @@ fn restored_batch_reuses_control_payload_and_words_with_a_new_generation() {
         previous_generation = generation;
         assert_eq!(prepared.payload.used, 0);
         assert!(prepared.payload.words.iter().all(Option::is_none));
-        heap.collect_exact(roots(&heap).into_iter());
+        heap.collect_rooted(roots(&heap).into_iter());
         assert!(!heap.owns_heap_value_for_test(value));
     }
     prepared.ensure_capacity(16).unwrap();
@@ -576,14 +576,14 @@ fn restored_batch_retirement_preserves_deferred_sweep_and_owner_roots() {
 
         // The next root census reads the restored owner, without the retired
         // table entry. Both its direct root and transitive child survive.
-        heap.collect_exact(restored.into_iter());
+        heap.collect_rooted(restored.into_iter());
         assert!(heap.owns_heap_value_for_test(parent));
         assert!(heap.owns_heap_value_for_test(child));
         assert_eq!(parent.cons_car().xfloat(), 19.5);
         drop(prepared);
         drop(exclusion);
         assert!(!heap.facade_mark_is_excluded());
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         assert!(!heap.owns_heap_value_for_test(parent));
         assert!(!heap.owns_heap_value_for_test(child));
     }

@@ -138,7 +138,7 @@ fn generational_mapped_and_permanent_logs_are_per_cycle() {
     let permanent = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(permanent);
     assert_eq!(heap.note_image_object(permanent), ImageStamp::Stamped);
-    heap.collect_exact(std::iter::once(permanent));
+    heap.collect_rooted(std::iter::once(permanent));
     assert!(header(permanent).generation.permanent());
     let child = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     for _ in 0..2 {
@@ -179,7 +179,7 @@ fn generational_disabled_never_logs_r() {
     let permanent = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(permanent);
     assert_eq!(heap.note_image_object(permanent), ImageStamp::Stamped);
-    heap.collect_exact(std::iter::once(permanent));
+    heap.collect_rooted(std::iter::once(permanent));
     let child = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     crate::tagged::mutate::set_vector_slot(mapped, 0, child);
     crate::tagged::mutate::set_vector_slot(permanent, 0, child);
@@ -272,7 +272,7 @@ fn minor_mapped_and_permanent_edges_are_seeded_by_r() {
     roots.keep(mapped);
     let permanent = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(permanent);
-    heap.collect_exact(std::iter::once(permanent));
+    heap.collect_rooted(std::iter::once(permanent));
     let child = heap.alloc_cons(TaggedValue::fixnum(29), TaggedValue::NIL);
     crate::tagged::mutate::set_vector_slot(mapped, 0, child);
     crate::tagged::mutate::set_vector_slot(permanent, 0, child);
@@ -447,11 +447,11 @@ fn major_before_first_minor_preserves_permanent_edge() {
     let owner = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(owner);
     assert_eq!(heap.note_image_object(owner), ImageStamp::Stamped);
-    heap.collect_exact(std::iter::once(owner));
+    heap.collect_rooted(std::iter::once(owner));
     assert!(header(owner).generation.permanent());
     let child = heap.alloc_cons(TaggedValue::fixnum(97), TaggedValue::NIL);
     crate::tagged::mutate::set_vector_slot(owner, 0, child);
-    heap.collect_exact(std::iter::once(owner));
+    heap.collect_rooted(std::iter::once(owner));
     assert_eq!(heap.generational.old_bytes, size_of::<ConsCell>());
     assert!(heap.current_mutator_gc().remset.is_empty());
     minor(&mut heap, &[owner]);
@@ -513,7 +513,7 @@ fn minor_uninterned_symbol_weak_key_survives_without_old_owner_retrace() {
 
     // The full path must still perform the skipped old-owner repair rather
     // than treating every symbol id as live, as a minor conservatively does.
-    heap.collect_exact([owner, table].into_iter());
+    heap.collect_rooted([owner, table].into_iter());
     assert!(heap.marked_symbols.contains(symbol_id));
     assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
 }
@@ -582,7 +582,7 @@ fn minor_then_major_old_owner_keeps_new_uninterned_weak_symbol_key() {
             assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
             assert!(heap.marked_symbols.contains(id));
             // Until C2.6, a requested major is today's synchronous full cycle.
-            heap.collect_exact([owner, table].into_iter());
+            heap.collect_rooted([owner, table].into_iter());
             assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
             assert!(heap.marked_symbols.contains(id));
         }
@@ -609,7 +609,7 @@ fn minor_lazy_hydration_keys_survive_from_old_and_permanent_owners() {
             let image = fake_image::FakeImage::leak(false);
             roots.keep(image.register_vector(&mut heap));
             assert_eq!(heap.note_image_object(owner), ImageStamp::Stamped);
-            heap.collect_exact(std::iter::once(owner));
+            heap.collect_rooted(std::iter::once(owner));
         } else {
             minor(&mut heap, &[owner]);
         }

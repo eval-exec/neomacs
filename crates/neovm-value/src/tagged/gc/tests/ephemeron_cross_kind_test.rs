@@ -75,7 +75,7 @@ fn alternating_killed_buffer_process_and_frame_chain_survives_a_full_collection(
     set_tagged_heap(&mut heap);
     let (root, buffers, processes, frames) = alternating_chain(&mut heap);
 
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
 
     assert_eq!(heap.take_reclaimed_buffer_ids(), Vec::<BufferId>::new());
     assert_eq!(heap.take_reclaimed_process_ids(), Vec::<ProcessId>::new());
@@ -108,7 +108,7 @@ fn unreached_alternating_chain_is_reclaimed_whole() {
     set_tagged_heap(&mut heap);
     let (_root, buffers, processes, frames) = alternating_chain(&mut heap);
 
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
 
     let mut reclaimed_buffers = heap.take_reclaimed_buffer_ids();
     reclaimed_buffers.sort_by_key(|id| id.0);
@@ -137,7 +137,7 @@ fn reclaimed_frame_id_refuses_make_frame_and_does_not_mint() {
     heap.register_frame_value(id, object);
     heap.arm_deleted_frame_ephemerons(vec![(id, Vec::new())]);
 
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
 
     let reclaimed = heap.take_reclaimed_frame_ids();
     assert_eq!(reclaimed, vec![id]);
@@ -198,7 +198,7 @@ fn bootstrapped_heap() -> Box<TaggedHeap> {
     let mut heap = Box::new(TaggedHeap::new());
     set_tagged_heap(&mut heap);
     let root = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(
         heap.should_run_concurrent(),
         "the dump-less bootstrap enables the incremental path"

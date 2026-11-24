@@ -1323,7 +1323,8 @@ unsafe extern "C" fn module_make_user_ptr(
         if !module_function_begin(env) {
             return std::ptr::null_mut();
         }
-        let val = neovm_value::tagged::gc::with_tagged_heap(|h| h.alloc_user_ptr(ptr, fin));
+        let val =
+            neovm_value::tagged::gc::with_tagged_heap(|h| unsafe { h.alloc_user_ptr(ptr, fin) });
         lisp_to_value(env, val)
     })
 }
@@ -2025,7 +2026,7 @@ unsafe extern "C" fn module_make_function(
                 }
             }
         };
-        let val = neovm_value::tagged::gc::with_tagged_heap(|h| {
+        let val = neovm_value::tagged::gc::with_tagged_heap(|h| unsafe {
             h.alloc_module_function(
                 min_arity,
                 max_arity,

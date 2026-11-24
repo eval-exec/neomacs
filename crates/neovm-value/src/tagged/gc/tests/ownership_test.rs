@@ -1210,7 +1210,7 @@ fn concurrent_mid_cycle_vector_in_reused_slot_keeps_child_alive() {
     let root = list;
     // Bootstrap STW cycle: blackens the fake dump (arming the
     // verifiers), promotes survivors, and frees v_dead's slot.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let pre_launch_bases: std::collections::HashSet<usize> = heap
         .vector_arena
         .pages
@@ -1503,14 +1503,16 @@ fn concurrent_module_function_interactive_form_overwrite_keeps_child_alive() {
 
     // V reachable ONLY via mf.interactive_form.
     let v = heap.alloc_float(9.5);
-    let mf = heap.alloc_module_function(
-        0,
-        0,
-        std::ptr::null(),
-        std::ptr::null_mut(),
-        TaggedValue::fixnum(0),
-        v,
-    );
+    let mf = unsafe {
+        heap.alloc_module_function(
+            0,
+            0,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            TaggedValue::fixnum(0),
+            v,
+        )
+    };
     // Bury mf in a seeded list so the mark takes real time.
     let mut list = heap.alloc_cons(mf, TaggedValue::fixnum(0));
     for i in 0..300_000 {
@@ -1861,7 +1863,7 @@ fn dumpless_heap_enables_concurrent_after_bootstrap_and_collects() {
         rooted = heap.alloc_cons(TaggedValue::fixnum(i), rooted);
     }
     let rooted_head = rooted;
-    heap.collect_exact(std::iter::once(rooted_head));
+    heap.collect_rooted(std::iter::once(rooted_head));
     assert!(
         heap.should_run_concurrent(),
         "the completed STW bootstrap must enable concurrent marking"
@@ -1964,7 +1966,7 @@ fn parity_allocate_black_object_survives_two_cycles() {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
     assert_eq!(
         heap.mark_parity,
@@ -2036,7 +2038,7 @@ fn parity_reclaims_garbage_within_two_cycles() {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     // G1: born BETWEEN cycles (idle) — never seeded, no allocate-black.
@@ -2110,7 +2112,7 @@ fn parity_tenured_objects_stay_frozen_across_cycles_under_verifier() {
     assert_eq!(heap.note_image_object(t), ImageStamp::Stamped);
 
     // First partition cycle: STW full trace + sweep, then promotion.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     let t_header = t.as_veclike_ptr().unwrap();
     assert!(unsafe { (*t_header).gc.tenured });
@@ -2157,7 +2159,7 @@ fn parity_string_claim_works_across_two_cycles() {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine)); // bootstrap
+    heap.collect_rooted(std::iter::once(spine)); // bootstrap
 
     for cycle in 0..2 {
         heap.concurrent_begin();
@@ -2229,7 +2231,7 @@ fn parity_idle_born_object_is_traced_on_the_next_cycle() {
     for i in 0..10_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine)); // bootstrap (parity -> true)
+    heap.collect_rooted(std::iter::once(spine)); // bootstrap (parity -> true)
 
     // Idle window: no mark, no sweep. Y is reachable ONLY through X.
     let y = heap.alloc_cons(TaggedValue::fixnum(31_337), TaggedValue::fixnum(0));
@@ -2302,7 +2304,7 @@ fn a_reclaimed_cons_is_recognizable_as_dead() {
     let doomed = heap.alloc_cons(TaggedValue::fixnum(3), TaggedValue::fixnum(4));
     assert!(!unsafe { (*doomed.xcons_ptr()).load_car() }.is_dead());
 
-    heap.collect_exact(std::iter::once(rooted));
+    heap.collect_rooted(std::iter::once(rooted));
 
     assert!(
         !unsafe { (*rooted.xcons_ptr()).load_car() }.is_dead(),
@@ -2356,7 +2358,7 @@ fn a_reclaimed_string_is_recognizable_as_dead() {
         "a live string must not look reclaimed",
     );
 
-    heap.collect_exact(std::iter::once(rooted));
+    heap.collect_rooted(std::iter::once(rooted));
 
     assert!(
         !unsafe { (*rooted.as_string_ptr().unwrap()).data.is_reclaimed() },
@@ -2418,7 +2420,7 @@ fn post_mark_ownership_verification_runs_and_finds_nothing() {
 
     // Asserts internally (problems == 0) at the one moment where "marked"
     // and "owned" must agree.
-    heap.collect_exact(std::iter::once(rooted));
+    heap.collect_rooted(std::iter::once(rooted));
     assert_eq!(heap.verify_marked_objects_owned(), 0);
 
     super::set_verify_marked_objects_for_test(false);
@@ -2453,7 +2455,7 @@ fn collect_exact_retains_rooted_and_frees_unrooted() {
     let before = heap.cons_live_count_exact();
 
     // Force a full collection with only the rooted list reachable.
-    heap.collect_exact(std::iter::once(rooted_head));
+    heap.collect_rooted(std::iter::once(rooted_head));
     let after = heap.cons_live_count_exact();
 
     // The unrooted list was reclaimed...
@@ -2496,7 +2498,7 @@ fn ordinary_non_cons_ownership_index_tracks_sweep() {
     assert!(heap.float_arena.owns(dead_ptr));
     assert_eq!(heap.non_cons_object_addrs.len(), 0);
 
-    heap.collect_exact(std::iter::once(live));
+    heap.collect_rooted(std::iter::once(live));
 
     // The sweep's alloc-bit clear IS the ownership eviction: the freed
     // slot answers NOT-owned with no addr-set bookkeeping involved.
@@ -2583,7 +2585,7 @@ fn vector_registry_matches_full_filter_across_cycles() {
     // Cycle 1 (synchronous sweep_objects path): the unrooted vector and
     // record are reclaimed; the registry follows.
     let _ = dead_vec;
-    heap.collect_exact([keep_vec, keep_float].into_iter());
+    heap.collect_rooted([keep_vec, keep_float].into_iter());
     assert_snapshots_match(&heap);
     assert_eq!(registry_entries(&heap).len(), 1);
 
@@ -2593,7 +2595,7 @@ fn vector_registry_matches_full_filter_across_cycles() {
     let _ = dead_vec2;
     assert_snapshots_match(&heap);
     assert_eq!(registry_entries(&heap).len(), 3);
-    heap.collect_exact([keep_vec, keep_vec2].into_iter());
+    heap.collect_rooted([keep_vec, keep_vec2].into_iter());
     assert_snapshots_match(&heap);
     assert_eq!(registry_entries(&heap).len(), 2);
 
@@ -2699,7 +2701,7 @@ fn collect_exact_retains_rooted_graph_and_frees_garbage() {
     assert!(live_before >= 5);
 
     // Force a full collection rooted only at `a`.
-    heap.collect_exact(std::iter::once(a));
+    heap.collect_rooted(std::iter::once(a));
 
     // The 3-cons rooted spine survives; the 2 garbage conses are reclaimed.
     assert_eq!(
@@ -2750,11 +2752,11 @@ fn native_font_object_traces_properties_and_capability() {
         ),
     });
 
-    heap.collect_exact(std::iter::once(font));
+    heap.collect_rooted(std::iter::once(font));
     assert!(heap.owns_non_cons_object(property_ptr));
     assert!(heap.owns_non_cons_object(capability_ptr));
 
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert!(!heap.owns_non_cons_object(property_ptr));
     assert!(!heap.owns_non_cons_object(capability_ptr));
 }
@@ -3158,7 +3160,7 @@ fn write_barrier_caches_skip_only_writes_with_nothing_to_record() {
     for &owner in &owners {
         assert_eq!(heap.note_image_object(owner), ImageStamp::Stamped);
     }
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(owners.iter().all(|&owner| heap.value_is_tenured(owner)));
     let calls = || RECORD_HEAP_WRITE_CALLS.with(|c| c.get());
 
@@ -3541,7 +3543,7 @@ fn concurrent_builtin_clear_string_retains_interval_child_for_snapshot() {
     );
     assert_eq!(child.as_str_owned().as_deref(), Some("only-in-properties"));
     // No property home remains. The next exact collection must reclaim child.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(!heap.owns_non_cons_object(child_ptr));
 }
 

@@ -204,7 +204,7 @@ fn rows_owned_domain_caught_direct_gen1_reclaim_panic_keeps_visible_obligation()
     let panic = tracing::subscriber::with_default(subscriber, || {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Standalone heap: empty roots really are its entire live graph.
-            heap.collect_exact(std::iter::empty());
+            heap.collect_rooted(std::iter::empty());
         }))
     });
     assert!(panic.is_err(), "must exercise the exact post-reclaim event");

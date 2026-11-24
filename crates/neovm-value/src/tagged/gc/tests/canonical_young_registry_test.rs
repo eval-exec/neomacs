@@ -123,7 +123,7 @@ fn canonical_young_retire_rejects_loan_before_satb_take_then_drains() {
 #[test]
 fn canonical_young_nested_selected_owner_capture_retire_and_panic_restore() {
     let mut heap = AliasableBox::new(TaggedHeap::new());
-    set_tagged_heap_root(heap.root());
+    unsafe { set_tagged_heap_root(heap.root()) };
     let handoff = heap.satb_handoff.clone();
     // SAFETY: all three artificial owners are confined to this one fixture;
     // selections/captures only touch Rust logs, with no Lisp/safepoint/marker.

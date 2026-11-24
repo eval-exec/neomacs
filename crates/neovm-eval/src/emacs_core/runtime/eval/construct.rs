@@ -2545,7 +2545,7 @@ impl Context {
         // provenance root; installation and every later access derive from it.
         let tagged_heap =
             neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
-        neovm_value::tagged::gc::set_tagged_heap_root(tagged_heap.root());
+        unsafe { neovm_value::tagged::gc::set_tagged_heap_root(tagged_heap.root()) };
 
         // Clear any caches that hold heap-allocated Values (tagged pointers) from a
         // previous heap. Critical for test isolation when multiple Contexts

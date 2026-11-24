@@ -41,7 +41,7 @@ fn weak_symbol_key_survives_full_collections(mapped: bool, with_position: bool) 
         heap.alloc_vector(vec![TaggedValue::NIL])
     };
     roots.keep(owner);
-    heap.collect_exact(std::iter::once(owner));
+    heap.collect_rooted(std::iter::once(owner));
     assert!(heap.dump_blackened_for_test());
     assert!(!heap.mapped_remembered_contains_for_test(owner.bits()));
 
@@ -74,7 +74,7 @@ fn weak_symbol_key_survives_full_collections(mapped: bool, with_position: bool) 
         );
     });
     for _ in 0..3 {
-        heap.collect_exact([owner, table].into_iter());
+        heap.collect_rooted([owner, table].into_iter());
         assert_eq!(
             table.as_hash_table().unwrap().data.len(),
             1,

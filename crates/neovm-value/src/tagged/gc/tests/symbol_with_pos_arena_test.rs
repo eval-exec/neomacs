@@ -73,7 +73,7 @@ fn symbol_with_pos_page_span_oracle_freed_slot_exactness() {
     assert_eq!(heap.non_cons_object_addrs.len(), 0);
     assert!(heap.symbol_with_pos_arena.owns(swp_ptr(dead)));
 
-    heap.collect_exact([keep, keep2, r].into_iter());
+    heap.collect_rooted([keep, keep2, r].into_iter());
 
     let b_addr = swp_ptr(keep) as usize;
     assert!(heap.symbol_with_pos_arena.owns(b_addr as *const u8));
@@ -113,7 +113,7 @@ fn symbol_with_pos_ownership_tracks_sweep() {
     assert!(heap.owns_non_cons_object(dead_ptr));
     assert_eq!(heap.non_cons_object_addrs.len(), 0);
 
-    heap.collect_exact(std::iter::once(live));
+    heap.collect_rooted(std::iter::once(live));
 
     assert!(heap.symbol_with_pos_arena.owns(live_ptr));
     assert!(!heap.symbol_with_pos_arena.owns(dead_ptr));
@@ -136,7 +136,7 @@ fn parity_two_cycle_symbol_with_pos_survival_and_reclaim_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     heap.concurrent_begin();
@@ -228,7 +228,7 @@ fn deferred_symbol_with_pos_resolves_at_termination_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     let mut list = TaggedValue::fixnum(0);
@@ -302,7 +302,7 @@ fn symbol_with_pos_freed_slot_garbage_never_read_body(verify: bool) {
     set_tagged_heap(&mut heap);
     if verify {
         arm_partition(&mut heap, true);
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
     }
 
     let mut objs = Vec::new();
@@ -317,7 +317,7 @@ fn symbol_with_pos_freed_slot_garbage_never_read_body(verify: bool) {
         .map(|(_, v)| v.as_veclike_ptr().unwrap() as *mut SymbolWithPosObj)
         .collect();
 
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for &p in &dead_ptrs {
         assert!(!heap.owns_non_cons_object(p as *const u8));
     }
@@ -326,7 +326,7 @@ fn symbol_with_pos_freed_slot_garbage_never_read_body(verify: bool) {
     }
     heap.assert_object_arenas_coherent();
 
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for (i, k) in keep.iter().enumerate() {
         assert_eq!(swp_pos(*k).as_fixnum(), Some(2 * i as i64));
     }
@@ -358,8 +358,8 @@ fn symbol_with_pos_freed_slot_garbage_never_read_body(verify: bool) {
 
     let mut roots: Vec<TaggedValue> = keep.clone();
     roots.extend(reused.iter().copied());
-    heap.collect_exact(roots.iter().copied());
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(roots.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for r in &reused {
         assert!(!heap.owns_non_cons_object(swp_ptr(*r)));
     }
@@ -452,7 +452,7 @@ fn symbol_with_pos_sweep_live_bytes_fixed_size_both_sites() {
     }
     let expected = 2 * size_of::<SymbolWithPosObj>() + cons_count * size_of::<ConsCell>();
 
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert_eq!(heap.live_bytes(), expected, "eager site");
 
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
@@ -490,7 +490,7 @@ fn symbol_with_pos_survivors_tenure_and_full_pages_retire_body(verify: bool) {
         assert_eq!(heap.note_image_object(b), ImageStamp::Stamped);
     }
 
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     for b in &objs {
         assert!(unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured });
@@ -513,7 +513,7 @@ fn symbol_with_pos_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     );
 
     for cycle in 0..2 {
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         for (i, b) in objs.iter().enumerate() {
             assert!(
                 heap.owns_non_cons_object(swp_ptr(*b)),
@@ -554,7 +554,7 @@ fn symbol_with_pos_mixed_page_tenured_survive_alternating_parities_body(verify: 
             root = heap.alloc_cons(b, root);
         }
     }
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     assert!(!heap.symbol_with_pos_arena.pages[0].retired);
 
@@ -562,7 +562,7 @@ fn symbol_with_pos_mixed_page_tenured_survive_alternating_parities_body(verify: 
         for i in 0..5 {
             let _ = swp(&mut heap, -(i as i64), TaggedValue::T);
         }
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         for (i, b) in keep.iter().enumerate() {
             assert!(
                 heap.owns_non_cons_object(swp_ptr(*b)),
@@ -602,7 +602,7 @@ fn symbol_with_pos_pages_freed_at_heap_drop_body(mid_mark: bool) {
         }
         assert!(LIVE_SYMBOL_WITH_POS_PAGES.load(Ordering::Relaxed) > before);
 
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         assert!(heap.dump_blackened);
         heap.assert_object_arenas_coherent();
 
@@ -645,7 +645,7 @@ fn tenured_page_symbol_with_pos_keeps_young_child_alive_body(verify: bool) {
     let b = heap.alloc_symbol_with_pos(y, TaggedValue::fixnum(1));
     let root = heap.alloc_cons(b, TaggedValue::fixnum(0));
 
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     // Runtime owner: ordinary old in GEN1; young in GEN0.
     assert_eq!(
@@ -654,7 +654,7 @@ fn tenured_page_symbol_with_pos_keeps_young_child_alive_body(verify: bool) {
     );
 
     for cycle in 0..2 {
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         assert_eq!(
             unsafe { (*y.xcons_ptr()).load_car() }.as_fixnum(),
             Some(999),

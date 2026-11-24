@@ -115,7 +115,7 @@ fn a_collect_in_a_nested_scope_leaves_the_outer_heap_untouched() {
         let inner_value = TaggedValue::cons(TaggedValue::fixnum(22), TaggedValue::NIL);
         // Root only the inner value: the outer value is not reachable from
         // this collect at all, and another heap owns it.
-        with_tagged_heap(|heap| heap.collect_exact(std::iter::once(inner_value)));
+        with_tagged_heap(|heap| heap.collect_rooted(std::iter::once(inner_value)));
         assert_eq!(inner_value.cons_car(), TaggedValue::fixnum(22));
         assert_eq!(
             outer_value.cons_car(),
@@ -126,7 +126,7 @@ fn a_collect_in_a_nested_scope_leaves_the_outer_heap_untouched() {
     assert_eq!(current_tagged_heap_identity(), Some(outer_id));
     // The outer heap's own collector still works after the inner cycle and
     // keeps its rooted object.
-    with_tagged_heap(|heap| heap.collect_exact(std::iter::once(outer_value)));
+    with_tagged_heap(|heap| heap.collect_rooted(std::iter::once(outer_value)));
     assert_eq!(outer_value.cons_car(), TaggedValue::fixnum(11));
     drop(outer);
     assert_eq!(current_tagged_heap_identity(), before);
@@ -153,7 +153,7 @@ fn a_cross_heap_store_is_never_traced_or_moved_by_the_other_heap() {
         let holder = TaggedValue::cons(outer_value, TaggedValue::NIL);
         assert_eq!(holder.cons_car(), outer_value);
         // Root the holder: the inner trace reaches the foreign word.
-        with_tagged_heap(|heap| heap.collect_exact(std::iter::once(holder)));
+        with_tagged_heap(|heap| heap.collect_rooted(std::iter::once(holder)));
         assert_eq!(
             holder.cons_car(),
             outer_value,

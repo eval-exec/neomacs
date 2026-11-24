@@ -87,7 +87,7 @@ impl TestHeapScope {
         let heap = crate::tagged::gc::AliasableBox::new(crate::tagged::gc::TaggedHeap::new());
         let root = heap.root();
         let previous = crate::tagged::gc::installed_tagged_heap_root_for_test_scope();
-        crate::tagged::gc::set_tagged_heap_root(root);
+        unsafe { crate::tagged::gc::set_tagged_heap_root(root) };
         Self {
             previous,
             heap: std::mem::ManuallyDrop::new(heap),
@@ -109,7 +109,7 @@ impl Drop for TestHeapScope {
         match self.previous {
             // LIFO: the slot goes back to the outer/default installation,
             // re-deriving the TLS mirrors from that live root.
-            Some(previous) => crate::tagged::gc::set_tagged_heap_root(previous),
+            Some(previous) => unsafe { crate::tagged::gc::set_tagged_heap_root(previous) },
             // No previous heap: uninstall this scope's heap through the
             // detach-then-pointer-checked-clear path, so the slot and every
             // hot-path mirror stop naming it. The heap stays allocated.

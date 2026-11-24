@@ -44,7 +44,7 @@ fn reuse_within_one_cooperative_sweep_window_body(verify: bool) {
         arm_verify(&mut heap);
         // Bootstrap cycle: blackens the (fake) dump so later
         // terminations run the armed verifiers.
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
     }
 
     // Exactly three full pages of floats.
@@ -170,7 +170,7 @@ fn parity_two_cycle_float_survival_and_reclaim_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     // Cycle 2: float born MID-MARK (allocate-black at this cycle's
@@ -275,7 +275,7 @@ fn deferred_floats_resolve_at_termination_body(verify: bool) {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     // A rooted cons list carrying float cars: the GC thread marks the
@@ -453,7 +453,7 @@ fn concurrent_tenured_float_dropped_not_claimed() {
     // The worker's tenured short-circuit is the permanent-image path.
     assert_eq!(heap.note_image_object(f), ImageStamp::Stamped);
     let root = heap.alloc_cons(f, TaggedValue::fixnum(0));
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let f_ptr = f.as_float_ptr().unwrap();
     assert!(
         unsafe { (*f_ptr).header.tenured },
@@ -498,7 +498,7 @@ fn pages_freed_at_heap_drop_body(verify: bool) {
     set_tagged_heap(&mut heap);
     if verify {
         heap.extend_dump_span(4096, 16);
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
     }
     for i in 0..(2 * FLOAT_PAGE_SLOTS + 5) {
         let _ = heap.alloc_float(i as f64);
@@ -510,13 +510,13 @@ fn pages_freed_at_heap_drop_body(verify: bool) {
     );
     // A GC in between releases pages that have no surviving slots. Their
     // storage stays spare for the next cycle's pages...
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert!(heap.float_arena.pages.is_empty());
     assert_eq!(heap.float_arena.spare_storage.len(), 3);
     assert_eq!(LIVE_FLOAT_PAGES.load(Ordering::Relaxed), before + 3);
     heap.assert_object_arenas_coherent();
     // ...and a cycle that needs none of it returns it to the allocator.
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert_eq!(
         LIVE_FLOAT_PAGES.load(Ordering::Relaxed),
         before,
@@ -527,7 +527,7 @@ fn pages_freed_at_heap_drop_body(verify: bool) {
     for i in 0..5 {
         let _ = heap.alloc_float(i as f64);
     }
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert_eq!(LIVE_FLOAT_PAGES.load(Ordering::Relaxed), before + 1);
     drop(heap);
     assert_eq!(
@@ -629,7 +629,7 @@ fn mapped_and_page_floats_coexist_body(verify: bool) {
     let root = heap.alloc_cons(h, m);
 
     // First partition cycle: full STW trace + sweep, then promote/blacken.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
 
     // Routing: the page float is owned (addr set); the mapped float is
@@ -655,7 +655,7 @@ fn mapped_and_page_floats_coexist_body(verify: bool) {
     // the page float re-marks via the root, fresh garbage is swept.
     let g2 = heap.alloc_float(3.5);
     let g2_ptr = g2.as_float_ptr().unwrap() as *const u8;
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.owns_non_cons_object(h_ptr));
     assert!(!heap.owns_non_cons_object(g2_ptr));
     assert!((h.xfloat() - 1.25).abs() < f64::EPSILON);
@@ -701,7 +701,7 @@ fn freed_slot_garbage_headers_are_never_read_body(verify: bool) {
         .collect();
 
     // Free the odd half (this is the first/promote cycle under verify).
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for &p in &dead_ptrs {
         assert!(!heap.owns_non_cons_object(p as *const u8));
     }
@@ -716,7 +716,7 @@ fn freed_slot_garbage_headers_are_never_read_body(verify: bool) {
     // A full cycle re-sweeps the page: the scribbled slots' bits are
     // clear, so no header is Drop-dispatched, size-read, or parity-read
     // (reading one would trip the kind/tenured debug asserts — or UB).
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for (i, k) in keep.iter().enumerate() {
         assert!((k.xfloat() - (2 * i) as f64).abs() < f64::EPSILON);
     }
@@ -757,11 +757,11 @@ fn freed_slot_garbage_headers_are_never_read_body(verify: bool) {
     // final unrooted cycle reclaims them cleanly.
     let mut roots: Vec<TaggedValue> = keep.clone();
     roots.extend(reused.iter().copied());
-    heap.collect_exact(roots.iter().copied());
+    heap.collect_rooted(roots.iter().copied());
     for (i, r) in reused.iter().enumerate() {
         assert!((r.xfloat() - (500.0 + i as f64)).abs() < f64::EPSILON);
     }
-    heap.collect_exact(keep.iter().copied());
+    heap.collect_rooted(keep.iter().copied());
     for r in &reused {
         assert!(!heap.owns_non_cons_object(r.as_float_ptr().unwrap() as *const u8));
     }
@@ -801,7 +801,7 @@ fn tenured_owner_keeps_young_page_float_alive_body(verify: bool) {
     let root = heap.alloc_cons(t, TaggedValue::fixnum(0));
 
     // First partition cycle: T promotes to tenured.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     let t_header = t.as_veclike_ptr().unwrap();
     // Runtime owner: ordinary old in GEN1; young (traced every collection)
@@ -817,7 +817,7 @@ fn tenured_owner_keeps_young_page_float_alive_body(verify: bool) {
     // never re-traced; F survives ONLY via the promotion-time remembered
     // set — the permanent owner's young-float edge.
     for cycle in 0..2 {
-        heap.collect_exact(std::iter::once(root));
+        heap.collect_rooted(std::iter::once(root));
         assert!(
             heap.owns_non_cons_object(f_ptr),
             "young page float lost on partitioned cycle {cycle} \
@@ -860,7 +860,7 @@ fn an_emptied_page_lends_its_storage_to_the_next_page() {
         .map(ObjectPage::base_addr)
         .collect();
     assert_eq!(bases.len(), 4);
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert!(heap.float_arena.pages.is_empty());
     assert_eq!(heap.float_arena.spare_storage.len(), 4);
 
@@ -881,7 +881,7 @@ fn an_emptied_page_lends_its_storage_to_the_next_page() {
 
     // The two spares nobody took this cycle go back to the allocator; the
     // live floats keep both pages.
-    heap.collect_exact(kept.iter().copied());
+    heap.collect_rooted(kept.iter().copied());
     assert_eq!(heap.float_arena.pages.len(), 2);
     assert!(heap.float_arena.spare_storage.is_empty());
     assert_eq!(LIVE_FLOAT_PAGES.load(Ordering::Relaxed), before + 2);

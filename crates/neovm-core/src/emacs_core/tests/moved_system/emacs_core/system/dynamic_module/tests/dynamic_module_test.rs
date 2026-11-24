@@ -259,7 +259,7 @@ fn install_module_function(
     name: &str,
     func: unsafe extern "C" fn(*mut emacs_env, isize, *mut emacs_value, *mut c_void) -> emacs_value,
 ) {
-    let value = neovm_value::tagged::gc::with_tagged_heap(|h| {
+    let value = neovm_value::tagged::gc::with_tagged_heap(|h| unsafe {
         h.alloc_module_function(
             0,
             0,

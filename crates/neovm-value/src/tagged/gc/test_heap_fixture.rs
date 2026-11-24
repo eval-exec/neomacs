@@ -29,7 +29,16 @@ impl TestHeap {
 
     /// Refresh TLS from the root after a phase/barrier-window change.
     pub fn install(&self) {
-        set_tagged_heap_root(self.root());
+        // SAFETY: this fixture owns the AliasableBox root it installs.
+        unsafe { set_tagged_heap_root(self.root()) }
+    }
+
+    /// Safe test collection. Production [`TaggedHeap::collect_exact`] is unsafe.
+    pub fn collect_rooted(
+        &mut self,
+        roots: impl Iterator<Item = crate::tagged::value::TaggedValue>,
+    ) {
+        TaggedHeap::collect_rooted(self.deref_mut(), roots)
     }
 
     #[cfg(test)]

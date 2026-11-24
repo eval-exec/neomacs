@@ -179,7 +179,7 @@ fn satb_inventory_counts_aligned_control_chunks_partials_and_sidecar() {
 #[test]
 fn satb_test_owner_switch_restores_hot_cold_state_and_tls_after_panic() {
     let mut heap = AliasableBox::new(TaggedHeap::new());
-    set_tagged_heap_root(heap.root());
+    unsafe { set_tagged_heap_root(heap.root()) };
     heap.current_mutator_gc_mut().bytes_since_gc = 11;
     heap.current_mutator_satb_mut()
         .satb_snapshotted_owners
@@ -237,7 +237,7 @@ fn satb_test_owner_switch_restores_hot_cold_state_and_tls_after_panic() {
 fn heapborrow_r6_registered_owner_barrier_keeps_root_provenance() {
     let mut heap = aliasable::AliasableBox::new(TaggedHeap::new());
     let root = heap.root();
-    set_tagged_heap_root(root);
+    unsafe { set_tagged_heap_root(root) };
     let old = heap.alloc_cons(TaggedValue::fixnum(19), TaggedValue::NIL);
     let source = heap.alloc_cons(old, TaggedValue::NIL);
     let id = {
@@ -246,7 +246,7 @@ fn heapborrow_r6_registered_owner_barrier_keeps_root_provenance() {
         world.register_mutator_gc_for_test()
     };
     heap.concurrent_begin();
-    set_tagged_heap_root(root);
+    unsafe { set_tagged_heap_root(root) };
     {
         // SAFETY: all artificial owners are stopped on this fixture thread;
         // the selected writer changes only preallocated cons cells and logs.

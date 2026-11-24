@@ -357,7 +357,7 @@ fn ownership_through_the_map_equals_the_registries() {
             "live {class:?}"
         );
     }
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     for &(class, value) in &keep {
         assert!(chunk_owns(&heap, value), "kept {class:?}");
         assert_eq!(chunk_owns(&heap, value), registry_owns(&mut heap, value));
@@ -393,7 +393,7 @@ fn released_pages_leave_the_map_and_survivors_are_reindexed() {
     assert!(map(&heap).get(middle_base).is(ChunkClass::Vector));
     let root = heap.alloc_cons(keep_first, keep_third);
     drop(all);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert_eq!(
         heap.vector_arena.pages.len(),
         2,
@@ -433,7 +433,7 @@ fn released_cons_blocks_leave_the_map() {
     let bases: Vec<usize> = heap.cons_blocks.iter().map(ConsBlock::base_addr).collect();
     // Keep only the last list: the blocks wholly holding the others empty.
     let root = lists[2];
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let live: FxHashSet<usize> = heap.cons_blocks.iter().map(ConsBlock::base_addr).collect();
     assert!(
         live.len() < bases.len(),
@@ -514,7 +514,7 @@ fn chunk_map_concurrent_cycles_keep_the_live_set_while_pages_grow() {
         spine = heap.alloc_cons(v, spine);
     }
     root = heap.alloc_cons(spine, root);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.should_run_concurrent());
     for round in 0..3 {
         heap.concurrent_begin();

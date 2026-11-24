@@ -46,7 +46,7 @@ fn unrelated_heap_reclamation_preserves_live_envelope_geometry() {
     // a sweep publisher with no marks removed.
     assert!(mark_collection_observed(garbage.bits()));
     let epoch = collection_observation_epoch();
-    other_heap.collect_exact(std::iter::empty());
+    other_heap.collect_rooted(std::iter::empty());
     assert_ne!(collection_observation_epoch(), epoch);
     assert!(!collection_observed_metadata(garbage.bits()));
     set_tagged_heap(&mut live_heap);

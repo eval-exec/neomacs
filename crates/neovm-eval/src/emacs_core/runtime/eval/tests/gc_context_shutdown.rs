@@ -28,9 +28,11 @@ fn gc_context_shutdown_finalizes_native_resources_once_on_owner() {
     let mut context = Box::new(Context::new(crate::test_utils::unit_runtime()));
     context.setup_thread_locals();
     let data = std::ptr::from_ref(&probe).cast_mut().cast();
-    context
-        .tagged_heap
-        .alloc_user_ptr(data, Some(count_owner_finalizer));
+    unsafe {
+        context
+            .tagged_heap
+            .alloc_user_ptr(data, Some(count_owner_finalizer))
+    };
     assert_eq!(probe.count.load(Ordering::Relaxed), 0);
 
     context.shutdown().unwrap();
@@ -54,9 +56,11 @@ fn gc_drains_a_native_deferral_before_garbage_collect_returns() {
     let mut context = Box::new(Context::new(crate::test_utils::unit_runtime()));
     context.setup_thread_locals();
     let data = std::ptr::from_ref(&probe).cast_mut().cast();
-    context
-        .tagged_heap
-        .alloc_user_ptr(data, Some(count_owner_finalizer));
+    unsafe {
+        context
+            .tagged_heap
+            .alloc_user_ptr(data, Some(count_owner_finalizer))
+    };
     // SAFETY: test-only owner-thread heap setup through the non-swappable
     // mutable accessor contract; the view is used in place.
     unsafe { context.tagged_heap_mut() }.begin_native_deferral_for_test();

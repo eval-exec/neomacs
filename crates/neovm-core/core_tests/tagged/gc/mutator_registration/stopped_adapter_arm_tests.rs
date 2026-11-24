@@ -220,15 +220,17 @@ fn stopped_major_reclaims_unreached_ephemeron_registries() {
 fn stopped_major_admits_callback_payloads() {
     let mut context = clean_context();
     let heap = unsafe { context.tagged_heap_mut() };
-    let _user_ptr = heap.alloc_user_ptr(std::ptr::null_mut(), None);
-    let _module_function = heap.alloc_module_function(
-        0,
-        0,
-        std::ptr::null(),
-        std::ptr::null_mut(),
-        TaggedValue::NIL,
-        TaggedValue::NIL,
-    );
+    let _user_ptr = unsafe { heap.alloc_user_ptr(std::ptr::null_mut(), None) };
+    let _module_function = unsafe {
+        heap.alloc_module_function(
+            0,
+            0,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            TaggedValue::NIL,
+            TaggedValue::NIL,
+        )
+    };
 
     let outcome = run_stopped_major(&mut context);
     assert!(
@@ -250,7 +252,7 @@ fn stopped_major_defers_a_user_ptr_finalizer_and_drains_before_resume() {
     let mut context = clean_context();
     let heap = unsafe { context.tagged_heap_mut() };
     let data = std::ptr::from_ref(&count).cast_mut().cast();
-    let _user_ptr = heap.alloc_user_ptr(data, Some(count_native_finalizer));
+    let _user_ptr = unsafe { heap.alloc_user_ptr(data, Some(count_native_finalizer)) };
 
     let outcome = run_stopped_major_observing_batch(&mut context, |batch| {
         assert_eq!(
@@ -292,14 +294,16 @@ fn stopped_major_admits_a_module_function_and_drains_its_finalizer() {
     let mut context = clean_context();
     let heap = unsafe { context.tagged_heap_mut() };
     let data = std::ptr::from_ref(&count).cast_mut().cast();
-    let function = heap.alloc_module_function(
-        0,
-        0,
-        std::ptr::null(),
-        data,
-        TaggedValue::NIL,
-        TaggedValue::NIL,
-    );
+    let function = unsafe {
+        heap.alloc_module_function(
+            0,
+            0,
+            std::ptr::null(),
+            data,
+            TaggedValue::NIL,
+            TaggedValue::NIL,
+        )
+    };
     // SAFETY: this fixture exclusively owns the initialized module function;
     // its data points to count, which outlives the stopped collection.
     unsafe {

@@ -133,7 +133,7 @@ fn visible_symbol_name_reads_follow_materialization_mutation_and_gc() {
         name.set_string_byte_same_char_count(0, replacement as u8);
         let mut roots = Vec::new();
         collect_symbol_name_gc_roots(&mut roots, heap_id);
-        heap.collect_exact(roots.into_iter());
+        heap.collect_rooted(roots.into_iter());
         assert_eq!(
             resolve_lisp_visible_symbol_name(symbol).text().as_bytes()[0],
             replacement as u8

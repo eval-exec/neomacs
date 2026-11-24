@@ -308,7 +308,7 @@ impl WorldView<neovm_value::tagged::gc::TaggedHeap> {
     /// root every access through the view derives from, so later `&mut`
     /// reborrows through the view cannot invalidate the installed pointer.
     pub(crate) fn install_tagged_heap(&self) {
-        neovm_value::tagged::gc::set_tagged_heap_root(self.ptr);
+        unsafe { neovm_value::tagged::gc::set_tagged_heap_root(self.ptr) };
     }
 }
 
@@ -1386,7 +1386,8 @@ impl WorldStorageBuilder {
         // before any allocation-capable Context setup resumes. The root (not
         // a `&mut` borrow) is what makes the slot survive every sibling
         // access the owner later takes.
-        neovm_value::tagged::gc::set_tagged_heap_root(lease.0.tagged_heap.root());
+        // SAFETY: `lease` owns the AliasableBox root this view installs.
+        unsafe { neovm_value::tagged::gc::set_tagged_heap_root(lease.0.tagged_heap.root()) };
         Self::publish_views(&lease, selection)
     }
 

@@ -445,7 +445,7 @@ mod tests {
             );
 
             obarray.set_symbol_plist_id(symbol, new_head);
-            heap.collect_exact(std::iter::once(new_head));
+            heap.collect_rooted(std::iter::once(new_head));
             assert!(heap.owns_heap_value_for_test(old_head));
             assert!(heap.owns_heap_value_for_test(new_head));
             assert!(!heap.owns_heap_value_for_test(garbage));
@@ -542,7 +542,7 @@ mod tests {
         drop(held);
         assert_eq!(published.registry_len(&heap), 2);
 
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         assert!(heap.owns_heap_value_for_test(first));
         assert!(heap.owns_heap_value_for_test(second));
         assert!(!heap.owns_heap_value_for_test(refused));
@@ -591,7 +591,7 @@ mod tests {
             PublishedConditionSnapshots::mint(&mut heap, &obarray, RetentionLimits::production())
                 .unwrap();
         obarray.set_symbol_plist_id(symbol, TaggedValue::NIL);
-        heap.collect_exact(std::iter::once(table));
+        heap.collect_rooted(std::iter::once(table));
         assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
         assert!(heap.owns_heap_value_for_test(head));
         {
@@ -608,7 +608,7 @@ mod tests {
         }
         published.unregister(&mut heap);
 
-        heap.collect_exact(std::iter::once(table));
+        heap.collect_rooted(std::iter::once(table));
         assert_eq!(table.as_hash_table().unwrap().data.len(), 0);
         assert!(!heap.owns_heap_value_for_test(head));
     }
@@ -709,7 +709,7 @@ mod tests {
             PublicationChange::Published { .. }
         ));
 
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         assert!(
             !heap.owns_heap_value_for_test(freed),
             "a head only the freed descriptor walked stays owned"
@@ -776,7 +776,7 @@ mod tests {
         assert_eq!(published.registry_len(&heap), 2);
         drop(held);
 
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         assert!(heap.owns_heap_value_for_test(first));
         assert!(heap.owns_heap_value_for_test(second));
         assert!(!heap.owns_heap_value_for_test(refused));
@@ -785,7 +785,7 @@ mod tests {
             published.refresh(&mut heap, &obarray).unwrap(),
             PublicationChange::Published { .. }
         ));
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         assert!(
             !heap.owns_heap_value_for_test(first),
             "dropping the view let reclaim free the oldest head"
@@ -923,7 +923,7 @@ mod tests {
         );
         assert_eq!(heap.payload_root_count_for_test(stacked_id), 1);
 
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
         assert!(
             heap.owns_heap_value_for_test(only_live),
             "another publisher's generation dropped a live head"

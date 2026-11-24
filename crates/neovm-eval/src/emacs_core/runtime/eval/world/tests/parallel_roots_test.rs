@@ -272,7 +272,7 @@ fn assert_unreachable_native_fixture_is_admitted_and_drained(
 fn a5_admission_admits_a_native_resource_fixture_and_the_stopped_major_drains_it() {
     // No finalizer: admission must not depend on a callback being present.
     let mut context = collection_fixture_context();
-    assert_unreachable_native_fixture_is_admitted_and_drained(&mut context, |context| {
+    assert_unreachable_native_fixture_is_admitted_and_drained(&mut context, |context| unsafe {
         context
             .tagged_heap
             .alloc_user_ptr(std::ptr::null_mut(), None)

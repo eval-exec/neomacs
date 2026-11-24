@@ -93,7 +93,7 @@ fn buffer_slot_seeds_survive_a_gc_before_create_buffer() {
     manager.trace_roots(&mut roots);
     assert!(roots.iter().any(|root| eq_value(root, &seed)));
     neovm_value::tagged::gc::with_tagged_heap(|heap| {
-        heap.collect(roots.into_iter());
+        heap.collect_rooted(roots.into_iter());
         assert!(heap.owns_heap_value_for_test(seed));
     });
     let fresh = manager.create_buffer("*slot-seed-after-gc*");

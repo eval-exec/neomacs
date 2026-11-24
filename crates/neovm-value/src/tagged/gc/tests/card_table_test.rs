@@ -256,7 +256,7 @@ fn gen0_heap_never_marks_a_card() {
     let roots = ScratchRoots::new();
     let owner = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(owner);
-    heap.collect_exact(std::iter::once(owner));
+    heap.collect_rooted(std::iter::once(owner));
     let child = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     store_young_child(owner, OwnerClass::ArenaVector, child);
     assert!(!heap.owner_card_is_dirty(card_addr(owner)));

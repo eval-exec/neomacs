@@ -47,7 +47,7 @@ fn table_len(table: TaggedValue) -> usize {
 /// TABLE included.
 fn first_partition(heap: &mut TaggedHeap, table: TaggedValue, roots: &[TaggedValue]) {
     heap.extend_dump_span(4096, 16);
-    heap.collect_exact(roots.iter().copied());
+    heap.collect_rooted(roots.iter().copied());
     assert!(!heap.sweep_in_progress());
     assert!(heap.value_is_old_for_test(table));
     let ptr = table.as_veclike_ptr().unwrap() as *mut HashTableObj;
@@ -97,7 +97,7 @@ fn minor_skips_an_unwritten_old_weak_table() {
 
     // A major keeps the full pass over every always-swept table.
     WEAK_ENTRY_VISITS.store(0, Ordering::Relaxed);
-    heap.collect_exact([table, holder].into_iter());
+    heap.collect_rooted([table, holder].into_iter());
     assert!(WEAK_ENTRY_VISITS.load(Ordering::Relaxed) >= ENTRIES);
     assert_eq!(table_len(table), ENTRIES);
 }

@@ -115,7 +115,7 @@ fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
 }
 
 fn major(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.collect_exact(roots.iter().copied());
+    heap.collect_rooted(roots.iter().copied());
     assert!(!heap.mark_in_progress());
     assert!(!heap.sweep_in_progress());
 }
@@ -679,7 +679,9 @@ impl Drop for FirstPartitionCancelCleanup {
         heap.concurrent_mark_running = false;
         heap.mark_in_progress = false;
         heap.generational.major_in_progress = false;
-        set_tagged_heap_root(std::ptr::NonNull::new(self.0).expect("partition cleanup heap"));
+        unsafe {
+            set_tagged_heap_root(std::ptr::NonNull::new(self.0).expect("partition cleanup heap"))
+        };
         clear_tagged_heap_if_installed(heap);
     }
 }

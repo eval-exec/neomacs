@@ -679,15 +679,17 @@ fn serial_heap_restoration_reclaims_former_owner_roots_after_resume<K, W>(
 #[test]
 fn stopped_admission_accepts_deferred_native_payloads() {
     let mut heap = TaggedHeap::new();
-    heap.alloc_user_ptr(std::ptr::null_mut(), None);
-    heap.alloc_module_function(
-        0,
-        0,
-        std::ptr::null(),
-        std::ptr::null_mut(),
-        Value::NIL,
-        Value::NIL,
-    );
+    unsafe { heap.alloc_user_ptr(std::ptr::null_mut(), None) };
+    unsafe {
+        heap.alloc_module_function(
+            0,
+            0,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            Value::NIL,
+            Value::NIL,
+        )
+    };
     assert!(
         super::collection::supported_for_test(&heap).is_ok(),
         "user-ptr and module-function payloads must be admissible once the \

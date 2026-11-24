@@ -59,7 +59,7 @@ fn a_dead_vector_marks_its_children_only_through_the_snapshot() {
         for (mode, marked) in [(VecScanMode::Snapshot, true), (VecScanMode::Defer, false)] {
             let mut heap = heap_with(mode, chunk_map);
             let keep = list(&mut heap, 10);
-            heap.collect_exact(std::iter::once(keep));
+            heap.collect_rooted(std::iter::once(keep));
             assert!(heap.should_run_concurrent());
             // Dead before the mark starts: nothing roots it.
             let child = list(&mut heap, 100);
@@ -99,7 +99,7 @@ fn deferred_live_vectors_keep_their_children_across_mid_cycle_writes() {
     let a = heap.alloc_vector(vec![a_child, TaggedValue::NIL]);
     let b = heap.alloc_vector(vec![TaggedValue::NIL; 3]);
     let root = heap.alloc_cons(a, b);
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let mut stored = TaggedValue::NIL;
     let mut bulk = TaggedValue::NIL;
     concurrent_cycle_until_termination(&mut heap, &[root], |heap| {

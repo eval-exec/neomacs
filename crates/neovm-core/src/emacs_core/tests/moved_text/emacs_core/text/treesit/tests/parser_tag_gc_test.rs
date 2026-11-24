@@ -77,11 +77,11 @@ fn native_parser_tag_survives(first: FirstCollection) {
     });
     let roots: Vec<Value> = manager.roots().into_iter().chain([witness]).collect();
     match first {
-        FirstCollection::Full => heap.collect_exact(roots.into_iter()),
+        FirstCollection::Full => heap.collect_rooted(roots.into_iter()),
         FirstCollection::Minor => collect_minor_or_full(&mut heap, roots),
     }
     for _ in 0..3 {
-        heap.collect_exact(manager.roots().into_iter().chain([witness]));
+        heap.collect_rooted(manager.roots().into_iter().chain([witness]));
         assert_eq!(manager.parser(id).unwrap().tag(), tag);
         let table = witness.as_hash_table().unwrap();
         assert_eq!(
@@ -107,6 +107,6 @@ fn collect_minor_or_full(heap: &mut TaggedHeap, roots: Vec<Value>) {
     } else {
         // GEN0 refuses minors and preserves the edge through a full cycle.
         assert!(heap.begin_minor_collection().is_err());
-        heap.collect_exact(roots.into_iter());
+        heap.collect_rooted(roots.into_iter());
     }
 }

@@ -117,7 +117,7 @@ fn memory_inventory_counts_arena_spares_and_partial_page_holes_once() {
     for _ in 0..ObjectPage::<StringObj>::SLOTS {
         heap.alloc_string(LispString::from_utf8("discarded"));
     }
-    heap.collect_exact(std::iter::once(survivor));
+    heap.collect_rooted(std::iter::once(survivor));
     let inventory = snapshot(&heap, false);
     let string = inventory
         .arenas
@@ -152,7 +152,7 @@ fn memory_inventory_does_not_count_free_unmarked_cons_as_occupied() {
     for _ in 0..CONS_BLOCK_SIZE {
         heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     }
-    heap.collect_exact(std::iter::once(survivor));
+    heap.collect_rooted(std::iter::once(survivor));
     // Keep a reclaimed cell white: age/mark bits alone cannot tell this free
     // cell apart from the newly allocated white cell immediately below.
     assert_eq!(heap.cons_blocks.len(), 1);

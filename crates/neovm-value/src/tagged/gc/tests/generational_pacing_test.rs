@@ -358,7 +358,7 @@ fn generational_pacing_real_minor_credits_promotion_and_major_resets_after_recla
     let roots = Roots(save_scratch_gc_roots());
     let owner = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     push_scratch_gc_root(owner);
-    heap.collect_exact([owner].into_iter());
+    heap.collect_rooted([owner].into_iter());
     assert_eq!(
         heap.generational.old_bytes_after_major,
         size_of::<ConsCell>()
@@ -382,7 +382,7 @@ fn generational_pacing_real_minor_credits_promotion_and_major_resets_after_recla
         heap.generational.old_bytes_after_major,
         size_of::<ConsCell>()
     );
-    heap.collect_exact([owner].into_iter());
+    heap.collect_rooted([owner].into_iter());
     assert!(heap.owns_heap_value_for_test(child));
     assert_eq!(
         heap.generational.old_bytes_after_major,
@@ -393,7 +393,7 @@ fn generational_pacing_real_minor_credits_promotion_and_major_resets_after_recla
         GenerationPacingCounters::default()
     );
     drop(roots);
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert!(!heap.owns_heap_value_for_test(owner));
     assert!(!heap.owns_heap_value_for_test(child));
     assert_eq!(heap.generational.old_bytes_after_major, 0);
