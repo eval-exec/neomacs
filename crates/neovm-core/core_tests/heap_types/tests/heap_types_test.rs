@@ -30,7 +30,8 @@ fn lisp_string_layout_keeps_gnu_fields_before_storage_metadata() {
 #[test]
 fn mapped_lisp_string_borrows_until_mutation() {
     let bytes = b"abc\0".to_vec();
-    let mut string = unsafe { LispString::from_mapped_bytes(bytes.as_ptr(), 3, 3, 3) };
+    let mut string = unsafe { LispString::from_mapped_bytes(bytes.as_ptr(), 3, 3, 3) }
+        .expect("consistent mapped string");
 
     assert_eq!(string.as_bytes(), b"abc");
     assert!(string.has_trailing_nul());
@@ -46,7 +47,8 @@ fn mapped_lisp_string_borrows_until_mutation() {
 #[test]
 fn mapped_lisp_string_clone_is_owned() {
     let bytes = b"abc\0".to_vec();
-    let string = unsafe { LispString::from_mapped_bytes(bytes.as_ptr(), 3, 3, 3) };
+    let string = unsafe { LispString::from_mapped_bytes(bytes.as_ptr(), 3, 3, 3) }
+        .expect("consistent mapped string");
     let cloned = string.clone();
 
     drop(bytes);

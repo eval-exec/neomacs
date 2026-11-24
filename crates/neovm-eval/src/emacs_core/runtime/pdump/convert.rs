@@ -1282,7 +1282,8 @@ impl<'a> LoadDecoder<'a> {
                     )
                 })?;
                 let bytes = mapped_heap.bytes(data)?;
-                Ok(unsafe { LispString::from_mapped_bytes(bytes.ptr, bytes.len, size, size_byte) })
+                unsafe { LispString::from_mapped_bytes(bytes.ptr, bytes.len, size, size_byte) }
+                    .map_err(|err| DumpError::ImageFormatError(err.to_string()))
             }
             DumpByteData::StaticRoData { key, len } => {
                 if size_byte != -2 {

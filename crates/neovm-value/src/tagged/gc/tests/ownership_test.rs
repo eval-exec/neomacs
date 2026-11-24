@@ -2381,7 +2381,8 @@ fn a_reclaimed_string_with_borrowed_bytes_is_also_marked_free() {
     // static-rodata payload has (`storage_capacity == 0`).
     static BYTES: &[u8] = b"borrowed\0";
     let borrowed =
-        unsafe { crate::heap_types::LispString::from_mapped_bytes(BYTES.as_ptr(), 8, 8, -1) };
+        unsafe { crate::heap_types::LispString::from_mapped_bytes(BYTES.as_ptr(), 8, 8, -1) }
+            .expect("consistent mapped unibyte string");
     assert!(!borrowed.is_reclaimed());
     let mut owner = std::mem::ManuallyDrop::new(borrowed);
     unsafe { std::ptr::drop_in_place(&mut *owner as *mut crate::heap_types::LispString) };

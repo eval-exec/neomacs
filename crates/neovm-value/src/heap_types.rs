@@ -429,6 +429,26 @@ impl LispString {
     pub const JIT_SIZE_BYTE_UNIBYTE: i64 = SIZE_BYTE_UNIBYTE_NORMAL;
 }
 
+/// Mapped pdump bytes whose length is not the length named by the string header.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MappedStringLengthError {
+    /// Bytes actually present in the mapping, excluding the trailing NUL.
+    pub mapped_len: usize,
+    /// Byte count `size` / `size_byte` name.
+    pub header_len: usize,
+}
+
+impl std::fmt::Display for MappedStringLengthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "mapped dump string length {} does not match header length {}",
+            self.mapped_len, self.header_len
+        )
+    }
+}
+
 impl LispString {
     /// The character count bits of the encoded size word.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -718,20 +738,32 @@ impl LispString {
 
     /// Build a Lisp string whose bytes live in a mapped pdump image.
     ///
+    /// A header whose byte count is not `len` is refused before any payload
+    /// read. `sbytes` follows the header, so a release build that skipped
+    /// this check would read past the mapping.
+    ///
     /// # Safety
-    /// `ptr..ptr+len+1` must remain mapped and immutable for the lifetime of
-    /// the returned `LispString`, with `ptr[len] == 0`. Mutation first copies
-    /// these bytes into owned storage.
+    /// On `Ok`, `ptr..ptr+len+1` must remain mapped and immutable for the
+    /// lifetime of the returned `LispString`, with `ptr[len] == 0`. Mutation
+    /// first copies these bytes into owned storage. `Err` does not
+    /// dereference `ptr`.
     #[doc(hidden)]
     pub unsafe fn from_mapped_bytes(
         ptr: *const u8,
         len: usize,
         size: usize,
         size_byte: i64,
-    ) -> Self {
+    ) -> Result<Self, MappedStringLengthError> {
+        let header_len = Self::payload_len_for(size, Self::normalize_size_byte(size_byte, false));
+        if len != header_len {
+            return Err(MappedStringLengthError {
+                mapped_len: len,
+                header_len,
+            });
+        }
         let mut string = unsafe { Self::from_borrowed_bytes(ptr, len, size, size_byte, false) };
         string.size = Self::character_count_word_for_image(string.as_bytes(), size, size_byte);
-        string
+        Ok(string)
     }
 
     /// `from_unibyte` from a borrowed slice, copying with the spare NUL slot
@@ -2096,6 +2128,10 @@ mod signed_string_positions_tests;
 #[cfg(test)]
 #[path = "heap_types/tests/character_count_kind.rs"]
 mod character_count_kind_tests;
+
+#[cfg(test)]
+#[path = "heap_types/tests/mapped_dump_len.rs"]
+mod mapped_dump_len_tests;
 
 /// Unique identifier for a process.
 ///
