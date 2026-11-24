@@ -868,7 +868,9 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
     let tagged_heap =
         neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
     // SAFETY: the dump loader owns this AliasableBox. The root stays live
-    // until the loaded Context clears it, and no heap reference is live yet.
+    // until the loaded Context, or this heap's Drop on the error path, clears
+    // it. Drop calls clear_tagged_heap_if_installed, so the `?` below cannot
+    // leave the thread-local installed. No heap reference is live yet.
     unsafe { neovm_value::tagged::gc::set_tagged_heap_root(tagged_heap.root()) };
     decoder.preload_tagged_heap_with_value_fixup_section(value_fixups_section)?;
 

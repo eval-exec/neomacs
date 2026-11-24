@@ -6,14 +6,17 @@
 //! `incremental_finish`, `incremental_sweep_slice`,
 //! `finish_incremental_sweep_now`) are `unsafe fn`. `seed_root` stays safe:
 //! it does not free. A safe function, including one that hides the call in
-//! an `unsafe` block, must not call `collect` or `collect_exact`. The sweep
-//! entries are reached from `gc_collect_from_current_roots_body` inside the
-//! stop-the-world `unsafe` block; the compiler requires that block.
+//! an `unsafe` block, must not call `collect` or `collect_exact`. The same
+//! scan covers the seven sweep entries. Exactly two safe callers may reach
+//! them: `gc_collect_from_current_roots_body` in `command_loop.rs`, and
+//! `StoppedCollectorJob::run` in `collection.rs`. A new safe wrapper fails.
 //! `Context::gc_collect_exact` stays safe. `&mut Context` is the capability
 //! only after Phase 1 stops returning `&'static` payload borrows. Until then
-//! a Rust local can keep a freed object. Test support calls `collect_rooted`
-//! and the `*_for_test` sweep wrappers, which are cfg'd out of production
-//! builds and are deliberately unsound for unrooted borrows.
+//! a Rust local can keep a freed object. Dropping a `TaggedHeap` and
+//! `shutdown(self)` still free from safe code. Those are Phase 1c
+//! (`HeapRef<'h>`). This guard does not cover them. Test support calls
+//! `collect_rooted` and the `*_for_test` sweep wrappers, which are cfg'd out
+//! of production builds and are deliberately unsound for unrooted borrows.
 //!
 //! The scan parses source syntax, not expanded macros or resolved types.
 //! `macro_rules` bodies, `<TaggedHeap>::method` (qself), renamed imports,
@@ -44,6 +47,32 @@ const HEAP_METHODS: &[&str] = &[
 ];
 
 const INSTALL: &str = "set_tagged_heap_root";
+
+/// Safe production functions that already own a sweep cycle. The pair is
+/// file plus function, so another `run` does not inherit the allowance.
+const SWEEP_SAFE_CALLERS: &[(&str, &str)] = &[
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/command_loop.rs",
+        "gc_collect_from_current_roots_body",
+    ),
+    (
+        "neovm-value/src/tagged/gc/mutator_registration/collection.rs",
+        "run",
+    ),
+];
+
+fn is_sweep_method(name: &str) -> bool {
+    matches!(
+        name,
+        "begin_stw_collection"
+            | "complete_collection"
+            | "begin_minor_collection"
+            | "complete_minor_collection"
+            | "incremental_finish"
+            | "incremental_sweep_slice"
+            | "finish_incremental_sweep_now"
+    )
+}
 
 struct Definition {
     name: &'static str,
@@ -123,6 +152,15 @@ impl<'a> Scanner<'a> {
         });
     }
 
+    fn sweep_caller_allowed(&self) -> bool {
+        let Some(function) = self.function.last() else {
+            return false;
+        };
+        SWEEP_SAFE_CALLERS
+            .iter()
+            .any(|(file, name)| *file == self.file && *name == function)
+    }
+
     fn note_call(&mut self, call: &str, line: usize) {
         if self.excluded > 0 || self.unsafe_fn > 0 {
             return;
@@ -199,12 +237,11 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let name = call.method.to_string();
-        // Sweep entries are gated by being `unsafe fn`. A safe caller may
-        // reach them only inside an `unsafe` block, which is how
-        // `gc_collect_from_current_roots_body` drives a cycle. Call-path
-        // scanning stays on `collect` / `collect_exact`: those names must
-        // not appear in a safe function at all.
-        if name == "collect_exact" || (name == "collect" && call.args.len() == 1) {
+        // `collect` / `collect_exact` must not appear in any safe function.
+        // Sweep names share that rule except for the two cycle owners.
+        let sweep = is_sweep_method(&name);
+        let collect = name == "collect_exact" || (name == "collect" && call.args.len() == 1);
+        if collect || (sweep && !self.sweep_caller_allowed()) {
             self.note_call(&name, call.method.span().start().line);
         }
         visit::visit_expr_method_call(self, call);
@@ -212,15 +249,12 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let Expr::Path(path) = &*call.func
-            && path_is_heap_collect(&path.path)
+            && let Some(name) = heap_path_method(&path.path)
         {
-            let name = path
-                .path
-                .segments
-                .last()
-                .map(|segment| segment.ident.to_string())
-                .unwrap_or_else(|| "collect".to_owned());
-            self.note_call(&name, path.path.span().start().line);
+            let sweep = is_sweep_method(&name);
+            if !sweep || !self.sweep_caller_allowed() {
+                self.note_call(&name, path.path.span().start().line);
+            }
         }
         visit::visit_expr_call(self, call);
     }
@@ -249,24 +283,23 @@ fn type_is_tagged_heap(ty: &Type) -> bool {
     }
 }
 
-fn path_is_heap_collect(path: &syn::Path) -> bool {
+fn heap_path_method(path: &syn::Path) -> Option<String> {
     let names = path
         .segments
         .iter()
         .map(|segment| segment.ident.to_string())
         .collect::<Vec<_>>();
-    let Some(method) = names.last() else {
-        return false;
-    };
-    if method != "collect" && method != "collect_exact" {
-        return false;
+    let method = names.last()?.clone();
+    if method != "collect" && method != "collect_exact" && !is_sweep_method(&method) {
+        return None;
     }
-    names.len() > 1
+    let receiver = names.len() > 1
         && names
             .iter()
             .rev()
             .skip(1)
-            .any(|name| name == "TaggedHeap" || name == "TestHeap" || name == "Self")
+            .any(|name| name == "TaggedHeap" || name == "TestHeap" || name == "Self");
+    receiver.then_some(method)
 }
 
 /// True when the attribute keeps the item out of a production build
@@ -488,5 +521,105 @@ fn heap_capability_guard_ignores_iterator_collect_and_test_modules() {
         problems.is_empty(),
         "iterator collect and cfg(test) must not be collection paths:\n{}",
         problems.join("\n")
+    );
+}
+
+fn sweep_stubs() -> &'static str {
+    r#"
+        struct TaggedHeap;
+        impl TaggedHeap {
+            pub unsafe fn collect(&mut self, roots: impl Iterator<Item = i32>) {
+                unsafe { self.collect_exact(roots) }
+            }
+            pub unsafe fn collect_exact(&mut self, roots: impl Iterator<Item = i32>) {}
+            pub unsafe fn alloc_user_ptr(&mut self) {}
+            pub unsafe fn alloc_module_function(&mut self) {}
+            pub unsafe fn begin_stw_collection(&mut self) {}
+            pub unsafe fn complete_collection(&mut self) {}
+            pub unsafe fn begin_minor_collection(&mut self) {}
+            pub unsafe fn complete_minor_collection(&mut self) {}
+            pub unsafe fn incremental_finish(&mut self, _bytes: usize, _pause: i32) {}
+            pub unsafe fn incremental_sweep_slice(&mut self, _budget: usize) -> bool { true }
+            pub unsafe fn finish_incremental_sweep_now(&mut self) {}
+        }
+        pub unsafe fn set_tagged_heap_root() {}
+        pub fn sweep_now(heap: &mut TaggedHeap) {
+            unsafe { heap.complete_collection(); }
+        }
+        pub fn gc_collect_from_current_roots_body(heap: &mut TaggedHeap) {
+            unsafe { heap.begin_stw_collection(); }
+        }
+        pub fn run(heap: &mut TaggedHeap) {
+            unsafe { heap.incremental_finish(0, 0); }
+        }
+    "#
+}
+
+#[test]
+fn heap_capability_guard_flags_a_new_safe_sweep_wrapper() {
+    let command_loop = capability_problems(&survey_file(
+        sweep_stubs(),
+        "neovm-eval/src/emacs_core/runtime/eval/command_loop.rs",
+    ))
+    .join("\n");
+    assert!(
+        command_loop.contains("safe `sweep_now` calls `complete_collection`"),
+        "a new safe wrapper must fail: {command_loop}"
+    );
+    assert!(
+        command_loop.contains("safe `run` calls `incremental_finish`"),
+        "run is allowed only in collection.rs: {command_loop}"
+    );
+    assert!(
+        !command_loop.contains("gc_collect_from_current_roots_body"),
+        "the command-loop cycle owner must stay allowed: {command_loop}"
+    );
+
+    let collection = capability_problems(&survey_file(
+        sweep_stubs(),
+        "neovm-value/src/tagged/gc/mutator_registration/collection.rs",
+    ))
+    .join("\n");
+    assert!(
+        collection.contains("safe `sweep_now` calls `complete_collection`"),
+        "a new safe wrapper must fail in collection.rs: {collection}"
+    );
+    assert!(
+        collection
+            .contains("safe `gc_collect_from_current_roots_body` calls `begin_stw_collection`"),
+        "the command-loop name is not allowed from collection.rs: {collection}"
+    );
+    assert!(
+        !collection.contains("safe `run`"),
+        "StoppedCollectorJob::run must stay allowed: {collection}"
+    );
+
+    let collect_still = capability_problems(&survey_file(
+        r#"
+        struct TaggedHeap;
+        impl TaggedHeap {
+            pub unsafe fn collect(&mut self, _roots: impl Iterator<Item = i32>) {}
+            pub unsafe fn collect_exact(&mut self, _roots: impl Iterator<Item = i32>) {}
+            pub unsafe fn alloc_user_ptr(&mut self) {}
+            pub unsafe fn alloc_module_function(&mut self) {}
+            pub unsafe fn begin_stw_collection(&mut self) {}
+            pub unsafe fn complete_collection(&mut self) {}
+            pub unsafe fn begin_minor_collection(&mut self) {}
+            pub unsafe fn complete_minor_collection(&mut self) {}
+            pub unsafe fn incremental_finish(&mut self, _bytes: usize, _pause: i32) {}
+            pub unsafe fn incremental_sweep_slice(&mut self, _budget: usize) -> bool { true }
+            pub unsafe fn finish_incremental_sweep_now(&mut self) {}
+        }
+        pub unsafe fn set_tagged_heap_root() {}
+        pub fn gc_collect_from_current_roots_body(heap: &mut TaggedHeap) {
+            unsafe { heap.collect_exact(std::iter::empty()); }
+        }
+        "#,
+        "neovm-eval/src/emacs_core/runtime/eval/command_loop.rs",
+    ))
+    .join("\n");
+    assert!(
+        collect_still.contains("safe `gc_collect_from_current_roots_body` calls `collect_exact`"),
+        "the sweep allow-list must not cover collect: {collect_still}"
     );
 }

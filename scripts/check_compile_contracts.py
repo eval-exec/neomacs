@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate a compile-fail contract runner log produced by cargo nextest.
 
-CI runs the six contract targets under `cargo nextest run` (B5: Rust tests
+CI runs the seven contract targets under `cargo nextest run` (B5: Rust tests
 only under nextest).  Nextest reports one status line per test function:
 
         PASS [   0.011s] ( 1/23) neovm-core::p0s3_contracts <test>
@@ -14,7 +14,7 @@ The old cargo-test parser summed every `test result: ok. N passed` line; a
 nested trybuild harness could print `ok. 1` and mask a FAILED runner.  Here the
 per-test status lines are authoritative: any non-PASS status fails, every
 expected target must contribute exactly its expected runner count, and the
-summary must report at least 19 tests run with zero failed, timed out or
+summary must report at least 24 tests run with zero failed, timed out or
 skipped.
 
 Nextest prints a failing test twice: once in the streaming section and again in
@@ -35,9 +35,10 @@ EXPECTED = {
     "thread_safety_contracts": 16,
     "chartable_write_contracts": 1,
     "mint_seal_contracts": 1,
+    "heap_capability_contracts": 1,
     "retained_leaf_contracts": 1,
 }
-EXPECTED_TOTAL = sum(EXPECTED.values())  # 23 nextest test functions
+EXPECTED_TOTAL = sum(EXPECTED.values())  # 24 nextest test functions
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 STATUS = re.compile(
@@ -131,6 +132,7 @@ def _nextest_log(counts=None, overrides=None, extra="", summary_run=None, replay
             "thread_safety_contracts": "neovm-core::thread_safety_contracts",
             "chartable_write_contracts": "neovm-core::chartable_write_contracts",
             "mint_seal_contracts": "neovm-core::mint_seal_contracts",
+            "heap_capability_contracts": "neovm-core::heap_capability_contracts",
             "retained_leaf_contracts": "neovm-core::retained_leaf_contracts",
         }[target]
         for offset in range(count):

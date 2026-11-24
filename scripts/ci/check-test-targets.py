@@ -30,6 +30,7 @@ ALLOWED_EXTRA_TARGETS = {
     # each one with `--test` and counts the runner that ran
     # (.github/workflows/test-suite.yml, "Run the compile-fail contracts").
     # mint_seal_contracts joined that list with its trybuild fixtures.
+    # heap_capability_contracts is the U1 collect/sweep E0133 runner.
     # retained_leaf_contracts is the same kind of runner: trybuild pass and
     # compile-fail fixtures, selected by both compile-contracts jobs.
     ("neovm-core", "thread_safety_contracts"),
@@ -37,6 +38,7 @@ ALLOWED_EXTRA_TARGETS = {
     ("neovm-core", "p0s3_contracts"),
     ("neovm-core", "p1rv_contracts"),
     ("neovm-core", "mint_seal_contracts"),
+    ("neovm-core", "heap_capability_contracts"),
     ("neovm-core", "retained_leaf_contracts"),
     # A process-wide global allocator must not leak into other tests.
     ("neovm-core", "gnu_overlay_deletion_allocations"),

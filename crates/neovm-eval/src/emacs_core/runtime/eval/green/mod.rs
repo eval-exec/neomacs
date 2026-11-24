@@ -244,7 +244,7 @@ impl Context {
                     .and_then(|runtime| runtime.standard_case_table.get()),
             )
         };
-        let views = baton.owner_views(current);
+        let mut views = baton.owner_views(current);
         views.tagged_heap.install_tagged_heap();
         let mut owner = Context::assemble(views, seed);
         owner.cached_standard_case_table = case_table;

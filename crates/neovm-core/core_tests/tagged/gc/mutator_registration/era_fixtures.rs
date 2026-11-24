@@ -233,7 +233,9 @@ impl EraFixtureExt for Context {
         drop(collector);
         drop(keeper);
         // Both finish capabilities returned; their loans ended above.
-        world_view_install_tagged_heap(context.tagged_heap());
+        // SAFETY: this fixture Context is the owning thread. The mutable view
+        // is used only to install the heap, and it is not replaced or moved.
+        world_view_install_tagged_heap(unsafe { context.tagged_heap_mut() });
         after(&mut context, output);
     }
 

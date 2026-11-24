@@ -560,7 +560,9 @@ pub mod authority {
 
     /// Delegate for `WorldView<TaggedHeap>::install_tagged_heap`.
     #[allow(private_interfaces)]
-    pub fn world_view_install_tagged_heap(view: &WorldView<neovm_value::tagged::gc::TaggedHeap>) {
+    pub fn world_view_install_tagged_heap(
+        view: &mut WorldView<neovm_value::tagged::gc::TaggedHeap>,
+    ) {
         view.install_tagged_heap()
     }
 

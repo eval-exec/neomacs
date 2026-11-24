@@ -649,7 +649,8 @@ jobs:
       # transfer, pentry E2 cold receipt, nmjit N1, three host-effect
       # tests, intern-shared, P15, split T2, jit grace, and
       # obarray_view_swap_compile_contracts),
-      # chartable_write 1, mint_seal 1 (the mint-seal trybuild fixtures), and
+      # chartable_write 1, mint_seal 1 (the mint-seal trybuild fixtures),
+      # heap_capability 1 (U1 collect and sweep-protocol E0133), and
       # retained_leaf 1 (the retained-leaf trybuild fixtures);
       # check_compile_contracts.py enforces these per-target counts and the
       # summary. The nmjit N1 runner drives the isolated
@@ -669,7 +670,8 @@ jobs:
             env -u TRYBUILD cargo nextest run -p neovm-core --features contract-fixtures --no-fail-fast \
               --test p0s3_contracts --test p1rv_contracts \
               --test thread_safety_contracts --test chartable_write_contracts \
-              --test mint_seal_contracts --test retained_leaf_contracts
+              --test mint_seal_contracts --test heap_capability_contracts \
+              --test retained_leaf_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
           python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
 
@@ -755,7 +757,8 @@ jobs:
             env -u TRYBUILD cargo nextest run -p neovm-core --features contract-fixtures --no-fail-fast \
               --test p0s3_contracts --test p1rv_contracts \
               --test thread_safety_contracts --test chartable_write_contracts \
-              --test mint_seal_contracts --test retained_leaf_contracts
+              --test mint_seal_contracts --test heap_capability_contracts \
+              --test retained_leaf_contracts
           } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
           python3 scripts/check_compile_contracts.py "$RUNNER_TEMP/contracts.log"
 
