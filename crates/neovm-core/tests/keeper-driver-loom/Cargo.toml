@@ -1,0 +1,23 @@
+[package]
+name = "keeper-driver-loom"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+autotests = false
+
+# L6.7 K9: the keeper driver's protocol core (parallel_entry/driver_core.rs)
+# and the ring control (rendezvous/control.rs), copied read-only by build.rs
+# and run under Loom. No product workspace dependency and no product feature.
+[workspace]
+
+[dev-dependencies]
+loom = "=0.7.2"
+tracing = "=0.1.44"
+
+[profile.test]
+opt-level = 1
+
+[[test]]
+name = "driver"
+path = "tests/driver.rs"

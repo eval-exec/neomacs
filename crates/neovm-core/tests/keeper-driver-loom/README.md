@@ -1,0 +1,42 @@
+# keeper-driver-loom: the L6.7 keeper driver's protocol under Loom (K9)
+
+This is an isolated Cargo workspace. It has no engine dependency and is not a member of the main workspace. It checks the keeper driver's real protocol code. `build.rs` copies two product files read-only into `OUT_DIR`:
+
+* `crates/neovm-eval/.../parallel_entry/driver_core.rs` holds the driver's whole protocol. It is generic over `KeeperOps` (the era) and `Batch` (custody between two lends), and it reaches synchronization only through `super::sync`.
+* `crates/neovm-value/.../rendezvous/control.rs` is the serial ring, re-anchored as in `pentry-l6-loom`.
+
+`tests/model.rs` is the model era.
+* It drives the product ring under a Loom `Mutex`, and the keeper waits for a model change on the seam's one-waiter `Signal`.
+* A stop attempt that the members have not met waits for one model change and reports Pending. The request stands, as the product's condvar-bounded attempt leaves it.
+
+`tests/sync.rs` is the model's side of the sync seam.
+* Its channels are built on a Loom `Mutex` and `park`/`unpark`, with std semantics: `sync_channel` capacity, and a receiver disconnected when the last sender drops. A blocking send into a full grant channel is a model panic, since the protocol never needs one.
+* Loom's own `mpsc` has neither, and the driver's `Drained` end and L9 depend on both.
+* The backoff's yield and sleep are Loom yields.
+* Every wait registers its thread under the lock and parks, and its waker takes that registration under the same lock, so an unpark only meets a thread that is parked or about to park. Loom's `Condvar` can leave a stale waiter that later wakes a thread blocked on a mutex ("expected to be able to acquire lock"). Its `Notify` explores a spurious wake at every wait, which multiplied `two_owners` at bound 3 past eight minutes.
+
+Loom replays a path only if the model is deterministic. On a replay it takes the recorded schedule's thread without checking that the thread can run. The driver's owner tables are `BTreeMap`s for that reason: the poison fan-out walks them, and a `HashMap`'s per-instance seed changed the send order between replays. Under the `Notify` seam that read "Reached unexpected exploration state". Under this seam a parked owner resumes unwoken and re-registers, which trips "model: a second waiter".
+
+## Rows
+
+Each row has a one-edge negative. build.rs mutates one anchored line of a copy, and the anchor must match exactly once. The witness is the exact assertion the mutation trips.
+
+| Row | Property | Negative (mutation) and witness |
+|---|---|---|
+| `two_owners_one_turn_each_in_commit_order` | L1: grants follow commit order. L3/L4/L5: one ticket out, no lend before return (in-turn probe). L7: each owner is woken only by its grant. | `control_lifo.rs`: the ring commits at the head. Witness: "grants follow commit order". |
+| `an_abandoned_lend_poisons_and_wakes_the_rest` | L8: a lend guard dropped armed poisons, and the queued owner reads Poisoned. | `driver_core_silent_poison.rs`: the poison fan-out sends nothing. Witness: "the queued owner reads Poisoned". |
+| `a_dead_keeper_disconnects_every_owner` | L9: once a keeper dies unanswered, the owner's grant channel reads disconnected. | A grant sender leaked past the keeper. Witness: "the owner learns the keeper is gone". |
+| `a_slow_owner_delays_the_turn_and_poisons_nothing` | K8 r2: a pending stop keeps its request, and the turn is lent once the slow owner stops. | `driver_core_pending_poisons.rs`: a pending stop poisons, the r1 shape. Witness: "a slow owner poisons nothing". |
+
+## Run it
+
+From the repo root (any cwd works; on this box, inside `nix develop`):
+
+```sh
+./crates/neovm-core/tests/keeper-driver-loom/run.sh
+LOOM_MAX_PREEMPTIONS=3 ./crates/neovm-core/tests/keeper-driver-loom/run.sh
+```
+
+Without `LOOM_MAX_PREEMPTIONS`, the model bounds preemptions at 2.
+
+CI finds this crate through `scripts/ci/run-loom-models.sh` (glob `crates/*/tests/*loom*`). The harness reads `LOOM_MAX_PREEMPTIONS` itself, so the script classes it as bounded and exports its `BOUND` here: 2 on push and pull requests, 3 on the Sunday run.
