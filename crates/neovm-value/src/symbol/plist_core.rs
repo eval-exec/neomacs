@@ -247,10 +247,14 @@ fn plist_get_select<Comparison: PlistKeyComparison>(plist: Value, prop: &Value) 
     }
 }
 
-/// Caller has just tested `cell.is_cons()`. The checked accessor repeats
-/// that compare; this load uses the caller's proof instead.
+/// Car of a plist cell the caller has proved is a cons.
+///
+/// # Safety
+///
+/// `cell.is_cons()` is true. When `OBSERVE` is false the caller is also in
+/// an unobserved walk, same as [`Value::cons_car_unobserved`].
 #[inline(always)]
-fn read_car<const OBSERVE: bool>(cell: Value) -> Value {
+unsafe fn read_car<const OBSERVE: bool>(cell: Value) -> Value {
     if OBSERVE {
         // SAFETY: caller proved `cell.is_cons()`.
         unsafe { cell.cons_car_unchecked() }
@@ -260,9 +264,13 @@ fn read_car<const OBSERVE: bool>(cell: Value) -> Value {
     }
 }
 
-/// Caller has just tested `cell.is_cons()`. See [`read_car`].
+/// Cdr of a plist cell the caller has proved is a cons.
+///
+/// # Safety
+///
+/// Same as [`read_car`].
 #[inline(always)]
-fn read_cdr<const OBSERVE: bool>(cell: Value) -> Value {
+unsafe fn read_cdr<const OBSERVE: bool>(cell: Value) -> Value {
     if OBSERVE {
         // SAFETY: caller proved `cell.is_cons()`.
         unsafe { cell.cons_cdr_unchecked() }
@@ -282,15 +290,19 @@ fn plist_get_with<Comparison: PlistKeyComparison, const OBSERVE: bool>(
     let mut tail = plist;
     let mut safe_tail = SafeTailGuard::new(tail);
     while tail.is_cons() {
-        let key = read_car::<OBSERVE>(tail);
-        let rest = read_cdr::<OBSERVE>(tail);
+        // SAFETY: `tail.is_cons()` just succeeded.
+        let key = unsafe { read_car::<OBSERVE>(tail) };
+        // SAFETY: `tail` is still that cons.
+        let rest = unsafe { read_cdr::<OBSERVE>(tail) };
         if !rest.is_cons() {
             return None;
         }
         if Comparison::matches::<OBSERVE>(&key, prop) {
-            return Some(read_car::<OBSERVE>(rest));
+            // SAFETY: `rest.is_cons()` just succeeded.
+            return Some(unsafe { read_car::<OBSERVE>(rest) });
         }
-        tail = read_cdr::<OBSERVE>(rest);
+        // SAFETY: `rest` is still that cons.
+        tail = unsafe { read_cdr::<OBSERVE>(rest) };
         if safe_tail.found_cycle_after_advance(tail) {
             return None;
         }
@@ -364,8 +376,10 @@ fn plist_put_walk<const OBSERVE: bool>(
             }
             return Ok((plist, !value.is_nil()));
         }
-        let key = read_car::<OBSERVE>(tail);
-        let rest = read_cdr::<OBSERVE>(tail);
+        // SAFETY: the `!tail.is_cons()` arm returned above.
+        let key = unsafe { read_car::<OBSERVE>(tail) };
+        // SAFETY: `tail` is still that cons.
+        let rest = unsafe { read_cdr::<OBSERVE>(tail) };
         if !rest.is_cons() {
             // Odd-length plist (non-cons tail after key). Signal as malformed.
             if !rest.is_nil() {
@@ -382,7 +396,8 @@ fn plist_put_walk<const OBSERVE: bool>(
         }
         if compare_swp::<OBSERVE>(&key, &prop, symbols_with_pos_enabled) {
             let changed = !compare_swp::<OBSERVE>(
-                &read_car::<OBSERVE>(rest),
+                // SAFETY: `rest.is_cons()` just succeeded.
+                &unsafe { read_car::<OBSERVE>(rest) },
                 &value,
                 symbols_with_pos_enabled,
             );
@@ -390,7 +405,8 @@ fn plist_put_walk<const OBSERVE: bool>(
             return Ok((plist, changed));
         }
         last_value_cell = Some(rest);
-        tail = read_cdr::<OBSERVE>(rest);
+        // SAFETY: `rest` is still that cons.
+        tail = unsafe { read_cdr::<OBSERVE>(rest) };
         // GNU plist_put walks with FOR_EACH_TAIL: a circular plist signals.
         if let Some(cycle_tail) = cycle.step(tail) {
             return Err(signal(LispCondition::CircularList, vec![cycle_tail]));

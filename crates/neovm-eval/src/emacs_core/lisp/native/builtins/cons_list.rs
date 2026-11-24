@@ -190,8 +190,8 @@ impl From<Value> for ConsCellView {
     fn from(value: Value) -> Self {
         match value.kind() {
             ValueKind::Nil => Self::Empty,
-            // `kind()` yields `Cons` only for `TAG_CONS` (`is_cons`). The
-            // discriminant does not dominate the accessor's tag compare.
+            // SAFETY: `kind()` yields `Cons` only for `TAG_CONS` (`is_cons`).
+            // The discriminant does not dominate the accessor's tag compare.
             ValueKind::Cons => Self::Cell {
                 car: unsafe { value.cons_car_unchecked() },
                 cdr: unsafe { value.cons_cdr_unchecked() },
@@ -535,8 +535,8 @@ pub(crate) fn builtin_nth_values(n_value: Value, list: Value) -> EvalResult {
 fn builtin_nth_values_scan<const OBSERVED: bool>(n_value: Value, list: Value) -> EvalResult {
     let tail = nthcdr_impl_scan::<OBSERVED>(n_value, list)?;
     match tail.kind() {
-        // Same `TAG_CONS` proof as `ConsCellView`. The kind discriminant
-        // does not delete the accessor compare.
+        // SAFETY: `ValueKind::Cons` is `TAG_CONS`, the same proof as
+        // `ConsCellView`. The kind discriminant does not delete the compare.
         ValueKind::Cons => Ok(unsafe { proven_scan_car::<OBSERVED>(tail) }),
         ValueKind::Nil => Ok(Value::NIL),
         _ => Err(signal(
@@ -634,7 +634,7 @@ fn nthcdr_impl_scan<const OBSERVED: bool>(n_value: Value, list: Value) -> EvalRe
         for _ in 0..(*n as usize) {
             match tail.kind() {
                 ValueKind::Cons => {
-                    // `ValueKind::Cons` is `TAG_CONS`. `kind()` does not
+                    // SAFETY: `ValueKind::Cons` is `TAG_CONS`. `kind()` does not
                     // dominate the compare inside `scan_cdr`.
                     tail = unsafe { proven_scan_cdr::<OBSERVED>(tail) };
                 }
