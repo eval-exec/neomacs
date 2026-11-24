@@ -467,13 +467,16 @@ fn projected_localized_generic_view_keeps_cache_hits_lazy() {
     unsafe {
         let cache = &*blv.blv().as_ptr();
         assert_eq!(cache.where_buf.get(), object);
-        assert_eq!(cache.where_buf_id, buffer_id.0);
-        assert!(cache.found);
+        assert_eq!(cache.where_buf_id.get(), buffer_id.0);
+        assert!(cache.found.get());
         assert_eq!(
             Some(cache.valcell.get()),
             view.buffer.local_variable_binding_cell(id)
         );
-        assert_eq!(cache.alist_epoch, neovm_value::symbol::blv_alist_epoch());
+        assert_eq!(
+            cache.alist_epoch.get(),
+            neovm_value::symbol::blv_alist_epoch()
+        );
     }
     assert_eq!(
         ev.obarray.read_projected_localized(id, blv, Some(&view)),
@@ -489,7 +492,7 @@ fn projected_localized_generic_view_keeps_cache_hits_lazy() {
     // SAFETY: same owned BLV; the preceding bufferless read has completed.
     unsafe {
         assert_eq!((*blv.blv().as_ptr()).where_buf.get(), object);
-        assert!((*blv.blv().as_ptr()).found);
+        assert!((*blv.blv().as_ptr()).found.get());
     }
     assert_eq!(ev.tagged_heap.allocated_count(), allocated);
 }
@@ -520,10 +523,13 @@ fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
             unsafe {
                 let cache = &*blv.blv().as_ptr();
                 assert!(cache.where_buf.get().is_nil());
-                assert_eq!(cache.where_buf_id, neovm_value::symbol::NO_WHERE_BUF);
-                assert!(!cache.found);
+                assert_eq!(cache.where_buf_id.get(), neovm_value::symbol::NO_WHERE_BUF);
+                assert!(!cache.found.get());
                 assert_eq!(cache.valcell.get(), cache.defcell.get());
-                assert_eq!(cache.alist_epoch, neovm_value::symbol::blv_alist_epoch());
+                assert_eq!(
+                    cache.alist_epoch.get(),
+                    neovm_value::symbol::blv_alist_epoch()
+                );
             }
         }
     }
@@ -545,13 +551,16 @@ fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
     unsafe {
         let cache = &*blv.blv().as_ptr();
         assert!(cache.where_buf.get().is_nil());
-        assert_eq!(cache.where_buf_id, neovm_value::symbol::NO_WHERE_BUF);
-        assert!(cache.found);
+        assert_eq!(cache.where_buf_id.get(), neovm_value::symbol::NO_WHERE_BUF);
+        assert!(cache.found.get());
         assert_eq!(
             Some(cache.valcell.get()),
             view.buffer.local_variable_binding_cell(id)
         );
-        assert_eq!(cache.alist_epoch, neovm_value::symbol::blv_alist_epoch());
+        assert_eq!(
+            cache.alist_epoch.get(),
+            neovm_value::symbol::blv_alist_epoch()
+        );
     }
     assert!(
         neovm_value::tagged::gc::with_tagged_heap(|heap| heap.buffer_value(buffer_id)).is_none()

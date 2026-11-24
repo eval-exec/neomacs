@@ -619,7 +619,7 @@ fn make_symbol_localized_allocates_blv() {
     // (sym . default)
     assert_eq!(blv.defcell.get().cons_cdr(), Value::fixnum(42));
     assert!(blv.where_buf.get().is_nil());
-    assert!(!blv.found);
+    assert!(!blv.found.get());
     assert!(!blv.local_if_set);
 }
 
@@ -689,7 +689,7 @@ fn localized_swap_in_reads_buffer_local_value() {
     // The cache now records `where_buf == buf_a` and `found == true`.
     let blv = ob.blv(id).expect("BLV");
     assert_eq!(blv.where_buf.get(), buf_a);
-    assert!(blv.found);
+    assert!(blv.found.get());
 }
 
 /// Switching buffers reloads the BLV cache. A symbol with a binding
@@ -718,7 +718,7 @@ fn localized_blv_cache_invalidated_on_buffer_switch() {
     assert_eq!(v_b, Some(Value::fixnum(0)));
     let blv = ob.blv(id).expect("BLV");
     assert_eq!(blv.where_buf.get(), buf_b);
-    assert!(!blv.found);
+    assert!(!blv.found.get());
 }
 
 // Phase 5 — LOCALIZED write path.
@@ -756,7 +756,7 @@ fn indexed_localized_reads_preserve_shared_cells_defaults_and_void_values() {
         ob.read_localized_in_buffer(id, buffers.get(b).unwrap()),
         Some(Value::fixnum(7))
     );
-    assert!(!ob.blv(id).unwrap().found);
+    assert!(!ob.blv(id).unwrap().found.get());
     // Switching back must preserve voidness rather than falling through to
     // the default, and subsequent writes must reach the same shared cell.
     assert_eq!(
@@ -780,7 +780,7 @@ fn indexed_localized_reads_preserve_shared_cells_defaults_and_void_values() {
         ob.read_localized_in_buffer(id, buffers.get(a).unwrap()),
         Some(Value::fixnum(7))
     );
-    assert!(!ob.blv(id).unwrap().found);
+    assert!(!ob.blv(id).unwrap().found.get());
 }
 
 /// `set_internal_localized` with `local_if_set = true` and

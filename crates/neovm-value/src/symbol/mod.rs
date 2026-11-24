@@ -25,6 +25,9 @@
 //! together as a [`ValueCell`] and written together by one seam, so the
 //! obarray cannot pair a tag with another arm's payload (see `cell`).
 
+#[cfg(test)]
+#[path = "tests/blv_shared_refresh.rs"]
+mod blv_shared_refresh;
 mod canonical_access;
 mod cell;
 mod fn_stamps;
@@ -157,7 +160,6 @@ impl std::error::Error for ObarrayRestoreError {}
 use crate::heap_types::LispString;
 use crate::tagged::header::AtomicTaggedValue;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-#[cfg(any(test, feature = "test-support"))]
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -381,7 +383,12 @@ pub struct LispBufferLocalValue {
     pub local_if_set: bool,
     /// True if the loaded binding (`valcell`) was actually found in the
     /// buffer's `local_var_alist`, vs. the default. GNU `found`.
-    pub found: bool,
+    ///
+    /// [`Cell`]: a shared [`Obarray::blv`] borrow can outlive
+    /// [`Obarray::read_localized`], which stores this through the record
+    /// pointer. `Cell<bool>` is `repr(transparent)`, so the byte stays the
+    /// one compiled code loads.
+    pub found: Cell<bool>,
     /// Optional forwarder for variables that have BOTH a per-buffer
     /// binding *and* a static C slot (e.g. `case-fold-search`). Must not
     /// be a `BufferObj` or `KboardObj`.
@@ -397,7 +404,11 @@ pub struct LispBufferLocalValue {
     /// where-buffer test as one integer compare. Comparing the object meant
     /// a tag test, a header load and a field load on every read of a
     /// buffer-local variable -- a third of the read.
-    pub where_buf_id: u64,
+    ///
+    /// A [`Cell`], like [`Self::found`]: refreshed through the record pointer
+    /// while [`Obarray::blv`] may still hold the record. The word is the
+    /// `u64` compiled code loads.
+    pub where_buf_id: Cell<u64>,
     /// `(SYMBOL . DEFAULT-VALUE)` cons. GNU `defcell`.
     pub defcell: AtomicTaggedValue,
     /// `(SYMBOL . CURRENT-VALUE)` cons. Equal to `defcell` when no
@@ -410,8 +421,16 @@ pub struct LispBufferLocalValue {
     /// even though some paths edit `local_var_alist` structure without
     /// touching the BLV cache (they bump the epoch instead). Starts 0;
     /// the global epoch starts 1, so a fresh BLV always rescans first.
-    pub alist_epoch: u64,
+    ///
+    /// A [`Cell`], like [`Self::found`].
+    pub alist_epoch: Cell<u64>,
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<Cell<bool>>() == 1);
+    assert!(std::mem::size_of::<Cell<u64>>() == std::mem::size_of::<u64>());
+    assert!(std::mem::align_of::<Cell<u64>>() == std::mem::align_of::<u64>());
+};
 
 /// [`LispBufferLocalValue::where_buf_id`] when `where_buf` is not a buffer.
 #[doc(hidden)]
@@ -422,9 +441,10 @@ impl LispBufferLocalValue {
     /// default): the object for the collector and for `eq` tests, its id
     /// for the read fast path. The one writer of both.
     #[inline]
-    pub(crate) fn set_where(&mut self, buf: Value) {
+    pub(crate) fn set_where(&self, buf: Value) {
         self.where_buf.store_atomic(buf);
-        self.where_buf_id = buf.as_buffer_id().map_or(NO_WHERE_BUF, |id| id.0);
+        self.where_buf_id
+            .set(buf.as_buffer_id().map_or(NO_WHERE_BUF, |id| id.0));
     }
 }
 
@@ -551,14 +571,14 @@ fn swap_in_blv(
     let key = Value::from_sym_id(sym_id);
     let found_cell = assq(key, local_var_alist);
     blv.set_where(current_buffer);
-    blv.found = !found_cell.is_nil();
-    let new_valcell = if blv.found {
+    blv.found.set(!found_cell.is_nil());
+    let new_valcell = if blv.found.get() {
         found_cell
     } else {
         blv.defcell.get()
     };
     blv.valcell.store_atomic(new_valcell);
-    blv.alist_epoch = epoch;
+    blv.alist_epoch.set(epoch);
 }
 
 /// Walk an alist looking for the cons whose car is `eq` to `key`.
@@ -685,11 +705,11 @@ impl LispSymbol {
     ) -> Option<BlvCacheHit> {
         let blv = self.localized_blv()?;
         // SAFETY: a `Localized` cell names a record `make_symbol_localized`
-        // allocated and the obarray owns for its lifetime; the evaluator
-        // thread is its only writer and nothing is written while this shared
-        // borrow lives.
+        // allocated and the obarray owns for its lifetime. The cache flags
+        // are cells, so a refresh through another borrow of this record is
+        // defined. The evaluator thread is the only writer.
         let blv = unsafe { &*blv.as_ptr() };
-        if blv.alist_epoch != blv_alist_epoch() || blv.where_buf_id != buffer.0 {
+        if blv.alist_epoch.get() != blv_alist_epoch() || blv.where_buf_id.get() != buffer.0 {
             return None;
         }
         debug_assert_eq!(
@@ -697,13 +717,13 @@ impl LispSymbol {
                 .get()
                 .as_buffer_id()
                 .map_or(NO_WHERE_BUF, |b| b.0),
-            blv.where_buf_id,
+            blv.where_buf_id.get(),
             "a BLV writer bypassed set_where"
         );
         Some(BlvCacheHit {
             valcell: blv.valcell.get(),
             defcell: blv.defcell.get(),
-            found: blv.found,
+            found: blv.found.get(),
             local_if_set: blv.local_if_set,
             fwd: blv.fwd,
         })
@@ -2761,15 +2781,15 @@ impl Obarray {
         let defcell = Value::cons(Value::from_sym_id(target), default);
         let blv = Box::new(LispBufferLocalValue {
             local_if_set: false,
-            found: false,
+            found: Cell::new(false),
             fwd: forwarder,
             where_buf: Value::NIL.into(),
-            where_buf_id: NO_WHERE_BUF,
+            where_buf_id: Cell::new(NO_WHERE_BUF),
             defcell: defcell.into(),
             valcell: defcell.into(),
             // 0 < the global epoch's initial 1: a fresh BLV never
             // fast-path-hits before its first swap_in records reality.
-            alist_epoch: 0,
+            alist_epoch: Cell::new(0),
         });
         let record = BlvPtr::leak(blv);
         self.blvs.push(record);
@@ -3041,18 +3061,20 @@ impl Obarray {
     ) -> Option<Value> {
         let blv_ptr = sym.localized_blv()?.as_ptr();
         let epoch = blv_alist_epoch();
-        // SAFETY: identical to `read_localized` -- the BLV record is reached
-        // only through the symbol's raw pointer and the evaluator thread is
-        // its only writer; no reference is held across a write.
+        // SAFETY: the BLV record is the symbol's localized pointer. The cache
+        // flags are cells, so a shared borrow of the record may be live.
+        // The evaluator thread is the only writer.
         unsafe {
-            if (*blv_ptr).alist_epoch == epoch && (*blv_ptr).where_buf_id == target_buf_id.0 {
+            if (*blv_ptr).alist_epoch.get() == epoch
+                && (*blv_ptr).where_buf_id.get() == target_buf_id.0
+            {
                 debug_assert_eq!(
                     (*blv_ptr)
                         .where_buf
                         .get()
                         .as_buffer_id()
                         .map_or(NO_WHERE_BUF, |b| b.0),
-                    (*blv_ptr).where_buf_id,
+                    (*blv_ptr).where_buf_id.get(),
                     "a BLV writer bypassed set_where"
                 );
                 return Some((*blv_ptr).valcell.get().cons_cdr());
@@ -3103,8 +3125,9 @@ impl Obarray {
     ///
     /// # Safety
     ///
-    /// `blv_ptr` names a live record of this obarray's BLV pool, and no
-    /// reference to it is held across the call.
+    /// `blv_ptr` names a live record of this obarray's BLV pool. The cache
+    /// flags are cells and the value slots are atomics, so a shared
+    /// reference to that record may also be live.
     #[inline(always)]
     pub(super) unsafe fn read_blv_with_lookup(
         blv_ptr: *mut LispBufferLocalValue,
@@ -3113,11 +3136,11 @@ impl Obarray {
     ) -> Value {
         let epoch = blv_alist_epoch();
         // SAFETY: the BLV record is a separate heap allocation reached only
-        // through the symbol's raw pointer; the evaluator thread is its only
-        // writer, and the two `Value` slots the GC thread may read
-        // concurrently are written with release stores -- the same contract
-        // `swap_in_blv` honours through `&mut`.  No `&LispBufferLocalValue`
-        // is held across the writes.
+        // through the symbol's raw pointer. The evaluator thread is its only
+        // writer. The two `Value` slots the GC thread may read concurrently
+        // are written with release stores. `found`, `where_buf_id`, and
+        // `alist_epoch` are cells, so a shared `blv()` borrow may be live
+        // across these stores.
         unsafe {
             // Same-buffer fast path -- the SAME soundness guard as
             // `find_symbol_value_in_buffer`'s GNU `swap_in_symval_forwarding`
@@ -3126,7 +3149,7 @@ impl Obarray {
             // since (`alist_epoch` vs the global epoch).  Every value write
             // updates that shared cons's cdr in place, so an epoch-valid cell
             // carries the identical live value.
-            if (*blv_ptr).alist_epoch == epoch
+            if (*blv_ptr).alist_epoch.get() == epoch
                 && crate::value::eq_value(&(*blv_ptr).where_buf.get(), &target_buf)
             {
                 return (*blv_ptr).valcell.get().cons_cdr();
@@ -3146,9 +3169,9 @@ impl Obarray {
                 (*blv_ptr).defcell.get()
             };
             (*blv_ptr).set_where(target_buf);
-            (*blv_ptr).found = found;
+            (*blv_ptr).found.set(found);
             (*blv_ptr).valcell.store_atomic(valcell);
-            (*blv_ptr).alist_epoch = epoch;
+            (*blv_ptr).alist_epoch.set(epoch);
             valcell.cons_cdr()
         }
     }
@@ -3176,10 +3199,10 @@ impl Obarray {
         // contract `read_localized` trusts).  `specbind` and `unbind_to`
         // asked this right after `find_symbol_value` had swapped the cache
         // in, so every buffer-local `let` paid a second whole-alist assq.
-        if blv.alist_epoch == blv_alist_epoch()
+        if blv.alist_epoch.get() == blv_alist_epoch()
             && crate::value::eq_value(&blv.where_buf.get(), &target_buf)
         {
-            return blv.found;
+            return blv.found.get();
         }
         // Otherwise the alist is authoritative (see `read_localized`).
         let key = Value::from_sym_id(id);
@@ -3194,7 +3217,7 @@ impl Obarray {
     pub fn reset_blv_cache_to_default(&mut self, id: SymId) {
         if let Some(blv) = self.blv_mut(id) {
             blv.set_where(Value::NIL);
-            blv.found = false;
+            blv.found.set(false);
             blv.valcell.store_atomic(blv.defcell.get());
         }
     }
@@ -3206,7 +3229,7 @@ impl Obarray {
             && crate::value::eq_value(&blv.where_buf.get(), &buffer)
         {
             blv.set_where(Value::NIL);
-            blv.found = false;
+            blv.found.set(false);
             blv.valcell.store_atomic(blv.defcell.get());
         }
     }
@@ -3632,7 +3655,7 @@ impl Obarray {
                     // dominates localized VarRef cost (Task 4: 58% of
                     // session VarRefs, 60.8ns -> ~cons_cdr).
                     if let Some(blv) = self.blv(current)
-                        && blv.alist_epoch == blv_alist_epoch()
+                        && blv.alist_epoch.get() == blv_alist_epoch()
                         && crate::value::eq_value(&blv.where_buf.get(), &current_buffer_value)
                     {
                         return Some(blv.valcell.get().cons_cdr());
@@ -3772,10 +3795,10 @@ impl Obarray {
         // loaded for it at the current epoch yields the cell directly (nil
         // when `found` is false, so the auto-create decision below is the
         // same one the scan would reach).
-        let mut cell = if blv.alist_epoch == epoch
+        let mut cell = if blv.alist_epoch.get() == epoch
             && crate::value::eq_value(&blv.where_buf.get(), &target_buf)
         {
-            if blv.found {
+            if blv.found.get() {
                 blv.valcell.get()
             } else {
                 Value::NIL
@@ -3784,8 +3807,8 @@ impl Obarray {
             assq(key, new_alist)
         };
         blv.set_where(target_buf);
-        blv.alist_epoch = epoch;
-        blv.found = true;
+        blv.alist_epoch.set(epoch);
+        blv.found.set(true);
 
         if cell.is_nil() {
             // No existing binding for this buffer.
@@ -3793,7 +3816,7 @@ impl Obarray {
                 bindflag == SetInternalBind::Set && blv.local_if_set && !let_shadows();
             if !auto_create {
                 // Fall through to writing the default.
-                blv.found = false;
+                blv.found.set(false);
                 cell = blv.defcell.get();
             } else {
                 // Cons up `(sym . current-default-cdr)` and prepend it

@@ -4202,7 +4202,7 @@ pub fn builtin_variable_binding_locus(
                     }
                 }
                 if let Some(blv) = ctx.obarray.blv(resolved)
-                    && blv.found
+                    && blv.found.get()
                     && !blv.where_buf.get().is_nil()
                 {
                     return Ok(blv.where_buf.get());

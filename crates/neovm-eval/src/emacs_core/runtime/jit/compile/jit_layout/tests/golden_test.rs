@@ -540,7 +540,7 @@ fn variable_words_are_where_compiled_code_reads_them() {
     assert_eq!(words_at(base, BLV_DEFCELL_OFFSET), blv.defcell.get().bits());
     assert_eq!(
         words_at(base, BLV_ALIST_EPOCH_OFFSET) as u64,
-        blv.alist_epoch
+        blv.alist_epoch.get()
     );
     assert_eq!(words_at(base, BLV_FWD_OFFSET), 0, "no forwarder");
     // SAFETY: the two bool bytes of a live record.
@@ -553,7 +553,7 @@ fn variable_words_are_where_compiled_code_reads_them() {
     assert_eq!((local_if_set, found), (u8::from(blv.local_if_set), 1));
     // SAFETY: a process static.
     let epoch = unsafe { (blv_alist_epoch_addr() as *const u64).read() };
-    assert_eq!(epoch, blv.alist_epoch, "the cache is current");
+    assert_eq!(epoch, blv.alist_epoch.get(), "the cache is current");
     // The valcell's cdr, from the tagged cons word.
     let cdr = words_at(
         blv.valcell.get().bits() as *const u8,
