@@ -73,11 +73,12 @@ impl<'s, 'era> StoppedInterval<'s, 'era> {
         self.stopped.epoch()
     }
 
-    /// The serial ring's head under this stop: owner and queued generation.
+    /// The serial ring's head under this stop: an owner with its queued
+    /// generation, or the Baton group.
     #[doc(hidden)]
     pub fn serial_head(
         &self,
-    ) -> Result<Option<(super::super::MutatorKey, std::num::NonZeroU64)>, RendezvousError> {
+    ) -> Result<Option<super::super::rendezvous::RingClient>, RendezvousError> {
         self.stopped.serial_head()
     }
 
@@ -94,6 +95,14 @@ impl<'s, 'era> StoppedInterval<'s, 'era> {
         ready: impl FnOnce(super::super::MutatorKey, std::num::NonZeroU64) -> bool,
     ) -> Result<Option<super::super::rendezvous::SerialGrant>, RendezvousError> {
         self.stopped.grant_serial_head(ready)
+    }
+
+    /// L6.7b b3: grant a Baton-group head inside this stop.
+    #[doc(hidden)]
+    pub fn grant_baton_group(
+        &mut self,
+    ) -> Result<Option<super::super::rendezvous::SerialGrant>, RendezvousError> {
+        self.stopped.grant_baton_group()
     }
 
     /// Retire a grant issued under this stop, exactly once.

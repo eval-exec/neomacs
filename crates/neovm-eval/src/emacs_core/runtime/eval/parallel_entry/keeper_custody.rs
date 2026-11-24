@@ -11,11 +11,10 @@ use neovm_value::tagged::gc::heap_transfer::{
     PublishedOwner, StopScope, StoppedInterval, UnenteredReservation,
 };
 use neovm_value::tagged::gc::{
-    AllStopped, AllStoppedFailure, MutatorKey, RendezvousError, SerialGrant,
+    AllStopped, AllStoppedFailure, RendezvousError, RingClient, SerialGrant,
 };
 use std::cell::Cell;
 use std::marker::PhantomData;
-use std::num::NonZeroU64;
 use std::rc::Rc;
 
 type KeeperStop<'s> = PhantomData<fn(&'s mut ()) -> &'s mut ()>;
@@ -153,8 +152,9 @@ impl<'s, 'era> StoppedKeeper<'s, 'era> {
         })
     }
 
-    /// The ring head under this stop: owner and queued generation.
-    pub(crate) fn serial_head(&self) -> Result<Option<(MutatorKey, NonZeroU64)>, RendezvousError> {
+    /// The ring head under this stop: an owner with its queued generation,
+    /// or the Baton group.
+    pub(crate) fn serial_head(&self) -> Result<Option<RingClient>, RendezvousError> {
         self.interval.serial_head()
     }
 
@@ -257,8 +257,9 @@ impl<'s, 'era> RestoredKeeper<'s, 'era> {
         })
     }
 
-    /// The ring head under this stop: owner and queued generation.
-    pub(crate) fn serial_head(&self) -> Result<Option<(MutatorKey, NonZeroU64)>, RendezvousError> {
+    /// The ring head under this stop: an owner with its queued generation,
+    /// or the Baton group.
+    pub(crate) fn serial_head(&self) -> Result<Option<RingClient>, RendezvousError> {
         self.export.reservation.serial_head()
     }
 

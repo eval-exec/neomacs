@@ -2,7 +2,7 @@
 // module per copy of the core and ring (the real ones and each one-edge
 // mutation), next to that module's `control` and `driver_core`.
 
-use self::control::{Mode, Request, RequestId, RingClient, State as Ring};
+use self::control::{Mode, Request, RequestId, RingClient, SerialClient, State as Ring};
 use self::driver_core::{
     Attempt, Batch, BatchVisitor, Breach, BreachOf, CustodyRefused, Driver, DriverEnd, GrantMsg,
     KeeperMsg, KeeperOps, LendDrop, Refusal, Settle,
@@ -135,7 +135,12 @@ impl<'a> KeeperOps for Era<'a> {
     }
 
     fn cancel(self, key: MutatorKey) -> Result<(), RendezvousError> {
-        self.0.model.lock().unwrap().ring.cancel_queued(key)
+        self.0
+            .model
+            .lock()
+            .unwrap()
+            .ring
+            .cancel_queued(SerialClient::Owner(key))
     }
 
     /// Request the stop. When the members are not all stopped yet, wait for

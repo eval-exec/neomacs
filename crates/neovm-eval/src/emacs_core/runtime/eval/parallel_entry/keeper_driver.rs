@@ -20,7 +20,8 @@ use super::serial_ticket::{ReceiveReason, SerialLendHeld, StoppedSerialTicket};
 use super::sync::mpsc;
 use neovm_value::tagged::gc::heap_transfer::{PublishedOwner, with_stop_scope};
 use neovm_value::tagged::gc::{
-    AllStopped, Mutator, MutatorKey, RendezvousError, SerialGrant, StopAttempt, StopPending,
+    AllStopped, Mutator, MutatorKey, RendezvousError, RingClient, SerialGrant, StopAttempt,
+    StopPending,
 };
 use std::num::NonZeroU64;
 use std::time::Duration;
@@ -146,7 +147,12 @@ impl<'s, 'k, 'service, 'heap> Batch<&'k KeeperEra<'service, 'heap>> for Between<
             Between::Fresh(keeper) => keeper.serial_head()?,
             Between::Restored(keeper) => keeper.serial_head()?,
         };
-        Ok(head.map(|(key, _generation)| key))
+        head.map(|client| match client {
+            RingClient::Owner { key, .. } => Ok(key),
+            // No product path enqueues the group yet; b3.2 routes its turn.
+            RingClient::BatonGroup => Err(RendezvousError::Identity),
+        })
+        .transpose()
     }
 
     fn ready(&self, receipt: PublishedOwner) -> Result<KeeperReadyRequest<'s>, RendezvousError> {

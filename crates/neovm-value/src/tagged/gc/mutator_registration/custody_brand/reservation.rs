@@ -48,14 +48,12 @@ impl<'s, 'era> UnenteredReservation<'s, 'era> {
         self.interval.validate_owner(owner)
     }
 
-    /// The serial ring's head under this stop: owner and queued generation.
+    /// The serial ring's head under this stop: an owner with its queued
+    /// generation, or the Baton group.
     #[doc(hidden)]
     pub fn serial_head(
         &self,
-    ) -> Result<
-        Option<(super::super::MutatorKey, std::num::NonZeroU64)>,
-        super::super::RendezvousError,
-    > {
+    ) -> Result<Option<super::super::rendezvous::RingClient>, super::super::RendezvousError> {
         self.interval.serial_head()
     }
 
@@ -73,6 +71,14 @@ impl<'s, 'era> UnenteredReservation<'s, 'era> {
         ready: impl FnOnce(super::super::MutatorKey, std::num::NonZeroU64) -> bool,
     ) -> Result<Option<super::super::rendezvous::SerialGrant>, super::super::RendezvousError> {
         self.interval.grant_serial_head(ready)
+    }
+
+    /// L6.7b b3: grant a Baton-group head inside this stop, between lends.
+    #[doc(hidden)]
+    pub fn grant_baton_group(
+        &mut self,
+    ) -> Result<Option<super::super::rendezvous::SerialGrant>, super::super::RendezvousError> {
+        self.interval.grant_baton_group()
     }
 
     /// Retire a grant issued under this stop, exactly once.

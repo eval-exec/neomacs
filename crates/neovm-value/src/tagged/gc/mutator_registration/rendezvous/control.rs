@@ -57,9 +57,11 @@ pub(in crate::tagged::gc) enum RingPhase {
 }
 
 /// Who a ring entry serves (L6.7b, lead #14000). The Baton group, main and
-/// every Baton thread, is ONE client however many Baton threads it has.
+/// every Baton thread, is ONE client however many Baton threads it has. The
+/// keeper reads the head's client to route its turn (b3).
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::tagged::gc) enum RingClient {
+pub enum RingClient {
     /// A parallel owner. It published its image and root lease before
     /// enqueueing (L6 condition b); `generation` names that publication, and
     /// the keeper re-validates it before the grant (via `ready`).
@@ -69,6 +71,25 @@ pub(in crate::tagged::gc) enum RingClient {
     },
     /// The Baton group. It has no owner image, so nothing beyond the stop is
     /// checked before its grant.
+    BatonGroup,
+}
+
+impl RingClient {
+    /// The client without the owner's publication.
+    pub(in crate::tagged::gc) const fn serial_client(self) -> SerialClient {
+        match self {
+            RingClient::Owner { key, .. } => SerialClient::Owner(key),
+            RingClient::BatonGroup => SerialClient::BatonGroup,
+        }
+    }
+}
+
+/// A ring client without its publication: whom a grant serves, or whose
+/// queued entry a cancel removes (L6.7b b3).
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SerialClient {
+    Owner(MutatorKey),
     BatonGroup,
 }
 
@@ -243,10 +264,6 @@ impl State {
     /// Commit the Baton group's request at the tail (L6.7b). The group is one
     /// client, so a second entry while one is queued or granted is a typed
     /// refusal; the group's waking threads share the one entry.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "L6.7b b3 is the production caller")
-    )]
     pub(in crate::tagged::gc) fn enqueue_baton_group(
         &mut self,
     ) -> Result<RequestId, RendezvousError> {
@@ -331,8 +348,9 @@ impl State {
     /// Grant the head inside the caller's own stop (L6.7 K3). A serial turn
     /// runs inside a stop, so its grant is issued there: only `Tracing` for
     /// the caller's epoch grants, which leaves no window where a granted head
-    /// exists without a stop. One ticket is out at a time; `ready` is the
-    /// keeper's publication check, and an unready head is never skipped.
+    /// exists without a stop. One ticket is out at a time. `ready` sees the
+    /// head entry: for an owner the keeper checks the publication it queued
+    /// under; the Baton group has none. An unready head is never skipped.
     pub(in crate::tagged::gc) fn grant_head_in_stop(
         &mut self,
         epoch: NonZeroU64,
@@ -374,25 +392,25 @@ impl State {
         Ok(())
     }
 
-    /// Cancel `owner`'s queued entry (owner exit, or a stale publication the
-    /// keeper sent back). A granted entry is not cancelled here: its ticket
-    /// is out and only the grant's retire ends it.
+    /// Cancel `client`'s queued entry: an owner's exit or a stale publication
+    /// the keeper sent back, or the Baton group leaving the era. A granted
+    /// entry is not cancelled here: its turn is out and only the grant's
+    /// retire ends it.
     pub(in crate::tagged::gc) fn cancel_queued(
         &mut self,
-        owner: MutatorKey,
+        client: SerialClient,
     ) -> Result<(), RendezvousError> {
-        let Some(index) = self
-            .serial_ring
-            .iter()
-            .position(|entry| entry.is_owner(owner) && entry.phase() == RingPhase::Queued)
-        else {
+        let Some(index) = self.serial_ring.iter().position(|entry| {
+            entry.client().serial_client() == client && entry.phase() == RingPhase::Queued
+        }) else {
             return Err(RendezvousError::Identity);
         };
         self.serial_ring.remove(index);
         Ok(())
     }
 
-    /// The head entry's owner and queued publication generation.
+    /// The head entry: its client (an owner with the publication generation
+    /// it queued under, or the Baton group) and whether it is granted.
     pub(in crate::tagged::gc) fn ring_head_entry(&self) -> Option<RingEntry> {
         self.serial_ring.front().copied()
     }

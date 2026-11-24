@@ -665,6 +665,20 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
         super::rendezvous::cancel_serial(self.core.registry(), owner)
     }
 
+    /// L6.7b b3: the keeper commits the Baton group's request at the ring's
+    /// tail. One entry for the whole group: a second refuses `Identity`.
+    #[doc(hidden)]
+    pub fn enqueue_baton_group(&self) -> Result<(), RendezvousError> {
+        super::rendezvous::enqueue_baton_group(self.core.registry())
+    }
+
+    /// L6.7b b3: the keeper cancels the Baton group's queued request. A
+    /// granted request refuses with `Identity`.
+    #[doc(hidden)]
+    pub fn cancel_baton_group(&self) -> Result<(), RendezvousError> {
+        super::rendezvous::cancel_baton_group(self.core.registry())
+    }
+
     /// Queue one serial request ahead of a live stop. Not the product ring.
     /// L6.7 owns that enqueue. The generation is stored and is not a
     /// publication check.

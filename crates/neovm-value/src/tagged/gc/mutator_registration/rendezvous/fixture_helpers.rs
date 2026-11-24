@@ -72,6 +72,7 @@ pub enum RootedRendezvousCase {
     KeeperReenteringAnEntryItHoldsRefusesAtOnce,
     KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop,
     KeeperBoundedStopPendsAndKeepsItsEpoch,
+    KeeperRoutesABatonGroupHeadAndGrantsItAlone,
 }
 
 impl RootedRendezvousCase {
@@ -123,6 +124,7 @@ impl RootedRendezvousCase {
         Self::KeeperReenteringAnEntryItHoldsRefusesAtOnce,
         Self::KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop,
         Self::KeeperBoundedStopPendsAndKeepsItsEpoch,
+        Self::KeeperRoutesABatonGroupHeadAndGrantsItAlone,
     ];
 }
 

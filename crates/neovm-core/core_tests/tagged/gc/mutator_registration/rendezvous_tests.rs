@@ -136,6 +136,7 @@ shells! {
     keeper_reentering_an_entry_it_holds_refuses_at_once => KeeperReenteringAnEntryItHoldsRefusesAtOnce,
     keeper_grants_the_serial_head_only_inside_its_traced_stop => KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop,
     keeper_bounded_stop_pends_and_keeps_its_epoch => KeeperBoundedStopPendsAndKeepsItsEpoch,
+    keeper_routes_a_baton_group_head_and_grants_it_alone => KeeperRoutesABatonGroupHeadAndGrantsItAlone,
 }
 
 #[test]

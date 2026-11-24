@@ -2684,8 +2684,8 @@ pub use mutator_registration::{
 };
 pub use mutator_registration::{
     AllStoppedFailure, MutatorEntry, MutatorFinishFailure, MutatorStartFailure, NativeReturn,
-    RegistrationCensus, ResumeGcImageFailure, RootedRetireFailure, SerialGrant, StopAttempt,
-    StopPending, StoppedSummaries, YoungWorkerLoan,
+    RegistrationCensus, ResumeGcImageFailure, RingClient, RootedRetireFailure, SerialClient,
+    SerialGrant, StopAttempt, StopPending, StoppedSummaries, YoungWorkerLoan,
 };
 pub use mutator_registration::{
     FunctionStep, GlobalError, InitialInternError, MutatorKey, Rendezvous,

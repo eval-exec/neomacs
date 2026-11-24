@@ -510,19 +510,19 @@ fn ring_cancel_queued_removes_only_a_queued_entry() {
     state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
     assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
     assert_eq!(
-        state.cancel_queued(keys[0]),
+        state.cancel_queued(SerialClient::Owner(keys[0])),
         Err(RendezvousError::Identity),
         "a granted entry is not cancelled"
     );
-    state.cancel_queued(keys[1]).unwrap();
+    state.cancel_queued(SerialClient::Owner(keys[1])).unwrap();
     assert_eq!(state.ring_len(), 1);
     assert_eq!(
-        state.cancel_queued(keys[1]),
+        state.cancel_queued(SerialClient::Owner(keys[1])),
         Err(RendezvousError::Identity),
         "a cancel happens once"
     );
     assert_eq!(
-        state.cancel_queued(keys[2]),
+        state.cancel_queued(SerialClient::Owner(keys[2])),
         Err(RendezvousError::Identity),
         "an owner with no entry"
     );
@@ -625,7 +625,9 @@ fn ring_refuses_a_second_baton_group_entry() {
 }
 
 /// The Baton group's turn is granted only under the caller's traced stop,
-/// like an owner's (K3): never outside a stop or before its trace.
+/// like an owner's (K3): never outside a stop or before its trace. The rule
+/// does not read the entry's kind; this row pins that a group entry gets no
+/// exemption from it (lead #14011 nit).
 #[test]
 fn ring_grants_the_baton_group_only_inside_a_traced_stop() {
     let mut state = State::new();
@@ -648,7 +650,9 @@ fn ring_grants_the_baton_group_only_inside_a_traced_stop() {
 }
 
 /// A granted Baton-group entry is retired exactly once, also after poison,
-/// so a turn that was out when the era died is not lost (L6 f).
+/// so a turn that was out when the era died is not lost (L6 f). Retire does
+/// not read the entry's kind either; the row pins the group to the same
+/// once-only retire (lead #14011 nit).
 #[test]
 fn ring_retires_a_granted_baton_group_once_after_poison() {
     let mut state = State::new();
@@ -665,4 +669,65 @@ fn ring_retires_a_granted_baton_group_once_after_poison() {
         "retire happens once"
     );
     assert_eq!(state.enqueue_baton_group(), Err(RendezvousError::Poisoned));
+}
+
+/// L6.7b b3 (lead #14011 M1 condition): no grant outlives its stop, and a
+/// Baton-group grant is no exception. The stop completes once the group's
+/// turn is retired.
+#[test]
+fn ring_complete_refuses_while_a_baton_group_grant_is_out() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let group = state.enqueue_baton_group().unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    let stopped = stopped_members(&keys);
+    state.begin_trace(epoch, &stopped).unwrap();
+    assert_eq!(
+        state.grant_head_in_stop(epoch, |entry| entry.client() == RingClient::BatonGroup),
+        Ok(Some(group))
+    );
+    assert_eq!(
+        state.complete(epoch, &stopped),
+        Err(RendezvousError::Publication),
+        "the group's turn is still out"
+    );
+    assert_eq!(
+        state.phase,
+        Phase::Tracing(epoch),
+        "the refusal changed nothing"
+    );
+    state.retire_serial(group).unwrap();
+    state.complete(epoch, &stopped).unwrap();
+}
+
+/// L6.7b b3: the Baton group leaving the era cancels its queued entry and
+/// no owner's. A granted group entry is not cancelled: its turn is out and
+/// only the grant's retire ends it.
+#[test]
+fn ring_cancel_queued_removes_only_the_baton_group_entry() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    state.enqueue_baton_group().unwrap();
+    let b = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    state.cancel_queued(SerialClient::BatonGroup).unwrap();
+    let left: Vec<_> = state.serial_ring.iter().map(|entry| entry.id()).collect();
+    assert_eq!(left, [a, b], "only the group's entry left the ring");
+    assert_eq!(
+        state.cancel_queued(SerialClient::BatonGroup),
+        Err(RendezvousError::Identity),
+        "a cancel happens once"
+    );
+    state.cancel_queued(SerialClient::Owner(keys[0])).unwrap();
+    state.cancel_queued(SerialClient::Owner(keys[1])).unwrap();
+    let group = state.enqueue_baton_group().unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    state.begin_trace(epoch, &stopped_members(&keys)).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(group)));
+    assert_eq!(
+        state.cancel_queued(SerialClient::BatonGroup),
+        Err(RendezvousError::Identity),
+        "a granted group entry is not cancelled"
+    );
+    state.retire_serial(group).unwrap();
 }

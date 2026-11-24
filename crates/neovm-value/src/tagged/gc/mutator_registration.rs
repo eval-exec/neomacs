@@ -138,6 +138,7 @@ pub use rendezvous::{AllStopped, Mode, Phase, PollOutcome, RendezvousError, Requ
 pub use rendezvous::{AllStoppedFailure, ResumeGcImageFailure, RootedRetireFailure, SerialGrant};
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use rendezvous::{OwnerRootAdmission, StoppedRootAdmission};
+pub use rendezvous::{RingClient, SerialClient};
 pub use rendezvous::{StopAttempt, StopPending};
 
 pub use summaries::{RegistrationCensus, StoppedSummaries};

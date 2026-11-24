@@ -16,7 +16,7 @@ use super::super::{
     EraCore, EraKeeper, MutatorEntry, MutatorKey, RegistrationError, Registry, RegistryGuard,
     RegistryState,
 };
-use super::control::{Mode, Phase, RingClient};
+use super::control::{Mode, Phase, RequestId, RingClient, SerialClient};
 use super::{
     RendezvousError, StoppedRootAdmission, entry_state, finish_debt, membership, request,
     verify_stopped, wait, wait_timeout,
@@ -70,18 +70,19 @@ pub struct AllStopped<'era> {
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct SerialGrant {
-    id: super::control::RequestId,
-    owner: MutatorKey,
+    id: RequestId,
+    client: SerialClient,
     _thread: PhantomData<Rc<()>>,
 }
 
 static_assertions::assert_not_impl_any!(SerialGrant: Send, Sync, Clone, Copy);
 
 impl SerialGrant {
-    /// The owner this grant's ticket goes to.
+    /// Whom this grant's turn goes to: an owner's ticket or the Baton
+    /// group's World turn (L6.7b b3).
     #[doc(hidden)]
-    pub fn owner(&self) -> MutatorKey {
-        self.owner
+    pub fn client(&self) -> SerialClient {
+        self.client
     }
 }
 
@@ -516,19 +517,39 @@ impl<'era> AllStopped<'era> {
         self.trace(|_stopped, _proof| Ok(()))
     }
 
-    /// L6.7 K3: grant the serial ring's head inside this stop. Only the
-    /// keeper, only after `trace`, and only for this stop's epoch. One
-    /// ticket is out at a time and an unready head is never skipped.
-    /// `ready` sees
-    /// the head's owner key and the publication generation it was queued
-    /// under. It runs under the registry gate, so it must not call back into
-    /// the gate: a refused re-entry would read as an unready head. The `&mut`
-    /// borrow keeps `trace` and `complete` out while the grant is decided,
-    /// and `complete` refuses while the grant is out.
+    /// L6.7 K3: grant an owner head inside this stop. Only the keeper, only
+    /// after `trace`, and only for this stop's epoch. One turn is out at a
+    /// time and an unready head is never skipped. `ready` sees the head's
+    /// owner key and the publication generation it was queued under. It runs
+    /// under the registry gate, so it must not call back into the gate: a
+    /// refused re-entry would read as an unready head. The `&mut` borrow
+    /// keeps `trace` and `complete` out while the grant is decided, and
+    /// `complete` refuses while the grant is out.
     #[doc(hidden)]
     pub fn grant_serial_head(
         &mut self,
         ready: impl FnOnce(MutatorKey, NonZeroU64) -> bool,
+    ) -> Result<Option<SerialGrant>, RendezvousError> {
+        self.grant_head(|client| match client {
+            RingClient::Owner { key, generation } => ready(key, generation),
+            // The group's turn is `grant_baton_group`'s: an owner grant
+            // leaves a group head in place, as it leaves an unready head.
+            RingClient::BatonGroup => false,
+        })
+    }
+
+    /// L6.7b b3: grant a Baton-group head inside this stop, under the same
+    /// rules as an owner's grant (keeper only, after `trace`, this stop's
+    /// epoch, one turn out). The group has no owner image, so nothing beyond
+    /// the stop is checked. An owner head stays in place.
+    #[doc(hidden)]
+    pub fn grant_baton_group(&mut self) -> Result<Option<SerialGrant>, RendezvousError> {
+        self.grant_head(|client| client == RingClient::BatonGroup)
+    }
+
+    fn grant_head(
+        &mut self,
+        ready: impl FnOnce(RingClient) -> bool,
     ) -> Result<Option<SerialGrant>, RendezvousError> {
         keeper(self.registry)?;
         // `stop` already moved the ring's phase to Tracing, so the ring
@@ -541,40 +562,29 @@ impl<'era> AllStopped<'era> {
             .lock_for_keeper()
             .map_err(registration_error)?;
         self.validate(&gate)?;
-        let mut owner = None;
-        let granted =
-            gate.rendezvous
-                .grant_head_in_stop(self.epoch, |entry| match entry.client() {
-                    RingClient::Owner { key, generation } => {
-                        owner = Some(key);
-                        ready(key, generation)
-                    }
-                    // A Baton-group turn is not an owner's ticket. Until L6.7b
-                    // b3 gives the keeper its route, the head stays in place,
-                    // as an unready head does.
-                    RingClient::BatonGroup => false,
-                })?;
-        Ok(granted.zip(owner).map(|(id, owner)| SerialGrant {
+        let mut client = None;
+        let granted = gate.rendezvous.grant_head_in_stop(self.epoch, |entry| {
+            client = Some(entry.client().serial_client());
+            ready(entry.client())
+        })?;
+        Ok(granted.zip(client).map(|(id, client)| SerialGrant {
             id,
-            owner,
+            client,
             _thread: PhantomData,
         }))
     }
 
-    /// The ring head's owner and the publication generation it was queued
-    /// under, so the keeper can check that owner's receipt before granting.
+    /// The ring head's client: an owner with the publication generation it
+    /// was queued under, so the keeper can check that owner's receipt before
+    /// granting, or the Baton group, whose turn the keeper routes to the
+    /// group (L6.7b b3).
     #[doc(hidden)]
-    pub fn serial_head(&self) -> Result<Option<(MutatorKey, NonZeroU64)>, RendezvousError> {
+    pub fn serial_head(&self) -> Result<Option<RingClient>, RendezvousError> {
         self.with_stopped_gate(|_registry, gate| {
-            // A Baton-group head has no owner route until L6.7b b3; it
-            // refuses rather than reading as an empty ring.
-            gate.rendezvous
+            Ok(gate
+                .rendezvous
                 .ring_head_entry()
-                .map(|entry| match entry.client() {
-                    RingClient::Owner { key, generation } => Ok((key, generation)),
-                    RingClient::BatonGroup => Err(RendezvousError::Identity),
-                })
-                .transpose()
+                .map(|entry| entry.client()))
         })
     }
 

@@ -7,7 +7,7 @@ mod resume;
 mod run_admission;
 mod sync;
 
-pub use control::{Mode, Phase, Request};
+pub use control::{Mode, Phase, Request, RingClient, SerialClient};
 pub use keeper::AllStopped;
 pub use keeper::AllStoppedFailure;
 pub use keeper::SerialGrant;
@@ -445,9 +445,28 @@ pub(super) fn poison_era(registry: &Registry) -> Result<(), RendezvousError> {
 /// L6.7 K6: the keeper cancels `owner`'s queued request. A granted entry
 /// refuses with `Identity`; its grant's retire ends it.
 pub(super) fn cancel_serial(registry: &Registry, owner: MutatorKey) -> Result<(), RendezvousError> {
+    cancel_queued(registry, SerialClient::Owner(owner))
+}
+
+/// L6.7b b3: the keeper commits the Baton group's request at the ring's
+/// tail. The group is one client: a second entry while one is queued or
+/// granted refuses with `Identity`. Keeper thread only.
+pub(super) fn enqueue_baton_group(registry: &Registry) -> Result<(), RendezvousError> {
     keeper::keeper_thread(registry)?;
     let mut gate = registry.lock_for_keeper()?;
-    gate.rendezvous.cancel_queued(owner)
+    gate.rendezvous.enqueue_baton_group().map(|_| ())
+}
+
+/// L6.7b b3: the keeper cancels the Baton group's queued request when the
+/// group leaves the era. A granted entry refuses with `Identity`.
+pub(super) fn cancel_baton_group(registry: &Registry) -> Result<(), RendezvousError> {
+    cancel_queued(registry, SerialClient::BatonGroup)
+}
+
+fn cancel_queued(registry: &Registry, client: SerialClient) -> Result<(), RendezvousError> {
+    keeper::keeper_thread(registry)?;
+    let mut gate = registry.lock_for_keeper()?;
+    gate.rendezvous.cancel_queued(client)
 }
 
 /// Test-only: queue one serial request without the keeper-thread check.

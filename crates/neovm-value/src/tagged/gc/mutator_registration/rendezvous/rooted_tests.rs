@@ -1221,7 +1221,7 @@ fn keeper_grants_the_serial_head_only_inside_its_traced_stop_body<
                 })
                 .unwrap()
                 .expect("the queued head is granted");
-            let granted_owner = grant.owner();
+            let granted_client = grant.client();
             let while_out = super::serial_ring_head_for_test(registry);
             let again = stopped
                 .grant_serial_head(|_, _| true)
@@ -1246,7 +1246,11 @@ fn keeper_grants_the_serial_head_only_inside_its_traced_stop_body<
                 "no grant before the trace"
             );
             assert_eq!(seen, Some((key, generation)), "ready sees the queued facts");
-            assert_eq!(granted_owner, key, "the grant names the queued owner");
+            assert_eq!(
+                granted_client,
+                SerialClient::Owner(key),
+                "the grant names the queued owner"
+            );
             assert_eq!(
                 while_out,
                 Ok((1, Some(queued))),
@@ -1264,6 +1268,112 @@ fn keeper_grants_the_serial_head_only_inside_its_traced_stop_body<
                 Ok((0, None)),
                 "the ring is empty after the retire"
             );
+        });
+        finish_era(era);
+    });
+}
+
+/// L6.7b b3 (lead #14011 conditions). The keeper reads a Baton-group head
+/// as the group's, not as a refusal, and grants it only through
+/// `grant_baton_group`: an owner grant leaves it in place, and a group
+/// grant leaves an owner head in place. The grant names the group, the stop
+/// does not complete while the group's turn is out, and the group's queued
+/// entry cancels when the group leaves.
+fn keeper_routes_a_baton_group_head_and_grants_it_alone_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1942, 1).unwrap();
+        let key = permit.key();
+        let registry = era.registry();
+        let input = vec![roots[0].clone()];
+        let generation = NonZeroU64::new(7).unwrap();
+        thread::scope(|scope| {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (owner, _entry) =
+                native_owner_for_keeper_rows(scope, heap, permit, 1942, input, release_rx);
+            retry(|| super::enqueue_serial_for_test(registry, key, generation));
+            retry(|| super::enqueue_baton_group(registry));
+            let second_group = super::enqueue_baton_group(registry);
+            let mut stopped = retry(|| era.stop());
+            trace_owners(&mut stopped, &[key]);
+            let owner_head = stopped.serial_head();
+            let group_over_owner = stopped.grant_baton_group().map(|grant| grant.is_some());
+            let owner_grant = stopped
+                .grant_serial_head(|_, _| true)
+                .unwrap()
+                .expect("the owner head is granted");
+            stopped.retire_serial_grant(owner_grant).unwrap();
+            let group_head = stopped.serial_head();
+            let owner_over_group = stopped
+                .grant_serial_head(|_, _| true)
+                .map(|grant| grant.is_some());
+            let group_grant = stopped
+                .grant_baton_group()
+                .unwrap()
+                .expect("the group head is granted");
+            let granted_client = group_grant.client();
+            let refused = match stopped.complete() {
+                Ok(()) => panic!("the stop completed with the group's turn out"),
+                Err(failure) => {
+                    let reason = failure.reason;
+                    stopped = failure.into_stopped();
+                    reason
+                }
+            };
+            stopped.retire_serial_grant(group_grant).unwrap();
+            complete(stopped);
+            retry(|| super::enqueue_baton_group(registry));
+            let cancelled = super::cancel_baton_group(registry);
+            let cancelled_again = super::cancel_baton_group(registry);
+            let ring_after = super::serial_ring_head_for_test(registry);
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(
+                second_group,
+                Err(RendezvousError::Identity),
+                "the group holds one entry"
+            );
+            assert_eq!(
+                owner_head,
+                Ok(Some(RingClient::Owner { key, generation })),
+                "an owner head reads with its queued generation"
+            );
+            assert_eq!(
+                group_over_owner,
+                Ok(false),
+                "a group grant leaves an owner head"
+            );
+            assert_eq!(
+                group_head,
+                Ok(Some(RingClient::BatonGroup)),
+                "a group head routes to the group instead of refusing"
+            );
+            assert_eq!(
+                owner_over_group,
+                Ok(false),
+                "an owner grant leaves a group head"
+            );
+            assert_eq!(
+                granted_client,
+                SerialClient::BatonGroup,
+                "the grant names the group"
+            );
+            assert_eq!(
+                refused,
+                RendezvousError::Publication,
+                "no group turn outlives its stop"
+            );
+            assert_eq!(cancelled, Ok(()), "the group's queued entry cancels");
+            assert_eq!(
+                cancelled_again,
+                Err(RendezvousError::Identity),
+                "a cancel happens once"
+            );
+            assert_eq!(ring_after, Ok((0, None)), "the ring is empty");
         });
         finish_era(era);
     });
@@ -1705,6 +1815,9 @@ pub(crate) fn run_rooted_mutator_case<K: EraKeeper + std::fmt::Debug + 'static>(
         }
         RootedRendezvousCase::KeeperBoundedStopPendsAndKeepsItsEpoch => {
             keeper_bounded_stop_pends_and_keeps_its_epoch_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperRoutesABatonGroupHeadAndGrantsItAlone => {
+            keeper_routes_a_baton_group_head_and_grants_it_alone_body(rooted_era)
         }
     }
 }
