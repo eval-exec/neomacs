@@ -705,9 +705,13 @@ impl LispSymbol {
     ) -> Option<BlvCacheHit> {
         let blv = self.localized_blv()?;
         // SAFETY: a `Localized` cell names a record `make_symbol_localized`
-        // allocated and the obarray owns for its lifetime. The cache flags
-        // are cells, so a refresh through another borrow of this record is
-        // defined. The evaluator thread is the only writer.
+        // allocated and the obarray owns until `Obarray::drop`. `LispSymbol`
+        // is `!Clone + !Copy + !Send + !Sync`, no public constructor creates a
+        // `Localized` cell, and no public `Obarray` method returns
+        // `&mut LispSymbol`, so `&self` necessarily borrows a live owning
+        // `Obarray` for the duration of this call. The cache flags are cells,
+        // so a refresh through another borrow of this record is defined. The
+        // evaluator thread is the only writer.
         let blv = unsafe { &*blv.as_ptr() };
         if blv.alist_epoch.get() != blv_alist_epoch() || blv.where_buf_id.get() != buffer.0 {
             return None;
@@ -1266,8 +1270,24 @@ impl Clone for SymbolChunks {
     fn clone(&self) -> Self {
         // A cloned obarray is never concurrently marked, so the seqlocks reset
         // to 0 (even); the function stamps carry over. (The side boxes hold
-        // atomics, which are not `Clone`, hence the manual impl.)
-        let chunks = self.chunks.clone();
+        // atomics and `LispSymbol` is deliberately `!Clone`, so each chunk is
+        // heap-copied via `clone_for_obarray` without building a 256 KiB array
+        // on the stack.)
+        let chunks: Vec<Box<[LispSymbol; OBARRAY_CHUNK]>> = self
+            .chunks
+            .iter()
+            .map(|chunk| {
+                let mut copied = Vec::with_capacity(OBARRAY_CHUNK);
+                for slot in chunk.iter() {
+                    copied.push(slot.clone_for_obarray());
+                }
+                copied
+                    .into_boxed_slice()
+                    .try_into()
+                    .ok()
+                    .expect("chunk length matches OBARRAY_CHUNK")
+            })
+            .collect();
         let spine_addr = chunks.as_ptr() as usize;
         Self {
             chunks,
@@ -1794,7 +1814,7 @@ impl Obarray {
         self.symbols.get_mut(Self::slot_index(id))
     }
 
-    fn ensure_slot(&mut self, id: SymId) -> &mut LispSymbol {
+    pub(crate) fn ensure_slot(&mut self, id: SymId) -> &mut LispSymbol {
         let idx = Self::slot_index(id);
         let slot = self.symbols.ensure(idx);
         if !slot.is_present() {
@@ -2192,11 +2212,17 @@ impl Obarray {
         Some(id)
     }
 
-    /// Get symbol data (mutable). Interns the symbol if needed.
-    pub fn get_or_intern(&mut self, name: &str) -> &mut LispSymbol {
+    /// Intern a symbol in the global obarray and return its identity.
+    ///
+    /// Never hands out `&mut LispSymbol`: cross-crate mutation goes through
+    /// `Obarray`'s atomic/seqlock setters so concurrent GC scans never see a
+    /// non-atomic slot overwrite and a `Localized` symbol cannot be moved out
+    /// of its owning obarray.
+    pub fn get_or_intern(&mut self, name: &str) -> SymId {
         let id = intern(name);
         self.mark_global_member(id);
-        self.ensure_symbol_id(id)
+        let _ = self.ensure_slot(id);
+        id
     }
 
     /// Get symbol data (immutable).
@@ -2206,8 +2232,11 @@ impl Obarray {
     }
 
     /// Ensure symbol storage exists for an arbitrary symbol id.
-    pub fn ensure_symbol_id(&mut self, id: SymId) -> &mut LispSymbol {
-        self.ensure_slot(id)
+    ///
+    /// Never hands out `&mut LispSymbol`: see [`Self::get_or_intern`] and
+    /// [`Self::get_mut_by_id`].
+    pub fn ensure_symbol_id(&mut self, id: SymId) {
+        let _ = self.ensure_slot(id);
     }
 
     /// Test hook: the slot count the compiled-code bounds check reads.
@@ -3059,6 +3088,12 @@ impl Obarray {
         target_buf_id: crate::value::buffer_vocab::BufferId,
         target_alist: Value,
     ) -> Option<Value> {
+        debug_assert!(
+            self.symbols
+                .get(Self::slot_index(id))
+                .is_some_and(|slot| std::ptr::eq(slot, sym)),
+            "read_localized_symbol_for_buffer called with a LispSymbol that does not belong to this Obarray"
+        );
         let blv_ptr = sym.localized_blv()?.as_ptr();
         let epoch = blv_alist_epoch();
         // SAFETY: the BLV record is the symbol's localized pointer. The cache
@@ -4010,7 +4045,7 @@ impl Obarray {
     pub fn set_symbol_function(&mut self, name: &str, function: Value) {
         let id = intern(name);
         self.mark_global_member(id);
-        let sym = self.ensure_symbol_id(id);
+        let sym = self.ensure_slot(id);
         // See `set_symbol_function_id': the same value redefines nothing.
         let unchanged = !sym.function_unbound && sym.function.get().bits() == function.bits();
         let previous = sym.function.get();
@@ -4137,7 +4172,7 @@ impl Obarray {
         why: FunctionEpochBump,
     ) {
         self.ensure_global_member_if_canonical(id);
-        let sym = self.ensure_symbol_id(id);
+        let sym = self.ensure_slot(id);
         // Storing the value the cell already holds changes no call's
         // behavior, so it redefines nothing: no epoch move, no JIT eviction
         // (a `defalias' re-run while a file reloads, an `fset' in a loop).
@@ -4162,7 +4197,7 @@ impl Obarray {
     /// Remove the function cell by identity.
     pub fn fmakunbound_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
-        let sym = self.ensure_symbol_id(id);
+        let sym = self.ensure_slot(id);
         let was_unbound = sym.function_unbound;
         let was_bound_function = !sym.function.get().is_nil();
         let previous = sym.function.get();
@@ -4373,7 +4408,7 @@ impl Obarray {
         } else {
             Value::list(flat)
         };
-        let sym = self.ensure_symbol_id(symbol);
+        let sym = self.ensure_slot(symbol);
         store_runtime_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);
     }
@@ -4383,7 +4418,7 @@ impl Obarray {
     /// value (including NIL).
     pub fn set_symbol_plist_id(&mut self, symbol: SymId, plist: Value) {
         self.ensure_global_member_if_canonical(symbol);
-        let sym = self.ensure_symbol_id(symbol);
+        let sym = self.ensure_slot(symbol);
         store_runtime_plist_head(sym, plist);
         SymbolPropertyRevision::changed(symbol);
     }
@@ -4410,7 +4445,7 @@ impl Obarray {
     pub fn make_special(&mut self, name: &str) {
         let id = intern(name);
         self.mark_global_member(id);
-        self.ensure_symbol_id(id).set_declared_special(true);
+        self.ensure_slot(id).set_declared_special(true);
     }
 
     /// Define a bound special variable in one semantic operation.
@@ -4448,20 +4483,20 @@ impl Obarray {
     /// Mark a symbol as special by identity.
     pub fn make_special_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
-        self.ensure_symbol_id(id).set_declared_special(true);
+        self.ensure_slot(id).set_declared_special(true);
     }
 
     /// Clear the special flag on a symbol.
     pub fn make_non_special(&mut self, name: &str) {
         let id = intern(name);
         self.mark_global_member(id);
-        self.ensure_symbol_id(id).set_declared_special(false);
+        self.ensure_slot(id).set_declared_special(false);
     }
 
     /// Clear the special flag on a symbol by identity.
     pub fn make_non_special_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
-        self.ensure_symbol_id(id).set_declared_special(false);
+        self.ensure_slot(id).set_declared_special(false);
     }
 
     /// Check if a symbol is special.
@@ -4536,7 +4571,7 @@ impl Obarray {
     /// Mark a symbol as a hard constant (like SYMBOL_NOWRITE in GNU Emacs) by identity.
     pub fn set_constant_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
-        self.ensure_symbol_id(id)
+        self.ensure_slot(id)
             .set_trapped_write(SymbolTrappedWrite::NoWrite);
     }
 
@@ -5222,6 +5257,10 @@ mod plist_epoch_tests;
 #[cfg(test)]
 #[path = "tests/member_funnel_test.rs"]
 mod member_funnel_tests;
+
+#[cfg(test)]
+#[path = "tests/blv_clone_and_mut_borrow_test.rs"]
+mod blv_clone_and_mut_borrow_tests;
 
 #[cfg(any(test, feature = "test-support"))]
 mod membership_audit;

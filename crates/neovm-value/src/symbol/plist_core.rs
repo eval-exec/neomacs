@@ -430,7 +430,7 @@ impl Obarray {
     pub fn put_property(&mut self, name: &str, prop: &str, value: Value) -> Result<(), Flow> {
         let symbol = intern(name);
         self.mark_global_member(symbol);
-        let sym = self.ensure_symbol_id(symbol);
+        let sym = self.ensure_slot(symbol);
         let (new_plist, _changed) =
             plist_put(sym.plist.get(), Value::from_sym_id(intern(prop)), value)?;
         store_runtime_plist_head(sym, new_plist);
@@ -449,7 +449,7 @@ impl Obarray {
         value: Value,
     ) -> Result<(), Flow> {
         self.ensure_global_member_if_canonical(symbol);
-        let sym = self.ensure_symbol_id(symbol);
+        let sym = self.ensure_slot(symbol);
         let (new_plist, _changed) = plist_put(sym.plist.get(), Value::from_sym_id(prop), value)?;
         store_runtime_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);

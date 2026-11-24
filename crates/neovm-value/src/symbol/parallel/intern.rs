@@ -45,7 +45,7 @@ impl Obarray {
     #[doc(hidden)]
     pub fn prepare_initial_nonmember_for_test(&mut self, id: SymId, nonmember: bool) {
         self.seed_value_id(id, super::super::Value::fixnum(73));
-        let symbol = self.ensure_symbol_id(id);
+        let symbol = self.ensure_slot(id);
         symbol
             .function
             .store_atomic(super::super::Value::fixnum(31));

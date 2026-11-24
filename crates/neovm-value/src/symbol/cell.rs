@@ -558,13 +558,15 @@ impl std::fmt::Debug for LispSymbol {
     }
 }
 
-// Hand-written because `name: AtomicU32` is not `Clone`-derivable. A cloned
-// obarray is never concurrently scanned, so a `Relaxed` load of the source name
-// is sufficient. The clone's cell names the SAME BLV record or descriptor as
-// the source; `Obarray::clone` re-homes both before the copy is used
+// Hand-written because `name: AtomicU32` is not `Clone`-derivable. Kept
+// crate-private (never `impl Clone for LispSymbol`): a `Localized` cell holds
+// a raw `BlvPtr` owned by its enclosing `Obarray`, so cloning a symbol outside
+// `Obarray::clone` would decouple that pointer from `Obarray::drop` and turn
+// later BLV reads into a use-after-free. `Obarray::clone` immediately
+// deep-copies and re-homes both BLV records and stateful forwarders
 // ([`LocalizedArm::rehome`], [`ForwardedArm::forward_to`]).
-impl Clone for LispSymbol {
-    fn clone(&self) -> Self {
+impl LispSymbol {
+    pub(super) fn clone_for_obarray(&self) -> Self {
         Self {
             name: AtomicU32::new(self.name.load(Ordering::Relaxed)),
             flags: self.flags.clone(),
