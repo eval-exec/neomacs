@@ -683,3 +683,110 @@ fn controls_non_local_flow_strict_snapshot_and_ordinary_perf() {
         assert_eq!(engine.last_layout_stats().exhaustion_snapshot_passes, 0);
     }
 }
+
+/// N3 runtime guard: during `ExhaustionSnapshot`, every known Lisp seam is
+/// skipped except TTY face realization advice (`realization.rs:777`). If
+/// unexpected Lisp mutates `face_change_count` during the snapshot pass, the
+/// post-snapshot guard must reject publication, abort cleanly, and settle
+/// `NoSafe` without accepting.
+#[test]
+fn n3_exhaustion_snapshot_aborts_on_unexpected_tty_face_mutation() {
+    use neovm_core::emacs_core::terminal::pure;
+    use neovm_core::emacs_core::xfaces::realization::XfacesRealizationContextExt;
+    struct RestoreTty;
+    impl Drop for RestoreTty {
+        fn drop(&mut self) {
+            pure::reset_terminal_host();
+            pure::reset_terminal_runtime();
+        }
+    }
+    let _policy = neovm_core::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
+    let (mut eval, frame, buffer_a, window) = incr_editing_frame("tty n3 body a\n", 800, 240);
+    let _restore_tty = RestoreTty;
+    pure::configure_terminal_runtime(pure::TerminalRuntimeConfig::interactive(
+        Some("xterm-256color".to_owned()),
+        neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+            256,
+        ),
+    ));
+    assert!(eval.frame_is_tty_face_target(frame));
+    let buffer_b = eval.buffer_manager_mut().create_buffer("*832-n3-b*");
+    eval.buffer_manager_mut()
+        .get_mut(buffer_b)
+        .unwrap()
+        .insert("tty n3 body b\n");
+    eval.set_variable("n3-win", Value::make_window(window.0));
+    eval.set_variable("n3-buf-a", Value::make_buffer(buffer_a));
+    eval.set_variable("n3-buf-b", Value::make_buffer(buffer_b));
+    // Switch buffers inside header-line :eval so retries exhaust (`SourceInvalidated`),
+    // and on the final converging attempt (`n3-hl-calls == 13`) apply a fresh named
+    // TTY color (`n3-cold-color`) to the buffer being switched INTO. That color is
+    // realized for the first time during `ExhaustionSnapshot`'s body walk, invoking
+    // `tty-color-desc` which mutates `bold` (bumping `face_change_count`).
+    let hl_fmt = eval
+        .eval_str(
+            r##"(progn
+          (setq inhibit-redisplay nil n3-hl-calls 0 n3-tty-mutated nil
+                tty-defined-color-alist nil
+                mode-line-format nil tab-line-format nil)
+          (fset 'tty-color-desc
+                (lambda (color &optional _frame)
+                  (if (and (equal color "n3-cold-color") (null n3-tty-mutated))
+                      (progn
+                        (setq n3-tty-mutated t)
+                        (internal-set-lisp-face-attribute 'bold :underline t 0)))
+                  (list color 4 12345 23456 34567)))
+          '((:eval (progn
+                     (setq n3-hl-calls (1+ n3-hl-calls))
+                     (let ((next (if (eq (window-buffer n3-win) n3-buf-a)
+                                     n3-buf-b
+                                   n3-buf-a)))
+                       (if (= n3-hl-calls 13)
+                           (save-current-buffer
+                             (set-buffer next)
+                             (put-text-property 1 5 'face '(:foreground "n3-cold-color"))))
+                       (set-window-buffer n3-win next))
+                     (format "N3:%d" n3-hl-calls)))))"##,
+        )
+        .expect("install exhausting header-line and mutating tty-color-desc");
+    for buf_id in [buffer_a, buffer_b] {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).unwrap();
+        buf.set_buffer_local("header-line-format", hl_fmt);
+        buf.set_buffer_local("mode-line-format", Value::NIL);
+        buf.set_buffer_local("tab-line-format", Value::NIL);
+    }
+    let accepted_before = eval.gnu_redisplay_hooks_accepted_serial();
+
+    let aborted = std::rc::Rc::new(std::cell::Cell::new(false));
+    let aborted_cb = aborted.clone();
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    eval.redisplay_fn = Some(Box::new(move |eval| {
+        let outcome = engine.redisplay_frame_attempt(eval, frame);
+        let calls = eval.eval_str("n3-hl-calls").unwrap().as_fixnum();
+        let mutated = eval.eval_str("n3-tty-mutated").unwrap().is_truthy();
+        assert!(
+            matches!(outcome, FrameLayoutAttempt::Aborted),
+            "N3 guard must abort ExhaustionSnapshot when face_change_count moves mid-snapshot (calls={calls:?}, mutated={mutated}, passes={})",
+            engine.last_layout_stats().exhaustion_snapshot_passes
+        );
+        aborted_cb.set(true);
+    }));
+
+    eval.gnu_mark_windows_all();
+    eval.redisplay_with_force(false)
+        .expect("N3 guard abort settles cleanly");
+    assert!(aborted.get(), "redisplay callback must run");
+    assert!(
+        eval.eval_str("n3-tty-mutated").unwrap().is_truthy(),
+        "tty-color-desc mutation must actually have fired during ExhaustionSnapshot"
+    );
+    assert_eq!(
+        eval.gnu_redisplay_hooks_accepted_serial(),
+        accepted_before,
+        "N3 guard abort must not accept the rejected snapshot"
+    );
+    assert!(
+        !eval.frame_redisplay_pending(frame),
+        "N3 guard abort must settle NoSafe for the frame"
+    );
+}

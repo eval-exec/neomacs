@@ -3546,6 +3546,145 @@ fn layout_bench_warm() {
     );
 }
 
+/// Matched-path layout benchmark exercising BOTH prepass (`fontification-functions`)
+/// and mode-line `:eval` chrome evaluation on `LayoutPurpose::Redisplay`.
+/// Reports two steady-state medians (min/median over 60 iterations each):
+/// 1. `chrome_eval_only`: already-fontified buffer + forced mode-line `:eval`
+///    (verifies R1a `outcome.entered_callbacks() == false` and R1b `retry_count == 0`).
+/// 2. `prepass_plus_chrome`: 1-char edit triggering `fontification-functions`
+///    prepass + mode-line `:eval`.
+/// Run:
+///   cargo nextest run -p neomacs-layout-engine --features perf-probes \
+///     --release --no-capture layout_bench_prepass_and_chrome_eval
+#[test]
+#[cfg(feature = "perf-probes")]
+fn layout_bench_prepass_and_chrome_eval() {
+    use std::time::{Duration, Instant};
+    let text = "(defun example-helper (alpha beta) (let ((sum (+ alpha beta))) (* sum sum)))\n"
+        .repeat(120);
+    let (mut eval, frame_id, buf_id, _win) = incr_editing_frame(&text, 1000, 700);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.eval_str(
+        r#"
+        (setq bench-fn-calls 0 bench-ml-calls 0
+              header-line-format nil tab-line-format nil
+              neomacs-test-fontify-face 'font-lock-keyword-face)
+        (setq fontification-functions
+              (list (lambda (start)
+                      (setq bench-fn-calls (1+ bench-fn-calls))
+                      (let ((end (min (point-max) (+ start 80))))
+                        (put-text-property start end 'fontified t)
+                        (put-text-property start end 'font-lock-face
+                                           neomacs-test-fontify-face)))))
+        (setq mode-line-format
+              '(" %b " (:eval (progn
+                                (setq bench-ml-calls (1+ bench-ml-calls))
+                                (format "ML:%d" bench-ml-calls)))))
+        "#,
+    )
+    .expect("install bench fontifier and mode-line :eval");
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    // Warm up cold frame so buffer is fontified and faces/fonts are cached.
+    let _ = engine.redisplay_frame_attempt(&mut eval, frame_id);
+    let _ = engine.redisplay_frame_attempt(&mut eval, frame_id);
+
+    // 1. Prepass check (Unchanged) + mode-line :eval (force-mode-line-update each iter).
+    let ml_before_1 = eval
+        .eval_str("bench-ml-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap();
+    let fn_before_1 = eval
+        .eval_str("bench-fn-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap();
+    let mut samples_chrome: Vec<Duration> = Vec::with_capacity(60);
+    for _ in 0..60 {
+        eval.eval_str("(force-mode-line-update)").unwrap();
+        let t = Instant::now();
+        let outcome = engine.redisplay_frame_attempt(&mut eval, frame_id);
+        assert!(matches!(outcome, FrameLayoutAttempt::Prepared(_)));
+        samples_chrome.push(t.elapsed());
+    }
+    samples_chrome.sort_unstable();
+    let chrome_med = samples_chrome[samples_chrome.len() / 2];
+    let chrome_min = samples_chrome[0];
+    let ml_1 = eval
+        .eval_str("bench-ml-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap()
+        - ml_before_1;
+    let fn_1 = eval
+        .eval_str("bench-fn-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap()
+        - fn_before_1;
+    let stats_1 = engine.last_layout_stats().clone();
+
+    // 2. Active prepass fontification (1-char edit at byte 6) + mode-line :eval.
+    let ml_before_2 = eval
+        .eval_str("bench-ml-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap();
+    let fn_before_2 = eval
+        .eval_str("bench-fn-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap();
+    let mut samples_both: Vec<Duration> = Vec::with_capacity(60);
+    for i in 0..60 {
+        {
+            let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+            buffer.goto_emacs_byte_pos(EmacsBytePos::new(6));
+            if i % 2 == 0 {
+                buffer.insert("x");
+            } else {
+                buffer.delete_emacs_byte_range(neovm_core::buffer::EmacsByteRange::new(
+                    EmacsBytePos::new(6),
+                    EmacsBytePos::new(7),
+                ));
+            }
+        }
+        eval.eval_str("(force-mode-line-update)").unwrap();
+        let t = Instant::now();
+        let outcome = engine.redisplay_frame_attempt(&mut eval, frame_id);
+        assert!(matches!(outcome, FrameLayoutAttempt::Prepared(_)));
+        samples_both.push(t.elapsed());
+    }
+    samples_both.sort_unstable();
+    let both_med = samples_both[samples_both.len() / 2];
+    let both_min = samples_both[0];
+    let ml_2 = eval
+        .eval_str("bench-ml-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap()
+        - ml_before_2;
+    let fn_2 = eval
+        .eval_str("bench-fn-calls")
+        .unwrap()
+        .as_fixnum()
+        .unwrap()
+        - fn_before_2;
+    let stats_2 = engine.last_layout_stats().clone();
+
+    panic!(
+        "BENCH prepass_and_chrome_eval 1000x700: \
+         chrome_only med={chrome_med:?} min={chrome_min:?} (ml={ml_1} fn={fn_1} relaid_chrome={} reused={}) | \
+         prepass+chrome med={both_med:?} min={both_min:?} (ml={ml_2} fn={fn_2} edit_wins={} relaid_body={} relaid_chrome={})",
+        stats_1.relaid_chrome_rows,
+        stats_1.reused_rows,
+        stats_2.edit_windows,
+        stats_2.relaid_body_rows,
+        stats_2.relaid_chrome_rows,
+    );
+}
+
 /// Phase 0a baseline (incremental-layout gate). With no fast path wired yet,
 /// every layout cycle is a full rebuild: even a no-op repaint relays every body
 /// row and reuses none. This pins that baseline so the Phase 1+ fast paths have
