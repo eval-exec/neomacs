@@ -3015,16 +3015,16 @@ impl Context {
             self.poll_pending_input_for_throw_on_input()?;
         }
 
-        // Drain the cross-thread quit-request atomic into `Vquit_flag`.
+        // Drain the cross-thread quit-request counter into `Vquit_flag`.
         // Set by the input-bridge thread when it observes a `quit-char`
         // keystroke while the evaluator is busy (e.g. deep in bytecode
         // and not reading from `input_rx`). See
         // `Context::quit_requested` for the design rationale.
-        if self.quit_requested.is_requested()
-            && self.quit_requested.take()
-            && self.quit_flag.is_nil()
-        {
-            self.set_quit_flag_value(Value::T);
+        if self.quit_requested.is_requested() {
+            let presses = self.quit_requested.take_count();
+            if presses != 0 {
+                self.record_quit_interrupts(presses);
+            }
         }
         let quit_flag = self.quit_flag;
         if quit_flag.is_nil() || self.inhibit_quit.is_truthy() {
@@ -3106,6 +3106,38 @@ impl Context {
         self.store_variable(self.quit_flag_symbol, value);
     }
 
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn set_inhibit_quit_value(&mut self, value: Value) {
+        self.inhibit_quit = value;
+        self.store_variable(self.inhibit_quit_symbol, value);
+    }
+
+    /// Apply `presses` quit-character interrupts following GNU Emacs
+    /// `handle_interrupt` (`src/keyboard.c:12714-12720`):
+    ///
+    /// ```c
+    /// int count = NILP (Vquit_flag) ? 1 : force_quit_count + 1;
+    /// force_quit_count = count;
+    /// if (count == 3)
+    ///   Vinhibit_quit = Qnil;
+    /// Vquit_flag = Qt;
+    /// ```
+    #[doc(hidden)]
+    pub fn record_quit_interrupts(&mut self, presses: u32) {
+        for _ in 0..presses {
+            let count = self
+                .quit_requested
+                .record_force_quit_press(self.quit_flag.is_nil());
+            if count == 3 {
+                self.set_inhibit_quit_value(Value::NIL);
+            }
+            if self.quit_flag != Value::T {
+                self.set_quit_flag_value(Value::T);
+            }
+        }
+    }
+
     #[doc(hidden)]
     pub fn quit_char(&self) -> i64 {
         *self.quit_char
@@ -3121,10 +3153,36 @@ impl Context {
         event.as_fixnum() == Some(*self.quit_char)
     }
 
+    /// Record a physical `quit-char` event consumed by `read_char` (`TtyByte`,
+    /// `TtyCharacter`, or `KeyPress`).
+    ///
+    /// The input bridge raises `quit_requested` eagerly when enqueuing a
+    /// default `C-g` so busy Lisp can be interrupted before `read_char` runs.
+    /// Consuming one matching bridge unit here reconciles with that eager
+    /// press so a single physical `C-g` is never counted twice — neither when
+    /// `read_char` runs before `maybe_quit`, nor when `maybe_quit` has already
+    /// drained the bridge raise into `quit-flag`.
     #[doc(hidden)]
     pub fn request_quit_from_keyboard_input(&mut self) {
-        if self.quit_flag_value().is_nil() {
-            self.set_quit_flag_value(Value::T);
+        let consumed_bridge = self.quit_requested.consume_one();
+        if consumed_bridge || self.quit_flag.is_nil() {
+            self.record_quit_interrupts(1);
+        }
+    }
+
+    /// GNU `read_char` (`src/keyboard.c:2809-2812`): when returning `quit-char`
+    /// while `inhibit-quit` is non-nil, clear `quit-flag` (preserving
+    /// `while-no-input`'s `throw-on-input` sentinel) so `read-event` /
+    /// `read-char` under `inhibit-quit` returns `7` without leaving
+    /// `quit-flag` set or tripping `force_quit_count` on repeated reads.
+    #[doc(hidden)]
+    pub fn clear_quit_flag_after_read_char_under_inhibit_quit(&mut self) {
+        let throw_on_input = self.variable_value_or_nil(self.throw_on_input_symbol);
+        let quit_flag = self.quit_flag_value();
+        let is_while_no_input =
+            !throw_on_input.is_nil() && equal_value(&quit_flag, &throw_on_input, 0);
+        if !quit_flag.is_nil() && !is_while_no_input {
+            self.set_quit_flag_value(Value::NIL);
         }
     }
 

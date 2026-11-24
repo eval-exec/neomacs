@@ -1024,3 +1024,100 @@ fn panic_recovery_unbound_localized_builtin_keeps_cells_and_projection() {
     assert_eq!(ctx.specpdl().len(), count);
     assert_eq!(ctx.tagged_heap().bytes_since_gc_exact(), allocated);
 }
+
+/// Regression test for review B1: one physical C-g delivered through both the
+/// input bridge (`quit_requested.request()`) and the input queue (`KeyPress`)
+/// must never be counted twice, and under `inhibit-quit` `read_char` clears
+/// `quit-flag` and returns `7` (GNU `src/keyboard.c:2809-2812,3834`), so
+/// `(let ((inhibit-quit t)) (list (read-event) (read-event) (read-event)))`
+/// returns `(7 7 7)` instead of quitting on the second press.
+#[test]
+fn single_cg_via_bridge_and_read_char_counts_once_and_clears_quit_flag_under_inhibit_quit() {
+    use crate::emacs_core::eval::keyboard::{InputEvent, KeyEvent, Modifiers};
+
+    crate::test_utils::init_test_tracing();
+    let mut ctx = crate::test_utils::new_context();
+    ctx.set_variable("inhibit-quit", Value::T);
+
+    let cg_event = || InputEvent::key_press(KeyEvent::char_with_mods('g', Modifiers::ctrl()));
+
+    // Ordering A: read_char pops KeyPress(C-g) before maybe_quit drains the bridge.
+    ctx.quit_requested.request();
+    ctx.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(cg_event());
+    assert_eq!(
+        ctx.read_char()
+            .expect("read_char returns C-g under inhibit-quit"),
+        Value::fixnum(7)
+    );
+    assert!(ctx.quit_flag_value().is_nil());
+    assert!(!ctx.quit_requested.is_requested());
+    assert_eq!(ctx.quit_requested.force_quit_count_for_test(), 1);
+    ctx.maybe_quit().expect("no leftover quit after read_char");
+
+    // Ordering B: maybe_quit drains the bridge before read_char pops KeyPress(C-g).
+    ctx.quit_requested.request();
+    ctx.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(cg_event());
+    ctx.maybe_quit()
+        .expect("maybe_quit respects inhibit-quit on first C-g");
+    assert_eq!(ctx.quit_requested.force_quit_count_for_test(), 1);
+    assert_eq!(
+        ctx.read_char()
+            .expect("read_char returns C-g under inhibit-quit"),
+        Value::fixnum(7)
+    );
+    assert!(
+        ctx.quit_flag_value().is_nil(),
+        "GNU keyboard.c:2811-2812 clears quit-flag when returning C-g under inhibit-quit"
+    );
+    assert_eq!(
+        ctx.quit_requested.force_quit_count_for_test(),
+        1,
+        "reading the queued KeyPress must not double-count the bridge press"
+    );
+
+    // Three sequential C-g reads under inhibit-quit return (7 7 7) with quit-flag nil.
+    let mut read_values = Vec::new();
+    for _ in 0..3 {
+        ctx.quit_requested.request();
+        ctx.command_loop_mut()
+            .keyboard
+            .pending_input_events
+            .push_back(cg_event());
+        ctx.maybe_quit().expect("inhibit-quit must remain active");
+        read_values.push(ctx.read_char().expect("read_char must return 7"));
+        ctx.maybe_quit()
+            .expect("quit-flag was cleared on return so inhibit-quit stays active");
+    }
+    assert_eq!(
+        read_values,
+        vec![Value::fixnum(7), Value::fixnum(7), Value::fixnum(7)]
+    );
+    assert!(ctx.quit_flag_value().is_nil());
+    assert!(ctx.inhibit_quit.is_truthy());
+
+    // Without inhibit-quit, one C-g delivered through both bridge and queue counts once.
+    ctx.set_variable("inhibit-quit", Value::NIL);
+    ctx.quit_requested.clear();
+    ctx.quit_requested.request();
+    ctx.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(cg_event());
+    assert_eq!(
+        ctx.read_char().expect("read_char returns raw event"),
+        Value::fixnum(7)
+    );
+    assert!(!ctx.quit_requested.is_requested());
+    assert_eq!(ctx.quit_requested.force_quit_count_for_test(), 1);
+    assert!(ctx.quit_flag_value().is_truthy());
+    let err = ctx
+        .maybe_quit()
+        .expect_err("without inhibit-quit, maybe_quit signals quit");
+    assert!(format!("{err:?}").contains("quit"), "{err:?}");
+}

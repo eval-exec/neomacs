@@ -720,8 +720,9 @@ fn read_secondary_tty(
             bytes[..read as usize].to_vec(),
             target.terminal.0,
         );
-        if event.requests_default_quit() {
-            quit_requested.request();
+        let quit_count = event.default_quit_count();
+        if quit_count != 0 {
+            quit_requested.request_n(quit_count);
         }
         if publish_input(&input_tx, event) == super::input_bridge::HostInputDelivery::ReceiverClosed
         {

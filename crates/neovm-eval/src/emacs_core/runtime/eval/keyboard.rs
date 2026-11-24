@@ -490,11 +490,14 @@ impl KeyEvent {
     /// overwhelmingly common default so a blocked bytecode loop can be
     /// interrupted.
     pub(crate) fn is_default_quit_char(&self) -> bool {
-        if !matches!(self.key, Key::Char('g')) {
+        let m = self.modifiers;
+        if m.meta || m.alt || m.super_ || m.hyper || m.shift {
             return false;
         }
-        let m = self.modifiers;
-        m.ctrl && !m.meta && !m.super_ && !m.hyper
+        matches!(
+            (&self.key, m.ctrl),
+            (Key::Char('g'), true) | (Key::Char('\x07'), _)
+        )
     }
 
     /// Format as Emacs key description (e.g., "C-x", "M-f", "RET").
@@ -1724,15 +1727,19 @@ impl InputEvent {
         }
     }
 
-    /// Whether this transport fact contains GNU Emacs's default quit input,
-    /// `C-g`, and should wake an evaluator that is busy outside `read_char`.
-    pub fn requests_default_quit(&self) -> bool {
+    /// How many default quit (`C-g` / `0x07`) presses this transport event
+    /// carries. A single `RawTtyBytes` chunk may coalesce multiple `0x07`
+    /// bytes; counting each preserves GNU's `force_quit_count` across rapid
+    /// TTY presses.
+    pub fn default_quit_count(&self) -> u32 {
         match self {
-            Self::RawTtyBytes { bytes, .. } => bytes.contains(&0x07),
-            Self::TtyByte { byte, .. } => *byte == 0x07,
-            Self::TtyCharacter { character, .. } => character.code() == 0x07,
-            Self::KeyPress { key, .. } => key.is_default_quit_char(),
-            Self::FrameSwitchDeferred(event) => event.requests_default_quit(),
+            Self::RawTtyBytes { bytes, .. } => {
+                u32::try_from(bytes.iter().filter(|&&b| b == 0x07).count()).unwrap_or(u32::MAX)
+            }
+            Self::TtyByte { byte, .. } => u32::from(*byte == 0x07),
+            Self::TtyCharacter { character, .. } => u32::from(character.code() == 0x07),
+            Self::KeyPress { key, .. } => u32::from(key.is_default_quit_char()),
+            Self::FrameSwitchDeferred(event) => event.default_quit_count(),
             Self::Tracked { .. }
             | Self::Observed { .. }
             | Self::NativeNonKey { .. }
@@ -1768,8 +1775,14 @@ impl InputEvent {
             | Self::FrameShaderFailed { .. }
             | Self::TerminalCreateFailed { .. }
             | Self::TerminalExited { .. }
-            | Self::TerminalTitleChanged { .. } => false,
+            | Self::TerminalTitleChanged { .. } => 0,
         }
+    }
+
+    /// Whether this transport fact contains GNU Emacs's default quit input,
+    /// `C-g`, and should wake an evaluator that is busy outside `read_char`.
+    pub fn requests_default_quit(&self) -> bool {
+        self.default_quit_count() != 0
     }
 }
 
@@ -5798,6 +5811,9 @@ impl crate::emacs_core::eval::Context {
                 CommandKeyRecording::AppendIfEmpty => {}
             }
             self.refresh_immediate_key_echo();
+        }
+        if self.inhibit_quit.is_truthy() && self.event_is_quit_char(&read_event.event) {
+            self.clear_quit_flag_after_read_char_under_inhibit_quit();
         }
         Ok(Some(read_event.event))
     }
