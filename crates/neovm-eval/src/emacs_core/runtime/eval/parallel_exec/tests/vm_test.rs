@@ -2272,9 +2272,12 @@ enum VerifierVoice {
     /// A branch whose target is a `Return` off the fall-through path; the
     /// verifier proves its fall-through edge only.
     Branch,
-    /// The verifier records no effect: `Return`, `Throw`,
+    /// The verifier records no effect: `Return`,
     /// `TrapOutOfRangeConstant`.
     Silent,
+    /// A terminal that consumes its operands and has no fall-through.
+    /// `Throw` pops the tag and the value, then leaves the function.
+    Terminal,
     /// The plain form refuses it (`Switch` needs its tables).
     Refused,
 }
@@ -2289,7 +2292,8 @@ fn verifier_voice(op: &Op) -> VerifierVoice {
         | Op::PushCatch(_)
         | Op::PushConditionCaseRaw(_)
         | Op::PushConditionCase(_) => VerifierVoice::Branch,
-        Op::Return | Op::Throw | Op::TrapOutOfRangeConstant(_) => VerifierVoice::Silent,
+        Op::Return | Op::TrapOutOfRangeConstant(_) => VerifierVoice::Silent,
+        Op::Throw => VerifierVoice::Terminal,
         Op::Switch => VerifierVoice::Refused,
         _ => VerifierVoice::Plain,
     }
@@ -2343,8 +2347,7 @@ fn vm_static_stack_effect_agrees_with_the_serial_verifier() {
             VerifierVoice::Silent => {
                 // The verifier accepts every depth and records nothing. The
                 // table carries the documented effect instead: `Breturn`
-                // carries `val = TOP` to `TOP = val` (bytecode.c:897-921),
-                // `Throw` pops tag and value (the serial `Throw` arm).
+                // carries `val = TOP` to `TOP = val` (bytecode.c:897-921).
                 silent += 1;
                 for depth in 0..=8 {
                     assert!(
@@ -2354,7 +2357,6 @@ fn vm_static_stack_effect_agrees_with_the_serial_verifier() {
                 }
                 let documented = match op {
                     Op::Return => (1, 1),
-                    Op::Throw => (2, 0),
                     Op::TrapOutOfRangeConstant(_) => (0, 0),
                     _ => unreachable!("every silent opcode is documented"),
                 };
@@ -2372,6 +2374,27 @@ fn vm_static_stack_effect_agrees_with_the_serial_verifier() {
                 // a hit leaves through `op_branch`, which pushes nothing.
                 assert_eq!((effect.consumed, effect.produced), (2, 0), "{name}");
             }
+            VerifierVoice::Terminal => {
+                // `Throw` ends the flow. The least admitted depth is its
+                // operand count, and nothing is produced for a following op.
+                // A shallower depth is not a proof: the verified driver would
+                // pop the tag and value below the frame.
+                tied += 1;
+                let consumed = least_entry_depth(&[op.clone(), Op::Return])
+                    .expect("a terminal opcode admits some depth");
+                assert_eq!(effect.consumed as usize, consumed, "{name}: consumed");
+                assert_eq!(effect.produced, 0, "{name}: produced");
+                assert!(
+                    consumed > 0
+                        && !verify_stack_effects(
+                            &[op.clone(), Op::Return],
+                            consumed - 1,
+                            MAX_STACK
+                        ),
+                    "{name}: depth {} is not a proof",
+                    consumed - 1
+                );
+            }
             VerifierVoice::Plain | VerifierVoice::Branch => {
                 let (consumed, produced) = verifier_effect(op).expect("the verifier speaks");
                 assert_eq!(effect.consumed as usize, consumed, "{name}: consumed");
@@ -2387,7 +2410,7 @@ fn vm_static_stack_effect_agrees_with_the_serial_verifier() {
     }
     assert_eq!(op_samples().len(), 89, "one sample per Op variant");
     assert_eq!(samples.len(), 89 + extra_payload_shapes().len());
-    assert_eq!((tied, silent, refused), (samples.len() - 4, 3, 1));
+    assert_eq!((tied, silent, refused), (samples.len() - 3, 2, 1));
 }
 
 // ---------------------------------------------------------------- V3: R6

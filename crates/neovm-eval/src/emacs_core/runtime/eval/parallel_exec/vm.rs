@@ -69,8 +69,9 @@ pub(crate) struct StackEffect {
 /// black-box over every `Op` variant. Where the table differs from the
 /// verifier, the verifier records nothing: it `continue`s on the opcodes
 /// that end a flow, and `Return` here carries the frame's value to its
-/// caller (`Breturn`: `val = TOP` … `TOP = val`, bytecode.c:897-921) and
-/// `Throw` consumes tag and value (`vm.rs`, the serial `Throw` arm).
+/// caller (`Breturn`: `val = TOP` … `TOP = val`, bytecode.c:897-921).
+/// `Throw` refuses a depth below two and does not fall through; the
+/// table's `(2, 0)` is that operand count (`vm.rs`, the serial `Throw` arm).
 pub(crate) fn static_stack_effect(op: &Op) -> StackEffect {
     /// The verifier's `usize` arithmetic, kept in `u16` without a panic on a
     /// payload at the type's edge.
