@@ -1023,6 +1023,59 @@ impl TaggedValue {
         unsafe { (*(self.0.wrapping_sub(TAG_CONS) as *const ConsCell)).cdr() }
     }
 
+    /// Car of a cons the caller has already proved.
+    ///
+    /// # Safety
+    ///
+    /// `self.is_cons()` is true and the cell is live. This does not test the
+    /// tag. It observes the cell, same as [`Self::cons_car`].
+    #[inline(always)]
+    pub unsafe fn cons_car_unchecked(self) -> Self {
+        debug_assert!(self.is_cons());
+        super::collection_reads::observe(self);
+        unsafe { (*((self.0 & !TAG_MASK) as *const ConsCell)).car.get() }
+    }
+
+    /// Cdr of a cons the caller has already proved.
+    ///
+    /// # Safety
+    ///
+    /// Same as [`Self::cons_car_unchecked`].
+    #[inline(always)]
+    pub unsafe fn cons_cdr_unchecked(self) -> Self {
+        debug_assert!(self.is_cons());
+        super::collection_reads::observe(self);
+        unsafe { (*((self.0 & !TAG_MASK) as *const ConsCell)).cdr() }
+    }
+
+    /// Unobserved car of a cons the caller has already proved.
+    ///
+    /// # Safety
+    ///
+    /// `self.is_cons()` is true and the cell is live. This does not test the
+    /// tag and does not observe the cell, same as [`Self::cons_car_unobserved`].
+    /// The caller also upholds that function's capture precondition.
+    #[inline(always)]
+    pub unsafe fn cons_car_unobserved_unchecked(self) -> Self {
+        debug_assert!(self.is_cons());
+        unsafe {
+            (*(self.0.wrapping_sub(TAG_CONS) as *const ConsCell))
+                .car
+                .get()
+        }
+    }
+
+    /// Unobserved cdr of a cons the caller has already proved.
+    ///
+    /// # Safety
+    ///
+    /// Same as [`Self::cons_car_unobserved_unchecked`].
+    #[inline(always)]
+    pub unsafe fn cons_cdr_unobserved_unchecked(self) -> Self {
+        debug_assert!(self.is_cons());
+        unsafe { (*(self.0.wrapping_sub(TAG_CONS) as *const ConsCell)).cdr() }
+    }
+
     /// Set the car of a cons cell. Panics if not a cons.
     #[inline(always)]
     pub fn set_car(self, val: Self) {

@@ -146,6 +146,34 @@ pub(crate) fn bytecode_to_closure_vector(value: &Value) -> Vec<Value> {
     result
 }
 
+/// Car of a value whose kind is [`ValueKind::Cons`].
+///
+/// # Safety
+///
+/// `value.is_cons()` is true. `ValueKind::Cons` is that tag.
+#[inline(always)]
+unsafe fn proven_scan_car<const OBSERVED: bool>(value: Value) -> Value {
+    if OBSERVED {
+        unsafe { value.cons_car_unchecked() }
+    } else {
+        unsafe { value.cons_car_unobserved_unchecked() }
+    }
+}
+
+/// Cdr of a value whose kind is [`ValueKind::Cons`].
+///
+/// # Safety
+///
+/// Same as [`proven_scan_car`].
+#[inline(always)]
+unsafe fn proven_scan_cdr<const OBSERVED: bool>(value: Value) -> Value {
+    if OBSERVED {
+        unsafe { value.cons_cdr_unchecked() }
+    } else {
+        unsafe { value.cons_cdr_unobserved_unchecked() }
+    }
+}
+
 /// Semantic view used by Lisp list-cell accessors.
 ///
 /// GNU represents interpreted functions as `PVEC_CLOSURE`, not cons cells.
@@ -162,9 +190,11 @@ impl From<Value> for ConsCellView {
     fn from(value: Value) -> Self {
         match value.kind() {
             ValueKind::Nil => Self::Empty,
+            // `kind()` yields `Cons` only for `TAG_CONS` (`is_cons`). The
+            // discriminant does not dominate the accessor's tag compare.
             ValueKind::Cons => Self::Cell {
-                car: value.cons_car(),
-                cdr: value.cons_cdr(),
+                car: unsafe { value.cons_car_unchecked() },
+                cdr: unsafe { value.cons_cdr_unchecked() },
             },
             _ => Self::NonList(value),
         }
@@ -505,7 +535,9 @@ pub(crate) fn builtin_nth_values(n_value: Value, list: Value) -> EvalResult {
 fn builtin_nth_values_scan<const OBSERVED: bool>(n_value: Value, list: Value) -> EvalResult {
     let tail = nthcdr_impl_scan::<OBSERVED>(n_value, list)?;
     match tail.kind() {
-        ValueKind::Cons => Ok(scan_car::<OBSERVED>(tail)),
+        // Same `TAG_CONS` proof as `ConsCellView`. The kind discriminant
+        // does not delete the accessor compare.
+        ValueKind::Cons => Ok(unsafe { proven_scan_car::<OBSERVED>(tail) }),
         ValueKind::Nil => Ok(Value::NIL),
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -602,7 +634,9 @@ fn nthcdr_impl_scan<const OBSERVED: bool>(n_value: Value, list: Value) -> EvalRe
         for _ in 0..(*n as usize) {
             match tail.kind() {
                 ValueKind::Cons => {
-                    tail = scan_cdr::<OBSERVED>(tail);
+                    // `ValueKind::Cons` is `TAG_CONS`. `kind()` does not
+                    // dominate the compare inside `scan_cdr`.
+                    tail = unsafe { proven_scan_cdr::<OBSERVED>(tail) };
                 }
                 ValueKind::Nil => return Ok(Value::NIL),
                 _ => {

@@ -247,21 +247,28 @@ fn plist_get_select<Comparison: PlistKeyComparison>(plist: Value, prop: &Value) 
     }
 }
 
+/// Caller has just tested `cell.is_cons()`. The checked accessor repeats
+/// that compare; this load uses the caller's proof instead.
 #[inline(always)]
 fn read_car<const OBSERVE: bool>(cell: Value) -> Value {
     if OBSERVE {
-        cell.cons_car()
+        // SAFETY: caller proved `cell.is_cons()`.
+        unsafe { cell.cons_car_unchecked() }
     } else {
-        cell.cons_car_unobserved()
+        // SAFETY: caller proved `cell.is_cons()`, and this walk is unobserved.
+        unsafe { cell.cons_car_unobserved_unchecked() }
     }
 }
 
+/// Caller has just tested `cell.is_cons()`. See [`read_car`].
 #[inline(always)]
 fn read_cdr<const OBSERVE: bool>(cell: Value) -> Value {
     if OBSERVE {
-        cell.cons_cdr()
+        // SAFETY: caller proved `cell.is_cons()`.
+        unsafe { cell.cons_cdr_unchecked() }
     } else {
-        cell.cons_cdr_unobserved()
+        // SAFETY: caller proved `cell.is_cons()`, and this walk is unobserved.
+        unsafe { cell.cons_cdr_unobserved_unchecked() }
     }
 }
 

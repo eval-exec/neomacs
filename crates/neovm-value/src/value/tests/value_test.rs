@@ -788,6 +788,20 @@ fn cons_accessors() {
 }
 
 #[test]
+fn cons_unchecked_matches_checked_on_a_cons() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let c = Value::cons(Value::fixnum(1), Value::fixnum(2));
+        unsafe {
+            assert_eq!(c.cons_car_unchecked(), c.cons_car());
+            assert_eq!(c.cons_cdr_unchecked(), c.cons_cdr());
+            assert_eq!(c.cons_car_unobserved_unchecked(), c.cons_car_unobserved());
+            assert_eq!(c.cons_cdr_unobserved_unchecked(), c.cons_cdr_unobserved());
+        }
+    });
+}
+
+#[test]
 fn value_is_copy_and_16_bytes() {
     crate::test_utils::init_test_tracing();
     // Value is Copy — this assignment would fail to compile if not.

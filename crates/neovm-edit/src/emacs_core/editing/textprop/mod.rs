@@ -1393,8 +1393,10 @@ pub fn verify_text_read_only_emacs_byte_range_in_state<'a, Vars: EditVariableRea
             if !alias_tail.is_cons() {
                 return None;
             }
-            let alias = alias_tail.cons_car();
-            alias_tail = alias_tail.cons_cdr();
+            // The test above is the cons proof. The accessor compare stayed
+            // live in this closure.
+            let alias = unsafe { alias_tail.cons_car_unchecked() };
+            alias_tail = unsafe { alias_tail.cons_cdr_unchecked() };
             Some(alias)
         });
         let read_only = resolve_effective_char_property(
@@ -1434,10 +1436,12 @@ pub fn verify_text_read_only_emacs_byte_range_in_state<'a, Vars: EditVariableRea
 fn value_in_list(needle: Value, list: Value) -> bool {
     let mut cursor = list;
     while cursor.is_cons() {
-        if eq_value(&cursor.cons_car(), &needle) {
+        // The loop test is the cons proof.
+        let car = unsafe { cursor.cons_car_unchecked() };
+        if eq_value(&car, &needle) {
             return true;
         }
-        cursor = cursor.cons_cdr();
+        cursor = unsafe { cursor.cons_cdr_unchecked() };
     }
     false
 }
