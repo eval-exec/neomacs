@@ -413,6 +413,9 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     ///
     /// The outer `None` leaves unverified/eager functions with the checked
     /// resolver's existing behavior. `Some(None)` rejects an unsafe target.
+    /// The verified driver reaches this only when the live shape still
+    /// matches the proof. The checked driver does not use this target; it
+    /// keeps its own operand checks.
     #[inline(never)]
     fn verified_switch_pc(&self, raw: i64) -> Option<Option<usize>> {
         let lazy = self.lazy_gnu_code().as_ref()?;

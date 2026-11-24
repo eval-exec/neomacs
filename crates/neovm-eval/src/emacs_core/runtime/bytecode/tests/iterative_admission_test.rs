@@ -84,8 +84,8 @@ fn bytecode_lazy_iterative_admission_checks_each_clones_environment() {
 }
 
 /// `set_max_stack` keeps the shared cell. The cached range was published
-/// against the proof's limit, so a clone with another limit is not admitted
-/// and must not replace that range with a refusal.
+/// against the proof's limit, so a clone with another limit is not admitted.
+/// The run_loop entry check is `executes_verified_ops` on that clone.
 #[test]
 fn bytecode_lazy_iterative_admission_rejects_a_stale_max_stack() {
     let proto = admission_function(0, 1, vec![192, 135]);
@@ -96,6 +96,7 @@ fn bytecode_lazy_iterative_admission_rejects_a_stale_max_stack() {
         proto.lazy_gnu_code().as_ref().unwrap(),
         lowered.lazy_gnu_code().as_ref().unwrap()
     ));
+    assert!(!lowered.executes_verified_ops());
     assert_eq!(
         lowered.peek_lazy_iterative_admission(0),
         LazyAdmissionPeek::Known(false)
@@ -114,6 +115,40 @@ fn bytecode_lazy_iterative_admission_rejects_a_stale_max_stack() {
         proto.peek_lazy_iterative_admission(0),
         LazyAdmissionPeek::Known(true)
     );
+}
+
+/// Admission is not published yet. A max_stack clone must return false
+/// without writing a refusal into the shared cell, so the prototype can
+/// still publish acceptance.
+#[test]
+fn bytecode_lazy_stale_max_stack_does_not_publish_an_admission_refusal() {
+    let mut proto = admission_function(0, 1, vec![192, 135]);
+    assert!(proto.executes_verified_ops());
+    assert!(
+        proto
+            .lazy_gnu_code()
+            .as_ref()
+            .unwrap()
+            .iterative_admission()
+            .is_none()
+    );
+    let mut lowered = proto.clone();
+    lowered.set_max_stack(StackDepth::for_test(0));
+    assert!(std::sync::Arc::ptr_eq(
+        proto.lazy_gnu_code().as_ref().unwrap(),
+        lowered.lazy_gnu_code().as_ref().unwrap()
+    ));
+    assert_eq!(lowered.lazy_iterative_admission(0), Some(false));
+    assert!(
+        proto
+            .lazy_gnu_code()
+            .as_ref()
+            .unwrap()
+            .iterative_admission()
+            .is_none(),
+        "a mismatched clone must not publish a refusal"
+    );
+    assert_eq!(proto.lazy_iterative_admission(0), Some(true));
 }
 
 /// A non-lexical named clone gains an entry depth when `set_env` captures
