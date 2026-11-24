@@ -4,7 +4,7 @@ use super::{
     SourceEntryRefusal, SourceWithdrawalFailure, SourceWithdrawalStep,
 };
 
-fn ready() -> Option<Box<super::super::super::Context>> {
+fn ready() -> Box<super::super::super::Context> {
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::cache::reset_carrier_tls();
     install_inactive_source_module_probe_for_test();
@@ -14,12 +14,12 @@ fn ready() -> Option<Box<super::super::super::Context>> {
     source.setup_thread_locals();
     source.gc_collect_exact();
     if source.tagged_heap.tagged_heap_generational_enabled() {
-        return Some(source);
+        return source;
     }
     match capture(source) {
         Err(SourceWithdrawalFailure::BeforeEffects(failure)) => {
             assert_eq!(failure.reason, SourceEntryRefusal::GenerationalRequired);
-            None
+            panic!("these rows need a generational heap; NEOVM_GC_GENERATIONAL=0 disables it")
         }
         other => panic!("GEN0 must refuse before any effect: {:?}", other.err()),
     }
@@ -50,7 +50,7 @@ fn cache_closed(
 
 #[test]
 fn pentry_e2b_source_jit_backend_actual_source_accepts_feature_static_backend() {
-    let Some(source) = ready() else { return };
+    let source = ready();
     let (alive, closed) = cache_closed(source);
     let closed: OwnedSourceBackendClosed = closed.withdraw_jit_backend().unwrap();
     assert!(closed._frame.effects.keeper().held_here());
@@ -60,15 +60,15 @@ fn pentry_e2b_source_jit_backend_actual_source_accepts_feature_static_backend() 
 
 #[test]
 fn pentry_e2b_source_jit_backend_actual_source_drop_forget_and_unwind_retain_backing() {
-    let Some(source) = ready() else { return };
+    let source = ready();
     let (first, closed) = cache_closed(source);
     drop(closed.withdraw_jit_backend().unwrap());
     assert!(first());
-    let Some(source) = ready() else { return };
+    let source = ready();
     let (second, closed) = cache_closed(source);
     std::mem::forget(closed.withdraw_jit_backend().unwrap());
     assert!(second());
-    let Some(source) = ready() else { return };
+    let source = ready();
     let (third, closed) = cache_closed(source);
     let closed = closed.withdraw_jit_backend().unwrap();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -83,9 +83,9 @@ fn pentry_e2b_source_jit_backend_actual_source_drop_forget_and_unwind_retain_bac
 #[cfg(feature = "jit")]
 #[test]
 fn pentry_e2b_source_jit_backend_actual_source_preserves_new_heap_on_refusal() {
-    let Some(source) = ready() else { return };
+    let source = ready();
     let (alive, closed) = cache_closed(source);
-    let Some(foreign) = ready() else { return };
+    let foreign = ready();
     let error = closed
         .withdraw_jit_backend()
         .err()

@@ -78,8 +78,11 @@ impl Grant {
 pub(crate) enum PortRefusal {
     /// The era was poisoned; no further grant will come.
     Poisoned,
-    /// The keeper could not finish its stop within its bound. Nothing was
-    /// lent and nothing is poisoned: publish again and request again.
+    /// An owner-side refusal (K8 r2): this owner could not publish within the
+    /// contention bound, or its request was sent back to publish more often
+    /// than the republish limit. Nothing was lent and nothing is poisoned:
+    /// request again. A slow keeper stop never answers this; the requester
+    /// just waits for its grant.
     Retry,
 }
 

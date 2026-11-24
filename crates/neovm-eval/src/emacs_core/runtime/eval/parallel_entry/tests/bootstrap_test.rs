@@ -6,9 +6,7 @@ use neovm_value::value::Value;
 
 #[test]
 fn pentry_e2b_bootstrap_actual_source_send_and_verified_return() {
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     let private = Value::string("actual-boxed-source-private-root");
     source.lexenv = private;
     let alive = source.world_lifetime_probe_for_test();
@@ -36,9 +34,7 @@ fn pentry_e2b_bootstrap_actual_source_send_and_verified_return() {
 
 #[test]
 fn pentry_e2b_bootstrap_source_drop_poisons_the_prepared_right() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let (shell, start) = close(source).prepare_era().unwrap();
     drop(shell);
@@ -49,9 +45,7 @@ fn pentry_e2b_bootstrap_source_drop_poisons_the_prepared_right() {
 
 #[test]
 fn pentry_e2b_bootstrap_prepared_drop_and_source_forget_retain_backing() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let (shell, start) = close(source).prepare_era().unwrap();
     drop(start);
@@ -62,9 +56,7 @@ fn pentry_e2b_bootstrap_prepared_drop_and_source_forget_retain_backing() {
 
 #[test]
 fn pentry_e2b_bootstrap_catch_unwind_does_not_restore_source_execution() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let pair = close(source).prepare_era().unwrap();
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -78,9 +70,7 @@ fn pentry_e2b_bootstrap_catch_unwind_does_not_restore_source_execution() {
 
 #[test]
 fn pentry_e2b_bootstrap_foreign_tls_preparation_failure_retains_actual_shell() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let closed = close(source);
     let mut foreign = Box::new(super::super::super::super::Context::new_minimal_vm_harness(
@@ -108,12 +98,10 @@ fn pentry_e2b_bootstrap_foreign_tls_preparation_failure_retains_actual_shell() {
 
 #[test]
 fn pentry_e2b_bootstrap_foreign_return_cannot_reactivate_either_source() {
-    let Some(first) = ready() else {
-        return;
-    };
+    let first = ready();
     let first_alive = first.world_lifetime_probe_for_test();
     let (first, first_start) = close(first).prepare_era().unwrap();
-    let second = ready().expect("the same heap mode admits a second source");
+    let second = ready();
     let second_alive = second.world_lifetime_probe_for_test();
     let (second, second_start) = close(second).prepare_era().unwrap();
     let end = second_start.return_to_main().unwrap();
@@ -132,9 +120,7 @@ fn pentry_e2b_bootstrap_foreign_return_cannot_reactivate_either_source() {
 #[test]
 fn pentry_l61_keeper_service_admits_and_finishes_its_own_era() {
     use super::super::keeper_service::keeper_start;
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     let private = Value::string("l61-keeper-service-private-root");
     source.lexenv = private;
     let (shell, start) = close(source).prepare_era().unwrap();
@@ -167,9 +153,7 @@ fn pentry_l61_keeper_service_admits_and_finishes_its_own_era() {
 #[test]
 fn pentry_l62_real_thread_stop_and_resume_on_the_service_thread() {
     use super::super::keeper_service::keeper_serve;
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     let private = Value::string("l62-keeper-stop-private-root");
     source.lexenv = private;
     let (shell, start) = close(source).prepare_era().unwrap();
@@ -212,9 +196,7 @@ fn pentry_l62_real_thread_stop_and_resume_on_the_service_thread() {
 #[test]
 fn pentry_l62_keeper_era_control_persists_across_two_stops() {
     use super::super::keeper_service::keeper_serve;
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     let private = Value::string("l62-keeper-two-stops-private-root");
     source.lexenv = private;
     let (shell, start) = close(source).prepare_era().unwrap();
@@ -278,9 +260,7 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
     // publication check, so this is not a product ring generation.
     const SERIAL_GENERATION: NonZeroU64 = NonZeroU64::MIN;
 
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     let private = Value::string("l62-live-lend-private-root");
     source.lexenv = private;
     let (shell, start) = close(source).prepare_era().unwrap();
@@ -507,9 +487,7 @@ fn pentry_l62_live_lend_refuses_a_stale_owner_a_wrong_generation_and_a_second_st
 fn pentry_l61_keeper_service_refuses_a_poisoned_start_with_a_notice() {
     use super::super::keeper_service::{KeeperStartNotice, keeper_start};
     use neovm_value::tagged::gc::heap_transfer::ScopedEraError;
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let (shell, start) = close(source).prepare_era().unwrap();
     drop(shell);

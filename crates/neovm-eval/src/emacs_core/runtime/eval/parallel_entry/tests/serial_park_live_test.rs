@@ -372,9 +372,7 @@ fn with_live_era(
     label: &'static str,
     body: impl for<'k, 'service, 'heap> FnOnce(&'k KeeperEra<'service, 'heap>) + Send + 'static,
 ) {
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     let private = Value::string(label);
     source.lexenv = private;
     let (shell, start) = close(source).prepare_era().unwrap();
@@ -399,8 +397,8 @@ fn with_live_era(
 fn with_poisoned_era<R: Send + 'static>(
     label: &'static str,
     body: impl for<'k, 'service, 'heap> FnOnce(&'k KeeperEra<'service, 'heap>) -> R + Send + 'static,
-) -> Option<R> {
-    let mut source = ready()?;
+) -> R {
+    let mut source = ready();
     source.lexenv = Value::string(label);
     let (_shell, start) = close(source).prepare_era().unwrap();
     let (tx, rx) = mpsc::channel();
@@ -410,9 +408,10 @@ fn with_poisoned_era<R: Send + 'static>(
         });
         drop(outcome);
     });
-    let report = rx.recv().expect("the keeper outcome");
+    // Bounded, so a driver that never ends fails here instead of hanging.
+    let report = rx.recv_timeout(BOUND).expect("the keeper outcome");
     service.join().expect("keeper service thread");
-    Some(report)
+    report
 }
 
 /// A running owner that counts its own progress and acks every stop.
@@ -950,9 +949,7 @@ fn l67a_a_lisp_signal_ends_only_that_turn() {
 /// era, and the other owner's request is answered `Poisoned`.
 #[test]
 fn l67a_an_owner_unwinding_mid_turn_poisons_and_wakes_the_rest() {
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     source.lexenv = Value::string("l67a-unwind");
     let (_shell, start) = close(source).prepare_era().unwrap();
     let (tx, rx) = mpsc::channel();
@@ -1515,7 +1512,7 @@ fn l67a_an_exit_while_queued_cancels_the_request() {
 /// break: the ticket is lost, so the keeper poisons.
 #[test]
 fn l67a_an_exit_while_lent_poisons() {
-    let Some((end, told)) = with_poisoned_era("l67a-exit-lent", |era| {
+    let (end, told) = with_poisoned_era("l67a-exit-lent", |era| {
         let (inbox, inbox_rx) = mpsc::channel();
         let mut driver = Driver::new(era, inbox_rx);
         let a = enroll_driver(era, &mut driver, &inbox, O);
@@ -1539,9 +1536,7 @@ fn l67a_an_exit_while_lent_poisons() {
             let end = driver.run();
             (end, lent.join().expect("A"))
         })
-    }) else {
-        return;
-    };
+    });
     assert_eq!(
         end,
         DriverEnd::Poisoned(Breach::Unexpected {
@@ -1557,7 +1552,7 @@ fn l67a_an_exit_while_lent_poisons() {
 /// waiting for a ticket that cannot come back.
 #[test]
 fn l67a_a_grant_to_a_gone_owner_poisons_without_waiting() {
-    let Some(end) = with_poisoned_era("l67a-gone", |era| {
+    let end = with_poisoned_era("l67a-gone", |era| {
         let (inbox, inbox_rx) = mpsc::channel();
         let mut driver = Driver::new(era, inbox_rx);
         let a = enroll_driver(era, &mut driver, &inbox, O);
@@ -1580,8 +1575,45 @@ fn l67a_a_grant_to_a_gone_owner_poisons_without_waiting() {
             done_tx.send(()).expect("tell A");
             end
         })
-    }) else {
-        return;
-    };
+    });
     assert_eq!(end, DriverEnd::Poisoned(Breach::Unreachable { owner: O }));
+}
+
+/// Lead #14009 nit. The keeper owns a running mutator, so its stop refuses
+/// `Busy` with the gate free: it waits on itself, and no retry can help. The
+/// driver ends that as `SelfWait` after one contention bound, instead of
+/// warning about a held gate forever, and the queued owner reads Poisoned.
+#[test]
+fn l67a_a_keeper_waiting_on_itself_ends_as_a_self_wait() {
+    let (end, answer) = with_poisoned_era("l67a-self-wait", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx).contention_bound(Duration::from_millis(50));
+        let a = enroll_driver(era, &mut driver, &inbox, O);
+        drop(inbox);
+        // The keeper's own running member: a frozen owner the stop waits for
+        // on the keeper's own thread.
+        let own = activate(
+            era.register(L, 0).expect("register the keeper's own owner"),
+            era.heap_identity(),
+            L,
+        );
+        std::thread::scope(|scope| {
+            let queued = scope.spawn(move || {
+                let (_state, _home, mut port) = a.start();
+                let answer = port.request_turn().map(|_granted| ());
+                drop(port.exit());
+                answer
+            });
+            let end = driver.run();
+            let answer = queued.join().expect("A");
+            drop(own);
+            (end, answer)
+        })
+    });
+    assert_eq!(end, DriverEnd::Poisoned(Breach::SelfWait));
+    assert_eq!(
+        answer,
+        Err(PortRefusal::Poisoned),
+        "A learns the era is poisoned"
+    );
 }

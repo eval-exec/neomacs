@@ -18,8 +18,12 @@ use neovm_value::value::Value;
 use std::mem::ManuallyDrop;
 use std::time::Duration;
 
+/// A fresh source Context for the live-era rows. Their eras need a
+/// generational heap, so a full-heap-only build (`NEOVM_GC_GENERATIONAL=0`)
+/// fails here loudly after checking that GEN0 refuses before any effect,
+/// rather than letting every row pass without running.
 pub(in crate::emacs_core::eval::parallel_entry) fn ready()
--> Option<Box<super::super::super::super::Context>> {
+-> Box<super::super::super::super::Context> {
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::cache::reset_carrier_tls();
     install_inactive_source_module_probe_for_test();
@@ -29,12 +33,14 @@ pub(in crate::emacs_core::eval::parallel_entry) fn ready()
     source.setup_thread_locals();
     source.gc_collect_exact();
     if source.tagged_heap.tagged_heap_generational_enabled() {
-        return Some(source);
+        return source;
     }
     match capture(source) {
         Err(SourceWithdrawalFailure::BeforeEffects(failure)) => {
             assert_eq!(failure.reason, SourceEntryRefusal::GenerationalRequired);
-            None
+            panic!(
+                "the live-era rows need a generational heap; NEOVM_GC_GENERATIONAL=0 disables it"
+            )
         }
         other => panic!("GEN0 must refuse before any effect: {:?}", other.err()),
     }

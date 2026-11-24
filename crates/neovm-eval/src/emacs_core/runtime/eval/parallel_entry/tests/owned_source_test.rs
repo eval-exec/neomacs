@@ -26,10 +26,10 @@ fn capture(source: Box<Context>) -> Result<OwnedSourceRegistries, SourceWithdraw
     unsafe { OwnedSourceRegistries::capture(source) }
 }
 
-fn gen1_source() -> Option<Box<Context>> {
+fn gen1_source() -> Box<Context> {
     let source = source();
     if source.tagged_heap.tagged_heap_generational_enabled() {
-        return Some(source);
+        return source;
     }
     match capture(source) {
         Err(SourceWithdrawalFailure::BeforeEffects(failure)) => {
@@ -37,7 +37,7 @@ fn gen1_source() -> Option<Box<Context>> {
             assert!(neovm_value::tagged::gc::tagged_heap_is_current(
                 &failure.source.tagged_heap
             ));
-            None
+            panic!("these rows need a generational heap; NEOVM_GC_GENERATIONAL=0 disables it")
         }
         other => panic!("GEN0 must refuse before any effect: {:?}", other.err()),
     }
@@ -55,9 +55,7 @@ fn retained(error: SourceWithdrawalFailure, step: SourceWithdrawalStep) -> Retai
 
 #[test]
 fn pentry_e2b_owned_source_exact_box_and_heap_are_retained() {
-    let Some(source) = gen1_source() else {
-        return;
-    };
+    let source = gen1_source();
     let address = std::ptr::from_ref(&*source);
     let heap = source.tagged_heap.heap_identity();
     let captured = capture(source).expect("actual source receipt chain");
@@ -71,9 +69,7 @@ fn pentry_e2b_owned_source_exact_box_and_heap_are_retained() {
 
 #[test]
 fn pentry_e2b_owned_source_drop_retains_actual_world_and_registries() {
-    let Some(source) = gen1_source() else {
-        return;
-    };
+    let source = gen1_source();
     let world_alive = source.world_lifetime_probe_for_test();
     let ccl = source.ccl_registry.downgrade();
     drop(capture(source).expect("selected effects"));
@@ -83,9 +79,7 @@ fn pentry_e2b_owned_source_drop_retains_actual_world_and_registries() {
 
 #[test]
 fn pentry_e2b_owned_source_forget_retains_actual_world() {
-    let Some(source) = gen1_source() else {
-        return;
-    };
+    let source = gen1_source();
     let world_alive = source.world_lifetime_probe_for_test();
     std::mem::forget(capture(source).expect("selected effects"));
     assert!(world_alive());
@@ -93,9 +87,7 @@ fn pentry_e2b_owned_source_forget_retains_actual_world() {
 
 #[test]
 fn pentry_e2b_owned_source_unwind_after_capture_retains_actual_world() {
-    let Some(source) = gen1_source() else {
-        return;
-    };
+    let source = gen1_source();
     let world_alive = source.world_lifetime_probe_for_test();
     let captured = capture(source).expect("selected effects");
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -108,9 +100,7 @@ fn pentry_e2b_owned_source_unwind_after_capture_retains_actual_world() {
 
 #[test]
 fn pentry_e2b_owned_source_unwind_during_first_adapter_retains_box() {
-    let Some(source) = gen1_source() else {
-        return;
-    };
+    let source = gen1_source();
     let world_alive = source.world_lifetime_probe_for_test();
     let frame = SourceFrame {
         source: std::mem::ManuallyDrop::new(source),
@@ -127,9 +117,7 @@ fn pentry_e2b_owned_source_unwind_during_first_adapter_retains_box() {
 
 #[test]
 fn pentry_e2b_owned_source_unwind_after_real_receipt_retains_prior_effects() {
-    let Some(source) = gen1_source() else {
-        return;
-    };
+    let source = gen1_source();
     let world_alive = source.world_lifetime_probe_for_test();
     let ccl = source.ccl_registry.downgrade();
     let frame = SourceFrame {
@@ -156,9 +144,7 @@ fn pentry_e2b_owned_source_unwind_after_real_receipt_retains_prior_effects() {
 
 #[test]
 fn pentry_e2b_owned_source_first_registry_refusal_retains_actual_inputs() {
-    let Some(source) = gen1_source() else {
-        return;
-    };
+    let source = gen1_source();
     let world_alive = source.world_lifetime_probe_for_test();
     let handle = source.ccl_registry.clone();
     let reader = handle.borrow();
@@ -172,9 +158,7 @@ fn pentry_e2b_owned_source_first_registry_refusal_retains_actual_inputs() {
 
 #[test]
 fn pentry_e2b_owned_source_later_registry_refusal_preserves_prior_receipts() {
-    let Some(source) = gen1_source() else {
-        return;
-    };
+    let source = gen1_source();
     let world_alive = source.world_lifetime_probe_for_test();
     let ccl = source.ccl_registry.downgrade();
     let handle = source.hash_table_test_registry.clone();
@@ -190,9 +174,7 @@ fn pentry_e2b_owned_source_later_registry_refusal_preserves_prior_receipts() {
 
 #[test]
 fn pentry_e2b_owned_source_last_slot_refusal_retains_all_prior_effects() {
-    let Some(source) = gen1_source() else {
-        return;
-    };
+    let source = gen1_source();
     let world_alive = source.world_lifetime_probe_for_test();
     let failure = neovm_value::quit::with_quit_requested_slot_borrowed_for_test(|| {
         let error = capture(source).err().expect("quit slot loan refuses");
@@ -259,9 +241,7 @@ fn pentry_e2b_owned_source_foreign_heap_refusal_preserves_current_owner() {
 
 #[test]
 fn pentry_e2b_owned_source_chain_order_includes_hook_routed_slots() {
-    let Some(source) = gen1_source() else {
-        return;
-    };
+    let source = gen1_source();
     let _ = super::super::super::lifecycle::take_source_shell_trace();
     capture(source).expect("owner parked before the host slots, including both display hooks");
     assert_eq!(
@@ -318,9 +298,7 @@ fn pentry_e2b_owned_source_unregistered_terminal_hook_refuses() {
 
 #[test]
 fn pentry_e2b_owned_source_original_registry_data_survives_withdrawal() {
-    let Some(source) = gen1_source() else {
-        return;
-    };
+    let source = gen1_source();
     let program = Value::vector(vec![Value::fixnum(0); 3]);
     let name = Value::symbol("pentry-e2b-owned-source-program");
     builtin_register_ccl_program_impl(vec![name, program]).expect("actual original registry entry");

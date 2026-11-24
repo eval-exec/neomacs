@@ -10,7 +10,7 @@ use neovm_value::intern::intern;
 use neovm_value::tagged::gc::{CacheRootScan, HeapIdentity};
 use neovm_value::value::Value;
 
-fn ready() -> Option<Box<super::super::super::Context>> {
+fn ready() -> Box<super::super::super::Context> {
     install_inactive_source_module_probe_for_test();
     let mut source = Box::new(super::super::super::Context::new_minimal_vm_harness(
         crate::test_utils::unit_harness(),
@@ -18,12 +18,12 @@ fn ready() -> Option<Box<super::super::super::Context>> {
     source.setup_thread_locals();
     source.gc_collect_exact();
     if source.tagged_heap.tagged_heap_generational_enabled() {
-        return Some(source);
+        return source;
     }
     match capture(source) {
         Err(SourceWithdrawalFailure::BeforeEffects(failure)) => {
             assert_eq!(failure.reason, SourceEntryRefusal::GenerationalRequired);
-            None
+            panic!("these rows need a generational heap; NEOVM_GC_GENERATIONAL=0 disables it")
         }
         other => panic!("GEN0 must refuse before any effect: {:?}", other.err()),
     }
@@ -105,9 +105,7 @@ fn caches(source: &super::super::super::Context) -> Vec<Value> {
 
 #[test]
 fn pentry_e2b_source_retirement_parks_default_binding_before_withdrawal() {
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     install_truncate_lines_forwarder(&mut source);
     let name = intern("truncate-lines");
     let original = slot(&source, "truncate-lines");
@@ -135,9 +133,7 @@ fn pentry_e2b_source_retirement_parks_default_binding_before_withdrawal() {
 
 #[test]
 fn pentry_e2b_source_retirement_parks_nested_local_bindings_and_keeps_slab_roots() {
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     let first = Value::cons(Value::fixnum(41), Value::NIL);
     let last = Value::cons(Value::fixnum(43), Value::NIL);
     let name = "buffer-undo-list";
@@ -161,9 +157,7 @@ fn pentry_e2b_source_retirement_parks_nested_local_bindings_and_keeps_slab_roots
 
 #[test]
 fn pentry_e2b_source_retirement_removes_real_caches_keeps_original_canonical_tables() {
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     seed_canonical_tables(&mut source);
     let original_box = std::ptr::from_ref(&*source);
     let canonical = [
@@ -191,9 +185,7 @@ fn pentry_e2b_source_retirement_removes_real_caches_keeps_original_canonical_tab
 
 #[test]
 fn pentry_e2b_source_retirement_actual_cache_reader_retains_prior_payloads() {
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     seed_canonical_tables(&mut source);
     let alive = source.world_lifetime_probe_for_test();
     let registry = source.ccl_registry.downgrade();
@@ -223,16 +215,12 @@ fn pentry_e2b_source_retirement_actual_cache_reader_retains_prior_payloads() {
 
 #[test]
 fn pentry_e2b_source_retirement_foreign_reactivation_refuses_before_cache_effects() {
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     seed_canonical_tables(&mut source);
     let alive = source.world_lifetime_probe_for_test();
     let captured = capture(source).unwrap();
     neovm_value::tagged::gc::clear_tagged_heap_if_installed(&captured._frame.source.tagged_heap);
-    let Some(mut foreign) = ready() else {
-        return;
-    };
+    let mut foreign = ready();
     seed_canonical_tables(&mut foreign);
     let foreign_roots = caches(&foreign);
     assert!(!foreign_roots.is_empty());
@@ -254,9 +242,7 @@ fn pentry_e2b_source_retirement_foreign_reactivation_refuses_before_cache_effect
 
 #[test]
 fn pentry_e2b_source_retirement_drop_and_forget_keep_original_worlds() {
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let retired = capture(source).unwrap().retire_text().unwrap();
     // `SourceFrame` holds `ManuallyDrop<Box<Context>>`, so dropping it leaves
@@ -265,9 +251,7 @@ fn pentry_e2b_source_retirement_drop_and_forget_keep_original_worlds() {
     neovm_value::tagged::gc::clear_tagged_heap_if_installed(&retired._frame.source.tagged_heap);
     drop(retired);
     assert!(alive());
-    let Some(source) = ready() else {
-        return;
-    };
+    let source = ready();
     let second = source.world_lifetime_probe_for_test();
     std::mem::forget(capture(source).unwrap().retire_text().unwrap());
     assert!(alive() && second());
@@ -275,9 +259,7 @@ fn pentry_e2b_source_retirement_drop_and_forget_keep_original_worlds() {
 
 #[test]
 fn pentry_e2b_source_retirement_catch_unwind_keeps_parked_source_closed() {
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     source
         .try_specbind(intern("truncate-lines"), Value::T)
         .unwrap();
@@ -293,9 +275,7 @@ fn pentry_e2b_source_retirement_catch_unwind_keeps_parked_source_closed() {
 
 #[test]
 fn pentry_e2b_source_retirement_already_empty_caches_complete_without_saved_words() {
-    let Some(mut source) = ready() else {
-        return;
-    };
+    let mut source = ready();
     seed_canonical_tables(&mut source);
     let heap: HeapIdentity = source.tagged_heap.heap_identity();
     neovm_text::emacs_core::casetab::retirement::retire_casetab_for_heap(heap).unwrap();
