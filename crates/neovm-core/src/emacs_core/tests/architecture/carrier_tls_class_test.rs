@@ -1011,7 +1011,7 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
     // owner is built from `bootstrap.seed()` (green/bootstrap.rs:141-174)
     // whose `ExecutionSeed` carries no display hook (construct.rs:44-61), and
     // `Context::assemble` leaves redisplay_fn, redisplay_prepare_fn,
-    // font_shape_fn, display_idle_maintenance_fn and frame_snapshot_fn None
+    // font_driver, display_idle_maintenance_fn and frame_snapshot_fn None
     // and window_layout_query_adapter Unavailable (construct.rs:2231-2239).
     // Every direct frame_layout entry point is reached only from those
     // main-thread startup/redisplay paths (main.rs:4215, 4219, 4239-4240,

@@ -247,31 +247,47 @@ pub fn install_frame_snapshot_fn(evaluator: &mut Context) {
 /// This targets one window through the canonical row producer without entering
 /// the renderer presentation lifecycle. Both GUI and TTY install this adapter;
 /// batch mode intentionally does not.
-/// Issue #447: install the font-shaping driver (GNU `font->driver->shape`)
-/// on the evaluator. The driver reenters the redisplay runtime and shapes
-/// ligature/composition gstrings through the layout engine's font system —
-/// the same cosmic machinery the row walk uses, so the font's `liga`
-/// feature applies.
-pub fn install_font_shape_driver(evaluator: &mut Context) {
-    evaluator.font_shape_fn = Some(Box::new(|eval, gstring, direction| {
+/// Single frontend font-driver vtable (`N-font-driver-vtable`, GNU
+/// `struct font_driver`) backed by `REDISPLAY_RUNTIME`. Zero-sized so boxing
+/// it performs no heap allocation.
+struct RedisplayFontDriver;
+
+impl neovm_core::emacs_core::font::FontDriver for RedisplayFontDriver {
+    fn shape_gstring(
+        &mut self,
+        _eval: &mut Context,
+        gstring: neovm_core::Value,
+        direction: neovm_core::Value,
+    ) -> neovm_core::emacs_core::font::GstringShapeOutcome {
         REDISPLAY_RUNTIME.with(|runtime| runtime.shape_gstring(gstring, direction))
-    }));
-}
+    }
 
-/// Install GNU `font->driver->text_extents` for the automatic-composition
-/// gstring constructor (`font_fill_lglyph_metrics`, src/font.c).
-pub fn install_font_glyph_metrics_driver(evaluator: &mut Context) {
-    evaluator.font_glyph_metrics_fn = Some(Box::new(|font, ch| {
+    fn glyph_text_metrics(
+        &mut self,
+        font: neovm_core::Value,
+        ch: u32,
+    ) -> Option<neovm_core::display_vocab::GlyphTextMetrics> {
         REDISPLAY_RUNTIME.with(|runtime| runtime.glyph_text_metrics(font, ch))
-    }));
+    }
+
+    fn realized_fontset(
+        &mut self,
+        eval: &mut Context,
+        frame_id: FrameId,
+        window_id: neovm_core::window::WindowId,
+        lisp_pos: i64,
+    ) -> Option<(u32, u64)> {
+        REDISPLAY_RUNTIME.with(|runtime| {
+            runtime.realized_fontset_for_lisp_pos(eval, frame_id, window_id, lisp_pos)
+        })
+    }
 }
 
-/// Install the lookup `(font-at)` uses to name the face redisplay sealed.
-pub fn install_realized_fontset_driver(evaluator: &mut Context) {
-    evaluator.realized_fontset_fn = Some(Box::new(|eval, frame, window, lisp_pos| {
-        REDISPLAY_RUNTIME
-            .with(|runtime| runtime.realized_fontset_for_lisp_pos(eval, frame, window, lisp_pos))
-    }));
+/// Install the frontend font driver vtable (`font->driver->shape`,
+/// `font->driver->text_extents`, and sealed realized-fontset lookup for
+/// `font-at` / positioned `internal-char-font`).
+pub fn install_font_driver(evaluator: &mut Context) {
+    evaluator.font_driver = Some(Box::new(RedisplayFontDriver));
 }
 
 pub fn install_window_layout_query_fn(evaluator: &mut Context) {
@@ -493,9 +509,7 @@ pub(crate) fn install_headless_tty_redisplay(
     }));
     install_frame_snapshot_fn(evaluator);
     install_window_layout_query_fn(evaluator);
-    install_font_shape_driver(evaluator);
-    install_font_glyph_metrics_driver(evaluator);
-    install_realized_fontset_driver(evaluator);
+    install_font_driver(evaluator);
 }
 
 pub fn install_tty_redisplay_callback_with_popup_redraw(
@@ -583,9 +597,7 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
             tty_rows_host_authority(),
         ),
     );
-    install_font_shape_driver(evaluator);
-    install_font_glyph_metrics_driver(evaluator);
-    install_realized_fontset_driver(evaluator);
+    install_font_driver(evaluator);
 }
 
 #[cfg(test)]

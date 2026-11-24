@@ -4251,19 +4251,19 @@ pub(crate) fn resolve_font_match(
 
 /// The face id redisplay sealed for this window's buffer position.
 ///
-/// The hook is taken for the call so a nested `font-at` does not borrow it
-/// twice. `None` (no hook, or the layout engine already borrowed) keeps the
-/// implicit fontset.
+/// The driver is taken via [`neovm_eval::emacs_core::eval::Context::with_font_driver`]
+/// so a nested `font-at` does not borrow it twice and unwinds always restore
+/// the slot. `None` (no driver, or the layout engine already borrowed) keeps
+/// the implicit fontset.
 fn realized_fontset_at(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame_id: FrameId,
     window_id: WindowId,
     lisp_pos: i64,
 ) -> Option<(u32, u64)> {
-    let mut hook = eval.realized_fontset_fn.take()?;
-    let found = hook(eval, frame_id.0, window_id.0, lisp_pos);
-    eval.realized_fontset_fn = Some(hook);
-    found
+    eval.with_font_driver(|eval, driver| {
+        driver.realized_fontset(eval, frame_id, window_id, lisp_pos)
+    })?
 }
 
 /// `(font-at POSITION &optional WINDOW STRING)` -- resolve the effective font
@@ -5275,40 +5275,7 @@ pub fn font_object_family_and_pixel_size(value: &Value) -> Option<(String, f64)>
 /// shape identically, so one cache entry serves both.
 pub use neovm_value::display_vocab::GstringShapeCacheKey;
 
-pub use neovm_eval::emacs_core::eval::font_shape::{FontShapeFn, GstringShapeOutcome};
-
-/// Own the installed callback while shaping has exclusive access to Context.
-/// The optional resource is restored even when shaping returns nil or unwinds;
-/// GNU font.c:4634-4700 never consumes the font driver's shape method.
-#[must_use]
-struct FontShapeDriverScope<'context> {
-    context: &'context mut neovm_eval::emacs_core::eval::Context,
-    driver: Option<FontShapeFn>,
-}
-
-impl FontShapeDriverScope<'_> {
-    fn run(
-        context: &mut neovm_eval::emacs_core::eval::Context,
-        gstring: Value,
-        direction: Value,
-    ) -> EvalResult {
-        let driver = context.font_shape_fn.take();
-        let mut scope = FontShapeDriverScope { context, driver };
-        match scope.driver.as_mut() {
-            Some(driver) => shape_gstring_with_driver(scope.context, driver, gstring, direction),
-            // GNU: `font->driver->shape == NULL` → the value is nil.
-            None => Ok(Value::NIL),
-        }
-    }
-}
-
-impl Drop for FontShapeDriverScope<'_> {
-    fn drop(&mut self) {
-        self.context.font_shape_fn = self.driver.take();
-    }
-}
-
-static_assertions::assert_not_impl_any!(FontShapeDriverScope<'static>: Send, Sync);
+pub use neovm_eval::emacs_core::eval::font_shape::{FontDriver, GstringShapeOutcome};
 
 pub(crate) fn font_shape_gstring(
     eval: &mut neovm_eval::emacs_core::eval::Context,
@@ -5350,7 +5317,9 @@ pub(crate) fn font_shape_gstring(
         ));
     }
 
-    FontShapeDriverScope::run(eval, args[0], args[1])
+    // GNU: `font->driver->shape == NULL` -> the value is nil.
+    eval.with_font_driver(|eval, driver| shape_gstring_with_driver(eval, driver, args[0], args[1]))
+        .unwrap_or(Ok(Value::NIL))
 }
 
 // Keep shaping's validation/cache walk outside the driver's restoration scope.
@@ -5359,7 +5328,7 @@ pub(crate) fn font_shape_gstring(
 #[inline(never)]
 fn shape_gstring_with_driver(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    shape_driver: &mut FontShapeFn,
+    shape_driver: &mut dyn FontDriver,
     mut gstring: Value,
     direction: Value,
 ) -> EvalResult {
@@ -5367,7 +5336,7 @@ fn shape_gstring_with_driver(
     // (src/font.c Ffont_shape_gstring).
     let mut shaped_count = None;
     for _ in 0..3 {
-        match shape_driver(eval, gstring.clone(), direction) {
+        match shape_driver.shape_gstring(eval, gstring.clone(), direction) {
             GstringShapeOutcome::Shaped(n) => {
                 shaped_count = Some(n);
                 break;

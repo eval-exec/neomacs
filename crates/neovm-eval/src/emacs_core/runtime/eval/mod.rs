@@ -3729,13 +3729,12 @@ pub struct Context {
     #[allow(clippy::type_complexity)]
     pub redisplay_prepare_fn:
         Option<Box<dyn FnMut(&mut Self, RedisplayMiniGeometryRequest) -> EvalResult>>,
-    /// Frontend-installed font-shaping driver (GNU `font->driver->shape`).
-    /// The gstring contract lives in src/font.c's `Ffont_shape_gstring`; the
-    /// shaping engine lives in the display layer, so the frontend installs
-    /// this typed seam. `None` means the driver cannot shape (the subr
-    /// answers nil — no composition).
-    #[allow(clippy::type_complexity)]
-    pub font_shape_fn: Option<font_shape::FontShapeFn>,
+    /// Frontend-installed font driver vtable (`N-font-driver-vtable`, GNU
+    /// `struct font_driver`). Holds shaping (`font->driver->shape`), glyph
+    /// text extents (`font->driver->text_extents`), and sealed realized-fontset
+    /// lookup in one 16-byte slot at offset 10648. `None` in batch mode (no
+    /// display font system attached).
+    pub font_driver: Option<Box<dyn font_shape::FontDriver>>,
     /// Optional GUI observer of a complete marker-backed scroll transition.
     #[allow(clippy::type_complexity)]
     pub scroll_preview_fn: Option<
@@ -4056,20 +4055,6 @@ pub struct Context {
     /// those records are still out of the manager and armed as ephemerons.
     /// Appended after the pinned layout; only the Context size grows.
     automatic_retired_processes: Option<Vec<neovm_value::heap_types::ProcessId>>,
-    /// Frontend-installed `font->driver->text_extents` seam (GNU
-    /// `font_fill_lglyph_metrics`): `composition-get-gstring` fills glyph
-    /// metrics with it before automatic-composition rules run.  `None` means
-    /// no graphics font system is available (batch: char-width-table
-    /// fallback).  Appended after the pinned layout so every earlier offset,
-    /// including the JIT-baked ones, stays put.
-    #[allow(clippy::type_complexity)]
-    pub font_glyph_metrics_fn: Option<font_shape::FontGlyphMetricsFn>,
-    /// Frontend-installed lookup of the face id redisplay sealed for a buffer
-    /// position. `(font-at)` uses it so a fallback move recorded on that face
-    /// is the move `font-at` sees. Appended after the pinned layout, so every earlier
-    /// offset stays put.
-    #[allow(clippy::type_complexity)]
-    pub realized_fontset_fn: Option<font_shape::RealizedFontsetFn>,
     /// One frame whose bounded redisplay exhausted without a publishable
     /// candidate. The transaction consumes the owned request after the
     /// callback. This does not advance `accepted_serial` and does not publish

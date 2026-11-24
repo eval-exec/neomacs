@@ -39104,10 +39104,39 @@ fn ligature_rule_composes_through_the_font_shape_driver() {
         crate::font::metrics::test_catalog::metrics_service(),
     ));
     let driver_metrics = metrics.clone();
-    eval.font_shape_fn = Some(Box::new(move |_eval, mut gstring, direction| {
-        let mut metrics = driver_metrics.lock().expect("driver metrics");
-        metrics.shape_gstring_through_font(&mut gstring, direction)
-    }));
+    struct TestShapeDriver(
+        std::sync::Arc<std::sync::Mutex<crate::font::metrics::FontMetricsService>>,
+    );
+    impl neovm_core::emacs_core::font::FontDriver for TestShapeDriver {
+        fn shape_gstring(
+            &mut self,
+            _eval: &mut Context,
+            mut gstring: Value,
+            direction: Value,
+        ) -> neovm_core::emacs_core::font::GstringShapeOutcome {
+            let mut metrics = self.0.lock().expect("driver metrics");
+            metrics.shape_gstring_through_font(&mut gstring, direction)
+        }
+
+        fn glyph_text_metrics(
+            &mut self,
+            _font: Value,
+            _ch: u32,
+        ) -> Option<neovm_core::display_vocab::GlyphTextMetrics> {
+            None
+        }
+
+        fn realized_fontset(
+            &mut self,
+            _eval: &mut Context,
+            _frame_id: neovm_core::window::FrameId,
+            _window_id: neovm_core::window::WindowId,
+            _lisp_pos: i64,
+        ) -> Option<(u32, u64)> {
+            None
+        }
+    }
+    eval.font_driver = Some(Box::new(TestShapeDriver(driver_metrics)));
 
     let frame_id = eval
         .frame_manager_mut()

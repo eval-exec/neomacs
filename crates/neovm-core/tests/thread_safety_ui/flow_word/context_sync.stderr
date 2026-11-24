@@ -36,6 +36,11 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
    |   pub struct NonNull<T: PointeeSized> {
    |   ----------------------------------- doesn't satisfy 38 bounds
    |
+  ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/font_shape.rs
+   |
+   |   pub trait FontDriver {
+   |   -------------------- doesn't satisfy `(dyn FontDriver + 'static): std::marker::Sync`
+   |
   ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs
    |
    |   pub trait DisplayHost {
@@ -218,7 +223,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: std::marker::Sync`
            `(dyn for<'a> FnMut(&'a mut neovm_core::Context, RedisplayMiniGeometryRequest) -> Result<TaggedValue, Flow> + 'static): std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
-           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, TaggedValue, TaggedValue) -> GstringShapeOutcome + 'static): std::marker::Sync`
+           `(dyn FontDriver + 'static): std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `(dyn for<'a> FnMut(&'a neovm_core::Context, FrameId, WindowId, Vec<neomacs_display_protocol::input_progress::InputReceipt>) + 'static): std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
@@ -233,10 +238,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `Cell<SymId>: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `Cell<eval::dispatch_class::FormHead>: std::marker::Sync`
-           which is required by `neovm_core::Context: std::marker::Sync`
-           `(dyn FnMut(TaggedValue, u32) -> Option<GlyphTextMetrics> + 'static): std::marker::Sync`
-           which is required by `neovm_core::Context: std::marker::Sync`
-           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, u64, u64, i64) -> Option<(u32, u64)> + 'static): std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `*const i64: std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`

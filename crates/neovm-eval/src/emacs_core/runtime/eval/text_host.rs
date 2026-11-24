@@ -43,8 +43,7 @@ impl TextHost for Context {
         font: Value,
         ch: u32,
     ) -> Option<neovm_value::display_vocab::GlyphTextMetrics> {
-        let driver = self.font_glyph_metrics_fn.as_mut()?;
-        driver(font, ch)
+        self.font_driver.as_mut()?.glyph_text_metrics(font, ch)
     }
 
     fn composition_gstring_cache_lookup(&mut self, header: Value) -> Option<Value> {

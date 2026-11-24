@@ -4892,9 +4892,7 @@ fn run_gui_evaluator_worker(
     }));
     frame_layout::install_frame_snapshot_fn(&mut evaluator);
     frame_layout::install_window_layout_query_fn(&mut evaluator);
-    frame_layout::install_font_shape_driver(&mut evaluator);
-    frame_layout::install_font_glyph_metrics_driver(&mut evaluator);
-    frame_layout::install_realized_fontset_driver(&mut evaluator);
+    frame_layout::install_font_driver(&mut evaluator);
     // Lisp's frame-initialize will create the first GUI frame. Publishing the
     // startup terminal as a GUI scene would expose the same premature frame.
 

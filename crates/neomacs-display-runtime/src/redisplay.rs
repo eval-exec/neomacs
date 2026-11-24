@@ -300,14 +300,14 @@ impl RedisplayRuntime {
     pub fn realized_fontset_for_lisp_pos(
         &self,
         evaluator: &mut Context,
-        frame: u64,
-        window: u64,
+        frame: FrameId,
+        window: WindowId,
         lisp_pos: i64,
     ) -> Option<(u32, u64)> {
         let Ok(mut engine) = self.engine.try_borrow_mut() else {
             return None;
         };
-        engine.realized_fontset_for_lisp_pos(evaluator, FrameId(frame), WindowId(window), lisp_pos)
+        engine.realized_fontset_for_lisp_pos(evaluator, frame, window, lisp_pos)
     }
 
     /// Produce one logical frame through the presentation engine.

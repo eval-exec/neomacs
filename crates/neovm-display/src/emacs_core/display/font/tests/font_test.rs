@@ -17,6 +17,86 @@ use std::cell::RefCell;
 use std::fs;
 use std::rc::Rc;
 
+/// Test-only [`FontDriver`] stub built from optional per-method closures.
+/// Production drivers must implement every method on [`FontDriver`] directly.
+#[allow(clippy::type_complexity)]
+#[derive(Default)]
+struct StubFontDriver {
+    shape: Option<Box<dyn FnMut(&mut Context, Value, Value) -> GstringShapeOutcome>>,
+    metrics:
+        Option<Box<dyn FnMut(Value, u32) -> Option<neovm_value::display_vocab::GlyphTextMetrics>>>,
+    realized: Option<
+        Box<
+            dyn FnMut(
+                &mut Context,
+                FrameId,
+                neovm_edit::emacs_core::display_metrics::WindowId,
+                i64,
+            ) -> Option<(u32, u64)>,
+        >,
+    >,
+}
+
+impl StubFontDriver {
+    fn shape(
+        f: impl FnMut(&mut Context, Value, Value) -> GstringShapeOutcome + 'static,
+    ) -> Box<dyn FontDriver> {
+        Box::new(Self {
+            shape: Some(Box::new(f)),
+            ..Self::default()
+        })
+    }
+
+    fn realized_fontset(
+        f: impl FnMut(
+            &mut Context,
+            FrameId,
+            neovm_edit::emacs_core::display_metrics::WindowId,
+            i64,
+        ) -> Option<(u32, u64)>
+        + 'static,
+    ) -> Box<dyn FontDriver> {
+        Box::new(Self {
+            realized: Some(Box::new(f)),
+            ..Self::default()
+        })
+    }
+}
+
+impl FontDriver for StubFontDriver {
+    fn shape_gstring(
+        &mut self,
+        eval: &mut Context,
+        gstring: Value,
+        direction: Value,
+    ) -> GstringShapeOutcome {
+        match self.shape.as_mut() {
+            Some(f) => f(eval, gstring, direction),
+            None => GstringShapeOutcome::NotShapable,
+        }
+    }
+
+    fn glyph_text_metrics(
+        &mut self,
+        font: Value,
+        ch: u32,
+    ) -> Option<neovm_value::display_vocab::GlyphTextMetrics> {
+        self.metrics.as_mut().and_then(|f| f(font, ch))
+    }
+
+    fn realized_fontset(
+        &mut self,
+        eval: &mut Context,
+        frame_id: FrameId,
+        window_id: neovm_edit::emacs_core::display_metrics::WindowId,
+        lisp_pos: i64,
+    ) -> Option<(u32, u64)> {
+        self.realized
+            .as_mut()
+            .and_then(|f| f(eval, frame_id, window_id, lisp_pos))
+    }
+}
+
 #[test]
 fn cached_font_name_spelling_preserves_bytes_and_drops_intervals() {
     let cases = [
@@ -1429,7 +1509,9 @@ fn font_at_passes_the_realized_face_redisplay_sealed() {
     eval.set_display_host(Box::new(CapturingFontAtDisplayHost {
         last_request: captured.clone(),
     }));
-    eval.realized_fontset_fn = Some(Box::new(|_eval, _frame, _window, _pos| Some((7, 3))));
+    eval.font_driver = Some(StubFontDriver::realized_fontset(
+        |_eval, _frame, _window, _pos| Some((7, 3)),
+    ));
     let buffer = eval
         .edit
         .buffers
@@ -2324,7 +2406,7 @@ fn font_shape_gstring_fills_slots_through_the_installed_shaper() {
 
     // A test shaper shaped as ONE ligature glyph covering both characters:
     // slot[2] = [from=0 to=1 code=0xF1 width=13 …], slot[3] = nil.
-    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
         let Some(slots) = gstring.as_vector_data() else {
             return crate::emacs_core::font::GstringShapeOutcome::NotShapable;
         };
@@ -2396,7 +2478,7 @@ fn font_shape_gstring_accepts_several_glyphs_in_one_cluster() {
 
     // "ab" is one cluster with two glyphs (from=0 to=1); "c" is its own
     // cluster (from=2 to=2).
-    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
         let Some(slots) = gstring.as_vector_data() else {
             return crate::emacs_core::font::GstringShapeOutcome::NotShapable;
         };
@@ -2463,7 +2545,7 @@ fn font_shape_gstring_adjusts_zero_width_clusters() {
     .expect("gstring");
 
     // A shaper that produces two ZERO-ADVANCE glyphs (e.g. combining marks).
-    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
         gstring.set_vector_slot(
             2,
             Value::vector(vec![
@@ -2535,7 +2617,7 @@ fn font_shape_gstring_caches_by_header_and_returns_the_cached_gstring() {
         .expect("gstring")
     };
 
-    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
         gstring.set_vector_slot(
             2,
             Value::vector(vec![
@@ -2591,7 +2673,7 @@ fn font_shape_gstring_cache_key_separates_same_family_and_pixel_weight() {
     let bold = build_font_object(&bold_face);
 
     let mut next_width = 7i64;
-    eval.font_shape_fn = Some(Box::new(move |_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(move |_eval, gstring, _direction| {
         let width = next_width;
         next_width += 2;
         gstring.set_vector_slot(
@@ -2693,7 +2775,7 @@ fn clear_composition_cache_empties_the_shaped_gstring_table() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let font = build_font_object(&RuntimeFace::new("default"));
-    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
         gstring.set_vector_slot(
             2,
             Value::vector(vec![
@@ -2762,7 +2844,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
         )
         .expect("gstring")
     };
-    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
         gstring.set_vector_slot(
             2,
             Value::vector(vec![
@@ -2917,7 +2999,7 @@ fn font_shape_gstring_grows_the_glyph_vector_when_the_shaper_needs_room() {
     // A shaper that first asks for a larger vector, then produces one glyph
     // covering the run — GNU grows the gstring and retries, up to three
     // attempts (src/font.c Ffont_shape_gstring).
-    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(|_eval, gstring, _direction| {
         use std::cell::Cell;
         use std::rc::Rc;
         thread_local! {
@@ -3026,7 +3108,7 @@ fn assert_font_shape_driver_survives(failure: ShapeFailure) {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let font = build_font_object(&RuntimeFace::new("default"));
-    eval.font_shape_fn = Some(Box::new(move |_eval, gstring, _direction| {
+    eval.font_driver = Some(StubFontDriver::shape(move |_eval, gstring, _direction| {
         let header = gstring.as_vector_data().expect("gstring")[0];
         let failing = header.as_vector_data().expect("header")[1] == Value::fixnum(i64::from(b'b'));
         let (from, to) = if failing {
@@ -3089,7 +3171,7 @@ fn assert_font_shape_driver_survives(failure: ShapeFailure) {
         Value::fixnum(123)
     );
     assert!(
-        eval.font_shape_fn.is_some(),
+        eval.font_driver.is_some(),
         "the driver must remain installed after success"
     );
 }

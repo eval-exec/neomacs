@@ -36,6 +36,11 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
    |   pub struct NonNull<T: PointeeSized> {
    |   ----------------------------------- doesn't satisfy 43 bounds
    |
+  ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/font_shape.rs
+   |
+   |   pub trait FontDriver {
+   |   -------------------- doesn't satisfy `(dyn FontDriver + 'static): Send`
+   |
   ::: $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs
    |
    |   pub trait DisplayHost {
@@ -195,7 +200,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `(dyn for<'a> FnMut(&'a mut neovm_core::Context, RedisplayMiniGeometryRequest) -> Result<TaggedValue, Flow> + 'static): Send`
            which is required by `neovm_core::Context: Send`
-           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, TaggedValue, TaggedValue) -> GstringShapeOutcome + 'static): Send`
+           `(dyn FontDriver + 'static): Send`
            which is required by `neovm_core::Context: Send`
            `(dyn for<'a> FnMut(&'a neovm_core::Context, FrameId, WindowId, Vec<neomacs_display_protocol::input_progress::InputReceipt>) + 'static): Send`
            which is required by `neovm_core::Context: Send`
@@ -206,10 +211,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `(dyn DisplayHost + 'static): Send`
            which is required by `neovm_core::Context: Send`
            `(dyn TtyFrameHostFactory + 'static): Send`
-           which is required by `neovm_core::Context: Send`
-           `(dyn FnMut(TaggedValue, u32) -> Option<GlyphTextMetrics> + 'static): Send`
-           which is required by `neovm_core::Context: Send`
-           `(dyn for<'a> FnMut(&'a mut neovm_core::Context, u64, u64, i64) -> Option<(u32, u64)> + 'static): Send`
            which is required by `neovm_core::Context: Send`
            `*const i64: Send`
            which is required by `neovm_core::Context: Send`

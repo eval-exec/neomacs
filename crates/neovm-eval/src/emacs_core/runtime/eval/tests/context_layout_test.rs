@@ -135,16 +135,24 @@ fn every_context_offset_is_mains() {
     // `no_safe_handled_frame` is `Option<FrameId>` (16 bytes), appended after
     // `realized_fontset_fn`. No earlier offset moves. With both trailing
     // fields the totals are debug 44744 and release 44736.
+    //
+    // N-font-driver-vtable collapses the three per-method font driver boxes
+    // (`font_shape_fn`, `font_glyph_metrics_fn`, `realized_fontset_fn`) into
+    // one 16-byte `font_driver: Option<Box<dyn FontDriver>>` slot in place at
+    // offset 10648 and removes `font_glyph_metrics_fn` and
+    // `realized_fontset_fn` from the tail. Zero pinned or JIT offsets move;
+    // both totals shrink by 32 bytes (debug 44744 -> 44712, release
+    // 44736 -> 44704).
     #[cfg(debug_assertions)]
     assert_eq!(
         size_of::<Context>(),
-        44744 + TEST_EXTRA,
+        44712 + TEST_EXTRA,
         "Context size (debug with test instrumentation)"
     );
     #[cfg(not(debug_assertions))]
     assert_eq!(
         size_of::<Context>(),
-        44736 + TEST_EXTRA,
+        44704 + TEST_EXTRA,
         "Context size (release with test instrumentation)"
     );
     let table: &[(usize, usize, &str)] = &[
@@ -508,7 +516,7 @@ fn every_context_offset_is_mains() {
             offset_of!(Context, redisplay_prepare_fn),
             "redisplay_prepare_fn",
         ),
-        (10648, offset_of!(Context, font_shape_fn), "font_shape_fn"),
+        (10648, offset_of!(Context, font_driver), "font_driver"),
         (
             10664,
             offset_of!(Context, scroll_preview_fn),
