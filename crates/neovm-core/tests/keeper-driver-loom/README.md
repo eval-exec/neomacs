@@ -30,6 +30,7 @@ Each row has a one-edge negative. build.rs mutates one anchored line of a copy, 
 | `a_group_and_an_owner_alternate_in_commit_order` | L10 (L6.7b b3): the Baton group's World turn and an owner's ticket are lent in commit order across the two kinds, one turn out at a time (the in-turn probe is shared). | `control_lifo.rs`. Witness: "grants follow commit order". |
 | `an_abandoned_world_turn_poisons_the_owners` | L11: the group's lend guard dropped armed poisons, and the waiting owner reads Poisoned. | `driver_core_silent_poison.rs`. Witness: "the queued owner reads Poisoned". |
 | `an_abandoned_lend_poisons_the_queued_group` | L12: an owner's abandoned lend poisons, and the queued group reads Poisoned on its own channel. | `driver_core_silent_poison.rs` (its third anchor drops the group's fan-out). Witness: "the queued group reads Poisoned". |
+| `a_collecting_group_resumes_before_any_other_turn` | L13 (L6.7b b5, QB3): the group's turn comes back asking for a collection while an owner is queued behind it; the next stop collects first and lends the group the World again before the owner, in that same stop. | `control_requeue_tail.rs`: the group is re-queued at the tail. Witness: "the collecting group resumes next". |
 
 ## Run it
 

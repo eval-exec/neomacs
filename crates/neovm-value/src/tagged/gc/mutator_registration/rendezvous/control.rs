@@ -276,21 +276,60 @@ impl State {
         self.push(RingClient::BatonGroup)
     }
 
-    fn push(&mut self, client: RingClient) -> Result<RequestId, RendezvousError> {
+    /// Put the Baton group's request back at the HEAD (L6.7b b5). A Baton
+    /// thread asked for a collection inside the group's interval: the keeper
+    /// collects first in its next stop, and the calling thread is the next
+    /// World user after it, with no other client's turn in between, as GNU's
+    /// `garbage-collect` runs synchronously under the global lock
+    /// (alloc.c:5994, :5779). One entry per client, and never ahead of a turn
+    /// that is out.
+    pub(in crate::tagged::gc) fn requeue_baton_group_at_head(
+        &mut self,
+    ) -> Result<RequestId, RendezvousError> {
+        self.live()?;
+        if self
+            .serial_ring
+            .iter()
+            .any(|entry| entry.client() == RingClient::BatonGroup)
+        {
+            return Err(RendezvousError::Identity);
+        }
+        if self.ring_head_granted.is_some() {
+            return Err(RendezvousError::Publication);
+        }
         self.serial_ring
             .try_reserve(1)
             .map_err(|_| RendezvousError::Capacity)?;
+        let id = self.next_id()?;
+        self.serial_ring.push_front(RingEntry {
+            id,
+            client: RingClient::BatonGroup,
+            phase: RingPhase::Queued,
+        });
+        Ok(id)
+    }
+
+    /// The next request identity; a wrap is a typed refusal (L6 e).
+    fn next_id(&mut self) -> Result<RequestId, RendezvousError> {
         let next = self
             .next_request
             .checked_add(1)
             .ok_or(RendezvousError::Generation)?;
         let id = RequestId(NonZeroU64::new(next).ok_or(RendezvousError::Generation)?);
+        self.next_request = next;
+        Ok(id)
+    }
+
+    fn push(&mut self, client: RingClient) -> Result<RequestId, RendezvousError> {
+        self.serial_ring
+            .try_reserve(1)
+            .map_err(|_| RendezvousError::Capacity)?;
+        let id = self.next_id()?;
         self.serial_ring.push_back(RingEntry {
             id,
             client,
             phase: RingPhase::Queued,
         });
-        self.next_request = next;
         Ok(id)
     }
 

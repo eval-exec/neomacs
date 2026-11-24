@@ -774,6 +774,14 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
         super::rendezvous::enqueue_baton_group(self.core.registry())
     }
 
+    /// L6.7b b5: the keeper puts the Baton group's request back at the
+    /// ring's HEAD, so the group is the next World user after the collection
+    /// it asked for.
+    #[doc(hidden)]
+    pub fn requeue_baton_group_at_head(&self) -> Result<(), RendezvousError> {
+        super::rendezvous::requeue_baton_group_at_head(self.core.registry())
+    }
+
     /// L6.7b b3: the keeper cancels the Baton group's queued request. A
     /// granted request refuses with `Identity`.
     #[doc(hidden)]

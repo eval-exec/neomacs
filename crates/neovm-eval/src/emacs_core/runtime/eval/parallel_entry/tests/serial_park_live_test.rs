@@ -2026,3 +2026,107 @@ fn l67a_binding_an_untraced_stop_refuses_grant_before_any_lend() {
         "binding an untraced stop must refuse grant_serial_head before any lend"
     );
 }
+
+/// L6.7b b5 (QB3). The group holds the World while O's request is committed
+/// behind it, and a Baton thread collects. The keeper ends that stop,
+/// collects first in the next one, and lends the group the World again in
+/// that same stop, before O: the collecting thread is the next World user
+/// and no other client's turn comes between its collection and its resume.
+/// The collection reclaims the unrooted garbage.
+#[test]
+fn l67b_a_group_collection_runs_first_and_the_group_resumes_next() {
+    with_live_era_with_garbage("l67b-b5", |era, survivor, garbage| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let o = enroll_driver(era, &mut driver, &inbox, O);
+        let mut group = enroll_group(&mut driver, &inbox);
+        drop(inbox);
+        let log = std::sync::Mutex::new(Vec::<&'static str>::new());
+        let (idle_tx, idle) = mpsc::channel::<()>();
+        let (holding_tx, holding) = mpsc::channel::<()>();
+        let (sent_tx, sent) = mpsc::channel::<()>();
+        let (report_tx, report_rx) = mpsc::sync_channel(1);
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let log = &log;
+            let owner = scope.spawn(move || {
+                let (mut state, home, mut raw, grants) = o.start_raw();
+                // NativeStopped, so the group's stops do not wait on O.
+                let receipt = raw.publish();
+                let (_, generation, _) = receipt.serial_facts();
+                idle_tx.send(()).expect("tell the group");
+                holding
+                    .recv_timeout(BOUND)
+                    .expect("the group holds the World");
+                raw.request(receipt);
+                sent_tx.send(()).expect("O's request is in the inbox");
+                let Ok(GrantMsg::Grant { ticket, epoch }) = grants.recv_timeout(BOUND) else {
+                    panic!("O is granted");
+                };
+                log.lock().expect("log").push("owner");
+                let mut port = raw.port();
+                raw_turn(
+                    &mut state,
+                    home,
+                    &mut port,
+                    Grant {
+                        ticket,
+                        generation,
+                        epoch,
+                    },
+                    "(setq sp-live 91)",
+                );
+                raw.inbox
+                    .send(KeeperMsg::Exit { owner: O })
+                    .expect("O exits");
+                retire(raw.mutator);
+                epoch
+            });
+            let runner = scope.spawn(move || {
+                idle.recv_timeout(BOUND).expect("O is idle");
+                let (turn, first, lend) = group
+                    .request_world()
+                    .ok()
+                    .expect("the group is lent the World");
+                log.lock().expect("log").push("group");
+                holding_tx.send(()).expect("tell O");
+                // O's request precedes the collection in the keeper's inbox.
+                sent.recv_timeout(BOUND).expect("O asked");
+                let (turn, again, lend) = group
+                    .collect(lend, WorldReturned::from_end(turn), Some(report_tx))
+                    .ok()
+                    .expect("the group resumes after its collection");
+                log.lock().expect("log").push("group");
+                group.give_back(lend, WorldReturned::from_end(turn));
+                group.exit();
+                (first, again)
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            let (first, again) = runner.join().expect("the group");
+            let owner_epoch = owner.join().expect("O");
+            let report = report_rx
+                .recv_timeout(BOUND)
+                .expect("the collection report")
+                .expect("the collection ran");
+            assert_eq!(
+                *log.lock().expect("log"),
+                ["group", "group", "owner"],
+                "the collecting group resumes before O's turn"
+            );
+            assert!(again > first, "the collection ended the group's stop");
+            assert_eq!(
+                report.epoch,
+                again.get(),
+                "the collection and the group's resume ride one stop"
+            );
+            assert!(owner_epoch >= again);
+        });
+        let stopped = stop_retrying(era);
+        assert!(era.owns_heap_word_for_test(&stopped, survivor).unwrap());
+        assert!(
+            !era.owns_heap_word_for_test(&stopped, garbage).unwrap(),
+            "the group's collection reclaimed the garbage"
+        );
+        complete_retrying("verify stop", stopped.complete());
+    });
+}

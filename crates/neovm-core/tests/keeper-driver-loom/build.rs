@@ -83,6 +83,17 @@ fn main() {
         );
     }
     write(&out, "control.rs", &control);
+    // N-L13: the collecting group goes back at the TAIL, behind the owners
+    // queued during its interval.
+    write(
+        &out,
+        "control_requeue_tail.rs",
+        &mutate(
+            &control,
+            "        self.serial_ring.push_front(RingEntry {",
+            "        self.serial_ring.push_back(RingEntry {",
+        ),
+    );
     // N-L1: the ring commits at the head, so it grants newest first.
     write(
         &out,

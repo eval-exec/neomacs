@@ -591,3 +591,41 @@ fn ring_cancel_queued_removes_only_the_baton_group_entry() {
     );
     state.retire_serial(group).unwrap();
 }
+
+/// L6.7b b5: the group's turn came back asking for a collection, so its
+/// request goes back at the HEAD, ahead of an owner queued during its
+/// interval. One group entry at a time, and never ahead of a turn that is
+/// out.
+#[test]
+fn ring_requeues_the_baton_group_at_the_head() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let group = state.enqueue_baton_group().unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    let stopped = stopped_members(&keys);
+    state.begin_trace(epoch, &stopped).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(group)));
+    let a = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    assert_eq!(
+        state.requeue_baton_group_at_head(),
+        Err(RendezvousError::Identity),
+        "the granted group entry is still the group's one entry"
+    );
+    state.retire_serial(group).unwrap();
+    let again = state.requeue_baton_group_at_head().unwrap();
+    assert_eq!(
+        state.ring_head(),
+        Some(again),
+        "the group is back at the head"
+    );
+    let order: Vec<_> = state.serial_ring.iter().map(|entry| entry.id()).collect();
+    assert_eq!(order, [again, a], "ahead of the owner queued behind it");
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(again)));
+    state.retire_serial(again).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(a)));
+    assert_eq!(
+        state.requeue_baton_group_at_head(),
+        Err(RendezvousError::Publication),
+        "never ahead of a turn that is out"
+    );
+}

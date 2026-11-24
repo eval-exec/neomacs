@@ -114,6 +114,11 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
         self.era.enqueue_baton_group()
     }
 
+    /// L6.7b b5: put the Baton group's request back at the ring's HEAD.
+    pub(crate) fn requeue_baton_group_at_head(&self) -> Result<(), RendezvousError> {
+        self.era.requeue_baton_group_at_head()
+    }
+
     /// L6.7b b3: cancel the Baton group's queued request.
     pub(crate) fn cancel_baton_group(&self) -> Result<(), RendezvousError> {
         self.era.cancel_baton_group()

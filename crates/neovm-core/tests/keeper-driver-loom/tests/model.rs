@@ -5,7 +5,7 @@
 use self::control::{Mode, Request, RequestId, RingClient, SerialClient, State as Ring};
 use self::driver_core::{
     Attempt, Batch, BatchVisitor, Breach, BreachOf, CustodyRefused, Driver, DriverEnd, GrantMsg,
-    GroupMsg, Head, KeeperMsg, KeeperOps, LendDrop, Refusal, Settle,
+    GroupMsg, Head, IntervalEnd, KeeperMsg, KeeperOps, LendDrop, Refusal, Settle,
 };
 use crate::sync::{Signal, mpsc};
 use crate::{MutatorKey, RendezvousError};
@@ -29,6 +29,9 @@ fn generation() -> NonZeroU64 {
 /// The Baton group's id in the era's commit and grant records; owners are
 /// 1 and up.
 const GROUP: u64 = 0;
+
+/// A collection in the era's grant record: what ran, in which stop.
+const COLLECTION: u64 = u64::MAX;
 
 /// What the era records: the product ring, the members' modes, the commit
 /// order and the grant order.
@@ -177,6 +180,16 @@ impl<'a> KeeperOps for Era<'a> {
             .cancel_queued(SerialClient::BatonGroup)
     }
 
+    fn requeue_group_at_head(self) -> Result<(), RendezvousError> {
+        self.0
+            .model
+            .lock()
+            .unwrap()
+            .ring
+            .requeue_baton_group_at_head()
+            .map(drop)
+    }
+
     /// Request the stop. When the members are not all stopped yet, wait for
     /// one model change and report the attempt pending: the request stands,
     /// as the product's condvar-bounded attempt leaves it.
@@ -227,7 +240,15 @@ impl<'a> KeeperOps for Era<'a> {
         Ok(false)
     }
 
-    fn collect_stopped(self, _stopped: &mut Stop<'a>) -> Result<(), RendezvousError> {
+    /// The model collects nothing; it records that the stop collected, so a
+    /// row can see where the collection fell among the grants.
+    fn collect_stopped(self, stopped: &mut Stop<'a>) -> Result<(), RendezvousError> {
+        self.0
+            .model
+            .lock()
+            .unwrap()
+            .grants
+            .push((COLLECTION, stopped.epoch));
         Ok(())
     }
 
@@ -461,36 +482,72 @@ fn requester(
     seen
 }
 
+/// How the Baton group ends the interval it was lent.
+#[derive(Clone, Copy)]
+enum OnWorld {
+    GiveBack,
+    /// Its lend guard drops armed (K7).
+    Abandon,
+    /// A Baton thread collects (b5): the turn goes back for the collection,
+    /// and the group waits, without asking again, for the World the keeper
+    /// lends it next; then it gives that interval back.
+    Collect,
+}
+
+/// One interval: hold the World alone, then end it as ON_WORLD says.
+fn group_interval(
+    inbox: &mpsc::Sender<Msg>,
+    in_turn: &AtomicUsize,
+    turn: WorldTurn,
+    on_world: OnWorld,
+    holding: Option<&mpsc::Sender<()>>,
+) {
+    // One turn out at a time across owners and the group (K3).
+    assert_eq!(
+        in_turn.fetch_add(1, Ordering::SeqCst),
+        0,
+        "two serial turns at once"
+    );
+    if let Some(holding) = holding {
+        let _ = holding.send(());
+    }
+    in_turn.fetch_sub(1, Ordering::SeqCst);
+    let message = match on_world {
+        OnWorld::GiveBack => KeeperMsg::WorldReturn {
+            returned: turn,
+            end: IntervalEnd::Done,
+        },
+        OnWorld::Abandon => KeeperMsg::GroupAbandon {
+            cause: LendDrop::Unwound,
+        },
+        OnWorld::Collect => KeeperMsg::WorldReturn {
+            returned: turn,
+            end: IntervalEnd::Collect { reply: None },
+        },
+    };
+    let _ = inbox.send(message);
+}
+
 /// The Baton group's runner, the shape of the seat's request: ask once,
 /// wait for the World, hold it alone, end the interval, leave the era.
 fn group_runner(
     inbox: mpsc::Sender<Msg>,
     world: mpsc::Receiver<World>,
     in_turn: Arc<AtomicUsize>,
-    on_world: OnGrant,
+    on_world: OnWorld,
     holding: Option<mpsc::Sender<()>>,
 ) -> Seen {
     let _ = inbox.send(KeeperMsg::BatonRequest);
     let seen = match world.recv() {
         Ok(GroupMsg::World { turn, epoch }) => {
-            // One turn out at a time across owners and the group (K3).
-            assert_eq!(
-                in_turn.fetch_add(1, Ordering::SeqCst),
-                0,
-                "two serial turns at once"
-            );
-            if let Some(holding) = &holding {
-                let _ = holding.send(());
-            }
-            in_turn.fetch_sub(1, Ordering::SeqCst);
-            match on_world {
-                OnGrant::GiveBack => {
-                    let _ = inbox.send(KeeperMsg::WorldReturn { returned: turn });
-                }
-                OnGrant::Abandon => {
-                    let _ = inbox.send(KeeperMsg::GroupAbandon {
-                        cause: LendDrop::Unwound,
-                    });
+            group_interval(&inbox, &in_turn, turn, on_world, holding.as_ref());
+            if let OnWorld::Collect = on_world {
+                match world.recv() {
+                    Ok(GroupMsg::World { turn, .. }) => {
+                        group_interval(&inbox, &in_turn, turn, OnWorld::GiveBack, None);
+                    }
+                    Ok(GroupMsg::Poisoned) => return Seen::Poisoned,
+                    Err(_) => return Seen::Disconnected,
                 }
             }
             Seen::Granted(epoch)
@@ -697,7 +754,7 @@ pub fn a_group_and_an_owner_alternate_in_commit_order() {
             let inbox = inbox.clone();
             let in_turn = in_turn.clone();
             loom::thread::spawn(move || {
-                group_runner(inbox, world, in_turn, OnGrant::GiveBack, None)
+                group_runner(inbox, world, in_turn, OnWorld::GiveBack, None)
             })
         };
         drop(inbox);
@@ -731,7 +788,7 @@ pub fn an_abandoned_world_turn_poisons_the_owners() {
             let inbox = inbox.clone();
             let in_turn = in_turn.clone();
             loom::thread::spawn(move || {
-                group_runner(inbox, world, in_turn, OnGrant::Abandon, Some(holding_tx))
+                group_runner(inbox, world, in_turn, OnWorld::Abandon, Some(holding_tx))
             })
         };
         let owner = {
@@ -797,7 +854,7 @@ pub fn an_abandoned_lend_poisons_the_queued_group() {
             loom::thread::spawn(move || {
                 // The group asks only once the owner holds its ticket.
                 let _ = holding.recv();
-                group_runner(inbox, world, in_turn, OnGrant::GiveBack, None)
+                group_runner(inbox, world, in_turn, OnWorld::GiveBack, None)
             })
         };
         drop(inbox);
@@ -817,6 +874,57 @@ pub fn an_abandoned_lend_poisons_the_queued_group() {
             group.join().unwrap(),
             Seen::Poisoned,
             "the queued group reads Poisoned"
+        );
+    });
+}
+
+/// L13 (L6.7b b5, QB3). The group's turn comes back asking for a
+/// collection while an owner is queued behind it. The keeper ends that stop,
+/// collects first in the next one, and lends the group the World again
+/// before the owner: the collecting group is the next World user, and no
+/// other client's turn comes between its collection and its resume.
+pub fn a_collecting_group_resumes_before_any_other_turn() {
+    model(|| {
+        let era = ModelEra::new(&[(1, Mode::NativeStopped)]);
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(Era(&era), inbox_rx);
+        let in_turn = Arc::new(AtomicUsize::new(0));
+        let (grants_tx, grants) = mpsc::sync_channel(1);
+        driver.enroll(1, key(1), grants_tx);
+        let (world_tx, world) = mpsc::sync_channel(1);
+        driver.enroll_group(world_tx);
+        let (holding_tx, holding) = mpsc::channel::<()>();
+        let group = {
+            let inbox = inbox.clone();
+            let in_turn = in_turn.clone();
+            loom::thread::spawn(move || {
+                group_runner(inbox, world, in_turn, OnWorld::Collect, Some(holding_tx))
+            })
+        };
+        let owner = {
+            let inbox = inbox.clone();
+            let in_turn = in_turn.clone();
+            loom::thread::spawn(move || {
+                // The owner asks only once the group holds the World.
+                let _ = holding.recv();
+                requester(1, inbox, grants, in_turn, OnGrant::GiveBack, None)
+            })
+        };
+        drop(inbox);
+        let end = driver.run();
+        assert!(matches!(group.join().unwrap(), Seen::Granted(_)));
+        assert!(matches!(owner.join().unwrap(), Seen::Granted(_)));
+        assert_eq!(end, DriverEnd::Drained);
+        let model = era.model.lock().unwrap();
+        let clients: Vec<u64> = model.grants.iter().map(|(client, _)| *client).collect();
+        assert_eq!(
+            clients,
+            [GROUP, COLLECTION, GROUP, 1],
+            "the collecting group resumes next"
+        );
+        assert_eq!(
+            model.grants[1].1, model.grants[2].1,
+            "the collection and the group's resume ride one stop"
         );
     });
 }

@@ -104,6 +104,10 @@ impl<'k, 'service, 'heap> KeeperOps for &'k KeeperEra<'service, 'heap> {
         self.cancel_baton_group()
     }
 
+    fn requeue_group_at_head(self) -> Result<(), RendezvousError> {
+        self.requeue_baton_group_at_head()
+    }
+
     fn stop_within(
         self,
         bound: Duration,
@@ -463,7 +467,10 @@ impl WorldLend {
     /// the turn: disarms the abandon guard and sends `WorldReturn`.
     pub(crate) fn give_back(mut self, returned: WorldReturned) {
         self.armed = false;
-        let _ = self.inbox.send(KeeperMsg::WorldReturn { returned });
+        let _ = self.inbox.send(KeeperMsg::WorldReturn {
+            returned,
+            end: driver_core::IntervalEnd::Done,
+        });
     }
 }
 
@@ -506,6 +513,11 @@ impl GroupPort {
         if self.inbox.send(KeeperMsg::BatonRequest).is_err() {
             return Err(PortRefusal::Poisoned);
         }
+        self.await_world()
+    }
+
+    /// The next World turn the keeper lends this group.
+    fn await_world(&mut self) -> Result<(WorldTurn, NonZeroU64, WorldLend), PortRefusal> {
         match self.world.recv() {
             Ok(driver_core::GroupMsg::World { turn, epoch }) => Ok((
                 turn,
@@ -524,6 +536,30 @@ impl GroupPort {
     /// End the group's interval: the turn goes back and its guard disarms.
     pub(crate) fn give_back(&mut self, lend: WorldLend, returned: WorldReturned) {
         lend.give_back(returned);
+    }
+
+    /// A Baton thread collects (L6.7b b5): end the interval so the keeper
+    /// collects first in its next stop, then wait for the World it lends
+    /// this group again at the ring HEAD. No new request: the keeper keeps
+    /// the group's place. REPLY, if any, gets the collection's report.
+    pub(crate) fn collect(
+        &mut self,
+        mut lend: WorldLend,
+        returned: WorldReturned,
+        reply: Option<mpsc::SyncSender<Result<CollectionReport, CollectRefusal>>>,
+    ) -> Result<(WorldTurn, NonZeroU64, WorldLend), PortRefusal> {
+        lend.armed = false;
+        if self
+            .inbox
+            .send(KeeperMsg::WorldReturn {
+                returned,
+                end: driver_core::IntervalEnd::Collect { reply },
+            })
+            .is_err()
+        {
+            return Err(PortRefusal::Poisoned);
+        }
+        self.await_world()
     }
 
     /// The group leaves the era.

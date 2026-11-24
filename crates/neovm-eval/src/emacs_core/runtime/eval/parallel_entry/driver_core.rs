@@ -98,6 +98,8 @@ pub(crate) trait KeeperOps: Copy {
     fn enqueue_group(self) -> Result<(), Self::Error>;
     /// Cancel the Baton group's queued request.
     fn cancel_group(self) -> Result<(), Self::Error>;
+    /// Put the Baton group's request back at the ring's HEAD (L6.7b b5).
+    fn requeue_group_at_head(self) -> Result<(), Self::Error>;
     fn stop_within(
         self,
         bound: Duration,
@@ -208,14 +210,32 @@ pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason, WorldReturned, Repo
     /// The Baton group asks for the World (L6.7b). One request stands for
     /// the whole group however many of its threads woke.
     BatonRequest,
-    /// The group's World turn came back.
-    WorldReturn { returned: WorldReturned },
+    /// The group's World turn came back, and how its interval ended.
+    WorldReturn {
+        returned: WorldReturned,
+        end: IntervalEnd<Report>,
+    },
     /// The group's lend guard dropped armed: the World turn is lost.
     GroupAbandon { cause: LendDrop },
     /// The group left the era; it requests nothing more.
     GroupExit,
     /// Explicit collection request (K5): wakes the keeper even when the serial
     /// ring is empty and rides the next stop.
+    Collect {
+        reply: Option<mpsc::SyncSender<Result<Report, CollectRefusal>>>,
+    },
+}
+
+/// How the Baton group ended its interval (L6.7b b5).
+pub(crate) enum IntervalEnd<Report> {
+    /// No Baton thread runs on: the group asks again on its next wake.
+    Done,
+    /// A Baton thread collects (`garbage-collect`, or allocation debt at the
+    /// threshold). The keeper ends this stop, collects first in its next one,
+    /// and lends the group the World again at the ring HEAD, so the calling
+    /// thread is the next World user with no other client's turn in between,
+    /// as GNU's collection runs synchronously under the global lock
+    /// (alloc.c:5994, :5779). REPLY, if any, gets that collection's report.
     Collect {
         reply: Option<mpsc::SyncSender<Result<Report, CollectRefusal>>>,
     },
@@ -303,6 +323,7 @@ pub(crate) type MsgOf<O> = KeeperMsg<
 >;
 pub(crate) type GrantOf<O> = GrantMsg<<O as KeeperOps>::Ticket>;
 pub(crate) type GroupOf<O> = GroupMsg<<O as KeeperOps>::WorldTurn>;
+pub(crate) type IntervalEndOf<O> = IntervalEnd<<O as KeeperOps>::Report>;
 pub(crate) type BreachOf<O> = Breach<<O as KeeperOps>::Reason, <O as KeeperOps>::Error>;
 pub(crate) type EndOf<O> = DriverEnd<<O as KeeperOps>::Reason, <O as KeeperOps>::Error>;
 
@@ -778,27 +799,40 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             // with the breach.
             return Err(Breach::GroupUnreachable);
         }
-        let returned = self.await_world()?;
-        B::settle_world(held, returned, grant)
-            .map(Step::Next)
-            .map_err(|settle| match settle {
-                Settle::NotTheTicketCut => Breach::GroupUnexpected {
-                    message: "a returned World turn that is not the one cut",
-                },
-                Settle::Retire(error) => Breach::Rendezvous(error),
-            })
+        let (returned, end) = self.await_world()?;
+        let batch = B::settle_world(held, returned, grant).map_err(|settle| match settle {
+            Settle::NotTheTicketCut => Breach::GroupUnexpected {
+                message: "a returned World turn that is not the one cut",
+            },
+            Settle::Retire(error) => Breach::Rendezvous(error),
+        })?;
+        match end {
+            IntervalEnd::Done => Ok(Step::Next(batch)),
+            // b5 (QB3): the group's turn is retired, so it goes back at the
+            // HEAD; this stop lends nothing more, and the next one collects
+            // before it grants anyone.
+            IntervalEnd::Collect { reply } => {
+                let ops = self.ops;
+                retry_busy::<O, _>(|| ops.requeue_group_at_head()).map_err(Breach::Rendezvous)?;
+                if let Some(group) = &mut self.group {
+                    group.request = GroupRequest::Queued;
+                }
+                self.queue_collect(reply);
+                Ok(Step::End(batch))
+            }
+        }
     }
 
     /// Wait for the group's World turn. Owners' requests and exits are
     /// committed as they come; anything else is a breach.
-    fn await_world(&mut self) -> Result<O::WorldReturned, BreachOf<O>> {
+    fn await_world(&mut self) -> Result<(O::WorldReturned, IntervalEndOf<O>), BreachOf<O>> {
         loop {
             let message = self
                 .inbox
                 .recv()
                 .map_err(|mpsc::RecvError| Breach::Disconnected)?;
             match message {
-                KeeperMsg::WorldReturn { returned } => return Ok(returned),
+                KeeperMsg::WorldReturn { returned, end } => return Ok((returned, end)),
                 KeeperMsg::GroupAbandon { cause } => {
                     return Err(Breach::GroupAbandoned { cause });
                 }
@@ -923,8 +957,9 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
 enum Step<B> {
     /// The turn came back: serve the next head.
     Next(B),
-    /// An owner was sent back to publish: FIFO is not skipped, so this stop
-    /// lends nothing more.
+    /// This stop lends nothing more: an owner was sent back to publish (FIFO
+    /// is not skipped), or the group asked for a collection that must run
+    /// before any other turn.
     End(B),
 }
 

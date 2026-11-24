@@ -58,6 +58,19 @@ mod lifo {
     include!("model.rs");
 }
 
+/// N-L13: the collecting group is re-queued at the tail.
+#[allow(dead_code, unused)]
+mod requeue_tail {
+    use crate::sync;
+    mod control {
+        include!(concat!(env!("OUT_DIR"), "/control_requeue_tail.rs"));
+    }
+    mod driver_core {
+        include!(concat!(env!("OUT_DIR"), "/driver_core.rs"));
+    }
+    include!("model.rs");
+}
+
 /// N-L8: the poison fan-out tells nobody.
 #[allow(dead_code, unused)]
 mod silent_poison {
@@ -166,4 +179,16 @@ fn an_abandoned_lend_poisons_the_queued_group() {
 #[should_panic(expected = "the queued group reads Poisoned")]
 fn negative_a_silent_poison_leaves_the_group_uninformed() {
     silent_poison::an_abandoned_lend_poisons_the_queued_group();
+}
+
+/// L13 (L6.7b b5).
+#[test]
+fn a_collecting_group_resumes_before_any_other_turn() {
+    real::a_collecting_group_resumes_before_any_other_turn();
+}
+
+#[test]
+#[should_panic(expected = "the collecting group resumes next")]
+fn negative_a_tail_requeue_lets_the_owner_in_first() {
+    requeue_tail::a_collecting_group_resumes_before_any_other_turn();
 }

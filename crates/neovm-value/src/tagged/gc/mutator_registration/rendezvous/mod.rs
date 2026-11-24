@@ -457,6 +457,15 @@ pub(super) fn enqueue_baton_group(registry: &Registry) -> Result<(), RendezvousE
     gate.rendezvous.enqueue_baton_group().map(|_| ())
 }
 
+/// L6.7b b5: the keeper puts the Baton group's request back at the ring's
+/// HEAD after the group's turn came back asking for a collection. Keeper
+/// thread only; refused while another group entry exists or a turn is out.
+pub(super) fn requeue_baton_group_at_head(registry: &Registry) -> Result<(), RendezvousError> {
+    keeper::keeper_thread(registry)?;
+    let mut gate = registry.lock_for_keeper()?;
+    gate.rendezvous.requeue_baton_group_at_head().map(|_| ())
+}
+
 /// L6.7b b3: the keeper cancels the Baton group's queued request when the
 /// group leaves the era. A granted entry refuses with `Identity`.
 pub(super) fn cancel_baton_group(registry: &Registry) -> Result<(), RendezvousError> {
