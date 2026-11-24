@@ -4287,6 +4287,61 @@ impl TaggedValue {
         self.to_equal_key_depth_budgeted(depth, seen, symbols_with_pos_enabled, &mut budget)
     }
 
+    /// Equal-hash of one cons, walking the cdr spine at `depth`.
+    ///
+    /// GNU `equal` does not count list length as nesting. The same walk
+    /// keeps `Hash` aligned with `PartialEq`: a tail past depth 200 used to
+    /// become a pointer key, so two long equal lists hashed apart.
+    /// Each cons still spends one budget node. Cars and the non-cons tail
+    /// are hashed at `depth + 1`.
+    fn equal_cons_key(
+        self,
+        depth: usize,
+        seen: &mut Vec<usize>,
+        symbols_with_pos_enabled: bool,
+        budget: &mut usize,
+    ) -> HashKey {
+        let seen_start = seen.len();
+        let mut car_keys = Vec::new();
+        let mut tail = self;
+        let mut first = true;
+        let terminal = loop {
+            if !tail.is_cons() {
+                break tail.to_equal_key_depth_budgeted(
+                    depth + 1,
+                    seen,
+                    symbols_with_pos_enabled,
+                    budget,
+                );
+            }
+            if !first {
+                if *budget == 0 {
+                    break HashKey::Cycle(TRUNCATED_KEY_CYCLE);
+                }
+                *budget -= 1;
+            }
+            first = false;
+            let ptr = tail.bits();
+            if let Some(index) = seen.iter().position(|&p| p == ptr) {
+                break HashKey::Cycle(index as u32);
+            }
+            seen.push(ptr);
+            car_keys.push(tail.cons_car().to_equal_key_depth_budgeted(
+                depth + 1,
+                seen,
+                symbols_with_pos_enabled,
+                budget,
+            ));
+            tail = tail.cons_cdr();
+        };
+        seen.truncate(seen_start);
+        let mut key = terminal;
+        while let Some(car_key) = car_keys.pop() {
+            key = HashKey::EqualCons(Box::new(car_key), Box::new(key));
+        }
+        key
+    }
+
     /// [`Self::to_equal_key_depth_swp`] with a hard node budget.
     ///
     /// A structural key unfolds a DAG into a tree, so its size is exponential
@@ -4346,29 +4401,7 @@ impl TaggedValue {
                 Some(string) => HashKey::string_content(string.as_bytes(), string.schars()),
                 None => self.to_eq_key(),
             },
-            ValueKind::Cons => {
-                let ptr = self.bits();
-                if let Some(index) = seen.iter().position(|&p| p == ptr) {
-                    return HashKey::Cycle(index as u32);
-                }
-                seen.push(ptr);
-                let car = self.cons_car();
-                let cdr = self.cons_cdr();
-                let car_key = car.to_equal_key_depth_budgeted(
-                    depth + 1,
-                    seen,
-                    symbols_with_pos_enabled,
-                    budget,
-                );
-                let cdr_key = cdr.to_equal_key_depth_budgeted(
-                    depth + 1,
-                    seen,
-                    symbols_with_pos_enabled,
-                    budget,
-                );
-                seen.pop();
-                HashKey::EqualCons(Box::new(car_key), Box::new(cdr_key))
-            }
+            ValueKind::Cons => self.equal_cons_key(depth, seen, symbols_with_pos_enabled, budget),
             ValueKind::Veclike(VecLikeType::BoolVector) => match self.as_bool_vector_obj() {
                 Some(bv) => HashKey::BoolVector(Box::new((bv.nbits, bv.words().into()))),
                 None => self.to_eq_key(),
@@ -4799,26 +4832,59 @@ pub fn equal_value_inner(
         if !right.is_cons() {
             return false;
         }
+        // GNU fns.c:2916-2934 (`FOR_EACH_TAIL_BASIC`): list length does not
+        // raise depth. Cars use `depth + 1`. A non-cons tail recurses once.
+        // This bool walk returns false past depth 200. It does not signal;
+        // `try_equal_value_inner` is the Lisp `equal` that does.
         if depth > 10 {
             let pair = EqualSeenPair::new(left, right);
             if !seen.get_or_insert_with(HashSet::new).insert(pair) {
                 return true;
             }
         }
-        let a_car = left.cons_car();
-        let a_cdr = left.cons_cdr();
-        let b_car = right.cons_car();
-        let b_cdr = right.cons_cdr();
+        let mut left_tail = left;
+        let mut right_tail = right;
+        let mut tail_guard = EqualTailGuard::new(left_tail);
+        while left_tail.is_cons() {
+            if !right_tail.is_cons() {
+                return false;
+            }
+            let left_car = left_tail.cons_car();
+            let right_car = right_tail.cons_car();
+            if !equal_value_inner(
+                &left_car,
+                &right_car,
+                depth + 1,
+                seen,
+                symbols_with_pos_enabled,
+                kind,
+            ) {
+                return false;
+            }
+            let left_cdr = left_tail.cons_cdr();
+            right_tail = right_tail.cons_cdr();
+            if left_cdr.bits() == right_tail.bits() {
+                return true;
+            }
+            left_tail = left_cdr;
+            if tail_guard.found_cycle_after_advance(left_tail) {
+                return if right_tail.is_cons() {
+                    equal_value_cycle_bool(
+                        right_tail,
+                        left_tail,
+                        depth,
+                        seen,
+                        symbols_with_pos_enabled,
+                        kind,
+                    )
+                } else {
+                    false
+                };
+            }
+        }
         return equal_value_inner(
-            &a_car,
-            &b_car,
-            depth + 1,
-            seen,
-            symbols_with_pos_enabled,
-            kind,
-        ) && equal_value_inner(
-            &a_cdr,
-            &b_cdr,
+            &left_tail,
+            &right_tail,
             depth + 1,
             seen,
             symbols_with_pos_enabled,
@@ -5014,6 +5080,49 @@ fn equal_value_cycle(
     }
     // o1 (right) terminated but o2 (left) is circular: not equal.
     Ok(false)
+}
+
+/// Bool twin of [`equal_value_cycle`]. Car comparison uses
+/// [`equal_value_inner`], so a nest past depth 200 is `false` and
+/// `PartialEq` does not build a signal.
+fn equal_value_cycle_bool(
+    o1: Value,
+    o2: Value,
+    depth: usize,
+    seen: &mut Option<HashSet<EqualSeenPair>>,
+    symbols_with_pos_enabled: bool,
+    kind: EqualKind,
+) -> bool {
+    let mut o1_tail = o1;
+    let mut o2_tail = o2;
+    let mut guard = EqualTailGuard::new(o1_tail);
+    while o1_tail.is_cons() {
+        if !o2_tail.is_cons() {
+            return false;
+        }
+        let o1_car = o1_tail.cons_car();
+        let o2_car = o2_tail.cons_car();
+        if !equal_value_inner(
+            &o1_car,
+            &o2_car,
+            depth + 1,
+            seen,
+            symbols_with_pos_enabled,
+            kind,
+        ) {
+            return false;
+        }
+        let o1_cdr = o1_tail.cons_cdr();
+        o2_tail = o2_tail.cons_cdr();
+        if o1_cdr.bits() == o2_tail.bits() {
+            return true;
+        }
+        o1_tail = o1_cdr;
+        if guard.found_cycle_after_advance(o1_tail) {
+            return true;
+        }
+    }
+    false
 }
 
 #[doc(hidden)]

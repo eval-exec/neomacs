@@ -506,6 +506,92 @@ fn equal_deferred_cycle_tracking_still_handles_circular_lists() {
     });
 }
 
+/// GNU `internal_equal_1` (`fns.c:2916-2934`) walks a list spine in a loop.
+/// Cars are compared at `depth + 1`, and only a non-cons tail increments
+/// depth. Attested Emacs 31.1: two fresh lists of 300 `(i . i)` pairs are
+/// `equal`. `Value ==` is that comparison. Car nesting past 200 stays
+/// unequal here; Lisp `equal` signals for that case instead.
+#[test]
+fn long_proper_list_partialeq_matches_lisp_equal() {
+    crate::test_utils::init_test_tracing();
+    with_test_heap(|| {
+        let pairs = |last: i64| {
+            Value::list(
+                (1..=300)
+                    .map(|i| {
+                        let n = if i == 300 { last } else { i };
+                        Value::cons(Value::fixnum(n), Value::fixnum(n))
+                    })
+                    .collect(),
+            )
+        };
+        let left = pairs(300);
+        let right = pairs(300);
+        let different = pairs(0);
+
+        assert!(!eq_value(&left, &right), "the lists are distinct objects");
+        assert!(left != different, "a different last pair is not equal");
+
+        let mut deep = Value::fixnum(1);
+        let mut deep_copy = Value::fixnum(1);
+        for _ in 0..201 {
+            deep = Value::cons(deep, Value::NIL);
+            deep_copy = Value::cons(deep_copy, Value::NIL);
+        }
+        assert!(
+            deep != deep_copy,
+            "car nesting past 200 stays unequal under PartialEq"
+        );
+
+        assert!(
+            left == right,
+            "a 300-element list of (i . i) is structurally equal"
+        );
+        assert_eq!(
+            left.to_hash_key(&HashTableTest::Equal),
+            right.to_hash_key(&HashTableTest::Equal),
+            "equal lists must share an equal-table hash key"
+        );
+
+        let improper = || {
+            let mut tail = Value::symbol("end");
+            for i in (1..=300).rev() {
+                tail = Value::cons(Value::fixnum(i), tail);
+            }
+            tail
+        };
+        let improper_left = improper();
+        let improper_right = improper();
+        assert!(
+            improper_left == improper_right,
+            "a long improper list is equal"
+        );
+        assert_eq!(
+            improper_left.to_hash_key(&HashTableTest::Equal),
+            improper_right.to_hash_key(&HashTableTest::Equal)
+        );
+
+        let long_cycle = || {
+            let head = Value::cons(Value::fixnum(1), Value::NIL);
+            let mut tail = head;
+            for i in 2..=250 {
+                let cell = Value::cons(Value::fixnum(i), Value::NIL);
+                tail.set_cdr(cell);
+                tail = cell;
+            }
+            tail.set_cdr(head);
+            head
+        };
+        let cycle_left = long_cycle();
+        let cycle_right = long_cycle();
+        assert!(cycle_left == cycle_right, "a long circular list is equal");
+        assert_eq!(
+            cycle_left.to_hash_key(&HashTableTest::Equal),
+            cycle_right.to_hash_key(&HashTableTest::Equal)
+        );
+    });
+}
+
 #[test]
 fn repeated_shallow_equal_avoids_cycle_tracking_overhead() {
     crate::test_utils::init_test_tracing();

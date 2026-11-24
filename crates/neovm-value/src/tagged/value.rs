@@ -286,6 +286,11 @@ impl Ord for TaggedValue {
 /// naturally.  For Emacs `eq` (pointer identity), use `eq_value()` or
 /// `a.bits() == b.bits()`.
 ///
+/// A list spine is walked in a loop, so its length does not count toward
+/// the depth cap. Car nesting past 200 returns false and does not signal.
+/// Lisp `equal` (`try_equal_value_swp`) signals "Stack overflow in equal"
+/// for that case.
+///
 /// NOTE: This is `equal`-style structural equality. Code that needs Lisp
 /// hash-table semantics for a specific test (`eq`, `eql`, or `equal`) should
 /// convert through `HashKey` with the selected `HashTableTest`.
