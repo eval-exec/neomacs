@@ -3790,31 +3790,66 @@ fn reaped_pty_process_releases_live_io_but_preserves_stale_status() {
 #[test]
 fn terminal_pty_process_releases_live_io_when_exit_record_is_retained() {
     crate::test_utils::init_test_tracing();
+    // The SIGCHLD latch is what lets `process-status` publish `exit` with no
+    // wait. GNU installs it before any child is forked (process.c:8640-8643).
+    crate::emacs_core::os_signal::install();
     let sh = find_bin("sh");
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let baseline_ptmx = open_ptmx_descriptor_count();
 
-    let result = eval_one_in_context(
+    // Spawn only. `process-id` does not call `update_status`, so the child
+    // can exit and stay unreaped while the master is still open.
+    let spawned = eval_one_in_context(
         &mut ev,
         &format!(
-            r#"(let ((delete-exited-processes nil)
-                     (proc (make-process
-                            :name "retained-terminal-pty-resource-owner"
-                            :command (list "{sh}" "-c" "exit 0")
-                            :connection-type 'pty)))
-                 (while (eq (process-status proc) 'run)
-                   (accept-process-output proc 0.1))
-                 (list (process-status proc)
-                       (eq proc
-                           (get-process "retained-terminal-pty-resource-owner"))))"#
+            r#"(progn
+                 (setq delete-exited-processes nil)
+                 (process-id
+                  (make-process
+                   :name "retained-terminal-pty-resource-owner"
+                   :command (list "{sh}" "-c" "exit 0")
+                   :connection-type 'pty)))"#
         ),
     );
+    let os_pid: u32 = spawned
+        .strip_prefix("OK ")
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or_else(|| panic!("spawn must return the child pid, got {spawned}"));
 
-    assert_eq!(result, "OK (exit t)");
+    // Kernel control, same rule as ledger 187: the child has exited and nobody
+    // has waitpid'd it, so `status_notify` has not run and has not closed the
+    // master. A loaded machine used to win this race inside the old
+    // `(while (eq (process-status proc) 'run) (accept-process-output ...))`
+    // loop; this wait makes that schedule the only one.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && !pw187_is_zombie(os_pid, 0) {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        pw187_is_zombie(os_pid, 0),
+        "control: the child must be exited and unreaped before process-status observes it"
+    );
+
+    // `process-status` only publishes the exit (GNU `update_status`,
+    // process.c:1188-1189). The master stays open until one wait runs
+    // `status_notify`, which deactivates and, with `delete-exited-processes`
+    // nil, leaves the record listed (process.c:7926-7930).
+    let result = eval_one_in_context(
+        &mut ev,
+        r#"(let ((proc (get-process "retained-terminal-pty-resource-owner")))
+             (let ((observed (process-status proc)))
+               (accept-process-output proc 0.1)
+               (list observed
+                     (process-status proc)
+                     (eq proc
+                         (get-process "retained-terminal-pty-resource-owner")))))"#,
+    );
+
+    assert_eq!(result, "OK (exit exit t)");
     assert_eq!(
         open_ptmx_descriptor_count(),
         baseline_ptmx,
-        "terminal status must deactivate live PTY I/O even when the Lisp record is retained"
+        "status_notify must release the PTY master while the retained record stays listed"
     );
 }
 
