@@ -88,13 +88,6 @@ pub(crate) enum DetachedWorldCarriers {
 pub(crate) struct DetachedOwner {
     host: DetachedHostBindings,
     tls: DetachedTls,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "carries the detach's carried-state disposition; tests assert it directly"
-        )
-    )]
     world: DetachedWorldCarriers,
 }
 
@@ -111,6 +104,10 @@ pub(crate) enum HostRefusal {
     /// Reattach: another Context's heap is installed on this thread, so its
     /// turn is live.
     HeapInstalled,
+    /// Reattach: this Context belongs to a Green World whose carried TLS and
+    /// warm `OwnerCarried` are still held by another owner rather than stowed
+    /// in `GreenRuntime`; reattaching would run against placeholders.
+    WorldHeldElsewhere,
     /// Detach: this Context's heap is not the one installed on this thread,
     /// so taking the TLS down would take down another Context's.
     NotInstalled,
@@ -174,7 +171,8 @@ impl Context {
     }
 
     /// Put this owner back on the OS thread for the next serial turn: refuse
-    /// while another Context's heap is installed here, else clear the
+    /// while another Context's heap is installed here or while this Green
+    /// World's carried state is still held by another owner, else clear the
     /// deferred caches, acquire the carried world when stowed (Green's order),
     /// then return the owner's TLS and host bindings.
     #[cold]
@@ -186,12 +184,24 @@ impl Context {
         if !neovm_value::tagged::gc::carrier_heap_is_acceptable_for_job_start() {
             return Err((detached, HostRefusal::HeapInstalled));
         }
+        if self.serial_world_held_elsewhere() {
+            return Err((detached, HostRefusal::WorldHeldElsewhere));
+        }
         let _abort = AbortOnPanic("reattach");
         let DetachedOwner {
             host,
             tls: DetachedTls { .. },
-            world: _,
+            world,
         } = detached;
+        match world {
+            DetachedWorldCarriers::Stowed => {
+                debug_assert!(
+                    self.serial_world_is_stowed(),
+                    "a detach that stowed the World's carriers must meet them stowed at reattach"
+                );
+            }
+            DetachedWorldCarriers::NotStowed => {}
+        }
         reset_carrier_tls();
         self.unstow_serial_world_state();
         self.resume_owner(host.parked);

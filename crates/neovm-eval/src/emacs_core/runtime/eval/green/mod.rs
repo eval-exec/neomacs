@@ -42,6 +42,17 @@ use super::admission::AdmissionError;
 use super::{Context, ThreadingMode};
 use neovm_value::tagged::gc::{CollectorQuiescenceError, FacadeMarkExclusionError};
 
+/// Identity of one owner's registered `OwnerSlab` (stable for the life of its
+/// `World`, because `OwnerSlabRegistry` retains slabs until World drop).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct OwnerSlabId(usize);
+
+impl OwnerSlabId {
+    pub(super) fn from_slab(slab: &super::owner_bindings::OwnerSlab) -> Self {
+        Self(slab as *const super::owner_bindings::OwnerSlab as usize)
+    }
+}
+
 /// Which owner currently holds the World's carried TLS and warm
 /// `OwnerCarried` state on its OS thread, or whether both are stowed in
 /// [`GreenRuntime`].
@@ -49,9 +60,9 @@ use neovm_value::tagged::gc::{CollectorQuiescenceError, FacadeMarkExclusionError
 pub(super) enum CarriedHolder {
     /// Both `carried` and `owner_carried` are stowed in `GreenRuntime`.
     Stowed,
-    /// Held inline by the Context whose `OwnerSlab` is at `slab` on `thread`.
+    /// Held inline by the Context whose `OwnerSlab` has identity `slab` on `thread`.
     Held {
-        slab: usize,
+        slab: OwnerSlabId,
         thread: std::thread::ThreadId,
     },
 }
@@ -214,7 +225,7 @@ impl Context {
         if !self.threads_admitted() {
             self.admit_threads()?;
         }
-        let main_slab = self.ensure_owner_slab() as *const _ as usize;
+        let main_slab = OwnerSlabId::from_slab(self.ensure_owner_slab());
         let main_thread = std::thread::current().id();
         let bootstrap = GreenBootstrap::capture(self);
         let baton = self.issue_green_baton()?;
@@ -239,6 +250,28 @@ impl Context {
         Ok(baton)
     }
 
+    /// Whether this Context belongs to a Green World whose carried TLS and
+    /// warm `OwnerCarried` are currently held by an active owner rather than
+    /// stowed in `GreenRuntime`.
+    ///
+    /// Returns `false` for a Sim World (which has no `GreenRuntime`).
+    #[cold]
+    pub(in crate::emacs_core::eval) fn serial_world_held_elsewhere(&self) -> bool {
+        self.green_runtime_ref()
+            .as_ref()
+            .is_some_and(|runtime| runtime.carried_holder.get() != CarriedHolder::Stowed)
+    }
+
+    /// Whether this Context belongs to a Green World whose carried TLS and
+    /// warm `OwnerCarried` are currently stowed in `GreenRuntime`.
+    #[cfg(debug_assertions)]
+    #[cold]
+    pub(in crate::emacs_core::eval) fn serial_world_is_stowed(&self) -> bool {
+        self.green_runtime_ref()
+            .as_ref()
+            .is_some_and(|runtime| runtime.carried_holder.get() == CarriedHolder::Stowed)
+    }
+
     /// Move the World's carried TLS and warm `OwnerCarried` into `GreenRuntime`
     /// during a serial detach, only when this Context on this OS thread
     /// currently holds them.
@@ -248,7 +281,7 @@ impl Context {
     /// unparked main) or is already stowed in `GreenRuntime`.
     #[cold]
     pub(in crate::emacs_core::eval) fn stow_serial_world_state(&mut self) -> bool {
-        let Some(my_slab) = self.owner.slab().map(|slab| slab as *const _ as usize) else {
+        let Some(my_slab) = self.owner.slab().map(OwnerSlabId::from_slab) else {
             return false;
         };
         let expected_holder = CarriedHolder::Held {
@@ -281,8 +314,9 @@ impl Context {
     /// Context and OS thread during a serial reattach, before `resume_owner`
     /// (matching Green's resume order in `switch.rs`).
     ///
-    /// A Sim World, or a Green World whose carried state is currently held by
-    /// another owner rather than stowed in `GreenRuntime`, is left alone.
+    /// Callers check [`Self::serial_world_held_elsewhere`] first, so a Green
+    /// World always arrives here with `CarriedHolder::Stowed`; a Sim World has
+    /// no runtime and skips.
     #[cold]
     pub(in crate::emacs_core::eval) fn unstow_serial_world_state(&mut self) {
         let stowed = self
@@ -292,7 +326,7 @@ impl Context {
         if !stowed {
             return;
         }
-        let my_slab = self.ensure_owner_slab() as *const _ as usize;
+        let my_slab = OwnerSlabId::from_slab(self.ensure_owner_slab());
         let warm = {
             let runtime = self.green_runtime_ref();
             let Some(runtime) = runtime.as_ref() else {

@@ -1923,7 +1923,7 @@ fn stow_owner_state(owner: &mut Context, baton: &Baton) {
 
 /// The warm GNU-global state arrives in OWNER with the Baton.
 fn unstow_owner_state(owner: &mut Context, baton: &Baton) {
-    let owner_slab = owner.ensure_owner_slab() as *const _ as usize;
+    let owner_slab = super::OwnerSlabId::from_slab(owner.ensure_owner_slab());
     let state = {
         let runtime = baton.green_runtime();
         let Some(runtime) = runtime.as_ref() else {

@@ -124,7 +124,7 @@ fn l64_green_reattach_installs_the_heap_and_restores_frame_slab_buffer_and_carri
         OWNER_ANSWER,
         "the owner state is set before the detach"
     );
-    assert_eq!(eval(&mut ev, "(lossage-size 300)"), "300");
+    assert_eq!(eval(&mut ev, "(lossage-size 417)"), "417");
     ev.display_var_change_count = 77;
     ev.face_change_count = 19;
     let buffer = ev.edit.buffers.current_buffer_id();
@@ -161,8 +161,8 @@ fn l64_green_reattach_installs_the_heap_and_restores_frame_slab_buffer_and_carri
     );
     assert_eq!(
         eval(&mut ev, "(lossage-size)"),
-        "300",
-        "F5: carried TLS value (lossage-size) round-trips across detach and reattach"
+        "417",
+        "F5: non-default carried TLS value (lossage-size 417 != 300 placeholder) round-trips across detach and reattach"
     );
     assert_eq!(
         ev.display_var_change_count, 77,
@@ -572,7 +572,7 @@ fn l64_owner_serial_state_refuses_a_seated_green_context() {
 fn l64_further_green_owner_detaches_without_corrupting_unparked_main() {
     let mut main =
         Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-    assert_eq!(eval(&mut main, "(lossage-size 300)"), "300");
+    assert_eq!(eval(&mut main, "(lossage-size 417)"), "417");
     main.display_var_change_count = 77;
     let baton = main.start_green_runtime().expect("start the Green runtime");
     let (to_main, from_worker) = std::sync::mpsc::channel();
@@ -582,9 +582,12 @@ fn l64_further_green_owner_detaches_without_corrupting_unparked_main() {
         let mut state: State = OwnerSerialState::new(7, Box::new(owner))
             .ok()
             .expect("a further Green owner detaches cleanly while main is unparked");
-        let mut turn = state.begin((7, "ticket-1")).ok().expect("own ticket");
-        assert_eq!(turn.with_world(|ev| eval(ev, "(+ 1 2)")), "3");
-        assert_eq!(ended(turn), (7, "ticket-1"));
+        let Err((ticket, refusal)) = state.begin((7, "ticket-1")) else {
+            panic!("A-1: begin must refuse while main holds the World carriers");
+        };
+        assert_eq!(ticket, (7, "ticket-1"));
+        assert_eq!(refusal, TurnRefusal::Host(HostRefusal::WorldHeldElsewhere));
+        assert!(names_no_heap(), "refusal keeps the worker thread detached");
         drop(state);
         to_main.send(baton).expect("return baton to main");
     });
@@ -596,12 +599,12 @@ fn l64_further_green_owner_detaches_without_corrupting_unparked_main() {
         .expect("main parks and resumes without two-places abort");
     assert_eq!(
         eval(&mut main, "(lossage-size)"),
-        "300",
-        "main's carried lossage-size survived the further owner's turn"
+        "417",
+        "main's non-default carried lossage-size survived the further owner's detach"
     );
     assert_eq!(
         main.display_var_change_count, 77,
-        "main's warm redisplay counter survived the further owner's turn"
+        "main's warm redisplay counter survived the further owner's detach"
     );
 }
 
@@ -609,7 +612,7 @@ fn l64_further_green_owner_detaches_without_corrupting_unparked_main() {
 fn l64_further_green_owner_acquires_stowed_world_carriers_on_begin() {
     let mut main =
         Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-    assert_eq!(eval(&mut main, "(lossage-size 300)"), "300");
+    assert_eq!(eval(&mut main, "(lossage-size 417)"), "417");
     main.display_var_change_count = 77;
     let baton = main.start_green_runtime().expect("start the Green runtime");
     let main_detached = detach(&mut main);
@@ -624,14 +627,14 @@ fn l64_further_green_owner_acquires_stowed_world_carriers_on_begin() {
         turn.with_world(|ev| {
             assert_eq!(
                 eval(ev, "(lossage-size)"),
-                "300",
-                "begin acquired the stowed carried lossage-size"
+                "417",
+                "begin acquired the stowed non-default carried lossage-size"
             );
             assert_eq!(
                 ev.display_var_change_count, 77,
                 "begin acquired the stowed warm display_var_change_count"
             );
-            assert_eq!(eval(ev, "(lossage-size 400)"), "400");
+            assert_eq!(eval(ev, "(lossage-size 523)"), "523");
             ev.display_var_change_count = 88;
         });
         assert_eq!(ended(turn), (7, "ticket-1"));
@@ -644,7 +647,7 @@ fn l64_further_green_owner_acquires_stowed_world_carriers_on_begin() {
     reattach(&mut main, main_detached);
     assert_eq!(
         eval(&mut main, "(lossage-size)"),
-        "400",
+        "523",
         "main reattached the worker's updated carried lossage-size"
     );
     assert_eq!(
@@ -654,7 +657,7 @@ fn l64_further_green_owner_acquires_stowed_world_carriers_on_begin() {
     main.seat_green_main_for_test(baton);
     main.green_park_runnable_for_test()
         .expect("main parks and resumes cleanly after serial handoff");
-    assert_eq!(eval(&mut main, "(lossage-size)"), "400");
+    assert_eq!(eval(&mut main, "(lossage-size)"), "523");
     assert_eq!(main.display_var_change_count, 88);
 }
 
@@ -685,4 +688,80 @@ fn l64_reattach_unstows_world_carriers_before_resume_owner_swap_in() {
         "F2: detach swap-out (+1) and reattach swap-in (+1) must both survive warm restore"
     );
     ev.unbind_to(count);
+}
+
+#[test]
+fn l64_begin_refuses_to_run_against_placeholders_when_world_is_held_elsewhere() {
+    let mut main =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    assert_eq!(eval(&mut main, "(lossage-size 417)"), "417");
+    main.display_var_change_count = 77;
+    let baton = main.start_green_runtime().expect("start the Green runtime");
+    let (to_worker, worker_rx) = std::sync::mpsc::channel::<super::super::super::world::Baton>();
+    let (to_main, from_worker) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        // Phase 1: main has not stowed the World carriers -> begin must refuse
+        // with WorldHeldElsewhere rather than run against placeholders.
+        baton.enter();
+        let owner = Context::new_green_owner(&baton);
+        let mut state: State = OwnerSerialState::new(7, Box::new(owner))
+            .ok()
+            .expect("further owner detaches cleanly while main holds the World");
+        let Err((ticket, refusal)) = state.begin((7, "ticket-1")) else {
+            panic!("A-1: begin must refuse rather than run against placeholders");
+        };
+        assert_eq!(ticket, (7, "ticket-1"));
+        assert_eq!(
+            refusal,
+            TurnRefusal::Host(HostRefusal::WorldHeldElsewhere),
+            "A-1: refusal names WorldHeldElsewhere before AbortOnPanic"
+        );
+        assert!(names_no_heap(), "refusal keeps worker TLS down");
+        to_main.send(baton).expect("return baton so main can stow");
+
+        // Phase 2: once main stows the World carriers, the same dormant state
+        // begins cleanly and observes the World's real carried and warm state.
+        let baton = worker_rx.recv().expect("baton returns after main stowed");
+        baton.enter();
+        let mut turn = state
+            .begin((7, "ticket-2"))
+            .ok()
+            .expect("once stowed, begin acquires the real World carriers");
+        turn.with_world(|ev| {
+            assert_eq!(
+                eval(ev, "(lossage-size)"),
+                "417",
+                "turn sees the World's real carried value, not the 300 placeholder"
+            );
+            assert_eq!(
+                ev.display_var_change_count, 77,
+                "turn sees the World's real warm value, not 0"
+            );
+            assert_eq!(eval(ev, "(lossage-size 529)"), "529");
+            ev.display_var_change_count = 91;
+        });
+        assert_eq!(ended(turn), (7, "ticket-2"));
+        assert!(names_no_heap(), "end detaches worker TLS again");
+        drop(state);
+        to_main.send(baton).expect("return baton to main");
+    });
+
+    let baton = from_worker.recv().expect("baton returns from phase 1");
+    baton.enter();
+    let main_detached = detach(&mut main);
+    to_worker
+        .send(baton)
+        .expect("send baton back after stowing");
+
+    let baton = from_worker.recv().expect("baton returns from phase 2");
+    worker.join().expect("worker finishes cleanly");
+    baton.enter();
+    reattach(&mut main, main_detached);
+    assert_eq!(eval(&mut main, "(lossage-size)"), "529");
+    assert_eq!(main.display_var_change_count, 91);
+    main.seat_green_main_for_test(baton);
+    main.green_park_runnable_for_test()
+        .expect("main parks and resumes cleanly");
+    assert_eq!(eval(&mut main, "(lossage-size)"), "529");
+    assert_eq!(main.display_var_change_count, 91);
 }
