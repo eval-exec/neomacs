@@ -153,7 +153,7 @@ pub struct ParsedTree {
 
 impl ParsedTree {
     #[doc(hidden)]
-    pub const fn new(tree: Tree, visible: EmacsByteRange) -> Self {
+    pub(crate) const fn new(tree: Tree, visible: EmacsByteRange) -> Self {
         Self { tree, visible }
     }
 
@@ -1644,23 +1644,8 @@ impl ParserEntry {
     }
 
     #[doc(hidden)]
-    pub fn set_generation(&mut self, generation: u64) {
-        self.generation = generation;
-    }
-
-    #[doc(hidden)]
     pub fn reparse_epoch(&self) -> u64 {
         self.reparse_epoch
-    }
-
-    #[doc(hidden)]
-    pub fn set_reparse_epoch(&mut self, reparse_epoch: u64) {
-        self.reparse_epoch = reparse_epoch;
-    }
-
-    #[doc(hidden)]
-    pub fn walk_clones(&self) -> Arc<AtomicU32> {
-        Arc::clone(&self.walk_clones)
     }
 
     /// Counted `ts_tree_copy`. The guard is the only walk clone other crates
@@ -1724,18 +1709,8 @@ impl ParserEntry {
     }
 
     #[doc(hidden)]
-    pub fn set_tree(&mut self, tree: Option<ParsedTree>) {
-        self.tree = tree;
-    }
-
-    #[doc(hidden)]
     pub fn last_changed_ranges_mut(&mut self) -> &mut Vec<SourceByteRange> {
         &mut self.last_changed_ranges
-    }
-
-    #[doc(hidden)]
-    pub fn set_last_changed_ranges(&mut self, ranges: Vec<SourceByteRange>) {
-        self.last_changed_ranges = ranges;
     }
 
     #[doc(hidden)]

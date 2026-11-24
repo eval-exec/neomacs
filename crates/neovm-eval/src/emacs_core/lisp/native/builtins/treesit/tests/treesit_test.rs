@@ -953,18 +953,6 @@ fn treesit_pattern_keyword_domain_matches_gnu_symbols() {
     assert_eq!(TreesitPatternKeyword::EqQuestion.name(), ":eq?");
 }
 
-/// The Lisp builtin must not call `Tree::clone`. A clone that skips
-/// `ParserEntry::walk_clone` leaves the live-walk count at zero, so the
-/// next edit rewrites the tree in place under the clone.
-#[test]
-fn lisp_treesit_builtin_does_not_clone_a_parser_tree() {
-    let src = include_str!("../../treesit.rs");
-    assert!(
-        !src.contains(".tree().clone()"),
-        "Tree::clone in the Lisp builtin skips the walk-clone count"
-    );
-}
-
 /// GNU `Ftreesit_parser_set_included_ranges` returns before touching the
 /// parser when `Fequal` says the new list matches the saved one
 /// (`src/treesit.c:2737-2738`). A freshly built equal list is that case.
@@ -988,6 +976,42 @@ fn treesit_parser_set_included_ranges_equal_list_does_not_reparse() {
         treesit_reparse_count(),
         after_change,
         "an equal range list must not mark the parser for reparse"
+    );
+}
+
+fn long_included_range_list(count: i64) -> Value {
+    Value::list(
+        (1..=count)
+            .map(|start| Value::cons(Value::fixnum(start), Value::fixnum(start + 1)))
+            .collect(),
+    )
+}
+
+/// GNU `Fequal` walks a list spine in a loop, so length does not count as
+/// nesting. `Value ==` returns false once that spine passes depth 200.
+/// Attested oracle form `(equal <300 fresh conses> <300 fresh conses>)` is
+/// `t` on Emacs 31.1. A fresh list of 250 ranges is the same shape.
+#[test]
+fn treesit_parser_set_included_ranges_long_equal_list_does_not_reparse() {
+    let text = format!("\"{}\"", "x".repeat(260));
+    let (mut eval, parser) = eval_with_json_parser(&text);
+    reset_treesit_reparse_count();
+    builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("parse");
+    let ranges = long_included_range_list(250);
+    builtin_treesit_parser_set_included_ranges(&mut eval, vec![parser, ranges]).expect("set");
+    builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("reparse after ranges");
+    let after_change = treesit_reparse_count();
+    let fresh = long_included_range_list(250);
+    assert!(
+        !neovm_value::value::eq_value(&ranges, &fresh),
+        "the second list is a different object"
+    );
+    builtin_treesit_parser_set_included_ranges(&mut eval, vec![parser, fresh]).expect("equal set");
+    builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root after equal set");
+    assert_eq!(
+        treesit_reparse_count(),
+        after_change,
+        "250 equal ranges must not mark the parser for reparse"
     );
 }
 

@@ -2645,9 +2645,16 @@ pub fn builtin_treesit_parser_set_included_ranges(
     expect_args("treesit-parser-set-included-ranges", &args, 2)?;
     let parser_id = expect_live_parser_id(eval, "treesit-parser-set-included-ranges", args[0])?;
     let current_ranges = parser_record_slot(args[0], runtime::PARSER_SLOT_INCLUDED_RANGES)?;
-    // `Value`'s `==` is structural `equal`, GNU `Fequal` (`src/treesit.c:2737`).
-    // A freshly allocated list with the same ranges is a no-op.
-    if current_ranges == args[1] {
+    // GNU `Fequal` (`src/treesit.c:2737`) walks a list spine in a loop.
+    // `Value ==` counts each cdr toward a depth of 200 and then returns
+    // false, so a long range list would reparse. `try_equal_value_swp` is
+    // the same walk `equal` uses.
+    if neovm_value::value::try_equal_value_swp(
+        &current_ranges,
+        &args[1],
+        0,
+        eval.symbols_with_pos_enabled,
+    )? {
         return Ok(Value::NIL);
     }
 
