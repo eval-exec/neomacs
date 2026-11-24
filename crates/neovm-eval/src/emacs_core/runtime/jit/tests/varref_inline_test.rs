@@ -53,7 +53,7 @@ fn interpret(eval: &mut Context, f: &ByteCodeFunction) -> String {
 fn native(ctx_ptr: *mut u8, f: &ByteCodeFunction) -> (String, usize) {
     let leaf = compile_bytecode_function(f).expect("compiles");
     VARREF_SHIM_CALLS.with(|c| c.set(0));
-    let answer = match leaf.call(ctx_ptr, &[]) {
+    let answer = match unsafe { leaf.call(ctx_ptr, &[]) } {
         NativeRun::Ok(bits) => print_value(&unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -169,7 +169,7 @@ fn reads_survive_obarray_growth_and_absent_symbols() {
     }
     eval_ok(&mut eval, "(setq vri-grow 'after)");
     VARREF_SHIM_CALLS.with(|c| c.set(0));
-    match leaf.call(ctx_ptr, &[]) {
+    match unsafe { leaf.call(ctx_ptr, &[]) } {
         NativeRun::Ok(bits) => assert_eq!(
             print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -202,7 +202,7 @@ fn a_void_variable_reaches_a_leaf_local_handler() {
         vec![Value::symbol("vri-void"), Value::symbol("caught")],
     );
     let leaf = compile_bytecode_function(&f).expect("compiles");
-    match leaf.call(ctx_ptr, &[]) {
+    match unsafe { leaf.call(ctx_ptr, &[]) } {
         NativeRun::Ok(bits) => assert_eq!(
             print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -213,7 +213,7 @@ fn a_void_variable_reaches_a_leaf_local_handler() {
         other => panic!("{other:?}"),
     }
     eval_ok(&mut eval, "(setq vri-void 5)");
-    match leaf.call(ctx_ptr, &[]) {
+    match unsafe { leaf.call(ctx_ptr, &[]) } {
         NativeRun::Ok(bits) => assert_eq!(
             print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -262,7 +262,7 @@ fn a_later_call_site_roots_what_only_the_varref_shim_stored() {
     );
     let leaf = compile_bytecode_function(&f).expect("compiles");
     for _ in 0..3 {
-        match leaf.call(ctx_ptr, &[]) {
+        match unsafe { leaf.call(ctx_ptr, &[]) } {
             NativeRun::Ok(bits) => {
                 let h = unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -317,7 +317,7 @@ fn raw_varref_preserves_integer_values_across_inline_and_fallback_reads() {
                 .expect("interpreter");
             let want = print_value(&want);
             VARREF_SHIM_CALLS.with(|c| c.set(0));
-            let result = leaf.call(&mut eval as *mut Context as *mut u8, &[arg]);
+            let result = unsafe { leaf.call(&mut eval as *mut Context as *mut u8, &[arg]) };
             let NativeRun::Ok(bits) = result else {
                 panic!("{name} {n}: {result:?}")
             };
@@ -360,7 +360,7 @@ fn raw_varref_signal_handler_receives_tagged_residual_values() {
     params.required.push(neovm_value::intern::intern("x"));
     f.set_params(params.into());
     let leaf = compile_bytecode_function(&f).expect("raw signal reader compiles");
-    let result = leaf.call(&mut eval as *mut Context as *mut u8, &[Value::make_int(-1)]);
+    let result = unsafe { leaf.call(&mut eval as *mut Context as *mut u8, &[Value::make_int(-1)]) };
     let NativeRun::Ok(bits) = result else {
         panic!("{result:?}")
     };
@@ -373,7 +373,7 @@ fn raw_varref_signal_handler_receives_tagged_residual_values() {
     );
     assert_eq!(eval.jit_root_stack_top, 0);
     eval_ok(&mut eval, "(setq raw-vri-void 5)");
-    let result = leaf.call(&mut eval as *mut Context as *mut u8, &[Value::make_int(-1)]);
+    let result = unsafe { leaf.call(&mut eval as *mut Context as *mut u8, &[Value::make_int(-1)]) };
     let NativeRun::Ok(bits) = result else {
         panic!("{result:?}")
     };
@@ -431,7 +431,8 @@ fn raw_varref_keeps_heap_roots_live_at_a_later_collecting_call() {
         let leaf = compile_bytecode_function(&f).expect("raw collecting reader compiles");
         let before = eval.tagged_heap.gc_collections();
         for _ in 0..3 {
-            let result = leaf.call(&mut eval as *mut Context as *mut u8, &[Value::make_int(41)]);
+            let result =
+                unsafe { leaf.call(&mut eval as *mut Context as *mut u8, &[Value::make_int(41)]) };
             let NativeRun::Ok(bits) = result else {
                 panic!("{name}: {result:?}")
             };
@@ -463,7 +464,7 @@ fn reused_alias_reader_observes_retargeting_and_contextual_values() {
         let want = interpret(eval, &f);
         assert_eq!(want, expected);
         VARREF_SHIM_CALLS.with(|c| c.set(0));
-        let got = match leaf.call(eval as *mut Context as *mut u8, &[]) {
+        let got = match unsafe { leaf.call(eval as *mut Context as *mut u8, &[]) } {
             NativeRun::Ok(bits) => print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                 Value::from_bits(bits)
@@ -565,7 +566,7 @@ fn aliases_of_buffer_identities_keep_original_name_context() {
             "{name}"
         );
         assert_eq!(interpret(&mut eval, &f), expected);
-        match leaf.call(&mut eval as *mut Context as *mut u8, &[]) {
+        match unsafe { leaf.call(&mut eval as *mut Context as *mut u8, &[]) } {
             NativeRun::Ok(bits) => assert_eq!(
                 print_value(&unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -593,7 +594,7 @@ fn reused_local_reader_observes_cache_misses_writes_and_unbinding() {
     let check = |eval: &mut Context, expected: &str| {
         // Run native first: interpretation would otherwise warm the cache and
         // hide the native miss after a buffer/structural-epoch change.
-        let got = match leaf.call(eval as *mut Context as *mut u8, &[]) {
+        let got = match unsafe { leaf.call(eval as *mut Context as *mut u8, &[]) } {
             NativeRun::Ok(bits) => print_value(&unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                 Value::from_bits(bits)

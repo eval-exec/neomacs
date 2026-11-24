@@ -82,7 +82,7 @@ fn opt_lower_global_ssa_loop_matches_tier0_and_reports_opt() {
             .execute(&f, args.to_vec())
             .unwrap();
         assert_eq!(
-            leaf.call(&mut ev as *mut Context as *mut u8, &args),
+            unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &args) },
             NativeRun::Ok(expected.bits())
         );
     }
@@ -109,7 +109,7 @@ fn opt_lower_diamond_and_else_pop_preserve_global_values() {
     for arg in [Value::NIL, Value::make_int(11)] {
         let expected = Vm::from_context(&mut ev).execute(&f, vec![arg]).unwrap();
         assert_eq!(
-            leaf.call(&mut ev as *mut Context as *mut u8, &[arg]),
+            unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[arg]) },
             NativeRun::Ok(expected.bits())
         );
     }
@@ -135,7 +135,8 @@ fn opt_lower_force_deopt_captures_exact_stack_after_heap_effect() {
     let mut ev = Context::new(crate::test_utils::unit_runtime());
     let pair = Value::cons(Value::make_int(1), Value::NIL);
     let arg = Value::symbol("opt-bad-number");
-    let NativeRun::DeoptAt(frame) = leaf.call(&mut ev as *mut Context as *mut u8, &[pair, arg])
+    let NativeRun::DeoptAt(frame) =
+        (unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[pair, arg]) })
     else {
         panic!("expected exact deopt")
     };
@@ -145,10 +146,12 @@ fn opt_lower_force_deopt_captures_exact_stack_after_heap_effect() {
     force_deopt_for_test(true);
     let forced_leaf = lower(&f, None);
     let fresh_pair = Value::cons(Value::make_int(1), Value::NIL);
-    let NativeRun::DeoptAt(frame) = forced_leaf.call(
-        &mut ev as *mut Context as *mut u8,
-        &[fresh_pair, Value::make_int(4)],
-    ) else {
+    let NativeRun::DeoptAt(frame) = (unsafe {
+        forced_leaf.call(
+            &mut ev as *mut Context as *mut u8,
+            &[fresh_pair, Value::make_int(4)],
+        )
+    }) else {
         panic!("forced deopt")
     };
     assert_eq!(frame.pc, 2);
@@ -176,14 +179,14 @@ fn opt_lower_osr_prunes_prologue_and_checks_untouched_snapshot() {
         Value::make_int(42).bits() as i64,
     ];
     assert_eq!(
-        leaf.call_premarshaled(&mut ev as *mut Context as *mut u8, args.as_ptr()),
+        unsafe { leaf.call_premarshaled(&mut ev as *mut Context as *mut u8, args.as_ptr()) },
         NativeRun::Ok(Value::make_int(10000).bits())
     );
     let snapshot = [Value::make_int(10000), Value::NIL];
     let snapshot_bits = snapshot.map(|value| value.bits() as i64);
-    let NativeRun::DeoptAt(frame) =
+    let NativeRun::DeoptAt(frame) = (unsafe {
         leaf.call_premarshaled(&mut ev as *mut Context as *mut u8, snapshot_bits.as_ptr())
-    else {
+    }) else {
         panic!("entry guard")
     };
     assert_eq!(frame.pc, 1);

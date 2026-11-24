@@ -1055,7 +1055,7 @@ pub(crate) unsafe fn try_run_osr_probe(
         return OsrProbe::NoTransfer;
     }
     let id = func.jit_runtime().compiled_id_or_assign();
-    let cached = match osr_lookup(ctx, func, osr_pc, id) {
+    let cached = match unsafe { osr_lookup(ctx, func, osr_pc, id) } {
         OsrLookup::Entry(entry) => entry,
         OsrLookup::Pending => return OsrProbe::Pending,
     };
@@ -1104,12 +1104,14 @@ pub(crate) unsafe fn try_run_osr_probe(
         None
     };
     OSR_TRANSFER_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let run = leaf.invoke_osr(
-        ctx as *mut u8,
-        arg_bits.as_ptr(),
-        func.jit_constant_base(),
-        bind_frame,
-    );
+    let run = unsafe {
+        leaf.invoke_osr(
+            ctx as *mut u8,
+            arg_bits.as_ptr(),
+            func.jit_constant_base(),
+            bind_frame,
+        )
+    };
     if let Some((_, stack_base)) = bind_frame {
         // SAFETY: native execution has returned; only a dormant Context length read.
         // SAFETY (owner chain): (c) fails: the Vec::len receiver is a statement-local shared borrow;
@@ -1120,16 +1122,18 @@ pub(crate) unsafe fn try_run_osr_probe(
     // The deopt hook runs before the interpreter installs the resume state
     // (the local `leaf` keeps the OSR leaf alive across it).
     let _verdict = match &run {
-        NativeRun::Deopt => super::reopt::note_deopt(
-            ctx,
-            func,
-            &leaf,
-            LeafOrigin::Osr {
-                header_pc: osr_pc,
-                snapshot: stack,
-            },
-            DeoptEvent::Rerun,
-        ),
+        NativeRun::Deopt => unsafe {
+            super::reopt::note_deopt(
+                ctx,
+                func,
+                &leaf,
+                LeafOrigin::Osr {
+                    header_pc: osr_pc,
+                    snapshot: stack,
+                },
+                DeoptEvent::Rerun,
+            )
+        },
         NativeRun::DeoptAt(resume) => {
             let origin = LeafOrigin::Osr {
                 header_pc: osr_pc,
@@ -1146,31 +1150,35 @@ pub(crate) unsafe fn try_run_osr_probe(
                         )
                     },
                 );
-                super::reopt::note_deopt_chain(
-                    ctx,
-                    func,
-                    inner,
-                    &leaf,
-                    origin,
-                    inlined.guard_site_pc,
-                    DeoptEvent::Precise {
-                        pc: inner_pc,
-                        stack: inner_stack,
-                        cause: resume.cause,
-                    },
-                )
+                unsafe {
+                    super::reopt::note_deopt_chain(
+                        ctx,
+                        func,
+                        inner,
+                        &leaf,
+                        origin,
+                        inlined.guard_site_pc,
+                        DeoptEvent::Precise {
+                            pc: inner_pc,
+                            stack: inner_stack,
+                            cause: resume.cause,
+                        },
+                    )
+                }
             } else {
-                super::reopt::note_deopt(
-                    ctx,
-                    func,
-                    &leaf,
-                    origin,
-                    DeoptEvent::Precise {
-                        pc: resume.pc,
-                        stack: &resume.stack,
-                        cause: resume.cause,
-                    },
-                )
+                unsafe {
+                    super::reopt::note_deopt(
+                        ctx,
+                        func,
+                        &leaf,
+                        origin,
+                        DeoptEvent::Precise {
+                            pc: resume.pc,
+                            stack: &resume.stack,
+                            cause: resume.cause,
+                        },
+                    )
+                }
             }
         }
         NativeRun::Ok(_) | NativeRun::Signal => super::reopt::ReoptVerdict::Kept,
@@ -1190,7 +1198,16 @@ pub(crate) unsafe fn try_run_osr_probe(
 /// The OSR leaf of `(id, osr_pc)`: installed if its background compile
 /// finished, still pending, cached (compiled or refused), or compiled now --
 /// deferring its backend when the mode allows (class `Osr`).
-fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64) -> OsrLookup {
+///
+/// # Safety
+/// `ctx` must point to the live, dormant owner-thread [`Context`] for the
+/// duration of the lookup and any compilation/installation it performs.
+unsafe fn osr_lookup(
+    ctx: *mut Context,
+    func: &ByteCodeFunction,
+    osr_pc: usize,
+    id: u64,
+) -> OsrLookup {
     let key = (id, osr_pc);
     // SAFETY: dormant seam-provided Context (as try_run_compiled); shared reads.
     // SAFETY (owner chain): (b) fails: the older ctx pointer reaches only callee_name_hint and
@@ -1227,7 +1244,7 @@ fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64
     }
     // The running function's own frame is the innermost one.
     let name_hint = stats::naming_enabled()
-        .then(|| callee_name_hint(ctx, id))
+        .then(|| unsafe { callee_name_hint(ctx, id) })
         .flatten();
     // A refused OSR job (the queue full of OSR jobs, or too many pending)
     // compiles in line: the loop is running now.
@@ -1237,7 +1254,7 @@ fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64
     );
     // The inline-variable environment (`NEOVM_JIT_INLINE_VARS`) is read by
     // the lowering, which runs here on the eval thread in every mode.
-    let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+    let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
     let compiled = compile_osr_leaf(&live.obarray, func, osr_pc, id, name_hint);
     drop(defer);
     if let Some(entry) = &compiled {
@@ -1743,9 +1760,11 @@ fn compile_cache_entry(
 /// symbol's function is the bytecode with this very `compiled_id`, so a
 /// wrong frame falls back to an anonymous label. Read-only: no interning,
 /// no allocation on the Lisp heap. Cold, and only called under naming.
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-fn callee_name_hint(ctx: *const Context, id: u64) -> Option<SymId> {
+unsafe fn callee_name_hint(ctx: *const Context, id: u64) -> Option<SymId> {
     let pending = stats::perf_map::take_pending_callee();
     if ctx.is_null() {
         return None;
@@ -2784,9 +2803,12 @@ fn publish_upgrade(
 /// Compile an upgrade without removing the running T1 first. A refusal
 /// or failure leaves that T1 native; a worker job retains it in the cache
 /// until install. Entry compiles continue using their interpreter hold.
+///
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-fn request_upgrade(
+unsafe fn request_upgrade(
     cache: &mut DenseCache,
     id: u64,
     func: &ByteCodeFunction,
@@ -2824,9 +2846,9 @@ fn request_upgrade(
     // write the borrowed Context/Obarray allocation through an older ctx pointer.
     let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
     let name_hint = stats::naming_enabled()
-        .then(|| callee_name_hint(ctx, id))
+        .then(|| unsafe { callee_name_hint(ctx, id) })
         .flatten();
-    let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+    let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
     if kind == super::tier2::T2Upgrade::Retier {
         stats::record_retier();
     }
@@ -2913,9 +2935,12 @@ fn probe_upgrade(cache: &mut DenseCache, id: u64, ctx: Option<&Context>) -> Rc<C
 /// Keep all upgrade-only probes off the default entry path. The process flag
 /// is published before any profiling leaf can exist; tests use their thread's
 /// knob override. This helper owns no state beyond the borrowed mutator cache.
+///
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-fn probe_tier2_upgrade(
+unsafe fn probe_tier2_upgrade(
     cache: &mut DenseCache,
     id: u64,
     func: &ByteCodeFunction,
@@ -2937,7 +2962,7 @@ fn probe_tier2_upgrade(
                 .due()
                 .or_else(|| super::aot::retier::legacy_request(old, func.jit_runtime()))?;
             let old = Rc::clone(old);
-            Some(request_upgrade(cache, id, func, old, kind, ctx))
+            Some(unsafe { request_upgrade(cache, id, func, old, kind, ctx) })
         }
         _ => None,
     }
@@ -3163,7 +3188,7 @@ pub(crate) unsafe fn try_run_compiled(
         // A countdown upgrade keeps its T1 live until the replacement
         // really installs. The legacy heat-driven re-tier below is unchanged.
         if super::compile::jit_tier_upgrade_enabled()
-            && let Some(leaf) = probe_tier2_upgrade(&mut cache, id, func, ctx)
+            && let Some(leaf) = unsafe { probe_tier2_upgrade(&mut cache, id, func, ctx) }
         {
             return Some(leaf).filter(|leaf| leaf.accepts(args.len()));
         }
@@ -3312,7 +3337,7 @@ pub(crate) unsafe fn try_run_compiled(
                 }
             }
             let name_hint = stats::naming_enabled()
-                .then(|| callee_name_hint(ctx, id))
+                .then(|| unsafe { callee_name_hint(ctx, id) })
                 .flatten();
             // The origin is only read on this cold miss path.
             let origin = if retier {
@@ -3323,7 +3348,7 @@ pub(crate) unsafe fn try_run_compiled(
                 stats::CompileOrigin::Dispatch
             };
             // Inline variable ops classify against this context (P1.4 B).
-            let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+            let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
             compile_cache_entry(
                 cache,
                 id,
@@ -3354,7 +3379,7 @@ pub(crate) unsafe fn try_run_compiled(
         Some(leaf) => {
             #[cfg(test)]
             super::test_support::note_native_dispatch();
-            run_resolved_leaf(ctx, func, func_value, &leaf, args)
+            unsafe { run_resolved_leaf(ctx, func, func_value, &leaf, args) }
         }
     }
 }
@@ -3462,8 +3487,13 @@ pub(crate) fn armed_leaf_for_native_call(
 /// (its premarshaled `Value` bits, NOT a pointer into the operand stack: a
 /// nested call's shim pushes onto it and may reallocate). Same result shape
 /// as `try_run_compiled`: `Ok(None)` = interpret instead.
+///
+/// # Safety
+/// `ctx` must point to the dormant owner-thread [`Context`], `leaf` must be a
+/// live leaf pointer armed under the current `leaf_slot_epoch`, and `args_ptr`
+/// must address `leaf.arity` readable tagged words for the call.
 #[inline(never)]
-pub(crate) fn run_armed_leaf(
+pub(crate) unsafe fn run_armed_leaf(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3501,7 +3531,7 @@ pub(crate) fn run_armed_leaf(
     // counters/spec cells use interior mutability, not an older mutable leaf pointer.
     let leaf = unsafe { &*leaf };
     super::stats::record_native_entry();
-    match run_resolved_leaf_native(ctx, func, func_value, leaf, args_ptr) {
+    match unsafe { run_resolved_leaf_native(ctx, func, func_value, leaf, args_ptr) } {
         NativeCallOutcome::Value(v) => Ok(Some(v.bits())),
         NativeCallOutcome::Fallback => Ok(None),
         NativeCallOutcome::FlowStashed => {
@@ -3515,13 +3545,16 @@ pub(crate) fn run_armed_leaf(
 /// exact-arity call takes the direct entry. Reads the cache only (the entry
 /// exists: the leaf just ran); Deferred/NotCompilable/inlining leaves leave
 /// the slot empty.
-pub(crate) fn arm_leaf_slot(ctx: *mut Context, func: &ByteCodeFunction) {
+///
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
+pub(crate) unsafe fn arm_leaf_slot(ctx: *mut Context, func: &ByteCodeFunction) {
     let rt = func.jit_runtime();
     let epoch = leaf_slot_epoch();
     if rt.armed_leaf_word(epoch).is_some() {
         return;
     }
-    if let Some(leaf) = resolve_compiled_leaf_ptr(ctx, func) {
+    if let Some(leaf) = unsafe { resolve_compiled_leaf_ptr(ctx, func) } {
         // SAFETY: `leaf` was resolved from this source's cache entry while the
         // entry is live and under `epoch`; the cache retires leaves without
         // freeing them, and the slot is armed and probed on this same mutator
@@ -3539,8 +3572,10 @@ pub(crate) enum SpecCallLeaf {
     RetainedUpgrade(Rc<CompiledLeaf>),
 }
 
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[inline(never)]
-pub(crate) fn resolve_compiled_leaf_ptr(
+pub(crate) unsafe fn resolve_compiled_leaf_ptr(
     ctx: *mut Context,
     func: &ByteCodeFunction,
 ) -> Option<*const CompiledLeaf> {
@@ -3582,7 +3617,7 @@ pub(crate) unsafe fn resolve_spec_call_leaf(
         // calls receive a retained handle instead, so a cold source need
         // not fall through the interpreter's initial heat threshold.
         if super::compile::jit_tier_upgrade_enabled() {
-            probe_tier2_upgrade(&mut cache, id, func, ctx);
+            unsafe { probe_tier2_upgrade(&mut cache, id, func, ctx) };
         }
         match cache.get_or_insert_with(id, |cache| {
             // SAFETY: same dormant-Context contract as try_run_compiled.
@@ -3591,9 +3626,9 @@ pub(crate) unsafe fn resolve_spec_call_leaf(
             // native execution or ancestor-pointer write to this borrowed allocation.
             let obarray = (!ctx.is_null()).then(|| unsafe { &*(*ctx).obarray });
             let name_hint = stats::naming_enabled()
-                .then(|| callee_name_hint(ctx, id))
+                .then(|| unsafe { callee_name_hint(ctx, id) })
                 .flatten();
-            let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+            let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
             compile_cache_entry(
                 cache,
                 id,
@@ -3687,7 +3722,10 @@ fn cached_frame_bytes(leaf: &CompiledLeaf, func: &ByteCodeFunction) -> usize {
 /// both have byte-identical deopt/signal semantics. Same return shape as
 /// `try_run_compiled`: `Ok(Some(bits))` success, `Ok(None)` fall-back, `Err`
 /// on a non-local flow.
-pub(crate) fn run_resolved_leaf(
+/// # Safety
+/// `ctx` must be null (only for bodies needing no Context) or point to the
+/// dormant owner-thread [`Context`] alive for the whole native run.
+pub(crate) unsafe fn run_resolved_leaf(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3698,7 +3736,7 @@ pub(crate) fn run_resolved_leaf(
     // `run_resolved_leaf_native` does; an over-budget frame falls back to the
     // interpreter entry, which raises GNU's error.
     if ctx.is_null() {
-        return run_resolved_leaf_inner(ctx, func, func_value, leaf, args);
+        return unsafe { run_resolved_leaf_inner(ctx, func, func_value, leaf, args) };
     }
     // SAFETY: the seam-provided Context is dormant for this native call.
     let charged = {
@@ -3714,9 +3752,11 @@ pub(crate) fn run_resolved_leaf(
     let Some(saved_budget) = charged else {
         return Ok(None);
     };
-    let outcome = run_with_bytecode_stack_probe(ctx, |ctx| {
-        run_resolved_leaf_inner(ctx, func, func_value, leaf, args)
-    });
+    let outcome = unsafe {
+        run_with_bytecode_stack_probe(ctx, |ctx| {
+            run_resolved_leaf_inner(ctx, func, func_value, leaf, args)
+        })
+    };
     // SAFETY: as above; valid for this whole call.
     // SAFETY (owner chain): (b) fails: native dispatch has already returned, and
     // release_bytecode_frame writes through this current typed owner. No older ctx call follows; this
@@ -3726,7 +3766,9 @@ pub(crate) fn run_resolved_leaf(
     outcome
 }
 
-fn run_resolved_leaf_inner(
+/// # Safety
+/// `ctx` must satisfy [`run_resolved_leaf`].
+unsafe fn run_resolved_leaf_inner(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3734,13 +3776,15 @@ fn run_resolved_leaf_inner(
     args: &[Value],
 ) -> Result<Option<usize>, Flow> {
     super::stats::record_native_entry();
-    finish_native_run(
-        ctx,
-        func,
-        func_value,
-        leaf,
-        leaf.call_consts(ctx as *mut u8, func.jit_constant_base(), args),
-    )
+    unsafe {
+        finish_native_run(
+            ctx,
+            func,
+            func_value,
+            leaf,
+            leaf.call_consts(ctx as *mut u8, func.jit_constant_base(), args),
+        )
+    }
 }
 
 /// Native-to-native variant of [`run_resolved_leaf`]: `args_ptr` addresses
@@ -3749,11 +3793,12 @@ fn run_resolved_leaf_inner(
 /// Skips the `LispArgVec` build and the `arg_bits` re-marshal entirely — the
 /// per-call cost the call-heavy benchmark is dominated by.
 ///
-/// SAFETY: see [`CompiledLeaf::call_premarshaled`] — `args_ptr` must address
-/// `leaf.arity` live words with no GC safepoint before the native entry reads
-/// them (the spec fast path's `maybe_quit`-returned-Ok window).
+/// # Safety
+/// `ctx` must be null (only for bodies needing no Context) or point to the
+/// dormant owner-thread [`Context`], and `args_ptr` must address `leaf.arity`
+/// live tagged words with no GC safepoint before the native entry reads them.
 #[inline(always)]
-pub(crate) fn run_resolved_leaf_native(
+pub(crate) unsafe fn run_resolved_leaf_native(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3767,7 +3812,7 @@ pub(crate) fn run_resolved_leaf_native(
     // which continues this same frame -- has finished; a fallback releases
     // before returning so the interpreter entry charges the frame once.
     if ctx.is_null() {
-        return run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr);
+        return unsafe { run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr) };
     }
     // SAFETY: the seam-provided Context is dormant for this native call.
     let charged = {
@@ -3790,9 +3835,11 @@ pub(crate) fn run_resolved_leaf_native(
     // compiled leaf entered between samples never meets its own entry guard
     // before the bytecode budget is exhausted (the guard's threshold is
     // inside the probe reserve, see `maybe_grow_tracking_jit_limit`).
-    let outcome = run_with_bytecode_stack_probe(ctx, |ctx| {
-        run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr)
-    });
+    let outcome = unsafe {
+        run_with_bytecode_stack_probe(ctx, |ctx| {
+            run_resolved_leaf_native_inner(ctx, func, func_value, leaf, args_ptr)
+        })
+    };
     // SAFETY: as above; valid for this whole call.
     // SAFETY (owner chain): (b) fails: dispatch has finished and release writes through this new typed
     // owner, not the older pointer. The function returns immediately afterward, leaving no later owner
@@ -3816,8 +3863,10 @@ pub(crate) fn run_resolved_leaf_native(
 /// every native entry), which the protected-codegen census counted as
 /// run_armed_leaf +119 instructions. The hot path keeps only the depth test;
 /// the probe runs once per sampled interval, on the segment it grows.
+/// # Safety
+/// `ctx` must point to the live, dormant owner-thread [`Context`].
 #[inline(always)]
-pub(crate) fn run_with_bytecode_stack_probe<R>(
+pub(crate) unsafe fn run_with_bytecode_stack_probe<R>(
     ctx: *mut Context,
     run: impl FnOnce(*mut Context) -> R,
 ) -> R {
@@ -3828,14 +3877,17 @@ pub(crate) fn run_with_bytecode_stack_probe<R>(
     {
         return run(ctx);
     }
-    run_with_bytecode_stack_probe_sampled(ctx, run)
+    unsafe { run_with_bytecode_stack_probe_sampled(ctx, run) }
 }
 
 /// The sampled half of [`run_with_bytecode_stack_probe`], deliberately out of
 /// line: stacker's remaining-stack query and the adaptive reserve arithmetic
 /// stay off the leaf entry path.
+///
+/// # Safety
+/// `ctx` must point to the live, dormant owner-thread [`Context`].
 #[inline(never)]
-fn run_with_bytecode_stack_probe_sampled<R>(
+unsafe fn run_with_bytecode_stack_probe_sampled<R>(
     ctx: *mut Context,
     run: impl FnOnce(*mut Context) -> R,
 ) -> R {
@@ -3856,7 +3908,9 @@ fn run_with_bytecode_stack_probe_sampled<R>(
     )
 }
 
-fn run_resolved_leaf_native_inner(
+/// # Safety
+/// `ctx` and `args_ptr` must satisfy [`run_resolved_leaf_native`].
+unsafe fn run_resolved_leaf_native_inner(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3902,9 +3956,9 @@ fn run_resolved_leaf_native_inner(
         }
         #[cfg(any(test, debug_assertions, feature = "test-support"))]
         count_native_status(status);
-        return direct_call_cold(ctx, func, func_value, leaf, status);
+        return unsafe { direct_call_cold(ctx, func, func_value, leaf, status) };
     }
-    run_resolved_leaf_native_outlined(ctx, func, func_value, leaf, args_ptr)
+    unsafe { run_resolved_leaf_native_outlined(ctx, func, func_value, leaf, args_ptr) }
 }
 
 /// The out-of-line shapes of [`run_resolved_leaf_native`]: a frameless
@@ -3912,8 +3966,11 @@ fn run_resolved_leaf_native_inner(
 /// bindings, handler frames or a sidecar runs under its own `invoke_native`
 /// frame. Out of line so the memory-ABI raw path above, inlined into the
 /// call shims, stays a raw entry call and a status compare.
+///
+/// # Safety
+/// `ctx` and `args_ptr` must satisfy [`run_resolved_leaf_native`].
 #[inline(never)]
-fn run_resolved_leaf_native_outlined(
+unsafe fn run_resolved_leaf_native_outlined(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3935,18 +3992,23 @@ fn run_resolved_leaf_native_outlined(
         }
         #[cfg(any(test, debug_assertions, feature = "test-support"))]
         count_native_status(ret.status);
-        return direct_call_cold(ctx, func, func_value, leaf, ret.status);
+        return unsafe { direct_call_cold(ctx, func, func_value, leaf, ret.status) };
     }
-    let outcome = leaf.call_premarshaled_consts(ctx as *mut u8, func.jit_constant_base(), args_ptr);
-    finish_framed_run(ctx, func, func_value, leaf, outcome)
+    let outcome = unsafe {
+        leaf.call_premarshaled_consts(ctx as *mut u8, func.jit_constant_base(), args_ptr)
+    };
+    unsafe { finish_framed_run(ctx, func, func_value, leaf, outcome) }
 }
 
 /// Map a framed native run's outcome to the shim's compact outcome: the
 /// signal fold and the precise-deopt resume. Shared with the spec shim's
 /// fast path, which makes the framed call itself and hands a non-OK
 /// outcome here. `leaf` is the leaf that ran (the deopt hook's subject).
+///
+/// # Safety
+/// `ctx` must be null or point to the dormant owner-thread [`Context`].
 #[inline(never)]
-pub(crate) fn finish_framed_run(
+pub(crate) unsafe fn finish_framed_run(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -3963,7 +4025,9 @@ pub(crate) fn finish_framed_run(
         // call_premarshaled maps null-vmctx deopts to Deopt; defensive only —
         // the caller re-runs the callee on the interpreter.
         NativeRun::Deopt => {
-            super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun);
+            unsafe {
+                super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun)
+            };
             NativeCallOutcome::Fallback
         }
         // Fold a contained shim panic into its signal flow at exactly the
@@ -3977,14 +4041,18 @@ pub(crate) fn finish_framed_run(
             stash_pending_flow(flow);
             NativeCallOutcome::FlowStashed
         }
-        NativeRun::DeoptAt(resume) => deopt_resume_outcome(ctx, func, func_value, leaf, *resume),
+        NativeRun::DeoptAt(resume) => unsafe {
+            deopt_resume_outcome(ctx, func, func_value, leaf, *resume)
+        },
     }
 }
 
 /// Precise-deopt resume shared by the wrapped and direct native paths: run
 /// the Tier-0 interpreter mid-function off the [`DeoptResume`] payload.
 /// `leaf` is the entry leaf that deopted (the deopt hook's subject).
-fn deopt_resume_outcome(
+/// # Safety
+/// `ctx` must be null or point to the dormant owner-thread [`Context`].
+unsafe fn deopt_resume_outcome(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -4011,9 +4079,12 @@ fn deopt_resume_outcome(
 
 /// Non-OK statuses of a direct handler-free native call, routed through the
 /// same machinery `invoke_native` would apply — out of the hot path.
+///
+/// # Safety
+/// `ctx` must point to the dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-pub(crate) fn direct_call_cold(
+pub(crate) unsafe fn direct_call_cold(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -4056,20 +4127,20 @@ pub(crate) fn direct_call_cold(
             stash_pending_flow(flow);
             return NativeCallOutcome::FlowStashed;
         }
-        return dispatch_raw_signal(ctx, flow);
+        return unsafe { dispatch_raw_signal(ctx, flow) };
     }
     if status == STATUS_DEOPT_AT {
         // Precise deopt: no bind/cond frames exist on the direct path (the
         // eligibility gate excludes them).
-        return match leaf.deopt_at_outcome(ctx as *mut u8, None, None) {
-            NativeRun::DeoptAt(resume) => {
+        return match unsafe { leaf.deopt_at_outcome(ctx as *mut u8, None, None) } {
+            NativeRun::DeoptAt(resume) => unsafe {
                 deopt_resume_outcome(ctx, func, func_value, leaf, *resume)
-            }
+            },
             // deopt_at_outcome only degrades to plain Deopt with a null vmctx.
             NativeRun::Signal => {
                 let flow = take_pending_flow()
                     .expect("STATUS_SIGNAL from compiled code implies a stashed Flow");
-                dispatch_raw_signal(ctx, flow)
+                unsafe { dispatch_raw_signal(ctx, flow) }
             }
             _ => NativeCallOutcome::Fallback,
         };
@@ -4078,7 +4149,7 @@ pub(crate) fn direct_call_cold(
     // (the same defensive rule invoke_native applies).
     leaf.obs.note_deopt_rerun();
     leaf.assert_rerunnable();
-    super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun);
+    unsafe { super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun) };
     NativeCallOutcome::Fallback
 }
 
@@ -4088,9 +4159,12 @@ pub(crate) fn direct_call_cold(
 /// caller's argument slot are live. Taking the flow first frees the pending
 /// slot for nested Lisp. The native runner supplies its mutator's Context;
 /// no Lisp state is shared or cached here.
+///
+/// # Safety
+/// `ctx` must point to the dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-fn dispatch_raw_signal(ctx: *mut Context, flow: Flow) -> NativeCallOutcome {
+unsafe fn dispatch_raw_signal(ctx: *mut Context, flow: Flow) -> NativeCallOutcome {
     // SAFETY: the native call's dormant seam Context, as in the runner.
     // SAFETY (owner chain): (b) fails: the incoming raw ctx is shadowed; dispatch_signal_flow_cold
     // borrows this current owner. No cache closure or later call carries an older ctx pointer, and
@@ -4209,7 +4283,9 @@ pub(crate) fn native_run_counters() -> (u64, u64, u64, u64) {
     )
 }
 
-fn finish_native_run(
+/// # Safety
+/// `ctx` must be null or point to the dormant owner-thread [`Context`].
+unsafe fn finish_native_run(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
@@ -4221,7 +4297,9 @@ fn finish_native_run(
     match outcome {
         NativeRun::Ok(bits) => Ok(Some(bits)),
         NativeRun::Deopt => {
-            super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun);
+            unsafe {
+                super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun)
+            };
             Ok(None)
         }
         NativeRun::DeoptAt(resume) => {
@@ -4298,8 +4376,11 @@ pub(crate) fn install_leaf_for_test(
 /// Prepare an entry through its real front/backend protocol without executing
 /// the body. Native-observation tests call this at explicit fixture boundaries;
 /// pending/cancellation tests use the production seam directly.
+///
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
+pub(crate) unsafe fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
     use std::time::Duration;
     sync_cache_to_current_heap().expect("serial jit grace");
     let id = func.jit_runtime().compiled_id_or_assign();
@@ -4311,7 +4392,7 @@ pub(crate) fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction)
             // owner, from which obarray is reborrowed. The later raw ctx use is the read-only
             // CompileEnvScope::enter; compilation gets typed obarray and no native body runs.
             let obarray = unsafe { ctx.as_ref() }.map(|ctx| &*ctx.obarray);
-            let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+            let _vars = unsafe { super::compile::inline_vars::CompileEnvScope::enter(ctx) };
             let entry = compile_cache_entry(
                 &mut cache,
                 id,
@@ -4354,8 +4435,11 @@ pub(crate) fn prepare_entry_for_test(ctx: *mut Context, func: &ByteCodeFunction)
 
 /// Compile/await OSR without transferring control into it: observations retain
 /// their original counters, side effects, stack snapshot and binding depths.
+///
+/// # Safety
+/// `ctx` must point to a live, dormant owner-thread [`Context`].
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunction, pc: usize) {
+pub(crate) unsafe fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunction, pc: usize) {
     use std::time::Duration;
     assert!(
         !ctx.is_null(),
@@ -4363,13 +4447,16 @@ pub(crate) fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunction, p
     );
     sync_cache_to_current_heap().expect("serial jit grace");
     let id = func.jit_runtime().compiled_id_or_assign();
-    let _ = osr_lookup(ctx, func, pc, id);
+    let _ = unsafe { osr_lookup(ctx, func, pc, id) };
     assert!(
         super::bg::quiesce_for_test(Duration::from_secs(60)),
         "OSR backend readiness timed out"
     );
     assert!(
-        matches!(osr_lookup(ctx, func, pc, id), OsrLookup::Entry(_)),
+        matches!(
+            unsafe { osr_lookup(ctx, func, pc, id) },
+            OsrLookup::Entry(_)
+        ),
         "OSR job must finish"
     );
 }
@@ -4377,8 +4464,11 @@ pub(crate) fn prepare_osr_for_test(ctx: *mut Context, func: &ByteCodeFunction, p
 /// Observe an admitted upgrade without executing the retained T1 while its
 /// backend is pending. The production probe keeps budget, policy and hold
 /// decisions intact; this fixture helper does not promise an upgrade.
+///
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cfg(test)]
-pub(crate) fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
+pub(crate) unsafe fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCodeFunction) {
     use std::time::Duration;
     sync_cache_to_current_heap().expect("serial jit grace");
     let Some(id) = func.jit_runtime().compiled_id() else {
@@ -4386,7 +4476,7 @@ pub(crate) fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCodeFunctio
     };
     if super::compile::jit_tier_upgrade_enabled() {
         COMPILED.with(|cache| {
-            probe_tier2_upgrade(&mut cache.borrow_mut(), id, func, ctx);
+            unsafe { probe_tier2_upgrade(&mut cache.borrow_mut(), id, func, ctx) };
         });
         assert!(
             super::bg::quiesce_for_test(Duration::from_secs(60)),

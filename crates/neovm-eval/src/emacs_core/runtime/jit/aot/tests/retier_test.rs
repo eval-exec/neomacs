@@ -476,7 +476,7 @@ fn aot_retier_pending_upgrade_serves_and_roots_old_until_publication() {
     }
     assert_eq!(cache::cache_entry_kind_for_test(f.id()), "upgrading");
     let data = f.data();
-    assert!(cache::resolve_compiled_leaf_ptr(&mut f.ctx, data).is_none());
+    assert!(unsafe { cache::resolve_compiled_leaf_ptr(&mut f.ctx, data) }.is_none());
     let mut roots = Vec::new();
     cache::collect_jit_reloc_gc_roots(&mut roots);
     assert!(

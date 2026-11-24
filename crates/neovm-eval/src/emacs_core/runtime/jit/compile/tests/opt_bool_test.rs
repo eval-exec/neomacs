@@ -135,7 +135,7 @@ fn reference(ctx: &mut Context, plan: &ir::Func, args: &[Value]) -> Value {
 }
 
 fn native(ctx: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
-    let NativeRun::Ok(bits) = leaf.call(ctx as *mut Context as *mut u8, args) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx as *mut Context as *mut u8, args) }) else {
         panic!("native must return")
     };
     unsafe {
@@ -1000,7 +1000,8 @@ fn opt_bool_native_cold_guard_materializes_complete_frame_after_visible_store() 
         let eval::Outcome::Deopt(expected) = run.outcome else {
             panic!("reference-only numeric guard must deopt before the opaque comparison")
         };
-        let NativeRun::DeoptAt(actual) = leaf.call(&mut ctx as *mut Context as *mut u8, &args)
+        let NativeRun::DeoptAt(actual) =
+            (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
         else {
             panic!("native failed guard must preserve its full frame")
         };
@@ -1221,7 +1222,7 @@ fn opt_bool_native_quit_at_255_and_510_matches_tier0_flow_and_cadence() {
         let expected = expected.as_signal().expect("Tier-0 quit signal");
         reset_bytecode_branch_poll_count();
         assert_eq!(
-            leaf.call(&mut ctx as *mut Context as *mut u8, &args),
+            unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) },
             NativeRun::Signal
         );
         ctx.set_quit_flag_value(Value::NIL);

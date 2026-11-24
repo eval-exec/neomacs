@@ -271,11 +271,13 @@ fn native(
     leaf: &CompiledLeaf,
     args: &[Value],
 ) -> Value {
-    match leaf.call_consts(
-        ctx as *mut Context as *mut u8,
-        source.jit_constant_base(),
-        args,
-    ) {
+    match unsafe {
+        leaf.call_consts(
+            ctx as *mut Context as *mut u8,
+            source.jit_constant_base(),
+            args,
+        )
+    } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -1005,11 +1007,13 @@ fn opt_sink_native_virtual_full_frame_after_visible_store() {
     let leaf = lower(src, &selected, &roots);
     ctx.obarray
         .set_symbol_value("t34-o36-watch-count", Value::make_int(0));
-    let NativeRun::DeoptAt(resume) = leaf.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        src.jit_constant_base(),
-        &args,
-    ) else {
+    let NativeRun::DeoptAt(resume) = (unsafe {
+        leaf.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            src.jit_constant_base(),
+            &args,
+        )
+    }) else {
         panic!("explicit native guard must reconstruct full original frame");
     };
     roots.add(&resume.stack);
@@ -1053,11 +1057,13 @@ fn opt_sink_native_virtual_full_frame_after_visible_store() {
         flow_observation(&reference_error),
         flow_observation(&expected_error)
     );
-    let NativeRun::DeoptAt(resume) = leaf.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        src.jit_constant_base(),
-        &error_args,
-    ) else {
+    let NativeRun::DeoptAt(resume) = (unsafe {
+        leaf.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            src.jit_constant_base(),
+            &error_args,
+        )
+    }) else {
         panic!("wrong-type path must retain explicit original frame");
     };
     roots.add(&resume.stack);
@@ -1116,7 +1122,7 @@ fn native_flow(
     args: &[Value],
     roots: &Roots,
 ) -> Flow {
-    match leaf.call(ctx as *mut Context as *mut u8, args) {
+    match unsafe { leaf.call(ctx as *mut Context as *mut u8, args) } {
         NativeRun::Signal => take_pending_flow().expect("native pending quit"),
         NativeRun::DeoptAt(resume) => {
             roots.add(&resume.stack);

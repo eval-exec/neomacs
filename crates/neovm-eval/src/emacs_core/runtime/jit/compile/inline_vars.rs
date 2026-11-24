@@ -135,10 +135,13 @@ static_assertions::assert_not_impl_any!(CompileEnvScope: Send, Sync);
 
 impl CompileEnvScope {
     /// Enter CTX's environment (nothing when CTX is null).
-    /// CTX must stay alive and its obarray and mask unmoved while the scope
-    /// lives: the dormant seam-provided context of a compile.
+    ///
+    /// # Safety
+    /// `ctx` must be null or point to a live, dormant owner-thread [`Context`]
+    /// whose obarray and runtime projection mask stay alive and unmoved for the
+    /// lifetime of the returned [`CompileEnvScope`].
     #[doc(hidden)]
-    pub fn enter(ctx: *const Context) -> Self {
+    pub unsafe fn enter(ctx: *const Context) -> Self {
         let state = if ctx.is_null() {
             CompileEnvState::Absent
         } else {
@@ -732,7 +735,7 @@ pub(crate) fn reset_inline_var_sites() {
 /// cache.
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) fn with_compile_env_for_test<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
-    let _scope = CompileEnvScope::enter(ctx);
+    let _scope = unsafe { CompileEnvScope::enter(ctx) };
     f()
 }
 

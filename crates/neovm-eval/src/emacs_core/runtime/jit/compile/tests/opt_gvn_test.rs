@@ -187,7 +187,7 @@ fn reference(ctx: &mut Context, plan: &ir::Func, args: &[Value]) -> Value {
     value.to_value()
 }
 fn native(ctx: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
-    match leaf.call(ctx as *mut Context as *mut u8, args) {
+    match unsafe { leaf.call(ctx as *mut Context as *mut u8, args) } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -813,7 +813,7 @@ fn opt_gvn_native_errors_nil_and_identity_keep_gnu_observations() {
                     };
                     ctx.obarray.set_symbol_value("t34-o34-side", Value::NIL);
                     let NativeRun::DeoptAt(resume) =
-                        leaf.call(&mut ctx as *mut Context as *mut u8, &args)
+                        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
                     else {
                         panic!("precise native guard failure after visible store")
                     };
@@ -1025,7 +1025,8 @@ fn opt_gvn_native_typed_list_reads_preserve_nil_and_cons_identity() {
         let eval::Outcome::Deopt(snapshot) = run.outcome else {
             panic!("non-list still fails the original source guard")
         };
-        let NativeRun::DeoptAt(resume) = candidate.call(&mut ctx as *mut Context as *mut u8, &args)
+        let NativeRun::DeoptAt(resume) =
+            (unsafe { candidate.call(&mut ctx as *mut Context as *mut u8, &args) })
         else {
             panic!("typed LIST load cannot absorb non-list guard failure")
         };
@@ -1351,7 +1352,7 @@ fn opt_gvn_native_adjacent_list_accessor_coemits_original_guard_and_clif() {
                     };
                     ctx.obarray.set_symbol_value("t34-o34-side", Value::NIL);
                     let NativeRun::DeoptAt(frame) =
-                        leaf.call(&mut ctx as *mut Context as *mut u8, &args)
+                        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
                     else {
                         panic!("nonlist must fail the actual accessor's three-way guard")
                     };
@@ -1410,14 +1411,14 @@ fn opt_gvn_native_adjacent_list_accessor_coemits_original_guard_and_clif() {
                     let args = [bad];
                     let _args = Roots::new(&args);
                     let expected = tier0(&mut ctx, &source, &args).unwrap();
-                    let NativeRun::DeoptAt(old) =
+                    let NativeRun::DeoptAt(old) = (unsafe {
                         forced_baseline.call(&mut ctx as *mut Context as *mut u8, &args)
-                    else {
+                    }) else {
                         panic!("baseline forced accessor guard exits")
                     };
-                    let NativeRun::DeoptAt(new) =
+                    let NativeRun::DeoptAt(new) = (unsafe {
                         forced_candidate.call(&mut ctx as *mut Context as *mut u8, &args)
-                    else {
+                    }) else {
                         panic!("deferred typed guard remains FORCE_DEOPT executable")
                     };
                     assert_eq!(new.pc, old.pc);

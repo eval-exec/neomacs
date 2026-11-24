@@ -90,7 +90,7 @@ fn intrinsic_loop() -> ByteCodeFunction {
 /// back-edge poll (the arith sites inline; no shim call remains).
 fn run_osr_loop_head(context: &mut Context, source: Value, n: i64) -> Option<NativeRun> {
     let source_data = source.get_bytecode_data().unwrap();
-    cache::prepare_osr_for_test(context, source_data, 2);
+    unsafe { cache::prepare_osr_for_test(context, source_data, 2) };
     // SAFETY: `context` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
     unsafe {
         cache::try_run_osr(
@@ -291,7 +291,7 @@ fn green_intrinsic_loop_leaf_is_sim_identical() {
         let source = Value::make_bytecode(intrinsic_loop());
         let source_data = source.get_bytecode_data().unwrap();
         let code = compile_pipeline_tests::captured_code(|| {
-            cache::prepare_entry_for_test(&mut context, source_data);
+            unsafe { cache::prepare_entry_for_test(&mut context, source_data) };
         });
         if mode == ThreadingMode::Green {
             context.green_teardown();
@@ -348,7 +348,7 @@ fn wc_loop_carries_only_the_polls_release_check() {
     let source_data = source.get_bytecode_data().unwrap();
     let before = release_revalidation_emitted();
     let code = compile_pipeline_tests::captured_code(|| {
-        cache::prepare_entry_for_test(&mut context, source_data);
+        unsafe { cache::prepare_entry_for_test(&mut context, source_data) };
     });
     assert_eq!(code.len(), 1, "one entry leaf: {code:#?}");
     assert_eq!(
@@ -378,7 +378,7 @@ fn helper_loop_carries_exactly_the_return_side_checks() {
     let source_data = source.get_bytecode_data().unwrap();
     let before = release_revalidation_emitted();
     let code = compile_pipeline_tests::captured_code(|| {
-        cache::prepare_entry_for_test(&mut context, source_data);
+        unsafe { cache::prepare_entry_for_test(&mut context, source_data) };
     });
     assert_eq!(code.len(), 1, "one entry leaf: {code:#?}");
     assert_eq!(
@@ -545,7 +545,7 @@ fn green_inlined_function_entry_still_guards() {
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).unwrap();
     assert_eq!(leaf.tier, leaf::LeafTier::Mir);
     let ctx = &mut ev as *mut Context as *mut u8;
-    let result = leaf.call(ctx, &[Value::make_int(5)]);
+    let result = unsafe { leaf.call(ctx, &[Value::make_int(5)]) };
     let NativeRun::DeoptAt(frame) = &result else {
         panic!("the redefined inlined callee must deopt: {result:?}")
     };

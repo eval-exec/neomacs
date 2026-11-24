@@ -83,11 +83,13 @@ fn opt_sink_numeric_resolved_float_keeps_original_guards_and_frames_without_dupl
         roots.add(&bad_first);
         let expected = tier0(&mut ctx, &f, &bad_first);
         for leaf in [&baseline, &selected] {
-            let NativeRun::DeoptAt(exit) = leaf.call_consts(
-                &mut ctx as *mut Context as *mut u8,
-                f.constants().as_ptr(),
-                &bad_first,
-            ) else {
+            let NativeRun::DeoptAt(exit) = (unsafe {
+                leaf.call_consts(
+                    &mut ctx as *mut Context as *mut u8,
+                    f.constants().as_ptr(),
+                    &bad_first,
+                )
+            }) else {
                 panic!("original pc2 Borrow type guard must remain");
             };
             roots.add(&exit.stack);
@@ -111,11 +113,13 @@ fn opt_sink_numeric_resolved_float_keeps_original_guards_and_frames_without_dupl
         let product = tier0(&mut ctx, &prefix, &bad_late[..1]).unwrap();
         roots.add(&[product]);
         for leaf in [&baseline, &selected] {
-            let NativeRun::DeoptAt(exit) = leaf.call_consts(
-                &mut ctx as *mut Context as *mut u8,
-                f.constants().as_ptr(),
-                &bad_late,
-            ) else {
+            let NativeRun::DeoptAt(exit) = (unsafe {
+                leaf.call_consts(
+                    &mut ctx as *mut Context as *mut u8,
+                    f.constants().as_ptr(),
+                    &bad_late,
+                )
+            }) else {
                 panic!("original pc5 unknown-Borrow guard must remain");
             };
             roots.add(&exit.stack);
@@ -178,11 +182,13 @@ fn opt_sink_numeric_resolved_float_keeps_original_guards_and_frames_without_dupl
     ];
     check_semantics(&mut ctx, &mixed, &baseline, &cases, &roots);
     check_semantics(&mut ctx, &mixed, &selected, &cases, &roots);
-    let NativeRun::DeoptAt(exit) = forced.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        mixed.constants().as_ptr(),
-        &cases[0],
-    ) else {
+    let NativeRun::DeoptAt(exit) = (unsafe {
+        forced.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            mixed.constants().as_ptr(),
+            &cases[0],
+        )
+    }) else {
         panic!("force hook still applies to actual checked both-fix Add");
     };
     roots.add(&exit.stack);
@@ -195,11 +201,13 @@ fn opt_sink_numeric_resolved_float_keeps_original_guards_and_frames_without_dupl
         observe(&resume(&mut ctx, &mixed, &exit)),
         observe(&tier0(&mut ctx, &mixed, &cases[0]))
     );
-    let NativeRun::DeoptAt(exit) = selected.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        mixed.constants().as_ptr(),
-        &cases[1],
-    ) else {
+    let NativeRun::DeoptAt(exit) = (unsafe {
+        selected.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            mixed.constants().as_ptr(),
+            &cases[1],
+        )
+    }) else {
         panic!("unknown-kind both-fix Mul overflow must retain exact exit");
     };
     roots.add(&exit.stack);

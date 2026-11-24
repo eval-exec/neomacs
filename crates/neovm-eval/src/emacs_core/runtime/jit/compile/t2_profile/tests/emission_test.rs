@@ -142,19 +142,21 @@ fn tier2_hof_profiler_accepts_dynamic_subrs_and_closes_its_window() {
     let ctx_ptr = (&mut ctx as *mut Context).cast::<u8>();
     let obs_ptr = std::ptr::from_ref(&*obs);
 
-    credit_generic(
-        ctx_ptr,
-        Value::from_sym_id(mapc).bits() as i64,
-        args.as_ptr(),
-        2,
-        obs_ptr,
-    );
+    unsafe {
+        credit_generic(
+            ctx_ptr,
+            Value::from_sym_id(mapc).bits() as i64,
+            args.as_ptr(),
+            2,
+            obs_ptr,
+        )
+    };
     assert_eq!(
         obs.t2.budget.get(),
         98,
         "symbol mapping callee receives len/64"
     );
-    credit_generic(ctx_ptr, subr.bits() as i64, args.as_ptr(), 2, obs_ptr);
+    unsafe { credit_generic(ctx_ptr, subr.bits() as i64, args.as_ptr(), 2, obs_ptr) };
     assert_eq!(
         obs.t2.budget.get(),
         96,
@@ -162,13 +164,15 @@ fn tier2_hof_profiler_accepts_dynamic_subrs_and_closes_its_window() {
     );
 
     ctx.obarray.set_symbol_function("mapc", Value::NIL);
-    credit_generic(
-        ctx_ptr,
-        Value::from_sym_id(mapc).bits() as i64,
-        args.as_ptr(),
-        2,
-        obs_ptr,
-    );
+    unsafe {
+        credit_generic(
+            ctx_ptr,
+            Value::from_sym_id(mapc).bits() as i64,
+            args.as_ptr(),
+            2,
+            obs_ptr,
+        )
+    };
     assert_eq!(
         obs.t2.budget.get(),
         96,
@@ -177,7 +181,7 @@ fn tier2_hof_profiler_accepts_dynamic_subrs_and_closes_its_window() {
 
     obs.t2.state.set(T2State::Kept);
     obs.t2.budget.set(DISARMED);
-    credit_generic(ctx_ptr, subr.bits() as i64, args.as_ptr(), 2, obs_ptr);
+    unsafe { credit_generic(ctx_ptr, subr.bits() as i64, args.as_ptr(), 2, obs_ptr) };
     assert_eq!(
         obs.t2.budget.get(),
         DISARMED,

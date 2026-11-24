@@ -148,11 +148,13 @@ fn independent(
     assert_eq!(pair(reference), expected);
     assert_eq!(ctx.gc_count - before, 1);
     let before = ctx.gc_count;
-    let outcome = leaf.call_consts(
-        ctx as *mut Context as *mut u8,
-        f.constants().as_ptr(),
-        &[flag],
-    );
+    let outcome = unsafe {
+        leaf.call_consts(
+            ctx as *mut Context as *mut u8,
+            f.constants().as_ptr(),
+            &[flag],
+        )
+    };
     let NativeRun::Ok(bits) = outcome else {
         panic!("actual native source success required: {outcome:?}")
     };

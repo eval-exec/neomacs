@@ -184,11 +184,13 @@ fn assert_native_parity(ctx: &mut Context, f: &ByteCodeFunction, leaf: &Compiled
             vm.force_interpreter_only_for_test();
             vm.execute(f, args.to_vec()).expect("Tier0 joined call")
         };
-        let actual = match leaf.call_consts(
-            ctx as *mut Context as *mut u8,
-            f.constants().as_ptr(),
-            &args,
-        ) {
+        let actual = match unsafe {
+            leaf.call_consts(
+                ctx as *mut Context as *mut u8,
+                f.constants().as_ptr(),
+                &args,
+            )
+        } {
             NativeRun::Ok(bits) => unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
                 Value::from_bits(bits)

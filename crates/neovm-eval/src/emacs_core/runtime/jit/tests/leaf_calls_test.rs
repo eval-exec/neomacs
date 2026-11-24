@@ -63,7 +63,7 @@ fn interpret(eval: &mut Context, f: &ByteCodeFunction, args: Vec<Value>) -> Stri
 }
 
 fn native(ctx_ptr: *mut u8, leaf: &CompiledLeaf, args: &[Value], what: &str) -> String {
-    match leaf.call(ctx_ptr, args) {
+    match unsafe { leaf.call(ctx_ptr, args) } {
         NativeRun::Ok(bits) => print_value(&unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -432,7 +432,7 @@ fn leaf_signals_are_caught_by_a_leaf_local_handler() {
             want.starts_with("(caught (wrong-type-argument"),
             "{op:?}: {want}"
         );
-        match leaf.call(ctx_ptr, &[a, b]) {
+        match unsafe { leaf.call(ctx_ptr, &[a, b]) } {
             NativeRun::Ok(bits) => {
                 assert_eq!(
                     print_value(&unsafe {
@@ -482,7 +482,7 @@ fn leaf_site_signal_edge_keeps_the_residual_alive() {
     let calls0 = leaf_trampoline_calls(LeafId::Nth);
     for _ in 0..3 {
         let l = eval.eval_str("(cons 'a 'b)").expect("improper");
-        match leaf.call(ctx_ptr, &[Value::fixnum(3), l]) {
+        match unsafe { leaf.call(ctx_ptr, &[Value::fixnum(3), l]) } {
             NativeRun::Ok(bits) => {
                 let h = unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -864,7 +864,7 @@ fn a_bcall_leaf_signal_edge_keeps_the_residual_alive() {
     .expect("hook");
     let runs0 = leaf_trampoline_calls(LeafId::Gethash);
     for _ in 0..3 {
-        match leaf.call(ctx_ptr, &[Value::fixnum(1), Value::fixnum(5)]) {
+        match unsafe { leaf.call(ctx_ptr, &[Value::fixnum(1), Value::fixnum(5)]) } {
             NativeRun::Ok(bits) => {
                 let r = unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */

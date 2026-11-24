@@ -174,7 +174,7 @@ fn shims_since(before: Shims) -> Shims {
 fn run(ev: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> (String, Shims) {
     let before = shims();
     let ctx = ev as *mut Context as *mut u8;
-    let answer = match leaf.call(ctx, args) {
+    let answer = match unsafe { leaf.call(ctx, args) } {
         NativeRun::Ok(bits) => print_value(&unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)

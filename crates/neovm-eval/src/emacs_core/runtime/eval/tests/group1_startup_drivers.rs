@@ -484,7 +484,7 @@ pub(crate) fn opt_switch_hoist_call_mutation_for_test(ctx: &mut Context) -> (boo
     .expect("verified typed integer IR has native support");
     assert_eq!(leaf.selected_tier(), compile::opt_census::SelectedTier::Opt);
     let args = [Value::symbol("a"), Value::fixnum(300)];
-    let actual = match leaf.call(&mut *ctx as *mut Context as *mut u8, &args) {
+    let actual = match unsafe { leaf.call(&mut *ctx as *mut Context as *mut u8, &args) } {
         NativeRun::Ok(bits) => {
             // SAFETY: these bits are the completed native result of `leaf.call`.
             unsafe { Value::from_bits(bits) }
@@ -601,7 +601,7 @@ pub(crate) fn lists48_osr_aset_advice_obs_for_test(
     push_scratch_gc_root(function_value);
     let normal_ok = unsafe { try_run_compiled(ctx, &source, function_value, &args) }.unwrap()
         == Some(alias.bits());
-    let normal = cache::resolve_compiled_leaf_ptr(ctx, &source).unwrap();
+    let normal = unsafe { cache::resolve_compiled_leaf_ptr(ctx, &source) }.unwrap();
     let normal_tier = unsafe { &*normal }.selected_tier().name();
     let normal_vector = vector.as_vector_data().unwrap()[0].bits() == alias.bits();
     let normal_pair = pair.cons_car() == Value::make_int(3);

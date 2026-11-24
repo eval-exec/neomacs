@@ -2737,13 +2737,15 @@ impl Context {
                     // reallocate `bc_buf` under a pointer into it, this vector
                     // is a local that nothing appends to for the duration of
                     // the call.
-                    cache::run_armed_leaf(
-                        ctx_ptr,
-                        bc_data,
-                        func_value,
-                        leaf,
-                        args.as_ptr().cast::<i64>(),
-                    )
+                    unsafe {
+                        cache::run_armed_leaf(
+                            ctx_ptr,
+                            bc_data,
+                            func_value,
+                            leaf,
+                            args.as_ptr().cast::<i64>(),
+                        )
+                    }
                 } else {
                     // Normalize to the leaf's ABI exactly as `call_consts`
                     // does: nil-padded for omitted `&optional`, the tail
@@ -2763,7 +2765,9 @@ impl Context {
                         };
                         bits.push(rest.bits() as i64);
                     }
-                    cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
+                    unsafe {
+                        cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
+                    }
                 };
                 restore_scratch_gc_roots(saved_roots);
                 return match native {
@@ -2833,7 +2837,7 @@ impl Context {
                 // cache probe above — the same hand-off
                 // `dispatch_bytecode_call_from_stack` makes.
                 if matches!(native, Ok(Some(_))) {
-                    cache::arm_leaf_slot(ctx_ptr, bc_data);
+                    unsafe { cache::arm_leaf_slot(ctx_ptr, bc_data) };
                 }
                 restore_scratch_gc_roots(saved_roots);
                 match native {
@@ -3205,13 +3209,15 @@ impl Context {
             let native = if !has_rest && nonrest == 1 {
                 // `Value` is `#[repr(transparent)]` over a word: the local IS
                 // a one-element argument array in the leaf's ABI.
-                cache::run_armed_leaf(
-                    ctx_ptr,
-                    bc_data,
-                    func_value,
-                    leaf,
-                    std::ptr::from_ref(&arg0).cast::<i64>(),
-                )
+                unsafe {
+                    cache::run_armed_leaf(
+                        ctx_ptr,
+                        bc_data,
+                        func_value,
+                        leaf,
+                        std::ptr::from_ref(&arg0).cast::<i64>(),
+                    )
+                }
             } else {
                 let nil = Value::NIL.bits() as i64;
                 let fixed = nonrest.min(1);
@@ -3228,7 +3234,7 @@ impl Context {
                     };
                     bits.push(rest.bits() as i64);
                 }
-                cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
+                unsafe { cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr()) }
             };
             return match native {
                 Ok(Some(b)) => Ok(unsafe {
@@ -3372,13 +3378,15 @@ impl Context {
             let ctx_ptr = self as *mut Context;
             let saved_roots = save_scratch_gc_roots();
             let native = if !has_rest && nonrest == 2 {
-                cache::run_armed_leaf(
-                    ctx_ptr,
-                    bc_data,
-                    function,
-                    leaf,
-                    args.as_ptr().cast::<i64>(),
-                )
+                unsafe {
+                    cache::run_armed_leaf(
+                        ctx_ptr,
+                        bc_data,
+                        function,
+                        leaf,
+                        args.as_ptr().cast::<i64>(),
+                    )
+                }
             } else {
                 let fixed = nonrest.min(2);
                 let nil = Value::NIL.bits() as i64;
@@ -3395,7 +3403,7 @@ impl Context {
                     };
                     bits.push(rest.bits() as i64);
                 }
-                cache::run_armed_leaf(ctx_ptr, bc_data, function, leaf, bits.as_ptr())
+                unsafe { cache::run_armed_leaf(ctx_ptr, bc_data, function, leaf, bits.as_ptr()) }
             };
             return match native {
                 Ok(Some(bits)) => Ok(unsafe {
@@ -3503,8 +3511,9 @@ impl Context {
                     };
                     bits[nonrest] = rest.bits() as i64;
                 }
-                let native =
-                    cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr());
+                let native = unsafe {
+                    cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
+                };
                 restore_scratch_gc_roots(saved_roots);
                 return Self::stack_call_dispatch_from_native(native);
             }
@@ -3527,7 +3536,7 @@ impl Context {
                         )
                     };
                     if matches!(native, Ok(Some(_))) {
-                        cache::arm_leaf_slot(ctx_ptr, bc_data);
+                        unsafe { cache::arm_leaf_slot(ctx_ptr, bc_data) };
                     }
                     restore_scratch_gc_roots(saved_roots);
                     Self::stack_call_dispatch_from_native(native)

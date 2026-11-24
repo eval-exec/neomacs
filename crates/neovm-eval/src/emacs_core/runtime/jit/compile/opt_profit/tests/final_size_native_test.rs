@@ -189,11 +189,11 @@ fn opt_profit_final_fused_size_uses_one_legacy_baseline_and_preserves_native_res
         let result = Value::make_int(((n + 59) / 60) * 60);
         let expected = NativeRun::Ok(result.bits());
         assert_eq!(
-            bounded.call(&mut context as *mut Context as *mut u8, &args),
+            unsafe { bounded.call(&mut context as *mut Context as *mut u8, &args) },
             expected
         );
         assert_eq!(
-            legacy.call(&mut context as *mut Context as *mut u8, &args),
+            unsafe { legacy.call(&mut context as *mut Context as *mut u8, &args) },
             expected
         );
         if n > 0 {

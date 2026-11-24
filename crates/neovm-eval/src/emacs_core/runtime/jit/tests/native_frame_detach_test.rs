@@ -39,7 +39,7 @@ fn function(nargs: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
 /// caller's spec slot; the first observed call still takes the arming route.
 fn prepare_native_entry(ev: &mut Context, function: Value) {
     let bc = function.get_bytecode_data().expect("bytecode fixture");
-    crate::emacs_core::jit::cache::prepare_entry_for_test(ev, &bc);
+    unsafe { crate::emacs_core::jit::cache::prepare_entry_for_test(ev, &bc) };
     let id = bc.jit_runtime().compiled_id().expect("compile requested");
     assert_eq!(
         crate::emacs_core::jit::cache::cache_entry_kind_for_test(id),
@@ -197,7 +197,11 @@ fn contained_panic_detaches_native_frames_before_the_caller_exits() {
                 let case = format!("{nargs} arguments, {route:?}");
                 let spec0 = ev.specpdl.len();
                 let fast0 = SPEC_SHIM_FAST_COUNT.load(Ordering::Relaxed);
-                assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal, "{case}");
+                assert_eq!(
+                    unsafe { leaf.call(ctx_ptr, &[]) },
+                    NativeRun::Signal,
+                    "{case}"
+                );
                 if route != Route::Arming {
                     assert!(
                         SPEC_SHIM_FAST_COUNT.load(Ordering::Relaxed) > fast0,
@@ -302,7 +306,11 @@ fn a_leaked_cleanup_after_a_contained_panic_reads_only_detached_frames() {
         for round in 0..2 {
             let case = format!("{nargs} arguments, round {round}");
             let spec0 = ev.specpdl.len();
-            assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal, "{case}");
+            assert_eq!(
+                unsafe { leaf.call(ctx_ptr, &[]) },
+                NativeRun::Signal,
+                "{case}"
+            );
             let flow = take_pending_flow().expect("the contained panic stashes a flow");
             assert!(
                 panic_message(&flow).contains("leak-boom"),

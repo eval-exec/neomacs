@@ -50,7 +50,7 @@ fn compile(ev: &Context, f: &ByteCodeFunction) -> CompiledLeaf {
 }
 
 fn run(ev: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
-    match leaf.call(ev as *mut Context as *mut u8, args) {
+    match unsafe { leaf.call(ev as *mut Context as *mut u8, args) } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)

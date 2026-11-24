@@ -356,7 +356,9 @@ impl DeoptCause {
 /// region deopt writes its call-site pc, MIR insts carry their original pc
 /// (or the call-site pc once spliced), and `stack` is the pre-op stack, so
 /// an arithmetic op's operands are its top `nargs` slots.
-pub(crate) fn classify(
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
+pub(crate) unsafe fn classify(
     ctx: *const Context,
     ops: &[Op],
     leaf: &CompiledLeaf,
@@ -423,25 +425,30 @@ pub(crate) fn classify(
 /// heap or reach a safepoint, because the resume stack is still unrooted.
 /// It touches only tag bits, relaxed atomics, `Cell`/`RefCell` fields, Rust
 /// collections and `tracing`.
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-pub(crate) fn note_deopt(
+pub(crate) unsafe fn note_deopt(
     ctx: *const Context,
     func: &ByteCodeFunction,
     leaf: &CompiledLeaf,
     origin: LeafOrigin<'_>,
     event: DeoptEvent<'_>,
 ) -> ReoptVerdict {
-    note_deopt_for_source(ctx, func, func, leaf, origin, event, None)
+    unsafe { note_deopt_for_source(ctx, func, func, leaf, origin, event, None) }
 }
 
 /// Attribute a virtual-frame exit to its innermost source while retiring the
 /// physical caller's leaf. Metadata and counters belong to that leaf; feedback
 /// belongs to the callee's original pc. This cold operation allocates no Lisp
 /// objects and observes only the current mutator's evaluator/cache state.
+///
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-pub(crate) fn note_deopt_chain(
+pub(crate) unsafe fn note_deopt_chain(
     ctx: *const Context,
     physical: &ByteCodeFunction,
     inner: &ByteCodeFunction,
@@ -450,12 +457,14 @@ pub(crate) fn note_deopt_chain(
     physical_pc: usize,
     event: DeoptEvent<'_>,
 ) -> ReoptVerdict {
-    note_deopt_for_source(ctx, physical, inner, leaf, origin, event, Some(physical_pc))
+    unsafe { note_deopt_for_source(ctx, physical, inner, leaf, origin, event, Some(physical_pc)) }
 }
 
+/// # Safety
+/// `ctx` must be null or point to a live, dormant owner-thread [`Context`].
 #[cold]
 #[inline(never)]
-fn note_deopt_for_source(
+unsafe fn note_deopt_for_source(
     ctx: *const Context,
     physical: &ByteCodeFunction,
     func: &ByteCodeFunction,
@@ -483,7 +492,7 @@ fn note_deopt_for_source(
             } else {
                 origin
             };
-            classify(ctx, func.executable_ops(), leaf, classify_origin, pc, stack)
+            unsafe { classify(ctx, func.executable_ops(), leaf, classify_origin, pc, stack) }
         }
     };
     super::stats::record_deopt(cause, origin.is_osr());

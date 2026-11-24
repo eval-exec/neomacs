@@ -70,7 +70,7 @@ fn native_matches_interpreter(
     let interp = Vm::from_context(ev)
         .execute(f, vec![Value::make_int(arg)])
         .expect("interprets");
-    let native = leaf.call(ev as *mut Context as *mut u8, &[Value::make_int(arg)]);
+    let native = unsafe { leaf.call(ev as *mut Context as *mut u8, &[Value::make_int(arg)]) };
     assert_eq!(native, NativeRun::Ok(interp.bits()), "arg {arg}");
 }
 
@@ -163,7 +163,7 @@ fn jit_mir_reach_dead_named_let_under_forced_deopt() {
         neovm_eval::test_support::compiled_leaf_copy_for_test(&leaf).tier_name,
         "mir"
     );
-    match leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(7)]) {
+    match unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(7)]) } {
         NativeRun::Ok(bits) => assert_eq!(bits, Value::make_int(7).bits()),
         NativeRun::Deopt | NativeRun::DeoptAt(_) => {}
         other => panic!("unexpected {other:?}"),

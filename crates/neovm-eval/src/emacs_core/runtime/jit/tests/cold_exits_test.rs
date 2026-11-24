@@ -395,7 +395,7 @@ fn cold_exits_run_the_corpus_unchanged() {
         )
         .expect("compiles");
         force_cold_exits_for_test(None);
-        leaf.call(ev as *mut Context as *mut u8, args)
+        unsafe { leaf.call(ev as *mut Context as *mut u8, args) }
     };
     // Fresh objects differ in identity between two runs: compare printed.
     let describe = |run: crate::emacs_core::jit::compile::NativeRun| match run {

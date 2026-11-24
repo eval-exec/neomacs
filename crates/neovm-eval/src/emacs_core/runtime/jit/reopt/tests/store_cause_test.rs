@@ -44,30 +44,34 @@ fn assert_store_semantic(store: Op) {
             },
         ] {
             assert_eq!(
-                classify(
-                    std::ptr::null(),
-                    f.executable_ops(),
-                    leaf,
-                    origin,
-                    2,
-                    &stack
-                ),
+                unsafe {
+                    classify(
+                        std::ptr::null(),
+                        f.executable_ops(),
+                        leaf,
+                        origin,
+                        2,
+                        &stack,
+                    )
+                },
                 cause,
             );
             for _ in 0..3 {
                 leaf.obs.note_deopt_at(2);
                 assert_eq!(
-                    note_deopt(
-                        std::ptr::null(),
-                        &f,
-                        leaf,
-                        origin,
-                        DeoptEvent::Precise {
-                            pc: 2,
-                            stack: &stack,
-                            cause: None
-                        }
-                    ),
+                    unsafe {
+                        note_deopt(
+                            std::ptr::null(),
+                            &f,
+                            leaf,
+                            origin,
+                            DeoptEvent::Precise {
+                                pc: 2,
+                                stack: &stack,
+                                cause: None,
+                            },
+                        )
+                    },
                     ReoptVerdict::Kept,
                     "{cause:?} must not retire speculation at the one-event limit",
                 );

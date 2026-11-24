@@ -137,7 +137,7 @@ fn reference(ctx: &mut Context, plan: &ir::Func, args: &[Value]) -> Value {
 }
 
 fn native(ctx: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
-    let NativeRun::Ok(bits) = leaf.call(ctx as *mut Context as *mut u8, args) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx as *mut Context as *mut u8, args) }) else {
         panic!("native return")
     };
     unsafe {
@@ -201,7 +201,7 @@ fn opt_ir_lower_proven_cons_read_keeps_exact_failed_guard_frame() {
         assert_eq!(native(&mut ctx, &leaf, &[cell]), expected);
         for wrong in [Value::NIL, Value::fixnum(3)] {
             let NativeRun::DeoptAt(frame) =
-                leaf.call(&mut ctx as *mut Context as *mut u8, &[wrong])
+                (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[wrong]) })
             else {
                 panic!("failed CONS speculation must deopt")
             };
@@ -408,8 +408,8 @@ fn opt_ir_lower_numeric_truth_is_only_folded_with_bool_pass() {
         leaves.push(leaf);
     }
     for argument in [Value::fixnum(Value::MOST_NEGATIVE_FIXNUM), Value::NIL] {
-        let first = leaves[0].call(&mut ctx as *mut Context as *mut u8, &[argument]);
-        let second = leaves[1].call(&mut ctx as *mut Context as *mut u8, &[argument]);
+        let first = unsafe { leaves[0].call(&mut ctx as *mut Context as *mut u8, &[argument]) };
+        let second = unsafe { leaves[1].call(&mut ctx as *mut Context as *mut u8, &[argument]) };
         assert_eq!(first, second, "the arithmetic guard's exact frame survives");
         let NativeRun::DeoptAt(frame) = first else {
             panic!("Sub1 overflow or type rejection deopts precisely")
@@ -705,7 +705,9 @@ fn opt_ir_lower_guard_uses_its_frame_after_a_heap_effect() {
     let pair = Value::cons(Value::fixnum(1), Value::NIL);
     let args = [pair, Value::fixnum(19)];
     let _roots = Roots::new(&args);
-    let NativeRun::DeoptAt(frame) = leaf.call(&mut ctx as *mut Context as *mut u8, &args) else {
+    let NativeRun::DeoptAt(frame) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
+    else {
         panic!("list guard deopt")
     };
     assert_eq!(frame.pc, 4);
@@ -783,7 +785,9 @@ fn opt_ir_lower_deopt_terminator_spills_its_exact_frame() {
         panic!("reference deopt")
     };
     let leaf = lower(&f, &changed);
-    let NativeRun::DeoptAt(actual) = leaf.call(&mut ctx as *mut Context as *mut u8, &args) else {
+    let NativeRun::DeoptAt(actual) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
+    else {
         panic!("IR terminator deopt")
     };
     assert_eq!(actual.pc, expected.pc as usize);
@@ -1210,7 +1214,7 @@ fn opt_ir_lower_poll_quit_matches_tier0_flow() {
 
     ctx.set_quit_flag_value(Value::T);
     reset_bytecode_branch_poll_count();
-    let actual = leaf.call(&mut ctx as *mut Context as *mut u8, &args);
+    let actual = unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) };
     ctx.set_quit_flag_value(Value::NIL);
     assert_eq!(actual, NativeRun::Signal);
     let actual = take_pending_flow().expect("native quit flow");

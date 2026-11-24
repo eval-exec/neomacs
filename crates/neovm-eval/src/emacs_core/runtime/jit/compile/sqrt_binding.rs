@@ -67,8 +67,11 @@ fn is_actual_sqrt_locked(binding: Value) -> bool {
 /// Context can rewrite the shared static object without bumping THIS clock.
 /// This guard does not rearm or publish a slot. Its 0/1 result is a machine
 /// predicate, never a Lisp value/STATUS/root; every miss replays original Call.
+/// # Safety
+/// `symbol_bits` must be the valid tagged bits of a live `Value` (a symbol word
+/// baked into the JIT site).
 #[inline]
-pub(super) fn binding_valid(
+pub(super) unsafe fn binding_valid(
     ctx: &Context,
     symbol_bits: u64,
     expected_subr_bits: u64,
@@ -118,10 +121,12 @@ pub(crate) unsafe extern "C" fn neovm_jit_sqrt_binding_valid(
     }
     // SAFETY: see the generated-call contract above; a shared read only.
     let ctx = unsafe { &*(ctx as *const Context) };
-    i64::from(binding_valid(
-        ctx,
-        symbol_bits as u64,
-        expected_subr_bits as u64,
-        expected_epoch as u64,
-    ))
+    i64::from(unsafe {
+        binding_valid(
+            ctx,
+            symbol_bits as u64,
+            expected_subr_bits as u64,
+            expected_epoch as u64,
+        )
+    })
 }

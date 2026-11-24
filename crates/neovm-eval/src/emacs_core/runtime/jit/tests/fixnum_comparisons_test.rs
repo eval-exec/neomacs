@@ -109,7 +109,8 @@ fn fixnum_comparison_deopt_resumes_after_effect_without_replaying_it() {
         ([Value::make_int(1), Value::make_float(0.5)], Value::NIL),
     ] {
         ctx.eval_str("(setq fixnum-comparison-effects 0)").unwrap();
-        let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &args)
+        let NativeRun::DeoptAt(resume) =
+            (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
         else {
             panic!("a float at the fixnum site must deopt precisely");
         };

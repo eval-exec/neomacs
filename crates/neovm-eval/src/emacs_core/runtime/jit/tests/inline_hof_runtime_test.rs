@@ -99,7 +99,7 @@ fn invoke(ctx: &mut Context, f: &ByteCodeFunction, sequence: Value) -> Result<Va
     let leaf =
         compile::compile_bytecode_function_with(f, Some(&ctx.obarray)).expect("HOF compiles");
     let _ = ctx.debug_on_next_call_is_armed();
-    match leaf.call(ctx as *mut Context as *mut u8, &[sequence]) {
+    match unsafe { leaf.call(ctx as *mut Context as *mut u8, &[sequence]) } {
         NativeRun::Ok(bits) => Ok(unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -343,7 +343,8 @@ fn inline_hof_runtime_native_mapc_mapcar_preserve_allocation_deltas() {
             let (value, native_delta, reference, reference_delta) = ctx.with_gc_inhibited(|ctx| {
                 crate::emacs_core::eval::reset_bytecode_branch_poll_count();
                 let before = Value::memory_use_counts_snapshot();
-                let NativeRun::Ok(bits) = leaf.call(ctx as *mut Context as *mut u8, &[sequence])
+                let NativeRun::Ok(bits) =
+                    (unsafe { leaf.call(ctx as *mut Context as *mut u8, &[sequence]) })
                 else {
                     panic!("valid fixnums stay native")
                 };
@@ -655,7 +656,8 @@ fn inline_hof_runtime_native_guard_resumes_lambda_and_parent_after_call() {
     let leaf = compile::compile_bytecode_function_with(&f, Some(&ctx.obarray)).unwrap();
     let _ = ctx.debug_on_next_call_is_armed();
     let before = Value::memory_use_counts_snapshot();
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
     else {
         panic!("mixed Add1 guard transfers the mapping")
     };
@@ -732,7 +734,7 @@ fn inline_hof_runtime_native_deopt_at_each_element_preserves_committed_capture_o
                 let run = |ctx: &mut Context| {
                     let before = Value::memory_use_counts_snapshot();
                     let NativeRun::DeoptAt(resume) =
-                        leaf.call(ctx as *mut Context as *mut u8, &[sequence])
+                        (unsafe { leaf.call(ctx as *mut Context as *mut u8, &[sequence]) })
                     else {
                         panic!("{kind:?} element {guard_index}: mixed Add1 must deopt")
                     };
@@ -895,7 +897,8 @@ fn inline_hof_runtime_rechecks_callback_depth_after_a_serviced_poll() {
     ctx.max_depth = 1000;
     ctx.gc_stress = true;
     crate::emacs_core::eval::reset_bytecode_branch_poll_count();
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
     else {
         panic!("the next callback must observe the poll hook's new depth limit")
     };
@@ -964,7 +967,7 @@ fn inline_hof_runtime_collection_capture_declines_native_loop_and_records_mappin
                     // SAFETY: `sequence` is a live Value word this test mutator owns.
                     assert_eq!(unsafe { neovm_jit_hof_length(sequence.bits() as i64) }, -1);
                     let NativeRun::DeoptAt(resume) =
-                        leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence])
+                        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
                     else {
                         panic!("an active capture must decline the direct-load mapping loop")
                     };
@@ -1075,7 +1078,7 @@ fn inline_hof_runtime_native_cache_call_preserves_mid_map_deopt_floor_and_prefix
     });
     let before = Value::memory_use_counts_snapshot();
     let arguments = [sequence.bits() as i64];
-    let outcome = ctx.with_gc_inhibited(|ctx| {
+    let outcome = ctx.with_gc_inhibited(|ctx| unsafe {
         cache::run_resolved_leaf_native(
             ctx as *mut Context,
             f,

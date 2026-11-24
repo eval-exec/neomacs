@@ -101,7 +101,8 @@ fn default_front_inlines_an_admitted_mapcar_callback() {
     assert!(inlines_mapcar(&leaf));
     let list = Value::list(vec![Value::make_int(1), Value::make_int(41)]);
     ctx.push_vm_frame_root(list);
-    let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &[list]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[list]) })
+    else {
         panic!("an all-fixnum list maps natively");
     };
     assert_eq!(

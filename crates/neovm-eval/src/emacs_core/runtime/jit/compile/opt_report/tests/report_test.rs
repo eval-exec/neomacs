@@ -204,10 +204,12 @@ fn opt_report_clif_parity_keeps_native_observation_and_source_heat_unchanged() {
                     assert_eq!(stats::entry_counting_enabled(), observe.entry_count);
                     assert_eq!(stats::naming_enabled(), observe.naming);
                     assert_eq!(
-                        leaf.call(
-                            &mut context as *mut Context as *mut u8,
-                            &[Value::make_int(7)]
-                        ),
+                        unsafe {
+                            leaf.call(
+                                &mut context as *mut Context as *mut u8,
+                                &[Value::make_int(7)],
+                            )
+                        },
                         NativeRun::Ok(Value::make_int(7).bits())
                     );
                     assert_eq!(leaf.obs.entries.get(), u64::from(observe.entry_count));

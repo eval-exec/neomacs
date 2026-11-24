@@ -236,7 +236,7 @@ fn physical_caller_handoff(context: &mut Context, admit: bool) {
     let argument = Value::cons(Value::fixnum(456), Value::string("inline2-root"));
     context.set_variable("g2-inline-kept", argument);
     assert_eq!(
-        leaf.call(context as *mut Context as *mut u8, &[argument]),
+        unsafe { leaf.call(context as *mut Context as *mut u8, &[argument]) },
         NativeRun::Ok(Value::fixnum(456).bits()),
         "the original inline2-capable native caller continues after handoff"
     );
@@ -301,7 +301,7 @@ fn materialized_callee_handoff(context: &mut Context, admit: bool) {
         "g2-inline-admit-in-hook",
         if admit { Value::T } else { Value::NIL },
     );
-    let run = leaf.call(context as *mut Context as *mut u8, &[argument]);
+    let run = unsafe { leaf.call(context as *mut Context as *mut u8, &[argument]) };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("the virtual Car guard must precisely exit: {run:?}")
     };

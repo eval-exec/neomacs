@@ -90,7 +90,7 @@ fn store_function(op: Op) -> ByteCodeFunction {
 }
 
 fn native(context: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
-    match leaf.call(context as *mut Context as *mut u8, args) {
+    match unsafe { leaf.call(context as *mut Context as *mut u8, args) } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -660,7 +660,10 @@ fn gen1_optimized_fixnum_store_needs_no_card_mark() {
     for input in [float, Value::make_int(Value::MOST_POSITIVE_FIXNUM)] {
         let ctx_ptr = &mut context as *mut Context as *mut u8;
         assert!(
-            matches!(leaf.call(ctx_ptr, &[owner, input]), NativeRun::DeoptAt(_)),
+            matches!(
+                unsafe { leaf.call(ctx_ptr, &[owner, input]) },
+                NativeRun::DeoptAt(_)
+            ),
             "a non-fixnum result leaves before the store"
         );
         assert_eq!(owner.cons_car(), Value::make_int(42));

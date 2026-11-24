@@ -181,11 +181,13 @@ fn opt_sink_cold_direct_slot_demand_keeps_complete_alias_frame_without_constant_
     let product = tier0(&mut ctx, &prefix, &bad[..2]).unwrap();
     roots.add(&[product]);
     for leaf in [&baseline, &selected] {
-        let NativeRun::DeoptAt(exit) = leaf.call_consts(
-            &mut ctx as *mut Context as *mut u8,
-            source.constants().as_ptr(),
-            &bad,
-        ) else {
+        let NativeRun::DeoptAt(exit) = (unsafe {
+            leaf.call_consts(
+                &mut ctx as *mut Context as *mut u8,
+                source.constants().as_ptr(),
+                &bad,
+            )
+        }) else {
             panic!("wrong third operand must recover original Add pc5");
         };
         roots.add(&exit.stack);

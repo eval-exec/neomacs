@@ -27,11 +27,13 @@ fn current_receiver(
     symbol: SymId,
 ) -> String {
     ctx.setup_thread_locals();
-    let run = leaf.call_consts(
-        ctx as *mut Context as *mut u8,
-        source.constants().as_ptr(),
-        &[],
-    );
+    let run = unsafe {
+        leaf.call_consts(
+            ctx as *mut Context as *mut u8,
+            source.constants().as_ptr(),
+            &[],
+        )
+    };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("different current binding must refuse the compiled inline entry: {run:?}")
     };
@@ -110,11 +112,13 @@ fn p3sym_c4_compiled_a_current_b_identity_across_owned_era() {
         "actual named region retains its selected definition identity"
     );
     let reloc_roots = a.retain_gc_roots(leaf.reloc_values().iter().copied());
-    let before_a = match leaf.call_consts(
-        &mut a as *mut Context as *mut u8,
-        source.constants().as_ptr(),
-        &[],
-    ) {
+    let before_a = match unsafe {
+        leaf.call_consts(
+            &mut a as *mut Context as *mut u8,
+            source.constants().as_ptr(),
+            &[],
+        )
+    } {
         NativeRun::Ok(bits) => printed(bits),
         other => panic!("original World must enter the actual native body: {other:?}"),
     };
@@ -141,11 +145,13 @@ fn p3sym_c4_compiled_a_current_b_identity_across_owned_era() {
     assert_eq!(a.obarray.symbol_function_id(ids[0]), Some(a_targets[0]));
     coherent(&a, clock);
     a.setup_thread_locals();
-    let after_a = match leaf.call_consts(
-        &mut a as *mut Context as *mut u8,
-        source.constants().as_ptr(),
-        &[],
-    ) {
+    let after_a = match unsafe {
+        leaf.call_consts(
+            &mut a as *mut Context as *mut u8,
+            source.constants().as_ptr(),
+            &[],
+        )
+    } {
         NativeRun::Ok(bits) => printed(bits),
         other => panic!("A's independent binding remains a valid native entry: {other:?}"),
     };

@@ -55,10 +55,12 @@ fn mir_cons_precise_frames_preserve_aliases_and_completed_effects() {
     assert_eq!(plan.cons_repl.iter().filter(|c| c.is_some()).count(), 2);
     let leaf = lower_mir_pure(&m).unwrap();
     let float = ev.eval_str("1.5").unwrap();
-    let result = leaf.call(
-        &mut ev as *mut Context as *mut u8,
-        &[Value::make_int(7), float],
-    );
+    let result = unsafe {
+        leaf.call(
+            &mut ev as *mut Context as *mut u8,
+            &[Value::make_int(7), float],
+        )
+    };
     let NativeRun::DeoptAt(resume) = result else {
         panic!("expected precise float deopt: {result:?}")
     };
@@ -157,7 +159,7 @@ fn assert_block_local_loop_allocation_count(singleton: bool) {
     // Fewer than 255 back edges avoids a service poll, so the allocation
     // counter directly observes this loop's conses without GC bookkeeping.
     let before = ev.tagged_heap.allocated_count();
-    let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(100)]);
+    let result = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(100)]) };
     assert_eq!(result, NativeRun::Ok(Value::make_int(5050).bits()));
     assert_eq!(ev.tagged_heap.allocated_count(), before);
 }
@@ -198,10 +200,12 @@ fn mir_singleton_precise_frames_preserve_aliases_and_completed_effects() {
     );
     let leaf = lower_mir_pure(&m).unwrap();
     let float = ev.eval_str("1.5").unwrap();
-    let result = leaf.call(
-        &mut ev as *mut Context as *mut u8,
-        &[Value::make_int(7), float],
-    );
+    let result = unsafe {
+        leaf.call(
+            &mut ev as *mut Context as *mut u8,
+            &[Value::make_int(7), float],
+        )
+    };
     let NativeRun::DeoptAt(ref resume) = result else {
         panic!("expected precise float deopt: {result:?}")
     };
@@ -235,7 +239,7 @@ fn mir_singleton_escaping_lists_preserve_freshness_elements_and_mutation() {
     let ctx = &mut ev as *mut Context as *mut u8;
     let mut lists = Vec::new();
     for _ in 0..2 {
-        let NativeRun::Ok(bits) = leaf.call(ctx, &[element]) else {
+        let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx, &[element]) }) else {
             panic!("singleton construction must run natively")
         };
         let list = unsafe {
@@ -265,7 +269,7 @@ fn mir_singleton_escaping_lists_preserve_freshness_elements_and_mutation() {
     );
     let m = mir::build_mir(f.ops(), f.constants(), None, 2).unwrap();
     let leaf = lower_mir_pure(&m).unwrap();
-    let NativeRun::Ok(bits) = leaf.call(ctx, &[Value::NIL, element]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ctx, &[Value::NIL, element]) }) else {
         panic!("mutating an escaping singleton must run natively")
     };
     let list = unsafe {
@@ -288,7 +292,7 @@ fn mir_empty_list_preserves_the_residual_stack() {
         assert!(!plan_mir_leaf(&m).needs_rt);
         let leaf = lower_mir_pure(&m).unwrap();
         assert_eq!(
-            leaf.call(&mut ev as *mut Context as *mut u8, &[element]),
+            unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[element]) },
             NativeRun::Ok(expected.bits())
         );
     }
@@ -317,7 +321,7 @@ fn mir_singleton_precise_frame_preserves_a_heap_element() {
     assert_eq!(plan_mir_leaf(&m).cons_repl.iter().flatten().count(), 1);
     let leaf = lower_mir_pure(&m).unwrap();
     let float = ev.eval_str("1.5").unwrap();
-    let result = leaf.call(&mut ev as *mut Context as *mut u8, &[float]);
+    let result = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[float]) };
     let NativeRun::DeoptAt(ref resume) = result else {
         panic!("expected precise float deopt: {result:?}")
     };

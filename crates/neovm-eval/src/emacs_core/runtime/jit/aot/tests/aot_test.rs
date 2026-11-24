@@ -158,7 +158,7 @@ fn aot_pure_arith_leaf_matches_jit_via_dlopen() {
     for a in [0i64, 1, 7, -3, 1000] {
         let arg = Value::make_int(a);
         // JIT result.
-        let jit = match jit_leaf.call(ctx_ptr, &[arg]) {
+        let jit = match unsafe { jit_leaf.call(ctx_ptr, &[arg]) } {
             crate::emacs_core::jit::compile::NativeRun::Ok(bits) => bits as i64,
             other => panic!("JIT did not return Ok: {other:?}"),
         };
@@ -472,11 +472,11 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
             let mut vm = Vm::from_context(&mut eval);
             vm.execute(&f, call.clone()).expect("interp").bits()
         };
-        let aot = match aot_leaf.call(ctx_ptr, &call) {
+        let aot = match unsafe { aot_leaf.call(ctx_ptr, &call) } {
             crate::emacs_core::jit::compile::NativeRun::Ok(b) => b,
             other => panic!("AOT not Ok: {other:?}"),
         };
-        let jit = match jit_leaf.call(ctx_ptr, &call) {
+        let jit = match unsafe { jit_leaf.call(ctx_ptr, &call) } {
             crate::emacs_core::jit::compile::NativeRun::Ok(b) => b,
             other => panic!("JIT not Ok: {other:?}"),
         };
@@ -655,7 +655,7 @@ fn aot_symbol_const_relocs_by_name_not_baked_sym_id() {
     // And the leaf returns the RIGHT symbol per branch, by IDENTITY (eq):
     // the rebuilt symbol must be the live obarray's 'aot-yes/'aot-no.
     let ctx_ptr = &mut eval as *mut crate::emacs_core::eval::Context as *mut u8;
-    let call = |arg: Value| match aot_leaf.call(ctx_ptr, &[arg]) {
+    let call = |arg: Value| match unsafe { aot_leaf.call(ctx_ptr, &[arg]) } {
         crate::emacs_core::jit::compile::NativeRun::Ok(b) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(b)
@@ -773,7 +773,7 @@ fn aot_reloc_bearing_leaf_rebuilds_string_const() {
 
     // Calling the AOT leaf returns that exact "hello" object.
     let ctx_ptr = &mut eval as *mut crate::emacs_core::eval::Context as *mut u8;
-    let bits = match aot_leaf.call(ctx_ptr, &[Value::make_int(0)]) {
+    let bits = match unsafe { aot_leaf.call(ctx_ptr, &[Value::make_int(0)]) } {
         crate::emacs_core::jit::compile::NativeRun::Ok(b) => b,
         other => panic!("AOT reloc leaf not Ok: {other:?}"),
     };
@@ -843,7 +843,7 @@ fn aot_two_reloc_consts_rebuild_in_index_order() {
 
     // And each branch returns the right rebuilt string.
     let ctx_ptr = &mut eval as *mut crate::emacs_core::eval::Context as *mut u8;
-    let call = |arg: Value| match aot_leaf.call(ctx_ptr, &[arg]) {
+    let call = |arg: Value| match unsafe { aot_leaf.call(ctx_ptr, &[arg]) } {
         crate::emacs_core::jit::compile::NativeRun::Ok(b) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(b)

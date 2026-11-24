@@ -216,7 +216,7 @@ fn pentry_e2b_source_jit_cache_real_pending_job_is_not_cancelled_by_refusal() {
     bg::hold_publish_for_test(true);
     let mut function = function(Value::fixnum(53));
     function.jit_runtime().set_hot_for_test();
-    prepare_entry_for_test(std::ptr::from_mut(&mut *source), &function);
+    unsafe { prepare_entry_for_test(std::ptr::from_mut(&mut *source), &function) };
     let pending = bg::pending_count();
     assert!(
         pending > 0,

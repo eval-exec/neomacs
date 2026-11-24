@@ -104,7 +104,8 @@ fn fixnum_range_overflow_resumes_as_bignum_without_replaying_prior_effects() {
         );
         let leaf = lower_leaf_full(f.ops(), f.constants(), 2, None, Some(&ctx.obarray), 0).unwrap();
         let args = [Value::make_int(a), Value::make_int(b)];
-        let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &args)
+        let NativeRun::DeoptAt(resume) =
+            (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
         else {
             panic!("overflow must deopt precisely after the observable effect");
         };

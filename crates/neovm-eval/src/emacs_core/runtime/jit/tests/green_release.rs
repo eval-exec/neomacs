@@ -125,7 +125,7 @@ fn run_witness(context: &mut Context) -> (Value, u64) {
     });
     let _root = context.retain_gc_roots([source]);
     let source_data = source.get_bytecode_data().unwrap();
-    cache::prepare_entry_for_test(context, source_data);
+    unsafe { cache::prepare_entry_for_test(context, source_data) };
     let before = cache::native_run_counters().2;
     let result = context
         .apply(Value::symbol("green-release-caller"), Vec::new())
@@ -327,7 +327,7 @@ fn plus_opcode_is_not_a_function_cell_dependent() {
     });
     let _root = context.retain_gc_roots([source]);
     let source_data = source.get_bytecode_data().unwrap();
-    cache::prepare_entry_for_test(&mut context, source_data);
+    unsafe { cache::prepare_entry_for_test(&mut context, source_data) };
     let before = cache::native_run_counters().2;
     let result = context
         .apply(Value::symbol("green-release-plus-caller"), Vec::new())
@@ -365,7 +365,7 @@ fn plus_opcode_is_not_a_function_cell_dependent() {
     });
     let _bare_root = context.retain_gc_roots([bare]);
     let bare_data = bare.get_bytecode_data().unwrap();
-    cache::prepare_entry_for_test(&mut context, bare_data);
+    unsafe { cache::prepare_entry_for_test(&mut context, bare_data) };
     let before_bare = cache::native_run_counters().2;
     let result = context
         .apply(Value::symbol("green-release-plus-bare"), Vec::new())
@@ -447,7 +447,7 @@ fn release_deopt_at_condition_case_landing() {
     });
     let _root = context.retain_gc_roots([source]);
     let source_data = source.get_bytecode_data().unwrap();
-    cache::prepare_entry_for_test(&mut context, source_data);
+    unsafe { cache::prepare_entry_for_test(&mut context, source_data) };
     let before = cache::native_run_counters().2;
     let result = context
         .apply(Value::symbol("green-release-caller"), Vec::new())

@@ -86,8 +86,9 @@ fn classify_arith_float_other_overflow() {
             stack.push(v);
             stack
         };
-        let cls =
-            |stack: &[Value]| classify(std::ptr::null(), &ops, &leaf, LeafOrigin::Entry, 1, stack);
+        let cls = |stack: &[Value]| unsafe {
+            classify(std::ptr::null(), &ops, &leaf, LeafOrigin::Entry, 1, stack)
+        };
         assert_eq!(
             cls(&with(Value::make_float(1.5))),
             DeoptCause::ArithOperands(NumericFeedback::Float),
@@ -127,7 +128,7 @@ fn classify_call_car_osr_entry_unattributed() {
         Op::VarRef(0),
     ];
     let stack = [Value::make_int(1), Value::make_int(2)];
-    let cls = |leaf: &CompiledLeaf, origin: LeafOrigin<'_>, pc: usize, stack: &[Value]| {
+    let cls = |leaf: &CompiledLeaf, origin: LeafOrigin<'_>, pc: usize, stack: &[Value]| unsafe {
         classify(ctx, &ops, leaf, origin, pc, stack)
     };
     assert_eq!(
@@ -150,7 +151,7 @@ fn classify_call_car_osr_entry_unattributed() {
     // A null Context cannot read the epoch: a plain call-site cause.
     leaf.inline_epoch = Some(now.wrapping_sub(1));
     assert_eq!(
-        classify(std::ptr::null(), &ops, &leaf, LeafOrigin::Entry, 1, &stack),
+        unsafe { classify(std::ptr::null(), &ops, &leaf, LeafOrigin::Entry, 1, &stack) },
         DeoptCause::InlinedCall
     );
     leaf.inline_epoch = None;
@@ -297,12 +298,12 @@ fn census_counts_a_direct_path_deopt_once() {
     let ctx = &mut ev as *mut Context as *mut u8;
     for _ in 0..3 {
         assert_eq!(
-            leaf.call(ctx, &[Value::make_int(5)]),
+            unsafe { leaf.call(ctx, &[Value::make_int(5)]) },
             crate::emacs_core::jit::compile::NativeRun::Ok(Value::make_int(4).bits())
         );
     }
     let before = census();
-    match leaf.call(ctx, &[Value::make_float(5.0)]) {
+    match unsafe { leaf.call(ctx, &[Value::make_float(5.0)]) } {
         crate::emacs_core::jit::compile::NativeRun::Ok(bits) => {
             assert_eq!(
                 unsafe {
@@ -481,10 +482,10 @@ fn ceiling_generic_takes_the_fallback_and_never_deopts() {
     assert_eq!(leaf.tier(), LeafTier::Baseline);
     let ctx = &mut ev as *mut Context as *mut u8;
     assert_eq!(
-        leaf.call(ctx, &[Value::make_int(2), Value::make_int(3)]),
+        unsafe { leaf.call(ctx, &[Value::make_int(2), Value::make_int(3)]) },
         NativeRun::Ok(Value::make_int(5).bits())
     );
-    match leaf.call(ctx, &[Value::make_float(1.5), Value::make_int(2)]) {
+    match unsafe { leaf.call(ctx, &[Value::make_float(1.5), Value::make_int(2)]) } {
         NativeRun::Ok(bits) => assert_eq!(
             unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -496,7 +497,7 @@ fn ceiling_generic_takes_the_fallback_and_never_deopts() {
         other => panic!("the generic fallback runs floats natively: {other:?}"),
     }
     let big = bignum();
-    match leaf.call(ctx, &[big, Value::make_int(1)]) {
+    match unsafe { leaf.call(ctx, &[big, Value::make_int(1)]) } {
         NativeRun::Ok(bits) => assert!(
             !unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -506,13 +507,15 @@ fn ceiling_generic_takes_the_fallback_and_never_deopts() {
         ),
         other => panic!("the generic fallback runs bignums natively: {other:?}"),
     }
-    match leaf.call(
-        ctx,
-        &[
-            Value::make_int(Value::MOST_POSITIVE_FIXNUM),
-            Value::make_int(1),
-        ],
-    ) {
+    match unsafe {
+        leaf.call(
+            ctx,
+            &[
+                Value::make_int(Value::MOST_POSITIVE_FIXNUM),
+                Value::make_int(1),
+            ],
+        )
+    } {
         NativeRun::Ok(bits) => assert!(
             !unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -698,7 +701,7 @@ fn no_inline_bit_skips_the_mir_inliner() {
     assert!(leaf.inline_deps().is_empty(), "the call stays a call");
     let ctx = &mut ev as *mut Context as *mut u8;
     assert_eq!(
-        leaf.call(ctx, &[Value::make_int(7)]),
+        unsafe { leaf.call(ctx, &[Value::make_int(7)]) },
         NativeRun::Ok(Value::make_int(49).bits())
     );
 }
@@ -737,11 +740,11 @@ fn no_inline_bit_skips_the_inline_bit_op() {
     );
     let ctx = &mut ev as *mut Context as *mut u8;
     assert_eq!(
-        leaf.call(ctx, &[Value::make_int(12), Value::make_int(10)]),
+        unsafe { leaf.call(ctx, &[Value::make_int(12), Value::make_int(10)]) },
         NativeRun::Ok(Value::make_int(8).bits())
     );
     // A non-fixnum bounces to the generic call inside the shim: no deopt.
-    let _ = leaf.call(ctx, &[bignum(), Value::make_int(5)]);
+    let _ = unsafe { leaf.call(ctx, &[bignum(), Value::make_int(5)]) };
     assert_eq!(leaf.obs.deopt_at.get() + leaf.obs.deopt_rerun.get(), 0);
     crate::emacs_core::jit::compile::force_inline_arith_for_test(false);
 }

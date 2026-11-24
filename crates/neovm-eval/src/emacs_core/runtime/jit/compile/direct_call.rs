@@ -261,8 +261,11 @@ impl DirectSite {
     /// and its unarmed test on every call. And the caller must be a body
     /// whose calls run often enough to pay the site's compile back
     /// ([`DirectSitesMode`], [`UnboundedBodyScope`]).
+    /// # Safety
+    /// `expected` must be the valid tagged bits of a live `Value` rooted by
+    /// the active compilation snapshot.
     #[doc(hidden)]
-    pub fn plan(rt: &RtCtx, aot: bool, expected: u64, nargs: usize) -> Option<Self> {
+    pub unsafe fn plan(rt: &RtCtx, aot: bool, expected: u64, nargs: usize) -> Option<Self> {
         if aot || !jit_direct_call_on() || jit_force_slow_spec() || nargs > MAX_REST_CALL_ARGS {
             return None;
         }
@@ -278,7 +281,7 @@ impl DirectSite {
         let self_only = jit_direct_sites() == DirectSitesMode::SelfOnly;
         if self_only {
             let source = rt.self_direct_source?;
-            if !self_only::expected_is_source(expected, source)
+            if !unsafe { self_only::expected_is_source(expected, source) }
                 || params.fixed_arity() != Some(nargs)
             {
                 return None;
@@ -1155,20 +1158,22 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_finish(
     } else {
         super::dispatch::FastRun::Raw(status)
     };
-    super::dispatch::call_spec_finish(
-        ctx,
-        unsafe {
-            /* SAFETY: JIT constant-pool word */
-            Value::from_bits(expected as usize)
-        },
-        leaf,
-        args,
-        nargs,
-        out,
-        bt_count,
-        run,
-        budget_restore as usize,
-    )
+    unsafe {
+        super::dispatch::call_spec_finish(
+            ctx,
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(expected as usize)
+            },
+            leaf,
+            args,
+            nargs,
+            out,
+            bt_count,
+            run,
+            budget_restore as usize,
+        )
+    }
 }
 
 #[cfg(any(test, debug_assertions, feature = "test-support"))]

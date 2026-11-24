@@ -60,13 +60,16 @@ pub(crate) unsafe extern "C" fn neovm_jit_t2_record_array_use(
     array: i64,
     obs: *const LeafObs,
 ) {
-    when_open(super::t2_profile::credit_window_open(obs), || {
-        // SAFETY: the native activation owns obs; FeedbackHolds retains source
-        // and its once-published site table; array is a live valid tagged Lisp
-        // operand. Nothing here can reach a safepoint before its header read.
-        unsafe { &*site }.observe(ObservedArrayKind::of(unsafe {
-            /* SAFETY: JIT constant-pool word */
-            Value::from_bits(array as usize)
-        }));
-    });
+    when_open(
+        unsafe { super::t2_profile::credit_window_open(obs) },
+        || {
+            // SAFETY: the native activation owns obs; FeedbackHolds retains source
+            // and its once-published site table; array is a live valid tagged Lisp
+            // operand. Nothing here can reach a safepoint before its header read.
+            unsafe { &*site }.observe(ObservedArrayKind::of(unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(array as usize)
+            }));
+        },
+    );
 }

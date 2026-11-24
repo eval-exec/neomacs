@@ -9239,13 +9239,15 @@ impl<'a> Vm<'a> {
                 }
                 slots[nonrest] = rest.bits() as i64;
             }
-            match crate::emacs_core::jit::cache::run_resolved_leaf_native(
-                ctx_ptr,
-                bc,
-                callee,
-                leaf,
-                slots.as_ptr(),
-            ) {
+            match unsafe {
+                crate::emacs_core::jit::cache::run_resolved_leaf_native(
+                    ctx_ptr,
+                    bc,
+                    callee,
+                    leaf,
+                    slots.as_ptr(),
+                )
+            } {
                 NativeCallOutcome::Fallback => unsafe {
                     Vm::interp_fallback_native(ctx_ptr, bc, callee, args_ptr, nargs)
                 },
@@ -9259,9 +9261,11 @@ impl<'a> Vm<'a> {
                 // through (no LispArgVec, no rooting, no re-marshal) — and a
                 // register-sized outcome back (no Result<_, Flow> sret moves;
                 // a signalling Flow stays in the pending slot).
-                match crate::emacs_core::jit::cache::run_resolved_leaf_native(
-                    ctx_ptr, bc, callee, leaf, args_ptr,
-                ) {
+                match unsafe {
+                    crate::emacs_core::jit::cache::run_resolved_leaf_native(
+                        ctx_ptr, bc, callee, leaf, args_ptr,
+                    )
+                } {
                     NativeCallOutcome::Fallback => unsafe {
                         Vm::interp_fallback_native(ctx_ptr, bc, callee, args_ptr, nargs)
                     },

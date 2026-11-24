@@ -186,7 +186,7 @@ fn compiled_old_cons_stores_remember_young_children_each_cycle() {
         let child = Value::cons(Value::fixnum(71 + index as i64), Value::NIL);
         context.push_specpdl_root(child);
         let context_ptr = &mut context as *mut Context as *mut u8;
-        let result = leaf.call(context_ptr, &[owner, child]);
+        let result = unsafe { leaf.call(context_ptr, &[owner, child]) };
         // SAFETY: the engine returned this exact word from the child value it
         // just ran; reconstructing the tagged value for comparison is sound.
         assert!(

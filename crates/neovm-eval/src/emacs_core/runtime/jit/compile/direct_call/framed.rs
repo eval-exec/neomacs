@@ -83,17 +83,19 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
                             "error",
                             vec![Value::string("Bytecode stack overflow")],
                         ));
-                        return call_spec_finish(
-                            ctx,
-                            callee,
-                            leaf,
-                            args_ptr,
-                            nargs,
-                            out,
-                            bt_count,
-                            FastRun::Framed(NativeRun::Signal),
-                            crate::emacs_core::bytecode::vm::BC_STACK_POSITION_UNCHARGED,
-                        );
+                        return unsafe {
+                            call_spec_finish(
+                                ctx,
+                                callee,
+                                leaf,
+                                args_ptr,
+                                nargs,
+                                out,
+                                bt_count,
+                                FastRun::Framed(NativeRun::Signal),
+                                crate::emacs_core::bytecode::vm::BC_STACK_POSITION_UNCHARGED,
+                            )
+                        };
                     }
                 }
             }
@@ -101,7 +103,7 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
             // charged, so a release must be a no-op.
             None => crate::emacs_core::bytecode::vm::BC_STACK_POSITION_UNCHARGED,
         };
-        let outcome = call_spec_framed_run(ctx, leaf, const_base as u64, args_ptr);
+        let outcome = unsafe { call_spec_framed_run(ctx, leaf, const_base as u64, args_ptr) };
         // No mutable Context reference spans the native/Lisp execution
         // above. Its dormant seam borrow is reconstructed only for cleanup.
         let ctx_ref = unsafe { &mut *(ctx as *mut Context) };
@@ -143,19 +145,19 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
         };
         // This owns depth/frame cleanup, signal propagation and a boxed
         // DeoptAt resume. In particular, a framed run is never FastRun::Raw.
-        call_spec_finish(
-            ctx,
-            unsafe {
+        unsafe {
+            call_spec_finish(
+                ctx,
                 /* SAFETY: JIT constant-pool word */
-                Value::from_bits(callee_bits as usize)
-            },
-            leaf,
-            args_ptr,
-            nargs,
-            out,
-            bt_count,
-            run,
-            saved_budget,
-        )
+                Value::from_bits(callee_bits as usize),
+                leaf,
+                args_ptr,
+                nargs,
+                out,
+                bt_count,
+                run,
+                saved_budget,
+            )
+        }
     }
 }

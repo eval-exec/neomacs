@@ -775,25 +775,37 @@ fn jit_obs_name_hint_rejects_mismatched_frame() {
         .jit_runtime()
         .compiled_id_or_assign();
     let ctx = &ev as *const Context;
-    assert_eq!(callee_name_hint(ctx, id), None, "no frame at all");
+    assert_eq!(
+        unsafe { callee_name_hint(ctx, id) },
+        None,
+        "no frame at all"
+    );
     ev.push_backtrace_frame(sym, &[Value::make_int(1)]);
     let ctx = &ev as *const Context;
-    assert_eq!(callee_name_hint(ctx, id), Some(sym_id), "its own frame");
+    assert_eq!(
+        unsafe { callee_name_hint(ctx, id) },
+        Some(sym_id),
+        "its own frame"
+    );
     ev.push_backtrace_frame(other, &[Value::make_int(1)]);
     let ctx = &ev as *const Context;
     assert_eq!(
-        callee_name_hint(ctx, id),
+        unsafe { callee_name_hint(ctx, id) },
         None,
         "the innermost frame is another function's"
     );
     stats::perf_map::set_pending_callee(sym_id);
     assert_eq!(
-        callee_name_hint(ctx, id),
+        unsafe { callee_name_hint(ctx, id) },
         Some(sym_id),
         "a speculated callee's symbol wins"
     );
-    assert_eq!(callee_name_hint(ctx, id), None, "the pending hint is taken");
-    assert_eq!(callee_name_hint(std::ptr::null(), id), None);
+    assert_eq!(
+        unsafe { callee_name_hint(ctx, id) },
+        None,
+        "the pending hint is taken"
+    );
+    assert_eq!(unsafe { callee_name_hint(std::ptr::null(), id) }, None);
 }
 
 /// Leaves are bound to the obarray they were compiled against (P1.4 §3.6): a

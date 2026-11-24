@@ -112,11 +112,13 @@ fn t1(ctx: &Context, f: &ByteCodeFunction) -> CompiledLeaf {
     .expect("ordinary Aref T1 lowers before observer evidence")
 }
 fn native(ctx: &mut Context, f: &ByteCodeFunction, leaf: &CompiledLeaf, arg: Value) -> String {
-    let NativeRun::Ok(bits) = leaf.call_consts(
-        ctx as *mut Context as *mut u8,
-        f.constants().as_ptr(),
-        &[arg],
-    ) else {
+    let NativeRun::Ok(bits) = (unsafe {
+        leaf.call_consts(
+            ctx as *mut Context as *mut u8,
+            f.constants().as_ptr(),
+            &[arg],
+        )
+    }) else {
         panic!("recording preserves baseline native Aref success")
     };
     print_value(&unsafe {

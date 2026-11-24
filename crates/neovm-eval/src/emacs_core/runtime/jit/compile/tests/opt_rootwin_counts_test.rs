@@ -106,11 +106,13 @@ fn assert_native_parity(ctx: &mut Context, f: &ByteCodeFunction, leaf: &Compiled
         vm.force_interpreter_only_for_test();
         vm.execute(f, args.to_vec()).expect("Tier-0 answer")
     };
-    let NativeRun::Ok(bits) = leaf.call_consts(
-        ctx as *mut Context as *mut u8,
-        f.constants().as_ptr(),
-        &args,
-    ) else {
+    let NativeRun::Ok(bits) = (unsafe {
+        leaf.call_consts(
+            ctx as *mut Context as *mut u8,
+            f.constants().as_ptr(),
+            &args,
+        )
+    }) else {
         panic!("the emitted leaf must finish natively")
     };
     assert_eq!(

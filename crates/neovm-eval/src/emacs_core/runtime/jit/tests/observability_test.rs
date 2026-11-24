@@ -206,7 +206,7 @@ fn jit_obs_direct_path_deopt_counted_once() {
     let ctx = &mut ev as *mut Context as *mut u8;
     for _ in 0..3 {
         assert_eq!(
-            leaf.call(ctx, &[Value::make_int(5)]),
+            unsafe { leaf.call(ctx, &[Value::make_int(5)]) },
             NativeRun::Ok(Value::make_int(4).bits())
         );
     }
@@ -219,7 +219,7 @@ fn jit_obs_direct_path_deopt_counted_once() {
     let base = row_for(callee_id, cache::LeafState::Live).obs;
     assert_eq!(base.deopt_at + base.deopt_rerun, 0);
     for _ in 0..2 {
-        match leaf.call(ctx, &[Value::make_float(5.0)]) {
+        match unsafe { leaf.call(ctx, &[Value::make_float(5.0)]) } {
             NativeRun::Ok(bits) => assert_eq!(
                 unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -256,7 +256,7 @@ fn jit_obs_signal_exit_counted() {
         &[Value::symbol("car"), Value::make_int(5)],
     )
     .expect("compiles");
-    assert_eq!(framed.call(ctx, &[]), NativeRun::Signal);
+    assert_eq!(unsafe { framed.call(ctx, &[]) }, NativeRun::Signal);
     take_pending_flow().expect("wrong-type-argument");
     assert_eq!(framed.obs.signals.get(), 1);
 
@@ -279,7 +279,10 @@ fn jit_obs_signal_exit_counted() {
     crate::emacs_core::jit::test_support::prepare_named(&mut ev, &["jit-obs-signaller"]);
     let ctx = &mut ev as *mut Context as *mut u8;
     for _ in 0..2 {
-        assert_eq!(leaf.call(ctx, &[Value::make_int(5)]), NativeRun::Signal);
+        assert_eq!(
+            unsafe { leaf.call(ctx, &[Value::make_int(5)]) },
+            NativeRun::Signal
+        );
         take_pending_flow().expect("wrong-type-argument");
     }
     assert_eq!(leaf.obs.signals.get(), 2, "the caller exits with it too");
@@ -327,7 +330,7 @@ fn jit_obs_spec_revalidation_counts_rearm_and_rebind() {
     let ctx = &mut ev as *mut Context as *mut u8;
     let call = |want: i64| {
         assert_eq!(
-            leaf.call(ctx, &[Value::make_int(5)]),
+            unsafe { leaf.call(ctx, &[Value::make_int(5)]) },
             NativeRun::Ok(Value::make_int(want).bits())
         );
     };
@@ -338,7 +341,7 @@ fn jit_obs_spec_revalidation_counts_rearm_and_rebind() {
         .expect("unrelated fset");
     let ctx = &mut ev as *mut Context as *mut u8;
     assert_eq!(
-        leaf.call(ctx, &[Value::make_int(5)]),
+        unsafe { leaf.call(ctx, &[Value::make_int(5)]) },
         NativeRun::Ok(Value::make_int(4).bits())
     );
     let d = EpochCounters::snapshot().since(&base);
@@ -353,7 +356,7 @@ fn jit_obs_spec_revalidation_counts_rearm_and_rebind() {
         .expect("rebind");
     let ctx = &mut ev as *mut Context as *mut u8;
     assert_eq!(
-        leaf.call(ctx, &[Value::make_int(5)]),
+        unsafe { leaf.call(ctx, &[Value::make_int(5)]) },
         NativeRun::Ok(Value::make_int(25).bits())
     );
     let d = EpochCounters::snapshot().since(&base);
@@ -625,7 +628,7 @@ fn jit_obs_entry_counter_counts_every_path() {
     let ctx = &mut ev as *mut Context as *mut u8;
     for _ in 0..3 {
         assert_eq!(
-            leaf.call(ctx, &[Value::make_int(5)]),
+            unsafe { leaf.call(ctx, &[Value::make_int(5)]) },
             NativeRun::Ok(Value::make_int(4).bits())
         );
     }

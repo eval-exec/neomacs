@@ -34,14 +34,9 @@ fn opt_sqrt_binding_equal_owner_clocks_still_read_cell_and_inplace_entry() {
         second.obarray.function_epoch()
     );
     assert!(is_actual_sqrt(original));
-    assert!(binding_valid(
-        &first,
-        symbol_bits,
-        original.bits() as u64,
-        epoch
-    ));
+    assert!(unsafe { binding_valid(&first, symbol_bits, original.bits() as u64, epoch) });
     assert!(
-        !binding_valid(&second, symbol_bits, original.bits() as u64, epoch),
+        !unsafe { binding_valid(&second, symbol_bits, original.bits() as u64, epoch) },
         "same numeric epoch cannot replace CURRENT owner function-cell proof"
     );
 
@@ -60,7 +55,7 @@ fn opt_sqrt_binding_equal_owner_clocks_still_read_cell_and_inplace_entry() {
         original.bits()
     );
     assert!(
-        !binding_valid(&first, symbol_bits, original.bits() as u64, epoch),
+        !unsafe { binding_valid(&first, symbol_bits, original.bits() as u64, epoch) },
         "same static pointer now holds a different actual A1 function"
     );
     second.register_subr(SubrSpec::fixed1(
@@ -68,12 +63,7 @@ fn opt_sqrt_binding_equal_owner_clocks_still_read_cell_and_inplace_entry() {
         crate::emacs_core::builtins::builtin_sqrt_1,
         FixedMin1::One,
     ));
-    assert!(binding_valid(
-        &first,
-        symbol_bits,
-        original.bits() as u64,
-        epoch
-    ));
+    assert!(unsafe { binding_valid(&first, symbol_bits, original.bits() as u64, epoch) });
     first.setup_thread_locals();
 }
 
@@ -102,7 +92,7 @@ fn opt_sqrt_binding_shared_static_reader_declines_busy_writer_and_observes_rewri
         let epoch = reader.obarray.function_epoch();
         reply.send(None).unwrap();
         while let Ok(Probe::Check) = receive.recv() {
-            let answer = binding_valid(&reader, symbol_bits, original_bits, epoch);
+            let answer = unsafe { binding_valid(&reader, symbol_bits, original_bits, epoch) };
             reply.send(Some(answer)).unwrap();
         }
     });

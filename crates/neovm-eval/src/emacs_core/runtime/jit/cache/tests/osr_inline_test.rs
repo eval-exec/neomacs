@@ -94,12 +94,14 @@ fn osr_inline_chain_maps_a_shifted_header_and_resumes_inside_the_callee() {
     assert!(!entry.leaf.chains.is_empty(), "OSR lowers the v2 body");
     let maximum = Value::fixnum(Value::MOST_POSITIVE_FIXNUM);
     let arguments = [maximum.bits() as i64];
-    let run = entry.leaf.invoke_osr(
-        &mut ctx as *mut Context as *mut u8,
-        arguments.as_ptr(),
-        physical.jit_constant_base(),
-        None,
-    );
+    let run = unsafe {
+        entry.leaf.invoke_osr(
+            &mut ctx as *mut Context as *mut u8,
+            arguments.as_ptr(),
+            physical.jit_constant_base(),
+            None,
+        )
+    };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("callee overflow must yield a precise chain deopt");
     };
@@ -125,22 +127,24 @@ fn osr_inline_chain_feedback_retires_the_osr_leaf_and_widens_the_inner_source() 
     OSR_CACHE.with(|cache| cache.borrow_mut().insert((id, 0), Some(entry)));
     let snapshot = [Value::fixnum(1)];
     assert_eq!(
-        reopt::note_deopt_chain(
-            &ctx,
-            &physical,
-            &inner,
-            &leaf,
-            LeafOrigin::Osr {
-                header_pc: 0,
-                snapshot: &snapshot,
-            },
-            2,
-            DeoptEvent::Precise {
-                pc: 1,
-                stack: &[],
-                cause: Some(reopt::DeoptCause::ArithOperands(NumericFeedback::Float)),
-            },
-        ),
+        unsafe {
+            reopt::note_deopt_chain(
+                &ctx,
+                &physical,
+                &inner,
+                &leaf,
+                LeafOrigin::Osr {
+                    header_pc: 0,
+                    snapshot: &snapshot,
+                },
+                2,
+                DeoptEvent::Precise {
+                    pc: 1,
+                    stack: &[],
+                    cause: Some(reopt::DeoptCause::ArithOperands(NumericFeedback::Float)),
+                },
+            )
+        },
         ReoptVerdict::Invalidated
     );
     assert_eq!(

@@ -162,7 +162,7 @@ fn a_body_answers_the_same_through_either_abi() {
             );
             register_leaves += usize::from(matches!(abi, TestLeafAbi::Register { .. }));
             // SAFETY: the Context outlives the call; `args` are immediates.
-            let run = leaf.call_consts(ctx.cast(), bc.constants().as_ptr(), args);
+            let run = unsafe { leaf.call_consts(ctx.cast(), bc.constants().as_ptr(), args) };
             // SAFETY: as above.
             answers.push(outcome(unsafe { &mut *ctx }, run));
             // The spec shim's raw entry, for a frameless exact-arity body.

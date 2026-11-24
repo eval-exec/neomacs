@@ -167,7 +167,7 @@ fn opt_profit_primitive_lists_retains_list_span_size_and_original_numeric_mir() 
         assert!(!selected_clif.is_empty());
         assert_eq!(normalize(selected_clif), normalize(legacy_clif));
         assert_eq!(
-            selected.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(4)]),
+            unsafe { selected.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(4)]) },
             NativeRun::Ok(Value::make_int(4).bits())
         );
     }
@@ -271,10 +271,12 @@ fn opt_profit_primitive_lists_original_call_survives_real_fusion_and_uses_one_le
     assert_eq!(normalize(selected_clif), normalize(legacy_clif));
     let pair = pair();
     assert_eq!(
-        selected.call(
-            &mut ctx as *mut Context as *mut u8,
-            &[pair, Value::make_int(4)]
-        ),
+        unsafe {
+            selected.call(
+                &mut ctx as *mut Context as *mut u8,
+                &[pair, Value::make_int(4)],
+            )
+        },
         NativeRun::Ok(Value::make_int(4).bits())
     );
     assert_eq!(pair.cons_car(), Value::make_int(3));

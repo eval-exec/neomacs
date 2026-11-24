@@ -93,7 +93,7 @@ fn interpret(eval: &mut Context, f: &ByteCodeFunction, args: &[Value]) -> Value 
 fn native(ctx_ptr: *mut u8, leaf: &CompiledLeaf, args: &[Value]) -> (Value, usize, usize) {
     EQ_SLOW_CALLS.with(|c| c.set(0));
     SYMBOLP_SLOW_CALLS.with(|c| c.set(0));
-    let answer = match leaf.call(ctx_ptr, args) {
+    let answer = match unsafe { leaf.call(ctx_ptr, args) } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)

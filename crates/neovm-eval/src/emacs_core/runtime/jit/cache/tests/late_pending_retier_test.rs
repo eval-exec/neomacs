@@ -122,7 +122,9 @@ impl Fixture {
         let before = bg::stats_snapshot().enqueued[class as usize];
         let ctx = self.ctx();
         match class {
-            JobClass::FirstSight => assert!(resolve_compiled_leaf_ptr(ctx, &self.proto).is_none()),
+            JobClass::FirstSight => {
+                assert!(unsafe { resolve_compiled_leaf_ptr(ctx, &self.proto) }.is_none())
+            }
             JobClass::Entry => assert_eq!(
                 // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
                 unsafe { try_run_compiled(ctx, &self.proto, self.one, &[Value::make_int(8)]) }
@@ -189,7 +191,7 @@ impl Fixture {
         assert_eq!(self.allocator(), RegallocChoice::Full);
         let full = compiled_leaf_ptr_for_test(self.id()).unwrap();
         let ctx = self.ctx();
-        arm_leaf_slot(ctx, &self.proto);
+        unsafe { arm_leaf_slot(ctx, &self.proto) };
         assert_eq!(self.slot(), Some(full));
         for i in 0..32 {
             self.callback(i % 2 != 0);
@@ -233,14 +235,14 @@ fn jit_bg_late_first_sight_retiers_before_callback_arming() {
         f.request(JobClass::FirstSight);
         f.publish_at(f.at + 3);
         let ctx = f.ctx();
-        let resolved = resolve_compiled_leaf_ptr(ctx, &f.proto);
+        let resolved = unsafe { resolve_compiled_leaf_ptr(ctx, &f.proto) };
         if f.allocator() == RegallocChoice::Fast {
             assert!(
                 resolved.is_none(),
                 "late Fast cannot escape through source resolution"
             );
         }
-        arm_leaf_slot(ctx, &f.proto);
+        unsafe { arm_leaf_slot(ctx, &f.proto) };
         f.assert_no_overdue_fast_slot();
         f.callback(false);
         f.callback(true);
@@ -268,9 +270,9 @@ fn jit_bg_timely_first_sight_keeps_fast_arming_and_retiers_at_crossing() {
         f.request(JobClass::FirstSight);
         f.publish_at(f.at - 3);
         let ctx = f.ctx();
-        assert!(resolve_compiled_leaf_ptr(ctx, &f.proto).is_some());
+        assert!(unsafe { resolve_compiled_leaf_ptr(ctx, &f.proto) }.is_some());
         assert_eq!(f.allocator(), RegallocChoice::Fast);
-        arm_leaf_slot(ctx, &f.proto);
+        unsafe { arm_leaf_slot(ctx, &f.proto) };
         assert!(f.slot().is_some(), "timely Fast still earns direct entry");
         for i in 0..8 {
             f.callback(i % 2 != 0);

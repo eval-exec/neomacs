@@ -466,12 +466,14 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
     } else {
         // A framed entry is always a memory entry; the key is the bare
         // constant base (no flags).
-        match call_spec_framed_run(
-            std::ptr::from_mut(ctx_ref).cast::<u8>(),
-            leaf,
-            consts as usize as u64,
-            args_ptr,
-        ) {
+        match unsafe {
+            call_spec_framed_run(
+                std::ptr::from_mut(ctx_ref).cast::<u8>(),
+                leaf,
+                consts as usize as u64,
+                args_ptr,
+            )
+        } {
             NativeRun::Ok(bits) => {
                 if ctx_ref.pop_native_backtrace_frame(bt_count) {
                     ctx_ref.depth -= 1;
@@ -496,17 +498,19 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
             other => FastRun::Framed(other),
         }
     };
-    call_spec_finish(
-        ctx,
-        callee,
-        leaf,
-        args_ptr,
-        nargs,
-        out,
-        bt_count,
-        run,
-        saved_budget,
-    )
+    unsafe {
+        call_spec_finish(
+            ctx,
+            callee,
+            leaf,
+            args_ptr,
+            nargs,
+            out,
+            bt_count,
+            run,
+            saved_budget,
+        )
+    }
 }
 
 /// Remember `leaf`, the source's current armed leaf, in a source site's

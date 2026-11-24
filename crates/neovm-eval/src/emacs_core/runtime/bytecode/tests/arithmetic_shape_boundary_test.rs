@@ -228,7 +228,7 @@ fn arithmetic_shape_dynamic_native_and_precise_deopt_match_gnu() {
         let args = arguments(&mut ctx, &case);
         let function = &functions[case.operation];
         let ctx_ptr = &mut ctx as *mut Context as *mut u8;
-        let result = match leaves[case.operation].call(ctx_ptr, &args) {
+        let result = match unsafe { leaves[case.operation].call(ctx_ptr, &args) } {
             NativeRun::Ok(bits) => {
                 native_answers += 1;
                 Ok(unsafe {

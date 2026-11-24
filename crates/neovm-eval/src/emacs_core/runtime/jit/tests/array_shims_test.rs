@@ -89,7 +89,7 @@ fn interpret(eval: &mut Context, f: &ByteCodeFunction, args: Vec<Value>) -> Stri
 }
 
 fn native(ctx_ptr: *mut u8, leaf: &CompiledLeaf, args: &[Value], what: &str) -> String {
-    match leaf.call(ctx_ptr, args) {
+    match unsafe { leaf.call(ctx_ptr, args) } {
         NativeRun::Ok(bits) => print_value(&unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -340,7 +340,7 @@ fn array_signals_are_caught_by_a_leaf_local_handler() {
         let f = lexical_fn(2, ops, vec![Value::symbol("caught"), Value::make_int(1)]);
         let leaf = compile_bytecode_function(&f).expect("compiles");
         let v = eval.eval_str("(vector 7 8)").expect("v");
-        match leaf.call(ctx_ptr, &[v, Value::make_int(9)]) {
+        match unsafe { leaf.call(ctx_ptr, &[v, Value::make_int(9)]) } {
             NativeRun::Ok(bits) => assert_eq!(
                 print_value(&unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -351,7 +351,7 @@ fn array_signals_are_caught_by_a_leaf_local_handler() {
             ),
             other => panic!("{op:?}: the handler must catch natively, got {other:?}"),
         }
-        match leaf.call(ctx_ptr, &[v, Value::make_int(1)]) {
+        match unsafe { leaf.call(ctx_ptr, &[v, Value::make_int(1)]) } {
             NativeRun::Ok(bits) => assert_eq!(
                 print_value(&unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -411,7 +411,7 @@ fn array_site_edges_keep_the_residual_alive() {
         };
         for _ in 0..3 {
             let v = eval.eval_str("(vector 0 0)").expect("v");
-            match leaf.call(ctx_ptr, &[v, Value::make_int(5)]) {
+            match unsafe { leaf.call(ctx_ptr, &[v, Value::make_int(5)]) } {
                 NativeRun::Ok(bits) => check(bits, &format!("{op:?} signal edge")),
                 other => panic!("{op:?}: must catch natively, got {other:?}"),
             }
@@ -432,7 +432,7 @@ fn array_site_edges_keep_the_residual_alive() {
             .expect("redefine");
             for _ in 0..3 {
                 let v = eval.eval_str("(vector 0 0)").expect("v");
-                match leaf.call(ctx_ptr, &[v, Value::make_int(1)]) {
+                match unsafe { leaf.call(ctx_ptr, &[v, Value::make_int(1)]) } {
                     NativeRun::Ok(bits) => check(bits, "Aset ignores collecting replacement"),
                     other => panic!("primitive opcode must run natively, got {other:?}"),
                 }
@@ -648,7 +648,7 @@ fn a_later_call_site_roots_what_only_the_aset_fallback_stored() {
     let leaf = compile_bytecode_function(&f).expect("compiles");
     for _ in 0..3 {
         let v = eval.eval_str("(vector 0 0)").expect("v");
-        match leaf.call(ctx_ptr, &[v]) {
+        match unsafe { leaf.call(ctx_ptr, &[v]) } {
             NativeRun::Ok(bits) => {
                 let h = unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */

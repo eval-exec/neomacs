@@ -423,11 +423,13 @@ fn freeze_gc_outside_brackets(ctx: &mut Context) {
 }
 
 fn native_ok(ctx: &mut Context, value: Value, leaf: &CompiledLeaf, args: &[Value]) -> Value {
-    match leaf.call_consts(
-        ctx as *mut Context as *mut u8,
-        source(value).jit_constant_base(),
-        args,
-    ) {
+    match unsafe {
+        leaf.call_consts(
+            ctx as *mut Context as *mut u8,
+            source(value).jit_constant_base(),
+            args,
+        )
+    } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)

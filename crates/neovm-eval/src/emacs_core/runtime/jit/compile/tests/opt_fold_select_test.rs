@@ -192,7 +192,8 @@ fn opt_fold_select_mixed_local_and_incoming_bool_materializes_gnu_boolean() {
                     };
                     let expected = expected.to_value();
                     assert!(expected.is_nil() || expected.is_t());
-                    let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &args)
+                    let NativeRun::Ok(bits) =
+                        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
                     else {
                         panic!("native Bool Select must return")
                     };

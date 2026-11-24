@@ -2416,10 +2416,10 @@ fn testkit_mir_cons_reconstruction_case(
     let unit = std::sync::Arc::new(LoadedUnit::new(library));
     let leaf = load_leaf_from_unit(&unit, hash, 2, &collect_reloc_consts(&m), None).unwrap();
     let float = ev.eval_str("1.5").unwrap();
-    let result = leaf.call(
-        &mut ev as *mut Context as *mut u8,
-        &[Value::make_int(7), float],
-    );
+    let vmctx = &mut ev as *mut Context as *mut u8;
+    let args = [Value::make_int(7), float];
+    // SAFETY: `vmctx` is the live owner `Context` and `args` matches arity 2.
+    let result = unsafe { leaf.call(vmctx, &args) };
     let NativeRun::DeoptAt(resume) = result else {
         panic!("precise AOT deopt expected: {result:?}")
     };
@@ -3552,7 +3552,7 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(
             let base = leaf.reloc_data.as_ptr();
             leaf.reloc_data[slot] = relocated;
             assert_eq!(leaf.reloc_data.as_ptr(), base);
-            match leaf.call(ctx as *mut u8, &[]) {
+            match unsafe { leaf.call(ctx as *mut u8, &[]) } {
                 super::compile::NativeRun::Ok(bits) => {
                     assert_eq!(
                         unsafe {

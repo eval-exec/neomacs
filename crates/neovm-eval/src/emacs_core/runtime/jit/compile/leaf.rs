@@ -1237,16 +1237,23 @@ impl CompiledLeaf {
     /// be null **only** when the body performs no runtime re-entry (it contains
     /// no `Call`); allocation (`cons`) uses the thread-local heap and tolerates
     /// a null vmctx too.
-    pub fn call(&self, vmctx: *mut u8, args: &[Value]) -> NativeRun {
-        self.call_consts(vmctx, core::ptr::null(), args)
+    /// # Safety
+    /// `vmctx` must be null (only for bodies performing no runtime re-entry)
+    /// or point to the dormant owner-thread [`Context`] alive for the call.
+    pub unsafe fn call(&self, vmctx: *mut u8, args: &[Value]) -> NativeRun {
+        unsafe { self.call_consts(vmctx, core::ptr::null(), args) }
     }
 
     /// [`call`](Self::call) with the executing callee's constant base
     /// (`callee.constants.as_ptr()`), REQUIRED when `dynamic_prefix > 0`:
     /// the leaf loads the `make-closure`-patched slots through it. Null is
     /// accepted only for an unpatched leaf (the JIT ignores the param then).
+    ///
+    /// # Safety
+    /// `vmctx` must satisfy [`Self::call`], and `consts` must be null (for
+    /// unpatched leaves) or point to the executing callee's constant table.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn call_consts(
+    pub(crate) unsafe fn call_consts(
         &self,
         vmctx: *mut u8,
         consts: *const Value,
@@ -1271,7 +1278,7 @@ impl CompiledLeaf {
             };
             arg_bits.push(rest.bits() as i64);
         }
-        self.invoke_native(vmctx, arg_bits.as_ptr(), consts)
+        unsafe { self.invoke_native(vmctx, arg_bits.as_ptr(), consts) }
     }
 
     /// Whether a call with `nargs` arguments needs NO argument normalization
@@ -1427,11 +1434,14 @@ impl CompiledLeaf {
 
     /// [`call_premarshaled_consts`](Self::call_premarshaled_consts) for an
     /// unpatched leaf (null constant base); only the JIT tests call it.
+    /// # Safety
+    /// `vmctx` must point to the dormant owner-thread [`Context`], and
+    /// `args_ptr` must address `self.arity` valid tagged words.
     #[cfg(test)]
     #[doc(hidden)]
-    pub fn call_premarshaled(&self, vmctx: *mut u8, args_ptr: *const i64) -> NativeRun {
+    pub unsafe fn call_premarshaled(&self, vmctx: *mut u8, args_ptr: *const i64) -> NativeRun {
         debug_assert!(!vmctx.is_null(), "native-to-native requires a Context");
-        self.invoke_native(vmctx, args_ptr, core::ptr::null())
+        unsafe { self.invoke_native(vmctx, args_ptr, core::ptr::null()) }
     }
 
     /// Native-to-native fast path: invoke the body with `args_ptr` addressing
@@ -1443,18 +1453,18 @@ impl CompiledLeaf {
     /// the `LispArgVec` build and the `arg_bits` re-marshal that [`call`](Self::call)
     /// pays, which is the per-call cost that dominates call-heavy compiled code.
     ///
-    /// SAFETY: `args_ptr` must address `self.arity` valid tagged words that stay
-    /// live until the native entry reads them (its first block). The spec fast
-    /// path guarantees no GC safepoint runs in between: `maybe_quit` already
-    /// returned `Ok` (which does not collect) and nothing allocates on a lisp
-    /// heap before the entry consumes its args.
+    /// # Safety
+    /// `vmctx` must point to the dormant owner-thread [`Context`], `consts`
+    /// must point to the callee's constant table when `dynamic_prefix > 0`, and
+    /// `args_ptr` must address `self.arity` valid tagged words that stay live
+    /// until the native entry reads them.
     ///
     /// For a FRAMED body ([`EntryShape::Framed`]: the spec shim's and
     /// `run_resolved_leaf_native`'s framed halves), which always has the
     /// memory ABI (`LeafAbi::for_build`), so it runs the memory entry with no
     /// ABI test.
     #[doc(hidden)]
-    pub fn call_premarshaled_consts(
+    pub unsafe fn call_premarshaled_consts(
         &self,
         vmctx: *mut u8,
         consts: *const Value,
@@ -1462,7 +1472,7 @@ impl CompiledLeaf {
     ) -> NativeRun {
         debug_assert!(!vmctx.is_null(), "native-to-native requires a Context");
         debug_assert_eq!(self.entry_shape, EntryShape::Framed);
-        self.invoke_native_frame::<false, false>(vmctx, args_ptr, consts, None)
+        unsafe { self.invoke_native_frame::<false, false>(vmctx, args_ptr, consts, None) }
     }
 
     /// The post-marshaling tail shared by [`call`](Self::call) and
@@ -1475,21 +1485,24 @@ impl CompiledLeaf {
     /// The entry's ABI picks the specialization; the framed callers, whose
     /// bodies always have the memory ABI, skip the test
     /// ([`call_premarshaled_consts`](Self::call_premarshaled_consts)).
+    ///
+    /// # Safety
+    /// `vmctx`, `args_ptr`, and `consts` must satisfy [`Self::invoke_native_frame`].
     #[inline(always)]
     #[doc(hidden)]
-    pub fn invoke_native(
+    pub unsafe fn invoke_native(
         &self,
         vmctx: *mut u8,
         args_ptr: *const i64,
         consts: *const Value,
     ) -> NativeRun {
         match self.abi {
-            LeafAbi::Memory => {
+            LeafAbi::Memory => unsafe {
                 self.invoke_native_frame::<false, false>(vmctx, args_ptr, consts, None)
-            }
-            LeafAbi::Register { .. } => {
+            },
+            LeafAbi::Register { .. } => unsafe {
                 self.invoke_native_frame::<false, true>(vmctx, args_ptr, consts, None)
-            }
+            },
         }
     }
 
@@ -1497,9 +1510,12 @@ impl CompiledLeaf {
     /// appended to `jit_bind_stack`. The suspended VM retains final frame cleanup;
     /// native exit cleans only to the transfer's specpdl depth. Precise deopt
     /// returns the evolved segment without unwinding it.
+    ///
+    /// # Safety
+    /// `vmctx`, `args_ptr`, and `consts` must satisfy [`Self::invoke_native_frame`].
     #[inline]
     #[doc(hidden)]
-    pub fn invoke_osr(
+    pub unsafe fn invoke_osr(
         &self,
         vmctx: *mut u8,
         args_ptr: *const i64,
@@ -1507,15 +1523,19 @@ impl CompiledLeaf {
         bind_frame: Option<(usize, usize)>,
     ) -> NativeRun {
         // An OSR entry always has the memory ABI (`LeafAbi::for_build`).
-        self.invoke_native_frame::<true, false>(vmctx, args_ptr, consts, bind_frame)
+        unsafe { self.invoke_native_frame::<true, false>(vmctx, args_ptr, consts, bind_frame) }
     }
 
     // Separate specializations keep OSR frame selection out of ordinary native
     // calls. Only the cold OSR entry supplies a borrowed binding segment.
     // `REGISTER` is the entry's ABI, fixed per specialization so a memory
     // entry makes no ABI test.
+    /// # Safety
+    /// `vmctx` must be null (only for bodies needing no Context) or point to the
+    /// dormant owner-thread [`Context`], `args_ptr` must address `self.arity`
+    /// valid tagged words, and `consts` must be valid when `dynamic_prefix > 0`.
     #[doc(hidden)]
-    pub fn invoke_native_frame<const OSR: bool, const REGISTER: bool>(
+    pub unsafe fn invoke_native_frame<const OSR: bool, const REGISTER: bool>(
         &self,
         vmctx: *mut u8,
         args_ptr: *const i64,
@@ -1685,7 +1705,7 @@ impl CompiledLeaf {
         }
         sweep_pending_root_floor(&bases);
         if status == STATUS_DEOPT_AT {
-            let outcome = self.deopt_at_outcome(vmctx, bind_frame, cond_base);
+            let outcome = unsafe { self.deopt_at_outcome(vmctx, bind_frame, cond_base) };
             if matches!(outcome, NativeRun::Signal)
                 && let Some(bases) = &bases
             {
@@ -1733,8 +1753,9 @@ impl CompiledLeaf {
             // Everything below the fast path is a no-op unless a signal is
             // pending or this leaf registered frames — outlined so the hot
             // OK-exit stops paying their register spills.
-            status =
-                self.cold_frame_exit(vmctx, status, out, bind_frame, cond_base, bases.as_ref());
+            status = unsafe {
+                self.cold_frame_exit(vmctx, status, out, bind_frame, cond_base, bases.as_ref())
+            };
         }
         sweep_pending_root_floor(&bases);
         match status {
@@ -1771,10 +1792,13 @@ impl CompiledLeaf {
     /// Precise-deopt outcome construction — cold by definition (a failed
     /// speculation guard), outlined so `invoke_native`'s hot exit carries
     /// none of its Vec/TLS frame weight.
+    /// # Safety
+    /// `vmctx` must be null or point to the dormant owner-thread [`Context`]
+    /// whose deopt spill slots were just populated by this leaf's exit.
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub fn deopt_at_outcome(
+    pub unsafe fn deopt_at_outcome(
         &self,
         vmctx: *mut u8,
         bind_frame: Option<(usize, usize)>,
@@ -1919,11 +1943,15 @@ impl CompiledLeaf {
     /// observers before retiring this frame's handlers and dynamic bindings
     /// (`src/eval.c:1966-2059`). Contained panics retain their separate healing
     /// and parking protocol across Lisp unwind cleanups.
+    /// # Safety
+    /// `vmctx` must point to the dormant owner-thread [`Context`], and when
+    /// `status == STATUS_OK`, `out` must hold the valid tagged bits of the
+    /// leaf's return `Value`.
     #[cold]
     #[inline(never)]
     #[allow(clippy::too_many_arguments)] // mirrors invoke_native's locals
     #[doc(hidden)]
-    pub(crate) fn cold_frame_exit(
+    pub(crate) unsafe fn cold_frame_exit(
         &self,
         vmctx: *mut u8,
         status: i64,
@@ -2050,7 +2078,7 @@ impl CompiledLeaf {
             !self.needs_vmctx,
             "a body with inline heap sites reads its vmctx: run it on a real Context"
         );
-        match self.call(core::ptr::null_mut(), args) {
+        match unsafe { self.call(core::ptr::null_mut(), args) } {
             NativeRun::Ok(bits) => Some(bits),
             NativeRun::Deopt | NativeRun::DeoptAt(_) => None,
             NativeRun::Signal => panic!("unexpected STATUS_SIGNAL from a test body"),

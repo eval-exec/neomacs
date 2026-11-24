@@ -130,10 +130,12 @@ fn opt_profit_lists_selected_list_upgrade_preserves_result_and_mutation() {
     let pair = Value::cons(Value::make_int(-1), Value::NIL);
     crate::emacs_core::eval::push_scratch_gc_root(pair);
     assert_eq!(
-        selected.call(
-            &mut context as *mut Context as *mut u8,
-            &[pair, Value::make_int(4)]
-        ),
+        unsafe {
+            selected.call(
+                &mut context as *mut Context as *mut u8,
+                &[pair, Value::make_int(4)],
+            )
+        },
         NativeRun::Ok(Value::make_int(4).bits())
     );
     assert_eq!(pair.cons_car(), Value::make_int(3));
@@ -141,10 +143,12 @@ fn opt_profit_lists_selected_list_upgrade_preserves_result_and_mutation() {
     let legacy = compile(&f, CompileTier::Upgrade(T2Upgrade::Retier));
     assert_eq!(legacy.selected_tier(), SelectedTier::Baseline);
     assert_eq!(
-        legacy.call(
-            &mut context as *mut Context as *mut u8,
-            &[pair, Value::make_int(6)]
-        ),
+        unsafe {
+            legacy.call(
+                &mut context as *mut Context as *mut u8,
+                &[pair, Value::make_int(6)],
+            )
+        },
         NativeRun::Ok(Value::make_int(6).bits())
     );
     assert_eq!(pair.cons_car(), Value::make_int(5));

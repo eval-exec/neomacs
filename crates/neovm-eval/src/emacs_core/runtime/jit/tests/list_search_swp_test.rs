@@ -83,7 +83,7 @@ fn native(
     args: &[Value],
     what: &str,
 ) -> Result<Value, Flow> {
-    match leaf.call(ctx_ptr, args) {
+    match unsafe { leaf.call(ctx_ptr, args) } {
         NativeRun::Ok(bits) => Ok(unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)

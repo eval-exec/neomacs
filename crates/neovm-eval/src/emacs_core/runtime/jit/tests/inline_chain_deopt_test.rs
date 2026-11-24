@@ -113,7 +113,7 @@ fn inline_chain_deopt_readback_splits_binds_and_preserves_cross_frame_cons_alias
     );
     leaf.deopt_meta.pc.set(17);
     let NativeRun::DeoptAt(resume) =
-        leaf.deopt_at_outcome(&mut ctx as *mut Context as *mut u8, Some((0, 1)), None)
+        (unsafe { leaf.deopt_at_outcome(&mut ctx as *mut Context as *mut u8, Some((0, 1)), None) })
     else {
         panic!("a valid chain reads back");
     };
@@ -163,7 +163,9 @@ fn inline_chain_deopt_native_raw_fixnum_spill_is_retagged_before_readback() {
     }]
     .into_boxed_slice();
     leaf.deopt_meta.chain.set(0);
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &[]) else {
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[]) })
+    else {
         panic!("mixed Max must deopt");
     };
     assert_eq!(resume.stack[0].as_fixnum(), Some(8));
@@ -208,14 +210,16 @@ fn inline_chain_deopt_native_flonum_spill_boxes_aliases_once() {
     }]
     .into_boxed_slice();
     leaf.deopt_meta.chain.set(0);
-    let NativeRun::DeoptAt(resume) = leaf.call(
-        &mut ctx as *mut Context as *mut u8,
-        &[
-            Value::make_float(1.5),
-            Value::make_float(2.0),
-            Value::symbol("chain-nonnumeric"),
-        ],
-    ) else {
+    let NativeRun::DeoptAt(resume) = (unsafe {
+        leaf.call(
+            &mut ctx as *mut Context as *mut u8,
+            &[
+                Value::make_float(1.5),
+                Value::make_float(2.0),
+                Value::symbol("chain-nonnumeric"),
+            ],
+        )
+    }) else {
         panic!("symbol arithmetic must deopt");
     };
     assert_eq!(resume.stack[3].as_float(), Some(3.0));
@@ -255,7 +259,7 @@ fn inline_chain_deopt_owned_payload_resumes_virtual_frames() {
         &[inner],
     );
     let NativeRun::DeoptAt(resume) =
-        leaf.deopt_at_outcome(&mut ctx as *mut Context as *mut u8, None, None)
+        (unsafe { leaf.deopt_at_outcome(&mut ctx as *mut Context as *mut u8, None, None) })
     else {
         panic!("valid readback")
     };
@@ -310,7 +314,7 @@ fn inline_chain_deopt_consumer_uses_native_guard_pc_for_repeat_threshold() {
         .reason
         .set(DeoptCause::ArithOverflow.reason_code());
     let NativeRun::DeoptAt(resume) =
-        leaf.deopt_at_outcome(&mut ctx as *mut Context as *mut u8, None, None)
+        (unsafe { leaf.deopt_at_outcome(&mut ctx as *mut Context as *mut u8, None, None) })
     else {
         panic!("valid chain readback")
     };
@@ -415,7 +419,7 @@ fn inline_chain_deopt_invalid_site_signals_and_resets_before_single_frame() {
     .unwrap();
     leaf.deopt_meta.chain.set(7);
     assert_eq!(
-        leaf.call(&mut ctx as *mut Context as *mut u8, &[]),
+        unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[]) },
         NativeRun::Signal
     );
     // GNU signal_or_quit (eval.c:1978-1982) normalizes an undeclared
@@ -436,7 +440,9 @@ fn inline_chain_deopt_invalid_site_signals_and_resets_before_single_frame() {
         }
     );
     assert_eq!(leaf.deopt_meta.chain.get(), DeoptCells::SINGLE_FRAME);
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &[]) else {
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[]) })
+    else {
         panic!("next single-frame deopt remains valid");
     };
     assert!(resume.chain.is_none() && resume.inlined.is_none());
@@ -463,13 +469,15 @@ fn inline_chain_deopt_direct_cold_forwards_invalid_metadata_signal() {
         },
         &[],
     );
-    let outcome = crate::emacs_core::jit::cache::direct_call_cold(
-        &mut ctx,
-        &f,
-        Value::NIL,
-        &leaf,
-        compile::STATUS_DEOPT_AT,
-    );
+    let outcome = unsafe {
+        crate::emacs_core::jit::cache::direct_call_cold(
+            &mut ctx,
+            &f,
+            Value::NIL,
+            &leaf,
+            compile::STATUS_DEOPT_AT,
+        )
+    };
     assert!(matches!(
         outcome,
         crate::emacs_core::jit::cache::NativeCallOutcome::FlowStashed

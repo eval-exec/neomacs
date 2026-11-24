@@ -76,7 +76,7 @@ fn successful_cfg_is_shared_across_mir_fuser_and_lower_view() {
     )
     .expect("unchanged baseline uses the same successful source");
     assert!(matches!(
-        leaf.call(std::ptr::null_mut(), &[]),
+        unsafe { leaf.call(std::ptr::null_mut(), &[]) },
         super::super::NativeRun::Ok(bits) if bits == Value::fixnum(9).bits()
     ));
     assert!(std::ptr::eq(
@@ -109,7 +109,7 @@ fn mir_refusal_preserves_successful_cfg_for_fuser_and_baseline() {
     )
     .expect("the existing baseline accepts the dead leader");
     assert!(matches!(
-        leaf.call(std::ptr::null_mut(), &[]),
+        unsafe { leaf.call(std::ptr::null_mut(), &[]) },
         super::super::NativeRun::Ok(bits) if bits == Value::fixnum(9).bits()
     ));
     assert!(std::ptr::eq(

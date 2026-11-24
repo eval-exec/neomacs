@@ -1504,17 +1504,21 @@ pub(crate) const SPEC_EPOCH_DISARMED: u64 = u64::MAX;
 /// `target` is scratch-rooted across the call; the args are rooted by the
 /// operand stack. Out of line, as both strict calls: inlined, they cost the
 /// shim's slow half its frame size and register assignment.
+/// # Safety
+/// `args_ptr` must address `nargs` valid tagged words for the entire call.
 #[cfg(feature = "jit")]
 #[inline(never)]
-fn call_for_jit_from_native(
+unsafe fn call_for_jit_from_native(
     ctx: &mut Context,
     target: Value,
     args_ptr: *const i64,
     nargs: usize,
 ) -> neovm_value::error::EvalResult {
-    stack_call_from_native(ctx, target, args_ptr, nargs, |vm, args_start| unsafe {
-        vm.call_for_jit_stack(target, args_start, nargs)
-    })
+    unsafe {
+        stack_call_from_native(ctx, target, args_ptr, nargs, |vm, args_start| {
+            vm.call_for_jit_stack(target, args_start, nargs)
+        })
+    }
 }
 
 /// [`call_for_jit_from_native`] for an armed spec site whose callee the leaf
@@ -1523,26 +1527,34 @@ fn call_for_jit_from_native(
 /// `callee`, so the stack call runs `callee` without resolving the symbol
 /// again (`Vm::call_resolved_bytecode_for_jit_stack`), and its frame records
 /// `called`, as GNU's `Bcall` does.
+///
+/// # Safety
+/// `args_ptr` must address `nargs` valid tagged words for the entire call.
 #[cfg(feature = "jit")]
 #[inline(never)]
-fn call_resolved_for_jit_from_native(
+unsafe fn call_resolved_for_jit_from_native(
     ctx: &mut Context,
     called: Value,
     callee: Value,
     args_ptr: *const i64,
     nargs: usize,
 ) -> neovm_value::error::EvalResult {
-    stack_call_from_native(ctx, callee, args_ptr, nargs, |vm, args_start| {
-        vm.call_resolved_bytecode_for_jit_stack(called, callee, args_start, nargs)
-    })
+    unsafe {
+        stack_call_from_native(ctx, callee, args_ptr, nargs, |vm, args_start| {
+            vm.call_resolved_bytecode_for_jit_stack(called, callee, args_start, nargs)
+        })
+    }
 }
 
 /// The operand-stack setup of the strict calls above: `root` scratch-rooted
 /// and the caller's `nargs` argument words pushed onto `bc_buf` (GC-traced)
 /// for the duration of `call`, which gets their start index.
+///
+/// # Safety
+/// `args_ptr` must address `nargs` valid tagged words for the entire call.
 #[cfg(feature = "jit")]
 #[inline(always)]
-fn stack_call_from_native(
+unsafe fn stack_call_from_native(
     ctx: &mut Context,
     root: Value,
     args_ptr: *const i64,
@@ -1790,12 +1802,14 @@ macro_rules! spec_call_body {
                         true,
                     );
                 }
-                match call_spec_framed_run(
-                    std::ptr::from_mut(ctx_ref).cast::<u8>(),
-                    leaf,
-                    direct_consts,
-                    frame_args,
-                ) {
+                match unsafe {
+                    call_spec_framed_run(
+                        std::ptr::from_mut(ctx_ref).cast::<u8>(),
+                        leaf,
+                        direct_consts,
+                        frame_args,
+                    )
+                } {
                     NativeRun::Ok(bits) => {
                         #[cfg(any(test, debug_assertions, feature = "test-support"))]
                         crate::emacs_core::jit::cache::NATIVE_OK_COUNT
@@ -1980,8 +1994,12 @@ unsafe fn spec_rest_frame(
 /// marker set; the shim returns STATUS_SIGNAL at once and leaves the
 /// healing to the caller leaf's exit (see the fast path).
 /// `key` is the slot's fast-path key, the constant base with its flags.
+/// # Safety
+/// `ctx` must point to the dormant owner-thread [`Context`], `key` must encode
+/// a valid constant base for `leaf`, and `args_ptr` must address `leaf.arity`
+/// valid tagged words.
 #[inline(never)]
-pub(super) fn call_spec_framed_run(
+pub(super) unsafe fn call_spec_framed_run(
     ctx: *mut u8,
     leaf: &CompiledLeaf,
     key: u64,
@@ -1989,7 +2007,7 @@ pub(super) fn call_spec_framed_run(
 ) -> NativeRun {
     let consts = (key & !SpecSlot::KEY_FLAGS) as usize as *const Value;
     jit_shim_contain!(ctx, NativeRun::Signal, {
-        leaf.call_premarshaled_consts(ctx, consts, args_ptr)
+        unsafe { leaf.call_premarshaled_consts(ctx, consts, args_ptr) }
     })
 }
 
@@ -2032,10 +2050,14 @@ pub(super) enum FastRun {
 /// resume, interpreter rerun, the depth and frame pops -- under the
 /// panic-containment frame those steps need. Runs with the callee's depth
 /// still counted and its frame still pushed.
+/// # Safety
+/// `ctx` must point to the dormant owner-thread [`Context`], `args_ptr` must
+/// address `nargs` readable tagged words, and `out` must point to a writable
+/// `i64` result slot.
 #[cold]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)] // the fast path's live state, handed over whole
-pub(super) fn call_spec_finish(
+pub(super) unsafe fn call_spec_finish(
     ctx: *mut u8,
     callee: Value,
     leaf: &CompiledLeaf,
@@ -2061,11 +2083,13 @@ pub(super) fn call_spec_finish(
             FastRun::Raw(status) => {
                 #[cfg(any(test, debug_assertions, feature = "test-support"))]
                 cache::count_native_status(status);
-                cache::direct_call_cold(std::ptr::from_mut(ctx), bc, callee, leaf, status)
+                unsafe {
+                    cache::direct_call_cold(std::ptr::from_mut(ctx), bc, callee, leaf, status)
+                }
             }
-            FastRun::Framed(outcome) => {
+            FastRun::Framed(outcome) => unsafe {
                 cache::finish_framed_run(std::ptr::from_mut(ctx), bc, callee, leaf, outcome)
-            }
+            },
         };
         // The native run is over, including any precise-deopt resume it
         // handed to the interpreter (that resume continues THIS frame, so
@@ -2127,8 +2151,13 @@ pub(super) fn call_spec_finish(
 /// epoch check and re-validation, and the call through
 /// `Vm::call_armed_callee_native` (which arms the slot's fast-path key) or
 /// the strict path.
+/// # Safety
+/// `ctx` must point to the dormant owner-thread [`Context`], `sym_bits` and
+/// `expected` must be valid tagged `Value` words from the compiled call site,
+/// `args_ptr` must address `nargs` readable tagged words, and `out` must point
+/// to a writable `i64` result slot.
 #[inline(never)]
-fn call_spec_slow(
+unsafe fn call_spec_slow(
     ctx: *mut u8,
     sym_bits: i64,
     expected: i64,
@@ -2251,14 +2280,14 @@ fn call_spec_slow(
                         // proof says the symbol names, so it resolves
                         // nothing again; its frame records the SYMBOL, as
                         // GNU's `Bcall` does and as the unarmed call below.
-                        None => NativeCallOutcome::from_result(call_resolved_for_jit_from_native(
-                            ctx, called, target, args_ptr, nargs,
-                        )),
+                        None => NativeCallOutcome::from_result(unsafe {
+                            call_resolved_for_jit_from_native(ctx, called, target, args_ptr, nargs)
+                        }),
                     }
                 } else {
-                    NativeCallOutcome::from_result(call_for_jit_from_native(
-                        ctx, called, args_ptr, nargs,
-                    ))
+                    NativeCallOutcome::from_result(unsafe {
+                        call_for_jit_from_native(ctx, called, args_ptr, nargs)
+                    })
                 };
                 match outcome {
                     NativeCallOutcome::Value(value) => {
@@ -2547,9 +2576,12 @@ fn screen_fixed_builtin(target: Value, nargs: usize) -> Option<FixedBuiltinEntry
 /// the shim's, so the inline form only adds a class-dispatch jump table and
 /// the builtin call site to the caller. See the turn-2 report for the
 /// measured hit-path Ir and the shim's census size.
+/// # Safety
+/// `args_ptr` must address `nargs` valid tagged words for the duration of the
+/// call, and `entry` must be a valid screened fixed-arity builtin entry.
 #[cfg(feature = "jit")]
 #[inline(always)]
-fn run_screened_fixed_builtin(
+unsafe fn run_screened_fixed_builtin(
     ctx: &mut Context,
     sym_id: SymId,
     entry: FixedBuiltinEntry,
@@ -2622,8 +2654,10 @@ fn run_screened_fixed_builtin(
 /// [`screen_fixed_builtin`]). On a successful screen the entry is cached in
 /// `slot` for the armed fast path's next calls
 /// (`SpecSlot::cache_screened_subr_entry`).
+/// # Safety
+/// `args_ptr` must address `nargs` valid tagged words for the entire call.
 #[cfg(feature = "jit")]
-fn call_fixed_builtin_from_native(
+unsafe fn call_fixed_builtin_from_native(
     ctx: &mut Context,
     sym_id: SymId,
     target: Value,
@@ -2635,9 +2669,7 @@ fn call_fixed_builtin_from_native(
     if let Some(encoded) = SpecSlot::pack_screened_subr_entry(entry.fn_ptr, entry.slots) {
         slot.cache_screened_subr_entry(encoded);
     }
-    Some(run_screened_fixed_builtin(
-        ctx, sym_id, entry, args_ptr, nargs,
-    ))
+    Some(unsafe { run_screened_fixed_builtin(ctx, sym_id, entry, args_ptr, nargs) })
 }
 
 /// Preserve signal-hook ordering and the general unwinder for non-local
@@ -2824,12 +2856,14 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_subr_spec(
                 None
             };
             let res = match screened {
-                Some(entry) => Some(run_screened_fixed_builtin(
-                    ctx, sym_id, entry, args_ptr, nargs,
-                )),
+                Some(entry) => Some(unsafe {
+                    run_screened_fixed_builtin(ctx, sym_id, entry, args_ptr, nargs)
+                }),
                 None => {
                     let target = unsafe { /* SAFETY: JIT constant-pool word */ Value::from_bits(expected as usize) };
-                    call_fixed_builtin_from_native(ctx, sym_id, target, slot, args_ptr, nargs)
+                    unsafe {
+                        call_fixed_builtin_from_native(ctx, sym_id, target, slot, args_ptr, nargs)
+                    }
                 }
             };
             if let Some(res) = res {
@@ -2845,16 +2879,18 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_subr_spec(
                     }
                 };
             }
-            return call_stack_builtin_from_native(
-                ctx,
-                sym_id,
-                unsafe { /* SAFETY: JIT constant-pool word */ Value::from_bits(expected as usize) },
-                args_ptr,
-                nargs,
-                out,
-            );
+            return unsafe {
+                call_stack_builtin_from_native(
+                    ctx,
+                    sym_id,
+                    Value::from_bits(expected as usize),
+                    args_ptr,
+                    nargs,
+                    out,
+                )
+            };
         }
-        subr_spec_call_reference(ctx, sym, expected, slot, args_ptr, nargs, out)
+        unsafe { subr_spec_call_reference(ctx, sym, expected, slot, args_ptr, nargs, out) }
     })
 }
 
@@ -2863,8 +2899,13 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_subr_spec(
 /// fixed-arity call or the stack path. Runs inside the shim's containment
 /// frame. `#[inline(never)]`, not `#[cold]`: re-validation after an epoch
 /// move is routine while `.el` files load.
+///
+/// # Safety
+/// `expected` must be valid tagged bits of a live subr `Value`, `args_ptr` must
+/// address `nargs` readable tagged words, and `out` must point to a writable
+/// `i64` result slot.
 #[inline(never)]
-fn subr_spec_call_reference(
+unsafe fn subr_spec_call_reference(
     ctx: &mut Context,
     sym: i64,
     expected: i64,
@@ -2896,16 +2937,17 @@ fn subr_spec_call_reference(
     // Everything else (Many/slice subrs, an arity the fixed entry rejects,
     // a debugger armed) takes the stack path below, the reference protocol.
     if !ctx.debug_on_next_call_is_armed()
-        && let Some(res) =
+        && let Some(res) = unsafe {
             // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
             call_fixed_builtin_from_native(
                 ctx,
-                unsafe { SymId::from_raw(sym as u32) },
+                SymId::from_raw(sym as u32),
                 target,
                 slot,
                 args_ptr,
                 nargs,
             )
+        }
     {
         return match res {
             Ok(value) => {
@@ -2920,21 +2962,27 @@ fn subr_spec_call_reference(
         };
     }
     // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
-    call_stack_builtin_from_native(
-        ctx,
-        unsafe { SymId::from_raw(sym as u32) },
-        target,
-        args_ptr,
-        nargs,
-        out,
-    )
+    unsafe {
+        call_stack_builtin_from_native(
+            ctx,
+            SymId::from_raw(sym as u32),
+            target,
+            args_ptr,
+            nargs,
+            out,
+        )
+    }
 }
 
 /// Stack-argument fallback for an armed native subr call. Keep its argument
 /// staging and bytecode-frame temporaries out of the fixed-arity shim's stack
 /// layout. This still runs inside that shim's panic-containment boundary.
+///
+/// # Safety
+/// `args_ptr` must address `nargs` readable tagged words for the entire call,
+/// and `out` must point to a writable `i64` result slot.
 #[inline(never)]
-fn call_stack_builtin_from_native(
+unsafe fn call_stack_builtin_from_native(
     ctx: &mut Context,
     sym_id: SymId,
     target: Value,

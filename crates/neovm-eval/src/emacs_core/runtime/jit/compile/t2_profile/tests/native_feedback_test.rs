@@ -175,7 +175,7 @@ fn tier2_native_use_source_guard_miss_widens_the_stable_snapshot() {
     let a_data = a.get_bytecode_data().expect("callback source");
     // Arm A first so matching source-slot hits have no generic decline.
     assert_eq!(run(&mut ctx, a_data, &[]), Value::make_int(1));
-    cache::arm_leaf_slot(&mut ctx as *mut Context, a_data);
+    unsafe { cache::arm_leaf_slot(&mut ctx as *mut Context, a_data) };
     assert!(
         a_data
             .jit_runtime()
@@ -293,7 +293,7 @@ fn tier2_native_use_static_mapping_records_callback_in_its_leaf_window() {
     let count = site.count();
     // Execute this old activation directly; a cache seam would install T2.
     assert!(
-        matches!(t1.call((&mut ctx as *mut Context).cast(), &[b, seq]), NativeRun::Ok(bits) if bits == seq.bits())
+        matches!(unsafe { t1.call((&mut ctx as *mut Context).cast(), &[b, seq]) }, NativeRun::Ok(bits) if bits == seq.bits())
     );
     assert_eq!(site.count(), count);
     assert_eq!(source_count(site), 1, "static and fallback paths both stop");
@@ -358,7 +358,7 @@ fn tier2_native_use_off_osr_and_upgrade_leave_native_recording_absent() {
         .expect("entry backend");
         assert!(!compiled.obs.t2.profiling());
         assert!(
-            matches!(compiled.call((&mut ctx as *mut Context).cast(), &[b, Value::make_int(4)]), NativeRun::Ok(bits) if bits == Value::make_int(4).bits())
+            matches!(unsafe { compiled.call((&mut ctx as *mut Context).cast(), &[b, Value::make_int(4)]) }, NativeRun::Ok(bits) if bits == Value::make_int(4).bits())
         );
         assert_eq!(
             site.count(),

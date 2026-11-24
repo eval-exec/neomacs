@@ -222,7 +222,7 @@ unsafe extern "C" fn neovm_jit_call_recording(
     out: *mut i64,
     site: *const CallSiteFeedback,
 ) -> i64 {
-    record_at(site, func_bits, args_ptr, nargs);
+    unsafe { record_at(site, func_bits, args_ptr, nargs) };
     // SAFETY: this shim's contract above covers ctx, args_ptr and out.
     unsafe { neovm_jit_call(ctx, func_bits, args_ptr, nargs, out) }
 }
@@ -269,7 +269,7 @@ unsafe extern "C" fn neovm_jit_apply_recording(
     out: *mut i64,
     site: *const CallSiteFeedback,
 ) -> i64 {
-    record_at(site, func_bits, args_ptr, nargs);
+    unsafe { record_at(site, func_bits, args_ptr, nargs) };
     // SAFETY: the recording shim's contract covers ctx, args_ptr and out.
     unsafe { neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out) }
 }
@@ -298,8 +298,13 @@ pub(crate) unsafe extern "C" fn neovm_jit_record_call_target<const WINDOWED: boo
 /// The recording half of the `_prof` shims. Touches only the site's
 /// atomics and, on a transition, Rust-heap `Weak`s: no Lisp allocation, no
 /// safepoint, no unwind.
+///
+/// # Safety
+/// `site` must point to a live [`CallSiteFeedback`] owned by the executing
+/// leaf, `func_bits` must be the valid tagged bits of a live `Value`, and when
+/// `nargs > 0`, `args_ptr` must point to at least one readable tagged word.
 #[inline(always)]
-pub(super) fn record_at(
+pub(super) unsafe fn record_at(
     site: *const CallSiteFeedback,
     func_bits: i64,
     args_ptr: *const i64,

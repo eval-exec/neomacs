@@ -189,7 +189,7 @@ fn exercise(preadmitted: bool, osr: bool) {
     let source_data = source.get_bytecode_data().unwrap();
     // Compilation happens before the make-thread inside the native callback.
     let result = if osr {
-        cache::prepare_osr_for_test(&mut context, source_data, 1);
+        unsafe { cache::prepare_osr_for_test(&mut context, source_data, 1) };
         let _leaf = cache::osr_leaf_ptr_for_test(source_data, 1).expect("baseline OSR leaf");
         // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
         let run =
@@ -221,7 +221,7 @@ fn exercise(preadmitted: bool, osr: bool) {
             resume.cond_base,
         )
     } else {
-        cache::prepare_entry_for_test(&mut context, source_data);
+        unsafe { cache::prepare_entry_for_test(&mut context, source_data) };
         let id = source_data.jit_runtime().compiled_id().unwrap();
         let original_pointer =
             cache::compiled_leaf_ptr_for_test(id).expect("original baseline leaf");

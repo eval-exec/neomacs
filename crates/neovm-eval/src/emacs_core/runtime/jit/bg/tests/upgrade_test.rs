@@ -104,7 +104,7 @@ fn jit_bg_upgrade_serves_old_native_until_successful_install() {
     assert_eq!(cache::cache_entry_kind_for_test(id), "upgrading");
     assert!(old.obs.t2.reserved_us.get() > 0);
     assert!(
-        cache::resolve_compiled_leaf_ptr(&mut ctx, &f).is_none(),
+        unsafe { cache::resolve_compiled_leaf_ptr(&mut ctx, &f) }.is_none(),
         "old raw slots must not bypass future probes"
     );
     assert_eq!(

@@ -32,18 +32,18 @@ fn mir_named_reads_follow_buffer_state_and_ignore_function_redefinition() {
     ev.eval_str("(insert \"abc\") (goto-char 2)").unwrap();
     let ctx = &mut ev as *mut Context as *mut u8;
     assert_eq!(
-        leaf.call(ctx, &[]),
+        unsafe { leaf.call(ctx, &[]) },
         NativeRun::Ok(Value::make_int(3).bits())
     );
     ev.eval_str("(fset 'point (lambda () 99)) (goto-char 4)")
         .unwrap();
     assert_eq!(
-        leaf.call(ctx, &[]),
+        unsafe { leaf.call(ctx, &[]) },
         NativeRun::Ok(Value::make_int(5).bits())
     );
     ev.eval_str("(narrow-to-region 2 3) (goto-char 2)").unwrap();
     assert_eq!(
-        leaf.call(ctx, &[]),
+        unsafe { leaf.call(ctx, &[]) },
         NativeRun::Ok(Value::make_int(3).bits())
     );
 }
@@ -66,7 +66,7 @@ fn mir_named_calls_signal_with_the_same_payload_as_the_interpreter() {
         let m = mir::build_mir(f.ops(), f.constants(), None, 0).unwrap();
         let leaf = lower_mir_pure(&m).unwrap();
         assert_eq!(
-            leaf.call(&mut ev as *mut Context as *mut u8, &[]),
+            unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[]) },
             NativeRun::Signal
         );
         let actual = take_pending_flow().unwrap();
@@ -112,7 +112,7 @@ fn mir_named_read_loop_observes_gc_hook_changes() {
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).unwrap();
     assert_eq!(leaf.tier, leaf::LeafTier::Mir);
     ev.gc_stress = true;
-    let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(600)]);
+    let result = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(600)]) };
     ev.gc_stress = false;
     assert_eq!(result, NativeRun::Ok(Value::make_int(4).bits()));
     assert_eq!(ev.jit_root_stack_top, 0);

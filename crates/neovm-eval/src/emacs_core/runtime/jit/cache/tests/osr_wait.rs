@@ -139,7 +139,7 @@ fn call(ctx: &mut Context, f: &ByteCodeFunction) -> Option<usize> {
 }
 
 fn entry_tier(ctx: &mut Context, f: &ByteCodeFunction) -> SelectedTier {
-    let leaf = resolve_compiled_leaf_ptr(ctx, f).expect("a native entry");
+    let leaf = unsafe { resolve_compiled_leaf_ptr(ctx, f) }.expect("a native entry");
     // SAFETY: cached leaves stay allocated; no native frame is live.
     unsafe { &*leaf }.selected_tier()
 }

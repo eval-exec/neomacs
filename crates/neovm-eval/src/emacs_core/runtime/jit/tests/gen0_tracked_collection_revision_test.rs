@@ -134,7 +134,7 @@ impl Store {
                 vec![owner, Value::make_int(self.slot() as i64), value]
             }
         };
-        match leaf.call(context as *mut Context as *mut u8, &args) {
+        match unsafe { leaf.call(context as *mut Context as *mut u8, &args) } {
             NativeRun::Ok(bits) => assert_eq!(bits, value.bits()),
             other => panic!("tracked setter must complete natively: {other:?}"),
         }

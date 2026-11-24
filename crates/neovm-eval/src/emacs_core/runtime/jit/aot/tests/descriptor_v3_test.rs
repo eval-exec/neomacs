@@ -70,7 +70,7 @@ fn a_pooled_reloc_is_the_pool_element_at_its_index() {
     let unit = std::sync::Arc::new(super::super::compile::LoadedUnit::new(lib));
     let leaf = load_leaf_from_unit(&unit, hash, 1, &constants, None).expect("load");
     let ctx = &mut eval as *mut crate::emacs_core::eval::Context as *mut u8;
-    let bits = match leaf.call(ctx, &[Value::make_int(0)]) {
+    let bits = match unsafe { leaf.call(ctx, &[Value::make_int(0)]) } {
         crate::emacs_core::jit::compile::NativeRun::Ok(bits) => bits,
         other => panic!("AOT leaf: {other:?}"),
     };

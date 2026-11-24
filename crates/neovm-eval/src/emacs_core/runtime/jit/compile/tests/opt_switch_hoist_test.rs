@@ -180,7 +180,9 @@ fn opt_switch_hoist_stale_entry_resumes_before_dispatch() {
     assert_eq!(native_ok(&mut ctx, &leaf, &args), expected);
     put(f.constants()[2], Value::symbol("a"), 14);
     let expected = tier0(&mut ctx, &f, &args).unwrap();
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &args) else {
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
+    else {
         panic!("stale preheader must exit");
     };
     assert_eq!(resume.pc, 1);
@@ -202,10 +204,12 @@ fn opt_switch_hoist_service_poll_mutation_resumes_current_stack() {
     ctx.eval_str("(setq post-gc-hook (list (lambda () (setq post-gc-hook nil) (puthash 'a 14 switch-hoist-table))))").unwrap();
     ctx.gc_stress = true;
     reset_bytecode_branch_poll_count();
-    let result = leaf.call(
-        &mut ctx as *mut Context as *mut u8,
-        &[Value::fixnum(300), Value::fixnum(0)],
-    );
+    let result = unsafe {
+        leaf.call(
+            &mut ctx as *mut Context as *mut u8,
+            &[Value::fixnum(300), Value::fixnum(0)],
+        )
+    };
     ctx.gc_stress = false;
     assert_eq!(bytecode_branch_poll_count(), 1);
     let NativeRun::DeoptAt(resume) = result else {
@@ -234,7 +238,9 @@ fn opt_switch_hoist_osr_stale_entry_checks_the_interpreter_stack() {
     let leaf = lower(&f, &ir);
     put(f.constants()[2], Value::symbol("a"), 14);
     let args = [Value::fixnum(7), Value::fixnum(99)];
-    let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &args) else {
+    let NativeRun::DeoptAt(resume) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
+    else {
         panic!("stale OSR entry must exit");
     };
     assert_eq!(resume.pc, 1);

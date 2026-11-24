@@ -170,8 +170,12 @@ fn leaf_word(id: LeafId, result: LeafResult) -> i64 {
 /// The contained body: `catch_unwind` around the call, one word out (a
 /// 16-byte `Result` through the unwind data union would be P0.2's
 /// store-forwarding pattern again).
+///
+/// # Safety
+/// `ctx` must point to the dormant owner-thread [`Context`] alive for the whole
+/// trampoline call.
 #[inline(always)]
-fn leaf_contained(
+unsafe fn leaf_contained(
     ctx: *const Context,
     spec: &'static LeafSpec,
     body: impl FnOnce(&Context) -> LeafResult,
@@ -186,8 +190,15 @@ fn leaf_contained(
 
 /// Enter a trampoline: the test counter and, in debug builds, the leaf
 /// marker (a zero-sized no-op in release builds).
+///
+/// # Safety
+/// `ctx` must point to the dormant owner-thread [`Context`] alive for at least
+/// `'a`.
 #[inline(always)]
-fn leaf_enter<'a>(ctx: *const Context, spec: &'static LeafSpec) -> (&'a Context, LeafActive) {
+unsafe fn leaf_enter<'a>(
+    ctx: *const Context,
+    spec: &'static LeafSpec,
+) -> (&'a Context, LeafActive) {
     #[cfg(test)]
     LEAF_TRAMPOLINE_CALLS.with(|c| {
         let cell = &c[spec.id.index()];
@@ -241,8 +252,8 @@ macro_rules! bare_trampoline {
                 /* SAFETY: JIT constant-pool word */
                 Value::from_bits(a as usize)
             };
-            let (c, active) = leaf_enter(ctx, &$spec);
-            let word = leaf_contained(ctx, &$spec, |c| $body(c, a));
+            let (c, active) = unsafe { leaf_enter(ctx, &$spec) };
+            let word = unsafe { leaf_contained(ctx, &$spec, |c| $body(c, a)) };
             leaf_finish(active, c, word)
         }
     };
@@ -264,8 +275,8 @@ macro_rules! bare_trampoline {
                     Value::from_bits(b as usize)
                 },
             );
-            let (c, active) = leaf_enter(ctx, &$spec);
-            let word = leaf_contained(ctx, &$spec, |c| $body(c, a, b));
+            let (c, active) = unsafe { leaf_enter(ctx, &$spec) };
+            let word = unsafe { leaf_contained(ctx, &$spec, |c| $body(c, a, b)) };
             leaf_finish(active, c, word)
         }
     };
@@ -287,7 +298,7 @@ macro_rules! bare_trampoline {
                     Value::from_bits(b as usize)
                 },
             );
-            let (c, active) = leaf_enter(ctx, &$spec);
+            let (c, active) = unsafe { leaf_enter(ctx, &$spec) };
             let word = match $fast(c, &[a, b, Value::NIL, Value::NIL]) {
                 Some(value) => value.bits() as i64,
                 None => $rest(ctx, a, b),
@@ -298,7 +309,7 @@ macro_rules! bare_trampoline {
         #[cold]
         #[inline(never)]
         fn $rest(ctx: *const Context, a: Value, b: Value) -> i64 {
-            leaf_contained(ctx, &$spec, |c| $body(c, a, b))
+            unsafe { leaf_contained(ctx, &$spec, |c| $body(c, a, b)) }
         }
     };
 }
@@ -456,8 +467,8 @@ macro_rules! bcall_trampoline {
                 /* SAFETY: JIT constant-pool word */
                 Value::from_bits(a as usize)
             };
-            let (cx, active) = leaf_enter(ctx, &$spec);
-            let word = leaf_contained(ctx, &$spec, |cx| $body(cx, a));
+            let (cx, active) = unsafe { leaf_enter(ctx, &$spec) };
+            let word = unsafe { leaf_contained(ctx, &$spec, |cx| $body(cx, a)) };
             leaf_finish(active, cx, word)
         }
     };
@@ -491,8 +502,8 @@ macro_rules! bcall_trampoline {
                     Value::from_bits(b as usize)
                 },
             );
-            let (cx, active) = leaf_enter(ctx, &$spec);
-            let word = leaf_contained(ctx, &$spec, |cx| $body(cx, a, b));
+            let (cx, active) = unsafe { leaf_enter(ctx, &$spec) };
+            let word = unsafe { leaf_contained(ctx, &$spec, |cx| $body(cx, a, b)) };
             leaf_finish(active, cx, word)
         }
     };
@@ -531,8 +542,8 @@ macro_rules! bcall_trampoline {
                     Value::from_bits(c as usize)
                 },
             );
-            let (cx, active) = leaf_enter(ctx, &$spec);
-            let word = leaf_contained(ctx, &$spec, |cx| $body(cx, a, b, c));
+            let (cx, active) = unsafe { leaf_enter(ctx, &$spec) };
+            let word = unsafe { leaf_contained(ctx, &$spec, |cx| $body(cx, a, b, c)) };
             leaf_finish(active, cx, word)
         }
     };
@@ -640,7 +651,14 @@ pub(crate) fn leaf_part_on(knob: super::LeafKnob, spec: &LeafSpec) -> bool {
 /// `bcall`, the leaf attached to that builtin (found through the SUBR, so an
 /// alias of `gethash` gets it too), past the `NEOVM_JIT_LEAF_ONLY` filter,
 /// taking the call's arguments in its slots.
-pub(crate) fn bcall_leaf_site(expected: u64, nargs: usize, aot: bool) -> Option<&'static LeafSpec> {
+/// # Safety
+/// `expected` must be the valid tagged bits of a live `Value` rooted by the
+/// active compilation snapshot.
+pub(crate) unsafe fn bcall_leaf_site(
+    expected: u64,
+    nargs: usize,
+    aot: bool,
+) -> Option<&'static LeafSpec> {
     let knob = super::jit_leaf_knob();
     if aot || !(knob.bcall || knob.vars || knob.batch) {
         return None;

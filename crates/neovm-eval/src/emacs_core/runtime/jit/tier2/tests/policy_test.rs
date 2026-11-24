@@ -252,19 +252,21 @@ fn tier2_deopt_reverts_and_preserves_retreat_and_ban() {
     run(&mut ctx, &f, &[Value::make_int(10)]);
     let t2 = current(&f);
     assert_ne!(std::ptr::from_ref(t1), std::ptr::from_ref(t2));
-    let outcome = super::super::super::reopt::note_deopt(
-        &ctx,
-        &f,
-        t2,
-        super::super::super::reopt::LeafOrigin::Entry,
-        super::super::super::reopt::DeoptEvent::Precise {
-            pc: 1,
-            stack: &[Value::make_float(1.0)],
-            cause: Some(super::super::super::reopt::DeoptCause::ArithOperands(
-                NumericFeedback::Float,
-            )),
-        },
-    );
+    let outcome = unsafe {
+        super::super::super::reopt::note_deopt(
+            &ctx,
+            &f,
+            t2,
+            super::super::super::reopt::LeafOrigin::Entry,
+            super::super::super::reopt::DeoptEvent::Precise {
+                pc: 1,
+                stack: &[Value::make_float(1.0)],
+                cause: Some(super::super::super::reopt::DeoptCause::ArithOperands(
+                    NumericFeedback::Float,
+                )),
+            },
+        )
+    };
     assert_eq!(
         outcome,
         super::super::super::reopt::ReoptVerdict::Invalidated

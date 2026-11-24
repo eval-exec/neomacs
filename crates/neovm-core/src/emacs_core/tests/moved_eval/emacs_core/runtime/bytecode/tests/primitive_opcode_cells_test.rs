@@ -327,11 +327,11 @@ fn run_cases_with_constant_pool(
                 .execute_with_func_value(f, args, value)
                 .expect("VM primitive runs"),
             #[cfg(feature = "jit")]
-            Mode::Jit => match leaf
-                .as_ref()
-                .unwrap()
-                .call((&mut ctx as *mut Context).cast(), &args)
-            {
+            Mode::Jit => match unsafe {
+                leaf.as_ref()
+                    .unwrap()
+                    .call((&mut ctx as *mut Context).cast(), &args)
+            } {
                 crate::emacs_core::jit::compile::NativeRun::Ok(bits) => {
                     value_from_native_bits(bits)
                 }
@@ -521,10 +521,14 @@ fn overrides_only_affect_genuine_calls(mode: Mode) {
             .execute_with_func_value(f, args, value)
             .unwrap(),
         #[cfg(feature = "jit")]
-        Mode::Jit => match leaf.unwrap().call((&mut ctx as *mut Context).cast(), &args) {
-            crate::emacs_core::jit::compile::NativeRun::Ok(bits) => value_from_native_bits(bits),
-            other => panic!("override native body: {other:?}"),
-        },
+        Mode::Jit => {
+            match unsafe { leaf.unwrap().call((&mut ctx as *mut Context).cast(), &args) } {
+                crate::emacs_core::jit::compile::NativeRun::Ok(bits) => {
+                    value_from_native_bits(bits)
+                }
+                other => panic!("override native body: {other:?}"),
+            }
+        }
     };
     ctx.set_variable("gnuop--override-result", result);
     assert_eq!(print_value(&result), "(7 \"AB\" overridden)");
@@ -656,7 +660,8 @@ fn sink_cannot_call_advised_aset(all_passes: bool) {
         .expect("collecting advice after warmup");
     ctx.eval_str(SINK_ARGS).expect("rooted operands");
     let args = list_to_vec(&ctx.eval_str("gnuop--sink-args").unwrap()).unwrap();
-    let NativeRun::Ok(bits) = leaf.call((&mut ctx as *mut Context).cast(), &args) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call((&mut ctx as *mut Context).cast(), &args) })
+    else {
         panic!("sink repro must execute natively without VM fallback");
     };
     // Check before dereferencing the returned string: the old implementation
@@ -734,7 +739,7 @@ fn primitive_insert_keeps_its_collecting_hooks(mode: Mode) {
         #[cfg(feature = "jit")]
         Mode::Jit => {
             let leaf = compile_native(source);
-            match leaf.call((&mut ctx as *mut Context).cast(), &args) {
+            match unsafe { leaf.call((&mut ctx as *mut Context).cast(), &args) } {
                 crate::emacs_core::jit::compile::NativeRun::Ok(bits) => {
                     value_from_native_bits(bits)
                 }

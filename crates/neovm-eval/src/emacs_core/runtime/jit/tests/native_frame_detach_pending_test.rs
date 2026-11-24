@@ -170,7 +170,7 @@ fn held_pending_callee_keeps_cleanup_backtrace_args_after_recovery() {
             let spec0 = ev.specpdl.len();
             let args0 = ev.backtrace_args_stack_len_for_test();
             let ctx_ptr = &mut ev as *mut Context as *mut u8;
-            assert_eq!(leaf.call(ctx_ptr, &words), NativeRun::Signal);
+            assert_eq!(unsafe { leaf.call(ctx_ptr, &words) }, NativeRun::Signal);
             let id = callee
                 .get_bytecode_data()
                 .expect("callee")

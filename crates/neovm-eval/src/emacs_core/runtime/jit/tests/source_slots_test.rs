@@ -77,7 +77,7 @@ fn arm(ev: &mut Context, proto: &ByteCodeFunction) {
         crate::emacs_core::jit::test_support::run_compiled(ctx, proto, v, &[Value::make_int(0)])
             .expect("no signal");
     assert!(got.is_some(), "the source compiled");
-    cache::arm_leaf_slot(ctx, proto);
+    unsafe { cache::arm_leaf_slot(ctx, proto) };
     assert!(
         proto
             .jit_runtime()
@@ -102,7 +102,7 @@ fn compile(ev: &Context, f: &ByteCodeFunction) -> CompiledLeaf {
 }
 
 fn run(ev: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Result<Value, String> {
-    match leaf.call(ev as *mut Context as *mut u8, args) {
+    match unsafe { leaf.call(ev as *mut Context as *mut u8, args) } {
         NativeRun::Ok(bits) => Ok(unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)

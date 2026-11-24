@@ -122,7 +122,7 @@ fn tier0(ctx: &mut Context, source: &ByteCodeFunction, args: &[Value]) -> Result
 }
 
 fn native_ok(ctx: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Value {
-    match leaf.call(ctx as *mut Context as *mut u8, args) {
+    match unsafe { leaf.call(ctx as *mut Context as *mut u8, args) } {
         NativeRun::Ok(bits) => unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)
@@ -472,7 +472,8 @@ fn opt_reps_native_checked_integer_boundaries_follow_typed_ir() {
         force_deopt_for_test(true);
         let leaf = lower(&source, &changed);
         force_deopt_for_test(false);
-        let NativeRun::DeoptAt(frame) = leaf.call(&mut ctx as *mut Context as *mut u8, &args)
+        let NativeRun::DeoptAt(frame) =
+            (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
         else {
             panic!("forced typed guard deopts");
         };
@@ -640,7 +641,7 @@ fn opt_reps_native_overflow_retags_aliases_and_replays_after_store() {
                 ctx.eval_str("(setq t34-o33-effects 0)").unwrap();
                 let collections = ctx.tagged_heap.gc_collections();
                 let NativeRun::DeoptAt(frame) =
-                    leaf.call(&mut ctx as *mut Context as *mut u8, &args)
+                    (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
                 else {
                     panic!("overflow must recover after the effect");
                 };
@@ -723,7 +724,8 @@ fn opt_reps_native_type_failure_keeps_original_error_and_effects() {
             let expected_signal = signal_summary(&expected);
             let expected_effect = ctx.eval_str("t34-o33-effects").unwrap();
             ctx.eval_str("(setq t34-o33-effects 0)").unwrap();
-            let NativeRun::DeoptAt(frame) = leaf.call(&mut ctx as *mut Context as *mut u8, &args)
+            let NativeRun::DeoptAt(frame) =
+                (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
             else {
                 panic!("wrong type must recover precisely");
             };

@@ -240,7 +240,7 @@ fn jit_bg_first_sight_installs_a_finished_pending_compile() {
     let f = add1();
     assert_eq!(run(ctx, &f, 1), None);
     assert_eq!(kind(&f), "pending");
-    assert!(cache::resolve_compiled_leaf_ptr(ctx, &f).is_some());
+    assert!(unsafe { cache::resolve_compiled_leaf_ptr(ctx, &f) }.is_some());
     assert_eq!(kind(&f), "compiled");
     force_deferred_install_for_test(false);
     force_mode_for_test(None);

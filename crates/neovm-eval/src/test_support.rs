@@ -1687,7 +1687,7 @@ pub mod authority {
             ctx: *mut u8,
             args: &[neovm_value::value::Value],
         ) -> crate::emacs_core::jit::compile::NativeRun {
-            self.leaf.call(ctx, args)
+            unsafe { self.leaf.call(ctx, args) }
         }
     }
 
@@ -1707,7 +1707,8 @@ pub mod authority {
     ) -> Option<RetainedLeafForTest> {
         use crate::emacs_core::bytecode::ByteCodeFunctionExt as _;
         use crate::emacs_core::jit::RuntimeStateTieringExt as _;
-        let resolved = crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(context, function)?;
+        let resolved =
+            unsafe { crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(context, function) }?;
         let retained = retained_current_leaf_for_test(function.jit_runtime().compiled_id()?)?;
         (std::rc::Rc::as_ptr(&retained.leaf) == resolved).then_some(retained)
     }
@@ -2189,7 +2190,7 @@ pub mod authority {
         ctx: &mut crate::emacs_core::eval::Context,
         function: &crate::emacs_core::bytecode::ByteCodeFunction,
     ) -> bool {
-        crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(ctx, function).is_some()
+        unsafe { crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(ctx, function) }.is_some()
     }
 
     /// Upper bound of the soak's fake-running probes for one finished job.
@@ -3034,7 +3035,7 @@ pub mod authority {
             let function = value
                 .get_bytecode_data()
                 .expect("fixture function bytecompiled");
-            crate::emacs_core::jit::cache::prepare_entry_for_test(ctx, function);
+            unsafe { crate::emacs_core::jit::cache::prepare_entry_for_test(ctx, function) };
         }
     }
 
@@ -3443,7 +3444,7 @@ pub mod authority {
         ctx: &mut crate::emacs_core::eval::Context,
         f: &crate::emacs_core::bytecode::ByteCodeFunction,
     ) {
-        crate::emacs_core::jit::cache::prepare_entry_for_test(ctx as *mut _, f);
+        unsafe { crate::emacs_core::jit::cache::prepare_entry_for_test(ctx as *mut _, f) };
     }
 
     /// FENCE: cold-exit counter. The atomic stays pub(crate).
@@ -3484,16 +3485,18 @@ pub mod authority {
         bt_count: i64,
         out: *mut i64,
     ) -> i64 {
-        crate::emacs_core::jit::compile::direct_call::neovm_jit_direct_framed(
-            ctx,
-            callee_bits,
-            leaf_bits,
-            const_base,
-            args_ptr,
-            nargs,
-            bt_count,
-            out,
-        )
+        unsafe {
+            crate::emacs_core::jit::compile::direct_call::neovm_jit_direct_framed(
+                ctx,
+                callee_bits,
+                leaf_bits,
+                const_base,
+                args_ptr,
+                nargs,
+                bt_count,
+                out,
+            )
+        }
     }
 
     /// FENCE: `direct_consts` register-ABI flag of bytecode spec slot `index`.
@@ -3760,7 +3763,7 @@ pub mod authority {
         func: &crate::emacs_core::bytecode::ByteCodeFunction,
         pc: usize,
     ) {
-        crate::emacs_core::jit::cache::prepare_osr_for_test(ctx, func, pc);
+        unsafe { crate::emacs_core::jit::cache::prepare_osr_for_test(ctx, func, pc) };
     }
 
     /// FENCE: transfer into a prepared OSR entry. `try_run_osr` stays
@@ -4327,10 +4330,12 @@ pub(crate) mod jit_fixture {
             }
             // SAFETY: the fixture owns `roots.ev` exclusively for this
             // preparation and the cache entry stays on this thread.
-            crate::emacs_core::jit::cache::prepare_entry_for_test(
-                roots.ev as *mut Context,
-                function,
-            );
+            unsafe {
+                crate::emacs_core::jit::cache::prepare_entry_for_test(
+                    roots.ev as *mut Context,
+                    function,
+                );
+            }
         }
     }
 

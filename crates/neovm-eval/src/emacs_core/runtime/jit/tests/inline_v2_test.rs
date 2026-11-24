@@ -158,7 +158,7 @@ fn inline_v2_refuses_legacy_mir_and_resumes_inner_chain() {
     );
     let arg = Value::symbol("inline-v2-not-a-number");
     let _ = ev.debug_on_next_call_is_armed();
-    let run = leaf.call(&mut ev as *mut Context as *mut u8, &[arg]);
+    let run = unsafe { leaf.call(&mut ev as *mut Context as *mut u8, &[arg]) };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("expected inner chain deopt: {run:?}")
     };

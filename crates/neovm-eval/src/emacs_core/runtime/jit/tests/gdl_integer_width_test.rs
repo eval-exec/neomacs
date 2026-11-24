@@ -52,7 +52,7 @@ fn gdl_integer_width_native_signal_roots_operands_through_collecting_hook() {
         let expected = args.map(|value| crate::emacs_core::print::print_value(&value));
         let ctx_ptr = &mut eval as *mut Context as *mut u8;
         assert_eq!(
-            leaf.call(ctx_ptr, &args),
+            unsafe { leaf.call(ctx_ptr, &args) },
             NativeRun::Signal,
             "must return native STATUS_SIGNAL rather than deopt or a value"
         );

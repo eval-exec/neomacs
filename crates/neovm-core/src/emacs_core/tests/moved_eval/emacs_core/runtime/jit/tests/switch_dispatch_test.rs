@@ -41,7 +41,7 @@ fn native_matches_interpreter(ev: &mut Context, f: Value, arg: Value, what: &str
         .execute(data, vec![arg])
         .expect("interprets");
     let interp = crate::emacs_core::print::print_value(&interp);
-    let NativeRun::Ok(bits) = leaf.call(ev as *mut Context as *mut u8, &[arg]) else {
+    let NativeRun::Ok(bits) = (unsafe { leaf.call(ev as *mut Context as *mut u8, &[arg]) }) else {
         panic!("{what}: expected a native answer");
     };
     // SAFETY: the native shim returned this exact tagged word from the run

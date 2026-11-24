@@ -210,7 +210,7 @@ fn predicate_branches_resume_type_deopt_without_repeating_effects() {
         ] {
             ctx.eval_str("(setq predicate-branch-effects 0)").unwrap();
             let NativeRun::DeoptAt(resume) =
-                leaf.call(&mut ctx as *mut Context as *mut u8, &[a, b])
+                (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[a, b]) })
             else {
                 panic!("float comparison must deopt precisely")
             };

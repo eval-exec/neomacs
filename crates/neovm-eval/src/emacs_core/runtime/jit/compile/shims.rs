@@ -570,9 +570,12 @@ pub(crate) fn shim_panic_pending() -> bool {
 /// the healing points instead — see the section comment): this keeps the
 /// wrapper's happy path free of per-call snapshot work. It never runs lisp
 /// and never allocates on the Lisp heap.
+/// # Safety
+/// `ctx` must be null or point to the dormant owner-thread [`Context`] for the
+/// active JIT shim invocation.
 #[cold]
 #[inline(never)]
-pub(crate) fn contain_jit_shim_panic(
+pub(crate) unsafe fn contain_jit_shim_panic(
     ctx: *mut u8,
     payload: Box<dyn std::any::Any + Send>,
 ) -> Result<(), Box<dyn std::any::Any + Send>> {
@@ -666,7 +669,7 @@ macro_rules! jit_shim_contain {
         let args_raw: *const i64 = $args_ptr;
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
             Ok(v) => v,
-            Err(payload) => match contain_jit_shim_panic(ctx_raw, payload) {
+            Err(payload) => match unsafe { contain_jit_shim_panic(ctx_raw, payload) } {
                 Ok(()) => {
                     // SAFETY: the seam-provided dormant Context (the shim's
                     // vmctx contract), and `args_raw` is the shim's own
@@ -689,7 +692,8 @@ macro_rules! jit_shim_contain {
     (no_ctx, $sentinel:expr, $body:expr) => {{
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
             Ok(v) => v,
-            Err(payload) => match contain_jit_shim_panic(core::ptr::null_mut(), payload) {
+            Err(payload) => match unsafe { contain_jit_shim_panic(core::ptr::null_mut(), payload) }
+            {
                 Ok(()) => $sentinel,
                 Err(payload) => std::panic::resume_unwind(payload),
             },
@@ -699,7 +703,7 @@ macro_rules! jit_shim_contain {
         let ctx_raw: *mut u8 = $ctx;
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
             Ok(v) => v,
-            Err(payload) => match contain_jit_shim_panic(ctx_raw, payload) {
+            Err(payload) => match unsafe { contain_jit_shim_panic(ctx_raw, payload) } {
                 Ok(()) => $sentinel,
                 Err(payload) => std::panic::resume_unwind(payload),
             },
@@ -774,19 +778,19 @@ pub(crate) unsafe extern "C" fn neovm_jit_call(
                     Vm::call_armed_bytecode_value_native(ctx_ref, func_val, args_ptr, nargs)
                 }
             {
-                return native_call_status(outcome, out);
+                return unsafe { native_call_status(outcome, out) };
             }
         }
-        neovm_jit_call_general(ctx, func_val, args_ptr, nargs, out)
+        unsafe { neovm_jit_call_general(ctx, func_val, args_ptr, nargs, out) }
     })
 }
 
 /// Deliver a native-to-native call's outcome to the generated code.
 ///
-/// SAFETY: `out` is the generated code's result stack slot (the call-shim
-/// contract).
+/// # Safety
+/// `out` must point to a writable `i64` result slot owned by the caller.
 #[inline(always)]
-fn native_call_status(
+unsafe fn native_call_status(
     outcome: crate::emacs_core::jit::cache::NativeCallOutcome,
     out: *mut i64,
 ) -> i64 {
@@ -807,9 +811,14 @@ fn native_call_status(
 }
 
 /// [`neovm_jit_call`] for every call its native-to-native path declines,
-/// inside the shim's panic containment. Same contract.
+/// inside the shim's panic containment.
+///
+/// # Safety
+/// Same contract as [`neovm_jit_call`]: `ctx` is the live dormant owner
+/// [`Context`], `args_ptr` addresses `nargs` readable tagged words, and `out`
+/// points to a writable `i64` result slot.
 #[inline(never)]
-fn neovm_jit_call_general(
+unsafe fn neovm_jit_call_general(
     ctx: *mut u8,
     func_val: Value,
     args_ptr: *const i64,
@@ -836,7 +845,7 @@ fn neovm_jit_call_general(
                 && let Some(outcome) =
                     unsafe { Vm::call_apply_native(ctx_ref, func_val, args_ptr, nargs) }
             {
-                return native_call_status(outcome, out);
+                return unsafe { native_call_status(outcome, out) };
             }
             let args_start = ctx_ref.bc_buf.len();
             // SAFETY: generated code stored `nargs` words at args_ptr, and
@@ -852,7 +861,7 @@ fn neovm_jit_call_general(
                     }
             {
                 ctx_ref.bc_buf.truncate(args_start);
-                return jit_call_status(res, out);
+                return unsafe { jit_call_status(res, out) };
             }
             // `maybe_quit_hot_ok` above tested exactly `maybe_quit`'s
             // fast-path condition (the same loads, the asynchronous word
@@ -868,7 +877,7 @@ fn neovm_jit_call_general(
             let res = /* SAFETY: this shim just staged nargs words at bc_buf[args_start..]. */ unsafe { vm.call_for_jit_stack(func_val, args_start, nargs) };
             vm.bc_buf_truncate(args_start);
             restore_scratch_gc_roots(saved);
-            return jit_call_status(res, out);
+            return unsafe { jit_call_status(res, out) };
         }
     }
     let saved = save_scratch_gc_roots();
@@ -901,7 +910,7 @@ fn neovm_jit_call_general(
             let mut vm = Vm::from_context(ctx);
             let res = /* SAFETY: this shim just staged nargs words at bc_buf[args_start..]. */ unsafe { vm.call_for_jit_stack(func_val, args_start, nargs) };
             vm.bc_buf_truncate(args_start);
-            jit_call_status(res, out)
+            unsafe { jit_call_status(res, out) }
         }
     };
     restore_scratch_gc_roots(saved);
@@ -911,10 +920,11 @@ fn neovm_jit_call_general(
 /// Deliver a call shim's result to the generated code: the value bits through
 /// its result slot, or the `Flow` stashed for the seam to re-raise.
 ///
-/// SAFETY: `out` is the generated code's result stack slot, valid for a write
-/// for the duration of the shim call (the call-shim contract).
+/// # Safety
+/// `out` must point to a writable `i64` result slot valid for the duration of
+/// the call.
 #[inline]
-fn jit_call_status(res: Result<Value, Flow>, out: *mut i64) -> i64 {
+unsafe fn jit_call_status(res: Result<Value, Flow>, out: *mut i64) -> i64 {
     match res {
         Ok(value) => {
             unsafe { *out = value.bits() as i64 };

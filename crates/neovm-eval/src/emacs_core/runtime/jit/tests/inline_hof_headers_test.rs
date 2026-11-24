@@ -104,7 +104,9 @@ fn inline_hof_headers_refresh_captured_cell_after_a_serviced_poll() {
     let _ = ctx.debug_on_next_call_is_armed();
     ctx.gc_stress = true;
     reset_bytecode_branch_poll_count();
-    let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) else {
+    let NativeRun::Ok(bits) =
+        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[sequence]) })
+    else {
         panic!("guarded capture stores remain native across a serviced poll")
     };
     assert_eq!(

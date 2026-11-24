@@ -60,7 +60,7 @@ fn count_to() -> ByteCodeFunction {
 /// Compile `f` through the cache (the first-sight seam: no heat needed) and
 /// return its cached leaf.
 fn compile_cached(ctx: *mut Context, f: &ByteCodeFunction) -> &'static CompiledLeaf {
-    let ptr = cache::resolve_compiled_leaf_ptr(ctx, f).expect("compiles");
+    let ptr = unsafe { cache::resolve_compiled_leaf_ptr(ctx, f) }.expect("compiles");
     // SAFETY: a cached leaf stays allocated for the thread's life (retired
     // leaves are kept); tests never clear the cache under this reference.
     unsafe { &*ptr }
@@ -321,7 +321,7 @@ fn jit_shared_same_label_recompiles_and_osr_coexist() {
         Value::make_int(9).bits() as i64,
         Value::make_int(4).bits() as i64,
     ];
-    match osr.call_premarshaled(ctx as *mut u8, seeded.as_ptr()) {
+    match unsafe { osr.call_premarshaled(ctx as *mut u8, seeded.as_ptr()) } {
         NativeRun::Ok(bits) => assert_eq!(
             unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */

@@ -322,7 +322,7 @@ fn jit_arith_generic_results_and_frameless_signal() {
     let big = rooted(eval.eval_str("(expt 7 60)").unwrap());
     crate::emacs_core::eval::push_scratch_gc_root(big);
     let want = rooted(eval.eval_str("(* (expt 7 60) 12)").unwrap());
-    match leaf.call(ctx_ptr, &[big, Value::fixnum(12)]) {
+    match unsafe { leaf.call(ctx_ptr, &[big, Value::fixnum(12)]) } {
         NativeRun::Ok(bits) => {
             assert_eq!(
                 print_value(&unsafe {
@@ -334,7 +334,7 @@ fn jit_arith_generic_results_and_frameless_signal() {
         }
         other => panic!("the generic site must answer natively: {other:?}"),
     }
-    match leaf.call(ctx_ptr, &[Value::symbol("a"), Value::fixnum(2)]) {
+    match unsafe { leaf.call(ctx_ptr, &[Value::symbol("a"), Value::fixnum(2)]) } {
         NativeRun::Signal => {
             let flow = take_pending_flow().expect("flow stashed");
             assert_eq!(signal_name(&Err(flow)), "wrong-type-argument");

@@ -108,7 +108,7 @@ fn native_ok(
     args: &[Value],
 ) -> Value {
     let NativeRun::Ok(bits) =
-        leaf.call_consts(ctx as *mut Context as *mut u8, f.constants().as_ptr(), args)
+        (unsafe { leaf.call_consts(ctx as *mut Context as *mut u8, f.constants().as_ptr(), args) })
     else {
         panic!("actual native positive case")
     };
@@ -125,11 +125,13 @@ fn cold(
     argument: Value,
 ) -> Box<DeoptResume> {
     cell.set_car(Value::fixnum(0));
-    let NativeRun::DeoptAt(exit) = leaf.call_consts(
-        ctx as *mut Context as *mut u8,
-        f.constants().as_ptr(),
-        &[cell, argument],
-    ) else {
+    let NativeRun::DeoptAt(exit) = (unsafe {
+        leaf.call_consts(
+            ctx as *mut Context as *mut u8,
+            f.constants().as_ptr(),
+            &[cell, argument],
+        )
+    }) else {
         panic!("selected sqrt must replay the original Call under this guard")
     };
     assert_eq!(cell.cons_car(), Value::fixnum(1), "visible effect ran once");
@@ -424,11 +426,13 @@ fn opt_sink_sqrt_native_epoch_guard_is_fresh_after_an_earlier_callback() {
     // callback changes the cell while this leaf is already running. Checking
     // only function entry, a stale SpecSlot or an earlier guard is insufficient.
     cell.set_car(Value::fixnum(0));
-    let NativeRun::DeoptAt(exit) = selected.call_consts(
-        &mut ctx as *mut Context as *mut u8,
-        f.constants().as_ptr(),
-        &args,
-    ) else {
+    let NativeRun::DeoptAt(exit) = (unsafe {
+        selected.call_consts(
+            &mut ctx as *mut Context as *mut u8,
+            f.constants().as_ptr(),
+            &args,
+        )
+    }) else {
         panic!("per-call current epoch must observe callback rewrite")
     };
     assert_eq!(exit.pc, 11);

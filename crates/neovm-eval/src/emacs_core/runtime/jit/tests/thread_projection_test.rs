@@ -96,7 +96,7 @@ fn compile_inline(ev: &Context, name: &str) -> CompiledLeaf {
 fn run(ev: &mut Context, leaf: &CompiledLeaf) -> (String, usize) {
     VARREF_SHIM_CALLS.with(|c| c.set(0));
     let ctx = ev as *mut Context as *mut u8;
-    let got = match leaf.call(ctx, &[]) {
+    let got = match unsafe { leaf.call(ctx, &[]) } {
         NativeRun::Ok(bits) => print_value(&unsafe {
             /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
             Value::from_bits(bits)

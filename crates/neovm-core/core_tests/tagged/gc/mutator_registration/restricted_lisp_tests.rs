@@ -79,7 +79,7 @@ fn run(name: &str) {
         let leaf = leaf_borrow.as_ref().expect("the switch body compiles");
         let mut context = cell.borrow_mut();
         let ctx_ptr = &mut *context as *mut crate::emacs_core::eval::Context as *mut u8;
-        match leaf.call(ctx_ptr, args) {
+        match unsafe { leaf.call(ctx_ptr, args) } {
             crate::emacs_core::jit::compile::NativeRun::Ok(bits) => (0, bits, String::new()),
             crate::emacs_core::jit::compile::NativeRun::Signal => (1, 0, String::new()),
             other => (2, 0, format!("{other:?}")),

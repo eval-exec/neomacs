@@ -8018,7 +8018,7 @@ fn lower_simple_op_arms(
             // behind the same run-time symbol check the general lowering
             // emits; a callee mismatch is the plain call of the actual value.
             if let Some((sym, expected, slot_ptr, _, SpecCalleeKind::SubrGeneral)) = spec
-                && let Some(leaf) = super::leaf_abi::bcall_leaf_site(expected, n, aot)
+                && let Some(leaf) = unsafe { super::leaf_abi::bcall_leaf_site(expected, n, aot) }
             {
                 return lower_bcall_leaf_site(
                     fb,
@@ -8047,7 +8047,8 @@ fn lower_simple_op_arms(
             // symbol constant.
             if let Some((sym, expected, slot_ptr, _, SpecCalleeKind::Bytecode)) = spec
                 && guarded_sym.is_none()
-                && let Some(site) = super::direct_call::DirectSite::plan(rt, aot, expected, n)
+                && let Some(site) =
+                    unsafe { super::direct_call::DirectSite::plan(rt, aot, expected, n) }
             {
                 let sym_v = materialize_op_sym_value(fb, reloc_base, reloc_index, sym);
                 return lower_direct_call_site(
@@ -8360,7 +8361,9 @@ fn lower_simple_op_arms(
                         // declare is keyed on exactly that condition).
                         match (kind, &reg_args) {
                             (SpecCalleeKind::SubrGeneral, _) => {
-                                if let Some(t2) = super::t2_profile::subr_profiler(rt, expected) {
+                                if let Some(t2) =
+                                    unsafe { super::t2_profile::subr_profiler(rt, expected) }
+                                {
                                     let f = rt
                                         .refs
                                         .try_get(fb.func, Shim::T2CallSubrProf)
