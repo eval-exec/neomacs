@@ -1878,8 +1878,7 @@ fn put_unicode_property_internal_numeric_round_trips_and_rejects_non_fixnum() {
     assert_eq!(ct_lookup(&table, 'B' as i64).unwrap(), Value::fixnum(0));
     assert_eq!(
         char_table_extra_slot_value(&table, 4)
-            .and_then(|v| v.as_vector_data())
-            .map(|v| v.to_vec()),
+            .and_then(|v| v.as_vector_data().map(|values| values.to_vec())),
         Some(vec![Value::fixnum(42)])
     );
 

@@ -610,14 +610,15 @@ fn encode_uniprop_value_run_length(
     value: Value,
     mode: SymbolMode,
 ) -> Result<Value, Flow> {
-    let value_table = char_table_extra_slot_value(&table, 4)
-        .filter(|v| v.is_vector())
-        .and_then(|v| v.as_vector_data());
-    let found = value_table.and_then(|values| {
-        values
-            .iter()
-            .position(|entry| eq_value_swp(entry, &value, mode == SymbolMode::Positioned))
-    });
+    let value_table = char_table_extra_slot_value(&table, 4).filter(|v| v.is_vector());
+    let found = value_table
+        .as_ref()
+        .and_then(|v| v.as_vector_data())
+        .and_then(|values| {
+            values
+                .iter()
+                .position(|entry| eq_value_swp(entry, &value, mode == SymbolMode::Positioned))
+        });
     match found {
         Some(index) => Ok(Value::fixnum(index as i64)),
         None => Err(signal(
@@ -639,8 +640,9 @@ fn encode_uniprop_value_numeric(
     mode: SymbolMode,
 ) -> Result<Value, Flow> {
     let _ = expect_fixnump(&value)?;
-    let mut value_table: Vec<Value> = char_table_extra_slot_value(&table, 4)
-        .filter(|v| v.is_vector())
+    let value_table_val = char_table_extra_slot_value(&table, 4).filter(|v| v.is_vector());
+    let mut value_table: Vec<Value> = value_table_val
+        .as_ref()
         .and_then(|v| v.as_vector_data())
         .map(|values| values.to_vec())
         .unwrap_or_default();

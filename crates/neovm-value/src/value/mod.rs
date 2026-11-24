@@ -4064,7 +4064,10 @@ impl TaggedValue {
     }
 
     /// Get vector elements.
-    pub fn as_vector_data(self) -> Option<&'static LispValueSlice> {
+    ///
+    /// Tied to this `Value` place. A later collection does not conflict with
+    /// this borrow.
+    pub fn as_vector_data(&self) -> Option<&LispValueSlice> {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::Vector {
             let ptr = header as *const VectorObj;

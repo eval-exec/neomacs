@@ -663,7 +663,7 @@ fn ct_lookup_ascii_cached(root: &crate::tagged::header::CharTableObj, ch: i64) -
             }
             obj.parent.get()
         };
-        if parent.as_char_table_obj().is_none() {
+        if parent.is_nil() {
             return Some(Value::NIL);
         }
         held = Some(parent);
@@ -738,7 +738,7 @@ pub fn ct_ascii_raw_values(table: &Value, out: &mut [Value; CT_ASCII_CACHE_LEN])
             }
             obj.parent.get()
         };
-        if parent.as_char_table_obj().is_none() {
+        if parent.is_nil() {
             break;
         }
         held = Some(parent);
