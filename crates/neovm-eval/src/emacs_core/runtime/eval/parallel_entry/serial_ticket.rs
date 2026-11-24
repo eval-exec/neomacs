@@ -3,9 +3,10 @@
 //! The ticket carries the owner, the generation, the heap, and the stop epoch
 //! the destination validates. It does not carry a Context, a collector, a
 //! slab, or a manager.
-//! The Baton and the heap transfer stay the held keeper loan until L6.4
-//! activates the owner's dormant Context. A refusal returns the ticket.
-//! Nothing is half-received.
+//! The Baton stays with the held keeper loan. `receive_serial` names the
+//! ticket's heap in a local loan and does not install it. Installing the
+//! heap, and restoring the frame, slab, buffer, and warm carrier, are the
+//! existing reattach. A refusal returns the ticket. Nothing is half-received.
 //!
 //! Production mint is [`StoppedSerialTicket::from_lend`]: it consumes the
 //! keeper lend, so a ticket exists only because that lend was cut. The
@@ -123,12 +124,39 @@ impl<'s, 'era> SerialLendHeld<'s, 'era> {
     }
 }
 
+/// Names the ticket heap on the destination thread.
+///
+/// Construction does not install the heap. The loan is `!Send` and ends when
+/// `end_serial` consumes the local owner; the return envelope does not carry it.
+#[derive(Debug)]
+#[must_use]
+#[allow(dead_code)] // the receive row reads `heap`; the turn holds the loan
+struct LocalSerialHeapLoan {
+    heap: HeapIdentity,
+    _local: PhantomData<Rc<()>>,
+}
+
+impl LocalSerialHeapLoan {
+    fn new(heap: HeapIdentity) -> Self {
+        Self {
+            heap,
+            _local: PhantomData,
+        }
+    }
+
+    #[cfg(test)]
+    fn heap(&self) -> HeapIdentity {
+        self.heap
+    }
+}
+
 /// One successful receive. `!Send`: it stays on the destination thread.
 #[derive(Debug)]
 #[must_use]
 #[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
 pub(crate) struct ReceivedSerial {
     identity: TicketIdentity,
+    loan: LocalSerialHeapLoan,
     _local: PhantomData<Rc<()>>,
 }
 
@@ -136,6 +164,12 @@ impl ReceivedSerial {
     #[allow(dead_code)] // Dormant L6.3; L6.4 begin is the caller.
     pub(crate) fn identity(&self) -> TicketIdentity {
         self.identity
+    }
+
+    /// The heap this receive loaned. Receive does not install it.
+    #[cfg(test)]
+    fn local_heap_loan(&self) -> Option<HeapIdentity> {
+        Some(self.loan.heap())
     }
 }
 
@@ -260,8 +294,10 @@ impl SerialDestination {
             return Err(ReceiveRefusal { ticket, reason });
         }
         self.seat = Seat::Occupied;
+        let heap = ticket.identity.heap;
         Ok(ReceivedSerial {
             identity: ticket.identity,
+            loan: LocalSerialHeapLoan::new(heap),
             _local: PhantomData,
         })
     }
@@ -275,8 +311,11 @@ impl SerialDestination {
             return Err(local);
         }
         self.seat = Seat::Empty;
+        let identity = local.received.identity;
+        // The return envelope keeps the identity. Dropping the guard ends the loan.
+        drop(local);
         Ok(ReturnableSerialOwner {
-            identity: local.received.identity,
+            identity,
             _local: PhantomData,
         })
     }
@@ -285,6 +324,7 @@ impl SerialDestination {
 static_assertions::assert_impl_all!(StoppedSerialTicket: Send);
 static_assertions::assert_not_impl_any!(StoppedSerialTicket: Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(SerialLendHeld<'static, 'static>: Send, Sync, Clone, Copy);
+static_assertions::assert_not_impl_any!(LocalSerialHeapLoan: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(ReceivedSerial: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(LocalSerialOwner: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(ReturnableSerialOwner: Send, Sync, Clone, Copy);
@@ -426,5 +466,25 @@ mod tests {
             .receive_serial(StoppedSerialTicket::transport(expected))
             .expect("the seat is empty again");
         assert_eq!(again.identity(), expected);
+    }
+
+    #[test]
+    fn pentry_l64_receive_serial_loans_the_heap_without_installing_it() {
+        let installed = neovm_value::tagged::gc::tagged_heap_is_installed();
+        let expected = identity(7, 1, 1);
+        let mut seat = SerialDestination::new(expected);
+        let received = seat
+            .receive_serial(StoppedSerialTicket::transport(expected))
+            .expect("the identity matches");
+        assert_eq!(
+            neovm_value::tagged::gc::tagged_heap_is_installed(),
+            installed,
+            "the local loan does not install the heap"
+        );
+        assert_eq!(
+            received.local_heap_loan(),
+            Some(expected.heap),
+            "receive constructs the local serial heap loan"
+        );
     }
 }

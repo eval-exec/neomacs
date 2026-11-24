@@ -230,6 +230,70 @@ fn l64_turns_through_the_owner_state_reattach_and_detach_its_context() {
 }
 
 #[test]
+fn l64_begin_installs_the_heap_and_reattaches_frame_slab_buffer_and_mirrors() {
+    let mut ev = owner();
+    eval(&mut ev, OWNER_STATE);
+    let buffer = ev.edit.buffers.current_buffer_id();
+    let buffer_name = eval(&mut ev, "(buffer-name)");
+    // A batch owner has not run window-init. `selected-frame` is the display
+    // layer, so this frame manager is empty. Reattach keeps that. It does not
+    // synthesize a frame the owner never had.
+    let frames = ev.frame_manager();
+    let frame = frames.selected;
+    let frame_count = frames.frames.len();
+    let slab = ev.ensure_owner_slab() as *const _ as usize;
+    assert!(buffer.is_some(), "the owner has a current buffer");
+    assert!(frame.is_none(), "a batch owner has no selected frame");
+    assert_eq!(frame_count, 0, "a batch owner has no frames");
+    let mut state = OwnerSerialState::new(7, Box::new(ev))
+        .ok()
+        .expect("a freshly built Context detaches");
+    assert!(
+        names_no_heap(),
+        "the loan's later install has not happened yet"
+    );
+    let mut turn = state.begin((7, "ticket")).ok().expect("own ticket");
+    assert!(
+        turn.with_world(owns_the_thread),
+        "(b) begin installs this owner's heap"
+    );
+    turn.with_world(|ev| {
+        assert_eq!(
+            ev.edit.buffers.current_buffer_id(),
+            buffer,
+            "(c) the owner's buffer is back"
+        );
+        assert_eq!(
+            eval(ev, "(buffer-name)"),
+            buffer_name,
+            "(c) the owner's buffer is the one from before the detach"
+        );
+        assert_eq!(
+            ev.frame_manager().selected,
+            frame,
+            "(c) the owner's frame selection is unchanged"
+        );
+        assert_eq!(
+            ev.frame_manager().frames.len(),
+            frame_count,
+            "(c) reattach does not add or drop a frame"
+        );
+        assert_eq!(
+            ev.owner.slab().map(|slab| slab as *const _ as usize),
+            Some(slab),
+            "(c) the owner's slab is back"
+        );
+    });
+    assert_eq!(
+        turn.with_world(|ev| eval(ev, PROBE)),
+        OWNER_ANSWER,
+        "(d) the mirrors show this owner again"
+    );
+    assert_eq!(ended(turn), (7, "ticket"));
+    assert!(names_no_heap(), "end takes the installed heap back down");
+}
+
+#[test]
 fn l64_a_second_owner_cannot_begin_while_another_owners_turn_is_live() {
     let mut first = dormant(7);
     let mut second = dormant(8);
