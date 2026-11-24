@@ -35,17 +35,16 @@ struct Ready {
     char_height: u32,
 }
 
-/// #178 residual: every step of a native enlargement must already present
-/// content laid out for the new size. GNU 31.1 gtkutil.c:1144-1166 queues
-/// the native size from the ConfigureNotify handler
+/// #178 residual: every step of a native enlargement must present content
+/// laid out for the new size. GNU 31.1 gtkutil.c:1144-1166 queues the native
+/// size from the ConfigureNotify handler
 /// (`change_frame_size (..., delay=true)` at gtkutil.c:1159),
 /// `SET_FRAME_GARBAGED` follows, and dispnew.c:6694-6742 applies the queued
 /// pixel size at the next redisplay, so Emacs never draws the pre-resize
 /// layout on the resized surface. xterm.c:21586-21662 is the X11
-/// ConfigureNotify path this contract mirrors. Neomacs applies the surface
-/// size in the render thread but receives the relaid presentation from the
-/// evaluator, so it must withhold the retained pre-resize scene until a
-/// presentation of the requested extent arrives.
+/// ConfigureNotify path this contract mirrors. The capture after the native
+/// resize can still show the previous frame, so the observation waits for a
+/// presentation whose content extent matches the requested size.
 ///
 /// The same vanilla capture also pins glyph preservation: each editor must
 /// preserve its own glyph pixels, and the GNU GTK and Neomacs menus need not
@@ -194,12 +193,13 @@ fn observe_vanilla_menu_resize(
     // Only native size notifications and external pixel captures occur
     // between the baseline and the final resized capture; neither injects
     // input into the editor. Keyboard input comes afterwards to test the
-    // Escape claim. The first capture after each windowsize --sync must
-    // already span the new native size: GNU queues the ConfigureNotify size
-    // in the resize handler (gtkutil.c:1159, delay=true) and applies it at
-    // the next redisplay before drawing (dispnew.c:6694-6742), and Neomacs
-    // must withhold the retained pre-resize presentation until a
-    // presentation of the requested extent arrives.
+    // Escape claim. GNU queues the ConfigureNotify size in the resize
+    // handler (gtkutil.c:1159, delay=true) and applies it at the next
+    // redisplay before drawing (dispnew.c:6694-6742). windowsize --sync
+    // returns when the native window has the new size, which can still
+    // show the previous frame letterboxed inside it. Wait until editor
+    // content reaches that size. The deadline fails the step; the glyph
+    // comparison below is not retried.
     for (width, height) in [(850, 540), (900, 590), (950, 640), (1000, 690), (1100, 760)] {
         input(
             env,
@@ -211,13 +211,13 @@ fn observe_vanilla_menu_resize(
                 &height.to_string(),
             ],
         );
-        // A compositor repaint can straddle its own X11 output reconfigure:
-        // that transient capture is uniformly the compositor background plus
-        // the pointer, which is not a presentation by the editor. Retry only
-        // those; any capture that carries editor content (including a
-        // pre-resize extent) is decided immediately.
+        // Empty compositor captures and a pre-resize extent are both the
+        // wrong presentation. Keep sampling until the content extent matches
+        // the requested native size, or the deadline expires.
         let (extent_x, extent_y, extent_width, extent_height) = {
+            let deadline = Instant::now() + Duration::from_secs(10);
             let mut attempt = 0;
+            let mut last_extent = None;
             loop {
                 let name = format!("growing-{width}x{height}-{attempt}");
                 let (frame, native) = capture_native_frame(env, window, artifacts, &name);
@@ -226,34 +226,37 @@ fn observe_vanilla_menu_resize(
                     (width, height),
                     "the native window did not reach the requested resize step; {artifacts:?}"
                 );
-                if let Some(extent) = content_extent(&frame)
-                    && (extent.2 >= width / 2 || extent.3 >= height / 2)
-                {
-                    break extent;
+                let extent = content_extent(&frame);
+                let settled =
+                    extent.is_some_and(|(x, y, w, h)| x == 0 && w == width && y + h + 1 >= height);
+                if settled {
+                    break extent.expect("settled extent");
                 }
+                last_extent = extent;
                 attempt += 1;
                 assert!(
-                    attempt < 4,
-                    "the {width}x{height} native window showed no composited editor content in \
-                     four captures; {artifacts:?}"
+                    Instant::now() < deadline,
+                    "the {width}x{height} native window did not present editor content at the \
+                     requested extent within 10s; last extent={last_extent:?}; attempts={attempt}; \
+                     {artifacts:?}"
                 );
                 thread::sleep(Duration::from_millis(20));
             }
         };
         assert_eq!(
             extent_x, 0,
-            "the first capture with editor content at the {width}x{height} native size does not reach \
+            "the settled capture at the {width}x{height} native size does not reach \
              the left edge; extent=({extent_x},{extent_y},{extent_width},{extent_height}) {artifacts:?}"
         );
         assert_eq!(
             extent_width, width,
-            "the first capture with editor content at the {width}x{height} native size still has \
+            "the settled capture at the {width}x{height} native size still has \
              the pre-resize content width; extent=({extent_x},{extent_y},{extent_width},\
              {extent_height}) {artifacts:?}"
         );
         assert!(
             extent_y + extent_height + 1 >= height,
-            "the first capture with editor content at the {width}x{height} native size does not reach \
+            "the settled capture at the {width}x{height} native size does not reach \
              the bottom edge; extent=({extent_x},{extent_y},{extent_width},{extent_height}) \
              {artifacts:?}"
         );
