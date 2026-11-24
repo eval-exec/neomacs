@@ -870,7 +870,9 @@ pub(super) fn owner_cons_reserve_ordinary_request_routes_through_stop<K, W>(
         );
         // Resume reports OwnerReserveHeld for a live lease. That order is
         // the caller's convention: this request does not enforce it.
-        let result = era.collect_requested(&mut stopped, world_roots);
+        // SAFETY: `world_roots` is the core shell's canonical Baton World-root
+        // walk for this stopped era.
+        let result = unsafe { era.collect_requested(&mut stopped, world_roots) };
         assert!(
             result.is_ok(),
             "the main-thread request routes through the stop session: {result:?}"
@@ -941,7 +943,9 @@ pub(super) fn owner_cons_reserve_resume_of_a_live_lease_is_not_busy<K, W>(
             reserve.holds_reserve(),
             "a refused resume leaves the book outstanding"
         );
-        let collected = era.collect_requested(&mut stopped, world_roots);
+        // SAFETY: `world_roots` is the core shell's canonical Baton World-root
+        // walk for this stopped era.
+        let collected = unsafe { era.collect_requested(&mut stopped, world_roots) };
         assert!(
             collected.is_ok(),
             "the stop session returns the lease: {collected:?}"

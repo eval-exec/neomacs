@@ -484,8 +484,16 @@ macro_rules! era_operations {
             }
 
             /// Main-thread GC request. See [`EraCore::collect_requested`].
+            ///
+            /// # Safety
+            /// Same complete CURRENT World root walk contract as
+            /// [`Self::collect_stopped_with`]: the upper adapter must supply
+            /// the complete CURRENT World root walk of the retained keeper,
+            /// including stable marker head slots, and no root or reference
+            /// may escape its real stopped authority.
             #[cold]
-            pub fn collect_requested(
+            #[doc(hidden)]
+            pub unsafe fn collect_requested(
                 &self,
                 stopped: &mut AllStopped<'_>,
                 roots: impl FnOnce(
