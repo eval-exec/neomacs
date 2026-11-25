@@ -613,16 +613,16 @@ impl WpeRuntime {
         self.backend.main_context()
     }
 
-    fn session(
+    fn ensure_session(
         &mut self,
         storage: &crate::StoragePartition,
-    ) -> Result<std::ptr::NonNull<super::sys::webkit::WebKitNetworkSession>, String> {
+    ) -> Result<LinuxProfileKey, String> {
         let key = LinuxProfileKey::from(storage);
         if !self.profiles.contains_key(&key) {
             let session = NetworkSession::create(storage, self.profile_root.as_deref())?;
             self.profiles.insert(key, session);
         }
-        Ok(self.profiles.get(&key).expect("profile was inserted").raw())
+        Ok(key)
     }
 
     fn navigate(view: &mut WpeWebView, target: &NavigationTarget) -> Result<(), String> {
@@ -640,15 +640,18 @@ impl WpeRuntime {
     }
 
     fn create(&mut self, request: PlatformCreateRequest) -> Result<(), String> {
-        let session = self.session(request.storage())?;
+        let session_key = self.ensure_session(request.storage())?;
+        let session = self
+            .profiles
+            .get(&session_key)
+            .expect("profile was inserted");
         let display = self.backend.platform_display();
         let related_view = match request.relationship() {
             crate::BrowsingRelationship::Independent => None,
             crate::BrowsingRelationship::Related(id) => Some(
                 self.views
                     .get(id)
-                    .ok_or_else(|| format!("related WebView {id} is not ready"))?
-                    .native(),
+                    .ok_or_else(|| format!("related WebView {id} is not ready"))?,
             ),
         };
         let mut view = WpeWebView::new(WpeViewCreation {

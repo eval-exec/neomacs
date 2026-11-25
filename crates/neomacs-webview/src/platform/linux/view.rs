@@ -54,8 +54,8 @@ pub(crate) struct WpeViewCreation<'a> {
     pub(crate) id: WebViewId,
     pub(crate) generation: WebViewGeneration,
     pub(crate) platform_display: &'a WpePlatformDisplay,
-    pub(crate) network_session: NonNull<wk::WebKitNetworkSession>,
-    pub(crate) related_view: Option<NonNull<wk::WebKitWebView>>,
+    pub(crate) network_session: &'a super::NetworkSession,
+    pub(crate) related_view: Option<&'a WpeWebView>,
     pub(crate) size: WebContentSize,
     pub(crate) policy: &'a WebViewPolicy,
     pub(crate) frame_transport: WpeFrameTransport,
@@ -577,22 +577,26 @@ impl WpeWebView {
             let display_prop = CString::new("display").unwrap();
             let web_view = if let Some(related) = creation.related_view {
                 let related_prop = CString::new("related-view").unwrap();
+                // SAFETY: `display` is checked non-null and borrowed from `platform_display`,
+                // and `related` borrows a live `WpeWebView` whose `native()` pointer stays valid.
                 plat::g_object_new(
                     wk::webkit_web_view_get_type(),
                     display_prop.as_ptr(),
                     display as *mut libc::c_void,
                     related_prop.as_ptr(),
-                    related.as_ptr(),
+                    related.native().as_ptr(),
                     ptr::null::<libc::c_char>(),
                 )
             } else {
                 let session_prop = CString::new("network-session").unwrap();
+                // SAFETY: `display` is checked non-null and borrowed from `platform_display`,
+                // and `network_session` borrows a live `NetworkSession` whose raw handle stays valid.
                 plat::g_object_new(
                     wk::webkit_web_view_get_type(),
                     display_prop.as_ptr(),
                     display as *mut libc::c_void,
                     session_prop.as_ptr(),
-                    creation.network_session.as_ptr(),
+                    creation.network_session.raw().as_ptr(),
                     ptr::null::<libc::c_char>(),
                 )
             } as *mut wk::WebKitWebView;
@@ -1366,6 +1370,11 @@ unsafe fn capture_render_buffer(
     true
 }
 
+/// Capture a DMA-BUF frame from WPE's `render-buffer` callback.
+///
+/// # Safety
+/// `wpe_view` and `buffer` must be live GObject instances valid on the WPE
+/// reactor thread for the duration of this callback.
 unsafe fn capture_dmabuf(
     wpe_view: *mut plat::WPEView,
     buffer: *mut plat::WPEBuffer,
@@ -1373,8 +1382,9 @@ unsafe fn capture_dmabuf(
     height: u32,
     formats: &neomacs_display_protocol::DmaBufImportFormats,
 ) -> Option<CapturedFrame> {
-    // SAFETY: `capture_dmabuf`'s caller guarantees `buffer` is a live `WPEBuffer`.
-    let dmabuf_info = unsafe { buffer_dmabuf_info(buffer) }?;
+    // SAFETY: `capture_dmabuf`'s caller passed the live `WPEBuffer` from WPE's
+    // render-buffer callback on the reactor thread.
+    let dmabuf_info = unsafe { buffer_dmabuf_info(buffer)? };
     if !formats.contains(neomacs_display_protocol::DmaBufFormat {
         fourcc: dmabuf_info.fourcc,
         modifier: dmabuf_info.modifier,
