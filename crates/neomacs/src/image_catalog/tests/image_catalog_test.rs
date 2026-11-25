@@ -850,24 +850,25 @@ fn tiff_pages_keep_independent_known_geometry() {
 fn animation_bookkeeping_mutations_hit_existing_catalog_entry_for_file_and_data() {
     use neovm_core::emacs_core::image_catalog::{EncodedBytes, ImageDataSource};
 
+    // One active Context for the whole test; the specs below allocate on its heap.
+    let _ctx = neovm_core::emacs_core::eval_hook_installers::new_context();
+
     let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
     let catalog = test_catalog(cmd_tx, None, metadata, None);
 
     let make_data_request = |tardiness: f64| {
-        let spec = IMAGE_SPEC_TEST_CONTEXT.with(|_| {
-            Value::list(vec![
-                Value::symbol("image"),
-                Value::keyword(":type"),
-                Value::symbol("gif"),
-                Value::keyword(":data"),
-                Value::string("GIF89a"),
-                Value::keyword(":index"),
-                Value::fixnum(0),
-                Value::keyword(":animate-tardiness"),
-                Value::make_float(tardiness),
-            ])
-        });
+        let spec = Value::list(vec![
+            Value::symbol("image"),
+            Value::keyword(":type"),
+            Value::symbol("gif"),
+            Value::keyword(":data"),
+            Value::string("GIF89a"),
+            Value::keyword(":index"),
+            Value::fixnum(0),
+            Value::keyword(":animate-tardiness"),
+            Value::make_float(tardiness),
+        ]);
         let items = list_to_vec(&spec).expect("test data spec is a list");
         ImageResolveRequest {
             spec: ImageSpecIdentity::from_lisp_spec(&spec).expect("data spec identity"),
