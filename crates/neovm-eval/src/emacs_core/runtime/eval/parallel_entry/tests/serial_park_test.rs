@@ -9,8 +9,8 @@ use super::super::serial_ticket::{
 };
 use super::super::serial_turn::{OwnerSerialState, TurnRefusal};
 use super::{
-    Grant, KeeperPort, ParkedSerial, PortRefusal, SerialHome, TurnStartRefusal, begin_turn,
-    verify_serial_host_heap,
+    Collecting, Grant, KeeperPort, ParkedSerial, PortRefusal, SerialHome, TurnStartRefusal,
+    begin_turn, verify_serial_host_heap,
 };
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
@@ -32,6 +32,8 @@ fn names_no_heap() -> bool {
 #[derive(Debug, PartialEq, Eq)]
 enum Seen {
     GiveBack(u64),
+    /// The ticket went back asking for a collection (L6.7c (c)).
+    GiveBackToCollect(u64),
     Request(u64),
     Refuse(ReceiveReason),
 }
@@ -77,10 +79,16 @@ fn nonzero(n: u64) -> NonZeroU64 {
 
 impl KeeperPort for FakePort {
     type LendGuard = ();
+    type CollectReply = ();
 
     fn give_back(&mut self, returned: ReturnedSerialTicket) {
         self.seen
             .push(Seen::GiveBack(returned.identity().epoch.get()));
+    }
+
+    fn give_back_to_collect(&mut self, returned: ReturnedSerialTicket, (): ()) {
+        self.seen
+            .push(Seen::GiveBackToCollect(returned.identity().epoch.get()));
     }
 
     fn request_turn(&mut self) -> Result<(Grant, ()), PortRefusal> {
@@ -227,6 +235,57 @@ fn e52_a_park_gives_the_ticket_back_and_a_resume_runs_on_a_later_grant() {
         "return and request alternate on the one port, each at its own epoch"
     );
     assert!(names_no_heap());
+}
+
+/// L6.7c (c): a turn that collects parks, and its ticket goes back asking
+/// for the collection before `park_to_collect` returns. The resume asks
+/// again under a new publication on the same port, and the resumed turn
+/// reads the state the turn left: `garbage-collect` returns to its caller.
+#[test]
+fn l67c_a_collecting_turn_gives_the_ticket_back_to_collect_and_resumes_on_the_next_grant() {
+    let (mut state, mut port) = dormant(7);
+    let grant = port.request_turn().ok().expect("granted");
+    let home = port.home;
+    let mut turn = begin_turn(&mut state, home, grant, &mut port, standalone)
+        .ok()
+        .expect("the first grant begins");
+    assert_eq!(turn.with_world(|ev| eval(ev, "(setq sp-state 3)")), "3");
+
+    let parked = turn
+        .park_to_collect((), &mut port)
+        .ok()
+        .expect("the host detaches");
+    assert_eq!(
+        port.seen,
+        [Seen::Request(1), Seen::GiveBackToCollect(1)],
+        "the ticket went back asking for the collection before the park returned"
+    );
+    assert!(
+        names_no_heap(),
+        "a turn parked for a collection leaves no heap on this thread"
+    );
+    assert_eq!(*parked.wait(), Collecting);
+
+    let mut turn = parked
+        .resume(&mut port, standalone)
+        .ok()
+        .expect("the grant after the collection resumes");
+    assert_eq!(
+        turn.with_world(|ev| eval(ev, "sp-state")),
+        "3",
+        "the caller resumes with the state it left"
+    );
+    turn.end(&mut port).ok().expect("the host detaches");
+    assert_eq!(
+        port.seen,
+        [
+            Seen::Request(1),
+            Seen::GiveBackToCollect(1),
+            Seen::Request(2),
+            Seen::GiveBack(2),
+        ],
+        "the resume asks again, under a new publication, on the one port"
+    );
 }
 
 #[test]

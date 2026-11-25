@@ -466,6 +466,22 @@ pub(super) fn requeue_baton_group_at_head(registry: &Registry) -> Result<(), Ren
     gate.rendezvous.requeue_baton_group_at_head().map(|_| ())
 }
 
+/// L6.7c (c): the keeper commits an owner's request at the ring's HEAD: the
+/// owner's turn came back asking for a collection, and this is its next
+/// request. Keeper thread only; refused while the owner has an entry or a
+/// turn is out.
+pub(super) fn requeue_serial_at_head(
+    registry: &Registry,
+    owner: MutatorKey,
+    generation: NonZeroU64,
+) -> Result<(), RendezvousError> {
+    keeper::keeper_thread(registry)?;
+    let mut gate = registry.lock_for_keeper()?;
+    gate.rendezvous
+        .requeue_serial_at_head(owner, generation)
+        .map(|_| ())
+}
+
 /// L6.7b b3: the keeper cancels the Baton group's queued request when the
 /// group leaves the era. A granted entry refuses with `Identity`.
 pub(super) fn cancel_baton_group(registry: &Registry) -> Result<(), RendezvousError> {

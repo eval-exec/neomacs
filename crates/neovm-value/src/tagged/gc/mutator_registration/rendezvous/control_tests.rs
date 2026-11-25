@@ -629,3 +629,59 @@ fn ring_requeues_the_baton_group_at_the_head() {
         "never ahead of a turn that is out"
     );
 }
+
+/// L6.7c (c): an owner's turn came back asking for a collection, so its
+/// next request, under its new publication, goes in at the HEAD, ahead of an
+/// owner queued during its turn. One entry per owner, and never ahead of a
+/// turn that is out.
+#[test]
+fn ring_requeues_a_collecting_owner_at_the_head() {
+    let mut state = State::new();
+    let keys = ring_keys();
+    let first = state.enqueue_serial(keys[0], ring_generation()).unwrap();
+    let epoch = requested(&mut state, &running(&keys));
+    let stopped = stopped_members(&keys);
+    state.begin_trace(epoch, &stopped).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(first)));
+    let behind = state.enqueue_serial(keys[1], ring_generation()).unwrap();
+    let republished = NonZeroU64::new(12).unwrap();
+    assert_eq!(
+        state.requeue_serial_at_head(keys[0], republished),
+        Err(RendezvousError::Identity),
+        "the granted entry is still the owner's one entry"
+    );
+    state.retire_serial(first).unwrap();
+    let again = state.requeue_serial_at_head(keys[0], republished).unwrap();
+    assert_eq!(
+        state.ring_head(),
+        Some(again),
+        "the owner is back at the head"
+    );
+    let order: Vec<_> = state.serial_ring.iter().map(|entry| entry.id()).collect();
+    assert_eq!(
+        order,
+        [again, behind],
+        "ahead of the owner queued behind it"
+    );
+    assert_eq!(
+        state.ring_head_entry().map(|entry| entry.client()),
+        Some(RingClient::Owner {
+            key: keys[0],
+            generation: republished,
+        }),
+        "under the publication it made after its turn"
+    );
+    assert_eq!(
+        state.requeue_serial_at_head(keys[0], republished),
+        Err(RendezvousError::Identity),
+        "one entry per owner"
+    );
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(again)));
+    state.retire_serial(again).unwrap();
+    assert_eq!(state.grant_head_in_stop(epoch, |_| true), Ok(Some(behind)));
+    assert_eq!(
+        state.requeue_serial_at_head(keys[2], ring_generation()),
+        Err(RendezvousError::Publication),
+        "never ahead of a turn that is out"
+    );
+}

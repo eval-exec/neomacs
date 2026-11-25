@@ -294,6 +294,32 @@ impl State {
         {
             return Err(RendezvousError::Identity);
         }
+        self.push_at_head(RingClient::BatonGroup)
+    }
+
+    /// Commit an owner's request at the HEAD (L6.7c (c)). The owner's turn
+    /// came back asking for a collection, and this is its next request,
+    /// under the publication it made after that turn: the keeper collects
+    /// first in the stop that grants it, and the owner resumes next, as the
+    /// Baton group does after its own collection. One entry per client, and
+    /// never ahead of a turn that is out.
+    pub(in crate::tagged::gc) fn requeue_serial_at_head(
+        &mut self,
+        owner: MutatorKey,
+        generation: NonZeroU64,
+    ) -> Result<RequestId, RendezvousError> {
+        self.live()?;
+        if self.serial_ring.iter().any(|entry| entry.is_owner(owner)) {
+            return Err(RendezvousError::Identity);
+        }
+        self.push_at_head(RingClient::Owner {
+            key: owner,
+            generation,
+        })
+    }
+
+    /// Put CLIENT at the ring's HEAD, never ahead of a granted head.
+    fn push_at_head(&mut self, client: RingClient) -> Result<RequestId, RendezvousError> {
         if self.ring_head_granted.is_some() {
             return Err(RendezvousError::Publication);
         }
@@ -303,7 +329,7 @@ impl State {
         let id = self.next_id()?;
         self.serial_ring.push_front(RingEntry {
             id,
-            client: RingClient::BatonGroup,
+            client,
             phase: RingPhase::Queued,
         });
         Ok(id)

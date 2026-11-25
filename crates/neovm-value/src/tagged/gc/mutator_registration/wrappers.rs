@@ -798,6 +798,18 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
         super::rendezvous::requeue_baton_group_at_head(self.core.registry())
     }
 
+    /// L6.7c (c): the keeper commits an owner's request at the ring's HEAD,
+    /// after that owner's turn came back asking for a collection, so the
+    /// owner resumes next after the collection.
+    #[doc(hidden)]
+    pub fn requeue_serial_at_head(
+        &self,
+        owner: super::MutatorKey,
+        generation: std::num::NonZeroU64,
+    ) -> Result<(), RendezvousError> {
+        super::rendezvous::requeue_serial_at_head(self.core.registry(), owner, generation)
+    }
+
     /// L6.7b b3: the keeper cancels the Baton group's queued request. A
     /// granted request refuses with `Identity`.
     #[doc(hidden)]

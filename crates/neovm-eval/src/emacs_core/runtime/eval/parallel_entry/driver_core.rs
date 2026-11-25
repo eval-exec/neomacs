@@ -12,6 +12,11 @@
 //! group's own channel; the keeper keeps its stop while the World is out, so
 //! no parallel owner runs during the group's interval.
 //!
+//! A turn of either kind may end asking for a collection (b5 for the group,
+//! L6.7c (c) for an owner): the keeper collects first in its next stop and
+//! the caller resumes next, as GNU's `garbage-collect` runs synchronously
+//! under the global lock.
+//!
 //! Only a proven invariant break poisons the era: an owner whose lend guard
 //! dropped armed (a Rust unwind or a leaked turn), a message that cannot
 //! belong to the protocol, or a keeper whose stop waits on its own guard
@@ -100,6 +105,12 @@ pub(crate) trait KeeperOps: Copy {
     fn cancel_group(self) -> Result<(), Self::Error>;
     /// Put the Baton group's request back at the ring's HEAD (L6.7b b5).
     fn requeue_group_at_head(self) -> Result<(), Self::Error>;
+    /// Commit an owner's request at the ring's HEAD (L6.7c (c)).
+    fn requeue_owner_at_head(
+        self,
+        key: Self::Key,
+        generation: NonZeroU64,
+    ) -> Result<(), Self::Error>;
     fn stop_within(
         self,
         bound: Duration,
@@ -198,8 +209,12 @@ pub(crate) enum CollectRefusal {
 pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason, WorldReturned, Report> {
     /// The owner published `receipt` and asks for a serial turn.
     Request { owner: u64, receipt: Receipt },
-    /// The lent ticket came back.
-    GiveBack { owner: u64, returned: Returned },
+    /// The lent ticket came back, and how the owner's turn ended.
+    GiveBack {
+        owner: u64,
+        returned: Returned,
+        end: IntervalEnd<Report>,
+    },
     /// The owner could not receive the lent ticket; it comes back unopened.
     Refuse {
         owner: u64,
@@ -242,16 +257,22 @@ pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason, WorldReturned, Repo
     IdleQuery { reply: mpsc::SyncSender<bool> },
 }
 
-/// How the Baton group ended its interval (L6.7b b5).
+/// How a lent turn ended: the Baton group's interval (L6.7b b5) or an
+/// owner's serial turn (L6.7c (c)).
 pub(crate) enum IntervalEnd<Report> {
-    /// No Baton thread runs on: the group asks again on its next wake.
+    /// The turn is over: the client asks again when it next needs one.
     Done,
-    /// A Baton thread collects (`garbage-collect`, or allocation debt at the
-    /// threshold). The keeper ends this stop, collects first in its next one,
-    /// and lends the group the World again at the ring HEAD, so the calling
-    /// thread is the next World user with no other client's turn in between,
-    /// as GNU's collection runs synchronously under the global lock
+    /// The client collects (`garbage-collect`, or allocation debt at the
+    /// threshold). The keeper ends this stop and collects first in its next
+    /// one, which lends the caller its next turn at the ring HEAD, so no
+    /// other client's turn comes between the collection and the caller's
+    /// resume, as GNU's collection runs synchronously under the global lock
     /// (alloc.c:5994, :5779). REPLY, if any, gets that collection's report.
+    ///
+    /// The group keeps its place without a new request. An owner asks again
+    /// under a new publication (a receipt is single-use), and the keeper
+    /// holds the HEAD for it until that request comes: no stop runs in
+    /// between, so the collection traces that publication.
     Collect {
         reply: Option<mpsc::SyncSender<Result<Report, CollectRefusal>>>,
     },
@@ -363,6 +384,15 @@ enum GroupRequest {
     Queued,
 }
 
+/// An owner whose turn came back asking for a collection (L6.7c (c)). The
+/// ring's HEAD is held for its next request, and the keeper runs no stop
+/// until that request comes: the collecting owner keeps the World, as GNU's
+/// caller keeps the global lock across `garbage-collect`.
+struct HeadHold<Report> {
+    owner: u64,
+    reply: Option<mpsc::SyncSender<Result<Report, CollectRefusal>>>,
+}
+
 /// The Baton group's "the ring has a waiter" word (L6.7b b4.1, QB2). The
 /// keeper raises it while the group holds the World and another client (a
 /// parallel owner's request or a collection) is waiting, and lowers it when
@@ -435,6 +465,8 @@ pub(crate) struct Driver<'o, O: KeeperOps> {
     collect_requested: bool,
     /// Waiters expecting the next in-stop collection's report (or Poisoned).
     collect_waiters: Vec<mpsc::SyncSender<Result<O::Report, CollectRefusal>>>,
+    /// A collecting owner the ring's HEAD is held for (L6.7c (c)).
+    head_hold: Option<HeadHold<O::Report>>,
     /// One stop attempt's bound.
     stop_bound: Duration,
     /// How long a refused stop may stay `Busy` before the keeper warns, or,
@@ -457,6 +489,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             group: None,
             collect_requested: false,
             collect_waiters: Vec::new(),
+            head_hold: None,
             stop_bound: CONTENTION_BOUND,
             contention_bound: CONTENTION_BOUND,
             pending_observer: None,
@@ -519,16 +552,26 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
         self.queued.len() + usize::from(group)
     }
 
+    /// Whether a stop has anything to serve. Nothing does while the HEAD is
+    /// held for a collecting owner (L6.7c (c)).
+    fn stop_due(&self) -> bool {
+        self.head_hold.is_none() && (self.queued_len() != 0 || self.collect_requested)
+    }
+
     /// Serve until every owner has exited, or until a proven invariant
     /// break poisons the era.
     pub(crate) fn run(mut self) -> EndOf<O> {
         loop {
-            if self.queued_len() == 0 && !self.collect_requested {
+            if !self.stop_due() {
                 match self.inbox.recv() {
                     Ok(message) => {
                         if let Err(breach) = self.between_stops(message) {
                             return self.poison(breach);
                         }
+                    }
+                    // The collecting owner is gone without asking again.
+                    Err(mpsc::RecvError) if self.head_hold.is_some() => {
+                        return self.poison(Breach::Disconnected);
                     }
                     Err(mpsc::RecvError) => return DriverEnd::Drained,
                 }
@@ -538,7 +581,7 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                     return self.poison(breach);
                 }
             }
-            if (self.queued_len() != 0 || self.collect_requested)
+            if self.stop_due()
                 && let Err(breach) = self.serve_stop()
             {
                 return self.poison(breach);
@@ -592,8 +635,10 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                 Ok(())
             }
             KeeperMsg::IdleQuery { reply } => {
-                let idle =
-                    self.owners.is_empty() && self.queued_len() == 0 && !self.collect_requested;
+                let idle = self.owners.is_empty()
+                    && self.queued_len() == 0
+                    && !self.collect_requested
+                    && self.head_hold.is_none();
                 let _ = reply.try_send(idle);
                 Ok(())
             }
@@ -647,6 +692,8 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
     }
 
     /// Commit a request at the ring's tail: commit order is receive order.
+    /// The request of an owner the HEAD is held for goes in at the HEAD, and
+    /// its collection is asked for the stop that grants it (L6.7c (c)).
     fn commit(&mut self, owner: u64, receipt: O::Receipt) -> Result<(), BreachOf<O>> {
         let key = self.key(owner)?;
         if self.queued.contains_key(&owner) {
@@ -657,17 +704,30 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
         }
         let generation = O::generation(&receipt);
         let ops = self.ops;
-        retry_busy::<O, _>(|| ops.enqueue(key, generation)).map_err(Breach::Rendezvous)?;
+        let hold = self.head_hold.take_if(|hold| hold.owner == owner);
+        let committed = match &hold {
+            Some(_) => retry_busy::<O, _>(|| ops.requeue_owner_at_head(key, generation)),
+            None => retry_busy::<O, _>(|| ops.enqueue(key, generation)),
+        };
+        committed.map_err(Breach::Rendezvous)?;
         self.queued.insert(owner, receipt);
+        if let Some(hold) = hold {
+            self.queue_collect(hold.reply);
+        }
         Ok(())
     }
 
-    /// A normal exit: cancel the owner's queued request, if any.
+    /// A normal exit: cancel the owner's queued request, if any. An owner
+    /// the HEAD is held for gives up its hold; the collection it asked for
+    /// still runs.
     fn exit(&mut self, owner: u64) -> Result<(), BreachOf<O>> {
         let key = self.key(owner)?;
         if self.queued.remove(&owner).is_some() {
             let ops = self.ops;
             retry_busy::<O, _>(|| ops.cancel(key)).map_err(Breach::Rendezvous)?;
+        }
+        if let Some(hold) = self.head_hold.take_if(|hold| hold.owner == owner) {
+            self.queue_collect(hold.reply);
         }
         self.owners.remove(&owner);
         Ok(())
@@ -845,16 +905,23 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             // stop with the breach.
             return Err(Breach::Unreachable { owner });
         }
-        let returned = self.await_return(owner)?;
-        B::settle(held, returned, grant)
-            .map(Step::Next)
-            .map_err(|settle| match settle {
-                Settle::NotTheTicketCut => Breach::Unexpected {
-                    owner,
-                    message: "a returned ticket that is not the one cut",
-                },
-                Settle::Retire(error) => Breach::Rendezvous(error),
-            })
+        let (returned, end) = self.await_return(owner)?;
+        let batch = B::settle(held, returned, grant).map_err(|settle| match settle {
+            Settle::NotTheTicketCut => Breach::Unexpected {
+                owner,
+                message: "a returned ticket that is not the one cut",
+            },
+            Settle::Retire(error) => Breach::Rendezvous(error),
+        })?;
+        match end {
+            IntervalEnd::Done => Ok(Step::Next(batch)),
+            // L6.7c (c): the owner's ticket is retired, so this stop lends
+            // nothing more, and the HEAD waits for the owner's next request.
+            IntervalEnd::Collect { reply } => {
+                self.head_hold = Some(HeadHold { owner, reply });
+                Ok(Step::End(batch))
+            }
+        }
     }
 
     /// Lend a Baton-group head the World and settle its return (L6.7b b3).
@@ -973,16 +1040,21 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
         }
     }
 
-    /// Wait for `owner`'s ticket. Other owners' requests and exits are
-    /// handled as they come; anything else is a breach.
-    fn await_return(&mut self, lent: u64) -> Result<O::Returned, BreachOf<O>> {
+    /// Wait for `owner`'s ticket and how its turn ended. Other owners'
+    /// requests and exits are handled as they come; anything else is a
+    /// breach.
+    fn await_return(&mut self, lent: u64) -> Result<(O::Returned, IntervalEndOf<O>), BreachOf<O>> {
         loop {
             let message = self
                 .inbox
                 .recv()
                 .map_err(|mpsc::RecvError| Breach::Disconnected)?;
             match message {
-                KeeperMsg::GiveBack { owner, returned } if owner == lent => return Ok(returned),
+                KeeperMsg::GiveBack {
+                    owner,
+                    returned,
+                    end,
+                } if owner == lent => return Ok((returned, end)),
                 KeeperMsg::Abandon { owner, cause } => {
                     return Err(Breach::Abandoned { owner, cause });
                 }
@@ -1042,6 +1114,12 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
     /// poisoned it when the breach came from inside one.
     fn poison(mut self, breach: BreachOf<O>) -> EndOf<O> {
         self.ops.poison();
+        if let Some(HeadHold {
+            reply: Some(reply), ..
+        }) = self.head_hold.take()
+        {
+            let _ = reply.send(Err(CollectRefusal::Poisoned));
+        }
         for reply in std::mem::take(&mut self.collect_waiters) {
             let _ = reply.send(Err(CollectRefusal::Poisoned));
         }
@@ -1065,7 +1143,7 @@ enum Step<B> {
     /// The turn came back: serve the next head.
     Next(B),
     /// This stop lends nothing more: an owner was sent back to publish (FIFO
-    /// is not skipped), or the group asked for a collection that must run
+    /// is not skipped), or a turn asked for a collection that must run
     /// before any other turn.
     End(B),
 }

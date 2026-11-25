@@ -119,6 +119,16 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
         self.era.requeue_baton_group_at_head()
     }
 
+    /// L6.7c (c): commit a collecting owner's next request at the ring's
+    /// HEAD.
+    pub(crate) fn requeue_serial_at_head(
+        &self,
+        owner: MutatorKey,
+        generation: NonZeroU64,
+    ) -> Result<(), RendezvousError> {
+        self.era.requeue_serial_at_head(owner, generation)
+    }
+
     /// L6.7b b3: cancel the Baton group's queued request.
     pub(crate) fn cancel_baton_group(&self) -> Result<(), RendezvousError> {
         self.era.cancel_baton_group()

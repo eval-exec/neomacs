@@ -190,6 +190,17 @@ impl<'a> KeeperOps for Era<'a> {
             .map(drop)
     }
 
+    fn requeue_owner_at_head(
+        self,
+        key: MutatorKey,
+        generation: NonZeroU64,
+    ) -> Result<(), RendezvousError> {
+        let mut model = self.0.model.lock().unwrap();
+        model.ring.requeue_serial_at_head(key, generation)?;
+        model.commits.push(key.owner);
+        Ok(())
+    }
+
     /// Request the stop. When the members are not all stopped yet, wait for
     /// one model change and report the attempt pending: the request stands,
     /// as the product's condvar-bounded attempt leaves it.
@@ -425,6 +436,10 @@ pub enum Seen {
 #[derive(Clone, Copy)]
 enum OnGrant {
     GiveBack,
+    /// The owner collects (L6.7c (c)): the ticket goes back asking for a
+    /// collection, the owner asks again under a new publication, and it
+    /// gives back the turn it is lent next.
+    Collect,
     /// Its lend guard drops armed (K7).
     Abandon,
     /// The probe's own negative: the ticket goes back while the owner is
@@ -436,7 +451,8 @@ enum OnGrant {
 }
 
 /// A requester, the shape of `ChannelPort::request_turn` plus a turn: request
-/// once, wait for the answer, hold the ticket alone, end the turn, exit.
+/// once, wait for the answer, hold the ticket alone, end the turn, exit. A
+/// collecting owner requests a second time, after its collection.
 fn requester(
     owner: u64,
     inbox: mpsc::Sender<Msg>,
@@ -445,14 +461,49 @@ fn requester(
     on_grant: OnGrant,
     holding: Option<mpsc::Sender<()>>,
 ) -> Seen {
+    let seen = one_turn(
+        owner,
+        &inbox,
+        &grants,
+        &in_turn,
+        on_grant,
+        holding.as_ref(),
+        generation(),
+    );
+    // A collecting owner asks again, under its next publication, and gives
+    // back the turn the keeper lends it after the collection.
+    let seen = match (on_grant, seen) {
+        (OnGrant::Collect, Seen::Granted(_)) => one_turn(
+            owner,
+            &inbox,
+            &grants,
+            &in_turn,
+            OnGrant::GiveBack,
+            None,
+            NonZeroU64::new(2).unwrap(),
+        ),
+        (_, seen) => seen,
+    };
+    let _ = inbox.send(KeeperMsg::Exit { owner });
+    seen
+}
+
+/// One request under GENERATION and the turn it is lent, ended as ON_GRANT
+/// says.
+fn one_turn(
+    owner: u64,
+    inbox: &mpsc::Sender<Msg>,
+    grants: &mpsc::Receiver<Grant>,
+    in_turn: &AtomicUsize,
+    on_grant: OnGrant,
+    holding: Option<&mpsc::Sender<()>>,
+    generation: NonZeroU64,
+) -> Seen {
     let _ = inbox.send(KeeperMsg::Request {
         owner,
-        receipt: Receipt {
-            owner,
-            generation: generation(),
-        },
+        receipt: Receipt { owner, generation },
     });
-    let seen = match grants.recv() {
+    match grants.recv() {
         Ok(GrantMsg::Grant { ticket, epoch }) => {
             // L7: the grant reaches the owner its ticket was cut for.
             assert_eq!(
@@ -465,7 +516,7 @@ fn requester(
                 0,
                 "two serial turns at once"
             );
-            if let Some(holding) = &holding {
+            if let Some(holding) = holding {
                 let _ = holding.send(());
             }
             let early = matches!(on_grant, OnGrant::GiveBackEarly);
@@ -476,6 +527,12 @@ fn requester(
                 OnGrant::GiveBack | OnGrant::GiveBackEarly => KeeperMsg::GiveBack {
                     owner,
                     returned: ticket,
+                    end: IntervalEnd::Done,
+                },
+                OnGrant::Collect => KeeperMsg::GiveBack {
+                    owner,
+                    returned: ticket,
+                    end: IntervalEnd::Collect { reply: None },
                 },
                 OnGrant::Abandon => KeeperMsg::Abandon {
                     owner,
@@ -491,9 +548,7 @@ fn requester(
         Ok(GrantMsg::Republish) => Seen::Republish,
         Ok(GrantMsg::Poisoned) => Seen::Poisoned,
         Err(_) => Seen::Disconnected,
-    };
-    let _ = inbox.send(KeeperMsg::Exit { owner });
-    seen
+    }
 }
 
 /// How the Baton group ends the interval it was lent.
@@ -1037,5 +1092,114 @@ pub fn an_owner_request_during_the_world_raises_the_waiter_word() {
         let model = era.model.lock().unwrap();
         let granted: Vec<u64> = model.grants.iter().map(|(client, _)| *client).collect();
         assert_eq!(granted, [GROUP, 1], "the owner is lent after the group's interval");
+    });
+}
+
+/// L15 (L6.7c (c)). Owner 1's turn comes back asking for a collection while
+/// owner 2 is queued behind it. The keeper holds the HEAD for owner 1's next
+/// request and runs no stop until it comes; that stop collects first and
+/// lends owner 1 its turn before owner 2's: the collecting owner resumes
+/// next, and its collection traces the publication it made after its turn.
+pub fn a_collecting_owner_resumes_before_any_other_turn() {
+    model(|| {
+        let era = ModelEra::new(&[(1, Mode::NativeStopped), (2, Mode::NativeStopped)]);
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(Era(&era), inbox_rx);
+        let in_turn = Arc::new(AtomicUsize::new(0));
+        let (one_tx, one) = mpsc::sync_channel(1);
+        let (two_tx, two) = mpsc::sync_channel(1);
+        driver.enroll(1, key(1), one_tx);
+        driver.enroll(2, key(2), two_tx);
+        let (holding_tx, holding) = mpsc::channel::<()>();
+        let first = {
+            let inbox = inbox.clone();
+            let in_turn = in_turn.clone();
+            loom::thread::spawn(move || {
+                requester(1, inbox, one, in_turn, OnGrant::Collect, Some(holding_tx))
+            })
+        };
+        let second = {
+            let inbox = inbox.clone();
+            let in_turn = in_turn.clone();
+            loom::thread::spawn(move || {
+                // Owner 2 asks only once owner 1 holds its first ticket.
+                let _ = holding.recv();
+                requester(2, inbox, two, in_turn, OnGrant::GiveBack, None)
+            })
+        };
+        drop(inbox);
+        let end = driver.run();
+        // The order is the witness: a keeper that lends owner 2 first either
+        // shows it here or refuses owner 1's HEAD commit behind owner 2's
+        // granted turn and poisons, which shows here too.
+        let grants = era.model.lock().unwrap().grants.clone();
+        let clients: Vec<u64> = grants.iter().map(|(client, _)| *client).collect();
+        assert_eq!(
+            clients,
+            [1, COLLECTION, 1, 2],
+            "the collecting owner resumes next"
+        );
+        assert_eq!(
+            grants[1].1, grants[2].1,
+            "the collection and the owner's resume ride one stop"
+        );
+        assert_eq!(end, DriverEnd::Drained);
+        assert!(matches!(first.join().unwrap(), Seen::Granted(_)));
+        assert!(matches!(second.join().unwrap(), Seen::Granted(_)));
+    });
+}
+
+/// L16 (L6.7c (c)). Owner 1's turn comes back asking for a collection, and
+/// owner 1 exits instead of asking again. Its exit gives up the HEAD; the
+/// collection it asked for still runs, before owner 2's turn, and the era
+/// drains.
+pub fn a_collecting_owner_that_exits_gives_up_the_head() {
+    model(|| {
+        let era = ModelEra::new(&[(1, Mode::NativeStopped), (2, Mode::NativeStopped)]);
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(Era(&era), inbox_rx);
+        let in_turn = Arc::new(AtomicUsize::new(0));
+        let (one_tx, one) = mpsc::sync_channel(1);
+        let (two_tx, two) = mpsc::sync_channel(1);
+        driver.enroll(1, key(1), one_tx);
+        driver.enroll(2, key(2), two_tx);
+        let (holding_tx, holding) = mpsc::channel::<()>();
+        let first = {
+            let inbox = inbox.clone();
+            let in_turn = in_turn.clone();
+            loom::thread::spawn(move || {
+                let seen = one_turn(
+                    1,
+                    &inbox,
+                    &one,
+                    &in_turn,
+                    OnGrant::Collect,
+                    Some(&holding_tx),
+                    generation(),
+                );
+                let _ = inbox.send(KeeperMsg::Exit { owner: 1 });
+                seen
+            })
+        };
+        let second = {
+            let inbox = inbox.clone();
+            let in_turn = in_turn.clone();
+            loom::thread::spawn(move || {
+                let _ = holding.recv();
+                requester(2, inbox, two, in_turn, OnGrant::GiveBack, None)
+            })
+        };
+        drop(inbox);
+        let end = driver.run();
+        assert!(matches!(first.join().unwrap(), Seen::Granted(_)));
+        assert!(matches!(second.join().unwrap(), Seen::Granted(_)));
+        assert_eq!(end, DriverEnd::Drained, "an exit gives up the HEAD");
+        let model = era.model.lock().unwrap();
+        let clients: Vec<u64> = model.grants.iter().map(|(client, _)| *client).collect();
+        assert_eq!(
+            clients,
+            [1, COLLECTION, 2],
+            "the collection still runs, before owner 2's turn"
+        );
     });
 }

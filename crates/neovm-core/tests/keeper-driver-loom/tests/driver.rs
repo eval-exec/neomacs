@@ -110,6 +110,19 @@ mod silent_waiter {
     include!("model.rs");
 }
 
+/// N-L15: a stop runs while the HEAD is held for a collecting owner.
+#[allow(dead_code, unused)]
+mod unheld_head {
+    use crate::sync;
+    mod control {
+        include!(concat!(env!("OUT_DIR"), "/control.rs"));
+    }
+    mod driver_core {
+        include!(concat!(env!("OUT_DIR"), "/driver_core_unheld_head.rs"));
+    }
+    include!("model.rs");
+}
+
 /// N-L7: the grant goes to another enrolled owner.
 #[allow(dead_code, unused)]
 mod misrouted_grant {
@@ -247,4 +260,28 @@ fn an_owner_request_during_the_world_raises_the_waiter_word() {
 #[should_panic(expected = "the waiter word was never raised")]
 fn negative_a_silent_waiter_word_keeps_the_owner_waiting() {
     silent_waiter::an_owner_request_during_the_world_raises_the_waiter_word();
+}
+
+/// L15 (L6.7c (c)).
+#[test]
+fn a_collecting_owner_resumes_before_any_other_turn() {
+    real::a_collecting_owner_resumes_before_any_other_turn();
+}
+
+#[test]
+#[should_panic(expected = "the collecting owner resumes next")]
+fn negative_an_unheld_head_lets_the_queued_owner_in_first() {
+    unheld_head::a_collecting_owner_resumes_before_any_other_turn();
+}
+
+#[test]
+#[should_panic(expected = "the collecting owner resumes next")]
+fn negative_a_tail_requeue_lets_the_queued_owner_in_first() {
+    requeue_tail::a_collecting_owner_resumes_before_any_other_turn();
+}
+
+/// L16 (L6.7c (c)).
+#[test]
+fn a_collecting_owner_that_exits_gives_up_the_head() {
+    real::a_collecting_owner_that_exits_gives_up_the_head();
 }

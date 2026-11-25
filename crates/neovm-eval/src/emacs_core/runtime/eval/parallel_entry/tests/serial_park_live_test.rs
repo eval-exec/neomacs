@@ -143,9 +143,10 @@ const P: u64 = 7203;
 // L6.7a: the same owners against the product keeper driver and port.
 // ---------------------------------------------------------------------------
 
+use super::super::driver_core::IntervalEnd;
 use super::super::keeper_driver::{
-    Breach, ChannelLend, ChannelPort, CollectRefusal, Driver, DriverEnd, GrantMsg, KeeperMsg,
-    LendDrop,
+    Breach, ChannelLend, ChannelPort, CollectRefusal, CollectReply, Driver, DriverEnd, GrantMsg,
+    KeeperMsg, LendDrop,
 };
 
 /// What one owner thread takes for the driver rows.
@@ -235,6 +236,8 @@ enum PortCall {
     /// A request, granted in the stop of this epoch.
     Granted(NonZeroU64),
     GiveBack,
+    /// The ticket went back asking for a collection (L6.7c (c)).
+    GiveBackToCollect,
     Refuse,
 }
 
@@ -260,7 +263,7 @@ impl<'p, 'era> EpochPort<'p, 'era> {
             .iter()
             .filter_map(|call| match call {
                 PortCall::Granted(epoch) => Some(*epoch),
-                PortCall::GiveBack | PortCall::Refuse => None,
+                PortCall::GiveBack | PortCall::GiveBackToCollect | PortCall::Refuse => None,
             })
             .collect()
     }
@@ -268,10 +271,16 @@ impl<'p, 'era> EpochPort<'p, 'era> {
 
 impl KeeperPort for EpochPort<'_, '_> {
     type LendGuard = ChannelLend;
+    type CollectReply = CollectReply;
 
     fn give_back(&mut self, returned: ReturnedSerialTicket) {
         self.calls.push(PortCall::GiveBack);
         self.port.give_back(returned);
+    }
+
+    fn give_back_to_collect(&mut self, returned: ReturnedSerialTicket, reply: CollectReply) {
+        self.calls.push(PortCall::GiveBackToCollect);
+        self.port.give_back_to_collect(returned, reply);
     }
 
     fn request_turn(&mut self) -> Result<(Grant, ChannelLend), PortRefusal> {
@@ -923,12 +932,24 @@ struct RawPort {
 
 impl KeeperPort for RawPort {
     type LendGuard = ();
+    type CollectReply = CollectReply;
 
     fn give_back(&mut self, returned: ReturnedSerialTicket) {
         self.inbox
             .send(KeeperMsg::GiveBack {
                 owner: self.owner,
                 returned,
+                end: IntervalEnd::Done,
+            })
+            .expect("the keeper takes the ticket back");
+    }
+
+    fn give_back_to_collect(&mut self, returned: ReturnedSerialTicket, reply: CollectReply) {
+        self.inbox
+            .send(KeeperMsg::GiveBack {
+                owner: self.owner,
+                returned,
+                end: IntervalEnd::Collect { reply },
             })
             .expect("the keeper takes the ticket back");
     }
@@ -2756,6 +2777,129 @@ fn l67b_a_group_collection_runs_first_and_the_group_resumes_next() {
         assert!(
             !era.owns_heap_word_for_test(&stopped, garbage).unwrap(),
             "the group's collection reclaimed the garbage"
+        );
+        complete_retrying("verify stop", stopped.complete());
+    });
+}
+
+/// L6.7c (c), the b5 shape for an owner. O's turn collects while B's request
+/// is committed behind it. The keeper ends that stop and holds the ring's
+/// HEAD for O; O asks again under a new publication, and the stop that
+/// grants it collects first, then lends O before B: no other client's turn
+/// comes between O's collection and its resume, as GNU's `garbage-collect`
+/// runs synchronously under the global lock. O resumes with the state its
+/// turn left, the report reaches O, and the collection reclaims the
+/// unrooted garbage.
+#[test]
+fn l67c_an_owner_collection_runs_first_and_the_owner_resumes_next() {
+    with_live_era_with_garbage("l67c-owner-collect", |era, survivor, garbage| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let o = enroll_driver(era, &mut driver, &inbox, O);
+        let b = enroll_driver(era, &mut driver, &inbox, B);
+        drop(inbox);
+        let log = std::sync::Mutex::new(Vec::<&'static str>::new());
+        let (idle_tx, idle) = mpsc::channel::<()>();
+        let (holding_tx, holding) = mpsc::channel::<()>();
+        let (sent_tx, sent) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let log = &log;
+            let queued = scope.spawn(move || {
+                let (mut state, home, mut raw, grants) = b.start_raw();
+                // NativeStopped, so O's stops do not wait on B.
+                let receipt = raw.publish();
+                let (_, generation, _) = receipt.serial_facts();
+                idle_tx.send(()).expect("tell O");
+                holding.recv_timeout(BOUND).expect("O holds its ticket");
+                raw.request(receipt);
+                sent_tx.send(()).expect("B's request is in the inbox");
+                let Ok(GrantMsg::Grant { ticket, epoch }) = grants.recv_timeout(BOUND) else {
+                    panic!("B is granted");
+                };
+                log.lock().expect("log").push("B");
+                let mut port = raw.port();
+                raw_turn(
+                    &mut state,
+                    home,
+                    &mut port,
+                    Grant {
+                        ticket,
+                        generation,
+                        epoch,
+                    },
+                    "(setq sp-live 72)",
+                );
+                raw.inbox
+                    .send(KeeperMsg::Exit { owner: B })
+                    .expect("B exits");
+                retire(raw.mutator);
+                epoch
+            });
+            let collecting = scope.spawn(move || {
+                idle.recv_timeout(BOUND).expect("B is idle");
+                o.run(|state, home, port| {
+                    let mut port = EpochPort::new(port);
+                    let granted = port.request_turn().ok().expect("O is granted");
+                    let mut turn = begin_turn(state, home, granted, &mut port, standalone)
+                        .ok()
+                        .expect("the grant begins");
+                    turn.with_world(|ev| eval(ev, "(setq sp-live 71)"));
+                    log.lock().expect("log").push("O");
+                    holding_tx.send(()).expect("tell B");
+                    // B's request precedes O's collection in the keeper's inbox.
+                    sent.recv_timeout(BOUND).expect("B asked");
+                    let (report_tx, report_rx) = mpsc::sync_channel(1);
+                    let parked = turn
+                        .park_to_collect(Some(report_tx), &mut port)
+                        .ok()
+                        .expect("the host detaches");
+                    let mut turn = parked
+                        .resume(&mut port, standalone)
+                        .ok()
+                        .expect("O resumes after its collection");
+                    log.lock().expect("log").push("O");
+                    let seen = turn.with_world(|ev| eval(ev, "sp-live"));
+                    turn.end(&mut port).ok().expect("the host detaches");
+                    let report = report_rx
+                        .recv_timeout(BOUND)
+                        .expect("the collection report")
+                        .expect("the collection ran");
+                    (seen, report, port.grants(), port.calls.clone())
+                })
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            let (seen, report, grants, calls) = collecting.join().expect("O");
+            let b_epoch = queued.join().expect("B");
+            assert_eq!(
+                *log.lock().expect("log"),
+                ["O", "O", "B"],
+                "the collecting owner resumes before B's turn"
+            );
+            assert_eq!(seen, "71", "O resumes with the state its turn left");
+            assert_eq!(
+                calls,
+                [
+                    PortCall::Granted(grants[0]),
+                    PortCall::GiveBackToCollect,
+                    PortCall::Granted(grants[1]),
+                    PortCall::GiveBack,
+                ],
+                "the ticket went back to collect, then O asked again"
+            );
+            assert!(grants[1] > grants[0], "the collection ended O's stop");
+            assert_eq!(
+                report.epoch,
+                grants[1].get(),
+                "the collection and O's resume ride one stop"
+            );
+            assert!(b_epoch >= grants[1]);
+        });
+        let stopped = stop_retrying(era);
+        assert!(era.owns_heap_word_for_test(&stopped, survivor).unwrap());
+        assert!(
+            !era.owns_heap_word_for_test(&stopped, garbage).unwrap(),
+            "O's collection reclaimed the garbage"
         );
         complete_retrying("verify stop", stopped.complete());
     });

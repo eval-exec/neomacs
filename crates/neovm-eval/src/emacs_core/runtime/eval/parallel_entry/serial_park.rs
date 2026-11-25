@@ -109,8 +109,14 @@ impl LendGuard for () {
 pub(crate) trait KeeperPort {
     /// The guard over one lent ticket.
     type LendGuard: LendGuard;
+    /// Where a collection's report goes (L6.7c (c)).
+    type CollectReply;
     /// Give a finished turn's ticket back to the keeper.
     fn give_back(&mut self, returned: ReturnedSerialTicket);
+    /// Give a parked turn's ticket back asking for a collection (L6.7c (c)).
+    /// The keeper holds the ring's HEAD for this owner's next request and
+    /// collects first in the stop that grants it; REPLY gets the report.
+    fn give_back_to_collect(&mut self, returned: ReturnedSerialTicket, reply: Self::CollectReply);
     /// Publish this owner's image, commit a request at the ring tail under
     /// that publication, and wait, NativeStopped, for the grant. The guard
     /// is armed: the ticket is out from here until it goes back.
@@ -128,6 +134,11 @@ pub(crate) struct LiveSerial<'t, C: SerialHost, G: LendGuard = ()> {
     home: SerialHome,
     guard: G,
 }
+
+/// What a turn parked for a collection waits on (L6.7c (c)): the grant the
+/// keeper lends it at the ring's HEAD, after the collection.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Collecting;
 
 /// A parked turn. It holds no ticket: only the parked E5.1 turn and the
 /// owner's fixed facts.
@@ -182,18 +193,24 @@ fn receive<P: KeeperPort, R, A>(
     }
 }
 
-/// Finish a local owner on the seat that received it and give its ticket
-/// back. The pairing is structural: a `LiveSerial` holds the seat beside the
-/// turn whose owner that seat received, and E5.1 hands back the same owner.
-/// A mismatch would leave the keeper's stop open forever, so it fails loudly.
-fn give_back(mut seat: SerialDestination, local: LocalSerialOwner, port: &mut impl KeeperPort) {
+/// Finish a local owner on the seat that received it, for its ticket's
+/// return. The pairing is structural: a `LiveSerial` holds the seat beside
+/// the turn whose owner that seat received, and E5.1 hands back the same
+/// owner. A mismatch would leave the keeper's stop open forever, so it fails
+/// loudly.
+fn returned(mut seat: SerialDestination, local: LocalSerialOwner) -> ReturnedSerialTicket {
     match local.finish(&mut seat) {
-        Ok(returnable) => port.give_back(returnable.return_ticket()),
+        Ok(returnable) => returnable.return_ticket(),
         Err(local) => panic!(
             "a serial seat refused the owner it received: {:?}",
             local.identity()
         ),
     }
+}
+
+/// Finish a local owner and give its ticket back.
+fn give_back(seat: SerialDestination, local: LocalSerialOwner, port: &mut impl KeeperPort) {
+    port.give_back(returned(seat, local));
 }
 
 /// Step (a) of SERIAL-TURN-CONTEXT r1 point 2: verify that the received
@@ -324,6 +341,49 @@ impl<'t, C: SerialHost, G: LendGuard> LiveSerial<'t, C, G> {
                     guard,
                 },
                 wait,
+                refusal,
+            )),
+        }
+    }
+
+    /// Park for a collection (L6.7c (c), the b5 shape for an owner): the
+    /// host leaves the thread and the ticket goes back asking the keeper to
+    /// collect, before this returns. The keeper holds the ring's HEAD for
+    /// this owner, so the [`ParkedSerial::resume`] that follows asks again
+    /// under a new publication, is granted in the stop that collects first,
+    /// and no other client's turn comes in between. REPLY gets that
+    /// collection's report. No stop runs until that resume asks, so a resume
+    /// refused `Retry` (this owner could not publish) keeps the HEAD held:
+    /// resume again. A host that refuses to detach keeps the turn live and
+    /// hands REPLY back.
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn park_to_collect<P: KeeperPort<LendGuard = G>>(
+        self,
+        reply: P::CollectReply,
+        port: &mut P,
+    ) -> Result<ParkedSerial<'t, C, Collecting>, (Self, P::CollectReply, C::Refusal)> {
+        let LiveSerial {
+            turn,
+            seat,
+            home,
+            guard,
+        } = self;
+        match turn.park(Collecting) {
+            Ok((parked, local)) => {
+                port.give_back_to_collect(returned(seat, local), reply);
+                guard.disarm();
+                Ok(ParkedSerial { parked, home })
+            }
+            Err((turn, Collecting, refusal)) => Err((
+                LiveSerial {
+                    turn,
+                    seat,
+                    home,
+                    guard,
+                },
+                reply,
                 refusal,
             )),
         }

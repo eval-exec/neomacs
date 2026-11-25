@@ -38,6 +38,9 @@ pub(crate) type KeeperMsg = driver_core::KeeperMsg<
 >;
 /// Keeper -> one owner.
 pub(crate) type GrantMsg = driver_core::GrantMsg<StoppedSerialTicket>;
+/// Where a collection's report goes: the caller of `garbage-collect`, or
+/// nobody (allocation debt).
+pub(crate) type CollectReply = Option<mpsc::SyncSender<Result<CollectionReport, CollectRefusal>>>;
 /// Keeper -> the Baton group (L6.7b b3).
 pub(crate) type GroupMsg = driver_core::GroupMsg<WorldTurn>;
 /// The Baton group's enrollment, for its port.
@@ -108,6 +111,14 @@ impl<'k, 'service, 'heap> KeeperOps for &'k KeeperEra<'service, 'heap> {
 
     fn requeue_group_at_head(self) -> Result<(), RendezvousError> {
         self.requeue_baton_group_at_head()
+    }
+
+    fn requeue_owner_at_head(
+        self,
+        key: MutatorKey,
+        generation: NonZeroU64,
+    ) -> Result<(), RendezvousError> {
+        self.requeue_serial_at_head(key, generation)
     }
 
     fn stop_within(
@@ -454,11 +465,21 @@ impl<'era> ChannelPort<'era> {
 
 impl KeeperPort for ChannelPort<'_> {
     type LendGuard = ChannelLend;
+    type CollectReply = CollectReply;
 
     fn give_back(&mut self, returned: ReturnedSerialTicket) {
         let _ = self.inbox.send(KeeperMsg::GiveBack {
             owner: self.owner,
             returned,
+            end: driver_core::IntervalEnd::Done,
+        });
+    }
+
+    fn give_back_to_collect(&mut self, returned: ReturnedSerialTicket, reply: CollectReply) {
+        let _ = self.inbox.send(KeeperMsg::GiveBack {
+            owner: self.owner,
+            returned,
+            end: driver_core::IntervalEnd::Collect { reply },
         });
     }
 
@@ -705,7 +726,7 @@ impl GroupPort {
         &mut self,
         mut lend: WorldLend,
         returned: WorldReturned,
-        reply: Option<mpsc::SyncSender<Result<CollectionReport, CollectRefusal>>>,
+        reply: CollectReply,
     ) -> Result<(WorldTurn, NonZeroU64, WorldLend), PortRefusal> {
         lend.armed = false;
         if self

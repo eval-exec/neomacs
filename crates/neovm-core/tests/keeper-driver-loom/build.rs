@@ -87,6 +87,16 @@ fn main() {
             "                    self.commit(owner, receipt)?;\n",
         ),
     );
+    // N-L15: a stop runs while the HEAD is held for a collecting owner.
+    write(
+        &out,
+        "driver_core_unheld_head.rs",
+        &mutate(
+            &core,
+            "        self.head_hold.is_none() && (self.queued_len() != 0 || self.collect_requested)",
+            "        self.queued_len() != 0 || self.collect_requested",
+        ),
+    );
     // N-L7: the grant goes to another enrolled owner.
     write(
         &out,
@@ -111,8 +121,8 @@ fn main() {
         );
     }
     write(&out, "control.rs", &control);
-    // N-L13: the collecting group goes back at the TAIL, behind the owners
-    // queued during its interval.
+    // N-L13/N-L15: a collecting client goes back at the TAIL, behind the
+    // owners queued during its turn.
     write(
         &out,
         "control_requeue_tail.rs",
