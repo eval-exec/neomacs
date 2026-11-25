@@ -1576,30 +1576,10 @@ impl FrameArena {
         self.region.install_cons_block_tail(first, cells, block);
     }
 
-    /// Test seam: install a float-page bump tail into this owner's cursors.
-    #[cfg(test)]
-    #[doc(hidden)]
-    pub(crate) fn install_float_page_tail(&mut self, first: usize, slots: usize, page: usize) {
-        self.region.install_float_page_tail(first, slots, page);
-    }
-
     /// The next cons cell of this owner's run, or `None` when it is exhausted.
     #[doc(hidden)]
     pub fn take_cons_cell(&self) -> Option<usize> {
         self.region.take_cons_cell()
-    }
-
-    /// The next float slot of this owner's run, or `None` when it is exhausted.
-    #[doc(hidden)]
-    pub fn take_float_slot(&self) -> Option<usize> {
-        self.region.take_float_slot()
-    }
-
-    /// Test seam: install a float-page free-list run into this owner's cursors.
-    #[cfg(test)]
-    #[doc(hidden)]
-    pub(crate) fn install_float_page_free(&mut self, first: usize, slots: usize, page: usize) {
-        self.region.install_float_page_free(first, slots, page);
     }
 
     /// A poll that does not block. The allocation region stays as it is.
@@ -1609,7 +1589,7 @@ impl FrameArena {
         // poll that returns without a stop. The region survives on purpose.
     }
 
-    /// Refund this owner's unused tails. Only a publication that precedes a
+    /// Refund this owner's unused cons tail. Only a publication that precedes a
     /// stop calls this. The shared free list is not written.
     ///
     /// This records the decision and does not apply it. A cursor installed
