@@ -28,6 +28,10 @@
 #![allow(dead_code)]
 
 use super::super::owner_bindings::OwnerRecordId;
+use super::backtrace::{
+    BacktraceDebugError, BacktraceDebugUpdate, OwnerBacktraceView, OwnerStopState,
+    StoppedOwnerBacktrace,
+};
 use super::dispatch::opcode_slot;
 use super::effective::{
     EffectivePlainKey, EraId, PlainAccess, PlainRefusal, PlainUnbind, ShapeGeneration,
@@ -259,7 +263,10 @@ pub(crate) enum ArithRefusal {
     Exhausted(NumericClass),
     /// A registration or era-poison failure from the owner's allocator
     /// (e.g. poisoned between an `Ok` refill and the retry, M1 / #12221).
-    /// Surfaces as `VmOutcome::Fault(EngineFault::Poll(Registration(..)))`,
+    /// Converted via `RendezvousError::from`: `RegistrationError::Poisoned`
+    /// surfaces as `VmOutcome::Fault(EngineFault::Poll(RendezvousError::Poisoned))`,
+    /// while other registration errors surface as
+    /// `VmOutcome::Fault(EngineFault::Poll(RendezvousError::Registration(..)))` —
     /// never as a Lisp signal.
     Fault(RegistrationError),
 }
@@ -417,6 +424,14 @@ pub(crate) trait VmEscape {
         arena: &FrameArena,
         plain: &mut dyn PlainAccess,
     ) -> EscapeCompletion;
+
+    /// Pending `backtrace-debug` flag updates recorded while the serial escape
+    /// inspected the stopped owner's [`OwnerBacktraceView`] (V6). Drained once
+    /// right when `escape` returns and applied while the owner is still stopped
+    /// at the escape boundary (only when the completion passes R2/R3/R1).
+    fn take_debug_on_exit_updates(&mut self) -> Vec<BacktraceDebugUpdate> {
+        Vec::new()
+    }
 }
 
 /// The lowered code one run executes.
@@ -488,6 +503,9 @@ pub(crate) struct VmExec<'era, E, S, A, V, P> {
     poll: P,
     frame: Option<FrameId>,
     state: RunState,
+    /// Whether this executor is actively stepping bytecode (`Running`) or
+    /// stopped (`Stopped`: idle, parked at an escape, or parked in a refill).
+    stop_state: OwnerStopState,
     /// The exit flags the next run's bottom frame carries (V4). The
     /// harness arms them; V6's backtrace adapter sets a stopped owner's.
     entry_exit_flags: ExitFlags,
@@ -554,6 +572,7 @@ where
             poll,
             frame: None,
             state: RunState::Idle,
+            stop_state: OwnerStopState::Stopped,
             entry_exit_flags: ExitFlags::EMPTY,
             keys: Vec::new(),
             era,
@@ -607,6 +626,27 @@ where
         matches!(self.state, RunState::Idle)
     }
 
+    pub(crate) fn stop_state(&self) -> OwnerStopState {
+        self.stop_state
+    }
+
+    /// Capture an owned, read-only [`OwnerBacktraceView`] of this executor's
+    /// published frames. Holds no borrow of `self` or `FrameArena`.
+    pub(crate) fn backtrace_view(&self) -> OwnerBacktraceView {
+        OwnerBacktraceView::from_arena(&self.arena)
+    }
+
+    /// Set or clear `ExitFlags::DEBUG_ON_EXIT` on a live `VmFrame` via the
+    /// stopped-owner backtrace adapter. Refused if the owner is running.
+    pub(crate) fn set_debug_on_exit(
+        &mut self,
+        frame_id: FrameId,
+        enabled: bool,
+    ) -> Result<bool, BacktraceDebugError> {
+        let mut stopped = StoppedOwnerBacktrace::try_from_state(&mut self.arena, self.stop_state)?;
+        Ok(stopped.set_debug_on_exit(frame_id, enabled))
+    }
+
     pub(crate) fn lookup_root(&mut self, handle: RootHandle) -> Option<Value> {
         self.arena.roots_mut().lookup(handle)
     }
@@ -652,6 +692,7 @@ where
             Err(error) => return VmOutcome::Fault(EngineFault::Frame(error)),
         };
         self.frame = Some(id);
+        self.stop_state = OwnerStopState::Running;
         loop {
             match self.step(ctx, program) {
                 Step::Continue => {}
@@ -661,9 +702,12 @@ where
                     // empty-handed resume refuses again, and that refusal
                     // is the poll fault here, never a silent loop: the
                     // production poll blocks until granted or errors).
-                    if let Err(error) = self.poll.vm_refill(&self.arena, class) {
+                    self.stop_state = OwnerStopState::Stopped;
+                    let result = self.poll.vm_refill(&self.arena, class);
+                    if let Err(error) = result {
                         return self.settle(VmOutcome::Fault(EngineFault::Poll(error)));
                     }
+                    self.stop_state = OwnerStopState::Running;
                 }
                 Step::Stop(outcome) => return self.settle(outcome),
             }
@@ -677,6 +721,7 @@ where
     /// further work. It is a defect on one side of the escape, not a Lisp
     /// outcome.
     fn settle(&mut self, outcome: VmOutcome) -> VmOutcome {
+        self.stop_state = OwnerStopState::Stopped;
         match &outcome {
             VmOutcome::Done { pending } => self.state = RunState::Finished { handle: *pending },
             VmOutcome::Fault(EngineFault::Busy | EngineFault::Poisoned) => {}
@@ -1519,7 +1564,11 @@ where
             frame,
             operands,
         };
+        // The owner is now stopped at the escape boundary until the serial
+        // turn completes and any checked deltas/debug-on-exit updates apply.
+        self.stop_state = OwnerStopState::Stopped;
         let completion = self.escape.escape(request, &self.arena, &mut self.plain);
+        let debug_updates = self.escape.take_debug_on_exit_updates();
         let (consumed, produced, jump) = match completion.stack {
             EscapeStack::Flow(flow) => return Step::Stop(VmOutcome::Signaled(flow)),
             EscapeStack::Completed {
@@ -1653,6 +1702,13 @@ where
         for token in &completion.handlers.pushed {
             self.arena.handlers_mut().push(*token);
         }
+        if !debug_updates.is_empty() {
+            let mut stopped = StoppedOwnerBacktrace::from_escape_park(&mut self.arena);
+            for update in debug_updates {
+                let _ = stopped.set_debug_on_exit(update.frame, update.debug_on_exit);
+            }
+        }
+        self.stop_state = OwnerStopState::Running;
         if matches!(op, Op::Return) {
             return self.return_from_frame(frame, produced);
         }

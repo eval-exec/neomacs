@@ -5,6 +5,10 @@
 use super::super::owner_bindings::{
     BindingKind, Channel, OwnerBindingRecord, OwnerRecordId, OwnerSlab, SlotState, UndoTarget,
 };
+use super::backtrace::{
+    BacktraceDebugError, BacktraceDebugUpdate, OwnerBacktraceEntry, OwnerBacktraceView,
+    OwnerStopState, StoppedOwnerBacktrace,
+};
 use super::dispatch::{admits_owner_local, opcode_slot};
 use super::effective::{
     EraId, OwnerSlots, OwnerSlotsMut, PlainAccess, PlainAdmission, PlainRefusal, ShapeGeneration,
@@ -12,9 +16,10 @@ use super::effective::{
 };
 use super::engine::{CoreOutcome, EngineFault, RecordStack, apply_one};
 use super::frames::{
-    BindStack, ExitFlags, FrameArena, FrameId, HandlerKind, HandlerMark, HandlerRecord,
+    BindStack, ExitFlags, FrameArena, FrameId, FrameKind, HandlerKind, HandlerMark, HandlerRecord,
     HandlerStack, InterpFrame, OperandCursor, OwnerHandler, OwnerRecord, OwnerRecordMark,
     OwnerScanJoin, Pc, PollBudget, RootGroup, SerialHandlerToken, SerialRecordToken, SlotRecord,
+    VmFrame,
 };
 use super::poll_tests::{
     OWNER, activate, collect, end_epoch, finish, lend, recv, request_stop, retire, retry,
@@ -7261,9 +7266,9 @@ fn vm_wired_refill_two_requesters_one_stop_both_claim_without_second_stop() {
 #[test]
 fn vm_wired_refill_poisoned_era_surfaces_poll_fault_and_never_loops() {
     // Pre-publish poison: when the era is poisoned before `poll_region_refill`
-    // requests a stop, `request_active` refuses with `Registration(Poisoned)`
+    // requests a stop, `request_active` refuses with `RendezvousError::Poisoned`
     // before `publish_scan` runs (`build_calls == 0`), and the driver surfaces
-    // `Fault(EngineFault::Poll(Registration(Poisoned)))` immediately instead
+    // `Fault(EngineFault::Poll(RendezvousError::Poisoned))` immediately instead
     // of looping `Step::Refill`. (Post-publish poison is the sibling row below.)
     Context::with_test_collection_era(
         |context| {
@@ -7330,7 +7335,7 @@ fn vm_wired_refill_poisoned_era_surfaces_poll_fault_and_never_loops() {
                 let (is_poison_fault, calls, allocs, is_idle, edges, builds) = recv(&done_rx);
                 assert!(
                     is_poison_fault,
-                    "poisoned era must surface Fault(Poll(Registration(Poisoned)))"
+                    "poisoned era must surface Fault(Poll(RendezvousError::Poisoned))"
                 );
                 assert_eq!(calls, 1, "must not loop Step::Refill on poison");
                 assert_eq!(allocs, 0);
@@ -7353,8 +7358,8 @@ fn vm_wired_refill_poisoned_after_publish_surfaces_poll_fault_and_never_loops() 
     // M2 (#12221 row 2): the owner publishes at `poll_region_refill`
     // (`build_calls == 1`) and ACKs the stop; the keeper then poisons the era
     // AFTER publication by dropping `AllStopped` before resume. `vm_refill`
-    // wakes with `Registration(Poisoned)` and `VmExec::run` surfaces
-    // `Fault(EngineFault::Poll(Registration(Poisoned)))` immediately with
+    // wakes with `RendezvousError::Poisoned` and `VmExec::run` surfaces
+    // `Fault(EngineFault::Poll(RendezvousError::Poisoned))` immediately with
     // `calls == 1`, `build_calls == 1`, and `is_idle == true`.
     Context::with_test_collection_era(
         |context| {
@@ -7428,7 +7433,7 @@ fn vm_wired_refill_poisoned_after_publish_surfaces_poll_fault_and_never_loops() 
                     recv(&done_rx);
                 assert!(
                     is_poison_fault,
-                    "post-publish poison must surface Fault(Poll(Registration(Poisoned)))"
+                    "post-publish poison must surface Fault(Poll(RendezvousError::Poisoned))"
                 );
                 assert_eq!(calls, 1, "must not loop Step::Refill after poisoned resume");
                 assert_eq!(allocs, 0);
@@ -7544,7 +7549,7 @@ fn vm_wired_open_numeric_run_dropped_without_close_poisons_era_and_faults_poll()
     // float and drops `RunAccess` WITHOUT calling `close_all_runs()`, `Drop
     // for RunAccess` immediately poisons the registry (`neovm-value`
     // token.rs:159-170) and leaves admission pinned, so the next VM poll
-    // (`poll_vm_back_edge`) faults `Fault(Poll(Registration(Poisoned)))` and
+    // (`poll_vm_back_edge`) faults `Fault(Poll(RendezvousError::Poisoned))` and
     // never publishes or ACKs the open run.
     Context::with_test_collection_era(
         |context| {
@@ -7925,4 +7930,811 @@ fn vm_an_exhausted_bignum_refill_passes_bignum_class_to_vm_refill() {
         "vm_refill must receive NumericClass::Bignum, not a hard-coded Float"
     );
     assert_clear(&engine);
+}
+
+// =========================================================================
+// V6 — Backtrace adapter rows (E4-DESIGN §5 :551-561, §8.4a; VM-EXECUTOR V6)
+// =========================================================================
+
+fn v6_program<'a>(function: Value, ops: &'a [Op], constants: &'a [Value]) -> VmProgram<'a> {
+    VmProgram {
+        ops,
+        constants,
+        function,
+        code: Value::NIL,
+    }
+}
+
+/// Harness escape double that models a serial turn installing an
+/// `OwnerBacktraceView` on its `SerialContext` for the duration of the ticket,
+/// optionally invoking `(backtrace-debug frame flag)` while the owner is
+/// stopped, and tearing the view down before the ticket returns.
+struct BacktraceAdapterEscape {
+    /// Active view installed on the mock `SerialContext` while an escape is in
+    /// flight; must be `None` before entry and after ticket return.
+    installed_view: Rc<RefCell<Option<OwnerBacktraceView>>>,
+    /// Snapshots observed during each escape, in call order.
+    observed_views: Vec<OwnerBacktraceView>,
+    /// Whether the mock `SerialContext` had an active view installed during
+    /// each escape.
+    was_installed_during_escape: Vec<bool>,
+    /// Per-escape script of `(target_level, debug_on_exit)` requests to apply
+    /// to the stopped owner before resuming.
+    debug_script: Vec<Vec<(usize, bool)>>,
+    /// Per-escape scripted completions (falls back to `fall_through`).
+    completions: Vec<Option<EscapeCompletion>>,
+    /// Pending updates drained by `VmExec::escape` while the owner is stopped.
+    pending_updates: Vec<BacktraceDebugUpdate>,
+    /// Recorded requests.
+    requests: Vec<VmEscapeRequest>,
+    /// Optional external slot that retains a copy of the view beyond the escape
+    /// to prove `OwnerBacktraceView` holds no borrow of a running owner.
+    retained_view: Option<Rc<RefCell<Option<OwnerBacktraceView>>>>,
+}
+
+impl BacktraceAdapterEscape {
+    fn new(installed_view: Rc<RefCell<Option<OwnerBacktraceView>>>) -> Self {
+        Self {
+            installed_view,
+            observed_views: Vec::new(),
+            was_installed_during_escape: Vec::new(),
+            debug_script: Vec::new(),
+            completions: Vec::new(),
+            pending_updates: Vec::new(),
+            requests: Vec::new(),
+            retained_view: None,
+        }
+    }
+
+    fn with_debug_script(mut self, script: Vec<Vec<(usize, bool)>>) -> Self {
+        self.debug_script = script;
+        self
+    }
+
+    fn with_completions(mut self, completions: Vec<Option<EscapeCompletion>>) -> Self {
+        self.completions = completions;
+        self
+    }
+
+    fn retaining_view_in(mut self, slot: Rc<RefCell<Option<OwnerBacktraceView>>>) -> Self {
+        self.retained_view = Some(slot);
+        self
+    }
+}
+
+impl VmEscape for BacktraceAdapterEscape {
+    fn escape(
+        &mut self,
+        request: VmEscapeRequest,
+        arena: &FrameArena,
+        _plain: &mut dyn PlainAccess,
+    ) -> EscapeCompletion {
+        assert!(
+            self.installed_view.borrow().is_none(),
+            "previous ticket must have torn down its OwnerBacktraceView"
+        );
+        let view = OwnerBacktraceView::from_arena(arena);
+        *self.installed_view.borrow_mut() = Some(view.clone());
+        self.was_installed_during_escape
+            .push(self.installed_view.borrow().is_some());
+        if let Some(slot) = &self.retained_view {
+            *slot.borrow_mut() = Some(view.clone());
+        }
+        let call_index = self.requests.len();
+        if let Some(actions) = self.debug_script.get(call_index) {
+            for &(level, enabled) in actions {
+                if let Some(entry) = view.frame_at(level) {
+                    self.pending_updates.push(BacktraceDebugUpdate {
+                        frame: entry.frame_id,
+                        debug_on_exit: enabled,
+                    });
+                }
+            }
+        }
+        self.observed_views.push(view);
+        self.requests.push(request.clone());
+        // Tear down the view before the ticket returns (E4-DESIGN §5 :560).
+        *self.installed_view.borrow_mut() = None;
+        self.completions
+            .get_mut(call_index)
+            .and_then(Option::take)
+            .unwrap_or_else(|| EscapeCompletion::fall_through(&request.op))
+    }
+
+    fn take_debug_on_exit_updates(&mut self) -> Vec<BacktraceDebugUpdate> {
+        std::mem::take(&mut self.pending_updates)
+    }
+}
+
+#[test]
+fn vm_the_adapter_renders_owner_vm_frames_from_the_published_image() {
+    // V6 / E4-DESIGN §5 :551-561 & §8.4a:
+    // 1. Empty-owner control: an empty FrameArena produces an empty
+    //    OwnerBacktraceView, and combining with serial escape frames shows ONLY
+    //    the serial frames.
+    // 2. Multi-frame published image: OwnerBacktraceView renders frames
+    //    innermost-first (newest first, matching GNU `mapbacktrace`), with
+    //    frame_id, kind, evald, function, args/operands, pc, debug_on_exit,
+    //    and Lisp flags plist (`(:debug-on-exit t)` vs `nil`).
+    // 3. Live escape rendering: during a VmExec escape, the adapter installs
+    //    the view, exposes the live VM frame at the escaping pc, and tears the
+    //    view down before the ticket returns.
+    let mut ctx = context();
+    let empty_arena = FrameArena::new(8);
+    let empty_view = OwnerBacktraceView::from_arena(&empty_arena);
+    assert!(empty_view.is_empty());
+    assert_eq!(empty_view.len(), 0);
+    assert!(empty_view.frame_at(0).is_none());
+    let serial_only = empty_view.combine_with_serial(&["serial-debugger", "serial-escape"], |e| {
+        e.function
+            .as_symbol_name(SymbolMode::Bare)
+            .unwrap_or("<non-sym>")
+    });
+    assert_eq!(
+        serial_only,
+        vec!["serial-debugger", "serial-escape"],
+        "§8.4a control: empty owner shows only the serial frames"
+    );
+
+    // Multi-frame published arena: outer VM -> middle Interp -> inner VM.
+    let mut arena = FrameArena::new(8);
+    let outer_fn = Value::symbol("pvm-bt-outer");
+    let mid_fn = Value::symbol("pvm-bt-mid");
+    let inner_fn = Value::symbol("pvm-bt-inner");
+    let mid_body = Value::list(vec![Value::symbol("quote"), Value::fixnum(5)]);
+
+    let outer_id = arena
+        .push_vm(VmFrame::new(
+            outer_fn,
+            Value::NIL,
+            Pc::new(3),
+            OperandCursor::new(0, 0),
+            OwnerRecordMark::EMPTY,
+            HandlerMark::EMPTY,
+            PollBudget::new(NonZeroU32::MIN),
+        ))
+        .expect("push outer vm");
+    arena
+        .vm_push(outer_id, Value::fixnum(10))
+        .expect("push outer arg0");
+    arena
+        .vm_push(outer_id, Value::fixnum(20))
+        .expect("push outer arg1");
+    let inner_base = arena.vm_segment(outer_id).expect("outer segment").len();
+
+    let mid_id = arena
+        .push_interp(InterpFrame::new(
+            mid_fn,
+            mid_body,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            1,
+            HandlerMark::EMPTY,
+            OwnerRecordMark::EMPTY,
+            PollBudget::new(NonZeroU32::MIN),
+        ))
+        .expect("push mid interp");
+
+    let inner_id = arena
+        .push_vm(
+            VmFrame::new(
+                inner_fn,
+                Value::NIL,
+                Pc::new(9),
+                OperandCursor::new(inner_base, 0),
+                OwnerRecordMark::EMPTY,
+                HandlerMark::EMPTY,
+                PollBudget::new(NonZeroU32::MIN),
+            )
+            .with_exit_flags(ExitFlags::DEBUG_ON_EXIT),
+        )
+        .expect("push inner vm");
+    arena
+        .vm_push(inner_id, Value::fixnum(77))
+        .expect("push inner arg0");
+
+    let view = OwnerBacktraceView::from_arena(&arena);
+    assert_eq!(view.len(), 3);
+    assert_eq!(view.vm_frames().count(), 2);
+
+    // Innermost-first order: [inner VM, middle Interp, outer VM].
+    let e0 = view.frame_at(0).expect("level 0");
+    assert_eq!(e0.frame_id, inner_id);
+    assert_eq!(e0.kind, FrameKind::Vm);
+    assert!(e0.evald);
+    assert_eq!(e0.function, inner_fn);
+    assert_eq!(e0.args, vec![Value::fixnum(77)]);
+    assert_eq!(e0.pc, Some(Pc::new(9)));
+    assert!(e0.debug_on_exit());
+    let (evald0, fn0, args0, flags0) = e0.to_lisp_quad();
+    assert_eq!(evald0, Value::T);
+    assert_eq!(fn0, inner_fn);
+    assert_eq!(args0.cons_car(), Value::fixnum(77));
+    assert_eq!(args0.cons_cdr(), Value::NIL);
+    assert_eq!(flags0.cons_car(), Value::symbol(":debug-on-exit"));
+    assert_eq!(flags0.cons_cdr().cons_car(), Value::T);
+
+    let e1 = view.frame_at(1).expect("level 1");
+    assert_eq!(e1.frame_id, mid_id);
+    assert_eq!(e1.kind, FrameKind::Interp);
+    assert!(!e1.evald);
+    assert_eq!(e1.function, mid_fn);
+    assert_eq!(e1.args, vec![mid_body]);
+    assert_eq!(e1.pc, None);
+    assert!(!e1.debug_on_exit());
+    assert_eq!(e1.flags_plist(), Value::NIL);
+
+    let e2 = view.frame_at(2).expect("level 2");
+    assert_eq!(e2.frame_id, outer_id);
+    assert_eq!(e2.kind, FrameKind::Vm);
+    assert!(e2.evald);
+    assert_eq!(e2.function, outer_fn);
+    assert_eq!(e2.args, vec![Value::fixnum(10), Value::fixnum(20)]);
+    assert_eq!(e2.pc, Some(Pc::new(3)));
+    assert!(!e2.debug_on_exit());
+    assert_eq!(e2.flags_plist(), Value::NIL);
+
+    let mut mapped = Vec::new();
+    view.map_frames::<()>(|entry| {
+        mapped.push(entry.frame_id);
+        Ok(())
+    })
+    .expect("map_frames");
+    assert_eq!(mapped, vec![inner_id, mid_id, outer_id]);
+
+    let combined = view.combine_with_serial(&["serial-escape"], |entry| {
+        entry
+            .function
+            .as_symbol_name(SymbolMode::Bare)
+            .unwrap_or("<non-sym>")
+    });
+    assert_eq!(
+        combined,
+        vec![
+            "serial-escape",
+            "pvm-bt-inner",
+            "pvm-bt-mid",
+            "pvm-bt-outer"
+        ],
+        "owner frames sit below serial escape frames in innermost-first order"
+    );
+
+    // Live VmExec escape renders the executing VM frame from its published image.
+    let worker_fn = Value::symbol("pvm-live-worker");
+    let callee = Value::symbol("pvm-callee");
+    let constants = [Value::fixnum(11), callee, Value::fixnum(22)];
+    let ops = [
+        Op::Constant(0), // 11 stays on stack below call
+        Op::Constant(1), // callee
+        Op::Constant(2), // arg 22
+        Op::Call(1),     // pc = 3, escapes with [11, callee, 22]
+        Op::Add,         // 11 + call_result
+        Op::Return,
+    ];
+    let installed = Rc::new(RefCell::new(None));
+    let escape = BacktraceAdapterEscape::new(installed.clone()).with_completions(vec![Some(
+        completion(&Op::Call(1), vec![Value::fixnum(30)]),
+    )]);
+    let mut engine = VmExec::new(
+        &(),
+        escape,
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, v6_program(worker_fn, &ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(41));
+    assert!(
+        installed.borrow().is_none(),
+        "OwnerBacktraceView must be torn down after the escape ticket returns"
+    );
+    let handler = engine.escape_handler();
+    assert_eq!(handler.was_installed_during_escape, vec![true]);
+    assert_eq!(handler.observed_views.len(), 1);
+    let live_entry: &OwnerBacktraceEntry = handler.observed_views[0]
+        .frame_at(0)
+        .expect("one live VM frame during escape");
+    assert_eq!(live_entry.frame_id, handler.requests[0].frame);
+    assert_eq!(live_entry.kind, FrameKind::Vm);
+    assert!(live_entry.evald);
+    assert_eq!(live_entry.function, worker_fn);
+    assert_eq!(
+        live_entry.args,
+        vec![Value::fixnum(11), callee, Value::fixnum(22)]
+    );
+    assert_eq!(live_entry.pc, Some(Pc::new(3)));
+    assert!(!live_entry.debug_on_exit());
+    assert_eq!(engine.arena_depth(), 0);
+}
+
+#[test]
+fn vm_backtrace_debug_on_an_owner_vm_frame_sets_its_exit_flag() {
+    // V6: `set_debug_on_exit(frame_id, bool)` is valid ONLY while the owner is
+    // stopped, sets/clears `ExitFlags::DEBUG_ON_EXIT` on any live VmFrame (both
+    // top and non-top), refuses a running owner with `OwnerRunning`, and
+    // returns `false` on stale, wrong-generation, out-of-range, or Interp
+    // FrameIds without mutating any live frame. Also proves construction under
+    // a real E2 `&AllStopped<'_>` proof.
+    let _ctx = context();
+    let mut arena = FrameArena::new(8);
+    let outer_id = arena
+        .push_vm(VmFrame::new(
+            Value::symbol("pvm-outer"),
+            Value::NIL,
+            Pc::new(1),
+            OperandCursor::new(0, 0),
+            OwnerRecordMark::EMPTY,
+            HandlerMark::EMPTY,
+            PollBudget::new(NonZeroU32::MIN),
+        ))
+        .expect("push outer");
+    let mid_interp_id = arena
+        .push_interp(InterpFrame::new(
+            Value::symbol("pvm-interp"),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            1,
+            HandlerMark::EMPTY,
+            OwnerRecordMark::EMPTY,
+            PollBudget::new(NonZeroU32::MIN),
+        ))
+        .expect("push interp");
+    let inner_id = arena
+        .push_vm(VmFrame::new(
+            Value::symbol("pvm-inner"),
+            Value::NIL,
+            Pc::new(4),
+            OperandCursor::new(0, 0),
+            OwnerRecordMark::EMPTY,
+            HandlerMark::EMPTY,
+            PollBudget::new(NonZeroU32::MIN),
+        ))
+        .expect("push inner");
+
+    // 1. Running owner MUST be refused; exit flags remain untouched.
+    assert_eq!(
+        StoppedOwnerBacktrace::try_from_state(&mut arena, OwnerStopState::Running).err(),
+        Some(BacktraceDebugError::OwnerRunning)
+    );
+    assert_eq!(arena.vm_exit_flags(inner_id), Some(ExitFlags::EMPTY));
+    assert_eq!(arena.vm_exit_flags(outer_id), Some(ExitFlags::EMPTY));
+
+    // 2. Stopped owner can set & clear DEBUG_ON_EXIT on BOTH top and non-top VmFrames.
+    {
+        let mut stopped =
+            StoppedOwnerBacktrace::try_from_state(&mut arena, OwnerStopState::Stopped)
+                .expect("stopped owner opens adapter");
+        assert!(stopped.set_debug_on_exit(outer_id, true));
+        assert!(stopped.set_debug_on_exit(inner_id, true));
+        // InterpFrame is rejected with false (GNU `Fbacktrace_debug` no-op guard).
+        assert!(!stopped.set_debug_on_exit(mid_interp_id, true));
+
+        let view = stopped.view();
+        assert!(view.frame_at(0).expect("inner").debug_on_exit());
+        assert!(!view.frame_at(1).expect("interp").debug_on_exit());
+        assert!(view.frame_at(2).expect("outer").debug_on_exit());
+
+        // Clearing back to false restores ExitFlags::EMPTY.
+        assert!(stopped.set_debug_on_exit(outer_id, false));
+        let view_after = stopped.view();
+        assert!(view_after.frame_at(0).expect("inner").debug_on_exit());
+        assert!(!view_after.frame_at(2).expect("outer").debug_on_exit());
+    }
+    assert_eq!(
+        arena.vm_exit_flags(inner_id),
+        Some(ExitFlags::DEBUG_ON_EXIT)
+    );
+    assert_eq!(arena.vm_exit_flags(outer_id), Some(ExitFlags::EMPTY));
+
+    // 3. Stale FrameId (same depth reused by a newer generation) is refused.
+    assert!(arena.pop(inner_id).is_some());
+    let reused_inner_id = arena
+        .push_vm(VmFrame::new(
+            Value::symbol("pvm-inner-reused"),
+            Value::NIL,
+            Pc::new(0),
+            OperandCursor::new(0, 0),
+            OwnerRecordMark::EMPTY,
+            HandlerMark::EMPTY,
+            PollBudget::new(NonZeroU32::MIN),
+        ))
+        .expect("push reused inner");
+    assert_ne!(inner_id, reused_inner_id);
+    {
+        let mut stopped =
+            StoppedOwnerBacktrace::try_from_state(&mut arena, OwnerStopState::Stopped)
+                .expect("stopped");
+        assert!(
+            !stopped.set_debug_on_exit(inner_id, true),
+            "stale FrameId from an older generation at the same depth must be refused"
+        );
+        assert!(
+            !stopped.view().frame_at(0).expect("reused").debug_on_exit(),
+            "stale write must not mutate the reused slot"
+        );
+    }
+
+    // 4. Real-era `&AllStopped<'_>` proof: `from_all_stopped` updates the
+    //    stopped owner's VM frame under a genuine E2 stop proof.
+    drop(_ctx);
+    Context::with_test_collection_era(
+        |context| era_vm_setup(context, |_ctx| vec![Value::fixnum(1)]),
+        |era, fixture| {
+            let stopped = retry("v6 all-stopped proof", || stop_for_test(&era));
+            {
+                let mut adapter = StoppedOwnerBacktrace::from_all_stopped(&mut arena, &stopped);
+                assert!(adapter.set_debug_on_exit(reused_inner_id, true));
+                assert!(adapter.view().frame_at(0).expect("reused").debug_on_exit());
+                assert!(adapter.set_debug_on_exit(reused_inner_id, false));
+                assert!(!adapter.view().frame_at(0).expect("reused").debug_on_exit());
+            }
+            let mut ticket = lend(&era, stopped);
+            collect(&mut ticket);
+            end_epoch(ticket);
+            drop(fixture);
+            finish(era);
+        },
+    );
+}
+
+#[test]
+fn vm_a_flagged_return_takes_the_serial_cleanup() {
+    // V6 / VM-EXECUTOR-DESIGN §10: the frame enters WITHOUT `DEBUG_ON_EXIT`.
+    // Mid-run, the owner stops at an escape (`Op::Call(0)`), the backtrace
+    // adapter renders `OwnerBacktraceView` (seeing `debug_on_exit == false`)
+    // and requests `set_debug_on_exit(frame_id, true)` while stopped. When the
+    // owner resumes and reaches `Op::Return`, `return_disposition` takes
+    // `ReturnDisposition::NeedsSerialCleanup` (escaping with `Op::Return`,
+    // where the debugger sees `debug_on_exit == true` and replaces 42 with 99).
+    let mut ctx = context();
+    let worker_fn = Value::symbol("pvm-flagged-fn");
+    let callee = Value::symbol("pvm-debug-hook");
+    let constants = [callee, Value::fixnum(42)];
+    let ops = [
+        Op::Constant(0), // callee
+        Op::Call(0),     // escape #0: adapter sets DEBUG_ON_EXIT = true while stopped
+        Op::Pop,         // discard call result
+        Op::Constant(1), // 42
+        Op::Return,      // escape #1: NeedsSerialCleanup -> debugger returns 99
+    ];
+    let installed = Rc::new(RefCell::new(None));
+    let escape = BacktraceAdapterEscape::new(installed.clone())
+        .with_debug_script(vec![vec![(0, true)]])
+        .with_completions(vec![
+            Some(completion(&Op::Call(0), vec![Value::NIL])),
+            Some(completion(&Op::Return, vec![Value::fixnum(99)])),
+        ]);
+    let mut engine = VmExec::new(
+        &(),
+        escape,
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, v6_program(worker_fn, &ops, &constants));
+    assert_eq!(
+        done_value(&mut engine, outcome),
+        Value::fixnum(99),
+        "debugger return value replaces 42 on flagged Return"
+    );
+    assert!(installed.borrow().is_none());
+    let handler = engine.escape_handler();
+    assert_eq!(handler.requests.len(), 2, "Call(0) escape + Return cleanup");
+    assert_eq!(handler.requests[0].op, Op::Call(0));
+    assert_eq!(handler.requests[1].op, Op::Return);
+    assert!(matches!(
+        handler.requests[1].why,
+        EscapeWhy::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup))
+    ));
+    assert!(
+        !handler.observed_views[0]
+            .frame_at(0)
+            .expect("call view")
+            .debug_on_exit(),
+        "before adapter set the flag, debug_on_exit was false"
+    );
+    assert!(
+        handler.observed_views[1]
+            .frame_at(0)
+            .expect("return view")
+            .debug_on_exit(),
+        "at Return cleanup, debug_on_exit is true on the same frame"
+    );
+    assert_eq!(engine.stop_state(), OwnerStopState::Stopped);
+
+    // Twin control: setting DEBUG_ON_EXIT = true on escape #0 then clearing it
+    // back to false on escape #1 restores OwnerLocal Return (no Return escape).
+    let ops_clear = [
+        Op::Constant(0),
+        Op::Call(0), // escape #0: set true
+        Op::Pop,
+        Op::Constant(0),
+        Op::Call(0), // escape #1: clear back to false
+        Op::Pop,
+        Op::Constant(1), // 42
+        Op::Return,      // stays OwnerLocal -> 42, zero Return escape
+    ];
+    let escape_clear = BacktraceAdapterEscape::new(installed.clone())
+        .with_debug_script(vec![vec![(0, true)], vec![(0, false)]]);
+    let mut engine_clear = VmExec::new(
+        &(),
+        escape_clear,
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome_clear = engine_clear.run(&mut ctx, v6_program(worker_fn, &ops_clear, &constants));
+    assert_eq!(
+        done_value(&mut engine_clear, outcome_clear),
+        Value::fixnum(42)
+    );
+    assert_eq!(
+        engine_clear.escape_handler().requests.len(),
+        2,
+        "cleared flag reverts Return to OwnerLocal (no 3rd escape)"
+    );
+    assert!(
+        engine_clear.escape_handler().observed_views[1]
+            .frame_at(0)
+            .expect("second call view")
+            .debug_on_exit(),
+        "second escape observed the flag set by the first escape"
+    );
+
+    // Atomicity control: if an escape queues DEBUG_ON_EXIT = true AND violates
+    // R3 (wrong produced arity), the contract fault keeps the scene untouched
+    // and does NOT apply the debug_on_exit update.
+    let bad_completion = EscapeCompletion {
+        stack: EscapeStack::Completed {
+            consumed: 1,
+            produced: vec![Value::NIL, Value::NIL], // Call(0) expects produced == 1
+            jump: None,
+        },
+        records: RecordDelta::default(),
+        handlers: HandlerDelta::default(),
+    };
+    let escape_fault = BacktraceAdapterEscape::new(installed)
+        .with_debug_script(vec![vec![(0, true)]])
+        .with_completions(vec![Some(bad_completion)]);
+    let mut engine_fault = VmExec::new(
+        &(),
+        escape_fault,
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let fault = fault_of(engine_fault.run(&mut ctx, v6_program(worker_fn, &ops, &constants)));
+    assert!(matches!(fault, EngineFault::EscapeStackEffect { .. }));
+    let preserved = engine_fault.backtrace_view();
+    assert_eq!(
+        preserved.len(),
+        1,
+        "contract fault preserves the frame scene"
+    );
+    assert!(
+        !preserved.frame_at(0).expect("preserved").debug_on_exit(),
+        "R3 contract fault must not apply debug_on_exit updates"
+    );
+}
+
+#[test]
+fn vm_the_adapter_holds_no_borrow_of_a_running_owner() {
+    // V6 / E4-DESIGN §5 :559: `OwnerBacktraceView` is an owned `'static`
+    // snapshot with zero borrow of `FrameArena` or `VmExec`.
+    // 1. Compile-time `'static` proof on both `OwnerBacktraceView` and
+    //    `OwnerBacktraceEntry`.
+    // 2. Live stepping + second run while a previously captured view remains
+    //    alive: the engine mutates operands, pops the frame, unwinds to Idle,
+    //    and runs a second program without borrow conflict, while the retained
+    //    view stays immutable.
+    // 3. Real-era safepoint proof: while parked at `poll_vm_back_edge`, the
+    //    owner captures `OwnerBacktraceView`, setup roots are cleared, real GC
+    //    runs, the owner resumes and finishes, and the captured view's cons
+    //    bits match the surviving era-owned value.
+    fn assert_static<T: 'static>(_: &T) {}
+
+    let mut ctx = context();
+    let fn1 = Value::symbol("pvm-first-run");
+    let fn2 = Value::symbol("pvm-second-run");
+    let callee = Value::symbol("pvm-escape-target");
+    let constants1 = [Value::fixnum(10), callee, Value::fixnum(5)];
+    let ops1 = [
+        Op::Constant(0), // 10
+        Op::Constant(1), // callee
+        Op::Call(0),     // escape captures & retains OwnerBacktraceView
+        Op::Add,         // 10 + 7 = 17
+        Op::Constant(2), // 5
+        Op::Add,         // 17 + 5 = 22
+        Op::Return,
+    ];
+    let installed = Rc::new(RefCell::new(None));
+    let retained = Rc::new(RefCell::new(None));
+    let escape = BacktraceAdapterEscape::new(installed.clone())
+        .with_completions(vec![Some(completion(&Op::Call(0), vec![Value::fixnum(7)]))])
+        .retaining_view_in(retained.clone());
+    let mut engine = VmExec::new(
+        &(),
+        escape,
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome1 = engine.run(&mut ctx, v6_program(fn1, &ops1, &constants1));
+    assert_eq!(done_value(&mut engine, outcome1), Value::fixnum(22));
+    assert!(installed.borrow().is_none());
+
+    // Take the captured view out and hold it alive across a SECOND full run on
+    // the exact same `VmExec` — impossible if the view borrowed `VmExec` or
+    // `FrameArena`.
+    let retained_view = retained
+        .borrow_mut()
+        .take()
+        .expect("view captured at escape");
+    assert_static(&retained_view);
+    assert_static(retained_view.frame_at(0).expect("entry"));
+
+    let constants2 = [Value::fixnum(100), Value::fixnum(23)];
+    let ops2 = [Op::Constant(0), Op::Constant(1), Op::Add, Op::Return];
+    let outcome2 = engine.run(&mut ctx, v6_program(fn2, &ops2, &constants2));
+    assert_eq!(done_value(&mut engine, outcome2), Value::fixnum(123));
+
+    // The retained snapshot still reflects run 1's escape point untouched.
+    assert_eq!(retained_view.len(), 1);
+    let snap = retained_view.frame_at(0).expect("retained entry");
+    assert_eq!(snap.function, fn1);
+    assert_eq!(snap.args, vec![Value::fixnum(10), callee]);
+    assert_eq!(snap.pc, Some(Pc::new(2)));
+    assert!(!snap.debug_on_exit());
+    drop(retained_view);
+    drop(ctx);
+
+    // Real-era safepoint proof: capture OwnerBacktraceView inside the
+    // `poll_vm_back_edge` publish closure, run real GC with setup roots
+    // cleared, resume the owner while the view is held, and verify the live
+    // cons operand survives and matches the view's snapshot bits.
+    Context::with_test_collection_era(
+        |context| {
+            era_vm_setup(context, |_ctx| {
+                let payload = Value::cons(Value::fixnum(31), Value::fixnum(37));
+                vec![payload]
+            })
+        },
+        |era, mut fixture| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let heap_addr = fixture.heap;
+            let words = fixture.words.clone();
+            let payload_bits = words[0];
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (go_tx, go_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let owner = activate(permit, heap, OWNER);
+                    let mut ctx = Context::new(unit_runtime());
+                    let constants = era_constants(&words);
+                    // Loop once with `payload` live on stack, then return `payload`.
+                    let ops = [
+                        Op::Constant(0), // payload
+                        Op::True,        // loop flag for iter 1
+                        Op::GotoIfNil(5),
+                        Op::Nil,     // iter 2 flag
+                        Op::Goto(2), // backward branch -> poll_vm_back_edge
+                        Op::Return,
+                    ];
+                    struct BackEdgeViewPoll<'era> {
+                        owner: Mutator<'era>,
+                        heap: usize,
+                        captured: Vec<OwnerBacktraceView>,
+                    }
+                    impl VmPoll for BackEdgeViewPoll<'_> {
+                        fn vm_back_edge(
+                            &mut self,
+                            arena: &FrameArena,
+                        ) -> Result<PollOutcome, RendezvousError> {
+                            let heap = self.heap;
+                            let captured = &mut self.captured;
+                            poll_vm_back_edge(&mut self.owner, || {
+                                captured.push(OwnerBacktraceView::from_arena(arena));
+                                let mut batch = Vec::new();
+                                // SAFETY: `heap` is this era's heap provenance
+                                // root and `self.owner` is active in this era.
+                                let heap_ref = unsafe { &*(heap as *const TaggedHeap) };
+                                arena.publish_scan(heap_ref, &mut batch)?;
+                                Ok(batch)
+                            })
+                        }
+                        fn vm_call(
+                            &mut self,
+                            _arena: &FrameArena,
+                        ) -> Result<PollOutcome, RendezvousError> {
+                            Ok(PollOutcome::Continue)
+                        }
+                        fn serial_request(
+                            &mut self,
+                            _arena: &FrameArena,
+                        ) -> Result<PollOutcome, RendezvousError> {
+                            Ok(PollOutcome::Continue)
+                        }
+                        fn vm_refill(
+                            &mut self,
+                            _arena: &FrameArena,
+                            _class: NumericClass,
+                        ) -> Result<PollOutcome, RendezvousError> {
+                            Ok(PollOutcome::Continue)
+                        }
+                    }
+                    let worker_fn = Value::symbol("pvm-era-back-edge");
+                    let mut engine = VmExec::new(
+                        &(),
+                        RecordingEscape::new(),
+                        HarnessVmSealed,
+                        HarnessArith::new(),
+                        HarnessPlain::new(),
+                        BackEdgeViewPoll {
+                            owner,
+                            heap: heap_addr,
+                            captured: Vec::new(),
+                        },
+                    );
+                    ready_tx.send(()).expect("ready");
+                    recv(&go_rx);
+                    let outcome = engine.run(&mut ctx, v6_program(worker_fn, &ops, &constants));
+                    let done = done_value(&mut engine, outcome);
+                    let done_bits = done.bits();
+                    let car_cdr = (done.cons_car().as_fixnum(), done.cons_cdr().as_fixnum());
+                    let poll = engine.into_poll();
+                    let captured_len = poll.captured.len();
+                    let captured_bits: Vec<usize> = poll.captured[0]
+                        .frame_at(0)
+                        .expect("captured back-edge frame")
+                        .args
+                        .iter()
+                        .map(|v| v.bits())
+                        .collect();
+                    let captured_pc = poll.captured[0].frame_at(0).expect("frame").pc;
+                    retire(poll.owner);
+                    done_tx
+                        .send((done_bits, car_cdr, captured_len, captured_bits, captured_pc))
+                        .expect("done");
+                });
+                recv(&ready_rx);
+                request_stop(rendezvous);
+                go_tx.send(()).expect("go");
+                let stopped = retry("v6 back-edge stop", || stop_for_test(&era));
+                fixture.roots.clear();
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                assert!(
+                    era_owns(&era, ticket.stopped_proof(), payload_bits),
+                    "published operand cons must survive real GC"
+                );
+                end_epoch(ticket);
+                let (done_bits, car_cdr, captured_len, captured_bits, captured_pc) = recv(&done_rx);
+                assert_eq!(done_bits, payload_bits);
+                assert_eq!(car_cdr, (Some(31), Some(37)));
+                assert_eq!(captured_len, 1);
+                assert!(
+                    captured_bits.contains(&payload_bits),
+                    "captured OwnerBacktraceView recorded the published payload cons"
+                );
+                assert_eq!(
+                    captured_pc,
+                    Some(Pc::new(2)),
+                    "back-edge poll publishes the loop target pc (Op::Goto(2) -> Pc(2))"
+                );
+            });
+            drop(fixture);
+            finish(era);
+        },
+    );
 }

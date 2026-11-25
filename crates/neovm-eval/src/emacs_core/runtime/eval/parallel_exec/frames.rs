@@ -934,6 +934,18 @@ impl ExitFlags {
     pub(crate) const fn set(self, flag: Self) -> Self {
         Self(self.0 | flag.0)
     }
+
+    pub(crate) const fn clear(self, flag: Self) -> Self {
+        Self(self.0 & !flag.0)
+    }
+
+    pub(crate) const fn with_flag(self, flag: Self, enabled: bool) -> Self {
+        if enabled {
+            self.set(flag)
+        } else {
+            self.clear(flag)
+        }
+    }
 }
 
 /// The parallel VM's owned frame. The operand segment lives in the arena's
@@ -1498,6 +1510,72 @@ impl FrameArena {
     #[doc(hidden)]
     pub fn frame_kinds(&self) -> impl Iterator<Item = FrameKind> + '_ {
         self.frames.iter().map(|slot| slot.frame.kind())
+    }
+
+    /// Walk every live frame in GNU backtrace order (innermost / newest first),
+    /// yielding its [`FrameId`], frame record, and operand segment (empty for
+    /// interpreter frames). Used by [`super::backtrace::OwnerBacktraceView`].
+    pub(crate) fn for_each_frame_innermost_first(
+        &self,
+        mut visit: impl FnMut(FrameId, &OwnedFrame, &[Value]),
+    ) {
+        for (index, slot) in self.frames.iter().enumerate().rev() {
+            let depth = u32::try_from(index + 1)
+                .ok()
+                .and_then(NonZeroU32::new)
+                .expect("a frame arena deeper than u32");
+            let id = FrameId {
+                depth,
+                generation: slot.generation,
+            };
+            let operands = match &slot.frame {
+                OwnedFrame::Vm(frame) => self.operand_segment(frame.operands),
+                OwnedFrame::Interp(_) => &[],
+            };
+            visit(id, &slot.frame, operands);
+        }
+    }
+
+    /// Read the exit flags of any live `VmFrame` named by `id` (top or
+    /// non-top), verifying depth and generation.
+    pub(crate) fn vm_exit_flags(&self, id: FrameId) -> Option<ExitFlags> {
+        let index = usize::try_from(id.depth.get()).ok()?.checked_sub(1)?;
+        let slot = self.frames.get(index)?;
+        if slot.generation != id.generation {
+            return None;
+        }
+        match &slot.frame {
+            OwnedFrame::Vm(frame) => Some(frame.exit_flags),
+            OwnedFrame::Interp(_) => None,
+        }
+    }
+
+    /// Update `ExitFlags::DEBUG_ON_EXIT` on any live `VmFrame` named by `id`
+    /// (top or non-top), verifying depth and generation. Restricted to
+    /// `parallel_exec` so callers go through
+    /// [`super::backtrace::StoppedOwnerBacktrace`].
+    pub(super) fn set_vm_debug_on_exit_raw(&mut self, id: FrameId, enabled: bool) -> bool {
+        let Some(index) = usize::try_from(id.depth.get())
+            .ok()
+            .and_then(|depth| depth.checked_sub(1))
+        else {
+            return false;
+        };
+        let Some(slot) = self.frames.get_mut(index) else {
+            return false;
+        };
+        if slot.generation != id.generation {
+            return false;
+        }
+        match &mut slot.frame {
+            OwnedFrame::Vm(frame) => {
+                frame.exit_flags = frame
+                    .exit_flags
+                    .with_flag(ExitFlags::DEBUG_ON_EXIT, enabled);
+                true
+            }
+            OwnedFrame::Interp(_) => false,
+        }
     }
 
     /// Park the frame-id counter at its last value so the next push refuses.

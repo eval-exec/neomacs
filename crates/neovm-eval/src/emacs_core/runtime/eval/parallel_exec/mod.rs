@@ -1,8 +1,10 @@
 //! E4 executor substrate: the E2-independent part of the owner-local parallel
 //! evaluator (E4-DESIGN §3.1, §4 and §5), DORMANT until E4 stage 1.
 //!
-//! Five dormant pieces live here:
+//! Six dormant pieces live here:
 //!
+//! - [`backtrace`]: read-only [`OwnerBacktraceView`] snapshot and stopped-only
+//!   `set_debug_on_exit` adapter over `FrameArena`'s published frames (V6);
 //! - [`dispatch`]: accessors over the generated cold dispatch rows (the
 //!   Scalar/Sealed/World arm plus the folded green-guard re-entry axis);
 //! - [`frames`]: the owned frame arena, handler/bind/slot records, typed
@@ -20,6 +22,8 @@
 //! allocates TLS. The real production stage 1 (a real serial escape and an
 //! executor) stays gated on READY-E2B. This harness records the escape.
 
+#[allow(dead_code)] // Harness-only until E5/E6-P wires the backtrace adapter.
+pub(crate) mod backtrace;
 pub(crate) mod dispatch;
 pub(crate) mod effective;
 #[allow(dead_code)] // Harness-only until a test target compiles the stepper.
