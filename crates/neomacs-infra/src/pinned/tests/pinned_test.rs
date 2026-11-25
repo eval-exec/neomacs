@@ -510,3 +510,127 @@ fn published_hash_directory_inherits_umask_instead_of_0700() {
         & 0o777;
     assert_eq!(actual_mode, expected_mode);
 }
+
+/// Stray symlinks (both a symlink pointing to an existing directory and a
+/// dangling symlink) occupying `<cache_root>/<sha256>` are replaced with a real
+/// directory without writing into or mutating the symlink's target.
+#[cfg(unix)]
+#[test]
+fn stray_symlinks_at_hash_path_are_replaced_without_touching_target() {
+    use std::os::unix::fs::symlink;
+
+    let sandbox = tempfile::tempdir().expect("sandbox");
+    let shared = sandbox.path().join("cache");
+    let external = sandbox.path().join("external-target");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::write(external.join("keep.txt"), b"do not touch").unwrap();
+
+    let payload_dir_link = b"fixture replacing symlink-to-dir";
+    let sha_dir_link = crate::inventory::sha256_hex(payload_dir_link);
+    let hash_dir_link = entry_dir(&shared, &sha_dir_link);
+    symlink(&external, &hash_dir_link).unwrap();
+
+    let published_a = pinned_file_in_with_fetch(
+        &shared,
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha_dir_link,
+        1024,
+        || Ok(payload_dir_link.to_vec()),
+    )
+    .expect("stray symlink to directory is replaced");
+    assert!(is_real_dir(&hash_dir_link));
+    assert_eq!(std::fs::read(&published_a).unwrap(), payload_dir_link);
+    assert_eq!(
+        std::fs::read(external.join("keep.txt")).unwrap(),
+        b"do not touch"
+    );
+    assert!(
+        !external.join("fixture.xpm").exists(),
+        "writer must never publish through a symlink into an external directory"
+    );
+
+    let payload_dangling = b"fixture replacing dangling symlink";
+    let sha_dangling = crate::inventory::sha256_hex(payload_dangling);
+    let hash_dangling = entry_dir(&shared, &sha_dangling);
+    symlink(sandbox.path().join("does-not-exist"), &hash_dangling).unwrap();
+
+    let published_b = pinned_file_in_with_fetch(
+        &shared,
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha_dangling,
+        1024,
+        || Ok(payload_dangling.to_vec()),
+    )
+    .expect("stray dangling symlink is replaced");
+    assert!(is_real_dir(&hash_dangling));
+    assert_eq!(std::fs::read(&published_b).unwrap(), payload_dangling);
+}
+
+/// If a stray symlink to a directory appears in the race window right before
+/// `rename`, the rename-collision fallback must NOT follow the symlink into the
+/// external directory; it must unlink the symlink and retry the directory
+/// rename.
+#[cfg(unix)]
+#[test]
+fn post_rename_retry_unlinks_raced_symlink_without_following_it() {
+    use std::os::unix::fs::symlink;
+
+    let sandbox = tempfile::tempdir().expect("sandbox");
+    let shared = sandbox.path().join("cache");
+    let external = sandbox.path().join("external-target");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::write(external.join("keep.txt"), b"untouched").unwrap();
+
+    let payload = b"post-rename retry payload";
+    let sha = crate::inventory::sha256_hex(payload);
+    let target_dir = entry_dir(&shared, &sha);
+    let destination = target_dir.join("fixture.xpm");
+
+    let stage = StageDir::create_in(&shared, &sha).unwrap();
+    let staged_file = stage.path().join("fixture.xpm");
+    std::fs::write(&staged_file, payload).unwrap();
+
+    let calls = AtomicUsize::new(0);
+    publish_stage_dir(
+        stage,
+        &staged_file,
+        &target_dir,
+        &destination,
+        |from, to| {
+            let attempt = calls.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                assert_eq!(to, target_dir);
+                symlink(&external, &target_dir)?;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "raced symlink-to-dir",
+                ));
+            }
+            assert_eq!(
+                to, target_dir,
+                "retry must rename staging directory into target_dir, not write through symlink"
+            );
+            std::fs::rename(from, to)
+        },
+    )
+    .expect("post-rename retry succeeds after unlinking raced symlink");
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(is_real_dir(&target_dir));
+    assert_eq!(std::fs::read(&destination).unwrap(), payload);
+    assert_eq!(
+        std::fs::read(external.join("keep.txt")).unwrap(),
+        b"untouched"
+    );
+    assert!(!external.join("fixture.xpm").exists());
+    let leftovers: Vec<_> = std::fs::read_dir(&shared)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".stage-"))
+        .collect();
+    assert!(leftovers.is_empty(), "leftover staging dirs: {leftovers:?}");
+}

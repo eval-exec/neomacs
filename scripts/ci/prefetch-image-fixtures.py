@@ -269,6 +269,11 @@ def create_stage_dir(root: Path, sha256: str) -> Path:
     )
 
 
+def is_real_dir(path: Path) -> bool:
+    """True only when `path` is a real directory, without following symlinks."""
+    return not path.is_symlink() and path.is_dir()
+
+
 def remove_stray_non_dir(path: Path) -> bool:
     """Remove a stray file or symlink occupying `<cache_root>/<sha256>`."""
     if path.is_symlink() or (path.exists() and not path.is_dir()):
@@ -333,12 +338,12 @@ def prefetch(workspace: Path, pin: Pin, fetch=fetch_bytes) -> Path:
             staged_file.write_bytes(data)
             target_dir = destination.parent
             remove_stray_non_dir(target_dir)
-            if not target_dir.exists():
+            if not is_real_dir(target_dir):
                 try:
                     os.rename(stage_dir, target_dir)
                     stage_dir = None
                 except OSError:
-                    if target_dir.is_dir():
+                    if is_real_dir(target_dir):
                         os.replace(staged_file, destination)
                     elif remove_stray_non_dir(target_dir):
                         os.rename(stage_dir, target_dir)

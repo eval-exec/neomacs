@@ -28,12 +28,13 @@ pub const PINNED_FIXTURE_CACHE_OVERRIDE: &str = "NEOMACS_PINNED_FIXTURE_CACHE";
 
 /// Shared directory for SHA-256-keyed pinned fixtures across worktrees.
 ///
-/// Resolution order matches `neomacs-test-fonts`:
+/// Resolution order:
 /// 1. Nonempty `NEOMACS_PINNED_FIXTURE_CACHE`
-/// 2. `$XDG_CACHE_HOME/neomacs/pinned-fixtures`
+/// 2. Absolute `$XDG_CACHE_HOME/neomacs/pinned-fixtures` (relative values are
+///    ignored per the XDG Base Directory Specification)
 /// 3. `$HOME/.cache/neomacs/pinned-fixtures`
-/// 4. `<workspace>/tmp/pinned-fixtures` as a last resort when neither XDG nor
-///    HOME is set.
+/// 4. `<workspace>/tmp/pinned-fixtures` as a last resort when neither an
+///    absolute XDG path nor HOME is set.
 #[must_use]
 pub fn pinned_fixture_cache_root() -> PathBuf {
     resolve_pinned_fixture_cache_root(
@@ -314,24 +315,57 @@ where
     // Verify once before touching the cache, so a bad response cannot replace a
     // good copy or leave an entry directory behind, and cold fetches do not
     // re-hash large archives multiple times.
-    let actual = hash_bytes(&bytes);
-    if actual != sha256 {
-        return Err(PinnedError::DownloadedHash {
+    let verified =
+        VerifiedBytes::verify(&bytes, sha256).map_err(|actual| PinnedError::DownloadedHash {
             url: url.to_owned(),
             expected: sha256.to_owned(),
             actual,
-        });
-    }
-    publish_verified(root, name, sha256, VerifiedBytes(&bytes))
+        })?;
+    publish_verified(root, name, verified)
 }
 
-/// Proof token that `bytes` have already been verified against the pin's SHA-256.
-struct VerifiedBytes<'a>(&'a [u8]);
+mod verified {
+    /// Proof token binding `bytes` to the exact `sha256` digest verified by
+    /// [`Self::verify`]. Sealed inside a private submodule so code in the
+    /// parent module and its tests cannot forge unverified bytes or mismatch a
+    /// digest at the type level.
+    pub(super) struct VerifiedBytes<'a> {
+        bytes: &'a [u8],
+        sha256: &'a str,
+    }
+
+    impl<'a> VerifiedBytes<'a> {
+        pub(super) fn verify(bytes: &'a [u8], expected_sha256: &'a str) -> Result<Self, String> {
+            let actual = super::hash_bytes(bytes);
+            if actual == expected_sha256 {
+                Ok(Self {
+                    bytes,
+                    sha256: expected_sha256,
+                })
+            } else {
+                Err(actual)
+            }
+        }
+
+        pub(super) fn bytes(&self) -> &'a [u8] {
+            self.bytes
+        }
+
+        pub(super) fn sha256(&self) -> &'a str {
+            self.sha256
+        }
+    }
+}
+
+use verified::VerifiedBytes;
 
 /// RAII staging directory created via `fs::create_dir` so it inherits the
 /// process umask (supporting multi-user/group shared caches) instead of
 /// `mkdtemp`'s hardcoded `0700`.
-struct StageDir(Option<PathBuf>);
+struct StageDir {
+    path: PathBuf,
+    remove_on_drop: bool,
+}
 
 impl StageDir {
     fn create_in(root: &Path, sha256: &str) -> Result<Self, PinnedError> {
@@ -344,7 +378,12 @@ impl StageDir {
             })?;
             let candidate = root.join(format!("{prefix}{:016x}", u64::from_ne_bytes(nonce)));
             match fs::create_dir(&candidate) {
-                Ok(()) => return Ok(Self(Some(candidate))),
+                Ok(()) => {
+                    return Ok(Self {
+                        path: candidate,
+                        remove_on_drop: true,
+                    });
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(source) => {
                     return Err(PinnedError::Write {
@@ -364,84 +403,84 @@ impl StageDir {
     }
 
     fn path(&self) -> &Path {
-        self.0
-            .as_deref()
-            .expect("StageDir path accessed after disarm")
+        &self.path
     }
 
-    fn disarm(&mut self) {
-        self.0 = None;
+    fn disarm(mut self) {
+        self.remove_on_drop = false;
     }
 }
 
 impl Drop for StageDir {
     fn drop(&mut self) {
-        if let Some(path) = self.0.take() {
-            let _ = fs::remove_dir_all(path);
+        if self.remove_on_drop {
+            let _ = fs::remove_dir_all(&self.path);
         }
     }
+}
+
+/// True only when `path` is a real directory, without following symlinks.
+fn is_real_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_dir())
 }
 
 /// Remove a stray non-directory entry (such as a regular file or symlink) at
 /// `<cache_root>/<sha256>` so the hash directory can be published cleanly.
 fn remove_stray_non_dir(path: &Path) -> Result<bool, std::io::Error> {
     match fs::symlink_metadata(path) {
-        Ok(meta) if !meta.file_type().is_dir() => {
-            fs::remove_file(path)?;
-            Ok(true)
-        }
+        Ok(meta) if !meta.file_type().is_dir() => match fs::remove_file(path) {
+            Ok(()) => Ok(true),
+            // On Windows, directory symlinks require `remove_dir`.
+            Err(error)
+                if cfg!(windows)
+                    && meta.file_type().is_symlink()
+                    && error.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
+                fs::remove_dir(path)?;
+                Ok(true)
+            }
+            Err(error) => Err(error),
+        },
         Ok(_) => Ok(false),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
     }
 }
 
-/// Stage already-verified bytes in a sibling temporary directory inside `root`
-/// and publish them atomically via rename.
-fn publish_verified(
-    root: &Path,
-    name: &str,
-    sha256: &str,
-    verified: VerifiedBytes<'_>,
-) -> Result<PathBuf, PinnedError> {
-    validate_pin(name, sha256)?;
-    let target_dir = entry_dir(root, sha256);
-    let destination = target_dir.join(name);
-    fs::create_dir_all(root).map_err(|source| PinnedError::CacheRoot {
-        path: root.to_path_buf(),
-        source,
-    })?;
-    let mut stage = StageDir::create_in(root, sha256)?;
-    let staged_file = stage.path().join(name);
-    fs::write(&staged_file, verified.0).map_err(|source| PinnedError::Write {
-        path: staged_file.clone(),
+fn publish_stage_dir<R>(
+    stage: StageDir,
+    staged_file: &Path,
+    target_dir: &Path,
+    destination: &Path,
+    rename: R,
+) -> Result<(), PinnedError>
+where
+    R: Fn(&Path, &Path) -> std::io::Result<()>,
+{
+    remove_stray_non_dir(target_dir).map_err(|source| PinnedError::Rename {
+        path: destination.to_path_buf(),
         source,
     })?;
 
-    remove_stray_non_dir(&target_dir).map_err(|source| PinnedError::Rename {
-        path: destination.clone(),
-        source,
-    })?;
-
-    if !target_dir.exists() {
-        match fs::rename(stage.path(), &target_dir) {
+    if !is_real_dir(target_dir) {
+        match rename(stage.path(), target_dir) {
             Ok(()) => {
                 // The staging directory is now the live entry directory.
                 stage.disarm();
             }
-            Err(_) if target_dir.is_dir() => {
-                // Another writer created the hash directory concurrently;
+            Err(_) if is_real_dir(target_dir) => {
+                // Another writer created the real hash directory concurrently;
                 // publish the staged file atomically into it.
-                fs::rename(&staged_file, &destination).map_err(|source| PinnedError::Rename {
-                    path: destination.clone(),
+                rename(staged_file, destination).map_err(|source| PinnedError::Rename {
+                    path: destination.to_path_buf(),
                     source,
                 })?;
             }
-            Err(source) => match remove_stray_non_dir(&target_dir) {
+            Err(source) => match remove_stray_non_dir(target_dir) {
                 Ok(true) => {
-                    fs::rename(stage.path(), &target_dir).map_err(|retry_source| {
+                    rename(stage.path(), target_dir).map_err(|retry_source| {
                         PinnedError::Rename {
-                            path: destination.clone(),
+                            path: destination.to_path_buf(),
                             source: retry_source,
                         }
                     })?;
@@ -449,18 +488,49 @@ fn publish_verified(
                 }
                 _ => {
                     return Err(PinnedError::Rename {
-                        path: destination,
+                        path: destination.to_path_buf(),
                         source,
                     });
                 }
             },
         }
     } else {
-        fs::rename(&staged_file, &destination).map_err(|source| PinnedError::Rename {
-            path: destination.clone(),
+        rename(staged_file, destination).map_err(|source| PinnedError::Rename {
+            path: destination.to_path_buf(),
             source,
         })?;
     }
+    Ok(())
+}
+
+/// Stage already-verified bytes in a sibling temporary directory inside `root`
+/// and publish them atomically via rename.
+fn publish_verified(
+    root: &Path,
+    name: &str,
+    verified: VerifiedBytes<'_>,
+) -> Result<PathBuf, PinnedError> {
+    let sha256 = verified.sha256();
+    validate_pin(name, sha256)?;
+    let target_dir = entry_dir(root, sha256);
+    let destination = target_dir.join(name);
+    fs::create_dir_all(root).map_err(|source| PinnedError::CacheRoot {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    let stage = StageDir::create_in(root, sha256)?;
+    let staged_file = stage.path().join(name);
+    fs::write(&staged_file, verified.bytes()).map_err(|source| PinnedError::Write {
+        path: staged_file.clone(),
+        source,
+    })?;
+    publish_stage_dir(
+        stage,
+        &staged_file,
+        &target_dir,
+        &destination,
+        |from, to| fs::rename(from, to),
+    )?;
     Ok(destination)
 }
 
@@ -473,15 +543,13 @@ fn publish_verified_bytes(
 ) -> Result<PathBuf, PinnedError> {
     validate_pin(name, sha256)?;
     let destination = entry_path(root, name, sha256);
-    let actual = hash_bytes(bytes);
-    if actual != sha256 {
-        return Err(PinnedError::CachedHash {
+    let verified =
+        VerifiedBytes::verify(bytes, sha256).map_err(|actual| PinnedError::CachedHash {
             path: destination,
             expected: sha256.to_owned(),
             actual,
-        });
-    }
-    publish_verified(root, name, sha256, VerifiedBytes(bytes))
+        })?;
+    publish_verified(root, name, verified)
 }
 
 #[cfg(test)]

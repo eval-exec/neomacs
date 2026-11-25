@@ -642,6 +642,75 @@ class ImageFixtureTests(unittest.TestCase):
         actual_mode = self.destination.parent.stat().st_mode & 0o777
         self.assertEqual(actual_mode, expected_mode)
 
+    def test_stray_symlinks_are_replaced_without_touching_symlink_target(self):
+        if os.name != "posix":
+            return
+        self.cache.mkdir(parents=True, exist_ok=True)
+        external = self.workspace / "external-target"
+        external.mkdir()
+        (external / "keep.txt").write_bytes(b"do not touch")
+
+        os.symlink(external, self.destination.parent)
+        result = provisioner.prefetch(
+            self.workspace, self.pin, mock.Mock(return_value=self.data)
+        )
+        self.assertEqual(result, self.destination)
+        self.assertTrue(provisioner.is_real_dir(self.destination.parent))
+        self.assertEqual(self.destination.read_bytes(), self.data)
+        self.assertEqual((external / "keep.txt").read_bytes(), b"do not touch")
+        self.assertFalse((external / self.pin.name).exists())
+
+        second_data = b"dangling symlink replacement"
+        second_pin = provisioner.Pin(
+            self.pin.name,
+            "2" * 40,
+            "https://fixtures.invalid/" + "2" * 40 + "/image.xpm",
+            hashlib.sha256(second_data).hexdigest(),
+        )
+        dangling = self.cache / second_pin.sha256
+        os.symlink(self.workspace / "does-not-exist", dangling)
+        result_b = provisioner.prefetch(
+            self.workspace, second_pin, mock.Mock(return_value=second_data)
+        )
+        self.assertTrue(provisioner.is_real_dir(dangling))
+        self.assertEqual(result_b.read_bytes(), second_data)
+
+    def test_post_rename_retry_unlinks_raced_symlink_without_following_it(self):
+        if os.name != "posix":
+            return
+        external = self.workspace / "external-target"
+        external.mkdir()
+        (external / "keep.txt").write_bytes(b"untouched")
+
+        real_rename = provisioner.os.rename
+        attempts = []
+
+        def race_then_rename(source, target):
+            attempts.append((Path(source), Path(target)))
+            if len(attempts) == 1:
+                os.symlink(external, target)
+                raise OSError(errno.ENOTDIR, "raced symlink-to-dir")
+            real_rename(source, target)
+
+        with (
+            mock.patch.object(provisioner.os, "rename", side_effect=race_then_rename),
+            mock.patch.object(
+                provisioner.os,
+                "replace",
+                side_effect=AssertionError("must not follow raced symlink"),
+            ),
+        ):
+            result = provisioner.prefetch(
+                self.workspace, self.pin, mock.Mock(return_value=self.data)
+            )
+        self.assertEqual(result, self.destination)
+        self.assertEqual(len(attempts), 2)
+        self.assertTrue(provisioner.is_real_dir(self.destination.parent))
+        self.assertEqual(self.destination.read_bytes(), self.data)
+        self.assertEqual((external / "keep.txt").read_bytes(), b"untouched")
+        self.assertFalse((external / self.pin.name).exists())
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+
     def test_distinct_revisions_for_same_filename_coexist_in_shared_cache(self):
         rev_b_data = b"revision b image bytes"
         pin_b = provisioner.Pin(
