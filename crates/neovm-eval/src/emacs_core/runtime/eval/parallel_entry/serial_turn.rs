@@ -59,6 +59,12 @@ pub(crate) trait SerialHost {
         detached: Self::Detached,
         transition: HostTransition,
     ) -> Result<(), (Self::Detached, Self::Refusal)>;
+    /// Called once a [`SerialTurn`] becomes live (after `reattach` succeeds).
+    /// Paired 1:1 with [`SerialHost::leave_turn`] by `SerialTurn`'s RAII
+    /// lifecycle (normal `end`/`park` or panic unwind `Drop`).
+    fn enter_turn(&mut self, _transition: HostTransition) {}
+    /// Called when a [`SerialTurn`] ends, parks, or unwind-drops.
+    fn leave_turn(&mut self, _transition: HostTransition) {}
 }
 
 /// Permission to detach or reattach a [`SerialHost`]. The private field
@@ -151,12 +157,18 @@ pub(crate) struct OwnerSerialState<C: SerialHost, L: TicketOwner> {
 }
 
 /// A live serial turn. `L` owns the received ticket until the turn ends.
+///
+/// `SerialTurn` also serves as the RAII guard for [`SerialHost::enter_turn`] /
+/// [`SerialHost::leave_turn`]: `begin` and `resume` call `enter_turn` after
+/// `attach` succeeds, and `end`, `park`, or a panic unwind `Drop` calls
+/// `leave_turn` exactly once so per-turn host state (such as L6.7c (a)'s
+/// `gc_inhibit_depth`) cannot leak on unwind.
 #[must_use = "a serial turn must end or park"]
 #[allow(dead_code)] // Dormant E5.1; E6-P.2 builds the owner's Context.
 pub(crate) struct SerialTurn<'turn, C: SerialHost, L: TicketOwner> {
-    state: &'turn mut OwnerSerialState<C, L>,
-    local: L,
-    armed: Armed,
+    state: Option<&'turn mut OwnerSerialState<C, L>>,
+    local: Option<L>,
+    armed: Option<Armed>,
     confined: Confined,
 }
 
@@ -199,10 +211,11 @@ impl<C: SerialHost, L: TicketOwner> OwnerSerialState<C, L> {
         if let Err(refusal) = self.dormant.attach() {
             return Err((local, TurnRefusal::Host(refusal)));
         }
+        self.dormant.context.enter_turn(HostTransition(()));
         Ok(SerialTurn {
-            state: self,
-            local,
-            armed: Armed(TURN_DROPPED),
+            state: Some(self),
+            local: Some(local),
+            armed: Some(Armed(TURN_DROPPED)),
             confined: PhantomData,
         })
     }
@@ -218,18 +231,31 @@ impl<'turn, C: SerialHost, L: TicketOwner> SerialTurn<'turn, C, L> {
     /// proof lands, BODY also receives the `'g`-branded `BatonWitness`
     /// (`capability.rs`).
     pub(crate) fn with_world<R>(&mut self, body: impl for<'g> FnOnce(&'g mut C) -> R) -> R {
-        body(&mut self.state.dormant.context)
+        let state = self
+            .state
+            .as_deref_mut()
+            .expect("live turn holds its state");
+        body(&mut state.dormant.context)
     }
 
     /// End the turn: the host leaves this OS thread, and the local owner goes
     /// back to L6.4's finish and return. A host that refuses to detach keeps
     /// the turn live, and the turn is handed back.
     pub(crate) fn end(self) -> Result<L, (Self, C::Refusal)> {
-        if let Err(refusal) = self.state.dormant.detach() {
-            return Err((self, refusal));
+        let mut this = self;
+        if let Err(refusal) = this
+            .state
+            .as_deref_mut()
+            .expect("live turn holds its state")
+            .dormant
+            .detach()
+        {
+            return Err((this, refusal));
         }
-        let SerialTurn { local, armed, .. } = self;
-        armed.disarm();
+        let state = this.state.take().expect("live turn holds its state");
+        state.dormant.context.leave_turn(HostTransition(()));
+        let local = this.local.take().expect("live turn holds its local owner");
+        this.armed.take().expect("live turn is armed").disarm();
         Ok(local)
     }
 
@@ -242,16 +268,20 @@ impl<'turn, C: SerialHost, L: TicketOwner> SerialTurn<'turn, C, L> {
         self,
         wait: W,
     ) -> Result<(ParkedTurn<'turn, C, L, W>, L), (Self, W, C::Refusal)> {
-        if let Err(refusal) = self.state.dormant.detach() {
-            return Err((self, wait, refusal));
+        let mut this = self;
+        if let Err(refusal) = this
+            .state
+            .as_deref_mut()
+            .expect("live turn holds its state")
+            .dormant
+            .detach()
+        {
+            return Err((this, wait, refusal));
         }
-        let SerialTurn {
-            state,
-            local,
-            armed,
-            ..
-        } = self;
-        armed.disarm();
+        let state = this.state.take().expect("live turn holds its state");
+        state.dormant.context.leave_turn(HostTransition(()));
+        let local = this.local.take().expect("live turn holds its local owner");
+        this.armed.take().expect("live turn is armed").disarm();
         let parked = ParkedTurn {
             state,
             wait,
@@ -259,6 +289,14 @@ impl<'turn, C: SerialHost, L: TicketOwner> SerialTurn<'turn, C, L> {
             confined: PhantomData,
         };
         Ok((parked, local))
+    }
+}
+
+impl<C: SerialHost, L: TicketOwner> Drop for SerialTurn<'_, C, L> {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            state.dormant.context.leave_turn(HostTransition(()));
+        }
     }
 }
 
@@ -286,10 +324,11 @@ impl<'turn, C: SerialHost, L: TicketOwner, W> ParkedTurn<'turn, C, L, W> {
         }
         let ParkedTurn { state, armed, .. } = self;
         armed.disarm();
+        state.dormant.context.enter_turn(HostTransition(()));
         Ok(SerialTurn {
-            state,
-            local,
-            armed: Armed(TURN_DROPPED),
+            state: Some(state),
+            local: Some(local),
+            armed: Some(Armed(TURN_DROPPED)),
             confined: PhantomData,
         })
     }
@@ -346,6 +385,7 @@ mod tests {
         writes: Vec<&'static str>,
         refuse: Rc<Cell<bool>>,
         stuck: Rc<Cell<bool>>,
+        turn_depth: Rc<Cell<usize>>,
     }
 
     impl Counted {
@@ -355,6 +395,7 @@ mod tests {
                 writes: Vec::new(),
                 refuse: Rc::new(Cell::new(false)),
                 stuck: Rc::new(Cell::new(false)),
+                turn_depth: Rc::new(Cell::new(0)),
             }
         }
     }
@@ -380,6 +421,12 @@ mod tests {
             }
             self.writes.push("reattach");
             Ok(())
+        }
+        fn enter_turn(&mut self, _: HostTransition) {
+            self.turn_depth.set(self.turn_depth.get() + 1);
+        }
+        fn leave_turn(&mut self, _: HostTransition) {
+            self.turn_depth.set(self.turn_depth.get() - 1);
         }
     }
 
@@ -558,5 +605,51 @@ mod tests {
         let turn = state.begin((7, "ticket-1")).ok().expect("own ticket");
         let (parked, _) = parked(turn, "mutex");
         drop(parked);
+    }
+
+    #[test]
+    fn l67c_a_serial_turn_raii_leave_runs_on_end_park_and_unwind_drop() {
+        let host = Counted::new(&Rc::new(Cell::new(0)));
+        let depth = Rc::clone(&host.turn_depth);
+        let stuck = Rc::clone(&host.stuck);
+        let refuse = Rc::clone(&host.refuse);
+        let mut state = dormant(host);
+        assert_eq!(depth.get(), 0, "dormant host starts at depth 0");
+
+        // Refused begin must not enter_turn.
+        refuse.set(true);
+        assert!(state.begin((7, "refused")).is_err());
+        assert_eq!(depth.get(), 0, "refused begin leaves depth 0");
+        refuse.set(false);
+
+        // Normal begin -> refused end (stays 1) -> end (returns to 0).
+        let turn = state.begin((7, "t1")).ok().expect("own ticket");
+        assert_eq!(depth.get(), 1);
+        stuck.set(true);
+        let Err((turn, _)) = turn.end() else {
+            panic!("stuck detach keeps turn live");
+        };
+        assert_eq!(depth.get(), 1, "refused end keeps depth 1");
+        stuck.set(false);
+        assert_eq!(ended(turn), (7, "t1"));
+        assert_eq!(depth.get(), 0, "end restores depth 0");
+
+        // Park -> resume -> panic unwind dropping SerialTurn mid-turn must
+        // still invoke leave_turn via SerialTurn's Drop impl (no depth leak).
+        let turn = state.begin((7, "t2")).ok().expect("own ticket");
+        assert_eq!(depth.get(), 1);
+        let (parked_turn, _) = parked(turn, "wait");
+        assert_eq!(depth.get(), 0, "park restores depth 0");
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut resumed = parked_turn.resume((7, "t3")).ok().expect("own ticket");
+            assert_eq!(depth.get(), 1, "resume restores depth 1");
+            resumed.with_world(|_| panic!("unwind past SerialTurn"));
+        }));
+        assert!(unwound.is_err(), "panic unwound past SerialTurn");
+        assert_eq!(
+            depth.get(),
+            0,
+            "SerialTurn::drop must run leave_turn on unwind so depth cannot leak"
+        );
     }
 }

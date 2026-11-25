@@ -3182,3 +3182,334 @@ fn l6_stop_cost_group_intervals() {
 fn l6_stop_cost_group_collections() {
     stop_cost(StopCostRow::GroupCollections);
 }
+
+// ---------------------------------------------------------------------------
+// L6.7c (a) + (b): SerialTurn threshold-GC inhibition (RAII) and
+// close_alloc_regions() on SerialHost::detach.
+// ---------------------------------------------------------------------------
+
+fn run_l67c_a_serial_turn_make_list_row(pre_freeze_cons: bool) {
+    #[cfg(feature = "jit")]
+    crate::emacs_core::jit::cache::reset_carrier_tls();
+    super::super::source_entry::install_inactive_source_module_probe_for_test();
+    let mut source = Box::new(Context::new(crate::test_utils::unit_runtime()));
+    source.setup_thread_locals();
+    source.gc_collect_exact();
+    let private = Value::string(if pre_freeze_cons {
+        "l67c-a-nonempty-frozen"
+    } else {
+        "l67c-a-empty-frozen"
+    });
+    source.lexenv = private;
+    if pre_freeze_cons {
+        let _pre = source
+            .tagged_heap
+            .alloc_cons(Value::fixnum(11), Value::fixnum(22));
+    }
+    source.tagged_heap.close_alloc_regions();
+    let bootstrap = source.capture_green_bootstrap_for_test();
+    let (shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |era| {
+            era.keeper_baton_for_test()
+                .install_stowed_green_runtime_for_test(bootstrap);
+            let before = if !pre_freeze_cons {
+                let mut stopped = retry_native("baseline stop", || era.stop());
+                let report =
+                    retry_native("baseline collect", || era.collect_requested(&mut stopped));
+                complete_retrying("baseline stop", stopped.complete());
+                report.cycle
+            } else {
+                let stopped = stop_retrying(era);
+                let cycles = era.gc_collections_for_test(&stopped).unwrap();
+                complete_retrying("read baseline", stopped.complete());
+                cycles
+            };
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let owner_kit = enroll_driver(era, &mut driver, &inbox, O);
+            drop(inbox);
+
+            let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
+            let (ready_tx, ready_rx) = mpsc::channel::<()>();
+            let (retire_tx, retire_rx) = mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let runner = scope.spawn(move || {
+                    let ctx = world_handle.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(owner_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("unseated same-World serial Context detaches");
+                    let home = owner_kit.home;
+                    let mut port = ChannelPort::new(
+                        home.owner,
+                        activate(owner_kit.permit, home.heap, home.owner),
+                        owner_kit.inbox,
+                        owner_kit.grants,
+                    );
+                    ready_tx.send(()).expect("signal serial owner ready");
+
+                    // Turn 1: cons past gc_threshold via real Lisp `(make-list N nil)`,
+                    // then hit an eval safe point `(setq ...)`. Threshold GC must be
+                    // inhibited for the whole SerialTurn (no direct minor/STW collection
+                    // and no `take_pending_young` panic on duplicate pending id_0).
+                    let granted1 = port.request_turn().ok().expect("Turn 1 granted");
+                    let mut t1 = begin_turn(&mut state, home, granted1, &mut port, standalone)
+                        .ok()
+                        .expect("Turn 1 begins");
+                    let threshold = t1.with_world(|ev| {
+                        let threshold = ev.tagged_heap.gc_threshold();
+                        let n = (threshold / 16) + 8192;
+                        let form = format!("(progn (make-list {n} nil) nil)");
+                        assert_eq!(eval(ev, &form), "nil");
+                        assert!(
+                            ev.tagged_heap.bytes_since_gc() >= threshold,
+                            "make-list must push era heap debt past gc_threshold"
+                        );
+                        assert_eq!(eval(ev, "(setq sp-l67c-a 92)"), "92");
+                        assert_eq!(
+                            ev.tagged_heap.gc_collections(),
+                            before,
+                            "L6.7c (a): eval safe point inside SerialTurn must not run direct GC"
+                        );
+                        assert_eq!(
+                            ev.tagged_heap.mark_phase(),
+                            neovm_value::tagged::gc::MarkPhase::Idle,
+                            "L6.7c (a): SerialTurn must not start a direct minor/sweep cycle"
+                        );
+                        assert!(
+                            ev.tagged_heap.bytes_since_gc() >= threshold,
+                            "L6.7c (a): debt must remain >= gc_threshold for the keeper's next stop"
+                        );
+                        assert!(
+                            ev.gc_inhibit_depth_for_test() >= 1,
+                            "L6.7c (a): SerialTurn must hold RAII GC inhibit guard"
+                        );
+                        threshold
+                    });
+                    t1.end(&mut port).ok().expect("Turn 1 ends cleanly");
+
+                    // Turn 2: Stop #2 observes the real Lisp allocation debt via
+                    // `should_collect_stopped` and runs a coordinated major collection.
+                    let granted2 = port.request_turn().ok().expect("Turn 2 granted");
+                    let mut t2 = begin_turn(&mut state, home, granted2, &mut port, standalone)
+                        .ok()
+                        .expect("Turn 2 begins");
+                    t2.with_world(|ev| {
+                        assert_eq!(
+                            ev.tagged_heap.gc_collections(),
+                            before + 1,
+                            "Stop #2 must collect the SerialTurn's accumulated Lisp debt"
+                        );
+                        assert!(
+                            ev.tagged_heap.bytes_since_gc() < threshold,
+                            "Stop #2 collection must reset era heap debt"
+                        );
+                        assert_eq!(eval(ev, "sp-l67c-a"), "92");
+                    });
+                    t2.end(&mut port).ok().expect("Turn 2 ends cleanly");
+                    retire(port.exit());
+
+                    retire_rx.recv_timeout(BOUND).expect("teardown signal");
+                    drop(state);
+                });
+
+                ready_rx.recv_timeout(BOUND).expect("serial owner ready");
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                retire_tx.send(()).expect("allow owner drop");
+                runner.join().expect("serial owner joined");
+            });
+
+            let mut stopped = stop_retrying(era);
+            assert_eq!(
+                era.gc_collections_for_test(&stopped).unwrap(),
+                before + 1,
+                "exactly one keeper collection must have run"
+            );
+            assert_eq!(era.should_collect_stopped(&mut stopped), Ok(false));
+            complete_retrying("verify stop", stopped.complete());
+            era.keeper_baton_for_test()
+                .uninstall_green_runtime_for_test();
+        });
+        match outcome {
+            Ok((end, ())) => tx.send(Ok(end)).expect("send keeper end"),
+            Err(failure) => tx.send(Err(failure.notice())).expect("send keeper notice"),
+        }
+    });
+    let outcome = rx.recv().expect("keeper outcome");
+    service.join().expect("keeper service thread");
+    let end = outcome.unwrap_or_else(|notice| panic!("L6.7c (a) era refused: {notice:?}"));
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    let returned = shell.accept_return(end).unwrap();
+    finish_fixture(returned, private);
+}
+
+#[test]
+fn l67c_a_serial_turn_lisp_make_list_past_threshold_empty_frozen_defers_to_keeper_stop() {
+    run_l67c_a_serial_turn_make_list_row(false);
+}
+
+#[test]
+fn l67c_a_serial_turn_lisp_make_list_past_threshold_nonempty_frozen_no_panic() {
+    run_l67c_a_serial_turn_make_list_row(true);
+}
+
+#[test]
+fn l67c_b_serial_turn_cons_without_safepoint_closes_alloc_regions_on_detach() {
+    #[cfg(feature = "jit")]
+    crate::emacs_core::jit::cache::reset_carrier_tls();
+    super::super::source_entry::install_inactive_source_module_probe_for_test();
+    let mut source = Box::new(Context::new(crate::test_utils::unit_runtime()));
+    source.setup_thread_locals();
+    source.gc_collect_exact();
+    let private = Value::string("l67c-b-close-alloc-regions");
+    source.lexenv = private;
+    source.tagged_heap.close_alloc_regions();
+    let bootstrap = source.capture_green_bootstrap_for_test();
+    let (shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |era| {
+            era.keeper_baton_for_test()
+                .install_stowed_green_runtime_for_test(bootstrap);
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let owner_kit = enroll_driver(era, &mut driver, &inbox, O);
+            drop(inbox);
+
+            let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
+            let (ready_tx, ready_rx) = mpsc::channel::<()>();
+            let (retire_tx, retire_rx) = mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let runner = scope.spawn(move || {
+                    let ctx = world_handle.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(owner_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("unseated same-World serial Context detaches");
+                    let home = owner_kit.home;
+                    let mut port = ChannelPort::new(
+                        home.owner,
+                        activate(owner_kit.permit, home.heap, home.owner),
+                        owner_kit.inbox,
+                        owner_kit.grants,
+                    );
+                    ready_tx.send(()).expect("signal serial owner ready");
+
+                    // Cons one cell without crossing gc_threshold or hitting a
+                    // safe point (leaves cons bump region open unless
+                    // detach_serial_owner closes alloc regions).
+                    let granted = port.request_turn().ok().expect("Turn 1 granted");
+                    let mut t1 = begin_turn(&mut state, home, granted, &mut port, standalone)
+                        .ok()
+                        .expect("Turn 1 begins");
+                    t1.with_world(|ev| {
+                        assert_eq!(eval(ev, "(setq sp-l67c-cons (cons 42 99))"), "(42 . 99)");
+                    });
+                    t1.end(&mut port).ok().expect("Turn 1 ends");
+                    retire(port.exit());
+
+                    retire_rx.recv_timeout(BOUND).expect("teardown signal");
+                    drop(state);
+                });
+
+                ready_rx.recv_timeout(BOUND).expect("serial owner ready");
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                retire_tx.send(()).expect("allow owner drop");
+                runner.join().expect("serial owner joined");
+            });
+
+            // A keeper stop + collection after the serial turn must see closed
+            // alloc regions (no ImageError::RegionsOpen / RegistrationError::OpenRegion).
+            let mut stopped = retry_native("post-turn stop", || era.stop());
+            let report = retry_native("post-turn collect", || era.collect_requested(&mut stopped));
+            assert!(report.major);
+            complete_retrying("post-turn stop", stopped.complete());
+            era.keeper_baton_for_test()
+                .uninstall_green_runtime_for_test();
+        });
+        match outcome {
+            Ok((end, ())) => tx.send(Ok(end)).expect("send keeper end"),
+            Err(failure) => tx.send(Err(failure.notice())).expect("send keeper notice"),
+        }
+    });
+    let outcome = rx.recv().expect("keeper outcome");
+    service.join().expect("keeper service thread");
+    let end = outcome.unwrap_or_else(|notice| panic!("L6.7c (b) era refused: {notice:?}"));
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    let returned = shell.accept_return(end).unwrap();
+    finish_fixture(returned, private);
+}
+
+#[test]
+fn l67c_a_serial_turn_gc_inhibit_guard_restores_depth_on_normal_and_unwind() {
+    use super::super::serial_turn::TicketOwner;
+
+    #[derive(Clone, Copy)]
+    struct Local(u64);
+    impl TicketOwner for Local {
+        type Owner = u64;
+        fn owner(&self) -> u64 {
+            self.0
+        }
+    }
+
+    let ev = Context::new(crate::test_utils::unit_runtime());
+    assert_eq!(ev.gc_inhibit_depth_for_test(), 0);
+    let mut state = OwnerSerialState::new(77, Box::new(ev))
+        .ok()
+        .expect("fresh Context detaches");
+
+    // Turn 1: depth == 1 across with_world, panic unwind inside with_world
+    // (caught while turn is live), and park/resume (depth does not accumulate).
+    let mut t1 = state.begin(Local(77)).ok().expect("turn 1 begins");
+    t1.with_world(|ctx| {
+        assert_eq!(
+            ctx.gc_inhibit_depth_for_test(),
+            1,
+            "L6.7c (a): depth must be 1 inside SerialTurn"
+        );
+    });
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        t1.with_world(|ctx| {
+            assert_eq!(
+                ctx.gc_inhibit_depth_for_test(),
+                1,
+                "depth must remain 1 before unwind inside with_world"
+            );
+            panic!("intentional unwind inside SerialTurn::with_world");
+        });
+    }));
+    assert!(unwound.is_err(), "panic must unwind out of with_world");
+    t1.with_world(|ctx| {
+        assert_eq!(
+            ctx.gc_inhibit_depth_for_test(),
+            1,
+            "depth must remain 1 after caught unwind inside with_world"
+        );
+    });
+    let (parked, _) = t1.park("wait").ok().expect("turn 1 parks");
+    let mut resumed = parked.resume(Local(77)).ok().expect("turn 1 resumes");
+    resumed.with_world(|ctx| {
+        assert_eq!(
+            ctx.gc_inhibit_depth_for_test(),
+            1,
+            "park/resume must restore and re-enter depth == 1 (no leak)"
+        );
+    });
+    let _ = resumed.end().ok().expect("turn 1 ends");
+
+    // Turn 2: fresh begin after end must still see depth == 1 (not 2).
+    let mut t2 = state.begin(Local(77)).ok().expect("turn 2 begins");
+    t2.with_world(|ctx| {
+        assert_eq!(
+            ctx.gc_inhibit_depth_for_test(),
+            1,
+            "end must restore depth to 0 so the next turn starts at 1"
+        );
+    });
+    let _ = t2.end().ok().expect("turn 2 ends");
+}

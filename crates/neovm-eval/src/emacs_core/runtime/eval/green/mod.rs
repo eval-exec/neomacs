@@ -691,6 +691,41 @@ impl Context {
         owner
     }
 
+    /// Build an unseated same-World `Context` over an already-open era's
+    /// `World` for `SerialHost` / `SerialTurn` testing (L6.7c). Unlike
+    /// [`Self::new_seated_era_worker_for_test`], this installs NO `GreenSeat`
+    /// so `SerialHost::detach` accepts it, and replaces its dynamic-module
+    /// registry handle so dropping the dormant owner does not retire the
+    /// shared World's registry.
+    pub(crate) fn new_unseated_serial_owner_for_test(
+        handle: &super::world::TestBatonWorldHandle,
+    ) -> Self {
+        neovm_value::intern::prepare_thread_symbol_caches();
+        let (seed, current, case_table) = {
+            let runtime = handle.green_runtime_for_test();
+            let runtime = runtime
+                .as_ref()
+                .expect("era test installs GreenRuntime before spawning serial owner");
+            runtime.bootstrap.install_native_tables();
+            (
+                runtime.bootstrap.seed(),
+                runtime.bootstrap.current_buffer,
+                runtime.standard_case_table.get(),
+            )
+        };
+        let mut views = handle.owner_views_for_test(current);
+        views.tagged_heap.install_tagged_heap();
+        let mut owner = Context::assemble(views, seed);
+        owner.dynamic_module_registry =
+            super::data::dynamic_module_registry::DynamicModuleRegistryHandle::new(Vec::new());
+        owner.cached_standard_case_table = case_table;
+        owner.gc_count = owner.tagged_heap.gc_collections() as u64;
+        owner.ensure_owner_slab();
+        owner.setup_thread_locals();
+        owner.republish_owner_mirrors();
+        owner.unstow_serial_world_state();
+        owner
+    }
     /// Seat this main owner with an already-issued Baton (after
     /// `start_green_runtime`), keeping `scheduler::Wake` inside Green.
     pub(crate) fn seat_green_main_for_test(&mut self, baton: super::world::Baton) {

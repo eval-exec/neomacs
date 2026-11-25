@@ -15,7 +15,10 @@
 //!    into `GreenRuntime` (`stow_serial_world_state`). A Sim World, or a
 //!    further owner whose World carriers are held elsewhere or already stowed,
 //!    skips and records `DetachedWorldCarriers::NotStowed`;
-//! 3. the carrier TLS goes down (`park_carrier_tls`): the heap slot, its
+//! 3. any open bump-allocation regions on this Context's heap are closed
+//!    (`close_alloc_regions`, L6.7c (b)), so the next keeper stop or collection
+//!    never meets `ImageError::RegionsOpen`;
+//! 4. the carrier TLS goes down (`park_carrier_tls`): the heap slot, its
 //!    hot-path mirrors and every heap-pointer record are null, so a
 //!    collection while the owner is detached cannot meet a stale pointer on
 //!    this thread.
@@ -160,6 +163,10 @@ impl Context {
         } else {
             DetachedWorldCarriers::NotStowed
         };
+        // L6.7c (b): close any bump-allocation regions opened during this
+        // serial turn before taking down carrier TLS, so the keeper's next
+        // stop / collection never observes `ImageError::RegionsOpen`.
+        self.tagged_heap.close_alloc_regions();
         park_carrier_tls();
         Ok(DetachedOwner {
             host: DetachedHostBindings { parked },
@@ -226,6 +233,23 @@ impl SerialHost for Context {
         _: HostTransition,
     ) -> Result<(), (DetachedOwner, HostRefusal)> {
         self.reattach_serial_owner(detached)
+    }
+
+    /// L6.7c (a): inhibit safe-point (threshold) GC for the whole `SerialTurn`
+    /// so Lisp allocation debt defers to the keeper's next stop instead of
+    /// firing an uncoordinated direct minor/STW collection inside the turn.
+    fn enter_turn(&mut self, _: HostTransition) {
+        self.gc_inhibit_depth += 1;
+    }
+
+    /// L6.7c (a): paired 1:1 with `enter_turn` by `SerialTurn`'s RAII
+    /// lifecycle (`end`, `park`, or unwind `Drop`), so depth cannot leak.
+    fn leave_turn(&mut self, _: HostTransition) {
+        debug_assert!(
+            self.gc_inhibit_depth > 0 || std::thread::panicking(),
+            "SerialTurn::leave_turn called with gc_inhibit_depth == 0"
+        );
+        self.gc_inhibit_depth = self.gc_inhibit_depth.saturating_sub(1);
     }
 }
 

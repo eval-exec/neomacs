@@ -332,6 +332,10 @@ impl TestBatonWorldHandle {
             .expect("era test installs GreenRuntime before reading Control");
         std::sync::Arc::clone(&runtime.control)
     }
+
+    pub(crate) fn spawn_unseated_serial_context_for_test(&self) -> Context {
+        Context::new_unseated_serial_owner_for_test(self)
+    }
 }
 
 fn retire_thread_completion_with(
