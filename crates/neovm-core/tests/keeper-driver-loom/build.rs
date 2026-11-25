@@ -24,11 +24,17 @@ fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
 
     let core = strip_header(&fs::read_to_string(CORE).expect("read driver_core.rs"));
-    for forbidden in ["crate::", "super::super", "std::sync", "std::thread"] {
+    for forbidden in [
+        "crate::",
+        "super::super",
+        "std::sync",
+        "std::thread",
+        "std::time::Instant",
+    ] {
         assert!(
             !core.contains(forbidden),
-            "driver_core.rs names `{forbidden}`: the core must reach synchronization only \
-             through super::sync"
+            "driver_core.rs names `{forbidden}`: the core must reach synchronization and \
+             its clock only through super::sync"
         );
     }
     for expected in [

@@ -29,7 +29,7 @@ use super::sync::{self, mpsc};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::num::NonZeroU64;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// How long one stop attempt waits for its owners before the keeper warns
 /// and serves its inbox, and how long a contended gate is retried before the
@@ -980,11 +980,11 @@ impl<O: KeeperOps> BatchVisitor<O> for ServeBatch<'_, '_, O> {
 
 /// Waits on a contended registry gate (lead #13966 LOW-1). The first waits
 /// only yield; later ones sleep, doubling up to a millisecond, so a long
-/// hold never spins. Both go through the sync seam, so the Loom copy
-/// schedules them.
+/// hold never spins. Both, and the clock that bounds them, go through the
+/// sync seam, so the Loom copy schedules them on its own time.
 struct Backoff {
     attempts: u32,
-    start: Instant,
+    start: sync::Instant,
     bound: Duration,
     window_end: Duration,
     /// The last gate holder seen in the current window.
@@ -998,7 +998,7 @@ impl Backoff {
     fn new(bound: Duration) -> Self {
         Self {
             attempts: 0,
-            start: Instant::now(),
+            start: sync::Instant::now(),
             bound,
             window_end: bound,
             holder: None,

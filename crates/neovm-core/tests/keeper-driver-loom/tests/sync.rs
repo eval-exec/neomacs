@@ -28,8 +28,35 @@ pub fn yield_now() {
     loom::thread::yield_now();
 }
 
-/// Loom has no time: a backoff sleep is a yield.
-pub fn sleep(_duration: Duration) {
+/// Virtual nanoseconds: advanced only by the model's backoff sleeps, so the
+/// contention bound is measured on the model's own time, never the host's.
+/// Only differences are read, so the count carried over from an earlier
+/// execution changes nothing; one OS thread runs every model thread, so
+/// the order of the advances is the schedule's.
+static VIRTUAL_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The backoff's clock on the model's virtual time.
+#[derive(Clone, Copy, Debug)]
+pub struct Instant(u64);
+
+impl Instant {
+    pub fn now() -> Self {
+        Instant(VIRTUAL_NANOS.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        Duration::from_nanos(
+            VIRTUAL_NANOS
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .saturating_sub(self.0),
+        )
+    }
+}
+
+/// A backoff sleep advances virtual time by DURATION and yields.
+pub fn sleep(duration: Duration) {
+    let nanos = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
+    VIRTUAL_NANOS.fetch_add(nanos, std::sync::atomic::Ordering::Relaxed);
     loom::thread::yield_now();
 }
 
