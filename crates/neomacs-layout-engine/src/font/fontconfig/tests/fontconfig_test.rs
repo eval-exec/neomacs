@@ -54,39 +54,16 @@ fn native_reference_candidates(
             )
         });
         assert!(!fonts.0.is_null());
-        // SAFETY: the font-set guard owns a live FcFontSet returned by the
-        // successful query. Reading its scalar count does not dereference its
-        // optional array pointer, which Fontconfig may leave NULL when empty.
-        let count = unsafe { (*fonts.0).nfont };
-        assert!(count >= 0, "Fontconfig returned a negative font-set count");
-        if count == 0 {
-            return Vec::new();
-        }
-        // SAFETY: the live set owns this field; the count is positive here.
-        let pointer = unsafe { (*fonts.0).fonts };
-        assert!(
-            !pointer.is_null(),
-            "a nonempty Fontconfig set requires its array"
-        );
-        let count = usize::try_from(count).expect("positive native font-set count");
-        // SAFETY: FcFontList owns this non-null, aligned count-element array
-        // until fonts drops. The native count has been checked before making
-        // any slice, including the empty/NULL case.
-        let patterns = unsafe { std::slice::from_raw_parts(pointer, count) };
         match selection {
-            ReferenceSelection::FirstEightMetadata => patterns
-                .iter()
-                .copied()
+            ReferenceSelection::FirstEightMetadata => fonts
+                .patterns()
                 .take(8)
-                .filter_map(|pattern| unsafe { listed_font_from_raw_pattern(pattern) })
+                .filter_map(listed_font_from_raw_pattern)
                 .collect(),
-            ReferenceSelection::Covering(ch) => patterns
-                .iter()
-                .copied()
-                .filter(|pattern| unsafe {
-                    super::raw_pattern_supports_any_char(*pattern, &[ch as u32])
-                })
-                .filter_map(|pattern| unsafe { listed_font_from_raw_pattern(pattern) })
+            ReferenceSelection::Covering(ch) => fonts
+                .patterns()
+                .filter(|&pattern| super::raw_pattern_supports_any_char(pattern, &[ch as u32]))
+                .filter_map(listed_font_from_raw_pattern)
                 .collect(),
         }
     })
@@ -846,14 +823,17 @@ fn isolated_native_defaults_preserve_explicit_language_and_dpi() {
             0
         );
         owner.apply_defaults(&pattern).expect("fixture defaults");
+        let borrowed = pattern.as_ref().expect("live pattern guard");
         assert_eq!(
-            unsafe { super::raw_pattern_string(pattern.0, fontconfig::FC_LANG) }.as_deref(),
+            super::raw_pattern_string(borrowed, fontconfig::FC_LANG).as_deref(),
             Some("zh-cn")
         );
         assert_eq!(
-            unsafe { super::raw_pattern_double(pattern.0, fontconfig_sys::constants::FC_DPI) },
+            super::raw_pattern_double(borrowed, fontconfig_sys::constants::FC_DPI),
             Some(168.0)
         );
+        assert!(FcPatternGuard(std::ptr::null_mut()).as_ref().is_none());
+        assert_eq!(FcFontSetGuard(std::ptr::null_mut()).patterns().count(), 0);
     });
 }
 
@@ -942,4 +922,106 @@ fn named_listing_native_weight_projection_matches_gnu_nearest_table_and_lower_ti
             "native weight {native}"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn fontconfig_pattern_readers_do_not_accept_raw_pointers_safely() {
+    let source = include_str!("../../fontconfig.rs");
+    let mut offenders = Vec::new();
+    let lines: Vec<&str> = source.lines().collect();
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        let is_safe_fn = trimmed.starts_with("fn ")
+            || trimmed.starts_with("pub fn ")
+            || trimmed.starts_with("pub(crate) fn ")
+            || trimmed.starts_with("pub(super) fn ");
+        if !is_safe_fn {
+            continue;
+        }
+        let mut sig = String::new();
+        for next in &lines[idx..] {
+            sig.push_str(next.trim());
+            sig.push(' ');
+            if next.contains('{') || next.contains(';') {
+                break;
+            }
+        }
+        let params = sig
+            .split_once('(')
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map(|(p, _)| p)
+            .unwrap_or("");
+        if params.contains("*mut fontconfig_sys::FcPattern")
+            || params.contains("*const fontconfig_sys::FcPattern")
+        {
+            offenders.push(format!("line {}: {}", idx + 1, trimmed));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "safe Fontconfig helper functions must not accept raw FcPattern pointers (B3):\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn pattern_ref_borrows_live_guards_and_rejects_null_guards() {
+    // Null guards hand out no PatternRef and empty iteration.
+    assert!(FcPatternGuard(std::ptr::null_mut()).as_ref().is_none());
+    assert_eq!(FcFontSetGuard(std::ptr::null_mut()).patterns().count(), 0);
+
+    // Live FcPatternGuard exposes a PatternRef that reads all typed fields.
+    // SAFETY: FcPatternCreate returns an owned pattern freed by FcPatternGuard.
+    let pattern = FcPatternGuard(unsafe { fontconfig_sys::FcPatternCreate() });
+    assert!(!pattern.0.is_null());
+    // SAFETY: `pattern.0` is an exclusively owned live FcPattern; all values are copied.
+    unsafe {
+        assert_ne!(
+            fontconfig_sys::FcPatternAddString(
+                pattern.0,
+                fontconfig::FC_FAMILY.as_ptr(),
+                c"DejaVu Sans Mono".as_ptr().cast(),
+            ),
+            0
+        );
+        assert_ne!(
+            fontconfig_sys::FcPatternAddInteger(pattern.0, fontconfig::FC_WEIGHT.as_ptr(), 200),
+            0
+        );
+        assert_ne!(
+            fontconfig_sys::FcPatternAddBool(pattern.0, fontconfig::FC_SCALABLE.as_ptr(), 1),
+            0
+        );
+        assert_ne!(
+            fontconfig_sys::FcPatternAddDouble(pattern.0, fontconfig::FC_PIXEL_SIZE.as_ptr(), 14.5),
+            0
+        );
+    }
+    let borrowed = pattern.as_ref().expect("non-null FcPatternGuard");
+    assert_eq!(
+        super::raw_pattern_string(borrowed, fontconfig::FC_FAMILY).as_deref(),
+        Some("DejaVu Sans Mono")
+    );
+    assert_eq!(
+        super::raw_pattern_int(borrowed, fontconfig::FC_WEIGHT),
+        Some(200)
+    );
+    assert_eq!(
+        super::raw_pattern_bool(borrowed, fontconfig::FC_SCALABLE),
+        Some(true)
+    );
+    assert_eq!(
+        super::raw_pattern_double(borrowed, fontconfig::FC_PIXEL_SIZE),
+        Some(14.5)
+    );
+    assert!(super::raw_pattern_supports_any_char(borrowed, &[]));
+    assert!(!super::raw_pattern_supports_any_char(
+        borrowed,
+        &['A' as u32]
+    ));
 }
