@@ -422,29 +422,41 @@ impl emacs_env_private {
 }
 
 fn allocate_emacs_value(storage: &mut emacs_value_storage, lisp_val: Value) -> emacs_value {
-    let active = match storage.overflow {
-        Some(mut ptr) => {
-            // SAFETY: `storage.overflow` only holds heap frames allocated via
-            // `Box::leak` and exclusively owned by `storage` until finalization.
-            unsafe { ptr.as_mut() }
-        }
-        None => &mut storage.initial,
+    let storage_ptr = std::ptr::from_mut(storage);
+    // SAFETY: `storage_ptr` addresses the exclusively borrowed `storage`, and
+    // any `Some(ptr)` in `overflow` is an exclusively owned heap frame created
+    // via `Box::leak`. Deriving the active frame via raw pointers avoids
+    // forming an overlapping `&mut storage.initial` across allocations that
+    // would invalidate previously returned `emacs_value` handles in `initial`.
+    let active_ptr: *mut emacs_value_frame = match unsafe { (*storage_ptr).overflow } {
+        Some(ptr) => ptr.as_ptr(),
+        None => unsafe { std::ptr::addr_of_mut!((*storage_ptr).initial) },
     };
-    if active.offset < VALUE_FRAME_SIZE {
-        let idx = active.offset;
-        active.objects[idx] = emacs_value_tag::new(lisp_val);
-        active.offset = idx + 1;
-        &mut active.objects[idx] as *mut emacs_value_tag
+    // SAFETY: `active_ptr` points to either `storage.initial` or the head
+    // overflow frame, both live and aligned for this call.
+    let offset = unsafe { (*active_ptr).offset };
+    if offset < VALUE_FRAME_SIZE {
+        // SAFETY: `offset < VALUE_FRAME_SIZE`, so `objects[offset]` is in
+        // bounds of the live active frame and exclusively written here.
+        unsafe {
+            let slot = std::ptr::addr_of_mut!((*active_ptr).objects[offset]);
+            slot.write(emacs_value_tag::new(lisp_val));
+            (*active_ptr).offset = offset + 1;
+            slot
+        }
     } else {
         let mut new_frame = Box::new(emacs_value_frame::new());
-        new_frame.next = storage.overflow;
+        // SAFETY: `storage_ptr` is live and exclusively borrowed.
+        new_frame.next = unsafe { (*storage_ptr).overflow };
         new_frame.objects[0] = emacs_value_tag::new(lisp_val);
         new_frame.offset = 1;
         let new_ptr = std::ptr::NonNull::from(Box::leak(new_frame));
-        storage.overflow = Some(new_ptr);
-        // SAFETY: `new_ptr` points to the heap-allocated `emacs_value_frame`
-        // just stored in `storage.overflow`, valid until `finalize_storage`.
-        unsafe { std::ptr::addr_of_mut!((*new_ptr.as_ptr()).objects[0]) }
+        // SAFETY: `storage_ptr` is live and exclusively borrowed, and `new_ptr`
+        // points to the heap frame just linked into `storage.overflow`.
+        unsafe {
+            (*storage_ptr).overflow = Some(new_ptr);
+            std::ptr::addr_of_mut!((*new_ptr.as_ptr()).objects[0])
+        }
     }
 }
 
@@ -2386,9 +2398,60 @@ unsafe extern "C" fn module_funcall(
 // ============================================================================
 
 thread_local! {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static MODULE_CTX: std::cell::Cell<*mut Context> =
         const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+/// Read-only observer of `MODULE_CTX` for cross-crate tests; the underlying
+/// cell remains module-private so external code cannot forge a context pointer.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub fn current_module_context_for_test() -> *mut Context {
+    MODULE_CTX.with(|slot| slot.get())
+}
+
+/// Self-contained verification helper for cross-crate tests: proves
+/// `with_module_context` restores a *distinct* prior `MODULE_CTX` address on
+/// both normal return and panic unwind while keeping `MODULE_CTX` private and
+/// always restoring the slot to null before returning.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub fn verify_with_module_context_restores_distinct_previous_for_test(ctx: &mut Context) {
+    let ctx_ptr: *mut Context = std::ptr::from_mut(ctx);
+    // Never dereferenced: only distinguishes the saved outer slot address
+    // from `ctx_ptr` and from null.
+    let outer_sentinel = std::ptr::without_provenance_mut::<Context>(0x1000);
+    assert_ne!(ctx_ptr, outer_sentinel);
+    let current = || MODULE_CTX.with(|slot| slot.get());
+
+    assert!(current().is_null());
+    {
+        let _outer = neovm_value::tls_scope::TlsScope::new(&MODULE_CTX, outer_sentinel);
+        assert_eq!(current(), outer_sentinel);
+
+        with_module_context(ctx, || {
+            assert_eq!(current(), ctx_ptr);
+        });
+        assert_eq!(
+            current(),
+            outer_sentinel,
+            "normal return must restore the distinct outer context pointer"
+        );
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_module_context(ctx, || {
+                assert_eq!(current(), ctx_ptr);
+                panic!("boom inside with_module_context");
+            });
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(
+            current(),
+            outer_sentinel,
+            "panic unwind must restore the distinct outer context pointer"
+        );
+    }
+    assert!(current().is_null());
 }
 
 /// Private lifetime-branded RAII installer for `MODULE_CTX`: borrows
@@ -2695,6 +2758,10 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
     let active_env = unsafe { ActiveModuleEnv::push(priv_ptr) };
     let args_ptr = emacs_args.as_mut_ptr();
     let call = with_module_context(ctx, || {
+        // SAFETY: `subr_fn_unwind` has the verified module-function C ABI from
+        // a permanently mapped library, `env_ptr` and `args_ptr[..nargs]` stay
+        // live for this call, and `with_module_context` / `active_env` own the
+        // thread-local context and local-value roots.
         catch_unwind(AssertUnwindSafe(|| unsafe {
             subr_fn_unwind(env_ptr, nargs, args_ptr, data)
         }))
@@ -2801,21 +2868,54 @@ mod value_storage_tests {
     }
 
     #[test]
-    fn emacs_value_storage_move_after_new_and_overflow_finalize_is_sound() {
-        let storage = emacs_value_storage::new();
-        let mut moved = Box::new(storage);
-        let count = VALUE_FRAME_SIZE * 2 + 17;
-        let mut handles = Vec::with_capacity(count);
-        for i in 0..count {
-            handles.push(allocate_emacs_value(&mut moved, Value::fixnum(i as i64)));
+    fn emacs_value_storage_move_after_initial_alloc_and_overflow_finalize_is_sound() {
+        let mut storage = emacs_value_storage::new();
+        let pre_move = 5usize;
+        for i in 0..pre_move {
+            let _ = allocate_emacs_value(&mut storage, Value::fixnum((i + 1) as i64));
+        }
+        // Move storage AFTER allocating into `initial`; no self-pointer may
+        // dangle and previously stored values in `initial` stay intact.
+        let mut env_priv = Box::new(emacs_env_private {
+            pending_non_local_exit: super::emacs_funcall_exit::Return,
+            non_local_exit_symbol: Value::NIL,
+            non_local_exit_data: Value::NIL,
+            storage,
+        });
+        let post_move = VALUE_FRAME_SIZE * 2 + 17;
+        let mut handles = Vec::with_capacity(post_move);
+        for i in 0..post_move {
+            handles.push(allocate_emacs_value(
+                &mut env_priv.storage,
+                Value::fixnum((pre_move + i + 1) as i64),
+            ));
         }
         for (i, &h) in handles.iter().enumerate() {
-            // SAFETY: `moved` has not moved since `h` was allocated and has not been finalized.
-            assert_eq!(unsafe { value_to_lisp(h) }, Value::fixnum(i as i64));
+            // SAFETY: `env_priv` has not moved since `h` was allocated and has not been finalized.
+            assert_eq!(
+                unsafe { value_to_lisp(h) },
+                Value::fixnum((pre_move + i + 1) as i64)
+            );
         }
-        finalize_storage(&mut moved);
+        let priv_ptr: *mut emacs_env_private = &mut *env_priv;
+        // SAFETY: `env_priv` stays boxed and live until after `_active` drops.
+        let active = unsafe { ActiveModuleEnv::push(priv_ptr) };
+        let heap_id = neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
+        let mut roots = Vec::new();
+        collect_dynamic_module_gc_roots(&mut roots, heap_id);
+        drop(active);
+        let mut seen: Vec<i64> = roots
+            .iter()
+            .filter_map(|v| v.as_fixnum())
+            .filter(|&n| n > 0)
+            .collect();
+        seen.sort_unstable();
+        let expected: Vec<i64> = (1..=((pre_move + post_move) as i64)).collect();
+        assert_eq!(seen, expected);
+
+        finalize_storage(&mut env_priv.storage);
         // Repeated finalization and Drop are idempotent.
-        finalize_storage(&mut moved);
+        finalize_storage(&mut env_priv.storage);
     }
 
     #[test]

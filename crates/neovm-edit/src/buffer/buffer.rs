@@ -4074,8 +4074,7 @@ impl Buffer {
         &self,
         resolver: &crate::emacs_core::textprop::CharPropertyResolver<'_>,
     ) -> bool {
-        static CATEGORY_SYM: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
-        let category = Value::from_sym_id(*CATEGORY_SYM.get_or_init(|| intern("category")));
+        let category = Value::from_sym_id(crate::emacs_core::textprop::category_sym_id());
         resolver.supports_presence_coalescing()
             && self.text_props_property_name_presence(category)
                 == crate::buffer::text_props::PropertyNamePresence::DefinitelyAbsent

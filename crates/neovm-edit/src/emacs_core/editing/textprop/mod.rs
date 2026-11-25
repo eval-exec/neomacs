@@ -466,7 +466,7 @@ where
 /// Interned `category`, resolved once: [`resolve_effective_char_property`] runs
 /// per property lookup, and re-interning the name there costs a registry lock
 /// and a hash on the syntax scanner's run-refill path.
-fn category_sym_id() -> SymId {
+pub(crate) fn category_sym_id() -> SymId {
     static ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
     *ID.get_or_init(|| neovm_value::intern::intern("category"))
 }

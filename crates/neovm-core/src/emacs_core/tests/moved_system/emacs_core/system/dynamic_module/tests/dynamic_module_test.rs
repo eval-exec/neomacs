@@ -64,7 +64,7 @@ impl Drop for TestEnv {
 fn module_context_guard_restores_previous_on_drop_and_panic() {
     let mut ctx = crate::test_utils::new_context();
     let ctx_ptr: *mut Context = std::ptr::from_mut(&mut ctx);
-    let current = || MODULE_CTX.with(|c| c.get());
+    let current = current_module_context_for_test;
 
     assert!(current().is_null());
     with_module_context(&mut ctx, || {
@@ -108,6 +108,10 @@ fn module_context_guard_restores_previous_on_drop_and_panic() {
     }));
     assert!(outer_panicked.is_err());
     assert!(current().is_null());
+
+    // Also verify restoration of a *distinct* prior pointer address on both
+    // normal return and panic unwind while keeping MODULE_CTX private.
+    verify_with_module_context_restores_distinct_previous_for_test(&mut ctx);
 }
 
 #[test]
