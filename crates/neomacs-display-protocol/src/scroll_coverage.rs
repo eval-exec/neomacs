@@ -575,13 +575,30 @@ impl ScrollSurface {
             }
             frame.glyphs.push(glyph);
         }
-        frame.fringe_bitmaps.extend(self.fringe_bitmaps.clone());
-        frame.faces.extend(self.coverage.faces.clone());
-        frame.fonts.extend(self.coverage.fonts.clone());
-        frame.char_fonts.extend(self.coverage.char_fonts.clone());
-        frame
-            .shaped_clusters
-            .extend(self.coverage.shaped_clusters.clone());
+        for (index, bitmap) in &self.fringe_bitmaps {
+            frame
+                .fringe_bitmaps
+                .entry(*index)
+                .or_insert_with(|| bitmap.clone());
+        }
+        for (id, face) in &self.coverage.faces {
+            frame.faces.entry(*id).or_insert_with(|| face.clone());
+        }
+        for (id, font) in &self.coverage.fonts {
+            frame.fonts.entry(*id).or_insert_with(|| font.clone());
+        }
+        for (face, chars) in &self.coverage.char_fonts {
+            let table = frame.char_fonts.entry(*face).or_default();
+            for (ch, glyph) in chars {
+                table.entry(*ch).or_insert(*glyph);
+            }
+        }
+        for (face, clusters) in &self.coverage.shaped_clusters {
+            let table = frame.shaped_clusters.entry(*face).or_default();
+            for (text, glyphs) in clusters {
+                table.entry(text.clone()).or_insert_with(|| glyphs.clone());
+            }
+        }
         if let Err(error) = frame.install_presented_pointer_source_map(&pointer_source) {
             frame.glyphs = original_glyphs;
             return Err(error);
