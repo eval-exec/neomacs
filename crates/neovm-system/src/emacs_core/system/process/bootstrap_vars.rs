@@ -696,14 +696,24 @@ pub(super) fn parse_network_host(
     }
 }
 
-pub(super) fn network_service_protocol(socket_type: NetworkSocketType) -> &'static str {
-    match socket_type {
-        NetworkSocketType::Datagram => "udp",
-        _ => "tcp",
+/// Convert `make-network-process` `:service` to the `portstring` passed to
+/// `getaddrinfo` (GNU `src/process.c:4139-4154`): `t` -> `"0"`, fixnum ->
+/// decimal string (including negative fixnums, which `getaddrinfo` rejects with
+/// `EAI_SERVICE`), string -> raw bytes, anything else -> `(wrong-type-argument stringp ...)`.
+pub(super) fn network_service_to_addrinfo_string(value: &Value) -> Result<String, Flow> {
+    match value.kind() {
+        ValueKind::T => Ok("0".to_string()),
+        ValueKind::Fixnum(port) => Ok(port.to_string()),
+        ValueKind::String => Ok(process_owned_runtime_string(*value)),
+        _ => Err(signal_wrong_type_string(*value)),
     }
 }
 
 pub(super) fn parse_network_numeric_service_port(service: &str) -> Option<u16> {
+    let service = service.split('\0').next().unwrap_or_default();
+    if service.is_empty() {
+        return Some(0);
+    }
     let service = service.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
     let service = service.strip_prefix('+').unwrap_or(service);
     if service.is_empty() || !service.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -713,35 +723,6 @@ pub(super) fn parse_network_numeric_service_port(service: &str) -> Option<u16> {
         .parse::<u128>()
         .ok()
         .map(|port| (port % (1 << 16)) as u16)
-}
-
-pub(super) fn parse_network_service_port(
-    value: &Value,
-    server: bool,
-    socket_type: NetworkSocketType,
-) -> Result<u16, Flow> {
-    match value.kind() {
-        ValueKind::T if server => Ok(0),
-        ValueKind::Fixnum(port) if port >= 0 => Ok((port as u64 % (1 << 16)) as u16),
-        ValueKind::String => {
-            let service = process_owned_runtime_string(*value);
-            if service.is_empty() {
-                return Ok(0);
-            }
-            if let Some(port) = parse_network_numeric_service_port(&service) {
-                return Ok(port);
-            }
-            sys::net::service_port(&service, network_service_protocol(socket_type)).ok_or_else(
-                || {
-                    signal(
-                        "error",
-                        vec![Value::string(format!("Unknown service: {}", service))],
-                    )
-                },
-            )
-        }
-        _ => Err(signal_wrong_type_string(*value)),
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1866,13 +1866,15 @@ pub(super) fn connect_datagram_network_process(
     socket_type: NetworkSocketType,
     socket_options: Vec<NetworkSocketOptionSpec>,
 ) -> EvalResult {
-    let port = parse_network_service_port(&service, server, socket_type)?;
+    let _ = socket_type;
+    let service_str = network_service_to_addrinfo_string(&service)?;
     let host_str = host
         .clone()
         .unwrap_or_else(|| family.loopback_host().to_string());
     if server {
         let effective_options = tcp_server_socket_options(&socket_options);
-        let socket = bind_udp_socket_host(host_str.as_str(), port, family, &effective_options)?;
+        let socket =
+            bind_udp_socket_host(host_str.as_str(), &service_str, family, &effective_options)?;
         let local_addr = socket.local_addr().map_err(|e| {
             signal(
                 LispCondition::FileError,
@@ -1937,7 +1939,7 @@ pub(super) fn connect_datagram_network_process(
     }
 
     let (socket, remote_addr) =
-        connect_udp_socket_host(host_str.as_str(), port, family, &socket_options)?;
+        connect_udp_socket_host(host_str.as_str(), &service_str, family, &socket_options)?;
     contact = process_contact_plist_put(
         contact,
         ProcessKeyword::Remote.value(),
@@ -2010,14 +2012,15 @@ pub(super) fn listen_stream_network_process(
     socket_type: NetworkSocketType,
     socket_options: Vec<NetworkSocketOptionSpec>,
 ) -> EvalResult {
-    let port = parse_network_service_port(&service, true, socket_type)?;
+    let _ = socket_type;
+    let service_str = network_service_to_addrinfo_string(&service)?;
     let host_str = host
         .clone()
         .unwrap_or_else(|| family.loopback_host().to_string());
     let effective_options = tcp_server_socket_options(&socket_options);
     let listener = bind_tcp_listener_host(
         host_str.as_str(),
-        port,
+        &service_str,
         family,
         server_backlog.unwrap_or(5),
         &effective_options,
@@ -2832,12 +2835,13 @@ pub(crate) fn builtin_make_network_process(
 
     // ---- Client mode: establish TCP connection ----
     let host_str = host.unwrap_or_else(|| family.loopback_host().to_string());
-    let port = parse_network_service_port(&service, false, socket_type)?;
+    let service_str = network_service_to_addrinfo_string(&service)?;
 
     if nowait {
-        let immediate_start = nowait_tcp_immediate_addrs(host_value, &host_str, port, family)
-            .map(|addrs| start_pending_tcp_stream_connect(addrs, &socket_options))
-            .transpose()?;
+        let immediate_start =
+            nowait_tcp_immediate_addrs(host_value, &host_str, &service_str, family)
+                .map(|addrs| start_pending_tcp_stream_connect(addrs, &socket_options))
+                .transpose()?;
         let (immediate_start, pending_dns) = if immediate_start.is_some() {
             (immediate_start, None)
         } else if crate::emacs_core::platform_facts::ASYNC_GETADDRINFO {
@@ -2845,7 +2849,7 @@ pub(crate) fn builtin_make_network_process(
                 None,
                 Some(start_async_network_dns_lookup(
                     host_str.clone(),
-                    port,
+                    service_str.clone(),
                     family,
                     NetworkSocketType::Stream,
                     socket_options.clone(),
@@ -2857,8 +2861,12 @@ pub(crate) fn builtin_make_network_process(
             // synchronously and signals a lookup failure before the process
             // exists (src/process.c:4203-4205); a successful lookup still
             // starts the non-blocking connect below.
-            let addrs =
-                resolve_network_socket_addrs(&host_str, port, family, NetworkSocketType::Stream)?;
+            let addrs = resolve_network_socket_addrs(
+                &host_str,
+                &service_str,
+                family,
+                NetworkSocketType::Stream,
+            )?;
             (
                 Some(start_pending_tcp_stream_connect(addrs, &socket_options)?),
                 None,
@@ -2930,8 +2938,13 @@ pub(crate) fn builtin_make_network_process(
         return Ok(Value::make_process(id));
     }
 
-    let stream =
-        connect_tcp_stream_host(host_str.as_str(), port, family, &socket_options, contact)?;
+    let stream = connect_tcp_stream_host(
+        host_str.as_str(),
+        &service_str,
+        family,
+        &socket_options,
+        contact,
+    )?;
     let remote_addr = stream.peer_addr().ok();
     let local_addr = stream.local_addr().ok();
 

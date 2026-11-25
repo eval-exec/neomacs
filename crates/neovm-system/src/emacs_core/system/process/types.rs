@@ -3598,21 +3598,22 @@ pub(super) fn network_addrinfo_item_error_detail(err: std::io::Error) -> String 
 
 pub(super) fn resolve_network_socket_addrs_raw(
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
     socket_type: NetworkSocketType,
 ) -> Result<Vec<SocketAddr>, String> {
     use dns_lookup::AddrInfoHints;
 
     let normalized_host = host.split('\0').next().unwrap_or_default();
-    let service = port.to_string();
+    let normalized_service = service.split('\0').next().unwrap_or_default();
     let hints = AddrInfoHints {
         address: family.addrinfo_family(),
         socktype: network_socket_type_addrinfo_socktype(socket_type),
         ..AddrInfoHints::default()
     };
-    let iter = dns_lookup::getaddrinfo(Some(normalized_host), Some(&service), Some(hints))
-        .map_err(network_addrinfo_error_detail)?;
+    let iter =
+        dns_lookup::getaddrinfo(Some(normalized_host), Some(normalized_service), Some(hints))
+            .map_err(network_addrinfo_error_detail)?;
     let mut addrs = Vec::new();
     for info in iter {
         let info = info.map_err(network_addrinfo_item_error_detail)?;
@@ -3627,22 +3628,25 @@ pub(super) fn resolve_network_socket_addrs_raw(
 
 pub(super) fn resolve_network_socket_addrs(
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
     socket_type: NetworkSocketType,
 ) -> Result<Vec<SocketAddr>, Flow> {
     let normalized_host = host.split('\0').next().unwrap_or_default();
-    resolve_network_socket_addrs_raw(host, port, family, socket_type).map_err(|detail| {
+    let normalized_service = service.split('\0').next().unwrap_or_default();
+    resolve_network_socket_addrs_raw(host, service, family, socket_type).map_err(|detail| {
         signal(
             "error",
-            vec![Value::string(format!("{normalized_host}/{port} {detail}"))],
+            vec![Value::string(format!(
+                "{normalized_host}/{normalized_service} {detail}"
+            ))],
         )
     })
 }
 
 pub(super) fn start_async_network_dns_lookup(
     host: String,
-    port: u16,
+    service: String,
     family: NetworkProcessFamily,
     socket_type: NetworkSocketType,
     socket_options: Vec<NetworkSocketOptionSpec>,
@@ -3663,7 +3667,7 @@ pub(super) fn start_async_network_dns_lookup(
     let thread_ready = Arc::clone(&ready);
     let thread_host = host.clone();
     std::thread::spawn(move || {
-        let result = resolve_network_socket_addrs_raw(&thread_host, port, family, socket_type);
+        let result = resolve_network_socket_addrs_raw(&thread_host, &service, family, socket_type);
         let _ = sender.send(result);
         thread_ready.store(true, Ordering::Release);
         if let Some(notifier) = notifier
@@ -3697,9 +3701,10 @@ pub(super) fn hostname_fails_without_dns_lookup(host: &str) -> bool {
 pub(super) fn nowait_tcp_immediate_addrs(
     host_value: Value,
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
 ) -> Option<Vec<SocketAddr>> {
+    let port = parse_network_numeric_service_port(service)?;
     if host_value.is_nil()
         || host_value.as_bare_symbol_name() == Some("local")
         || host == "localhost"
@@ -3717,12 +3722,12 @@ pub(super) fn nowait_tcp_immediate_addrs(
 
 pub(super) fn bind_udp_socket_host(
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
     options: &[NetworkSocketOptionSpec],
 ) -> Result<UdpSocket, Flow> {
     let mut last_error = None;
-    for addr in resolve_network_socket_addrs(host, port, family, NetworkSocketType::Datagram)? {
+    for addr in resolve_network_socket_addrs(host, service, family, NetworkSocketType::Datagram)? {
         match bind_udp_socket(addr, options) {
             Ok(socket) => return Ok(socket),
             Err(err) => last_error = Some(err),
@@ -3738,12 +3743,12 @@ pub(super) fn bind_udp_socket_host(
 
 pub(super) fn connect_udp_socket_host(
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
     options: &[NetworkSocketOptionSpec],
 ) -> Result<(UdpSocket, SocketAddr), Flow> {
     let mut last_error = None;
-    for addr in resolve_network_socket_addrs(host, port, family, NetworkSocketType::Datagram)? {
+    for addr in resolve_network_socket_addrs(host, service, family, NetworkSocketType::Datagram)? {
         match bind_udp_client_socket(addr, options) {
             Ok(socket) => return Ok((socket, addr)),
             Err(err) => last_error = Some(err),
@@ -3759,13 +3764,13 @@ pub(super) fn connect_udp_socket_host(
 
 pub(super) fn bind_tcp_listener_host(
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
     backlog: i32,
     options: &[NetworkSocketOptionSpec],
 ) -> Result<TcpListener, Flow> {
     let mut last_error = None;
-    for addr in resolve_network_socket_addrs(host, port, family, NetworkSocketType::Stream)? {
+    for addr in resolve_network_socket_addrs(host, service, family, NetworkSocketType::Stream)? {
         match bind_tcp_listener_socket(addr, backlog, options) {
             Ok(listener) => return Ok(listener),
             Err(err) => last_error = Some(err),
@@ -3781,13 +3786,13 @@ pub(super) fn bind_tcp_listener_host(
 
 pub(super) fn connect_tcp_stream_host(
     host: &str,
-    port: u16,
+    service: &str,
     family: NetworkProcessFamily,
     options: &[NetworkSocketOptionSpec],
     contact: Value,
 ) -> Result<TcpStream, Flow> {
     let mut last_error = None;
-    for addr in resolve_network_socket_addrs(host, port, family, NetworkSocketType::Stream)? {
+    for addr in resolve_network_socket_addrs(host, service, family, NetworkSocketType::Stream)? {
         match connect_tcp_stream_socket(addr, options, contact) {
             Ok(stream) => return Ok(stream),
             Err(err) => last_error = Some(err),

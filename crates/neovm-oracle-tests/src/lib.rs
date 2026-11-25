@@ -412,6 +412,7 @@ mod suppress_keymap_semantics;
 mod surface_diverges;
 mod symbol;
 mod syntax;
+mod sys_compat_semantics;
 mod take;
 mod temporary_file_directory_strict_edge_semantics;
 mod text;

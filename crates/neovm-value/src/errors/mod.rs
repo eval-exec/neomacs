@@ -378,12 +378,6 @@ pub fn init_standard_errors(obarray: &mut Obarray) {
     register_simple(obarray, "type-mismatch", "Type mismatch", &["error"]);
     register_simple(
         obarray,
-        "permission-denied",
-        "Permission denied",
-        &["error"],
-    );
-    register_simple(
-        obarray,
         "recursion-error",
         "Excessive recursive calling error",
         &["error"],
@@ -438,6 +432,13 @@ pub fn init_standard_errors(obarray: &mut Obarray) {
     // symbol visible at boot and changed `(intern-soft "file-locked")` /
     // `(all-completions "file-" obarray)`.
     register_simple(obarray, "file-missing", "File is missing", &["file-error"]);
+    // GNU src/fileio.c:6819-6822 (`syms_of_fileio`).
+    register_simple(
+        obarray,
+        "permission-denied",
+        "Cannot access file or directory",
+        &["file-error"],
+    );
     register_simple(
         obarray,
         "file-notify-error",
