@@ -1246,7 +1246,8 @@ pub(super) fn owner_cons_reserve_session_return_keeps_handed_cell_and_reclaims_t
             assert_eq!(value.cons_car(), Value::fixnum(1701));
             let block = &heap.cons_blocks[block_index];
             assert_eq!(
-                block.next_index, 1,
+                block.next_index(),
+                1,
                 "the unhanded tail was rewound to the handed cell"
             );
             let cell = std::mem::size_of::<ConsCell>();
@@ -1256,7 +1257,7 @@ pub(super) fn owner_cons_reserve_session_return_keeps_handed_cell_and_reclaims_t
             // sitting on the tail cell, which the sweep does not walk.
             assert_eq!(
                 tail_addr,
-                block.base_addr() + (block.next_index as usize) * cell,
+                block.base_addr() + block.next_index() * cell,
                 "the tail cell is the bump cursor and is not in the swept prefix"
             );
             let fresh = heap.alloc_cons(Value::NIL, Value::NIL);
@@ -1335,15 +1336,10 @@ pub(super) fn owner_cons_reserve_retire_rooted_reclaims_one_registration<K>(
                 (
                     heap.cons_allocator.owner_reserved_blocks(),
                     registrations,
-                    heap.cons_blocks[block_a].next_index,
-                    heap.cons_blocks[block_b].next_index,
+                    heap.cons_blocks[block_a].next_index(),
+                    heap.cons_blocks[block_b].next_index(),
                 ),
-                (
-                    1,
-                    vec![Some(reg_b)],
-                    0,
-                    crate::tagged::gc::CONS_BLOCK_SIZE as u16
-                ),
+                (1, vec![Some(reg_b)], 0, crate::tagged::gc::CONS_BLOCK_SIZE),
                 "retire_rooted reclaims only the retiring registration"
             );
             heap.return_leased_owner_cons_reserves();
@@ -1573,15 +1569,10 @@ pub(super) fn owner_cons_reserve_retire_requires_closed_book_and_reclaims_carved
                 (
                     heap.cons_allocator.owner_reserved_blocks(),
                     heap.cons_allocator.owner_cons_registrations_for_test(),
-                    heap.cons_blocks[block_a].next_index,
-                    heap.cons_blocks[block_b].next_index,
+                    heap.cons_blocks[block_a].next_index(),
+                    heap.cons_blocks[block_b].next_index(),
                 ),
-                (
-                    1,
-                    vec![Some(reg_b)],
-                    1,
-                    crate::tagged::gc::CONS_BLOCK_SIZE as u16,
-                ),
+                (1, vec![Some(reg_b)], 1, crate::tagged::gc::CONS_BLOCK_SIZE,),
                 "retire reclaim must rewind A's tail to the handed cell and keep B"
             );
         }
@@ -1593,7 +1584,7 @@ pub(super) fn owner_cons_reserve_retire_requires_closed_book_and_reclaims_carved
         with_stopped_legacy_heap(&era, &stopped, |heap| {
             let value = root.materialize(heap).unwrap().value();
             assert_eq!(value.cons_car(), Value::fixnum(1761));
-            assert_eq!(heap.cons_blocks[block_a].next_index, 1);
+            assert_eq!(heap.cons_blocks[block_a].next_index(), 1);
             let fresh = heap.alloc_cons(Value::NIL, Value::NIL);
             assert_ne!(
                 fresh.as_cons_ptr().map(|cell| cell as usize),
@@ -1724,7 +1715,7 @@ pub(super) fn owner_cons_reserve_reclaim_busy_requeues_for_later_apply<K>(
             let mut collector = era.core.collector.borrow_mut();
             let heap = collector.as_mut().unwrap().registration_heap_mut();
             assert!(!heap.has_owner_cons_reserves());
-            assert_eq!(heap.cons_blocks[block_a].next_index, 0);
+            assert_eq!(heap.cons_blocks[block_a].next_index(), 0);
         }
         let (collector, keeper) = era.finish().unwrap();
         drop(collector);
@@ -1785,8 +1776,8 @@ pub(super) fn owner_cons_reserve_reclaim_poisoned_allocator_requeues<K>(
             let heap = collector.as_mut().unwrap().registration_heap_mut();
             assert_eq!(heap.cons_allocator.owner_reserved_blocks(), 1);
             assert_eq!(
-                heap.cons_blocks[block_a].next_index,
-                crate::tagged::gc::CONS_BLOCK_SIZE as u16
+                heap.cons_blocks[block_a].next_index(),
+                crate::tagged::gc::CONS_BLOCK_SIZE
             );
             heap.cons_allocator.clear_storage_poison_for_test();
         }
@@ -1797,7 +1788,7 @@ pub(super) fn owner_cons_reserve_reclaim_poisoned_allocator_requeues<K>(
             let mut collector = era.core.collector.borrow_mut();
             let heap = collector.as_mut().unwrap().registration_heap_mut();
             assert!(!heap.has_owner_cons_reserves());
-            assert_eq!(heap.cons_blocks[block_a].next_index, 0);
+            assert_eq!(heap.cons_blocks[block_a].next_index(), 0);
         }
         let (collector, keeper) = era.finish().unwrap();
         drop(collector);
@@ -1856,8 +1847,8 @@ pub(super) fn owner_cons_reserve_reclaim_refuses_wrong_thread<K>(
             let heap = collector.as_mut().unwrap().registration_heap_mut();
             assert_eq!(heap.cons_allocator.owner_reserved_blocks(), 1);
             assert_eq!(
-                heap.cons_blocks[block_a].next_index,
-                crate::tagged::gc::CONS_BLOCK_SIZE as u16
+                heap.cons_blocks[block_a].next_index(),
+                crate::tagged::gc::CONS_BLOCK_SIZE
             );
         }
 

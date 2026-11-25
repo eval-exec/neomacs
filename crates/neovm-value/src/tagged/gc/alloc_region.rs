@@ -606,7 +606,7 @@ impl TaggedHeap {
         if let ConsRegionSource::BlockTail { block } = source
             && let Some(owner) = self.cons_blocks.get_mut(block)
             && owner.base_addr() == base
-            && owner.next_index as usize == start + unused
+            && owner.next_index() == start + unused
         {
             owner.rewind_tail(start);
             return;

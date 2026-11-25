@@ -1012,7 +1012,7 @@ impl AllocatorState {
         state.detach(slot);
         let entry = state.block_mut(slot);
         entry.head = head as usize;
-        entry.count = block.next_index as usize - live;
+        entry.count = block.next_index() - live;
         debug_assert_eq!(head.is_null(), entry.count == 0);
         entry.availability = BlockAvailability::Ready;
         state.attach_if_ready(slot);
@@ -1098,7 +1098,7 @@ impl AllocatorState {
         head: *mut ConsCell,
         live: usize,
     ) {
-        let used = block.next_index as usize;
+        let used = block.next_index();
         let free_after = used
             .checked_sub(live)
             .expect("sweep live exceeds used cells");
@@ -2281,7 +2281,7 @@ impl ConsStopAll<'_> {
         self.verify_stale_marks(blocks);
         for block in blocks {
             let metadata = self.state.block_for_base(ConsBlockBase::of(block));
-            for index in 0..block.next_index as usize {
+            for index in 0..block.next_index() {
                 // SAFETY: this guard proves stopped mutators/closed regions,
                 // and its caller retains every listed block's storage.
                 let cell = unsafe { &*block.cells_ptr().add(index) };
@@ -2317,7 +2317,7 @@ impl ConsStopAll<'_> {
                 "cached old count differs from bitmap"
             );
             if !metadata.young.load(Ordering::Relaxed) {
-                for index in 0..block.next_index as usize {
+                for index in 0..block.next_index() {
                     assert!(
                         !block.trailer().is_marked(index) || block.trailer().is_old(index),
                         "non-young block has marked non-old cell"

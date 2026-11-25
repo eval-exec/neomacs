@@ -66,7 +66,7 @@ fn check_survivors(heap: &TestHeap, payloads: &[TaggedValue]) {
             .find(|block| block.base_addr() == base)
             .expect("survivor's owned block must remain allocated after sweep");
         assert!(ConsBlock::ptr_is_cell_aligned(ptr));
-        assert!(ConsBlock::index_of_ptr(ptr) < block.next_index as usize);
+        assert!(ConsBlock::index_of_ptr(ptr) < block.next_index());
         assert!(
             block.is_marked_ptr(ptr),
             "unmarked cons must never be dereferenced"

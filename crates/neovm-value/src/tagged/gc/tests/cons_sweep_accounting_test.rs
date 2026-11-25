@@ -165,7 +165,7 @@ fn cons_sweep_accounting_includes_new_sweep_window_blocks_and_refunds_unused_tai
         assert!(heap.owns_heap_value_for_test(newborn));
         assert!(!heap.value_is_old_for_test(newborn));
         let newborn_block = &heap.cons_blocks[heap.cons_block_index_by_base[&base(newborn)]];
-        assert_eq!(newborn_block.next_index, 1);
+        assert_eq!(newborn_block.next_index(), 1);
         roots.push(newborn);
         begin_deferred(&mut heap, DeferredCycle::Minor, &roots);
         finish(&mut heap, 3);

@@ -57,7 +57,7 @@ pub(in crate::tagged::gc) fn two_idle_stops_hold_no_reserve(
     );
     owner.return_unused_before_sweep(stopped, heap).unwrap();
     assert!(!owner.holds_reserve());
-    assert_eq!(heap.cons_blocks[block].next_index, 0);
+    assert_eq!(heap.cons_blocks[block].next_index(), 0);
 }
 
 pub(in crate::tagged::gc) fn pacing_charges_carved_cells_and_subtracts_the_open_tail(
@@ -92,7 +92,7 @@ pub(in crate::tagged::gc) fn pacing_charges_carved_cells_and_subtracts_the_open_
     assert!(region.is_closed());
     owner.return_unused_before_sweep(stopped, heap).unwrap();
     assert!(!owner.holds_reserve());
-    assert_eq!(heap.cons_blocks[block].next_index, 100);
+    assert_eq!(heap.cons_blocks[block].next_index(), 100);
     assert_eq!(heap.jit_cons_window_for_test(), (0, 0));
 }
 
@@ -185,8 +185,8 @@ pub(in crate::tagged::gc) fn a_moved_block_tail_is_not_rewound(
         .unwrap();
     let block = super::lock_blocks(owner.cons.as_ref().unwrap())[0].block_index;
     // Model an extended tail, preserving the original release refusal check.
-    heap.cons_blocks[block].next_index = CONS_BLOCK_SIZE as u16;
+    let _ = heap.cons_blocks[block].reserve_tail(CONS_BLOCK_SIZE);
     super::lock_blocks(owner.cons.as_ref().unwrap())[0].limit = CONS_BLOCK_SIZE - 1;
     owner.return_unused_before_sweep(stopped, heap).unwrap();
-    assert_eq!(heap.cons_blocks[block].next_index, CONS_BLOCK_SIZE as u16);
+    assert_eq!(heap.cons_blocks[block].next_index(), CONS_BLOCK_SIZE);
 }

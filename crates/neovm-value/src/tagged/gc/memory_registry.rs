@@ -476,7 +476,7 @@ impl TaggedHeap {
         let bumped_cons_slots: usize = self
             .cons_blocks
             .iter()
-            .map(|block| block.next_index as usize)
+            .map(|block| block.next_index())
             .sum();
         let mut free_count = 0usize;
         for (base, count) in self.cons_allocator.free_counts() {
@@ -502,7 +502,7 @@ impl TaggedHeap {
             ..ConsLayoutStats::default()
         };
         for (block, reclaimed) in self.cons_blocks.iter().zip(free_cells_by_block) {
-            let live = (block.next_index as usize).saturating_sub(reclaimed);
+            let live = (block.next_index()).saturating_sub(reclaimed);
             if live == 0 {
                 cons.empty_pages += 1;
             } else if live == CONS_BLOCK_SIZE {

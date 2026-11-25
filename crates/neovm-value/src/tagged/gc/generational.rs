@@ -773,7 +773,7 @@ impl TaggedHeap {
     #[inline(never)]
     pub(super) fn verify_old_cons_edge_cards_world_stopped(&self) {
         for block in &self.cons_blocks {
-            for word in 0..cons_mark_words(block.next_index as usize) {
+            for word in 0..cons_mark_words(block.next_index()) {
                 let mut old = block.trailer().old_word(word);
                 while old != 0 {
                     let index = word * CONS_MARK_BITS_PER_WORD + old.trailing_zeros() as usize;

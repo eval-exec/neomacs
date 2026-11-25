@@ -73,7 +73,7 @@ fn regions_bump_a_block_tail_in_order() {
     assert_eq!(heap.region_stats.cons_refills(), 3);
     assert_eq!(heap.cons_blocks.len(), 1);
     assert_eq!(
-        heap.cons_blocks[0].next_index as usize,
+        heap.cons_blocks[0].next_index(),
         3 * CONS_REGION_MAX_CELLS,
         "the third region was used up exactly"
     );
@@ -87,7 +87,7 @@ fn a_full_block_rolls_over_into_a_fresh_block() {
         cons(&mut heap, i);
     }
     assert_eq!(heap.cons_blocks.len(), 1);
-    assert_eq!(heap.cons_blocks[0].next_index as usize, CONS_BLOCK_SIZE);
+    assert_eq!(heap.cons_blocks[0].next_index(), CONS_BLOCK_SIZE);
     let (cur, lim) = heap.cons_region_for_test();
     assert_eq!(cur, lim, "the region ended with the block");
     let next = cons(&mut heap, -1);
@@ -153,7 +153,7 @@ fn closing_gives_the_unused_tail_back_where_it_came_from() {
     heap.close_alloc_regions();
     assert!(!heap.alloc_regions_open());
     assert_eq!(heap.cons_region_for_test(), (0, 0));
-    assert_eq!(heap.cons_blocks[0].next_index, 2, "the bump tail rewound");
+    assert_eq!(heap.cons_blocks[0].next_index(), 2, "the bump tail rewound");
     let c = cons(&mut heap, 3);
     assert_eq!(cell_addr(c), cell_addr(a) + 2 * size_of::<ConsCell>());
 
@@ -300,7 +300,7 @@ fn black_follows_the_region_across_the_phase_flags() {
     assert!(!is_black(&heap, after));
     // Bits at or above a block's cursor are never set.
     for block in &heap.cons_blocks {
-        let used = block.next_index as usize;
+        let used = block.next_index();
         let marked_at_or_above = (used..CONS_BLOCK_SIZE).any(|i| {
             let cell = unsafe { block.cells_ptr().add(i) };
             block.is_marked_ptr(cell)

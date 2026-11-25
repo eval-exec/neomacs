@@ -186,7 +186,7 @@ fn assert_loan_refusal_refunds_cached_grant(heap: &mut TaggedHeap, prior: &[Tagg
     let used_before: usize = heap
         .cons_blocks
         .iter()
-        .map(|block| block.next_index as usize)
+        .map(|block| block.next_index())
         .sum();
     let loan = {
         // SAFETY: this fixture is the exclusive parked owner; no collector or
@@ -203,7 +203,7 @@ fn assert_loan_refusal_refunds_cached_grant(heap: &mut TaggedHeap, prior: &[Tagg
     let used_after: usize = heap
         .cons_blocks
         .iter()
-        .map(|block| block.next_index as usize)
+        .map(|block| block.next_index())
         .sum();
     // Return the actual loan before assertions can unwind the fixture.
     {

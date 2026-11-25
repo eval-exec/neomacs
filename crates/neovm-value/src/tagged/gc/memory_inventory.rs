@@ -275,7 +275,7 @@ fn cons_inventory(
         .blocks
         .saturating_mul(CONS_BLOCK_BYTES - CONS_CELLS_BYTES);
     for block in &heap.cons_blocks {
-        let bumped = block.next_index as usize;
+        let bumped = block.next_index();
         let mut occupied = 0usize;
         // The free-list poison is the allocated/free discriminator here;
         // mark bits cannot distinguish newly allocated white cells from free

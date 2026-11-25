@@ -865,8 +865,7 @@ impl ConsCatalog {
             let start = ConsBlock::index_of_ptr(first);
             if unused != 0 {
                 unsafe { ConsBlock::mark_run_at(base, start, unused, false) };
-                if region.source != CatalogSource::FreeList
-                    && block.next_index as usize == start + unused
+                if region.source != CatalogSource::FreeList && block.next_index() == start + unused
                 {
                     block.rewind_tail(start);
                 } else {
@@ -918,7 +917,7 @@ impl ConsCatalog {
                     .get(&tail.base)
                     .expect("granted block base index");
                 let block = &mut state.blocks[index];
-                debug_assert_eq!(block.next_index as usize, tail.limit as usize);
+                debug_assert_eq!(block.next_index(), tail.limit as usize);
                 // Bits above the rewound top were never set.
                 block.rewind_tail(tail.start as usize);
             } else {
@@ -1141,7 +1140,7 @@ impl ConsCatalog {
                 // still ends at it — a later grant may own the cells above
                 // our limit, and then the suffix returns through the free
                 // list with the defensive mark clear instead.
-                if tail.from_tail && block.next_index as usize == tail.limit as usize {
+                if tail.from_tail && block.next_index() == tail.limit as usize {
                     // Bits above the rewound top were never set.
                     block.rewind_tail(tail.cursor as usize);
                 } else {
@@ -1207,9 +1206,9 @@ impl ConsCatalog {
             && state.blocks.iter().enumerate().all(|(index, block)| {
                 let base = block.base_addr();
                 state.by_base.get(&base) == Some(&index)
-                    && free.iter().any(|(key, count)| {
-                        key.addr() == base && *count <= block.next_index as usize
-                    })
+                    && free
+                        .iter()
+                        .any(|(key, count)| key.addr() == base && *count <= block.next_index())
                     && state.chunk_map.as_ref().is_none_or(|map| {
                         let entry = map.get(base);
                         entry.is(ChunkClass::Cons) && entry.index() == index

@@ -1266,7 +1266,7 @@ impl TaggedHeap {
         // catches a missed old-to-young edge before the young child is freed.
         if self.generational.enabled {
             for block in &self.cons_blocks {
-                for i in 0..block.next_index as usize {
+                for i in 0..block.next_index() {
                     if !block.trailer().is_old(i)
                         || (!self.is_minor_collection() && !block.trailer().is_marked(i))
                     {
@@ -1363,7 +1363,7 @@ impl TaggedHeap {
         let blocks: Vec<(*mut ConsCell, usize)> = self
             .cons_blocks
             .iter()
-            .map(|b| (b.cells_ptr(), b.next_index as usize))
+            .map(|b| (b.cells_ptr(), b.next_index()))
             .collect();
         for (cells, count) in blocks {
             for i in 0..count {

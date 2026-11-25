@@ -27,11 +27,19 @@ impl ConsBlockCacheEntry {
 
 /// A GNU-shaped cons block with cells at the front of a fixed-size aligned
 /// storage area, followed by the mark bitmap and the cells' age bytes.
+///
+/// Both fields are private so safe code in `gc` cannot forge a `ConsBlock`
+/// literal with a foreign `storage` pointer or an out-of-bounds `next_index`;
+/// `trailer()`, sweeps, and `Drop` rely exclusively on the invariants
+/// established by [`Self::new`] and maintained by [`Self::reserve_tail`] and
+/// [`Self::rewind_tail`].
 pub(super) struct ConsBlock {
     /// Aligned raw storage for cons cells plus `ConsBlockTrailer`.
-    pub(super) storage: *mut u8,
-    /// Index of the first never-allocated cell in this block.
-    pub(super) next_index: u16,
+    /// Allocated by [`Self::new`] via `alloc_zeroed(Self::layout())` and freed
+    /// once by [`Drop`].
+    storage: *mut u8,
+    /// Index of the first never-allocated cell in this block (`<= CONS_BLOCK_SIZE`).
+    next_index: u16,
 }
 
 impl ConsBlock {
@@ -39,6 +47,18 @@ impl ConsBlock {
         Layout::from_size_align(CONS_BLOCK_BYTES, CONS_BLOCK_ALIGN).expect("cons block layout")
     }
 
+    /// Allocate a fresh, zero-initialized, `CONS_BLOCK_ALIGN`-aligned cons block.
+    ///
+    /// Correctness invariants established here and relied upon by `trailer()`,
+    /// sweeps, and `Drop`:
+    /// - `storage` is a non-null, uniquely owned allocation of `Self::layout()`
+    ///   (`CONS_BLOCK_BYTES` bytes, `CONS_BLOCK_ALIGN`-aligned) with cells at
+    ///   offset `0..CONS_CELLS_BYTES` and zeroed `ConsBlockTrailer` metadata
+    ///   afterward.
+    /// - Observation bits for this block's address range are cleared before
+    ///   publication so address reuse from a prior foreign cons starts unobserved.
+    /// - `next_index` starts at `0` and stays within `0..=CONS_BLOCK_SIZE`
+    ///   through `reserve_tail` and `rewind_tail`.
     pub(super) fn new() -> Self {
         let layout = Self::layout();
         let storage = unsafe { alloc::alloc_zeroed(layout) };
@@ -52,6 +72,12 @@ impl ConsBlock {
             storage,
             next_index: 0,
         }
+    }
+
+    /// Index of the first never-allocated cell in this block (`0..=CONS_BLOCK_SIZE`).
+    #[inline]
+    pub(super) fn next_index(&self) -> usize {
+        self.next_index as usize
     }
 
     #[inline]
@@ -166,8 +192,16 @@ impl ConsBlock {
     /// Give the tail `[index, next_index)` back to the bump cursor (an
     /// allocation region's unused tail). Its mark bits must already be
     /// clear: bits at or above `next_index` are never set.
+    ///
+    /// # Panics
+    /// Panics if `index > self.next_index` (which would extend past allocated
+    /// cells or past `CONS_BLOCK_SIZE`).
     pub(super) fn rewind_tail(&mut self, index: usize) {
-        debug_assert!(index <= self.next_index as usize);
+        assert!(
+            index <= self.next_index as usize,
+            "cons block rewind_tail index {index} exceeds next_index {}",
+            self.next_index
+        );
         self.next_index = index as u16;
     }
 
@@ -322,6 +356,34 @@ impl Drop for ConsBlock {
     fn drop(&mut self) {
         clear_cons_observed_block(self.base_addr());
         unsafe { alloc::dealloc(self.storage, Self::layout()) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cons_block_constructor_and_tail_invariants() {
+        let mut block = ConsBlock::new();
+        assert_eq!(block.next_index(), 0);
+        assert_eq!(block.base_addr() % CONS_BLOCK_ALIGN, 0);
+        assert_eq!(block.cells_ptr() as usize, block.base_addr());
+        assert_eq!(block.count_marked(), 0);
+        assert_eq!(block.count_old(), 0);
+
+        let (first, count) = block.reserve_tail(4);
+        assert_eq!((first, count), (0, 4));
+        assert_eq!(block.next_index(), 4);
+
+        block.rewind_tail(2);
+        assert_eq!(block.next_index(), 2);
+
+        let (rest_first, rest_count) = block.reserve_tail(CONS_BLOCK_SIZE + 10);
+        assert_eq!(rest_first, 2);
+        assert_eq!(rest_count, CONS_BLOCK_SIZE - 2);
+        assert_eq!(block.next_index(), CONS_BLOCK_SIZE);
+        assert_eq!(block.reserve_tail(1), (CONS_BLOCK_SIZE, 0));
     }
 }
 

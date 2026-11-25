@@ -99,7 +99,7 @@ impl DrainCollectionSnapshot {
                 .cons_blocks
                 .iter()
                 .map(|block| {
-                    (0..cons_mark_words(block.next_index as usize))
+                    (0..cons_mark_words(block.next_index()))
                         .map(|word| block.mark_word(word).load(Ordering::Relaxed))
                         .collect()
                 })
@@ -108,7 +108,7 @@ impl DrainCollectionSnapshot {
                 .cons_blocks
                 .iter()
                 .map(|block| {
-                    (0..cons_mark_words(block.next_index as usize))
+                    (0..cons_mark_words(block.next_index()))
                         .map(|word| block.trailer().old_word(word))
                         .collect()
                 })

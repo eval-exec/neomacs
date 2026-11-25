@@ -101,7 +101,7 @@ impl TaggedHeap {
         let bumped: usize = self
             .cons_blocks
             .iter()
-            .map(|block| block.next_index as usize)
+            .map(|block| block.next_index())
             .sum();
         let free: usize = self
             .cons_allocator

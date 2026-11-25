@@ -1487,7 +1487,7 @@ impl TaggedHeap {
                 .cons_block_index_by_base
                 .get(&base.addr())
                 .expect("completed sweep candidate is still heap-owned");
-            let used = self.cons_blocks[index].next_index as usize;
+            let used = self.cons_blocks[index].next_index();
             let free = self
                 .cons_allocator
                 .free_count_for(base)
@@ -2545,7 +2545,7 @@ impl TaggedHeap {
             // The geometric oracle covers the whole block, including cells
             // never reserved from its bump tail and the open region's unused
             // tail. Neither is an initialized, handed-out cons.
-            if ConsBlock::index_of_ptr(ptr) >= block.next_index as usize
+            if ConsBlock::index_of_ptr(ptr) >= block.next_index()
                 || (self.jit.cons_cur.get()..self.jit.cons_lim.get()).contains(&(ptr as usize))
             {
                 return false;

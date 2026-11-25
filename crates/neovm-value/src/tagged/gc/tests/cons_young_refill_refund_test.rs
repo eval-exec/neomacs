@@ -41,7 +41,7 @@ fn refill_refund_source_counts(heap: &TaggedHeap) -> (u64, u64, u64) {
 fn refill_refund_total_used(heap: &TaggedHeap) -> usize {
     heap.cons_blocks
         .iter()
-        .map(|block| block.next_index as usize)
+        .map(|block| block.next_index())
         .sum()
 }
 

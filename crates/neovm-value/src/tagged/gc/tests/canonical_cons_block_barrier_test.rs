@@ -249,7 +249,7 @@ fn canonical_block_black_partial_close_keeps_color_and_unmarks_only_refunded_tai
         assert_eq!(heap.region_book.cons_color(), RegionColor::Black);
         assert_eq!(heap.region_book.cons_block_and_color, 3);
         assert_eq!(counts(&heap), exact);
-        assert_eq!(heap.cons_blocks[0].next_index as usize, n);
+        assert_eq!(heap.cons_blocks[0].next_index(), n);
         assert!(handed.iter().all(|v| marked(&heap, v.bits() & !TAG_MASK)));
         assert!(tail.iter().all(|&a| !marked(&heap, a)));
 

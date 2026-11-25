@@ -557,7 +557,7 @@ fn mint_cons_block(heap: &mut TaggedHeap) -> ReservedCons {
     if let Some(block_index) = heap
         .cons_blocks
         .iter()
-        .position(|block| block.next_index == 0)
+        .position(|block| block.next_index() == 0)
     {
         let (first, n) = heap.cons_blocks[block_index].reserve_tail(CONS_BLOCK_SIZE);
         debug_assert_eq!((first, n), (0, CONS_BLOCK_SIZE));
@@ -619,7 +619,7 @@ fn return_cons_block(heap: &mut TaggedHeap, reserved: &ReservedCons) {
         return;
     }
     let block = &mut heap.cons_blocks[reserved.block_index];
-    if block.base_addr() == reserved.base && block.next_index as usize == reserved.limit {
+    if block.base_addr() == reserved.base && block.next_index() == reserved.limit {
         block.rewind_tail(reserved.carve_at);
         return;
     }
