@@ -99,14 +99,32 @@ fn with_poisoned_era<R: Send + 'static>(
 }
 
 /// A running owner that counts its own progress and acks every stop.
-fn run_peer(mut owner: Mutator<'_>, progress: &AtomicU64, done: &AtomicBool) {
+fn run_peer(owner: Mutator<'_>, progress: &AtomicU64, done: &AtomicBool) {
+    run_peer_reporting(owner, progress, done, None);
+}
+
+/// [`run_peer`], and PARKED holds the epoch of the stop it acked from the
+/// ack until it runs again (0 while it runs), so a row can see where it is
+/// without sampling a time window.
+fn run_peer_reporting(
+    mut owner: Mutator<'_>,
+    progress: &AtomicU64,
+    done: &AtomicBool,
+    parked: Option<&AtomicU64>,
+) {
     while !done.load(Ordering::Acquire) {
         match owner.wait_request_for(Duration::from_millis(2)) {
-            Ok(_epoch) => {
+            Ok(epoch) => {
                 retry_native("ack the stop", || {
                     owner.publish_native_owner(&[]).map(|_| ())
                 });
+                if let Some(parked) = parked {
+                    parked.store(epoch.get(), Ordering::Release);
+                }
                 retry_native("run after the stop", || owner.leave_native().map(|_| ()));
+                if let Some(parked) = parked {
+                    parked.store(0, Ordering::Release);
+                }
             }
             Err(RendezvousError::Busy) => {
                 progress.fetch_add(1, Ordering::AcqRel);
@@ -1493,7 +1511,10 @@ fn l67b_the_group_and_an_owner_take_turns_in_ring_order() {
 /// L6.7b b3 exclusion (K3). While the group holds the World, the keeper
 /// holds its stop, so a running parallel owner makes no progress. Its
 /// counter advances before the group asks and again after the turn comes
-/// back, so the probe can see progress.
+/// back, so the probe can see progress. No time window is sampled (lead
+/// #14111): while the World is out, R must be parked in the World's own stop
+/// from its ack on, and still parked there when the group gives the World
+/// back, with its counter unmoved.
 #[test]
 fn l67b_no_parallel_owner_runs_while_the_group_holds_the_world() {
     with_live_era("l67b-exclusion", |era| {
@@ -1505,10 +1526,13 @@ fn l67b_no_parallel_owner_runs_while_the_group_holds_the_world() {
         drop(inbox);
         let progress = AtomicU64::new(0);
         let done = AtomicBool::new(false);
+        let parked = AtomicU64::new(0);
         std::thread::scope(|scope| {
             let _panic_guard = KeeperPanicGuard { keeper: era };
-            let (progress, done) = (&progress, &done);
-            scope.spawn(move || run_peer(activate(peer, heap, R), progress, done));
+            let (progress, done, parked) = (&progress, &done, &parked);
+            scope.spawn(move || {
+                run_peer_reporting(activate(peer, heap, R), progress, done, Some(parked))
+            });
             let runner = scope.spawn(move || {
                 let advanced = |from: u64| {
                     let start = Instant::now();
@@ -1518,13 +1542,28 @@ fn l67b_no_parallel_owner_runs_while_the_group_holds_the_world() {
                     }
                 };
                 advanced(0);
-                let (turn, _epoch, lend) = group
+                let (turn, epoch, lend) = group
                     .request_world()
                     .ok()
                     .expect("the group is lent the World");
+                // R acked this stop before the World was lent; wait only for
+                // its own store after the ack.
+                let start = Instant::now();
+                while parked.load(Ordering::Acquire) != epoch.get() {
+                    assert!(
+                        start.elapsed() < BOUND,
+                        "R is parked in the World's stop: {}",
+                        parked.load(Ordering::Acquire)
+                    );
+                    std::thread::yield_now();
+                }
                 let before = progress.load(Ordering::Acquire);
-                std::thread::sleep(Duration::from_millis(30));
                 let during = progress.load(Ordering::Acquire);
+                assert_eq!(
+                    parked.load(Ordering::Acquire),
+                    epoch.get(),
+                    "R is still parked when the World goes back"
+                );
                 group.give_back(lend, WorldReturned::from_end(turn));
                 advanced(during);
                 done.store(true, Ordering::Release);
