@@ -788,7 +788,7 @@ fn a_group_and_an_owner(on_world: OnWorld) {
         let (grants_tx, grants) = mpsc::sync_channel(1);
         driver.enroll(1, key(1), grants_tx);
         let (world_tx, world) = mpsc::sync_channel(1);
-        driver.enroll_group(world_tx);
+        let _waiter = driver.enroll_group(world_tx);
         let owner = {
             let inbox = inbox.clone();
             let in_turn = in_turn.clone();
@@ -826,7 +826,7 @@ pub fn an_abandoned_world_turn_poisons_the_owners() {
         let (grants_tx, grants) = mpsc::sync_channel(1);
         driver.enroll(1, key(1), grants_tx);
         let (world_tx, world) = mpsc::sync_channel(1);
-        driver.enroll_group(world_tx);
+        let _waiter = driver.enroll_group(world_tx);
         let (holding_tx, holding) = mpsc::channel::<()>();
         let group = {
             let inbox = inbox.clone();
@@ -876,7 +876,7 @@ pub fn an_abandoned_lend_poisons_the_queued_group() {
         let (grants_tx, grants) = mpsc::sync_channel(1);
         driver.enroll(1, key(1), grants_tx);
         let (world_tx, world) = mpsc::sync_channel(1);
-        driver.enroll_group(world_tx);
+        let _waiter = driver.enroll_group(world_tx);
         let (holding_tx, holding) = mpsc::channel::<()>();
         let owner = {
             let inbox = inbox.clone();
@@ -936,7 +936,7 @@ pub fn a_collecting_group_resumes_before_any_other_turn() {
         let (grants_tx, grants) = mpsc::sync_channel(1);
         driver.enroll(1, key(1), grants_tx);
         let (world_tx, world) = mpsc::sync_channel(1);
-        driver.enroll_group(world_tx);
+        let _waiter = driver.enroll_group(world_tx);
         let (holding_tx, holding) = mpsc::channel::<()>();
         let group = {
             let inbox = inbox.clone();
@@ -970,5 +970,77 @@ pub fn a_collecting_group_resumes_before_any_other_turn() {
             model.grants[1].1, model.grants[2].1,
             "the collection and the group's resume ride one stop"
         );
+    });
+}
+
+/// How many switch points the group's runner polls the waiter word at in
+/// L14 before it calls the word never raised.
+const WAIT_YIELDS: usize = 8;
+
+/// L14 (L6.7b b4.1, QB2). The group holds the World when the owner asks.
+/// The keeper raises the group's waiter word; the group, polling it at its
+/// switch points, ends the interval; the owner is lent next. Nobody waited
+/// when the World was lent, so the interval starts with the word lowered.
+pub fn an_owner_request_during_the_world_raises_the_waiter_word() {
+    model(|| {
+        let era = ModelEra::new(&[(1, Mode::NativeStopped)]);
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(Era(&era), inbox_rx);
+        let in_turn = Arc::new(AtomicUsize::new(0));
+        let (grants_tx, grants) = mpsc::sync_channel(1);
+        driver.enroll(1, key(1), grants_tx);
+        let (world_tx, world) = mpsc::sync_channel(1);
+        let waiter = driver.enroll_group(world_tx);
+        let (holding_tx, holding) = mpsc::channel::<()>();
+        let group = {
+            let inbox = inbox.clone();
+            loom::thread::spawn(move || {
+                let _ = inbox.send(KeeperMsg::BatonRequest);
+                let seen = match world.recv() {
+                    Ok(GroupMsg::World { turn, epoch }) => {
+                        assert!(
+                            !waiter.raised(),
+                            "an interval nobody waits behind starts lowered"
+                        );
+                        let _ = holding_tx.send(());
+                        let raised = (0..WAIT_YIELDS).any(|_| {
+                            let raised = waiter.raised();
+                            if !raised {
+                                loom::thread::yield_now();
+                            }
+                            raised
+                        });
+                        assert!(raised, "the waiter word was never raised");
+                        let _ = inbox.send(KeeperMsg::WorldReturn {
+                            returned: turn,
+                            end: IntervalEnd::Done,
+                        });
+                        Seen::Granted(epoch)
+                    }
+                    Ok(GroupMsg::Poisoned) => Seen::Poisoned,
+                    Err(_) => Seen::Disconnected,
+                };
+                let _ = inbox.send(KeeperMsg::GroupExit);
+                seen
+            })
+        };
+        let owner = {
+            let inbox = inbox.clone();
+            loom::thread::spawn(move || {
+                // The owner asks only once the group holds the World.
+                let _ = holding.recv();
+                requester(1, inbox, grants, in_turn, OnGrant::GiveBack, None)
+            })
+        };
+        drop(inbox);
+        let end = driver.run();
+        let group = group.join().unwrap();
+        let owner = owner.join().unwrap();
+        assert_eq!(end, DriverEnd::Drained);
+        assert!(matches!(group, Seen::Granted(_)), "the group: {group:?}");
+        assert!(matches!(owner, Seen::Granted(_)), "the owner: {owner:?}");
+        let model = era.model.lock().unwrap();
+        let granted: Vec<u64> = model.grants.iter().map(|(client, _)| *client).collect();
+        assert_eq!(granted, [GROUP, 1], "the owner is lent after the group's interval");
     });
 }

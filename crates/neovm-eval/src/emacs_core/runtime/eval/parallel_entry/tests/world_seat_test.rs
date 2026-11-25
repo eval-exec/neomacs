@@ -342,8 +342,8 @@ fn run_peer(mut owner: Mutator<'_>, progress: &AtomicU64, done: &AtomicBool) {
 
 fn enroll_group(driver: &mut Driver<'_, '_, '_>, inbox: &mpsc::Sender<KeeperMsg>) -> GroupPort {
     let (world_tx, world_rx) = mpsc::sync_channel(1);
-    driver.enroll_group(world_tx);
-    GroupPort::new(inbox.clone(), world_rx)
+    let waiter = driver.enroll_group(world_tx);
+    GroupPort::new(inbox.clone(), world_rx, waiter)
 }
 
 #[test]

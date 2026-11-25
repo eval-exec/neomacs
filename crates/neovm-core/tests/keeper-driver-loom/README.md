@@ -31,6 +31,7 @@ Each row has a one-edge negative. build.rs mutates one anchored line of a copy, 
 | `an_abandoned_world_turn_poisons_the_owners` | L11: the group's lend guard dropped armed poisons, and the waiting owner reads Poisoned. | `driver_core_silent_poison.rs`. Witness: "the queued owner reads Poisoned". |
 | `an_abandoned_lend_poisons_the_queued_group` | L12: an owner's abandoned lend poisons, and the queued group reads Poisoned on its own channel. | `driver_core_silent_poison.rs` (its third anchor drops the group's fan-out). Witness: "the queued group reads Poisoned". |
 | `a_collecting_group_resumes_before_any_other_turn` | L13 (L6.7b b5, QB3): the group's turn comes back asking for a collection while an owner is queued behind it; the next stop collects first and lends the group the World again before the owner, in that same stop. | `control_requeue_tail.rs`: the group is re-queued at the tail. Witness: "the collecting group resumes next". |
+| `an_owner_request_during_the_world_raises_the_waiter_word` | L14 (L6.7b b4.1, QB2): the group holds the World when the owner asks; the keeper raises the group's waiter word, the group sees it within `WAIT_YIELDS` switch points and ends its interval, and the owner is lent next. Nobody waited at the lend, so the interval starts lowered. | `driver_core_silent_waiter.rs`: the request is committed but the word stays down. Witness: "the waiter word was never raised". |
 
 ## Run it
 

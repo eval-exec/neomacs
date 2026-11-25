@@ -17,7 +17,7 @@ use super::keeper_custody::{
 use super::owned_source::KeeperEra;
 use super::serial_park::{Grant, KeeperPort, LendGuard, PortRefusal};
 use super::serial_ticket::{ReceiveReason, SerialLendHeld, StoppedSerialTicket};
-use super::sync::mpsc;
+use super::sync::{Arc, mpsc};
 use super::world_turn::{WorldReturned, WorldTurn, WorldTurnIdentity};
 use neovm_value::tagged::gc::heap_transfer::{PublishedOwner, with_stop_scope};
 use neovm_value::tagged::gc::{
@@ -499,6 +499,7 @@ impl Drop for WorldLend {
 pub(crate) struct GroupPort {
     inbox: mpsc::Sender<KeeperMsg>,
     world: mpsc::Receiver<GroupMsg>,
+    waiter: Arc<driver_core::RingWaiter>,
 }
 
 #[cfg_attr(
@@ -506,8 +507,23 @@ pub(crate) struct GroupPort {
     expect(dead_code, reason = "L6.7b b4 (Green switch points) is the caller")
 )]
 impl GroupPort {
-    pub(crate) fn new(inbox: mpsc::Sender<KeeperMsg>, world: mpsc::Receiver<GroupMsg>) -> Self {
-        Self { inbox, world }
+    /// WAITER is the word `Driver::enroll_group` returned for this group.
+    pub(crate) fn new(
+        inbox: mpsc::Sender<KeeperMsg>,
+        world: mpsc::Receiver<GroupMsg>,
+        waiter: Arc<driver_core::RingWaiter>,
+    ) -> Self {
+        Self {
+            inbox,
+            world,
+            waiter,
+        }
+    }
+
+    /// Whether another client waits behind this group's interval (L6.7b
+    /// b4.1, QB2): one Acquire load, for the Green switch points.
+    pub(crate) fn ring_waiter(&self) -> bool {
+        self.waiter.raised()
     }
 
     /// Ask for the World and wait for it. The era being poisoned, or the
@@ -515,14 +531,23 @@ impl GroupPort {
     pub(crate) fn request_world(
         &mut self,
     ) -> Result<(WorldTurn, NonZeroU64, WorldLend), PortRefusal> {
-        if self.inbox.send(KeeperMsg::BatonRequest).is_err() {
-            return Err(PortRefusal::Poisoned);
-        }
+        self.request()?;
         self.await_world()
     }
 
+    /// Ask for the World without waiting. The group's coalesced request
+    /// (b4.3): the Baton thread that asks need not be the one that receives
+    /// the World.
+    pub(crate) fn request(&self) -> Result<(), PortRefusal> {
+        self.inbox
+            .send(KeeperMsg::BatonRequest)
+            .map_err(|_| PortRefusal::Poisoned)
+    }
+
     /// The next World turn the keeper lends this group.
-    fn await_world(&mut self) -> Result<(WorldTurn, NonZeroU64, WorldLend), PortRefusal> {
+    pub(crate) fn await_world(
+        &mut self,
+    ) -> Result<(WorldTurn, NonZeroU64, WorldLend), PortRefusal> {
         match self.world.recv() {
             Ok(driver_core::GroupMsg::World { turn, epoch }) => Ok((
                 turn,

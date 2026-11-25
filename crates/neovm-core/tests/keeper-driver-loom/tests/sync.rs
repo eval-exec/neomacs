@@ -18,7 +18,9 @@
 //! answer per request, plus the poison fan-out's `try_send`, so a blocking
 //! send on a full grant channel would itself be a protocol break.
 
-use loom::sync::{Arc, Mutex, MutexGuard};
+pub use loom::sync::Arc;
+pub use loom::sync::atomic;
+use loom::sync::{Mutex, MutexGuard};
 use loom::thread::Thread;
 use std::collections::VecDeque;
 use std::time::Duration;

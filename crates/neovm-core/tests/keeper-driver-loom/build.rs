@@ -77,6 +77,16 @@ fn main() {
         ),
     );
 
+    // N-L14: an owner's request during the World leaves the waiter word down.
+    write(
+        &out,
+        "driver_core_silent_waiter.rs",
+        &mutate(
+            &core,
+            "                    self.commit(owner, receipt)?;\n                    self.set_waiter(true);\n",
+            "                    self.commit(owner, receipt)?;\n",
+        ),
+    );
     // N-L7: the grant goes to another enrolled owner.
     write(
         &out,

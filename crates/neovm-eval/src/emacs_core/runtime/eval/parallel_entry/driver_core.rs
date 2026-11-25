@@ -339,6 +339,7 @@ struct Enrolled<O: KeeperOps> {
 struct Group<O: KeeperOps> {
     grants: mpsc::SyncSender<GroupOf<O>>,
     request: GroupRequest,
+    waiter: sync::Arc<RingWaiter>,
 }
 
 /// Whether the group's one request is in the ring.
@@ -346,6 +347,28 @@ struct Group<O: KeeperOps> {
 enum GroupRequest {
     None,
     Queued,
+}
+
+/// The Baton group's "the ring has a waiter" word (L6.7b b4.1, QB2). The
+/// keeper raises it while the group holds the World and another client (a
+/// parallel owner's request or a collection) is waiting, and lowers it when
+/// the World comes back. The group reads it at each switch point with one
+/// Acquire load: no lock, no syscall.
+pub(crate) struct RingWaiter(sync::atomic::AtomicBool);
+
+impl RingWaiter {
+    fn new() -> Self {
+        Self(sync::atomic::AtomicBool::new(false))
+    }
+
+    /// Whether a client is waiting behind the group's interval.
+    pub(crate) fn raised(&self) -> bool {
+        self.0.load(sync::atomic::Ordering::Acquire)
+    }
+
+    fn set(&self, raised: bool) {
+        self.0.store(raised, sync::atomic::Ordering::Release);
+    }
 }
 
 /// Called after each pending stop attempt, once the keeper has served its
@@ -422,12 +445,26 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
     }
 
     /// Enroll the Baton group before it can request. `grants` is the group's
-    /// own one-slot channel.
-    pub(crate) fn enroll_group(&mut self, grants: mpsc::SyncSender<GroupOf<O>>) {
+    /// own one-slot channel. The returned word is the group's view of the
+    /// ring while it holds the World (b4.1).
+    pub(crate) fn enroll_group(
+        &mut self,
+        grants: mpsc::SyncSender<GroupOf<O>>,
+    ) -> sync::Arc<RingWaiter> {
+        let waiter = sync::Arc::new(RingWaiter::new());
         self.group = Some(Group {
             grants,
             request: GroupRequest::None,
+            waiter: waiter.clone(),
         });
+        waiter
+    }
+
+    /// Raise or lower the group's waiter word.
+    fn set_waiter(&self, raised: bool) {
+        if let Some(group) = &self.group {
+            group.waiter.set(raised);
+        }
     }
 
     /// Requests in the ring: queued owners, and the group's if it has one.
@@ -797,12 +834,16 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
         let (turn, held) = batch
             .lend_world()
             .map_err(|CustodyRefused| Breach::Custody)?;
+        // A client already waiting behind the group's grant ends the
+        // interval at its first switch point (QB2).
+        self.set_waiter(!self.queued.is_empty() || self.collect_requested);
         if self.send_group(GroupMsg::World { turn, epoch }).is_err() {
             // The bounced message drops the turn, and `held` drops the stop
             // with the breach.
             return Err(Breach::GroupUnreachable);
         }
         let (returned, end) = self.await_world()?;
+        self.set_waiter(false);
         let batch = B::settle_world(held, returned, grant).map_err(|settle| match settle {
             Settle::NotTheTicketCut => Breach::GroupUnexpected {
                 message: "a returned World turn that is not the one cut",
@@ -849,7 +890,10 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                         message: "an exit while its turn is out",
                     });
                 }
-                KeeperMsg::Request { owner, receipt } => self.commit(owner, receipt)?,
+                KeeperMsg::Request { owner, receipt } => {
+                    self.commit(owner, receipt)?;
+                    self.set_waiter(true);
+                }
                 KeeperMsg::Exit { owner } => self.exit(owner)?,
                 KeeperMsg::GiveBack { owner, .. } => {
                     return Err(Breach::Unexpected {
@@ -868,7 +912,10 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                 KeeperMsg::Abandon { owner, cause } => {
                     return Err(Breach::Abandoned { owner, cause });
                 }
-                KeeperMsg::Collect { reply } => self.queue_collect(reply),
+                KeeperMsg::Collect { reply } => {
+                    self.queue_collect(reply);
+                    self.set_waiter(true);
+                }
             }
         }
     }

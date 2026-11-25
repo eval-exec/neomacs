@@ -1447,8 +1447,8 @@ const R: u64 = 7206;
 /// Enroll the Baton group with the driver; its port crosses to the runner.
 fn enroll_group(driver: &mut Driver<'_, '_, '_>, inbox: &mpsc::Sender<KeeperMsg>) -> GroupPort {
     let (world_tx, world) = mpsc::sync_channel(1);
-    driver.enroll_group(world_tx);
-    GroupPort::new(inbox.clone(), world)
+    let waiter = driver.enroll_group(world_tx);
+    GroupPort::new(inbox.clone(), world, waiter)
 }
 
 /// L6.7b b3. The Baton group and an owner are both lent through the
@@ -1579,6 +1579,76 @@ fn l67b_no_parallel_owner_runs_while_the_group_holds_the_world() {
                 "no parallel owner ran while the group held the World"
             );
             assert_eq!(end, DriverEnd::Drained);
+        });
+    });
+}
+
+/// L6.7b b4.1 (QB2). The group and O are both committed before the stop,
+/// group first, so O waits behind the group's interval. The keeper lends
+/// the World with the group's waiter word raised, and the group reads it
+/// with one Acquire load, as a Green switch point will. The World coming
+/// back lowers it, so the group's next interval, with nobody behind it,
+/// starts lowered. (No owner can ask during the interval itself: the keeper
+/// holds the stop. Loom L14 covers a request that arrives late.)
+#[test]
+fn l67b_a_waiting_owner_raises_the_group_waiter_word() {
+    with_live_era("l67b-waiter", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let o = enroll_driver(era, &mut driver, &inbox, O);
+        let mut group = enroll_group(&mut driver, &inbox);
+        drop(inbox);
+        // Both requests are in the inbox before the keeper runs, group first.
+        group.request().ok().expect("the group asks");
+        let (requested_tx, requested) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let owner = scope.spawn(move || {
+                let (mut state, home, mut raw, grants) = o.start_raw();
+                let receipt = raw.publish();
+                let (_, generation, _) = receipt.serial_facts();
+                raw.request(receipt);
+                requested_tx.send(()).expect("O asked");
+                let Ok(GrantMsg::Grant { ticket, epoch }) = grants.recv_timeout(BOUND) else {
+                    panic!("O is granted after the group");
+                };
+                let mut port = raw.port();
+                let grant = Grant {
+                    ticket,
+                    generation,
+                    epoch,
+                };
+                raw_turn(&mut state, home, &mut port, grant, "(setq sp-live 41)");
+                raw.inbox
+                    .send(KeeperMsg::Exit { owner: O })
+                    .expect("O exits");
+                retire(raw.mutator);
+            });
+            requested.recv_timeout(BOUND).expect("O's request is in");
+            let runner = scope.spawn(move || {
+                let (turn, _epoch, lend) = group
+                    .await_world()
+                    .ok()
+                    .expect("the group is lent the World");
+                let behind = group.ring_waiter();
+                group.give_back(lend, WorldReturned::from_end(turn));
+                let (turn, _epoch, lend) = group
+                    .request_world()
+                    .ok()
+                    .expect("the group is lent the World again");
+                let alone = group.ring_waiter();
+                group.give_back(lend, WorldReturned::from_end(turn));
+                group.exit();
+                (behind, alone)
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            owner.join().expect("O");
+            let (behind, alone) = runner.join().expect("the group");
+            assert!(
+                behind,
+                "an owner waiting behind the group raises its waiter word"
+            );
+            assert!(!alone, "an interval nobody waits behind starts lowered");
         });
     });
 }

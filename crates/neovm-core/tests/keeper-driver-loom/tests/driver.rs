@@ -97,6 +97,19 @@ mod pending_poisons {
     include!("model.rs");
 }
 
+/// N-L14: an owner's request during the World leaves the waiter word down.
+#[allow(dead_code, unused)]
+mod silent_waiter {
+    use crate::sync;
+    mod control {
+        include!(concat!(env!("OUT_DIR"), "/control.rs"));
+    }
+    mod driver_core {
+        include!(concat!(env!("OUT_DIR"), "/driver_core_silent_waiter.rs"));
+    }
+    include!("model.rs");
+}
+
 /// N-L7: the grant goes to another enrolled owner.
 #[allow(dead_code, unused)]
 mod misrouted_grant {
@@ -222,4 +235,16 @@ fn a_collecting_group_resumes_before_any_other_turn() {
 #[should_panic(expected = "the collecting group resumes next")]
 fn negative_a_tail_requeue_lets_the_owner_in_first() {
     requeue_tail::a_collecting_group_resumes_before_any_other_turn();
+}
+
+/// L14 (L6.7b b4.1).
+#[test]
+fn an_owner_request_during_the_world_raises_the_waiter_word() {
+    real::an_owner_request_during_the_world_raises_the_waiter_word();
+}
+
+#[test]
+#[should_panic(expected = "the waiter word was never raised")]
+fn negative_a_silent_waiter_word_keeps_the_owner_waiting() {
+    silent_waiter::an_owner_request_during_the_world_raises_the_waiter_word();
 }
