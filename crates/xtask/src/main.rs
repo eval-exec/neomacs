@@ -42,7 +42,7 @@ use std::fs;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write as IoWrite};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::Instant;
 
 use production_capabilities::ProductionCapabilities;
@@ -1109,7 +1109,7 @@ fn run_fresh_build_pipeline(
     // generated subdirectory metadata.
     run_update_subdirs(options, &paths)?;
 
-    run_command(
+    run_captured_step(
         options,
         &options.repo_root,
         &paths.temacs,
@@ -1150,7 +1150,7 @@ fn run_fresh_build_pipeline(
         // picks up the .elc files from previous compilations.
         for source in &compile_first_sources {
             let compile_args = compile_first_args_for_source(options.native_comp, source);
-            run_command(
+            run_captured_step(
                 options,
                 &options.repo_root,
                 &paths.bootstrap,
@@ -1226,7 +1226,7 @@ fn run_fresh_build_pipeline(
     // a required seed.  If obsolete secondary outputs ever need pruning, the
     // generator must first expose a manifest and pruning must consume a
     // successful-generation proof after this command returns.
-    run_command(
+    run_captured_step(
         options,
         &options.repo_root,
         &paths.bootstrap,
@@ -1309,7 +1309,7 @@ fn run_fresh_build_pipeline(
     // xtask only sets the env here + verifies the artifacts afterward.
     let pdump_envs = aot_preload_dump_envs(options, &envs);
     prepare_aot_preload_artifacts(options, &paths)?;
-    run_command(
+    run_captured_step(
         options,
         &options.repo_root,
         &paths.temacs,
@@ -1763,7 +1763,7 @@ fn run_unidata_lisp_generation(
             OsString::from("batch-byte-compile"),
             unidata_gen.as_os_str().to_os_string(),
         ];
-        run_command(options, &options.repo_root, &paths.bootstrap, &args, envs)?;
+        run_captured_step(options, &options.repo_root, &paths.bootstrap, &args, envs)?;
     }
 
     if unifiles_need_rebuild {
@@ -1997,7 +1997,7 @@ fn run_unidata_generator_function(
     );
     args.push(output.as_os_str().to_os_string());
     args.extend(extra_args.iter().cloned());
-    let result = run_command(options, &options.repo_root, &paths.bootstrap, &args, envs);
+    let result = run_captured_step(options, &options.repo_root, &paths.bootstrap, &args, envs);
     if result.is_err() && !options.dry_run {
         // Same partial-output rule as `run_generated_lisp_jobs`.
         let _ = fs::remove_file(output);
@@ -2154,13 +2154,14 @@ fn run_generated_lisp_jobs(
             .collect());
     }
 
+    let started = Instant::now();
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(jobs.len().min(compile_main_jobs()).max(1))
         .build()?;
-    Ok(pool.install(|| {
+    let errors: Vec<String> = pool.install(|| {
         jobs.par_iter()
             .filter_map(|job| {
-                run_command(
+                run_captured_wave_job(
                     options,
                     &options.repo_root,
                     &paths.bootstrap,
@@ -2179,7 +2180,15 @@ fn run_generated_lisp_jobs(
                 })
             })
             .collect()
-    }))
+    });
+    println!(
+        "  INFO  finished {} generated Lisp job{} ({} failed) in {}ms",
+        jobs.len(),
+        if jobs.len() == 1 { "" } else { "s" },
+        errors.len(),
+        started.elapsed().as_millis(),
+    );
+    Ok(errors)
 }
 
 fn generated_lisp_failure_summary(errors: &[String]) -> String {
@@ -2326,12 +2335,13 @@ fn run_leim_generation_jobs(
             .collect());
     }
 
+    let started = Instant::now();
     let pool = rayon::ThreadPoolBuilder::new().num_threads(jobs).build()?;
-    Ok(pool.install(|| {
+    let errors: Vec<String> = pool.install(|| {
         jobs_to_run
             .par_iter()
             .filter_map(|job| {
-                run_command(
+                run_captured_wave_job(
                     options,
                     &options.repo_root,
                     &paths.bootstrap,
@@ -2342,7 +2352,15 @@ fn run_leim_generation_jobs(
                 .map(|err| format!("{} ({err})", job.source.display()))
             })
             .collect()
-    }))
+    });
+    println!(
+        "  INFO  finished {} LEIM generation job{} ({} failed) in {}ms",
+        jobs_to_run.len(),
+        if jobs_to_run.len() == 1 { "" } else { "s" },
+        errors.len(),
+        started.elapsed().as_millis(),
+    );
+    Ok(errors)
 }
 
 fn leim_generation_failure_summary(errors: &[String]) -> String {
@@ -2376,7 +2394,7 @@ fn run_leim_list_generation(
     }
 
     let args = leim_list_generation_args(&leim_dir);
-    run_command(options, &options.repo_root, &paths.bootstrap, &args, envs)?;
+    run_captured_step(options, &options.repo_root, &paths.bootstrap, &args, envs)?;
     if !options.dry_run {
         append_leim_ext(&output, &leim_ext)?;
     }
@@ -2504,7 +2522,7 @@ fn run_semantic_grammar_generation(
         ensure_output_parent(options, &target.output)?;
         make_output_writable(options, &target.output)?;
         let args = semantic_grammar_args(target.kind, &target.output, &target.source);
-        run_command(options, &options.repo_root, &paths.bootstrap, &args, envs)?;
+        run_captured_step(options, &options.repo_root, &paths.bootstrap, &args, envs)?;
         generated += 1;
     }
     Ok(())
@@ -3393,6 +3411,23 @@ fn path_lookup_candidate_names_with(program: &str, pathext: Option<&OsStr>) -> V
     }
 }
 
+const CAPTURED_OUTPUT_TAIL_BYTES: usize = 16 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommandExecutionMode {
+    /// Stream child stdio directly to the parent (Cargo builds, interactive steps).
+    Inherit,
+    /// Detach stdin and sink combined stdout/stderr into an unlinked temporary
+    /// file (`tempfile::tempfile()`), logging concise start/completion lines.
+    /// Regular files never block on an undrained pty (`file_tty_write`) or a
+    /// fixed-capacity pipe; on failure the bounded output tail is attached.
+    CapturedStep,
+    /// Same unlinked-file stdio isolation as `CapturedStep`, but silent per
+    /// job on success so parallel wave coordinators emit one summary line per
+    /// wave instead of flooding stdout from N concurrent workers.
+    CapturedWaveJob,
+}
+
 fn run_command(
     options: &FreshBuildOptions,
     cwd: &Path,
@@ -3400,7 +3435,61 @@ fn run_command(
     args: &[OsString],
     envs: &[(OsString, OsString)],
 ) -> Result<()> {
-    print_command(program.as_os_str(), args);
+    run_command_with_mode(
+        options,
+        cwd,
+        program,
+        args,
+        envs,
+        CommandExecutionMode::Inherit,
+    )
+}
+
+fn run_captured_step(
+    options: &FreshBuildOptions,
+    cwd: &Path,
+    program: &Path,
+    args: &[OsString],
+    envs: &[(OsString, OsString)],
+) -> Result<()> {
+    run_command_with_mode(
+        options,
+        cwd,
+        program,
+        args,
+        envs,
+        CommandExecutionMode::CapturedStep,
+    )
+}
+
+fn run_captured_wave_job(
+    options: &FreshBuildOptions,
+    cwd: &Path,
+    program: &Path,
+    args: &[OsString],
+    envs: &[(OsString, OsString)],
+) -> Result<()> {
+    run_command_with_mode(
+        options,
+        cwd,
+        program,
+        args,
+        envs,
+        CommandExecutionMode::CapturedWaveJob,
+    )
+}
+
+fn run_command_with_mode(
+    options: &FreshBuildOptions,
+    cwd: &Path,
+    program: &Path,
+    args: &[OsString],
+    envs: &[(OsString, OsString)],
+    mode: CommandExecutionMode,
+) -> Result<()> {
+    if options.dry_run || mode != CommandExecutionMode::CapturedWaveJob {
+        print_command(program.as_os_str(), args);
+    }
     if options.dry_run {
         return Ok(());
     }
@@ -3416,23 +3505,82 @@ fn run_command(
         remove_outer_cargo_env(&mut command);
     }
 
+    let mut capture = match mode {
+        CommandExecutionMode::Inherit => None,
+        CommandExecutionMode::CapturedStep | CommandExecutionMode::CapturedWaveJob => {
+            let file = tempfile::tempfile()?;
+            let stdout_file = file.try_clone()?;
+            let stderr_file = file.try_clone()?;
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(stdout_file))
+                .stderr(Stdio::from(stderr_file));
+            Some(file)
+        }
+    };
+
     let status = command.status()?;
     let elapsed_ms = started.elapsed().as_millis();
-    let args_str = args
-        .iter()
-        .map(|a| a.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join(" ");
-    println!(
-        "  INFO  [{program_name:?} {args_str}] exited with {} in {elapsed_ms}ms",
-        status
-            .code()
-            .map_or_else(|| "signal".to_string(), |c| c.to_string()),
-    );
+    if mode != CommandExecutionMode::CapturedWaveJob {
+        let args_str = args
+            .iter()
+            .map(|a| a.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
+        println!(
+            "  INFO  [{program_name:?} {args_str}] exited with {} in {elapsed_ms}ms",
+            status
+                .code()
+                .map_or_else(|| "signal".to_string(), |c| c.to_string()),
+        );
+    }
     if !status.success() {
+        if let Some(file) = capture.as_mut() {
+            let tail = read_captured_tail(file, CAPTURED_OUTPUT_TAIL_BYTES)
+                .unwrap_or_else(|err| format!("<failed to read captured output: {err}>"));
+            return Err(command_failure_with_output(program, args, status, &tail).into());
+        }
         return Err(command_failure(program, args, status).into());
     }
     Ok(())
+}
+
+fn read_captured_tail(file: &mut fs::File, max_bytes: usize) -> std::io::Result<String> {
+    let len = file.seek(SeekFrom::End(0))?;
+    if len == 0 {
+        return Ok(String::new());
+    }
+    let start = len.saturating_sub(max_bytes as u64);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::with_capacity((len - start) as usize);
+    file.read_to_end(&mut bytes)?;
+    let text = String::from_utf8_lossy(&bytes);
+    if start > 0 {
+        Ok(format!(
+            "[captured output truncated: showing last {} of {} bytes]\n{}",
+            bytes.len(),
+            len,
+            text
+        ))
+    } else {
+        Ok(text.into_owned())
+    }
+}
+
+fn command_failure_with_output(
+    program: &Path,
+    args: &[OsString],
+    status: ExitStatus,
+    captured: &str,
+) -> String {
+    let mut rendered = command_failure(program, args, status);
+    let trimmed = captured.trim_end();
+    if !trimmed.is_empty() {
+        rendered.push_str("\n--- captured output ---\n");
+        rendered.push_str(trimmed);
+        rendered.push_str("\n--- end captured output ---");
+    }
+    rendered
 }
 
 const BUILD_TIME_EMACS_ENV_VARS: [&str; 2] = ["EMACSLOADPATH", "EMACSNATIVELOADPATH"];
@@ -3881,6 +4029,7 @@ fn run_preloaded_lisp_byte_compile(
             run_preloaded_lisp_byte_compile_source(options, paths, envs, source)?;
         }
     } else {
+        let started = Instant::now();
         let pool = rayon::ThreadPoolBuilder::new().num_threads(jobs).build()?;
         let wave = compile_wave::PlannedWave::create(&paths.lisp_root, &sources)?;
         let errors: Vec<String> = pool.install(|| {
@@ -3893,6 +4042,13 @@ fn run_preloaded_lisp_byte_compile(
                 })
                 .collect()
         });
+        println!(
+            "  INFO  finished {} loadup preloaded .el job{} ({} failed) in {}ms",
+            sources.len(),
+            if sources.len() == 1 { "" } else { "s" },
+            errors.len(),
+            started.elapsed().as_millis(),
+        );
 
         if !errors.is_empty() {
             let retained = wave.retain();
@@ -3963,7 +4119,7 @@ fn scan_compile_main_load_dependencies(
             elisp_string_literal(&output)
         )),
     ];
-    run_command(
+    run_captured_step(
         options,
         &options.repo_root,
         compile_main_emacs(paths),
@@ -4008,6 +4164,7 @@ fn run_compile_main_parallel(
             }));
             continue;
         }
+        let wave_started = Instant::now();
         let wave = compile_wave::PlannedWave::create(&paths.lisp_root, &sources)?;
         let wave_errors: Vec<String> = pool.install(|| {
             wave.jobs()
@@ -4019,6 +4176,13 @@ fn run_compile_main_parallel(
                 })
                 .collect()
         });
+        println!(
+            "  INFO  finished compile-main wave of {} .el file{} ({} failed) in {}ms",
+            sources.len(),
+            if sources.len() == 1 { "" } else { "s" },
+            wave_errors.len(),
+            wave_started.elapsed().as_millis(),
+        );
         if !wave_errors.is_empty() {
             let retained = wave.retain();
             errors.extend(wave_errors);
@@ -4146,7 +4310,7 @@ fn run_preloaded_lisp_byte_compile_source(
     source: &Path,
 ) -> Result<()> {
     let args = preloaded_lisp_args_for_source(options.native_comp, source);
-    run_command(
+    run_captured_step(
         options,
         &options.repo_root,
         bootstrap_byte_compile_emacs(paths),
@@ -4171,7 +4335,7 @@ fn run_byte_compile_source_with(
     source: &Path,
 ) -> Result<()> {
     let args = compile_main_args_for_source(options.native_comp, source);
-    run_command(options, &options.repo_root, program, &args, envs)
+    run_captured_step(options, &options.repo_root, program, &args, envs)
 }
 
 fn run_preloaded_lisp_pending_source(
@@ -4182,7 +4346,7 @@ fn run_preloaded_lisp_pending_source(
 ) -> Result<()> {
     let mut args = preloaded_lisp_args_for_source(options.native_comp, pending.source());
     pending.redirect_args(&mut args)?;
-    run_command(
+    run_captured_wave_job(
         options,
         &options.repo_root,
         bootstrap_byte_compile_emacs(paths),
@@ -4199,7 +4363,7 @@ fn run_final_compile_main_pending_source(
 ) -> Result<()> {
     let mut args = compile_main_args_for_source(options.native_comp, pending.source());
     pending.redirect_args(&mut args)?;
-    run_command(
+    run_captured_wave_job(
         options,
         &options.repo_root,
         compile_main_emacs(paths),
