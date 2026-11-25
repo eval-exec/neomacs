@@ -295,6 +295,27 @@ impl InputScroll {
         Some(window)
     }
 
+    /// Coverage delivery changes no logical frame. Reconcile its replacement
+    /// coordinates explicitly and redraw only when the active projection moves
+    /// to a different immutable publication, offset or certification boundary.
+    pub(in crate::render_thread) fn reconcile_auxiliary(
+        &mut self,
+        retention: &CoverageRetention,
+        frame: Option<&FrameGlyphBuffer>,
+    ) -> bool {
+        let identity = |active: &PendingScroll| {
+            (
+                active.surface.coverage().content.window_id,
+                active.surface.coverage().publication,
+                active.offset.to_bits(),
+                active.presentation,
+            )
+        };
+        let before = self.active.as_ref().map(identity);
+        self.reconcile(retention, frame);
+        before != self.active.as_ref().map(identity)
+    }
+
     pub(in crate::render_thread) fn paint(&mut self, frame: &mut FrameGlyphBuffer) {
         self.staged = Some(None);
         self.staged_tokens.clear();
@@ -387,3 +408,7 @@ impl InputScroll {
 #[cfg(test)]
 #[path = "input_scroll/tests/input_scroll_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "input_scroll/tests/auxiliary_coverage_test.rs"]
+mod auxiliary_coverage_tests;

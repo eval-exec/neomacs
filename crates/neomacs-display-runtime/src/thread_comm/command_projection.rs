@@ -53,6 +53,45 @@ impl RenderCommandSender {
         (Self { sender }, receiver)
     }
 
+    /// Replace a frame's complete desired auxiliary snapshot. Only an empty
+    /// slot queues a wake. Notification and insertion share the lock, so the
+    /// receiver cannot consume a wake before its payload exists. The caller
+    /// notifies the native event loop only after this method returns. `true`
+    /// means a new wake was queued; `false` replaced an already pending slot.
+    /// A full/disconnected queue returns the uncommitted payload unchanged.
+    pub fn publish_scroll_coverage(
+        &self,
+        pending: &std::sync::Mutex<
+            std::collections::HashMap<
+                neomacs_display_protocol::DisplayFrameId,
+                neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+            >,
+        >,
+        update: neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+    ) -> Result<
+        bool,
+        TrySendError<neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage>,
+    > {
+        let mut pending = pending.lock().unwrap();
+        let frame = update.frame;
+        if let std::collections::hash_map::Entry::Occupied(mut entry) = pending.entry(frame) {
+            entry.insert(update);
+            return Ok(false);
+        }
+        // Never block with this guard: the renderer can be waiting to take an
+        // earlier frame's slot while the bounded command queue is full.
+        match self.try_send(RenderCommand::Window(
+            super::WindowCommand::PublishScrollCoverage { frame },
+        )) {
+            Ok(()) => {
+                pending.insert(frame, update);
+                Ok(true)
+            }
+            Err(TrySendError::Full(_)) => Err(TrySendError::Full(update)),
+            Err(TrySendError::Disconnected(_)) => Err(TrySendError::Disconnected(update)),
+        }
+    }
+
     /// Publish once, waiting for room when the bounded channel is full; a
     /// disconnected channel returns the uncommitted command.
     #[inline(always)]

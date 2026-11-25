@@ -46,6 +46,33 @@ impl RenderApp {
     pub(super) fn handle_window(&mut self, cmd: WindowCommand) {
         match cmd {
             WindowCommand::RefreshFrameOpacity => self.refresh_frame_opacity(),
+            WindowCommand::PublishScrollCoverage { frame } => {
+                // Taking releases the native slot lock before admission or any
+                // redraw operation. A racing producer queues its own next wake.
+                if let Some(update) = self.comms.take_scroll_coverage(frame)
+                    && let Some(state) = self.frame_windows.get_mut(frame.get())
+                {
+                    let compositor = &mut state.render.compositor;
+                    let current = compositor.current_frame.as_ref();
+                    let changes = compositor
+                        .coverage_retention
+                        .apply_auxiliary(update, current);
+                    super::frame_stats::AUXILIARY_COVERAGE_CONSERVATIVE_REVOCATIONS.fetch_add(
+                        changes.conservative_revocations as u64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    if changes.changed()
+                        && compositor
+                            .input_scroll
+                            .reconcile_auxiliary(&compositor.coverage_retention, current)
+                    {
+                        compositor.current_scene_generation =
+                            super::frame_state::next_scene_generation();
+                        compositor.current_row_damage = None;
+                        state.render.mark_dirty();
+                    }
+                }
+            }
             WindowCommand::ScrollPreview(intent) => {
                 if let Some(state) = self.frame_windows.get_mut(intent.frame)
                     && matches!(

@@ -2,7 +2,7 @@ use super::*;
 use neomacs_display_protocol::input_progress::{InputProgress, InputStream};
 use neomacs_display_protocol::*;
 
-fn frame(presentation: u64, displacement: f32, epoch: u64) -> FrameGlyphBuffer {
+pub(super) fn frame(presentation: u64, displacement: f32, epoch: u64) -> FrameGlyphBuffer {
     frame_with_prediction(presentation, displacement, epoch, true)
 }
 
@@ -109,7 +109,7 @@ fn install_retention(frames: &[&FrameGlyphBuffer]) -> CoverageRetention {
     retention
 }
 
-fn point(frame: &FrameGlyphBuffer, y: f32) -> PresentationFramePoint {
+pub(super) fn point(frame: &FrameGlyphBuffer, y: f32) -> PresentationFramePoint {
     InteractionProjection::settled(frame.presentation_id)
         .map(GeometryPoint::<RootSurfaceSpace, LogicalPixels>::from_px(1.0, y).unwrap())
         .unwrap()

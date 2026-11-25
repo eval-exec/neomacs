@@ -5,6 +5,8 @@ use neomacs_display_protocol::*;
 fn surface_frame(presentation: u64, window: u64, epoch: u64) -> FrameGlyphBuffer {
     let mut frame = FrameGlyphBuffer::with_size(100.0, 100.0);
     frame.presentation_id = PresentationId::new(presentation);
+    frame.char_width = 10.0;
+    frame.char_height = 10.0;
     frame.scroll_surfaces = vec![surface(window, epoch, presentation)];
     frame
 }
@@ -263,4 +265,114 @@ fn windows_expire_independently() {
             .certified_epoch_at(PresentationId::new(2), DisplayWindowId::new(8), 5)
             .is_none()
     );
+}
+
+fn auxiliary(base: u64, surfaces: Vec<Arc<ScrollSurface>>) -> AuxiliaryScrollCoverage {
+    AuxiliaryScrollCoverage {
+        frame: DisplayFrameId::new(0),
+        base: PresentationId::new(base),
+        surfaces,
+    }
+}
+
+#[test]
+fn auxiliary_exact_base_installs_new_publications_without_a_logical_frame() {
+    let first = surface_frame(1, 7, 3);
+    let second = surface_frame(1, 7, 3);
+    let first_id = first.scroll_surfaces[0].coverage().publication;
+    let second_id = second.scroll_surfaces[0].coverage().publication;
+    let window = DisplayWindowId::new(7);
+    let mut retention = CoverageRetention::default();
+    retention.refresh(&first);
+    let changes =
+        retention.apply_auxiliary(auxiliary(1, second.scroll_surfaces.clone()), Some(&first));
+    assert_eq!(
+        changes,
+        AuxiliaryCoverageChanges {
+            installed: 1,
+            revoked: 0,
+            conservative_revocations: 0,
+        }
+    );
+    assert!(
+        retention
+            .certified_publication_at(first.presentation_id, window, 3, first_id)
+            .is_none()
+    );
+    assert!(
+        retention
+            .certified_publication_at(first.presentation_id, window, 3, second_id)
+            .is_some()
+    );
+    assert!(
+        !retention
+            .apply_auxiliary(auxiliary(1, second.scroll_surfaces.clone()), Some(&first))
+            .changed()
+    );
+}
+
+#[test]
+fn auxiliary_wrong_base_revokes_absent_newer_epochs_but_never_installs() {
+    let stale = surface_frame(1, 7, 3);
+    let mut current = surface_frame(2, 7, 9);
+    current.scroll_surfaces.push(surface(8, 10, 2));
+    let current_id = current.scroll_surfaces[0].coverage().publication;
+    let mut retention = CoverageRetention::default();
+    retention.refresh(&current);
+    let changes = retention.apply_auxiliary(auxiliary(1, stale.scroll_surfaces), Some(&current));
+    assert_eq!(
+        changes,
+        AuxiliaryCoverageChanges {
+            installed: 0,
+            revoked: 1,
+            conservative_revocations: 1,
+        }
+    );
+    assert!(
+        retention
+            .certified_publication_at(
+                current.presentation_id,
+                DisplayWindowId::new(7),
+                9,
+                current_id
+            )
+            .is_some()
+    );
+    assert!(
+        retention
+            .certified_at(current.presentation_id, DisplayWindowId::new(8))
+            .is_none()
+    );
+    let empty = retention.apply_auxiliary(auxiliary(1, Vec::new()), Some(&current));
+    assert_eq!(
+        empty,
+        AuxiliaryCoverageChanges {
+            installed: 0,
+            revoked: 1,
+            conservative_revocations: 1,
+        }
+    );
+    assert!(retention.entries.is_empty());
+}
+
+#[test]
+fn auxiliary_resource_refusal_revokes_its_previous_surface() {
+    let first = surface_frame(1, 7, 3);
+    let mut incompatible = first.clone();
+    incompatible.char_width += 1.0;
+    let mut retention = CoverageRetention::default();
+    retention.refresh(&first);
+    let changes = retention.apply_auxiliary(
+        auxiliary(1, first.scroll_surfaces.clone()),
+        Some(&incompatible),
+    );
+    assert_eq!(
+        changes,
+        AuxiliaryCoverageChanges {
+            installed: 0,
+            revoked: 1,
+            conservative_revocations: 0,
+        }
+    );
+    assert!(retention.entries.is_empty());
 }

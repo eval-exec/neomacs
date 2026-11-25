@@ -94,6 +94,16 @@ pub struct ScrollCoverage {
     pub pointer_source: crate::PresentedPointerSourceMap,
 }
 
+/// Complete desired coverage for one logical frame, delivered without a new
+/// evaluator presentation. Absence revokes a window even when `base` is stale;
+/// installing a surface requires that exact base and its admitted resources.
+#[derive(Clone, Debug)]
+pub struct AuxiliaryScrollCoverage {
+    pub frame: crate::DisplayFrameId,
+    pub base: crate::PresentationId,
+    pub surfaces: Vec<Arc<ScrollSurface>>,
+}
+
 /// Materialized once on frame ingestion, shared by render clones.
 #[derive(Clone, Debug)]
 pub struct ScrollSurface {
@@ -102,6 +112,8 @@ pub struct ScrollSurface {
     fringe_bitmaps: rustc_hash::FxHashMap<u16, crate::frame_glyphs::FringeBitmapData>,
     cell_size: (f32, f32),
     scroll_bars: Vec<crate::glyph_matrix::ScrollBarItem>,
+    scroll_bar_glyphs: Vec<FrameGlyph>,
+    font_catalog_generation: crate::font::FontCatalogGeneration,
 }
 
 #[cfg(test)]
@@ -196,6 +208,52 @@ impl ScrollCoverageAdmission {
 }
 
 impl ScrollCoverage {
+    fn resource_subset(
+        &self,
+        faces: &crate::FrameFaceMap,
+        fonts: &crate::font::ResolvedFontTable,
+        char_fonts: &crate::font::CharFontTable,
+        shaped_clusters: &crate::font::ShapedClusterTable,
+    ) -> bool {
+        self.faces
+            .iter()
+            .all(|(id, face)| faces.get(id) == Some(face))
+            && self
+                .fonts
+                .iter()
+                .all(|(id, font)| fonts.get(id) == Some(font))
+            && self.char_fonts.iter().all(|(face, chars)| {
+                chars.iter().all(|(ch, glyph)| {
+                    char_fonts.get(face).and_then(|table| table.get(ch)) == Some(glyph)
+                })
+            })
+            && self.shaped_clusters.iter().all(|(face, clusters)| {
+                clusters.iter().all(|(text, glyphs)| {
+                    shaped_clusters.get(face).and_then(|table| table.get(text)) == Some(glyphs)
+                })
+            })
+    }
+
+    /// Auxiliary publication cannot extend or replace the base's font/face
+    /// bindings. Nested maps are subsets entry by entry, not just by face ID.
+    pub fn resource_subset_of_frame_state(&self, frame: &FrameDisplayState) -> bool {
+        self.resource_subset(
+            &frame.faces,
+            &frame.fonts,
+            &frame.char_fonts,
+            &frame.shaped_clusters,
+        )
+    }
+
+    pub fn resource_subset_of_frame_buffer(&self, frame: &FrameGlyphBuffer) -> bool {
+        self.resource_subset(
+            &frame.faces,
+            &frame.fonts,
+            &frame.char_fonts,
+            &frame.shaped_clusters,
+        )
+    }
+
     /// Refuse malformed, disjoint, foreign-window or unbounded transport.
     /// Only ordinary text and whitespace are admitted by this first source
     /// domain; media and Lisp strings need their own interaction ownership.
@@ -276,9 +334,12 @@ impl ScrollCoverage {
                 .cloned(),
         );
         let mut glyphs = Vec::with_capacity(glyph_count);
+        let mut scroll_bar_glyphs = Vec::new();
         // Scroll bars supply fringe geometry but remain stationary frame chrome.
         source.for_each_glyph(|glyph| {
-            if !matches!(glyph, FrameGlyph::ScrollBar { .. }) {
+            if matches!(glyph, FrameGlyph::ScrollBar { .. }) {
+                scroll_bar_glyphs.push(glyph);
+            } else {
                 glyphs.push(glyph);
             }
         });
@@ -343,25 +404,53 @@ impl ScrollCoverage {
             fringe_bitmaps,
             cell_size: (frame.char_width, frame.char_height),
             scroll_bars: source.scroll_bars,
+            scroll_bar_glyphs,
+            font_catalog_generation: frame.font_catalog_generation,
         }))
     }
 }
 
 impl ScrollSurface {
-    /// Whether the frame resources read during admission still match: cell
-    /// size, this window's scroll bars, and referenced fringe bitmaps only.
-    /// This grants resource equality, not presentation or coverage freshness;
-    /// a caller reusing across publications must establish those separately.
-    pub fn frame_resources_match(&self, frame: &FrameDisplayState) -> bool {
-        self.cell_size == (frame.char_width, frame.char_height)
-            && self.scroll_bars.iter().eq(frame
-                .scroll_bars
-                .iter()
-                .filter(|bar| bar.window_id == self.coverage.content.window_id))
+    fn metric_and_bitmap_resources_match(
+        &self,
+        cell_size: (f32, f32),
+        catalog: crate::font::FontCatalogGeneration,
+        bitmaps: &rustc_hash::FxHashMap<u16, crate::frame_glyphs::FringeBitmapData>,
+    ) -> bool {
+        self.cell_size == cell_size
+            && self.font_catalog_generation == catalog
             && self
                 .fringe_bitmaps
                 .iter()
-                .all(|(index, bitmap)| frame.fringe_bitmaps.get(index) == Some(bitmap))
+                .all(|(index, bitmap)| bitmaps.get(index) == Some(bitmap))
+    }
+
+    /// Admission's resource footprint, without presentation or source authority.
+    pub fn frame_resources_match(&self, frame: &FrameDisplayState) -> bool {
+        self.metric_and_bitmap_resources_match(
+            (frame.char_width, frame.char_height),
+            frame.font_catalog_generation,
+            &frame.fringe_bitmaps,
+        ) && self.scroll_bars.iter().eq(frame
+            .scroll_bars
+            .iter()
+            .filter(|bar| bar.window_id == self.coverage.content.window_id))
+    }
+
+    /// The same resource proof against the renderer's materialized base. Bars
+    /// are compared in their materialized form captured by the admission walk.
+    pub fn frame_buffer_resources_match(&self, frame: &FrameGlyphBuffer) -> bool {
+        self.metric_and_bitmap_resources_match(
+            (frame.char_width, frame.char_height),
+            frame.font_catalog_generation,
+            &frame.fringe_bitmaps,
+        ) && self
+            .scroll_bar_glyphs
+            .iter()
+            .eq(frame.glyphs.iter().filter(|glyph| {
+                matches!(glyph, FrameGlyph::ScrollBar { window_id, .. }
+                if *window_id == self.coverage.content.window_id)
+            }))
     }
 
     /// A per-publication admission also requires the original presentation.
@@ -375,6 +464,10 @@ impl ScrollSurface {
     }
 
     pub fn coverage(&self) -> &ScrollCoverage {
+        &self.coverage
+    }
+
+    pub fn coverage_arc(&self) -> &Arc<ScrollCoverage> {
         &self.coverage
     }
 
@@ -575,7 +668,7 @@ mod prepared_surface_tests {
     use crate::glyph_matrix::{FringeBitmapInfo, ScrollBarItem};
     use crate::{Color, DisplayWindowId, Face, FaceId, Glyph, GlyphMatrix, GlyphRow, MatrixRow};
 
-    fn frame() -> FrameDisplayState {
+    pub(super) fn frame() -> FrameDisplayState {
         let mut state = FrameDisplayState::new(10, 2, 10.0, 10.0);
         state.presentation_id = crate::PresentationId::new(1);
         let window = DisplayWindowId::new(1);
@@ -996,3 +1089,7 @@ mod prepared_surface_tests {
         assert_eq!(state.prepared_scroll_admission_count(), 1);
     }
 }
+
+#[cfg(test)]
+#[path = "scroll_coverage/tests/auxiliary_resource_test.rs"]
+mod auxiliary_resource_tests;

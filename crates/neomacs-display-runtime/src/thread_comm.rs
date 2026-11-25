@@ -368,6 +368,10 @@ pub enum LifecycleCommand {
 pub enum WindowCommand {
     /// Wake presentation after a synchronous CPU opacity control operation.
     RefreshFrameOpacity,
+    /// Consume the latest complete auxiliary coverage snapshot for this frame.
+    PublishScrollCoverage {
+        frame: neomacs_display_protocol::DisplayFrameId,
+    },
     /// Paint an evaluator-resolved viewport while canonical layout is pending.
     ScrollPreview(neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent),
     /// Scroll blit pixels within pixel buffer
@@ -1062,6 +1066,16 @@ pub struct ThreadComms {
     pub capabilities: Arc<SharedRenderCapabilities>,
     pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
     pub frame_opacity: Arc<Mutex<FrameOpacityState>>,
+    /// Latest complete auxiliary snapshot per logical frame. An occupied
+    /// slot has exactly one queued PublishScrollCoverage wake.
+    pub auxiliary_scroll_coverage: Arc<
+        Mutex<
+            std::collections::HashMap<
+                neomacs_display_protocol::DisplayFrameId,
+                neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+            >,
+        >,
+    >,
     image_decoder: Option<neomacs_renderer_wgpu::ImageDecoder>,
 }
 
@@ -1082,6 +1096,7 @@ impl ThreadComms {
             capabilities,
             tooltip_context: Arc::default(),
             frame_opacity: Arc::default(),
+            auxiliary_scroll_coverage: Arc::default(),
             image_decoder: None,
         }
     }
@@ -1098,6 +1113,7 @@ impl ThreadComms {
         let emacs = EmacsComms {
             tooltip_context: self.tooltip_context.clone(),
             frame_opacity: Arc::clone(&self.frame_opacity),
+            auxiliary_scroll_coverage: Arc::clone(&self.auxiliary_scroll_coverage),
             frame_tx: self.frame_tx,
             cmd_tx: self.cmd_tx,
             input_rx: self.input_rx,
@@ -1109,6 +1125,7 @@ impl ThreadComms {
             image_decoder: self.image_decoder,
             tooltip_context: self.tooltip_context,
             frame_opacity: self.frame_opacity,
+            auxiliary_scroll_coverage: self.auxiliary_scroll_coverage,
             frame_rx: self.frame_rx,
             cmd_rx: self.cmd_rx,
             input_tx: self.input_tx,
@@ -1133,6 +1150,16 @@ pub struct EmacsComms {
     pub capabilities: Arc<SharedRenderCapabilities>,
     pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
     pub frame_opacity: Arc<Mutex<FrameOpacityState>>,
+    /// Latest complete auxiliary snapshot per logical frame. An occupied
+    /// slot has exactly one queued PublishScrollCoverage wake.
+    pub auxiliary_scroll_coverage: Arc<
+        Mutex<
+            std::collections::HashMap<
+                neomacs_display_protocol::DisplayFrameId,
+                neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+            >,
+        >,
+    >,
 }
 
 /// Render thread communication handle
@@ -1145,9 +1172,30 @@ pub struct RenderComms {
     pub capabilities: Arc<SharedRenderCapabilities>,
     pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
     pub frame_opacity: Arc<Mutex<FrameOpacityState>>,
+    /// Latest complete auxiliary snapshot per logical frame. An occupied
+    /// slot has exactly one queued PublishScrollCoverage wake.
+    pub auxiliary_scroll_coverage: Arc<
+        Mutex<
+            std::collections::HashMap<
+                neomacs_display_protocol::DisplayFrameId,
+                neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+            >,
+        >,
+    >,
 }
 
 impl RenderComms {
+    /// Remove under the slot lock; callers apply after this guard is released.
+    pub fn take_scroll_coverage(
+        &self,
+        frame: neomacs_display_protocol::DisplayFrameId,
+    ) -> Option<neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage> {
+        self.auxiliary_scroll_coverage
+            .lock()
+            .unwrap()
+            .remove(&frame)
+    }
+
     fn observe_scroll_input(event: InputEvent) -> InputEvent {
         #[cfg(target_os = "linux")]
         if neomacs_display_protocol::input_latency::enabled() {
@@ -1370,3 +1418,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/positioned_input_test.rs"]
 mod positioned_input_test;
+
+#[cfg(test)]
+#[path = "thread_comm/tests/auxiliary_scroll_coverage_test.rs"]
+mod auxiliary_scroll_coverage_tests;
