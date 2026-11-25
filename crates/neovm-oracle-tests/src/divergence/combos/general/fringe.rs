@@ -796,3 +796,72 @@ fn divergence_measurement_hotpath_textget_and_from_defer_batch() {
         expect,
     );
 }
+
+#[test]
+fn divergence_from_rewind_f5_and_nits_batch() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((5 . 1) (7 . 1) (4 . 1) (5 . 1) (5 . 1) (5 . 1) (4 . 1) (4 . 1) (14 . 1) (14 . 1) (4 . 1) (4 . 1) (6 . 1))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((measure (lambda (setup &optional from to)
+                  (with-temp-buffer
+                    (funcall setup)
+                    (switch-to-buffer (current-buffer))
+                    (window-text-pixel-size nil from to))))
+      (ov (lambda (b e &rest props)
+            (let ((o (make-overlay b e)))
+              (while props (overlay-put o (pop props) (pop props)))
+              o))))
+  (list
+   ;; F5 A1: mid-string newline pops subsequent overlay string
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 1 'priority 1 'before-string "AB\nCD")
+                      (funcall ov 1 1 'priority 2 'before-string "ZZ")))
+   ;; Control A2: trailing newline stops at char 0 of next overlay string
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 1 'before-string "AB\n" 'after-string "CD")))
+   ;; F5 A9: display-string newline inside before-string (string_from_display_prop_p = 1)
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 1 'before-string (propertize "Q" 'display "AB\nCD"))))
+   ;; F5 A11: wrapping single-line before-string (100 chars on 80-col TTY)
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 1 'before-string (make-string 100 ?a))))
+   ;; F5 A11 boundary: 80 chars wraps at col 79 -> mid-string
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 1 'before-string (make-string 80 ?a))))
+   ;; F5 A14: three-overlay mix
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 1 'priority 1 'before-string "AB\n")
+                      (funcall ov 1 1 'priority 2 'before-string "C\nDDDD")
+                      (funcall ov 1 1 'priority 3 'before-string "ZZ")))
+   ;; F5 A17: mid-string newline before-string + overlay display at FROM
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 2 'before-string "AB\nCD" 'display "Q")))
+   ;; F5 B8: mid-line FROM before-string newline + display Q
+   (funcall measure (lambda () (insert "xhello")
+                      (put-text-property 2 3 'display "Q")
+                      (funcall ov 2 2 'before-string "AB\nCD")) 2 nil)
+   ;; N1 H1 & H1f: ((space :align-to 10) ...) after before-string ZZ
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((space :align-to 10) "A\nB"))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((space :align-to 10) (margin left-margin "A\nB")))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   ;; N2 J3 & J4: 9 (raise 0) specs before newline display string
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((raise 0) (raise 0) (raise 0) (raise 0) (raise 0) (raise 0) (raise 0) (raise 0) (raise 0) "A\nB"))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((raise 0) (raise 0) (raise 0) (raise 0) (raise 0) (raise 0) (raise 0) (raise 0) (raise 0) "A\nBCDEFGH"))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   ;; N3 K1: overlay string `when` runs before buffer display at FROM
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display "A\nB")
+                      (funcall ov 1 1 'before-string
+                        (propertize "Z" 'display '(when (progn (put-text-property 1 2 'display "Q") nil) . "X")))))))"#,
+        expect,
+    );
+}

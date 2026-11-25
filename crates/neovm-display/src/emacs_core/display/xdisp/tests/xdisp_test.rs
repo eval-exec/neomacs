@@ -9395,6 +9395,274 @@ fn window_text_pixel_size_hotpath_textget_fallbacks_and_from_defer() {
     );
 }
 
+#[test]
+fn window_text_pixel_size_from_rewind_f5_and_nits() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let run_case = |from: Option<i64>,
+                    to: Option<i64>,
+                    setup: &dyn Fn(&mut neovm_eval::emacs_core::eval::Context, BufferId)|
+     -> (i64, i64) {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        setup(&mut eval, buf_id);
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                from.map(Value::fixnum).unwrap_or(Value::NIL),
+                to.map(Value::fixnum).unwrap_or(Value::NIL),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+    let put_prop = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                    start: i64,
+                    end: i64,
+                    prop: &'static str,
+                    val: Value| {
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                Value::symbol(prop),
+                val,
+            ],
+        )
+        .expect("put-text-property");
+    };
+    let add_ov = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                  start: i64,
+                  end: i64,
+                  props: &[(&'static str, Value)]| {
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(start), Value::fixnum(end)],
+        )
+        .expect("make-overlay");
+        for &(k, v) in props {
+            neovm_edit::emacs_core::buffer::builtin_overlay_put(
+                eval,
+                vec![ov, Value::symbol(k), v],
+            )
+            .expect("overlay-put");
+        }
+    };
+
+    // F5 A1: mid-string newline in priority 1 before-string fails IT_POS_VALID_AFTER_MOVE_P,
+    // so GNU move_it_to(FROM + 0) pops priority 2 "ZZ" too -> (5 . 1).
+    assert_eq!(
+        run_case(None, None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            add_ov(
+                eval,
+                1,
+                1,
+                &[
+                    ("priority", Value::fixnum(1)),
+                    ("before-string", Value::string("AB\nCD")),
+                ],
+            );
+            add_ov(
+                eval,
+                1,
+                1,
+                &[
+                    ("priority", Value::fixnum(2)),
+                    ("before-string", Value::string("ZZ")),
+                ],
+            );
+        }),
+        (5, 1),
+        "A1: mid-string newline pops subsequent overlay string"
+    );
+
+    // F5 A14: trailing newline in prio 1, mid-string newline in prio 2 pops prio 3 "ZZ" -> (5 . 1).
+    assert_eq!(
+        run_case(None, None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            add_ov(
+                eval,
+                1,
+                1,
+                &[
+                    ("priority", Value::fixnum(1)),
+                    ("before-string", Value::string("AB\n")),
+                ],
+            );
+            add_ov(
+                eval,
+                1,
+                1,
+                &[
+                    ("priority", Value::fixnum(2)),
+                    ("before-string", Value::string("C\nDDDD")),
+                ],
+            );
+            add_ov(
+                eval,
+                1,
+                1,
+                &[
+                    ("priority", Value::fixnum(3)),
+                    ("before-string", Value::string("ZZ")),
+                ],
+            );
+        }),
+        (5, 1),
+        "A14: three-overlay mix pops trailing ZZ after mid-string newline"
+    );
+
+    // F5 A11: wrapping single-line before-string (>199 usable cols on 200-col TTY frame)
+    // fails IT_POS_VALID_AFTER_MOVE_P -> popped before buffer text -> (5 . 1).
+    for len in [200usize, 250usize] {
+        assert_eq!(
+            run_case(None, None, &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                add_ov(
+                    eval,
+                    1,
+                    1,
+                    &[("before-string", Value::string("a".repeat(len)))],
+                );
+            }),
+            (5, 1),
+            "A11: wrapping before-string (len={len}) at FROM"
+        );
+    }
+
+    // F5 A9: display string with newline inside overlay before-string sets
+    // string_from_display_prop_p = 1 -> move_it_to(FROM + 1) skips char 1 -> (4 . 1).
+    assert_eq!(
+        run_case(None, None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let q = Value::string("Q");
+            set_string_text_properties_for_value(
+                q,
+                vec![StringTextPropertyRun {
+                    start: 0,
+                    end: 1,
+                    plist: Value::list(vec![sym("display"), Value::string("AB\nCD")]),
+                }],
+            );
+            add_ov(eval, 1, 1, &[("before-string", q)]);
+        }),
+        (4, 1),
+        "A9: display-string newline inside before-string at FROM"
+    );
+
+    // F5 A17: mid-string newline in before-string at FROM + overlay display "Q" on 1..2 -> (4 . 1).
+    assert_eq!(
+        run_case(None, None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            add_ov(
+                eval,
+                1,
+                2,
+                &[
+                    ("before-string", Value::string("AB\nCD")),
+                    ("display", Value::string("Q")),
+                ],
+            );
+        }),
+        (4, 1),
+        "A17: mid-string newline before-string + overlay display at FROM"
+    );
+
+    // F5 B8: mid-line FROM=2 with before-string "AB\nCD" + text-prop display "Q" -> (4 . 1).
+    assert_eq!(
+        run_case(Some(2), None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("xhello");
+            put_prop(eval, 2, 3, "display", Value::string("Q"));
+            add_ov(eval, 2, 2, &[("before-string", Value::string("AB\nCD"))]);
+        }),
+        (4, 1),
+        "B8: mid-line FROM before-string newline + display Q"
+    );
+
+    // N1 H1: ((space :align-to 10) "A\nB") with before-string "ZZ" must see col 2 -> (14 . 1).
+    assert_eq!(
+        run_case(None, None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let spec = Value::list(vec![
+                Value::list(vec![sym("space"), sym(":align-to"), Value::fixnum(10)]),
+                Value::string("A\nB"),
+            ]);
+            put_prop(eval, 1, 2, "display", spec);
+            add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+        }),
+        (14, 1),
+        "H1: space :align-to 10 after before-string ZZ"
+    );
+
+    // N2 J3/J4: 9 non-replacing (raise 0) specs before "A\nB" / "A\nBCDEFGH" + before-string "ZZ" -> (4 . 1).
+    for disp_str in ["A\nB", "A\nBCDEFGH"] {
+        assert_eq!(
+            run_case(None, None, &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                let mut items: Vec<Value> = (0..9)
+                    .map(|_| Value::list(vec![sym("raise"), Value::fixnum(0)]))
+                    .collect();
+                items.push(Value::string(disp_str));
+                put_prop(eval, 1, 2, "display", Value::list(items));
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            }),
+            (4, 1),
+            "J3/J4: long display list before newline string ({disp_str})"
+        );
+    }
+
+    // N3 K1: overlay string runs BEFORE buffer display at FROM, so a side-effecting `when`
+    // in the before-string that replaces pos 1's display with "Q" is observed -> (6 . 1).
+    assert_eq!(
+        run_case(None, None, &|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            put_prop(eval, 1, 2, "display", Value::string("A\nB"));
+            let when_spec = eval
+                .eval_str("'(when (progn (setq buffer-invisibility-spec t) nil) . \"X\")")
+                .expect("when spec");
+            // Also verify direct `put-text-property` mutation in oracle test K1; here verify
+            // overlay-first `when` ordering via `buffer-invisibility-spec` mutation:
+            // before-string `when` enables invisibility for the `\n` in pos 1's display "A\nB",
+            // so no rewind occurs: "Z" (1) + "AB" (2) + "ello" (4) = (7 . 1).
+            let buf = eval.edit.buffers.get_mut(buf_id).unwrap();
+            buf.set_buffer_local("buffer-invisibility-spec", Value::NIL);
+            let disp = Value::string("A\nB");
+            set_string_text_properties_for_value(
+                disp,
+                vec![StringTextPropertyRun {
+                    start: 1,
+                    end: 2,
+                    plist: Value::list(vec![sym("invisible"), Value::T]),
+                }],
+            );
+            put_prop(eval, 1, 2, "display", disp);
+            let z = Value::string("Z");
+            set_string_text_properties_for_value(
+                z,
+                vec![StringTextPropertyRun {
+                    start: 0,
+                    end: 1,
+                    plist: Value::list(vec![sym("display"), when_spec]),
+                }],
+            );
+            add_ov(eval, 1, 1, &[("before-string", z)]);
+        }),
+        (7, 1),
+        "N3: overlay string when runs before buffer display at FROM"
+    );
+}
+
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_test.rs"]
 mod mode_line_min_width_boundary_test;

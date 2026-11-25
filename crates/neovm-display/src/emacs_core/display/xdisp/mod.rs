@@ -1288,23 +1288,24 @@ pub(crate) fn region_text_metrics_with_display(
             .get(buffer_id)
             .filter(|buf| prop_env.buffer_has_no_display_or_invis(buf))
             .map_or(0usize, |_| end);
-        let mut origin_rewind_reset_x = false;
+        let mut from_rewind = FromRewindState::None;
         while scan < end {
             if state.y_limit_reached() {
                 break;
             }
 
-            if state.before_origin() && scan > range.from.get() {
-                if origin_rewind_reset_x {
-                    state.line.restart();
-                    origin_rewind_reset_x = false;
+            if scan > range.from.get() {
+                if from_rewind != FromRewindState::None {
+                    state.reset_after_from_rewind(true);
+                    from_rewind = FromRewindState::None;
+                } else if state.before_origin() {
+                    state.reach_origin();
                 }
-                state.reach_origin();
             }
 
             // Fast path when `scan` lies inside a verified propertyless /
             // non-display / non-invisible interval of an overlay-free buffer.
-            if scan < next_prop_check_byte {
+            if from_rewind == FromRewindState::None && scan < next_prop_check_byte {
                 if state.before_origin() && scan >= range.from.get() {
                     state.reach_origin();
                 }
@@ -1327,7 +1328,8 @@ pub(crate) fn region_text_metrics_with_display(
             // Advance `next_prop_check_byte` across the whole buffer or current
             // interval when the buffer is overlay-free and `textget` is proven
             // plain for `display` and active `invisible`.
-            if let Some(buf) = eval.edit.buffers.get(buffer_id)
+            if from_rewind == FromRewindState::None
+                && let Some(buf) = eval.edit.buffers.get(buffer_id)
                 && buf.overlays().is_empty()
             {
                 let run_end_byte = if prop_env.buffer_has_no_display_or_invis(buf) {
@@ -1360,103 +1362,48 @@ pub(crate) fn region_text_metrics_with_display(
                 }
             }
 
-            let at_origin_rewind = state.before_origin()
-                && scan == range.from.get()
-                && origin_not_after_buffer_newline;
+            let at_origin_rewind = scan == range.from.get() && origin_not_after_buffer_newline;
+            let midline_prefix = range.from > range.line_start;
 
-            if state.before_origin() && scan == range.from.get() && !at_origin_rewind {
+            // When `FROM` is at `line_start` (or immediately after a buffer `\n`),
+            // `origin_x` is 0 so single-line overlay strings and `:align-to` specs
+            // at `FROM` see their real column from 0.  When `FROM > line_start`
+            // (mid-line), keep `before_origin` active across single-line overlay
+            // strings at `FROM` so GNU's `move_it_to(&it, start)` folds them into
+            // `start_x`.
+            if state.before_origin()
+                && scan == range.from.get()
+                && (!at_origin_rewind || !midline_prefix)
+            {
                 state.reach_origin();
             }
-
-            // When BOTH overlay strings and a newline-bearing `display` property
-            // exist at a rewound `FROM`, resolve the `display` property once now
-            // so `keep_before_origin_for_display` follows the *resolved*
-            // `DisplayElement::Text` (not a raw structural prefilter that would
-            // misclassify invisible newlines, false `when` clauses, or margin
-            // specs).  The resolved element is reused below without re-running
-            // any `when` form.
-            let should_pre_resolve_display = at_origin_rewind
-                && eval.edit.buffers.get(buffer_id).is_some_and(|buf| {
-                    !buf.overlays().is_empty()
-                        && !collect_overlay_strings_at(buf, scan, true).is_empty()
-                        && (!prop_env.invis_active()
-                            || invisible_measure_run(
-                                eval,
-                                buf,
-                                scan,
-                                &prop_env.invisible_sym,
-                                prop_env.invis_spec,
-                                end,
-                            )
-                            .is_none())
-                        && raw_display_property_at(eval, buf, scan, &prop_env.display_sym)
-                            .is_some_and(|v| value_contains_newline_string(v, 0))
-                });
-            let pre_resolved_display = if should_pre_resolve_display {
-                let outcome = display_element_run(
-                    eval,
-                    frame,
-                    buffer_id,
-                    scan,
-                    state.line_columns(),
-                    &mut prop_env,
-                    end,
-                )?;
-                if outcome.1 {
-                    next_prop_check_byte = 0;
-                }
-                Some(outcome)
-            } else {
-                None
-            };
-            let keep_before_origin_for_display = matches!(
-                pre_resolved_display,
-                Some((Some((DisplayElement::Text(s), run_end)), _))
-                    if run_end > scan
-                        && display_string_contains_visible_newline(eval, buffer_id, s, &prop_env)
-            );
 
             // GNU's display iterator processes overlay strings anchored at a
             // position *before* the buffer character there: before-strings of
             // overlays starting here, plus after-strings of overlays ending here
             // (see `load_overlay_strings`/`get_overlay_strings` in xdisp.c).  Each
             // contributes its own laid-out columns to the running line width.
-            let overlay_policy = if at_origin_rewind {
-                OriginOverlayPolicy::AtRewoundOrigin {
-                    midline_prefix: range.from > range.line_start,
-                    keep_before_origin_for_display,
-                }
-            } else {
-                OriginOverlayPolicy::Normal
-            };
-            // Root any pre-resolved display string across overlay-string Lisp.
-            let pre_root_scope = if let Some((Some((DisplayElement::Text(s), _)), _)) =
-                pre_resolved_display
-                && s.is_heap_object()
-            {
-                let scope = eval.save_specpdl_roots();
-                eval.push_specpdl_root(s);
-                Some(scope)
-            } else {
-                None
-            };
-            let overlay_res = process_overlay_strings_at(
+            if process_overlay_strings_at(
                 eval,
                 frame,
                 buffer_id,
                 scan,
                 &mut prop_env,
-                overlay_policy,
+                at_origin_rewind,
+                &mut from_rewind,
                 &mut state,
-            );
-            if let Some(scope) = pre_root_scope {
-                eval.restore_specpdl_roots(scope);
-            }
-            if overlay_res? {
+            )? {
                 next_prop_check_byte = 0;
             }
             if state.y_limit_reached() {
                 break;
+            }
+
+            if state.before_origin()
+                && scan == range.from.get()
+                && from_rewind == FromRewindState::None
+            {
+                state.reach_origin();
             }
 
             // GNU's display iterator elides an `invisible` run
@@ -1483,11 +1430,13 @@ pub(crate) fn region_text_metrics_with_display(
             if let Some((invisibility, run_end)) = invisible_run
                 && run_end > scan
             {
-                if state.before_origin() && scan >= range.from.get() {
-                    state.reach_origin();
-                }
-                if invisibility.shows_ellipsis() {
-                    state.push_ellipsis();
+                if from_rewind == FromRewindState::None {
+                    if state.before_origin() && scan >= range.from.get() {
+                        state.reach_origin();
+                    }
+                    if invisibility.shows_ellipsis() {
+                        state.push_ellipsis();
+                    }
                 }
                 state.last_code = None;
                 scan = run_end;
@@ -1499,50 +1448,48 @@ pub(crate) fn region_text_metrics_with_display(
             // a marginal-area spec, or a `(left-fringe ...)` / `(right-fringe ...)`
             // spec -- defines the whole run's extent.  Resolve it once and advance
             // over the run atomically.
-            let (display_run, display_ran_lisp) = match pre_resolved_display {
-                Some(outcome) => outcome,
-                None => display_element_run(
-                    eval,
-                    frame,
-                    buffer_id,
-                    scan,
-                    state.line_columns(),
-                    &mut prop_env,
-                    end,
-                )?,
-            };
+            let (display_run, display_ran_lisp) = display_element_run(
+                eval,
+                frame,
+                buffer_id,
+                scan,
+                state.line_columns(),
+                &mut prop_env,
+                end,
+            )?;
             if display_ran_lisp {
                 next_prop_check_byte = 0;
             }
             if let Some((element, run_end)) = display_run
                 && run_end > scan
             {
-                let nl_origin_display = state.before_origin()
-                    && scan == range.from.get()
-                    && origin_not_after_buffer_newline
-                    && matches!(
-                        element,
-                        DisplayElement::Text(s)
-                            if display_string_contains_visible_newline(
-                                eval,
-                                buffer_id,
-                                s,
-                                &prop_env,
-                            )
-                    );
-                if state.before_origin() && scan >= range.from.get() && !nl_origin_display {
-                    state.reach_origin();
-                }
-                state.push_display_element(eval, buffer_id, element, &prop_env);
-                if nl_origin_display {
-                    origin_rewind_reset_x = true;
+                if at_origin_rewind {
+                    let saved_y_limit = state.y_limit.take();
+                    let breaks_before = state.line_breaks;
+                    let is_text = matches!(element, DisplayElement::Text(_));
+                    state.push_display_element(eval, buffer_id, element, &prop_env);
+                    state.y_limit = saved_y_limit;
+                    if is_text && state.line_breaks > breaks_before {
+                        if !state.glyphs_after_last_break {
+                            state.reset_after_from_rewind(false);
+                            from_rewind = FromRewindState::None;
+                        } else {
+                            from_rewind = FromRewindState::MidDisplayString;
+                        }
+                    }
+                } else {
+                    state.push_display_element(eval, buffer_id, element, &prop_env);
                 }
                 scan = run_end.min(end);
                 continue;
             }
 
-            if state.before_origin() && scan >= range.from.get() {
-                state.reach_origin();
+            if from_rewind == FromRewindState::MidOverlayString {
+                // GNU `move_it_by_lines` -> `move_it_to(FROM + 0)` exits
+                // overlay strings and stops at `GET_FROM_BUFFER` at `FROM`,
+                // resetting `it.current_x = 0` (`src/xdisp.c:11526, 11868`).
+                state.reset_after_from_rewind(true);
+                from_rewind = FromRewindState::None;
             }
 
             let Some(buf) = eval.edit.buffers.get(buffer_id) else {
@@ -1572,23 +1519,18 @@ pub(crate) fn region_text_metrics_with_display(
         // visits positions `scan < end`, so `end` itself is processed exactly once
         // here with the same full `before = true` collection used in the loop body.
         if !state.y_limit_reached() {
-            let at_end_origin_rewind =
-                state.before_origin() && end == range.from.get() && origin_not_after_buffer_newline;
-            let end_policy = if at_end_origin_rewind {
-                OriginOverlayPolicy::AtRewoundOrigin {
-                    midline_prefix: range.from > range.line_start,
-                    keep_before_origin_for_display: false,
-                }
-            } else {
-                OriginOverlayPolicy::Normal
-            };
+            let at_end_origin_rewind = end == range.from.get() && origin_not_after_buffer_newline;
+            if at_end_origin_rewind && state.before_origin() && range.from == range.line_start {
+                state.reach_origin();
+            }
             process_overlay_strings_at(
                 eval,
                 frame,
                 buffer_id,
                 end,
                 &mut prop_env,
-                end_policy,
+                at_end_origin_rewind,
+                &mut from_rewind,
                 &mut state,
             )?;
         }
@@ -1596,10 +1538,9 @@ pub(crate) fn region_text_metrics_with_display(
         // A range that ends where it starts never entered the loop, and one whose
         // last byte is the origin's own character left the origin unreached; both
         // still measure FROM's display line, one of GNU's rewound positions.
-        if state.before_origin() {
-            if origin_rewind_reset_x {
-                state.line.restart();
-            }
+        if from_rewind != FromRewindState::None {
+            state.reset_after_from_rewind(true);
+        } else if state.before_origin() {
             state.reach_origin();
         }
 
@@ -1657,6 +1598,14 @@ struct ScanState {
     line_ascent: f32,
     line_descent: f32,
     last_code: Option<u32>,
+    /// Monotonic count of screen-line breaks (`\n` or soft wrap) taken by this
+    /// scan state, used to detect breaks inside overlay/display strings at `FROM`.
+    line_breaks: u64,
+    /// Whether any visible glyph/stretch/image/margin element has been emitted
+    /// since the last screen-line break.  Mirrors GNU's
+    /// `!IT_POS_VALID_AFTER_MOVE_P` (`IT_STRING_CHARPOS != 0`) after crossing a
+    /// screen-line break inside a string at `FROM`.
+    glyphs_after_last_break: bool,
 }
 
 impl ScanState {
@@ -1686,6 +1635,8 @@ impl ScanState {
             line_ascent: 0.0,
             line_descent: 0.0,
             last_code: None,
+            line_breaks: 0,
+            glyphs_after_last_break: false,
         }
     }
 
@@ -1721,12 +1672,34 @@ impl ScanState {
         self.height = 0.0;
         self.lines = 1;
         self.last_code = None;
+        self.glyphs_after_last_break = false;
         // GNU's "If FROM is on a newline, pretend that we start at the
         // beginning of the next line, because the newline takes no place on
         // display" (src/xdisp.c:11920) zeroes the iterator's x for the walk --
         // but not `start_x`, which was read from the iterator just before.
         if self.origin_is_newline {
             self.line.restart();
+        }
+    }
+
+    /// Apply GNU's post-rewind reset (`window_text_pixel_size`,
+    /// `src/xdisp.c:11867-11868`): discard rewound display lines and reset
+    /// horizontal advance to `x = 0` (`start_x = 0`), keeping the post-break
+    /// baseline split when visible glyphs were consumed after the break.
+    fn reset_after_from_rewind(&mut self, keep_baseline: bool) {
+        self.origin_pos = None;
+        self.origin_x = 0.0;
+        self.crossed_display_line = false;
+        self.y_limit_stop = None;
+        self.max_width = 0.0;
+        self.height = 0.0;
+        self.lines = 1;
+        self.line.restart();
+        self.last_code = None;
+        self.glyphs_after_last_break = false;
+        if !keep_baseline {
+            self.line_ascent = 0.0;
+            self.line_descent = 0.0;
         }
     }
 
@@ -1806,6 +1779,7 @@ impl ScanState {
             }
             DisplayElement::MarginBaseline => {
                 self.note_text_baseline();
+                self.glyphs_after_last_break = true;
                 self.last_code = None;
             }
             DisplayElement::Consumed => {
@@ -1953,6 +1927,7 @@ impl ScanState {
         self.note_text_baseline();
         self.line.pixels += extent.advance.max(0.0);
         self.fold_vertical(extent);
+        self.glyphs_after_last_break = true;
         if self.line_at_limit() {
             self.truncate_at_limit();
         }
@@ -1984,6 +1959,7 @@ impl ScanState {
         {
             self.note_text_baseline();
             self.line.pixels += room;
+            self.glyphs_after_last_break = true;
             self.truncate_at_limit();
             return;
         }
@@ -2001,6 +1977,7 @@ impl ScanState {
                     let available = wrap_at - self.line_width();
                     let advanced = (available / self.cell.width).min(remaining);
                     self.line.columns += advanced;
+                    self.glyphs_after_last_break = true;
                     remaining -= advanced;
                     if remaining > 0.0 {
                         self.soft_wrap();
@@ -2009,6 +1986,7 @@ impl ScanState {
                 }
                 None => {
                     self.line.columns += remaining;
+                    self.glyphs_after_last_break = true;
                     remaining = 0.0;
                 }
             }
@@ -2041,6 +2019,8 @@ impl ScanState {
             // than from FROM.
             self.crossed_display_line = true;
         }
+        self.line_breaks += 1;
+        self.glyphs_after_last_break = false;
         self.lines += 1;
         self.max_width = self.max_width.max(self.line_width());
         self.height += self.line_height();
@@ -2392,57 +2372,6 @@ fn resolve_display_element(
     outcome.map(|el| (el, ran_lisp))
 }
 
-/// Pure lookup of the raw `display` property (overlay or text property) at
-/// buffer byte `pos`, without evaluating any `when` forms.
-fn raw_display_property_at(
-    eval: &neovm_eval::emacs_core::eval::Context,
-    buf: &Buffer,
-    pos: usize,
-    display_sym: &Value,
-) -> Option<Value> {
-    let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(pos));
-    let charpos1 = charpos0.get() as i64 + 1;
-    neovm_edit::emacs_core::textprop::buffer_overlay_property_at_byte_pos(
-        eval.variables(),
-        &eval.edit.buffers,
-        buf,
-        pos,
-        *display_sym,
-        None,
-    )
-    .map(|(v, _)| v)
-    .or_else(|| {
-        let v = neovm_edit::emacs_core::textprop::builtin_get_text_property_in_state(
-            eval.variables(),
-            &eval.edit.buffers,
-            &[Value::fixnum(charpos1), *display_sym],
-        )
-        .ok()?;
-        if v.is_nil() { None } else { Some(v) }
-    })
-}
-
-/// Fast structural check: whether `value` contains any Lisp string with a `\n`
-/// byte (bounded depth so circular lists never loop).
-fn value_contains_newline_string(value: Value, depth: usize) -> bool {
-    if depth >= 8 {
-        return false;
-    }
-    if let Some(s) = value.as_lisp_string() {
-        return s.as_bytes().contains(&b'\n');
-    }
-    if value.is_cons() {
-        return value_contains_newline_string(value.cons_car(), depth + 1)
-            || value_contains_newline_string(value.cons_cdr(), depth + 1);
-    }
-    if let Some(items) = value.as_vector_data() {
-        return items
-            .iter()
-            .any(|&item| value_contains_newline_string(item, depth + 1));
-    }
-    false
-}
-
 /// Whether `string` contains any visible glyph (a non-hidden character or an
 /// ellipsis-producing invisible run) under `buffer_id`'s
 /// `buffer-invisibility-spec`.
@@ -2486,74 +2415,6 @@ fn display_string_produces_glyphs(
             continue;
         }
         return true;
-    }
-    false
-}
-
-/// Whether `string` contains a visible (non-invisible) `\n` character under
-/// `buffer_id`'s `buffer-invisibility-spec`.
-fn display_string_contains_visible_newline(
-    eval: &neovm_eval::emacs_core::eval::Context,
-    buffer_id: BufferId,
-    string: Value,
-    prop_env: &MeasurePropEnv,
-) -> bool {
-    let Some(s) = string.as_lisp_string() else {
-        return false;
-    };
-    let bytes = s.as_bytes();
-    if !bytes.contains(&b'\n') {
-        return false;
-    }
-    let skip_all_invis =
-        match neovm_value::value::borrow_string_text_properties_table_for_value(string) {
-            None => prop_env.propertyless_string_has_no_invis(),
-            Some(table) => prop_env.table_has_no_invis(table),
-        };
-    if skip_all_invis {
-        return true;
-    }
-    let schars = s.schars();
-    let multibyte = s.is_multibyte();
-    let mut char_index = 0usize;
-    let mut byte_off = 0usize;
-    while char_index < schars && byte_off < bytes.len() {
-        if let Some((_, run_end_char)) = string_invisible_measure_run(
-            eval,
-            buffer_id,
-            string,
-            char_index,
-            &prop_env.invisible_sym,
-            prop_env.invis_spec,
-            schars,
-        ) && run_end_char > char_index
-        {
-            let mut skip = run_end_char.min(schars) - char_index;
-            while skip > 0 && byte_off < bytes.len() {
-                let len = if multibyte {
-                    neovm_value::emacs_char::string_char(&bytes[byte_off..])
-                        .1
-                        .max(1)
-                } else {
-                    1
-                };
-                byte_off += len;
-                char_index += 1;
-                skip -= 1;
-            }
-            continue;
-        }
-        let (code, len) = if multibyte {
-            let (code, len) = neovm_value::emacs_char::string_char(&bytes[byte_off..]);
-            (code.code(), len.max(1))
-        } else {
-            (bytes[byte_off] as u32, 1)
-        };
-        if code == '\n' as u32 {
-            return true;
-        }
-        byte_off += len;
-        char_index += 1;
     }
     false
 }
@@ -2959,25 +2820,28 @@ fn collect_overlay_strings_at(buf: &Buffer, pos: usize, before: bool) -> Vec<Ove
     entries
 }
 
-/// How overlay strings anchored at `pos` interact with GNU's `FROM` rewind
-/// (`window_text_pixel_size`, `src/xdisp.c:11867-11912`).
+/// State of GNU's `FROM` rewind (`move_it_by_lines` ->
+/// `IT_POS_VALID_AFTER_MOVE_P` -> `move_it_to(FROM + string_from_display_prop_p)`,
+/// `src/xdisp.c:10071, 11268-11347, 11511-11528, 11867-11912`) while scanning
+/// elements anchored at `FROM`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OriginOverlayPolicy {
-    /// Ordinary position (already past `FROM`, or strictly before `FROM`, or
-    /// `FROM` immediately after a buffer `\n`).
-    Normal,
-    /// Positioned at `FROM` while `state.before_origin()` still holds and
-    /// `FROM` is not immediately after a buffer `\n`.
-    AtRewoundOrigin {
-        /// `FROM > line_start`: GNU's `move_it_to (&it, start, ...)`
-        /// (`src/xdisp.c:11875`) walks even single-line overlay strings at
-        /// `FROM` into `start_x`.
-        midline_prefix: bool,
-        /// A newline-bearing display property at `FROM` may still need to run
-        /// before `reach_origin()`; keep `state.before_origin()` active until
-        /// the display property is resolved.
-        keep_before_origin_for_display: bool,
-    },
+enum FromRewindState {
+    /// No pending mid-string rewind at `FROM`.
+    None,
+    /// A screen-line break (newline or soft wrap) landed mid-string inside an
+    /// overlay string at `FROM` (`!IT_POS_VALID_AFTER_MOVE_P`,
+    /// `string_from_display_prop_p == 0`): consume remaining overlay strings
+    /// and any `invisible` or replacing `display` run at `FROM`, then reset to
+    /// `x = 0` (keeping post-break baseline) before the first ordinary buffer
+    /// character.
+    MidOverlayString,
+    /// A screen-line break landed mid-string inside a `display` string at
+    /// `FROM` (either a buffer/overlay `display` property or a `display`
+    /// property inside an overlay string — `!IT_POS_VALID_AFTER_MOVE_P`,
+    /// `string_from_display_prop_p == 1`): consume through `FROM` (including
+    /// the buffer char/display at `FROM` if still at `FROM`), then reset to
+    /// `x = 0` (keeping post-break baseline) once `scan > FROM`.
+    MidDisplayString,
 }
 
 /// Process the overlay before- and after-strings anchored at buffer byte `pos`,
@@ -2990,7 +2854,8 @@ fn process_overlay_strings_at(
     buffer_id: BufferId,
     pos: usize,
     prop_env: &mut MeasurePropEnv,
-    policy: OriginOverlayPolicy,
+    at_origin_rewind: bool,
+    from_rewind: &mut FromRewindState,
     state: &mut ScanState,
 ) -> Result<bool, Flow> {
     let Some((entries, buf_charpos1)) = eval.edit.buffers.get(buffer_id).and_then(|buf| {
@@ -3015,67 +2880,51 @@ fn process_overlay_strings_at(
             eval.push_specpdl_root(entry.string);
         }
     }
+    let saved_y_limit = if at_origin_rewind {
+        state.y_limit.take()
+    } else {
+        None
+    };
     let outcome = (|| -> Result<bool, Flow> {
-        match policy {
-            OriginOverlayPolicy::Normal => {
-                for entry in entries {
-                    walk_overlay_string(
-                        eval,
-                        frame,
-                        buffer_id,
-                        entry.string,
-                        buf_charpos1,
-                        prop_env,
-                        state,
-                    )?;
-                }
-            }
-            OriginOverlayPolicy::AtRewoundOrigin {
-                midline_prefix,
-                keep_before_origin_for_display,
-            } => {
-                let last_nl_idx = entries.iter().rposition(|entry| {
-                    display_string_contains_visible_newline(eval, buffer_id, entry.string, prop_env)
-                });
-                let reach_before_idx = match last_nl_idx {
-                    Some(idx) => Some(idx + 1),
-                    None if midline_prefix || keep_before_origin_for_display => None,
-                    None => Some(0),
-                };
-                for (idx, entry) in entries.into_iter().enumerate() {
-                    if reach_before_idx == Some(idx) && state.before_origin() {
-                        if last_nl_idx.is_some() {
-                            state.line.restart();
-                        }
-                        if !keep_before_origin_for_display {
-                            state.reach_origin();
-                        }
-                    }
-                    walk_overlay_string(
-                        eval,
-                        frame,
-                        buffer_id,
-                        entry.string,
-                        buf_charpos1,
-                        prop_env,
-                        state,
-                    )?;
-                }
-                if state.before_origin() && !keep_before_origin_for_display {
-                    if last_nl_idx.is_some() {
-                        state.line.restart();
-                    }
-                    state.reach_origin();
+        for entry in entries {
+            let breaks_before = state.line_breaks;
+            let mid_display_break = walk_overlay_string(
+                eval,
+                frame,
+                buffer_id,
+                entry.string,
+                buf_charpos1,
+                prop_env,
+                state,
+            )?;
+            if at_origin_rewind && state.line_breaks > breaks_before {
+                if !state.glyphs_after_last_break {
+                    // The last screen-line break ended right at the end of this
+                    // overlay string: `IT_POS_VALID_AFTER_MOVE_P` holds at char 0
+                    // of the next overlay string (or buffer `FROM`), so reset now.
+                    state.reset_after_from_rewind(false);
+                    *from_rewind = FromRewindState::None;
+                } else if mid_display_break {
+                    *from_rewind = FromRewindState::MidDisplayString;
+                } else {
+                    *from_rewind = FromRewindState::MidOverlayString;
                 }
             }
         }
         Ok(true)
     })();
+    if at_origin_rewind {
+        state.y_limit = saved_y_limit;
+    }
     eval.restore_specpdl_roots(root_scope);
     outcome
 }
 
 /// Walk an overlay string character by character, folding it into `state`.
+///
+/// Returns `true` when the last screen-line break inside this overlay string
+/// landed mid-string inside a nested `display` string (`string_from_display_prop_p
+/// == 1` in GNU `move_it_by_lines`, `src/xdisp.c:11526`).
 ///
 /// The string carries its OWN `invisible` and `display` text properties: an
 /// invisible run is elided (or emits an ellipsis) under the buffer's
@@ -3096,15 +2945,15 @@ fn walk_overlay_string(
     buf_charpos1: i64,
     prop_env: &mut MeasurePropEnv,
     state: &mut ScanState,
-) -> Result<(), Flow> {
+) -> Result<bool, Flow> {
     let Some((schars, byte_len, multibyte)) = string
         .as_lisp_string()
         .map(|s| (s.schars(), s.as_bytes().len(), s.is_multibyte()))
     else {
-        return Ok(());
+        return Ok(false);
     };
     if schars == 0 {
-        return Ok(());
+        return Ok(false);
     }
 
     let skip_all_props =
@@ -3113,11 +2962,12 @@ fn walk_overlay_string(
             Some(table) => prop_env.table_has_no_display_or_invis(table),
         };
     let mut next_prop_check_char = if skip_all_props { schars } else { 0usize };
+    let mut mid_display_break = false;
     let mut char_index = 0usize; // 0-based char position into the string
     let mut byte_off = 0usize;
     while char_index < schars && byte_off < byte_len {
         if state.y_limit_reached() {
-            return Ok(());
+            return Ok(mid_display_break);
         }
 
         if char_index >= next_prop_check_char {
@@ -3159,10 +3009,14 @@ fn walk_overlay_string(
                 && run_end_char > char_index
             {
                 if invisibility.shows_ellipsis() {
+                    let b_before = state.line_breaks;
                     state.push_ellipsis();
+                    if state.line_breaks > b_before {
+                        mid_display_break = false;
+                    }
                 }
                 let Some(bytes) = string.as_lisp_string().map(|s| s.as_bytes()) else {
-                    return Ok(());
+                    return Ok(mid_display_break);
                 };
                 let mut skip = run_end_char.min(schars) - char_index;
                 while skip > 0 && byte_off < bytes.len() {
@@ -3201,9 +3055,14 @@ fn walk_overlay_string(
             if let Some((element, run_end_char)) = display_run
                 && run_end_char > char_index
             {
+                let is_text = matches!(element, DisplayElement::Text(_));
+                let b_before = state.line_breaks;
                 state.push_display_element(eval, buffer_id, element, prop_env);
+                if state.line_breaks > b_before {
+                    mid_display_break = is_text && state.glyphs_after_last_break;
+                }
                 let Some(bytes) = string.as_lisp_string().map(|s| s.as_bytes()) else {
-                    return Ok(());
+                    return Ok(mid_display_break);
                 };
                 // Skip the covered chars (advance both char and byte cursors).
                 let mut skip = run_end_char.min(schars) - char_index;
@@ -3224,7 +3083,7 @@ fn walk_overlay_string(
         }
 
         let Some(bytes) = string.as_lisp_string().map(|s| s.as_bytes()) else {
-            return Ok(());
+            return Ok(mid_display_break);
         };
         if byte_off >= bytes.len() {
             break;
@@ -3235,11 +3094,15 @@ fn walk_overlay_string(
         } else {
             (bytes[byte_off] as u32, 1)
         };
+        let b_before = state.line_breaks;
         state.push_char(code);
+        if state.line_breaks > b_before {
+            mid_display_break = false;
+        }
         byte_off += len;
         char_index += 1;
     }
-    Ok(())
+    Ok(mid_display_break)
 }
 
 /// String-object analogue of [`display_element_run`]: the element an overlay
