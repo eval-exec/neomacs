@@ -2243,15 +2243,35 @@ fn l67a_real_serial_turn_allocation_drives_due_collection() {
                         // keeper is blocked in `await_return` with all other
                         // owners stopped), allocate real vectors on the era's
                         // TaggedHeap until `bytes_since_gc >= gc_threshold`.
+                        // Note: `dormant_state` builds a separate standalone
+                        // `Context` for the turn harness; Lisp-path allocation
+                        // on a same-World `SerialTurn` is tracked separately
+                        // (see lead #14201 / peer #14213 note 3).
                         let mut t1 = driver_turn(state, home, port, "(setq sp-live 91)");
-                        let first_word = {
-                            // SAFETY: this owner holds the serial turn inside
-                            // the keeper's stop; no parallel owner is running
-                            // and the keeper is blocked awaiting `GiveBack`.
+                        let (first_word, threshold) = {
+                            // SAFETY:
+                            // 1. Temporal exclusivity: this owner holds the
+                            //    granted serial turn inside the keeper's stop;
+                            //    no parallel owner is running and the keeper is
+                            //    blocked awaiting `GiveBack`.
+                            // 2. Pointer stability: `heap_addr` was taken from
+                            //    `source.tagged_heap.heap_root()` (`World`'s
+                            //    pinned `AliasableBox`), so moving `Context`
+                            //    into `close(source).prepare_era()` does not
+                            //    move the `TaggedHeap`.
+                            // 3. No aliasing: no `&` or `&mut TaggedHeap`
+                            //    derived from the era's `World` is live across
+                            //    this block (`dormant_state` owns a separate
+                            //    standalone `Context`/`World`).
                             let heap = unsafe {
                                 &mut *(heap_addr as *mut neovm_value::tagged::gc::TaggedHeap)
                             };
                             let threshold = heap.gc_threshold();
+                            assert_eq!(
+                                heap.gc_collections(),
+                                before,
+                                "Stop #1 must not collect while baseline debt is 0"
+                            );
                             assert!(
                                 heap.bytes_since_gc() < threshold,
                                 "turn 1 must start below gc_threshold"
@@ -2260,19 +2280,87 @@ fn l67a_real_serial_turn_allocation_drives_due_collection() {
                             while heap.bytes_since_gc() < threshold {
                                 let v = heap.alloc_vector(vec![Value::NIL; 4096]);
                                 if first.is_none() {
+                                    assert!(
+                                        heap.owns_heap_value_for_test(v),
+                                        "positive control: freshly allocated Turn 1 vector must be owned by era heap"
+                                    );
                                     first = Some(v.bits());
                                 }
                             }
-                            first.expect("allocated at least one vector on era heap")
+                            (
+                                first.expect("allocated at least one vector on era heap"),
+                                threshold,
+                            )
                         };
                         let s1 = t1.with_world(|ev| eval(ev, "sp-live"));
                         assert_eq!(s1, "91");
+                        // End of Turn 1 (after eval, before `t1.end`): prove no
+                        // in-turn collection ran and debt is still >= threshold.
+                        {
+                            // SAFETY: same exclusivity, pinned `heap_root()`
+                            // stability, and non-aliasing invariants as above;
+                            // `t1.with_world` has returned.
+                            let heap = unsafe {
+                                &*(heap_addr as *const neovm_value::tagged::gc::TaggedHeap)
+                            };
+                            assert_eq!(
+                                heap.gc_collections(),
+                                before,
+                                "Turn 1 eval must not run a collection on the era heap"
+                            );
+                            assert!(
+                                heap.bytes_since_gc() >= threshold,
+                                "Turn 1 must end with era heap debt still >= gc_threshold"
+                            );
+                            // SAFETY: `first_word` is a live vector allocated
+                            // on this era heap earlier in Turn 1.
+                            assert!(
+                                heap.owns_heap_value_for_test(unsafe {
+                                    Value::from_bits(first_word)
+                                }),
+                                "Turn 1 vector must remain owned until Stop #2 collects"
+                            );
+                        }
                         t1.end(port).ok().expect("turn 1 ends");
 
                         // Turn 2: no `KeeperMsg::Collect`; Stop #2 observes the
                         // real serial-turn allocation debt via
-                        // `should_collect_stopped` and collects.
-                        let mut t2 = driver_turn(state, home, port, "(setq sp-live 92)");
+                        // `should_collect_stopped` and collects BEFORE Turn 2
+                        // evaluates any Lisp.
+                        let granted2 = port
+                            .request_turn()
+                            .ok()
+                            .expect("the driver grants Turn 2");
+                        let mut t2 = begin_turn(state, home, granted2, port, standalone)
+                            .ok()
+                            .expect("Turn 2 begins");
+                        {
+                            // SAFETY: same exclusivity, pinned `heap_root()`
+                            // stability, and non-aliasing invariants as above;
+                            // Stop #2 has granted Turn 2 and no `with_world`
+                            // borrow is active.
+                            let heap = unsafe {
+                                &*(heap_addr as *const neovm_value::tagged::gc::TaggedHeap)
+                            };
+                            assert_eq!(
+                                heap.gc_collections(),
+                                before + 1,
+                                "Stop #2 must drive the due collection before Turn 2 evaluates any Lisp"
+                            );
+                            assert!(
+                                heap.bytes_since_gc() < threshold,
+                                "Stop #2 collection must reset era heap debt before Turn 2 evaluates"
+                            );
+                            // SAFETY: bit pattern of the unrooted Turn 1 vector
+                            // allocated on this heap (positive-controlled above).
+                            assert!(
+                                !heap.owns_heap_value_for_test(unsafe {
+                                    Value::from_bits(first_word)
+                                }),
+                                "Stop #2 collection must reclaim the unrooted Turn 1 vector before Turn 2 evaluates"
+                            );
+                        }
+                        t2.with_world(|ev| eval(ev, "(setq sp-live 92)"));
                         let s2 = t2.with_world(|ev| eval(ev, "sp-live"));
                         assert_eq!(s2, "92");
                         t2.end(port).ok().expect("turn 2 ends");
