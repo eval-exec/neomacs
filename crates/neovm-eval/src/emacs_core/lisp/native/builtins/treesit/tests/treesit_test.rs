@@ -1247,3 +1247,211 @@ fn treesit_insert_node_rejects_foreign_and_clone_tree_nodes() {
         "insert_node must accept a node belonging to the parser's own live tree"
     );
 }
+
+#[test]
+fn treesit_callbacks_root_values_across_gc_in_sparse_tree_predicates_and_notifiers() {
+    // 1. `build_sparse_tree`: `payload` and accumulated `children` must stay
+    //    rooted across recursive predicate / process_fn callbacks that run GC.
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": [1, 2, 3], "b": [4, 5, 6]}"#);
+    let root =
+        builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root node for json");
+    let pred = eval
+        .eval_str(
+            r#"(lambda (n)
+                 (garbage-collect)
+                 (let ((i 0))
+                   (while (< i 200)
+                     (cons i (concat "junk-" (number-to-string i)))
+                     (setq i (1+ i))))
+                 (or (equal (treesit-node-type n) "array")
+                     (equal (treesit-node-type n) "number")))"#,
+        )
+        .expect("sparse tree predicate");
+    let process_fn = eval
+        .eval_str(
+            r#"(lambda (n)
+                 (garbage-collect)
+                 (let ((i 0))
+                   (while (< i 200)
+                     (cons i (concat "proc-junk-" (number-to-string i)))
+                     (setq i (1+ i))))
+                 (cons (concat "tag-" (treesit-node-type n))
+                       (treesit-node-start n)))"#,
+        )
+        .expect("sparse tree process_fn");
+
+    let tree = builtin_treesit_induce_sparse_tree(&mut eval, vec![root, pred, process_fn])
+        .expect("induce sparse tree across GC");
+    let expected = eval
+        .eval_str(
+            r#"(quote (nil
+                       (("tag-array" . 7)
+                        (("tag-number" . 8))
+                        (("tag-number" . 11))
+                        (("tag-number" . 14)))
+                       (("tag-array" . 23)
+                        (("tag-number" . 24))
+                        (("tag-number" . 27))
+                        (("tag-number" . 30)))))"#,
+        )
+        .expect("expected sparse tree");
+    assert!(
+        neovm_value::value::equal_value(&tree, &expected, 0),
+        "sparse tree corrupted across GC: got {tree:?}"
+    );
+    drop(eval);
+
+    // 2. `predicate_matches_node`: composite `or`/`and` predicate looked up
+    //    from `treesit-thing-settings` must stay rooted even if the first
+    //    branch drops `treesit-thing-settings` and runs GC.
+    let (mut eval, parser) = eval_with_json_parser(r#"[1, 2]"#);
+    let root =
+        builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root node for json");
+    eval.eval_str(
+        r#"(set (make-local-variable 'treesit-thing-settings)
+             (list
+              (list 'json
+                    (list 'gc-thing
+                          (list 'or
+                                (lambda (n)
+                                  (if (equal (treesit-node-type n) "number")
+                                      (progn
+                                        (setq treesit-thing-settings nil)
+                                        (garbage-collect)
+                                        (let ((i 0))
+                                          (while (< i 200)
+                                            (cons i (concat "or-junk-" (number-to-string i)))
+                                            (setq i (1+ i))))))
+                                  nil)
+                                (eval '(let ((target (concat "num" "ber")))
+                                         (lambda (n)
+                                           (equal (treesit-node-type n) target)))
+                                      t))))))"#,
+    )
+    .expect("install thing settings");
+    let found = builtin_treesit_search_subtree(&mut eval, vec![root, Value::symbol("gc-thing")])
+        .expect("search subtree with gc-thing");
+    assert!(
+        !found.is_nil(),
+        "expected second `or` branch to match number"
+    );
+    let found_type = builtin_treesit_node_type(&mut eval, vec![found]).expect("found node type");
+    assert_eq!(
+        found_type.as_utf8_str(),
+        Some("number"),
+        "expected number node from second `or` branch"
+    );
+    drop(eval);
+
+    // 3. `builtin_treesit_parser_changed_regions`: `regions` and copied
+    //    `notifiers` must stay rooted across notifier callbacks that mutate
+    //    the parser's notifier list and run GC.
+    let (mut eval, parser) = eval_with_json_parser(r#"[1]"#);
+    eval.eval_str("(setq neomacs--gc-notifier-log nil)")
+        .expect("init notifier log");
+    eval.eval_str(
+        r#"(defalias 'neomacs--gc-notifier-2
+             (eval '(let ((marker (concat "seen-" "n2")))
+                      (lambda (ranges _parser)
+                        (setq neomacs--gc-notifier-log
+                              (list marker (car (car ranges)) (cdr (car ranges))))))
+                   t))"#,
+    )
+    .expect("notifier2");
+    eval.eval_str(
+        r#"(defalias 'neomacs--gc-notifier-1
+             (lambda (_ranges parser)
+               (treesit-parser-remove-notifier parser 'neomacs--gc-notifier-2)
+               (garbage-collect)
+               (let ((i 0))
+                 (while (< i 200)
+                   (cons i (concat "notif-junk-" (number-to-string i)))
+                   (setq i (1+ i))))))"#,
+    )
+    .expect("notifier1");
+    builtin_treesit_parser_add_notifier(
+        &mut eval,
+        vec![parser, Value::symbol("neomacs--gc-notifier-2")],
+    )
+    .expect("add notifier2");
+    builtin_treesit_parser_add_notifier(
+        &mut eval,
+        vec![parser, Value::symbol("neomacs--gc-notifier-1")],
+    )
+    .expect("add notifier1");
+    // Edit buffer so changed_regions is non-empty.
+    eval.eval_str("(goto-char 3) (insert \", 2\")")
+        .expect("edit json buffer");
+    let regions =
+        builtin_treesit_parser_changed_regions(&mut eval, vec![parser]).expect("changed regions");
+    assert!(
+        regions.is_cons() && regions.cons_car().is_cons(),
+        "returned regions corrupted across GC: {regions:?}"
+    );
+    let log = eval
+        .eval_str("neomacs--gc-notifier-log")
+        .expect("read notifier log");
+    let log_items = neovm_value::value::list_to_vec(&log).expect("notifier log list");
+    assert_eq!(log_items.len(), 3);
+    assert_eq!(log_items[0].as_utf8_str(), Some("seen-n2"));
+    assert!(log_items[1].is_fixnum() && log_items[2].is_fixnum());
+    drop(eval);
+
+    // 4. Pure-Lisp `treesit-induce-sparse-tree` and `treesit-search-forward`
+    //    with `and`/`not` composite predicates and forced GC inside callbacks.
+    let (mut eval, parser) = eval_with_json_parser(r#"{"x": [10, 20]}"#);
+    eval.set_variable("neomacs--gc-parser", parser);
+    let lisp_sparse = eval
+        .eval_str(
+            r#"(treesit-induce-sparse-tree
+                 (treesit-parser-root-node neomacs--gc-parser)
+                 (lambda (n)
+                   (garbage-collect)
+                   (or (equal (treesit-node-type n) "array")
+                       (equal (treesit-node-type n) "number")))
+                 (lambda (n)
+                   (garbage-collect)
+                   (cons (concat "p-" (treesit-node-type n))
+                         (treesit-node-start n))))"#,
+        )
+        .expect("pure-Lisp sparse tree across GC");
+    let expected_lisp_sparse = eval
+        .eval_str(r#"(quote (nil (("p-array" . 7) (("p-number" . 8)) (("p-number" . 12)))))"#)
+        .expect("expected pure-Lisp sparse tree");
+    assert!(
+        neovm_value::value::equal_value(&lisp_sparse, &expected_lisp_sparse, 0),
+        "pure-Lisp sparse tree corrupted across GC: got {lisp_sparse:?}"
+    );
+
+    let lisp_fwd = eval
+        .eval_str(
+            r#"(let* ((root (treesit-parser-root-node neomacs--gc-parser))
+                      (first-num (treesit-search-subtree root "number")))
+                 (set (make-local-variable 'treesit-thing-settings)
+                   (list
+                    (list 'json
+                          (list 'and-thing
+                                (list 'and
+                                      (list 'not
+                                            (lambda (n)
+                                              (if (equal (treesit-node-type n) "number")
+                                                  (progn
+                                                    (setq treesit-thing-settings nil)
+                                                    (garbage-collect)))
+                                              nil))
+                                      (eval '(let ((want (concat "num" "ber")))
+                                               (lambda (n)
+                                                 (equal (treesit-node-type n) want)))
+                                            t))))))
+                 (let ((next (treesit-search-forward first-num 'and-thing)))
+                   (and next (list (treesit-node-type next) (treesit-node-start next)))))"#,
+        )
+        .expect("pure-Lisp search-forward with and/not across GC");
+    let expected_fwd = eval
+        .eval_str(r#"(quote ("number" 12))"#)
+        .expect("expected search-forward result");
+    assert!(
+        neovm_value::value::equal_value(&lisp_fwd, &expected_fwd, 0),
+        "search-forward and/not predicate corrupted across GC: got {lisp_fwd:?}"
+    );
+}

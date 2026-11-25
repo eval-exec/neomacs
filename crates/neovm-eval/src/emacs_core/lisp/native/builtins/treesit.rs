@@ -1442,7 +1442,16 @@ fn call_node_predicate(
         .map(|parser| parser.reparse_epoch());
     // SAFETY: `project_node_to_parser` returned a `TSNode` from `parser_id`'s live tree.
     let node_value = unsafe { make_node_value_from_raw(eval, parser_id, raw) };
-    let result = eval.funcall_general(predicate, vec![node_value])?;
+    let root_scope = eval.save_specpdl_roots();
+    if predicate.is_heap_object() {
+        eval.push_specpdl_root(predicate);
+    }
+    if node_value.is_heap_object() {
+        eval.push_specpdl_root(node_value);
+    }
+    let result = eval.funcall_general(predicate, vec![node_value]);
+    eval.restore_specpdl_roots(root_scope);
+    let result = result?;
     // GNU `treesit_pred_with_guard` (`src/treesit.c:2232-2245`) signals when a
     // function predicate reparses. The timestamp advances only in
     // `treesit_ensure_parsed` after `ts_parser_parse`, so an edit that does
@@ -1490,7 +1499,11 @@ fn predicate_matches_node(
         parser_record_slot(parser_value, PARSER_SLOT_LANGUAGE)?,
         predicate,
     ) {
-        return predicate_matches_node(
+        let root_scope = eval.save_specpdl_roots();
+        if definition.is_heap_object() {
+            eval.push_specpdl_root(definition);
+        }
+        let matched = predicate_matches_node(
             eval,
             parser_id,
             parser_value,
@@ -1500,6 +1513,8 @@ fn predicate_matches_node(
             ignore_missing,
             share,
         );
+        eval.restore_specpdl_roots(root_scope);
+        return matched;
     }
 
     if predicate.as_symbol_name(eval.symbol_mode()).is_some()
@@ -1539,7 +1554,11 @@ fn predicate_matches_node(
                         predicate,
                     ));
                 }
-                Ok(!predicate_matches_node(
+                let root_scope = eval.save_specpdl_roots();
+                if args[0].is_heap_object() {
+                    eval.push_specpdl_root(args[0]);
+                }
+                let matched = predicate_matches_node(
                     eval,
                     parser_id,
                     parser_value,
@@ -1548,7 +1567,9 @@ fn predicate_matches_node(
                     named_only,
                     ignore_missing,
                     share,
-                )?)
+                );
+                eval.restore_specpdl_roots(root_scope);
+                Ok(!matched?)
             }
             TreesitBooleanPredicate::Or | TreesitBooleanPredicate::And => {
                 let args = neovm_value::value::list_to_vec(&tail).ok_or_else(|| {
@@ -1563,43 +1584,53 @@ fn predicate_matches_node(
                         predicate,
                     ));
                 }
-                match boolean_predicate {
-                    TreesitBooleanPredicate::Or => {
-                        for item in args {
-                            if predicate_matches_node(
-                                eval,
-                                parser_id,
-                                parser_value,
-                                node,
-                                item,
-                                named_only,
-                                ignore_missing,
-                                share,
-                            )? {
-                                return Ok(true);
-                            }
-                        }
-                        Ok(false)
+                let root_scope = eval.save_specpdl_roots();
+                for &item in &args {
+                    if item.is_heap_object() {
+                        eval.push_specpdl_root(item);
                     }
-                    TreesitBooleanPredicate::And => {
-                        for item in args {
-                            if !predicate_matches_node(
-                                eval,
-                                parser_id,
-                                parser_value,
-                                node,
-                                item,
-                                named_only,
-                                ignore_missing,
-                                share,
-                            )? {
-                                return Ok(false);
-                            }
-                        }
-                        Ok(true)
-                    }
-                    TreesitBooleanPredicate::Not => unreachable!(),
                 }
+                let outcome = (|| -> Result<bool, Flow> {
+                    match boolean_predicate {
+                        TreesitBooleanPredicate::Or => {
+                            for item in args {
+                                if predicate_matches_node(
+                                    eval,
+                                    parser_id,
+                                    parser_value,
+                                    node,
+                                    item,
+                                    named_only,
+                                    ignore_missing,
+                                    share,
+                                )? {
+                                    return Ok(true);
+                                }
+                            }
+                            Ok(false)
+                        }
+                        TreesitBooleanPredicate::And => {
+                            for item in args {
+                                if !predicate_matches_node(
+                                    eval,
+                                    parser_id,
+                                    parser_value,
+                                    node,
+                                    item,
+                                    named_only,
+                                    ignore_missing,
+                                    share,
+                                )? {
+                                    return Ok(false);
+                                }
+                            }
+                            Ok(true)
+                        }
+                        TreesitBooleanPredicate::Not => unreachable!(),
+                    }
+                })();
+                eval.restore_specpdl_roots(root_scope);
+                outcome
             }
         };
     }
@@ -1813,72 +1844,93 @@ fn build_sparse_tree(
     // node that does not match and attaches its matches to the nearest
     // matching ancestor. `process_fn` runs before the children
     // (`src/treesit.c:4941-4950`).
-    let matched = predicate_matches_node(
-        eval,
-        parser_id,
-        parser_value,
-        node,
-        predicate,
-        false,
-        true,
-        share,
-    )?;
-    let payload = if matched {
-        let changed_by = if process_fn.is_nil() {
-            predicate
-        } else {
-            process_fn
-        };
-        let raw = project_node_to_parser(eval, parser_id, node, share)
-            .ok_or_else(|| treesit_buffer_changed(changed_by))?;
-        let epoch = eval
-            .treesit
-            .parser(parser_id)
-            .map(|parser| parser.reparse_epoch());
-        // SAFETY: `project_node_to_parser` returned a `TSNode` from `parser_id`'s live tree.
-        let node_value = unsafe { make_node_value_from_raw(eval, parser_id, raw) };
-        let value = if process_fn.is_nil() {
-            node_value
-        } else {
-            let value = eval.funcall_general(process_fn, vec![node_value])?;
-            let now = eval
+    //
+    // Root `payload` and accumulated `children` on the specpdl across all
+    // recursive `predicate_matches_node` / `process_fn` callbacks so a
+    // callback triggering GC cannot sweep in-flight sparse-tree nodes.
+    let root_scope = eval.save_specpdl_roots();
+    let result = (|| -> Result<Vec<Value>, Flow> {
+        let matched = predicate_matches_node(
+            eval,
+            parser_id,
+            parser_value,
+            node,
+            predicate,
+            false,
+            true,
+            share,
+        )?;
+        let payload = if matched {
+            let changed_by = if process_fn.is_nil() {
+                predicate
+            } else {
+                process_fn
+            };
+            let raw = project_node_to_parser(eval, parser_id, node, share)
+                .ok_or_else(|| treesit_buffer_changed(changed_by))?;
+            let epoch = eval
                 .treesit
                 .parser(parser_id)
                 .map(|parser| parser.reparse_epoch());
-            if now != epoch {
-                return Err(treesit_buffer_changed(process_fn));
+            // SAFETY: `project_node_to_parser` returned a `TSNode` from `parser_id`'s live tree.
+            let node_value = unsafe { make_node_value_from_raw(eval, parser_id, raw) };
+            let value = if process_fn.is_nil() {
+                node_value
+            } else {
+                if node_value.is_heap_object() {
+                    eval.push_specpdl_root(node_value);
+                }
+                let value = eval.funcall_general(process_fn, vec![node_value])?;
+                let now = eval
+                    .treesit
+                    .parser(parser_id)
+                    .map(|parser| parser.reparse_epoch());
+                if now != epoch {
+                    return Err(treesit_buffer_changed(process_fn));
+                }
+                value
+            };
+            if value.is_heap_object() {
+                eval.push_specpdl_root(value);
             }
-            value
+            Some(value)
+        } else {
+            None
         };
-        Some(value)
-    } else {
-        None
-    };
-    // GNU visits children only when `limit > 0` (`src/treesit.c:4957`).
-    // Zero and negative DEPTH match this node and do not walk downward.
-    // A negative limit used to stay negative under `saturating_sub` and
-    // recurse without bound.
-    let mut children = Vec::new();
-    if depth > 0 {
-        for idx in 0..node.child_count() {
-            if let Some(child) = node.child(idx) {
-                children.extend(build_sparse_tree(
-                    eval,
-                    parser_id,
-                    parser_value,
-                    child,
-                    predicate,
-                    process_fn,
-                    depth.saturating_sub(1),
-                    share,
-                )?);
+        // GNU visits children only when `limit > 0` (`src/treesit.c:4957`).
+        // Zero and negative DEPTH match this node and do not walk downward.
+        // A negative limit used to stay negative under `saturating_sub` and
+        // recurse without bound.
+        let mut children = Vec::new();
+        if depth > 0 {
+            for idx in 0..node.child_count() {
+                if let Some(child) = node.child(idx) {
+                    let child_nodes = build_sparse_tree(
+                        eval,
+                        parser_id,
+                        parser_value,
+                        child,
+                        predicate,
+                        process_fn,
+                        depth.saturating_sub(1),
+                        share,
+                    )?;
+                    for child_node in child_nodes {
+                        if child_node.is_heap_object() {
+                            eval.push_specpdl_root(child_node);
+                        }
+                        children.push(child_node);
+                    }
+                }
             }
         }
-    }
-    match payload {
-        None => Ok(children),
-        Some(payload) => Ok(vec![Value::cons(payload, Value::list(children))]),
-    }
+        match payload {
+            None => Ok(children),
+            Some(payload) => Ok(vec![Value::cons(payload, Value::list(children))]),
+        }
+    })();
+    eval.restore_specpdl_roots(root_scope);
+    result
 }
 
 #[doc(hidden)]
@@ -1913,19 +1965,26 @@ pub fn builtin_treesit_induce_sparse_tree(
         .parser(handle.parser_id)
         .ok_or_else(|| node_outdated_error(args[0]))?
         .value();
+    let process_fn = args.get(2).copied().unwrap_or(Value::NIL);
     let mut share = walk_share(eval, handle.parser_id);
     let walk = parser_tree_clone(eval, handle.parser_id, args[0])?;
     // SAFETY: every `NodeEntry.raw` names the parser's current tree
     // (`insert_node` enforces it and `apply_parser_edits` retargets it), and
     // `walk` was just cloned from that live tree.
     let root = unsafe { node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share) };
-    match build_sparse_tree(
+    let root_scope = eval.save_specpdl_roots();
+    for value in [args[0], args[1], process_fn, parser_value] {
+        if value.is_heap_object() {
+            eval.push_specpdl_root(value);
+        }
+    }
+    let outcome = match build_sparse_tree(
         eval,
         handle.parser_id,
         parser_value,
         root,
         args[1],
-        args.get(2).copied().unwrap_or(Value::NIL),
+        process_fn,
         depth,
         share,
     )
@@ -1940,7 +1999,9 @@ pub fn builtin_treesit_induce_sparse_tree(
             Ok(Value::NIL)
         }
         Err(err) => Err(Flow::from_kind(err)),
-    }
+    };
+    eval.restore_specpdl_roots(root_scope);
+    outcome
 }
 
 #[doc(hidden)]
@@ -2268,6 +2329,12 @@ pub fn builtin_treesit_node_match_p(
     // (`insert_node` enforces it and `apply_parser_edits` retargets it), and
     // `walk` was just cloned from that live tree.
     let node = unsafe { node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share) };
+    let root_scope = eval.save_specpdl_roots();
+    for value in [args[0], args[1], parser_value] {
+        if value.is_heap_object() {
+            eval.push_specpdl_root(value);
+        }
+    }
     let matched = predicate_matches_node(
         eval,
         handle.parser_id,
@@ -2277,8 +2344,9 @@ pub fn builtin_treesit_node_match_p(
         false,
         ignore_missing,
         share,
-    )?;
-    Ok(if matched { Value::T } else { Value::NIL })
+    );
+    eval.restore_specpdl_roots(root_scope);
+    Ok(if matched? { Value::T } else { Value::NIL })
 }
 
 #[doc(hidden)]
@@ -3414,7 +3482,13 @@ pub fn builtin_treesit_search_forward(
     // (`insert_node` enforces it and `apply_parser_edits` retargets it), and
     // `walk` was just cloned from that live tree.
     let start = unsafe { node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share) };
-    match search_forward_impl(
+    let root_scope = eval.save_specpdl_roots();
+    for value in [args[0], args[1], parser_value] {
+        if value.is_heap_object() {
+            eval.push_specpdl_root(value);
+        }
+    }
+    let outcome = match search_forward_impl(
         eval,
         handle.parser_id,
         parser_value,
@@ -3440,7 +3514,9 @@ pub fn builtin_treesit_search_forward(
             Ok(Value::NIL)
         }
         Err(err) => Err(Flow::from_kind(err)),
-    }
+    };
+    eval.restore_specpdl_roots(root_scope);
+    outcome
 }
 
 #[doc(hidden)]
@@ -3467,7 +3543,13 @@ pub fn builtin_treesit_search_subtree(
     // (`insert_node` enforces it and `apply_parser_edits` retargets it), and
     // `walk` was just cloned from that live tree.
     let start = unsafe { node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share) };
-    match search_subtree_impl(
+    let root_scope = eval.save_specpdl_roots();
+    for value in [args[0], args[1], parser_value] {
+        if value.is_heap_object() {
+            eval.push_specpdl_root(value);
+        }
+    }
+    let outcome = match search_subtree_impl(
         eval,
         handle.parser_id,
         parser_value,
@@ -3495,7 +3577,9 @@ pub fn builtin_treesit_search_subtree(
             Ok(Value::NIL)
         }
         Err(err) => Err(Flow::from_kind(err)),
-    }
+    };
+    eval.restore_specpdl_roots(root_scope);
+    outcome
 }
 
 #[doc(hidden)]
@@ -3655,13 +3739,26 @@ pub fn builtin_treesit_parser_changed_regions(
         return Ok(Value::NIL);
     }
     let regions = changed_ranges_to_lisp(eval, parser_id, &changed_ranges)?;
-    for notifier in
+    let notifiers =
         neovm_value::value::list_to_vec(&parser_record_slot(args[0], PARSER_SLOT_NOTIFIERS)?)
-            .unwrap_or_default()
+            .unwrap_or_default();
+    let root_scope = eval.save_specpdl_roots();
+    for value in [args[0], regions]
+        .into_iter()
+        .chain(notifiers.iter().copied())
     {
-        let _ = eval.funcall_general(notifier, vec![regions, args[0]])?;
+        if value.is_heap_object() {
+            eval.push_specpdl_root(value);
+        }
     }
-    Ok(regions)
+    let outcome = (|| -> EvalResult {
+        for notifier in notifiers {
+            let _ = eval.funcall_general(notifier, vec![regions, args[0]])?;
+        }
+        Ok(regions)
+    })();
+    eval.restore_specpdl_roots(root_scope);
+    outcome
 }
 
 #[doc(hidden)]
