@@ -494,3 +494,22 @@ fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() 
     );
     eprintln!("GPU_TEST_RAN: b8_video_system_submit_and_foreign_release");
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_render_device_numbers_requires_vulkan_1_1_on_both_sides() {
+    use ash::vk;
+
+    assert!(
+        !crate::sampling::supports_core_properties2(vk::API_VERSION_1_0, vk::API_VERSION_1_1),
+        "Vulkan 1.0 physical device with 1.1 instance must not dispatch core properties2"
+    );
+    assert!(
+        !crate::sampling::supports_core_properties2(vk::API_VERSION_1_1, vk::API_VERSION_1_0),
+        "Vulkan 1.1 physical device with 1.0 instance must not dispatch core properties2"
+    );
+    assert!(
+        crate::sampling::supports_core_properties2(vk::API_VERSION_1_1, vk::API_VERSION_1_1),
+        "Vulkan 1.1 on both physical device and instance supports core properties2"
+    );
+}

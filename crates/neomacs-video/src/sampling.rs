@@ -1032,18 +1032,30 @@ impl GpuVideoContext {
     }
 }
 
+/// Core `vkGetPhysicalDeviceProperties2` requires Vulkan 1.1 on both the
+/// physical device and the active `VkInstance`.
+#[cfg(target_os = "linux")]
+pub(crate) fn supports_core_properties2(physical_api: u32, instance_api: u32) -> bool {
+    physical_api.min(instance_api) >= ash::vk::API_VERSION_1_1
+}
+
 /// Query the exact DRM render-device identity selected by wgpu's Vulkan
 /// adapter. The device numbers come from Vulkan's DRM properties extension,
 /// avoiding ambiguous vendor/device scans on identical multi-GPU systems.
+///
+/// Note: `wgpu-hal` binds to the host Vulkan loader/ICD version, so a real
+/// Vulkan 1.0 `wgpu::Device` cannot be fabricated on a Vulkan 1.1+ host; the
+/// version gate is unit-tested via [`supports_core_properties2`].
 #[cfg(target_os = "linux")]
 pub fn linux_render_device_numbers(device: &wgpu::Device) -> Option<(u32, u32)> {
     use ash::vk;
     use wgpu::hal::api::Vulkan;
 
-    // SAFETY: `device.as_hal::<Vulkan>()` returns a guard tied to `&device`
-    // that keeps the underlying Vulkan instance and physical device alive for
-    // the entire lifetime of `hal`; this function only performs read-only
-    // physical-device queries and never mutates or destroys HAL state.
+    // SAFETY: `device.as_hal::<Vulkan>()` returns an `Arc`-backed resource
+    // guard (`SimpleResourceGuard`) that keeps the underlying HAL device,
+    // Vulkan instance, and physical device alive for the entire lifetime of
+    // `hal`; this function only performs read-only physical-device queries and
+    // never mutates or destroys HAL state.
     let hal = unsafe { device.as_hal::<Vulkan>() }?;
     let instance = hal.shared_instance().raw_instance();
     let physical_device = hal.raw_physical_device();
@@ -1051,13 +1063,13 @@ pub fn linux_render_device_numbers(device: &wgpu::Device) -> Option<(u32, u32)> 
     // `VkPhysicalDevice`; `vkGetPhysicalDeviceProperties` is a core Vulkan 1.0
     // immutable query.
     let physical_properties = unsafe { instance.get_physical_device_properties(physical_device) };
-    let api = physical_properties
-        .api_version
-        .min(hal.shared_instance().instance_api_version());
     // `vkGetPhysicalDeviceProperties2` is a core Vulkan 1.1 entry point;
     // calling it on a 1.0 instance or physical device would dispatch an
     // unloaded entry point.
-    if api < vk::API_VERSION_1_1 {
+    if !supports_core_properties2(
+        physical_properties.api_version,
+        hal.shared_instance().instance_api_version(),
+    ) {
         return None;
     }
     // SAFETY: `hal` supplies a matching live `VkInstance` and
@@ -1078,7 +1090,7 @@ pub fn linux_render_device_numbers(device: &wgpu::Device) -> Option<(u32, u32)> 
     let mut drm = vk::PhysicalDeviceDrmPropertiesEXT::default();
     let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut drm);
     // SAFETY: `hal` supplies a matching live `VkInstance` and
-    // `VkPhysicalDevice`, `api >= vk::API_VERSION_1_1` above guarantees the
+    // `VkPhysicalDevice`, `supports_core_properties2` above guarantees the
     // core `vkGetPhysicalDeviceProperties2` entry point is available,
     // `VK_EXT_physical_device_drm` is advertised by `physical_device`, and
     // `drm` in `properties.p_next` stays pinned on this stack frame for the
