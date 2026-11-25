@@ -248,6 +248,79 @@ fn window_text_pixel_size_measure_path_separates_rewind_edge_from_x_limit() {
             (2, 2),
             "GNU: (2 . 2) on {label} TextMeasurement::measure for N1 newline origin X-LIMIT=4 Y-LIMIT=2"
         );
+        // R3-1: replacing `display` property on `\n` at FROM must NOT skip `FROM`
+        // to `from + 1`, while non-replacing `(raise 0.2)` keeps newline-advance behavior.
+        let disp_nl_setup = |eval: &mut Context| {
+            let buf = eval.buffer_manager().current_buffer().unwrap().id();
+            eval.buffer_manager_mut()
+                .get_mut(buf)
+                .unwrap()
+                .insert("abcdefgh\nxy");
+            eval.eval_str(r#"(put-text-property 9 10 'display "ZZZZ")"#)
+                .expect("install replacing display string on newline");
+        };
+        assert_eq!(
+            run_measured(ws, &disp_nl_setup, 9, None, Some(4), None, true),
+            (4, 2),
+            "GNU: (4 . 2) on {label} TextMeasurement::measure for R3-1 replacing display on \\n X-LIMIT=4 Y-LIMIT=nil"
+        );
+        assert_eq!(
+            run_measured(ws, &disp_nl_setup, 9, None, Some(4), Some(1), true),
+            (4, 1),
+            "GNU: (4 . 1) on {label} TextMeasurement::measure for R3-1 replacing display on \\n X-LIMIT=4 Y-LIMIT=1"
+        );
+        assert_eq!(
+            run_measured(ws, &disp_nl_setup, 9, None, Some(4), Some(2), true),
+            (4, 2),
+            "GNU: (4 . 2) on {label} TextMeasurement::measure for R3-1 replacing display on \\n X-LIMIT=4 Y-LIMIT=2"
+        );
+        let ov_disp_nl_setup = |eval: &mut Context| {
+            let buf = eval.buffer_manager().current_buffer().unwrap().id();
+            eval.buffer_manager_mut()
+                .get_mut(buf)
+                .unwrap()
+                .insert("abcdefgh\nxy");
+            eval.eval_str(r#"(let ((o (make-overlay 9 10))) (overlay-put o 'display "ZZZZ"))"#)
+                .expect("install overlay replacing display string on newline");
+        };
+        assert_eq!(
+            run_measured(ws, &ov_disp_nl_setup, 9, None, Some(4), None, true),
+            (4, 2),
+            "GNU: (4 . 2) on {label} TextMeasurement::measure for R3-1 overlay replacing display on \\n X-LIMIT=4"
+        );
+        let space_nl_setup = |eval: &mut Context| {
+            let buf = eval.buffer_manager().current_buffer().unwrap().id();
+            eval.buffer_manager_mut()
+                .get_mut(buf)
+                .unwrap()
+                .insert("abcdefgh\nxy");
+            eval.eval_str(r#"(put-text-property 9 10 'display '(space :width 3))"#)
+                .expect("install replacing space display on newline");
+        };
+        assert_eq!(
+            run_measured(ws, &space_nl_setup, 9, None, Some(4), None, true),
+            (4, 2),
+            "GNU: (4 . 2) on {label} TextMeasurement::measure for R3-1 replacing (space :width 3) on \\n X-LIMIT=4"
+        );
+        let raise_nl_setup = |eval: &mut Context| {
+            let buf = eval.buffer_manager().current_buffer().unwrap().id();
+            eval.buffer_manager_mut()
+                .get_mut(buf)
+                .unwrap()
+                .insert("abcdefgh\nxy");
+            eval.eval_str(r#"(put-text-property 9 10 'display '(raise 0.2))"#)
+                .expect("install non-replacing raise display on newline");
+        };
+        assert_eq!(
+            run_measured(ws, &raise_nl_setup, 9, None, Some(4), Some(1), true),
+            (2, 1),
+            "GNU: (2 . 1) on {label} TextMeasurement::measure for R3-1 non-replacing (raise 0.2) on \\n X-LIMIT=4 Y-LIMIT=1"
+        );
+        assert_eq!(
+            run_measured(ws, &raise_nl_setup, 9, None, Some(4), Some(2), true),
+            (2, 2),
+            "GNU: (2 . 2) on {label} TextMeasurement::measure for R3-1 non-replacing (raise 0.2) on \\n X-LIMIT=4 Y-LIMIT=2"
+        );
         // N2: mid-line single-line before-string overlay at FROM must not be double-counted.
         let ov_mid_setup = |eval: &mut Context| {
             let buf = eval.buffer_manager().current_buffer().unwrap().id();

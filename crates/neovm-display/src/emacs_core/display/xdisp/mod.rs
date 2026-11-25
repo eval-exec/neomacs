@@ -2472,10 +2472,15 @@ impl ScanState {
     /// GNU's returned width: the widest display line walked, minus `start_x`
     /// unless the walk crossed a display-line boundary.
     fn measurement_width(&self) -> f32 {
-        let widest = if self.y_limit_stop.is_some() {
-            // The row Y-LIMIT landed in was retracted: GNU restored the
-            // iterator to that row's start before recording `max_current_x`,
-            // so whatever width the row had reached is not part of the answer.
+        let widest = if self.y_limit_stop.is_some() && !self.explicit_x_limit {
+            // When X-LIMIT is nil, GNU's `move_it_to` (`src/xdisp.c:10982-11028`)
+            // calls `move_it_in_display_line_to` with `to_x = 0`, hits
+            // `MOVE_X_REACHED`, and restores `it` to `it_backup` (`x = 0`),
+            // retracting the row Y-LIMIT landed in. When X-LIMIT is non-nil
+            // (`op & MOVE_TO_X`, `to_x = INT_MAX`, `src/xdisp.c:11928-11929`),
+            // GNU scans the full row without restoring `it_backup` and records
+            // `max_current_x = max(it->current_x, max_current_x)`
+            // (`src/xdisp.c:11088`) before stopping.
             self.max_width
         } else {
             self.max_width.max(self.line_width())

@@ -156,25 +156,34 @@ impl TextMeasurement {
                 .char_code_after_emacs_byte_pos(source.lisp_pos_to_emacs_byte_pos(from))
                 == Some('\n' as u32);
 
-            // N1: Mirror GNU `src/xdisp.c:11920` (`if (FETCH_BYTE (start_bpos) == '\n')
-            // it.current_x = 0`): advance past the newline at `FROM` instead of
-            // re-walking `screen_line_start..from` under `measure_width` (which
-            // would re-wrap the prefix and consume `y_limit` before reaching `FROM`).
+            // N1 / R3-1: Mirror GNU `src/xdisp.c:11920` (`if (FETCH_BYTE (start_bpos) == '\n')
+            // it.current_x = 0`): when `FROM` is a plain (or non-replacing) newline,
+            // advance past `\n` to `from + 1` instead of re-wrapping the prefix under
+            // `measure_width`; when `FROM` carries a replacing `display` property
+            // (e.g. a display string or `(space ...)`), keep `FROM` in the walk
+            // starting at `x = 0` so the replacement is measured under `measure_width`.
             if origin_is_newline {
                 if from >= end {
                     return Ok(finalize(1, 0, origin_row_height, origin_x, false, false));
                 }
-                let after_nl =
-                    neovm_edit::buffer::LispCharPos1::new(from.as_i64().saturating_add(1));
-                if after_nl >= end {
-                    return Ok(finalize(1, 0, origin_row_height, origin_x, true, true));
-                }
+                let replaced_newline =
+                    origin_has_replacing_display(eval, frame, buffer, from, range.from.get());
+                let (tail_start, mut rows, mut height) = if replaced_newline {
+                    (from, 0usize, 0i64)
+                } else {
+                    let after_nl =
+                        neovm_edit::buffer::LispCharPos1::new(from.as_i64().saturating_add(1));
+                    if after_nl >= end {
+                        return Ok(finalize(1, 0, origin_row_height, origin_x, true, true));
+                    }
+                    (after_nl, 1usize, origin_row_height)
+                };
                 let tail_query = eval.query_window_layout_scope(
                     frame,
                     window,
                     WindowLayoutQueryScope::TextExtent {
                         buffer,
-                        start: after_nl,
+                        start: tail_start,
                         end,
                         width: measure_width,
                         height: y_limit.and_then(|limit| {
@@ -191,12 +200,10 @@ impl TextMeasurement {
                         vec![Value::string("Measurement buffer was deleted")],
                     )
                 })?;
-                let mut rows = 1usize;
                 let mut width = 0i64;
-                let mut height = origin_row_height;
                 for row in &tail_snapshot.rows {
                     if row.start_buffer_pos == Some(end)
-                        && end > after_nl
+                        && end > tail_start
                         && source.char_before_emacs_byte_pos(source.lisp_pos_to_emacs_byte_pos(end))
                             == Some('\n')
                     {
@@ -206,7 +213,15 @@ impl TextMeasurement {
                     height += row.height;
                     width = width.max(row.end_x);
                 }
-                return Ok(finalize(rows, width, height, origin_x, true, true));
+                let crossed = !replaced_newline || rows > 1;
+                return Ok(finalize(
+                    rows.max(1),
+                    width,
+                    height.max(origin_row_height),
+                    origin_x,
+                    true,
+                    crossed,
+                ));
             }
 
             if let Some(measure_edge) = edge
@@ -325,9 +340,9 @@ impl TextMeasurement {
                 return Ok(finalize(rows, width, height, origin_x, false, true));
             }
 
-            // `origin_x < measure_edge.x` (or unbounded `edge` / newline origin):
-            // `FROM`'s screen line already starts at `screen_line_start` without
-            // wrapping again before `FROM`, so run the measurement query from
+            // `origin_x < measure_edge.x` (or unbounded `edge`): `FROM`'s screen
+            // line already starts at `screen_line_start` without wrapping again
+            // before `FROM`, so run the measurement query from
             // `screen_line_start` under `measure_width`.
             let query = eval.query_window_layout_scope(
                 frame,
@@ -367,21 +382,9 @@ impl TextMeasurement {
                 }
                 rows += 1;
                 height += row.height;
-                let row_width = if origin_is_newline && row.row == origin_row {
-                    row.end_x.saturating_sub(origin_x)
-                } else {
-                    row.end_x
-                };
-                width = width.max(row_width);
+                width = width.max(row.end_x);
             }
-            return Ok(finalize(
-                rows,
-                width,
-                height,
-                origin_x,
-                origin_is_newline,
-                false,
-            ));
+            return Ok(finalize(rows, width, height, origin_x, false, false));
         }
 
         // The vertical budget begins at FROM's display row, after its wrapped
@@ -485,6 +488,49 @@ impl TextMeasurement {
 /// measures `string-pixel-width` while the mode line is being laid out),
 /// serve the measurement from the same display-aware scan used when no
 /// frontend exists instead of failing redisplay (issue #715).
+fn origin_has_replacing_display(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    frame: FrameId,
+    buffer: BufferId,
+    from: neovm_edit::buffer::LispCharPos1,
+    from_byte: usize,
+) -> bool {
+    let Some(source) = eval.edit.buffers.get(buffer) else {
+        return false;
+    };
+    let display_sym = Value::symbol("display");
+    let display = neovm_edit::emacs_core::textprop::buffer_overlay_property_at_byte_pos(
+        eval.variables(),
+        &eval.edit.buffers,
+        source,
+        from_byte,
+        display_sym,
+        None,
+    )
+    .map(|(v, _)| v)
+    .or_else(|| {
+        let v = neovm_edit::emacs_core::textprop::builtin_get_text_property_in_state(
+            eval.variables(),
+            &eval.edit.buffers,
+            &[
+                Value::fixnum(from.as_i64()),
+                display_sym,
+                Value::make_buffer(buffer),
+            ],
+        )
+        .ok()?;
+        if v.is_nil() { None } else { Some(v) }
+    });
+    let Some(display) = display else {
+        return false;
+    };
+    let frame_window_p = eval
+        .frame_manager()
+        .get(frame)
+        .is_some_and(|frame| frame.effective_window_system().is_some());
+    display_prop_replacing_p(display, frame_window_p)
+}
+
 fn query_geometry(
     outcome: WindowLayoutQueryOutcome,
 ) -> Result<Option<WindowDisplaySnapshot>, Flow> {

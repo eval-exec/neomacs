@@ -1138,3 +1138,45 @@ fn divergence_window_text_pixel_size_x_limit_from_rewind_batch() {
         expect,
     );
 }
+
+#[test]
+fn divergence_window_text_pixel_size_replacing_display_on_newline_at_from() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((4 . 2) (4 . 1) (4 . 2) (4 . 2) (4 . 2) (2 . 1) (2 . 2) (0 . 1) (1 . 1) (2 . 1))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((measure (lambda (setup &optional from to xlim ylim)
+                  (with-temp-buffer
+                    (funcall setup)
+                    (switch-to-buffer (current-buffer))
+                    (window-text-pixel-size nil from to xlim ylim)))))
+  (list
+   ;; R3-1: replacing `display` on `\n` at FROM under X-LIMIT=4 (Y-LIMIT nil/1/2)
+   (funcall measure (lambda () (insert "abcdefgh\nxy")
+                      (put-text-property 9 10 'display "ZZZZ")) 9 nil 4 nil)
+   (funcall measure (lambda () (insert "abcdefgh\nxy")
+                      (put-text-property 9 10 'display "ZZZZ")) 9 nil 4 1)
+   (funcall measure (lambda () (insert "abcdefgh\nxy")
+                      (put-text-property 9 10 'display "ZZZZ")) 9 nil 4 2)
+   ;; Overlay replacing `display` on `\n` at FROM
+   (funcall measure (lambda () (insert "abcdefgh\nxy")
+                      (let ((o (make-overlay 9 10)))
+                        (overlay-put o 'display "ZZZZ"))) 9 nil 4 nil)
+   ;; Replacing `(space :width 3)` on `\n` at FROM
+   (funcall measure (lambda () (insert "abcdefgh\nxy")
+                      (put-text-property 9 10 'display '(space :width 3))) 9 nil 4 nil)
+   ;; Non-replacing `(raise 0.2)` on `\n` at FROM keeps plain-newline advance;
+   ;; X-LIMIT=4 vs X-LIMIT=nil under Y-LIMIT=1 (GNU src/xdisp.c:10982-11090).
+   (funcall measure (lambda () (insert "abcdefgh\nxy")
+                      (put-text-property 9 10 'display '(raise 0.2))) 9 nil 4 1)
+   (funcall measure (lambda () (insert "abcdefgh\nxy")
+                      (put-text-property 9 10 'display '(raise 0.2))) 9 nil 4 2)
+   (funcall measure (lambda () (insert "abcdefgh\nxy")
+                      (put-text-property 9 10 'display '(raise 0.2))) 9 nil nil 1)
+   (funcall measure (lambda () (insert "a\nxy")) 1 nil nil 1)
+   (funcall measure (lambda () (insert "a\nxy")) 1 nil 4 1)))"#,
+        expect,
+    );
+}
