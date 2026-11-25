@@ -487,14 +487,20 @@ impl EmacsQuery {
         &self.predicates
     }
 
+    /// Execute this compiled query against `node` within `byte_range`.
+    ///
+    /// # Safety
+    /// `node` must be a valid `TSNode` belonging to a live `TSTree` that
+    /// remains alive and unmutated for the duration of this call.
     #[doc(hidden)]
-    pub fn matches(
+    pub unsafe fn matches(
         &self,
         node: ffi::TSNode,
         byte_range: Option<Range<usize>>,
     ) -> Result<Vec<RawQueryMatch>, &'static str> {
         // SAFETY: `self.raw` is a live `TSQuery` owned by `self` for the
-        // duration of `&self`, and `cursor` is dropped before `matches` returns.
+        // duration of `&self`, the caller guarantees `node` belongs to a live,
+        // unmutated tree, and `cursor` is dropped before `matches` returns.
         let cursor = unsafe { RawQueryCursor::new(self.raw, node, byte_range) }?;
         let mut matches = Vec::new();
         loop {
@@ -1027,13 +1033,36 @@ impl TreeSitterManager {
         true
     }
 
+    /// Store a node belonging to `parser_id`'s current live tree.
+    ///
+    /// Panics if `parser_id` does not exist, has no parsed tree, `node` does
+    /// not belong to that parser's current live `TSTree`, or `reparse_epoch`
+    /// does not match the parser's current epoch. Enforcing this on storage
+    /// guarantees that every `NodeEntry.raw` names its parser's live tree
+    /// (until `apply_parser_edits` retargets it or a reparse clears it).
     #[doc(hidden)]
     pub fn insert_node(
         &mut self,
         parser_id: u64,
-        raw: tree_sitter::ffi::TSNode,
+        node: tree_sitter::Node<'_>,
         reparse_epoch: u64,
     ) -> u64 {
+        let Some(parser) = self.parsers.get(&parser_id) else {
+            panic!("insert_node requires an existing parser {parser_id}");
+        };
+        let Some(live_root) = parser.root_raw() else {
+            panic!("insert_node requires parser {parser_id} to have a live tree");
+        };
+        let raw = node.into_raw();
+        assert!(
+            !live_root.tree.is_null() && raw.tree == live_root.tree,
+            "insert_node requires a node belonging to parser {parser_id}'s current live tree"
+        );
+        assert_eq!(
+            reparse_epoch,
+            parser.reparse_epoch(),
+            "insert_node requires parser {parser_id}'s current reparse_epoch"
+        );
         let id = self.next_node_id;
         self.next_node_id += 1;
         self.nodes.insert(

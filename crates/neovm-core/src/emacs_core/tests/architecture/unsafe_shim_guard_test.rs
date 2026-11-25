@@ -32,6 +32,15 @@
 //!     may pass an integer word parameter (`usize`/`u64`/`i64`, or a value
 //!     derived from it) directly to `from_bits` / `Value::from_bits` /
 //!     `TaggedValue::from_bits`, or cast it to a raw pointer for an unsafe op.
+//! (f) Class guard (G4, sys B3/B4): across every workspace production crate,
+//!     no safe `fn` (outside foreign `extern { ... }` import blocks) may take
+//!     a parameter whose type names a raw C FFI handle (`TSNode`, `TSTree`,
+//!     `TSQuery`, `TSQueryCursor`, `sqlite3_stmt`, `sqlite3`, `sqlite3_value`),
+//!     whether by value, reference, raw pointer, `Option`, or `NonNull`.
+//!     Either accept a validated/typed owner or declare `unsafe fn` with a
+//!     `/// # Safety` contract. Limitation: this matches by handle type name
+//!     in parameter types only; it does not inspect structs embedding a handle
+//!     field or lifetime-erasing storage of a borrowed wrapper (`into_raw`).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -972,6 +981,40 @@ fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+const RAW_FFI_HANDLE_TYPES: &[&str] = &[
+    "TSNode",
+    "TSTree",
+    "TSQuery",
+    "TSQueryCursor",
+    "sqlite3_stmt",
+    "sqlite3",
+    "sqlite3_value",
+];
+
+fn is_raw_ffi_handle_type(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Group(group) => is_raw_ffi_handle_type(&group.elem),
+        syn::Type::Paren(paren) => is_raw_ffi_handle_type(&paren.elem),
+        syn::Type::Reference(reference) => is_raw_ffi_handle_type(&reference.elem),
+        syn::Type::Ptr(ptr) => is_raw_ffi_handle_type(&ptr.elem),
+        syn::Type::Path(path) => path.path.segments.last().is_some_and(|seg| {
+            RAW_FFI_HANDLE_TYPES
+                .iter()
+                .any(|handle| seg.ident == *handle)
+                || match &seg.arguments {
+                    syn::PathArguments::AngleBracketed(args) => args.args.iter().any(|arg| {
+                        matches!(
+                            arg,
+                            syn::GenericArgument::Type(inner) if is_raw_ffi_handle_type(inner)
+                        )
+                    }),
+                    _ => false,
+                }
+        }),
+        _ => false,
+    }
+}
+
 fn is_raw_ptr_type(ty: &syn::Type) -> bool {
     match ty {
         syn::Type::Ptr(_) => true,
@@ -1754,6 +1797,7 @@ struct ClassGuardScan {
     fn_count: usize,
     ptr_offenders: Vec<String>,
     word_offenders: Vec<String>,
+    ffi_handle_offenders: Vec<String>,
 }
 
 impl ClassGuardScan {
@@ -1764,22 +1808,32 @@ impl ClassGuardScan {
         self.fn_count += 1;
         let mut ptr_params = Vec::new();
         let mut word_params = Vec::new();
+        let mut has_raw_ffi_handle = false;
         for arg in &sig.inputs {
             let syn::FnArg::Typed(typed) = arg else {
                 continue;
             };
+            if is_raw_ffi_handle_type(&typed.ty) {
+                has_raw_ffi_handle = true;
+            }
             if is_raw_ptr_type(&typed.ty) {
                 collect_pat_idents(&typed.pat, &mut ptr_params);
             } else if is_word_int_type(&typed.ty) {
                 collect_pat_idents(&typed.pat, &mut word_params);
             }
         }
+        let fn_line = sig.ident.span().start().line;
+        if has_raw_ffi_handle {
+            self.ffi_handle_offenders.push(format!(
+                "{}:{fn_line}: fn {} (raw C FFI handle parameter)",
+                self.file, sig.ident
+            ));
+        }
         if ptr_params.is_empty() && word_params.is_empty() {
             return;
         }
         let mut scanner = FnBodyScanner::new(ptr_params, word_params);
         scanner.visit_block(block);
-        let fn_line = sig.ident.span().start().line;
         if let Some(use_line) = scanner.ptr_offense {
             self.ptr_offenders.push(format!(
                 "{}:{fn_line}: fn {} (unsafe ptr use at line {use_line})",
@@ -1839,14 +1893,26 @@ impl<'ast> Visit<'ast> for ClassGuardScan {
     }
 }
 
-fn scan_class_guard_source(file: &str, source: &str) -> (Vec<String>, Vec<String>, usize) {
+struct ClassGuardReport {
+    ptr_offenders: Vec<String>,
+    word_offenders: Vec<String>,
+    ffi_handle_offenders: Vec<String>,
+    fn_count: usize,
+}
+
+fn scan_class_guard_source(file: &str, source: &str) -> ClassGuardReport {
     let parsed = syn::parse_file(source).unwrap_or_else(|error| panic!("parse {file}: {error}"));
     let mut scan = ClassGuardScan {
         file: file.to_owned(),
         ..ClassGuardScan::default()
     };
     scan.visit_file(&parsed);
-    (scan.ptr_offenders, scan.word_offenders, scan.fn_count)
+    ClassGuardReport {
+        ptr_offenders: scan.ptr_offenders,
+        word_offenders: scan.word_offenders,
+        ffi_handle_offenders: scan.ffi_handle_offenders,
+        fn_count: scan.fn_count,
+    }
 }
 
 #[test]
@@ -1992,16 +2058,46 @@ fn class_guard_controls_detect_safe_ptr_deref_and_word_from_bits() {
             false,
         ),
     ] {
-        let (ptrs, words, _) = scan_class_guard_source("fixture.rs", fixture);
+        let report = scan_class_guard_source("fixture.rs", fixture);
         assert_eq!(
-            !ptrs.is_empty(),
+            !report.ptr_offenders.is_empty(),
             expect_ptr,
-            "ptr control mismatch for {label}: {ptrs:?}"
+            "ptr control mismatch for {label}: {:?}",
+            report.ptr_offenders
         );
         assert_eq!(
-            !words.is_empty(),
+            !report.word_offenders.is_empty(),
             expect_word,
-            "word control mismatch for {label}: {words:?}"
+            "word control mismatch for {label}: {:?}",
+            report.word_offenders
+        );
+    }
+
+    // Rule (f): safe fns taking raw C FFI handle types (by value, pointer,
+    // Option, NonNull, or ref) must be caught.
+    for (label, fixture) in [
+        (
+            "safe pub fn taking ffi::TSNode",
+            "impl Q { pub fn matches(&self, node: ffi::TSNode) {} }",
+        ),
+        (
+            "safe fn taking tree_sitter::ffi::TSNode",
+            "fn node_on_clone<'tree>(tree: &'tree WalkClone, raw: tree_sitter::ffi::TSNode) {}",
+        ),
+        (
+            "safe fn taking *mut ffi::sqlite3_stmt",
+            "fn bind_values(connection: &Connection, stmt: *mut ffi::sqlite3_stmt) {}",
+        ),
+        (
+            "safe fn taking Option<NonNull<ffi::TSQuery>>",
+            "fn bad(q: Option<NonNull<ffi::TSQuery>>) {}",
+        ),
+        ("safe fn taking *mut sqlite3", "fn bad(db: *mut sqlite3) {}"),
+    ] {
+        let report = scan_class_guard_source("fixture.rs", fixture);
+        assert!(
+            !report.ffi_handle_offenders.is_empty(),
+            "rule (f) control must flag {label}"
         );
     }
 
@@ -2051,11 +2147,36 @@ fn class_guard_controls_detect_safe_ptr_deref_and_word_from_bits() {
             "cfg(all(feature, test)) is skipped",
             "#[cfg(all(feature = \"jit\", test))] fn ok(p: *const u8) -> u8 { unsafe { *p } }",
         ),
+        (
+            "unsafe fn taking raw TSNode",
+            "impl Q { pub unsafe fn matches(&self, node: ffi::TSNode) {} }",
+        ),
+        (
+            "unsafe fn taking *mut ffi::sqlite3_stmt",
+            "unsafe fn row_to_value(stmt: *mut ffi::sqlite3_stmt) {}",
+        ),
+        (
+            "safe fn taking typed &PreparedStatement owner",
+            "fn bind_values(connection: &Connection, statement: &PreparedStatement) {}",
+        ),
+        (
+            "safe fn whose parameter is merely named sqlite3",
+            "fn helper(sqlite3: &Connection) {}",
+        ),
+        (
+            "foreign extern C import block",
+            "extern \"C\" { fn sqlite3_reset(stmt: *mut sqlite3_stmt) -> i32; }",
+        ),
     ] {
-        let (ptrs, words, _) = scan_class_guard_source("fixture.rs", fixture);
+        let report = scan_class_guard_source("fixture.rs", fixture);
         assert!(
-            ptrs.is_empty() && words.is_empty(),
-            "valid control flagged for {label}: ptrs={ptrs:?} words={words:?}"
+            report.ptr_offenders.is_empty()
+                && report.word_offenders.is_empty()
+                && report.ffi_handle_offenders.is_empty(),
+            "valid control flagged for {label}: ptrs={:?} words={:?} ffi={:?}",
+            report.ptr_offenders,
+            report.word_offenders,
+            report.ffi_handle_offenders
         );
     }
 }
@@ -2070,29 +2191,35 @@ fn safe_fns_do_not_deref_raw_ptr_or_word_params() {
     );
     let mut ptr_offenders = Vec::new();
     let mut word_offenders = Vec::new();
+    let mut ffi_handle_offenders = Vec::new();
     let mut fn_count = 0usize;
     for (relative, path) in &files {
         let source = std::fs::read_to_string(path)
             .unwrap_or_else(|error| panic!("read {relative}: {error}"));
-        let (ptrs, words, count) = scan_class_guard_source(relative, &source);
-        fn_count += count;
-        ptr_offenders.extend(ptrs);
-        word_offenders.extend(words);
+        let report = scan_class_guard_source(relative, &source);
+        fn_count += report.fn_count;
+        ptr_offenders.extend(report.ptr_offenders);
+        word_offenders.extend(report.word_offenders);
+        ffi_handle_offenders.extend(report.ffi_handle_offenders);
     }
     assert!(
         fn_count > 1000,
         "G4 class guard scanned too few production fns ({fn_count})"
     );
     assert!(
-        ptr_offenders.is_empty() && word_offenders.is_empty(),
-        "G4 class guard: a safe fn must not dereference a raw pointer parameter or \
-         rebuild a Value from a word parameter via from_bits; mark it `unsafe fn` \
-         with a `# Safety` section or take a typed handle.\n\
+        ptr_offenders.is_empty() && word_offenders.is_empty() && ffi_handle_offenders.is_empty(),
+        "G4 class guard: a safe fn must not dereference a raw pointer parameter, \
+         rebuild a Value from a word parameter via from_bits, or take a raw C FFI \
+         handle parameter; mark it `unsafe fn` with a `# Safety` section or take \
+         a validated/typed owner.\n\
          raw-ptr offenders ({}):\n{}\n\
-         word-param from_bits offenders ({}):\n{}",
+         word-param from_bits offenders ({}):\n{}\n\
+         raw-FFI-handle offenders ({}):\n{}",
         ptr_offenders.len(),
         ptr_offenders.join("\n"),
         word_offenders.len(),
         word_offenders.join("\n"),
+        ffi_handle_offenders.len(),
+        ffi_handle_offenders.join("\n"),
     );
 }

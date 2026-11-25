@@ -1188,3 +1188,62 @@ fn treesit_linecol_at_rejects_markers_like_gnu() {
     );
     assert_eq!(sig.data, vec![Value::symbol("numberp"), marker]);
 }
+
+#[test]
+fn treesit_insert_node_rejects_foreign_and_clone_tree_nodes() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    // Force an initial parse so the parser holds a live tree.
+    let _root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root node");
+    let parser_id = runtime::parser_id(parser).expect("parser id");
+    let epoch = eval
+        .treesit
+        .parser(parser_id)
+        .expect("live parser")
+        .reparse_epoch();
+
+    // Build an unrelated temporary tree using the same grammar.
+    let mut other_parser = tree_sitter::Parser::new();
+    other_parser
+        .set_language(&Language::new(tree_sitter_json::LANGUAGE))
+        .expect("set json language");
+    let foreign_tree = other_parser.parse("[1, 2]", None).expect("foreign tree");
+
+    let foreign_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        eval.treesit
+            .insert_node(parser_id, foreign_tree.root_node(), epoch)
+    }));
+    assert!(
+        foreign_result.is_err(),
+        "insert_node must reject a node belonging to a foreign tree"
+    );
+
+    let clone = eval
+        .treesit
+        .parser(parser_id)
+        .expect("live parser")
+        .walk_clone()
+        .expect("walk clone");
+    let clone_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        eval.treesit
+            .insert_node(parser_id, clone.root_node(), epoch)
+    }));
+    assert!(
+        clone_result.is_err(),
+        "insert_node must reject a node belonging to a WalkClone rather than the parser's live tree"
+    );
+
+    let live_root_raw = eval
+        .treesit
+        .parser(parser_id)
+        .expect("live parser")
+        .root_raw()
+        .expect("live root");
+    // SAFETY: `live_root_raw` belongs to `parser_id`'s current live tree and
+    // is not mutated before `insert_node` returns.
+    let live_root = unsafe { tree_sitter::Node::from_raw(live_root_raw) };
+    let inserted_id = eval.treesit.insert_node(parser_id, live_root, epoch);
+    assert!(
+        eval.treesit.node(inserted_id).is_some(),
+        "insert_node must accept a node belonging to the parser's own live tree"
+    );
+}

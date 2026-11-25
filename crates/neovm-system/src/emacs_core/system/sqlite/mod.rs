@@ -1098,6 +1098,81 @@ pub mod enabled {
                 i32::MAX
             );
         }
+
+        #[test]
+        fn bind_values_binds_and_rebinds_all_variants_through_prepared_statement() {
+            crate::test_utils::init_test_tracing();
+            let connection = super::Connection::open_in_memory().expect("in-memory sqlite");
+            let statement = super::prepare_statement(
+                super::SqliteOperation::Select,
+                &connection,
+                b"SELECT ?1, ?2, ?3, ?4, ?5",
+            )
+            .expect("prepare statement");
+
+            let first = [
+                super::BindValue::Null,
+                super::BindValue::Integer(42),
+                super::BindValue::Real(3.5),
+                super::BindValue::Text(b"hello".to_vec()),
+                super::BindValue::Blob(vec![0x00, 0xFF, 0x10]),
+            ];
+            super::bind_values(&connection, &statement, &first).expect("bind first pass");
+            // SAFETY: `statement` owns a live prepared `sqlite3_stmt` on live `connection`.
+            assert_eq!(
+                unsafe { super::ffi::sqlite3_step(statement.stmt) },
+                super::ffi::SQLITE_ROW
+            );
+            // SAFETY: `sqlite3_step` returned `SQLITE_ROW` on this live statement.
+            let row = unsafe { super::row_to_value(statement.stmt) };
+            let cols = super::list_to_vec(&row).expect("row list");
+            assert_eq!(cols.len(), 5);
+            assert!(cols[0].is_nil());
+            assert_eq!(cols[1].as_int(), Some(42));
+            assert_eq!(cols[2].as_float(), Some(3.5));
+            assert_eq!(
+                cols[3].as_lisp_string().map(|s| s.as_bytes()),
+                Some(b"hello".as_slice())
+            );
+            assert_eq!(
+                cols[4]
+                    .as_lisp_string()
+                    .map(|s| (s.is_multibyte(), s.as_bytes())),
+                Some((false, [0x00, 0xFF, 0x10].as_slice()))
+            );
+
+            // Re-binding through the same typed owner resets and binds new values.
+            let second = [
+                super::BindValue::Integer(-7),
+                super::BindValue::Null,
+                super::BindValue::Real(-1.25),
+                super::BindValue::Text(b"again".to_vec()),
+                super::BindValue::Blob(vec![0xAB, 0xCD]),
+            ];
+            super::bind_values(&connection, &statement, &second).expect("re-bind pass");
+            // SAFETY: `statement` owns a live prepared `sqlite3_stmt` on live `connection`.
+            assert_eq!(
+                unsafe { super::ffi::sqlite3_step(statement.stmt) },
+                super::ffi::SQLITE_ROW
+            );
+            // SAFETY: `sqlite3_step` returned `SQLITE_ROW` on this live statement.
+            let row = unsafe { super::row_to_value(statement.stmt) };
+            let cols = super::list_to_vec(&row).expect("second row list");
+            assert_eq!(cols.len(), 5);
+            assert_eq!(cols[0].as_int(), Some(-7));
+            assert!(cols[1].is_nil());
+            assert_eq!(cols[2].as_float(), Some(-1.25));
+            assert_eq!(
+                cols[3].as_lisp_string().map(|s| s.as_bytes()),
+                Some(b"again".as_slice())
+            );
+            assert_eq!(
+                cols[4]
+                    .as_lisp_string()
+                    .map(|s| (s.is_multibyte(), s.as_bytes())),
+                Some((false, [0xAB, 0xCD].as_slice()))
+            );
+        }
     }
 }
 
