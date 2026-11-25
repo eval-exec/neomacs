@@ -2,7 +2,7 @@
 //! not admit compiled code to an N-mutator era or move a backend to a peer.
 
 use super::super::shims::{
-    CURRENT_LEAF_BASES, PENDING_FLOW, PENDING_ROOT_SWEEP_FLOOR, PENDING_SHIM_PANIC,
+    PENDING_FLOW, PENDING_ROOT_SWEEP_FLOOR, PENDING_SHIM_PANIC, is_inside_native_extent,
 };
 use super::{SHARED_JIT, SharedJit};
 use crate::emacs_core::jit::cache::source_detachment::DetachedSourceCache;
@@ -79,7 +79,7 @@ impl DetachedSourceBackend {
         if crate::emacs_core::jit::cache::native_depth() != 0 {
             return Err(SourceBackendError::NativeActivation);
         }
-        if CURRENT_LEAF_BASES.with(|slot| slot.get().is_inside()) {
+        if is_inside_native_extent() {
             return Err(SourceBackendError::NativeFramePublished);
         }
         if PENDING_ROOT_SWEEP_FLOOR.with(|slot| slot.get().is_some()) {

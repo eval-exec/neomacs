@@ -238,9 +238,15 @@ impl SpecSlot {
     /// loads anyway keeps its pure, handler-free, memory-ABI case at one
     /// test each instead of the leaf's arity load, its three eligibility
     /// loads and its ABI. Any direct entry the slot held goes first.
+    /// # Safety
+    /// `leaf` must be null or point to a live/cache-retired `CompiledLeaf`
+    /// that remains allocated for as long as this slot stays armed. When
+    /// `direct_consts` is non-null it must be 8-byte aligned and point to
+    /// `leaf`'s live constants array for the same lifetime, and `short_call` /
+    /// `framed` / `register` must accurately describe `leaf`'s ABI.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn arm_leaf(
+    pub unsafe fn arm_leaf(
         &self,
         leaf: *const CompiledLeaf,
         direct_consts: *const Value,
@@ -268,9 +274,15 @@ impl SpecSlot {
 
     /// Arm the raw entry or framed tag of the leaf [`Self::arm_leaf`]
     /// just cached: published with Release last, after the leaf/key/epoch.
+    ///
+    /// # Safety
+    /// `entry` must be null, `DirectEntryTag::Framed as *const u8` (when
+    /// `KEY_FRAMED` is set), or the compiled entry pointer of the live leaf
+    /// armed in `self`, matching this slot's key ABI and remaining mapped
+    /// for as long as this slot stays armed.
     #[inline]
     #[doc(hidden)]
-    pub fn arm_direct_entry(&self, entry: *const u8) {
+    pub unsafe fn arm_direct_entry(&self, entry: *const u8) {
         debug_assert!(
             !self.holds_subr_binding(),
             "a subr site never calls directly"
@@ -471,9 +483,18 @@ pub(crate) static DIRECT_ENTRIES_ARMED: AtomicU64 = AtomicU64::new(0);
 /// the shim. Under the framed shape knob, an exact required-only JIT memory
 /// leaf with bindings or handlers publishes the framed trampoline tag
 /// instead. AOT sidecars remain excluded. Once per arming, so cold.
+///
+/// # Safety
+/// `slot` must be a bytecode spec slot (not subr-bound) already armed via
+/// [`SpecSlot::arm_leaf`] with `leaf`, and `leaf` must remain live in the
+/// active or retired JIT cache for as long as `slot` can execute.
 #[cold]
 #[inline(never)]
-pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize) {
+pub(crate) unsafe fn arm_direct_entry_if_eligible(
+    slot: &SpecSlot,
+    leaf: &CompiledLeaf,
+    nargs: usize,
+) {
     super::direct_call::note_arming();
     let key = slot.direct_consts.load(Ordering::Relaxed);
     let eligible = if jit_direct_sites() == DirectSitesMode::SelfOnly {
@@ -510,7 +531,9 @@ pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf,
             && super::jit_layout::backtrace_layout().is_some()
     };
     if eligible {
-        slot.arm_direct_entry(leaf.entry);
+        // SAFETY: `leaf` is the live compiled leaf armed in `slot` and `eligible`
+        // verified its ABI matches the slot's key flags.
+        unsafe { slot.arm_direct_entry(leaf.entry) };
         DIRECT_ENTRIES_ARMED.fetch_add(1, Ordering::Relaxed);
     } else if jit_direct_sites() != DirectSitesMode::SelfOnly
         && super::knobs::jit_direct_shapes().framed
@@ -519,7 +542,9 @@ pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf,
         && key & SpecSlot::KEY_FLAGS == SpecSlot::KEY_FRAMED
         && super::jit_layout::backtrace_layout().is_some()
     {
-        slot.arm_direct_entry(DirectEntryTag::Framed as u64 as usize as *const u8);
+        // SAFETY: `KEY_FRAMED` and `framed_direct_eligible(leaf, nargs)` were
+        // verified above, so publishing the framed sentinel tag is valid.
+        unsafe { slot.arm_direct_entry(DirectEntryTag::Framed as u64 as usize as *const u8) };
         DIRECT_ENTRIES_ARMED.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -566,9 +591,13 @@ pub(crate) fn framed_direct_eligible(leaf: &CompiledLeaf, nargs: usize) -> bool 
 /// not be the one the site was compiled against (a collected definition's
 /// slot reused), so the leaf is matched against the shape the site's code
 /// passes. Once per arming, so cold.
+/// # Safety
+/// `slot` must have been armed via [`SpecSlot::arm_leaf`] with a null pointer
+/// or a live/cache-retired `CompiledLeaf` whose entry remains mapped while
+/// armed.
 #[cold]
 #[inline(never)]
-pub(crate) fn arm_shaped_direct_entry(
+pub(crate) unsafe fn arm_shaped_direct_entry(
     slot: &SpecSlot,
     shape: super::direct_call::CalleeShape,
     nargs: usize,
@@ -577,8 +606,8 @@ pub(crate) fn arm_shaped_direct_entry(
     if ptr.is_null() {
         return;
     }
-    // SAFETY: a slot's leaf names a live or retired cache leaf, which stays
-    // allocated (`resolve_compiled_leaf_ptr`).
+    // SAFETY: caller guarantees `slot`'s armed leaf pointer names a live or
+    // cache-retired `CompiledLeaf`.
     let leaf = unsafe { &*ptr };
     let key = slot.direct_consts.load(Ordering::Relaxed);
     let eligible = leaf.abi
@@ -594,7 +623,9 @@ pub(crate) fn arm_shaped_direct_entry(
         && key & SpecSlot::KEY_REGISTER != 0
         && super::jit_layout::backtrace_layout().is_some();
     if eligible {
-        slot.arm_direct_entry(leaf.entry);
+        // SAFETY: `leaf` is the live/retired leaf armed in `slot` and `eligible`
+        // verified its register ABI matches `shape` and the slot's key.
+        unsafe { slot.arm_direct_entry(leaf.entry) };
         DIRECT_ENTRIES_ARMED.fetch_add(1, Ordering::Relaxed);
     }
 }

@@ -112,7 +112,7 @@ fn the_preload_index_finds_every_emitted_leaf() {
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
     let unit = super::super::compile::LoadedUnit::new(lib);
     let index = unit_leaf_index(&unit).expect("the preload exports an index");
-    assert_eq!(index.len, bodies.len());
+    assert_eq!(index.len(), bodies.len());
     for (ops, constants) in &bodies {
         let hash = leaf_content_hash(ops, constants, 1).unwrap();
         let (entry, desc) = index.lookup(hash).expect("indexed");

@@ -8753,19 +8753,31 @@ impl<'a> Vm<'a> {
             } else {
                 core::ptr::null()
             };
-            slot.arm_leaf(
-                ptr,
-                direct,
-                !passthrough,
-                !leaf.direct_call_eligible(),
-                leaf.entry_shape == crate::emacs_core::jit::compile::EntryShape::RawRegister,
-            );
+            // SAFETY: `ptr` is a live cache leaf resolved from `callee`,
+            // `direct` is either null or `bc`'s 8-byte-aligned constants base,
+            // and the flags match `leaf`'s ABI/eligibility.
+            unsafe {
+                slot.arm_leaf(
+                    ptr,
+                    direct,
+                    !passthrough,
+                    !leaf.direct_call_eligible(),
+                    leaf.entry_shape == crate::emacs_core::jit::compile::EntryShape::RawRegister,
+                );
+            }
             // A compiled site may then call the leaf itself (S2.1b): its
             // register entry, armed last, for an exact-arity call of a
             // frameless body the shim would enter raw (the key's flags
             // clear). Knob-gated; nothing reads it but a direct site.
             if crate::emacs_core::jit::compile::jit_direct_call_on() {
-                crate::emacs_core::jit::compile::arm_direct_entry_if_eligible(slot, leaf, nargs);
+                // SAFETY: `slot` was just armed above via `slot.arm_leaf` with
+                // this cache-resident `leaf`, which stays live in the active or
+                // retired JIT cache for the slot's lifetime.
+                unsafe {
+                    crate::emacs_core::jit::compile::arm_direct_entry_if_eligible(
+                        slot, leaf, nargs,
+                    );
+                }
             }
             bc
         } else {

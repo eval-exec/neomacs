@@ -359,13 +359,17 @@ fn stale_leaf_deopt_unlinks_but_does_not_evict_successor() {
     let slot = p.caller_slot();
     // SAFETY: the old leaf is retired, never freed while the cache lives.
     let old_leaf = unsafe { &*old };
-    slot.arm_leaf(
-        old,
-        p.callee().constants().as_ptr(),
-        false,
-        !old_leaf.direct_call_eligible(),
-        old_leaf.entry_shape == crate::emacs_core::jit::compile::EntryShape::RawRegister,
-    );
+    // SAFETY: `old` is a retired cache leaf kept allocated for the cache lifetime,
+    // and `p.callee().constants()` stays live across the call below.
+    unsafe {
+        slot.arm_leaf(
+            old,
+            p.callee().constants().as_ptr(),
+            false,
+            !old_leaf.direct_call_eligible(),
+            old_leaf.entry_shape == crate::emacs_core::jit::compile::EntryShape::RawRegister,
+        );
+    }
     let stale = stats::compile_stats_snapshot().reopt_stale;
     let count = p.callee().jit_runtime().reopt_count();
     assert_eq!(p.call(|| Value::make_float(3.0)).as_float(), Some(27.0));

@@ -1067,11 +1067,14 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_slow(
     // SAFETY: the executing leaf's slot (the contract above).
     let slot = unsafe { &*(slot as *const SpecSlot) };
     if slot.direct_entry.load(Ordering::Relaxed) == 0 && !slot.leaf_ptr().is_null() {
-        super::spec_slot::arm_shaped_direct_entry(
-            slot,
-            CalleeShape::from_word(shape),
-            nargs as usize,
-        );
+        // SAFETY: `slot` was armed by `neovm_jit_call_spec` with a live/retired cache leaf.
+        unsafe {
+            super::spec_slot::arm_shaped_direct_entry(
+                slot,
+                CalleeShape::from_word(shape),
+                nargs as usize,
+            );
+        }
     }
     status
 }

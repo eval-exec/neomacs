@@ -1071,11 +1071,9 @@ fn inline_hof_runtime_native_cache_call_preserves_mid_map_deopt_floor_and_prefix
     let bases = compile::JitLeafBases {
         snap: ctx.module_boundary_snapshot(),
     };
-    let outer_bases = compile::CURRENT_LEAF_BASES.with(|slot| {
-        slot.replace(compile::NativeExtent::framed(std::ptr::NonNull::from(
-            &bases,
-        )))
-    });
+    // SAFETY: `bases` lives on this frame until `_bases_guard` drops right after the call.
+    let _bases_guard =
+        unsafe { compile::publish_leaf_bases(Some(std::ptr::NonNull::from(&bases))) };
     let before = Value::memory_use_counts_snapshot();
     let arguments = [sequence.bits() as i64];
     let outcome = ctx.with_gc_inhibited(|ctx| unsafe {
@@ -1087,7 +1085,7 @@ fn inline_hof_runtime_native_cache_call_preserves_mid_map_deopt_floor_and_prefix
             arguments.as_ptr(),
         )
     });
-    compile::CURRENT_LEAF_BASES.with(|slot| slot.set(outer_bases));
+    drop(_bases_guard);
     let result = match outcome {
         NativeCallOutcome::Value(value) => value,
         NativeCallOutcome::FlowStashed => panic!(

@@ -172,23 +172,41 @@ pub(crate) struct AotIndexRow {
 }
 
 /// A unit's leaf index: `len` rows at `rows`, inside the mapped `.so`.
-#[derive(Clone, Copy)]
+///
+/// Not `Copy`/`Clone` and privately constructed so callers can only borrow
+/// `&AotUnitIndex` from the owning [`LoadedUnit`], keeping the backing `.so`
+/// mapped for every lookup.
 pub(crate) struct AotUnitIndex {
-    pub(crate) rows: *const AotIndexRow,
-    pub(crate) len: usize,
+    rows: *const AotIndexRow,
+    len: usize,
 }
 
 // SAFETY: the rows are immutable data of the mapped library, which the owning
-// `LoadedUnit` keeps mapped; sharing the addresses is sharing read-only memory.
+// `LoadedUnit` keeps mapped (and callers can only borrow `&AotUnitIndex` from
+// `&LoadedUnit`); sharing the addresses is sharing read-only memory.
 unsafe impl Send for AotUnitIndex {}
 unsafe impl Sync for AotUnitIndex {}
 
 impl AotUnitIndex {
+    /// Construct an index over `len` immutable sorted [`AotIndexRow`]s.
+    ///
+    /// # Safety
+    /// `rows` must be valid for reads of `len` contiguous, initialized,
+    /// hash-sorted `AotIndexRow` entries inside the owning `LoadedUnit`'s
+    /// mapped library for the entire lifetime of that `LoadedUnit`.
+    pub(crate) unsafe fn from_raw_parts(rows: *const AotIndexRow, len: usize) -> Self {
+        Self { rows, len }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
     /// The (entry, descriptor) of the leaf whose content hash is `hash`.
     #[doc(hidden)]
     pub fn lookup(&self, hash: u128) -> Option<(*const u8, *const u8)> {
-        // SAFETY: `rows`/`len` describe the unit's exported index (validated
-        // by its magic at lookup), alive while the unit is.
+        // SAFETY: `from_raw_parts` guarantees `rows`/`len` describe the unit's
+        // exported immutable index, alive while the owning `LoadedUnit` is.
         let rows = unsafe { std::slice::from_raw_parts(self.rows, self.len) };
         let key = |row: &AotIndexRow| (u128::from(row.hash_hi) << 64) | u128::from(row.hash_lo);
         let at = rows.binary_search_by_key(&hash, key).ok()?;
@@ -206,13 +224,14 @@ impl LoadedUnit {
         }
     }
 
-    /// The unit's leaf index, resolved by `init` on first use.
+    /// The unit's leaf index, resolved by `init` on first use and borrowed for
+    /// `&self`'s lifetime so the index cannot outlive the mapped library.
     #[doc(hidden)]
     pub(crate) fn index_or_init(
         &self,
         init: impl FnOnce(&libloading::Library) -> Option<AotUnitIndex>,
-    ) -> Option<AotUnitIndex> {
-        *self.index.get_or_init(|| init(&self.lib))
+    ) -> Option<&AotUnitIndex> {
+        self.index.get_or_init(|| init(&self.lib)).as_ref()
     }
 
     /// The open library, for `dlsym`'ing the entry + descriptor (R1c-5). The
@@ -1633,27 +1652,13 @@ impl CompiledLeaf {
                 snap: unsafe { (*(vmctx as *const Context)).module_boundary_snapshot() },
             })
         };
-        // `bases` is declared first so this guard drops while the
+        // `bases` is declared first so `_published` drops while the
         // frame-resident snapshot is still alive. Only this site maps a
         // missing pointer to the live tag. `NativeExtent::bases` still
         // returns `None` for that tag.
-        struct PublishedExtent {
-            outer: NativeExtent,
-        }
-        impl Drop for PublishedExtent {
-            fn drop(&mut self) {
-                CURRENT_LEAF_BASES.with(|b| b.set(self.outer));
-            }
-        }
         let bases_ptr = bases.as_ref().map(std::ptr::NonNull::from);
-        let _published = PublishedExtent {
-            outer: CURRENT_LEAF_BASES.with(|b| {
-                b.replace(match bases_ptr {
-                    Some(ptr) => NativeExtent::framed(ptr),
-                    None => NativeExtent::LIVE_NO_BASES,
-                })
-            }),
-        };
+        // SAFETY: `bases` lives on this frame and outlives `_published` (even on unwind).
+        let _published = unsafe { super::shims::publish_leaf_bases(bases_ptr) };
         // R1c-sidecar: the unified 4-param entry ABI. AOT code reads its
         // per-thread bases from `sidecar`; JIT code declares the param but never
         // reads it (its bases are baked `iconst`s), so `null` is safe for JIT.
@@ -2093,5 +2098,23 @@ impl CompiledLeaf {
             NativeRun::Deopt | NativeRun::DeoptAt(_) => None,
             NativeRun::Signal => panic!("unexpected STATUS_SIGNAL from a test body"),
         }
+    }
+}
+
+#[cfg(test)]
+mod aot_unit_index_soundness_tests {
+    use super::*;
+
+    // JIT B5: `AotUnitIndex` must not be `Copy`/`Clone` so callers can only
+    // borrow `&AotUnitIndex` tied to `&LoadedUnit`'s lifetime.
+    static_assertions::assert_not_impl_any!(AotUnitIndex: Copy, Clone);
+
+    #[test]
+    #[deny(unused_unsafe)]
+    fn aot_unit_index_from_raw_parts_requires_unsafe() {
+        // SAFETY: empty slice with aligned dangling pointer is valid for len 0.
+        let index =
+            unsafe { AotUnitIndex::from_raw_parts(std::ptr::NonNull::dangling().as_ptr(), 0) };
+        assert_eq!(index.lookup(0), None);
     }
 }

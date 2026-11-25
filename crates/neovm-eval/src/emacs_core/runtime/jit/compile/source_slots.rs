@@ -188,8 +188,14 @@ impl SpecSlot {
     /// Framed or direct-memory generated readers use an atomic
     /// Acquire-or-stronger load;
     /// the slot and leaf retain the existing mutator-owned cache lifetime.
+    ///
+    /// # Safety
+    /// `leaf` must be null or point to a live/cache-retired `CompiledLeaf`
+    /// valid under `epoch` that remains allocated while armed, and `entry`
+    /// must be null, `DirectEntryTag::Framed as *const u8`, or `leaf`'s valid
+    /// compiled entry remaining mapped while armed.
     #[doc(hidden)]
-    pub fn arm_source(&self, leaf: *const CompiledLeaf, entry: *const u8, epoch: u64) {
+    pub unsafe fn arm_source(&self, leaf: *const CompiledLeaf, entry: *const u8, epoch: u64) {
         // A direct entry never outlives the leaf it was armed for.
         self.direct_entry.store(0, Ordering::Relaxed);
         self.epoch.store(epoch, Ordering::Relaxed);
@@ -413,7 +419,9 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
         // SAFETY: the executing leaf's slot.
         let slot = unsafe { &*(slot as *const SpecSlot) };
         if slot.leaf_ptr() != ptr || slot.epoch.load(Ordering::Relaxed) != epoch {
-            arm_source_direct_entry(slot, leaf, nargs, epoch);
+            // SAFETY: `leaf` is the live cache leaf resolved for this source
+            // site at `epoch`, and `slot` is the executing source spec slot.
+            unsafe { arm_source_direct_entry(slot, leaf, nargs, epoch) };
         }
     }
     let consts = bc.jit_constant_base();
@@ -522,15 +530,20 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
 /// knob an exact required-only framed JIT memory leaf publishes the framed
 /// tag instead; no AOT sidecar is admitted. Out of line: once per leaf the
 /// source runs.
+///
+/// # Safety
+/// `slot` must be a source spec slot, and `leaf` must remain live in the
+/// active or retired JIT cache for as long as `slot` can execute under `epoch`.
 #[cold]
 #[inline(never)]
-fn arm_source_direct_entry(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize, epoch: u64) {
+unsafe fn arm_source_direct_entry(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize, epoch: u64) {
     #[cfg(any(test, debug_assertions))]
     SOURCE_SLOT_ARMINGS.fetch_add(1, Ordering::Relaxed);
     if jit_direct_sites() == DirectSitesMode::SelfOnly {
         // Feedback source speculation retains its shim cache, but the self
         // policy never emits a source/constant direct entry.
-        slot.arm_source(leaf, std::ptr::null(), epoch);
+        // SAFETY: `leaf` is a live cache leaf valid under `epoch`; entry is null.
+        unsafe { slot.arm_source(leaf, std::ptr::null(), epoch) };
         return;
     }
     let eligible = if jit_direct_memory_on() && !jit_register_abi_on() {
@@ -553,17 +566,21 @@ fn arm_source_direct_entry(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize, e
         && super::jit_layout::backtrace_layout().is_some();
     // The slot remembers the leaf either way, so the shim's compare holds
     // until the leaf changes; the entry only when the site may enter it.
-    slot.arm_source(
-        leaf,
-        if eligible {
-            leaf.entry
-        } else if framed {
-            super::spec_slot::DirectEntryTag::Framed as u64 as usize as *const u8
-        } else {
-            std::ptr::null()
-        },
-        epoch,
-    );
+    // SAFETY: `leaf` is a live cache leaf valid under `epoch`; the entry is
+    // `leaf.entry` (ABI checked by `eligible`), the framed tag (`framed`), or null.
+    unsafe {
+        slot.arm_source(
+            leaf,
+            if eligible {
+                leaf.entry
+            } else if framed {
+                super::spec_slot::DirectEntryTag::Framed as u64 as usize as *const u8
+            } else {
+                std::ptr::null()
+            },
+            epoch,
+        );
+    }
 }
 
 /// The fast path declined: the site runs its generic call.

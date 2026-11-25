@@ -705,7 +705,7 @@ pub(crate) fn native_depth() -> u32 {
 )))]
 #[inline]
 pub(crate) fn native_depth() -> u32 {
-    u32::from(super::compile::CURRENT_LEAF_BASES.with(|slot| slot.get().is_inside()))
+    u32::from(super::compile::is_inside_native_extent())
 }
 
 /// Last `CompiledLeaf` drops observed while `native_depth() > 0`.
@@ -3517,27 +3517,7 @@ pub(crate) unsafe fn run_armed_leaf(
     // says native code is on the stack. A nested armed call during a framed
     // tail must not hide that frame's pointer. No snapshot and no extra `Rc`:
     // the tag covers the raw callees this leaf reaches.
-    struct ArmedExtent {
-        saved: Option<super::compile::NativeExtent>,
-    }
-    impl Drop for ArmedExtent {
-        fn drop(&mut self) {
-            if let Some(saved) = self.saved {
-                super::compile::CURRENT_LEAF_BASES.with(|slot| slot.set(saved));
-            }
-        }
-    }
-    let _armed = super::compile::CURRENT_LEAF_BASES.with(|slot| {
-        let current = slot.get();
-        if current.is_outside() {
-            slot.set(super::compile::NativeExtent::LIVE_NO_BASES);
-            ArmedExtent {
-                saved: Some(current),
-            }
-        } else {
-            ArmedExtent { saved: None }
-        }
-    });
+    let _armed = super::compile::enter_armed_live_extent();
     // SAFETY: see armed_leaf_for_stack_call.
     // SAFETY (owner chain): (b) fails for this owner: the incoming raw leaf is shadowed and only
     // &CompiledLeaf is forwarded. Native writes to Context target a different allocation; leaf

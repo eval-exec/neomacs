@@ -3676,7 +3676,10 @@ pub mod authority {
         let eligible = leaf.direct_call_eligible();
         let slot = SpecSlot::at_epoch(0);
         let consts = [neovm_value::value::Value::NIL];
-        slot.arm_leaf(leaf, consts.as_ptr(), false, true, false);
+        // SAFETY: `leaf` and `consts` live for the duration of `slot` in this test helper.
+        unsafe {
+            slot.arm_leaf(leaf, consts.as_ptr(), false, true, false);
+        }
         let exact = named_shape_name_for_test(&slot);
         leaf.has_binds = true;
         let binds = named_shape_name_for_test(&slot);

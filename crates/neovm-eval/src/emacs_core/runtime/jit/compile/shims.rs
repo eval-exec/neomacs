@@ -439,7 +439,12 @@ impl NativeExtent {
 
     /// A framed snapshot. The pointer is non-null and aligned, so it is
     /// distinct from [`Self::OUTSIDE`] and [`Self::LIVE_NO_BASES`].
-    pub(crate) fn framed(ptr: std::ptr::NonNull<JitLeafBases>) -> Self {
+    ///
+    /// # Safety
+    /// `ptr` must be aligned (`addr & 1 == 0`) and point to a live
+    /// [`JitLeafBases`] for as long as the resulting `NativeExtent` is
+    /// published in `CURRENT_LEAF_BASES`.
+    pub(crate) unsafe fn framed(ptr: std::ptr::NonNull<JitLeafBases>) -> Self {
         let addr = ptr.as_ptr() as usize;
         debug_assert_ne!(addr, 0);
         debug_assert_eq!(addr & 1, 0);
@@ -465,6 +470,80 @@ impl NativeExtent {
             None
         }
     }
+}
+
+/// RAII guard restoring `CURRENT_LEAF_BASES` after an unframed armed leaf call.
+pub(crate) struct ArmedExtentGuard {
+    saved: Option<NativeExtent>,
+}
+
+impl Drop for ArmedExtentGuard {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if let Some(saved) = self.saved {
+            CURRENT_LEAF_BASES.with(|slot| slot.set(saved));
+        }
+    }
+}
+
+/// RAII guard restoring `CURRENT_LEAF_BASES` after a framed native leaf call.
+pub(crate) struct PublishedExtentGuard {
+    outer: NativeExtent,
+}
+
+impl Drop for PublishedExtentGuard {
+    #[inline(always)]
+    fn drop(&mut self) {
+        CURRENT_LEAF_BASES.with(|slot| slot.set(self.outer));
+    }
+}
+
+/// Whether this thread is currently inside a native JIT extent.
+#[inline(always)]
+pub(crate) fn is_inside_native_extent() -> bool {
+    CURRENT_LEAF_BASES.with(|slot| slot.get().is_inside())
+}
+
+/// Mark this thread inside native code (`LIVE_NO_BASES`) when currently
+/// outside, restoring on drop without hiding an enclosing framed snapshot.
+#[inline(always)]
+pub(crate) fn enter_armed_live_extent() -> ArmedExtentGuard {
+    CURRENT_LEAF_BASES.with(|slot| {
+        let current = slot.get();
+        if current.is_outside() {
+            slot.set(NativeExtent::LIVE_NO_BASES);
+            ArmedExtentGuard {
+                saved: Some(current),
+            }
+        } else {
+            ArmedExtentGuard { saved: None }
+        }
+    })
+}
+
+/// Publish a frame-resident [`JitLeafBases`] snapshot (or `LIVE_NO_BASES` when
+/// `None`) for the lifetime of the returned guard.
+///
+/// # Safety
+/// When `ptr` is `Some(p)`, `p` must remain valid and live until the returned
+/// [`PublishedExtentGuard`] is dropped (including on unwind).
+#[inline(always)]
+pub(crate) unsafe fn publish_leaf_bases(
+    ptr: Option<std::ptr::NonNull<JitLeafBases>>,
+) -> PublishedExtentGuard {
+    let next = match ptr {
+        // SAFETY: caller guarantees `p` remains live until the guard drops.
+        Some(p) => unsafe { NativeExtent::framed(p) },
+        None => NativeExtent::LIVE_NO_BASES,
+    };
+    let outer = CURRENT_LEAF_BASES.with(|slot| slot.replace(next));
+    PublishedExtentGuard { outer }
+}
+
+/// Reset `CURRENT_LEAF_BASES` to `OUTSIDE` (test teardown helper).
+#[cfg(test)]
+pub(crate) fn clear_current_leaf_bases() {
+    CURRENT_LEAF_BASES.with(|slot| slot.set(NativeExtent::OUTSIDE));
 }
 
 std::thread_local! {
@@ -510,7 +589,7 @@ std::thread_local! {
     /// and its own guard restores it. `run_armed_leaf` publishes the tag
     /// only when the word is outside, so a raw callee does not hide the
     /// enclosing framed pointer.
-    pub(crate) static CURRENT_LEAF_BASES: std::cell::Cell<NativeExtent> =
+    static CURRENT_LEAF_BASES: std::cell::Cell<NativeExtent> =
         const { std::cell::Cell::new(NativeExtent::OUTSIDE) };
 
     /// Scratch-GC-root depth a contained panic left dead pushes above (the
@@ -1874,4 +1953,21 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
         h,
         PENDING_SHIM_PANIC.with(|slot| slot.borrow().is_some() as u64),
     );
+}
+
+#[cfg(test)]
+mod native_extent_soundness_tests {
+    use super::*;
+
+    /// JIT B6: constructing a pointer-carrying `NativeExtent::framed` must
+    /// require `unsafe`.
+    #[test]
+    #[deny(unused_unsafe)]
+    fn native_extent_framed_requires_unsafe() {
+        let ptr = std::ptr::NonNull::<JitLeafBases>::dangling();
+        // SAFETY: test only inspects `bases()` equality and never dereferences `ptr`.
+        let extent = unsafe { NativeExtent::framed(ptr) };
+        assert_eq!(extent.bases(), Some(ptr));
+        assert!(extent.is_inside());
+    }
 }

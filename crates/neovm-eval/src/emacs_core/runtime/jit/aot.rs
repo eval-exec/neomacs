@@ -5043,7 +5043,7 @@ fn aot_index_symbol() -> String {
 /// `unit`'s leaf index, resolved once per unit; `None` for a unit that
 /// exports none (single-leaf `.so`s keep the per-leaf symbols) or a table
 /// whose header is not ours.
-fn unit_leaf_index(unit: &super::compile::LoadedUnit) -> Option<super::compile::AotUnitIndex> {
+fn unit_leaf_index(unit: &super::compile::LoadedUnit) -> Option<&super::compile::AotUnitIndex> {
     unit.index_or_init(|lib| {
         // SAFETY: a data symbol of a `.so` we emitted: the header (magic,
         // count) is checked before the rows are trusted; the count is capped.
@@ -5055,10 +5055,10 @@ fn unit_leaf_index(unit: &super::compile::LoadedUnit) -> Option<super::compile::
             if words[0] != INDEX_MAGIC || words[1] > u64::from(MAX_INDEX_ROWS) {
                 return None;
             }
-            Some(super::compile::AotUnitIndex {
-                rows: base.add(INDEX_HEADER_BYTES).cast(),
-                len: words[1] as usize,
-            })
+            Some(super::compile::AotUnitIndex::from_raw_parts(
+                base.add(INDEX_HEADER_BYTES).cast(),
+                words[1] as usize,
+            ))
         }
     })
 }
