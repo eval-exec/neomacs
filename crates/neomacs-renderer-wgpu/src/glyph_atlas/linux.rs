@@ -174,8 +174,9 @@ impl NativeRasterizer {
             return None;
         }
         // SAFETY: this live glyph slot owns the bitmap until the next load.
-        // FreeType defines pitch as the signed offset to the next logical row;
-        // copy_rows validates row sizes before reading and returns owned bytes.
+        // FreeType stores `buffer` at the lowest memory address of the
+        // `height * |pitch|`-byte allocation, with negative `pitch` indicating
+        // bottom-up row storage; `copy_rows` bounds every access to that span.
         let rows = unsafe { copy_rows(bitmap.raw().buffer, bitmap.pitch(), height, row_bytes) }?;
         let (data, content) = match pixel_mode {
             PixelMode::Gray => (
@@ -201,8 +202,11 @@ impl NativeRasterizer {
 /// Copy logical top-to-bottom rows, discarding pitch padding.
 ///
 /// # Safety
-/// `buffer` must name the first logical row of a live FreeType bitmap, and
-/// every row at the signed `pitch` offset must contain `row_bytes` valid bytes.
+/// `buffer` must point to the lowest memory address of a live FreeType bitmap
+/// covering `height * |pitch|` readable bytes (`FT_Bitmap.buffer`). When
+/// `pitch >= 0` row 0 starts at `buffer`; when `pitch < 0` (up-flow) row 0
+/// starts at `buffer + (height - 1) * |pitch|` and row `height - 1` starts at
+/// `buffer`.
 unsafe fn copy_rows(
     buffer: *const u8,
     pitch: i32,
@@ -213,18 +217,25 @@ unsafe fn copy_rows(
     if length == 0 {
         return Some(Vec::new());
     }
-    if buffer.is_null() || usize::try_from(pitch.unsigned_abs()).ok()? < row_bytes {
+    let stride = usize::try_from(pitch.unsigned_abs()).ok()?;
+    if buffer.is_null() || stride < row_bytes {
         return None;
     }
     if length > MAX_PIXELS * 4 {
         return None;
     }
+    let total_bytes = height.checked_mul(stride)?;
+    if total_bytes > isize::MAX as usize {
+        return None;
+    }
     let mut data = Vec::with_capacity(length);
     for row in 0..height {
-        let offset = isize::try_from(row).ok()?.checked_mul(pitch as isize)?;
-        // SAFETY: the caller guarantees each row at this signed offset. Read
-        // only row_bytes, not abs(pitch), so padding is neither read nor copied.
-        let bytes = unsafe { std::slice::from_raw_parts(buffer.offset(offset), row_bytes) };
+        let physical_row = if pitch < 0 { height - 1 - row } else { row };
+        let offset = physical_row.checked_mul(stride)?;
+        // SAFETY: `physical_row < height` and `row_bytes <= stride`, so
+        // `offset + row_bytes <= total_bytes <= isize::MAX` stays inside the
+        // `height * |pitch|`-byte FreeType bitmap buffer rooted at `buffer`.
+        let bytes = unsafe { std::slice::from_raw_parts(buffer.add(offset), row_bytes) };
         data.extend_from_slice(bytes);
     }
     Some(data)

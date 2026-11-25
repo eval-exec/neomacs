@@ -232,38 +232,23 @@ impl OpenedFont {
             let mode = bitmap.pixel_mode().map_err(|error| {
                 FontMaterializationError::UnsupportedPixelMode(error.to_string())
             })?;
+            let (width_px, height_px) = bitmap_dimensions(&bitmap)?;
             let pixels = match mode {
-                freetype::bitmap::PixelMode::Mono => RasterPixels::Mask8(normalize_mono_bitmap(
-                    &bitmap,
-                    bitmap.width() as u32,
-                    bitmap.rows() as u32,
-                )?),
-                freetype::bitmap::PixelMode::Gray => RasterPixels::Mask8(normalize_gray_bitmap(
-                    &bitmap,
-                    bitmap.width() as u32,
-                    bitmap.rows() as u32,
-                )?),
+                freetype::bitmap::PixelMode::Mono => {
+                    RasterPixels::Mask8(normalize_mono_bitmap(&bitmap)?)
+                }
+                freetype::bitmap::PixelMode::Gray => {
+                    RasterPixels::Mask8(normalize_gray_bitmap(&bitmap)?)
+                }
                 freetype::bitmap::PixelMode::Gray2 => {
-                    RasterPixels::Mask8(normalize_packed_gray_bitmap(
-                        &bitmap,
-                        bitmap.width() as u32,
-                        bitmap.rows() as u32,
-                        2,
-                    )?)
+                    RasterPixels::Mask8(normalize_packed_gray_bitmap(&bitmap, 2)?)
                 }
                 freetype::bitmap::PixelMode::Gray4 => {
-                    RasterPixels::Mask8(normalize_packed_gray_bitmap(
-                        &bitmap,
-                        bitmap.width() as u32,
-                        bitmap.rows() as u32,
-                        4,
-                    )?)
+                    RasterPixels::Mask8(normalize_packed_gray_bitmap(&bitmap, 4)?)
                 }
-                freetype::bitmap::PixelMode::Bgra => RasterPixels::Bgra8(normalize_bgra_bitmap(
-                    &bitmap,
-                    bitmap.width() as u32,
-                    bitmap.rows() as u32,
-                )?),
+                freetype::bitmap::PixelMode::Bgra => {
+                    RasterPixels::Bgra8(normalize_bgra_bitmap(&bitmap)?)
+                }
                 other => {
                     return Err(FontMaterializationError::UnsupportedPixelMode(format!(
                         "{other:?}"
@@ -271,8 +256,8 @@ impl OpenedFont {
                 }
             };
             Ok(RasterizedGlyph {
-                width_px: bitmap.width() as u32,
-                height_px: bitmap.rows() as u32,
+                width_px,
+                height_px,
                 left_px: slot.bitmap_left(),
                 top_px: slot.bitmap_top(),
                 advance_px: (slot.metrics().horiAdvance >> 6) as f32 / self.device_scale,
@@ -775,16 +760,45 @@ fn bitmap_line_height(
 mod lib_test;
 
 #[cfg(any(windows, target_os = "linux"))]
-fn normalize_mono_bitmap(
-    bitmap: &freetype::Bitmap,
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, FontMaterializationError> {
-    let mut mask = vec![0; width as usize * height as usize];
+fn bitmap_dimensions(bitmap: &freetype::Bitmap) -> Result<(u32, u32), FontMaterializationError> {
+    let raw_width = bitmap.width();
+    let width =
+        u32::try_from(raw_width).map_err(|_| FontMaterializationError::MalformedBitmapBuffer {
+            expected: 1,
+            actual: 0,
+        })?;
+    let raw_rows = bitmap.rows();
+    let height =
+        u32::try_from(raw_rows).map_err(|_| FontMaterializationError::MalformedBitmapBuffer {
+            expected: 1,
+            actual: 0,
+        })?;
+    Ok((width, height))
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn bitmap_output_len(row_len: usize, height: usize) -> Result<usize, FontMaterializationError> {
+    row_len
+        .checked_mul(height)
+        .ok_or(FontMaterializationError::MalformedBitmapBuffer {
+            expected: usize::MAX,
+            actual: 0,
+        })
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn normalize_mono_bitmap(bitmap: &freetype::Bitmap) -> Result<Vec<u8>, FontMaterializationError> {
+    let (width, height) = bitmap_dimensions(bitmap)?;
+    if width == 0 || height == 0 {
+        return Ok(Vec::new());
+    }
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+    let mut mask = vec![0; bitmap_output_len(width_usize, height_usize)?];
     let required_row_len = width.div_ceil(8) as usize;
-    for y in 0..height as usize {
+    for y in 0..height_usize {
         let row = bitmap_row(bitmap, y, required_row_len)?;
-        let output = &mut mask[y * width as usize..(y + 1) * width as usize];
+        let output = &mut mask[y * width_usize..(y + 1) * width_usize];
         for (x, alpha) in output.iter_mut().enumerate() {
             let bit = 0x80 >> (x & 7);
             *alpha = if row[x >> 3] & bit != 0 { 255 } else { 0 };
@@ -794,16 +808,18 @@ fn normalize_mono_bitmap(
 }
 
 #[cfg(any(windows, target_os = "linux"))]
-fn normalize_gray_bitmap(
-    bitmap: &freetype::Bitmap,
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, FontMaterializationError> {
-    let mut mask = vec![0; width as usize * height as usize];
+fn normalize_gray_bitmap(bitmap: &freetype::Bitmap) -> Result<Vec<u8>, FontMaterializationError> {
+    let (width, height) = bitmap_dimensions(bitmap)?;
+    if width == 0 || height == 0 {
+        return Ok(Vec::new());
+    }
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+    let mut mask = vec![0; bitmap_output_len(width_usize, height_usize)?];
     let max_gray = bitmap.raw().num_grays.saturating_sub(1).max(1) as u32;
-    for y in 0..height as usize {
-        let row = bitmap_row(bitmap, y, width as usize)?;
-        let output = &mut mask[y * width as usize..(y + 1) * width as usize];
+    for y in 0..height_usize {
+        let row = bitmap_row(bitmap, y, width_usize)?;
+        let output = &mut mask[y * width_usize..(y + 1) * width_usize];
         for (alpha, value) in output.iter_mut().zip(row.iter().copied()) {
             *alpha = (u32::from(value) * 255 / max_gray) as u8;
         }
@@ -814,17 +830,21 @@ fn normalize_gray_bitmap(
 #[cfg(any(windows, target_os = "linux"))]
 fn normalize_packed_gray_bitmap(
     bitmap: &freetype::Bitmap,
-    width: u32,
-    height: u32,
     bits_per_pixel: u8,
 ) -> Result<Vec<u8>, FontMaterializationError> {
-    let mut mask = vec![0; width as usize * height as usize];
+    let (width, height) = bitmap_dimensions(bitmap)?;
+    if width == 0 || height == 0 {
+        return Ok(Vec::new());
+    }
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+    let mut mask = vec![0; bitmap_output_len(width_usize, height_usize)?];
     let pixels_per_byte = 8 / usize::from(bits_per_pixel);
-    let required_row_len = (width as usize).div_ceil(pixels_per_byte);
+    let required_row_len = width_usize.div_ceil(pixels_per_byte);
     let value_mask = (1u8 << bits_per_pixel) - 1;
-    for y in 0..height as usize {
+    for y in 0..height_usize {
         let row = bitmap_row(bitmap, y, required_row_len)?;
-        let output = &mut mask[y * width as usize..(y + 1) * width as usize];
+        let output = &mut mask[y * width_usize..(y + 1) * width_usize];
         for (x, alpha) in output.iter_mut().enumerate() {
             let shift = 8 - usize::from(bits_per_pixel) * (x % pixels_per_byte + 1);
             let value = (row[x / pixels_per_byte] >> shift) & value_mask;
@@ -835,14 +855,21 @@ fn normalize_packed_gray_bitmap(
 }
 
 #[cfg(any(windows, target_os = "linux"))]
-fn normalize_bgra_bitmap(
-    bitmap: &freetype::Bitmap,
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, FontMaterializationError> {
-    let row_len = width as usize * 4;
-    let mut pixels = vec![0; row_len * height as usize];
-    for y in 0..height as usize {
+fn normalize_bgra_bitmap(bitmap: &freetype::Bitmap) -> Result<Vec<u8>, FontMaterializationError> {
+    let (width, height) = bitmap_dimensions(bitmap)?;
+    if width == 0 || height == 0 {
+        return Ok(Vec::new());
+    }
+    let row_len =
+        (width as usize)
+            .checked_mul(4)
+            .ok_or(FontMaterializationError::MalformedBitmapBuffer {
+                expected: usize::MAX,
+                actual: 0,
+            })?;
+    let height_usize = height as usize;
+    let mut pixels = vec![0; bitmap_output_len(row_len, height_usize)?];
+    for y in 0..height_usize {
         pixels[y * row_len..(y + 1) * row_len].copy_from_slice(bitmap_row(bitmap, y, row_len)?);
     }
     Ok(pixels)
@@ -854,6 +881,18 @@ fn bitmap_row(
     y: usize,
     required_len: usize,
 ) -> Result<&[u8], FontMaterializationError> {
+    let rows = usize::try_from(bitmap.rows()).map_err(|_| {
+        FontMaterializationError::MalformedBitmapBuffer {
+            expected: y.saturating_add(1),
+            actual: 0,
+        }
+    })?;
+    if y >= rows {
+        return Err(FontMaterializationError::MalformedBitmapBuffer {
+            expected: y.saturating_add(1),
+            actual: rows,
+        });
+    }
     let pitch = bitmap.pitch();
     let row_bytes = pitch.unsigned_abs() as usize;
     let buffer = bitmap.raw().buffer;
@@ -863,11 +902,27 @@ fn bitmap_row(
             actual: row_bytes,
         });
     }
-    // FreeType defines `pitch` as the signed offset from one logical row to
-    // the next. The buffer remains valid until the next face operation.
-    Ok(unsafe {
-        std::slice::from_raw_parts(buffer.offset(y as isize * pitch as isize), required_len)
-    })
+    // FreeType stores `buffer` at the lowest address. For positive pitch
+    // (down-flow), row 0 is at `buffer` and row `y` is at `y * row_bytes`.
+    // For negative pitch (up-flow), row 0 is the highest row at
+    // `(rows - 1) * row_bytes`, and row `y` is at `(rows - 1 - y) * row_bytes`.
+    let physical_row = if pitch < 0 { rows - 1 - y } else { y };
+    let byte_offset = physical_row
+        .checked_mul(row_bytes)
+        .filter(|offset| {
+            offset
+                .checked_add(required_len)
+                .is_some_and(|end| end <= isize::MAX as usize)
+        })
+        .ok_or(FontMaterializationError::MalformedBitmapBuffer {
+            expected: required_len,
+            actual: row_bytes,
+        })?;
+    // SAFETY: `y < rows` ensures `physical_row < rows`, `row_bytes >= required_len`
+    // keeps `[byte_offset..byte_offset + required_len]` inside the FreeType
+    // bitmap buffer (`rows * row_bytes` bytes), and `buffer` is non-null and
+    // stays valid for `&freetype::Bitmap`.
+    Ok(unsafe { std::slice::from_raw_parts(buffer.add(byte_offset), required_len) })
 }
 
 #[cfg(any(windows, target_os = "linux"))]
