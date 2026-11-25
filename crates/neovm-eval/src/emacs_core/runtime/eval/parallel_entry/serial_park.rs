@@ -356,6 +356,15 @@ impl<'t, C: SerialHost, G: LendGuard> LiveSerial<'t, C, G> {
     /// refused `Retry` (this owner could not publish) keeps the HEAD held:
     /// resume again. A host that refuses to detach keeps the turn live and
     /// hands REPLY back.
+    ///
+    /// The returned `ParkedSerial` is deliberately unguarded (it cannot hold
+    /// the `&mut P` this call borrows): the lend guard was disarmed above, so
+    /// between this return and the `resume` `Request` the driver holds the
+    /// ring HEAD and no armed guard exists. A caller that can unwind or give
+    /// up in that window MUST drop an `Exit`-sending guard (e.g.
+    /// `KeeperPort::abandon_head_hold`) before the `resume`, or the era
+    /// deadlocks — the driver only sees `Disconnected` when every inbox
+    /// sender is gone (L6.7c (c) D1 / F1).
     #[cold]
     #[inline(never)]
     #[allow(clippy::type_complexity)]

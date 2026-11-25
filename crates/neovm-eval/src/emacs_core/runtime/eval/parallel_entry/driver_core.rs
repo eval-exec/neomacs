@@ -393,6 +393,17 @@ struct HeadHold<Report> {
     reply: Option<mpsc::SyncSender<Result<Report, CollectRefusal>>>,
 }
 
+impl<Report> HeadHold<Report> {
+    /// Answer the held collection request with `Poisoned` and drop the hold.
+    /// Every path that takes a hold off the driver must reach either
+    /// `queue_collect` or this, so a held caller is never left unanswered (F2).
+    fn refuse(self) {
+        if let Some(reply) = self.reply {
+            let _ = reply.send(Err(CollectRefusal::Poisoned));
+        }
+    }
+}
+
 /// The Baton group's "the ring has a waiter" word (L6.7b b4.1, QB2). The
 /// keeper raises it while the group holds the World and another client (a
 /// parallel owner's request or a collection) is waiting, and lowers it when
@@ -709,7 +720,14 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             Some(_) => retry_busy::<O, _>(|| ops.requeue_owner_at_head(key, generation)),
             None => retry_busy::<O, _>(|| ops.enqueue(key, generation)),
         };
-        committed.map_err(Breach::Rendezvous)?;
+        if let Err(error) = committed {
+            // The ring refused the re-commit: answer the held caller rather
+            // than dropping its reply, then poison (F2).
+            if let Some(hold) = hold {
+                hold.refuse();
+            }
+            return Err(Breach::Rendezvous(error));
+        }
         self.queued.insert(owner, receipt);
         if let Some(hold) = hold {
             self.queue_collect(hold.reply);
@@ -906,13 +924,26 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             return Err(Breach::Unreachable { owner });
         }
         let (returned, end) = self.await_return(owner)?;
-        let batch = B::settle(held, returned, grant).map_err(|settle| match settle {
-            Settle::NotTheTicketCut => Breach::Unexpected {
-                owner,
-                message: "a returned ticket that is not the one cut",
-            },
-            Settle::Retire(error) => Breach::Rendezvous(error),
-        })?;
+        let batch = match B::settle(held, returned, grant) {
+            Ok(batch) => batch,
+            Err(settle) => {
+                // Answer the collect reply before the breach drops `end`
+                // (F2): a caller that asked for the collection must never be
+                // left unanswered on a settle failure.
+                if let IntervalEnd::Collect { reply } = end {
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(CollectRefusal::Poisoned));
+                    }
+                }
+                return Err(match settle {
+                    Settle::NotTheTicketCut => Breach::Unexpected {
+                        owner,
+                        message: "a returned ticket that is not the one cut",
+                    },
+                    Settle::Retire(error) => Breach::Rendezvous(error),
+                });
+            }
+        };
         match end {
             IntervalEnd::Done => Ok(Step::Next(batch)),
             // L6.7c (c): the owner's ticket is retired, so this stop lends
