@@ -2165,8 +2165,11 @@ impl<'a> LoadDecoder<'a> {
     /// `tagged::pdump_image::BytecodeExtras`) — the self-contained replacement for
     /// the object-extra descriptor. Runs after the value-fixup pass, so the
     /// metadata and extra-slot words read as final tagged values.
-    #[doc(hidden)]
-    pub fn populate_bytecode_from_extras(
+    ///
+    /// Crate-private: like `populate_tagged_object`, this invokes unsafe
+    /// pre-publish placeholder installers and must not be exposed to external
+    /// callers after publication.
+    pub(crate) fn populate_bytecode_from_extras(
         &mut self,
         id: TaggedHeapRef,
         value: Value,
@@ -2319,10 +2322,13 @@ impl<'a> LoadDecoder<'a> {
                         "bytecode extras claim a GNU region but the object has no span".into(),
                     )
                 })?;
-            let gnu_offset =
-                u64::try_from(obj_span.offset as i64 + header.gnu_rel).map_err(|_| {
+            let gnu_offset = i64::try_from(obj_span.offset)
+                .ok()
+                .and_then(|base| base.checked_add(header.gnu_rel))
+                .and_then(|off| u64::try_from(off).ok())
+                .ok_or_else(|| {
                     DumpError::ImageFormatError(
-                        "bytecode GNU region offset underflows the heap image".into(),
+                        "bytecode GNU region offset overflows or underflows the heap image".into(),
                     )
                 })?;
             // Structural presence check; decode-level validation happens at
@@ -2344,10 +2350,13 @@ impl<'a> LoadDecoder<'a> {
                         "bytecode extras claim constants but the object has no span".into(),
                     )
                 })?;
-            let const_offset =
-                u64::try_from(obj_span.offset as i64 + header.const_rel).map_err(|_| {
+            let const_offset = i64::try_from(obj_span.offset)
+                .ok()
+                .and_then(|base| base.checked_add(header.const_rel))
+                .and_then(|off| u64::try_from(off).ok())
+                .ok_or_else(|| {
                     DumpError::ImageFormatError(
-                        "bytecode constants offset underflows the heap image".into(),
+                        "bytecode constants offset overflows or underflows the heap image".into(),
                     )
                 })?;
             mapped_heap.slots_mut(

@@ -160,6 +160,101 @@ fn populate_bytecode_from_extras_rejects_mismatched_or_non_bytecode_value() {
     );
 }
 
+/// Relative GNU-code and constants offsets in `BytecodeExtras` come from
+/// untrusted dump bytes and must use checked arithmetic rather than panicking
+/// (debug) or wrapping (release) on `i64` overflow.
+#[test]
+fn populate_bytecode_from_extras_rejects_overflowing_relative_offsets() {
+    use neovm_value::tagged::header::{ByteCodeObj, VecLikeHeader, VecLikeType};
+    use neovm_value::tagged::pdump_image::{BC_FLAG_HAS_GNU, BytecodeExtras};
+
+    crate::test_utils::init_test_tracing();
+    let mut runtime_heap = Box::new(neovm_value::tagged::gc::TaggedHeap::new());
+    neovm_value::tagged::gc::set_tagged_heap(&mut runtime_heap);
+
+    struct SymIdentityGuard(bool);
+    impl Drop for SymIdentityGuard {
+        fn drop(&mut self) {
+            PDUMP_LOAD_SYM_IDENTITY.with(|flag| flag.set(self.0));
+        }
+    }
+    let _guard = SymIdentityGuard(PDUMP_LOAD_SYM_IDENTITY.with(|flag| flag.replace(true)));
+
+    let obj_len = std::mem::size_of::<ByteCodeObj>();
+    let extras_len = std::mem::size_of::<BytecodeExtras>();
+    let span_len = obj_len + extras_len;
+    let align = std::mem::align_of::<ByteCodeObj>().max(16);
+    let stride = (span_len + align - 1) & !(align - 1);
+    let stub_template = crate::emacs_core::pdump::mapped_heap::baked_stub_template(extras_len);
+    let data_offset = std::mem::offset_of!(ByteCodeObj, data);
+
+    for (label, configure) in [
+        (
+            "gnu_rel overflow",
+            (|extras: &mut BytecodeExtras| {
+                extras.flags = BC_FLAG_HAS_GNU;
+                extras.gnu_rel = i64::MAX;
+                extras.gnu_len = 1;
+            }) as fn(&mut BytecodeExtras),
+        ),
+        (
+            "const_rel overflow",
+            (|extras: &mut BytecodeExtras| {
+                extras.const_count = 1;
+                extras.const_rel = i64::MAX;
+            }) as fn(&mut BytecodeExtras),
+        ),
+    ] {
+        let mut backing = vec![0u128; (stride * 2).div_ceil(std::mem::size_of::<u128>())];
+        let bytes: &mut [u8] = bytemuck::cast_slice_mut(&mut backing);
+        let mut extras: BytecodeExtras = bytemuck::Zeroable::zeroed();
+        extras.params_kind = super::super::types::DumpFunctionParamsKind::Named as u8;
+        configure(&mut extras);
+
+        // Place object 0 at nonzero offset `stride` so `offset as i64 + i64::MAX` overflows.
+        let base = stride;
+        // SAFETY: `bytes` is 16-byte aligned and `base` is aligned to `ByteCodeObj`.
+        unsafe {
+            std::ptr::write(
+                bytes.as_mut_ptr().add(base).cast::<VecLikeHeader>(),
+                VecLikeHeader::new(VecLikeType::ByteCode),
+            );
+        }
+        bytes[base + data_offset..base + data_offset + stub_template.len()]
+            .copy_from_slice(&stub_template);
+        bytes[base + obj_len..base + obj_len + extras_len]
+            .copy_from_slice(bytemuck::bytes_of(&extras));
+
+        let heap = DumpTaggedHeap {
+            objects: vec![DumpHeapObject::Free],
+            mapped_cons: Vec::new(),
+            mapped_floats: Vec::new(),
+            mapped_strings: Vec::new(),
+            mapped_veclikes: vec![Some(DumpVecLikeSpan {
+                offset: base as u64,
+                len: span_len as u64,
+            })],
+            mapped_slots: Vec::new(),
+        };
+        // SAFETY: `backing` stays live for the duration of `decoder`.
+        let mapped = unsafe { MappedHeapView::from_mut_slice(bytes) };
+        let mut decoder = LoadDecoder::new_with_mapped_heap(&heap, Some(mapped));
+        let id0 = TaggedHeapRef { index: 0 };
+        let ptr0 = decoder
+            .mapped_typed_object_for_object::<ByteCodeObj>(id0, "bytecode")
+            .expect("object 0 span")
+            .expect("object 0 ptr");
+        // SAFETY: `ptr0` addresses an initialized ByteCodeObj header in `bytes`.
+        let value0 = unsafe { Value::from_veclike_ptr(ptr0.cast::<VecLikeHeader>()) };
+
+        let result = decoder.populate_bytecode_from_extras(id0, value0);
+        assert!(
+            matches!(result, Err(DumpError::ImageFormatError(_))),
+            "{label}: expected ImageFormatError, got {result:?}"
+        );
+    }
+}
+
 /// P3: every restore-time placeholder mutator writes object storage without a
 /// GC write barrier and must remain `unsafe fn`.
 #[test]

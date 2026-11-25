@@ -70,7 +70,7 @@ fn native_lease_is_retained_until_the_gpu_completion_callback_runs() {
 fn prepared_draw_and_retirement_are_tied_to_submission() {
     let sampling_src = include_str!("../sampling.rs");
     assert!(
-        !sampling_src.contains("pub fn bind_group(&self) -> &'a wgpu::BindGroup"),
+        !sampling_src.contains("pub fn bind_group("),
         "PreparedVideoDraw must not leak a cloneable &wgpu::BindGroup past submission (B8)"
     );
     assert!(
@@ -80,6 +80,11 @@ fn prepared_draw_and_retirement_are_tied_to_submission() {
     assert!(
         !sampling_src.contains("pub struct VideoSubmissionToken"),
         "VideoSubmissionToken must stay private inside VideoCommandEncoder (B8)"
+    );
+    let lib_src = include_str!("../lib.rs");
+    assert!(
+        !lib_src.contains("VideoSubmissionToken"),
+        "neomacs_video root must not re-export VideoSubmissionToken (B8)"
     );
     let system_src = include_str!("../system.rs");
     assert!(

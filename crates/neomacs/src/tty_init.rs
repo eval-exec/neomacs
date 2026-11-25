@@ -694,7 +694,9 @@ fn stuff_tty_input(stuff: &[u8]) {
     // keyboard queue are not re-stuffed into the TTY before suspending.
     for &byte in stuff.iter().chain(std::iter::once(&b'\n')) {
         let ch = byte as libc::c_char;
-        // SAFETY: `STDIN_FILENO` is a valid fd and `TIOCSTI` reads one byte.
+        // SAFETY: `&ch` points to one initialized `libc::c_char` read by
+        // `TIOCSTI`; if `STDIN_FILENO` is closed or not a TTY, the kernel
+        // rejects the ioctl with `-1` (`EBADF`/`ENOTTY`).
         if unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCSTI as _, &ch) } < 0 {
             break;
         }
