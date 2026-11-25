@@ -75,7 +75,7 @@ fn make_test_turn(
 fn l67b_b3_world_seat_refuses_unseated_and_sim_contexts() {
     let mut sim = Context::new(crate::test_utils::unit_runtime());
     assert_eq!(
-        ParkedWorldSeat::park_seated(&mut sim).unwrap_err(),
+        unsafe { ParkedWorldSeat::park_seated(&mut sim) }.unwrap_err(),
         WorldSeatRefusal::Unseated,
         "a Sim Context has no Green seat"
     );
@@ -87,7 +87,7 @@ fn l67b_b3_world_seat_refuses_unseated_and_sim_contexts() {
         .start_green_runtime()
         .expect("start Green runtime");
     assert_eq!(
-        ParkedWorldSeat::park_seated(&mut unseated_green).unwrap_err(),
+        unsafe { ParkedWorldSeat::park_seated(&mut unseated_green) }.unwrap_err(),
         WorldSeatRefusal::Unseated,
         "an unseated Green Context belongs to SerialHost, not WorldSeat"
     );
@@ -99,7 +99,7 @@ fn l67b_b3_world_seat_refuses_wrong_heap_and_keeps_turn_intact() {
     let real_heap = main.tagged_heap.heap_identity();
     let foreign_heap = foreign_heap_for(real_heap);
 
-    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    let parked = unsafe { ParkedWorldSeat::park_seated(&mut main) }.expect("park seated main");
     assert!(names_no_heap(), "park_seated takes carrier TLS down");
     assert!(
         main.serial_world_is_stowed(),
@@ -126,7 +126,7 @@ fn l67b_b3_world_seat_refuses_wrong_heap_and_keeps_turn_intact() {
         .enter(&mut main, turn, lend)
         .expect("matching heap enters");
     assert_eq!(active.identity().epoch, nonzero(8));
-    let (_parked, lend, returned) = active.exit(&mut main);
+    let (_parked, lend, returned) = unsafe { active.exit(&mut main) };
     lend.give_back(returned);
 }
 
@@ -175,7 +175,7 @@ fn l67b_b3_world_seat_refuses_enter_when_peer_holds_world_carriers_a1() {
     main.seat_green_main_for_test(baton);
 
     // Park seated main -> World carriers are now Stowed.
-    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    let parked = unsafe { ParkedWorldSeat::park_seated(&mut main) }.expect("park seated main");
     assert!(main.serial_world_is_stowed());
 
     // Let the parallel owner acquire the World carriers.
@@ -203,7 +203,7 @@ fn l67b_b3_world_seat_refuses_enter_when_peer_holds_world_carriers_a1() {
         .enter(&mut main, turn, lend)
         .expect("enter succeeds once peer stowed World carriers");
     assert_eq!(eval(&mut main, "(lossage-size)"), "419");
-    let (_parked, lend, returned) = active.exit(&mut main);
+    let (_parked, lend, returned) = unsafe { active.exit(&mut main) };
     lend.give_back(returned);
 }
 
@@ -251,7 +251,7 @@ fn l67b_b3_world_seat_stows_and_alternates_with_unseated_serial_host() {
 
     // Park seated main (SerialHost::detach would refuse HostRefusal::Seated,
     // while ParkedWorldSeat::park_seated accepts seated Green hosts).
-    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    let parked = unsafe { ParkedWorldSeat::park_seated(&mut main) }.expect("park seated main");
     assert!(names_no_heap());
     assert!(main.serial_world_is_stowed());
 
@@ -272,7 +272,7 @@ fn l67b_b3_world_seat_stows_and_alternates_with_unseated_serial_host() {
     assert_eq!(eval(&mut main, "(lossage-size 613)"), "613");
     main.display_var_change_count = 99;
 
-    let (_parked, lend, returned) = active.exit(&mut main);
+    let (_parked, lend, returned) = unsafe { active.exit(&mut main) };
     assert!(names_no_heap(), "exit parks carrier TLS");
     assert!(main.serial_world_is_stowed(), "exit stows World carriers");
     assert_eq!(returned.identity().epoch, nonzero(2));
@@ -462,7 +462,7 @@ fn l67b_b3_world_seat_refuses_enter_when_another_heap_is_installed_on_thread() {
 
     let mut main = seated_green_main();
     let real_heap = main.tagged_heap.heap_identity();
-    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    let parked = unsafe { ParkedWorldSeat::park_seated(&mut main) }.expect("park seated main");
     assert!(names_no_heap());
 
     // Install `other`'s heap on this OS thread via a live turn.
@@ -491,7 +491,7 @@ fn l67b_b3_world_seat_refuses_enter_when_another_heap_is_installed_on_thread() {
     let active = parked
         .enter(&mut main, turn, lend)
         .expect("enter succeeds once thread has no heap installed");
-    let (_parked, lend, returned) = active.exit(&mut main);
+    let (_parked, lend, returned) = unsafe { active.exit(&mut main) };
     lend.give_back(returned);
 }
 
@@ -635,8 +635,10 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
                 let _panic_guard = KeeperPanicGuard { keeper: era };
                 let runner = scope.spawn(move || {
                     let (mut ctx, retention) = world_handle.spawn_seated_context_for_test(1);
-                    let parked = ParkedWorldSeat::park_seated_with_retention(&mut ctx, &retention)
-                        .expect("park seated Baton worker");
+                    let parked = unsafe {
+                        ParkedWorldSeat::park_seated_with_retention(&mut ctx, &retention)
+                    }
+                    .expect("park seated Baton worker");
                     drop(retention);
                     ready_tx.send(()).expect("signal seated worker parked");
 
@@ -685,7 +687,7 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
                     // (before WorldTurn #2 allocates and can reuse its slot).
                     ctx.lexenv = survivor;
 
-                    let (parked, lend, returned) = active.exit(&mut ctx);
+                    let (parked, lend, returned) = unsafe { active.exit(&mut ctx) };
                     let (turn2, second_epoch, lend2) = group
                         .collect(lend, returned, Some(report_tx))
                         .ok()
@@ -720,12 +722,12 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
                     );
                     ctx.set_variable("gc-cons-threshold", saved_threshold);
                     ctx.lexenv = Value::NIL;
-                    let (parked, lend2, returned2) = active2.exit(&mut ctx);
+                    let (parked, lend2, returned2) = unsafe { active2.exit(&mut ctx) };
                     group.give_back(lend2, returned2);
                     group.exit();
 
                     retire_rx.recv_timeout(BOUND).expect("teardown signal");
-                    parked.retire_parked_for_teardown_for_test(&mut ctx);
+                    unsafe { parked.retire_parked_for_teardown_for_test(&mut ctx) };
                     ctx.retire_green_owner();
                     (survivor_alive, garbage_alive, survivor_printed)
                 });
@@ -809,8 +811,10 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                 let _panic_guard = KeeperPanicGuard { keeper: era };
                 let runner = scope.spawn(move || {
                     let (mut ctx, retention) = world_handle.spawn_seated_context_for_test(3);
-                    let parked = ParkedWorldSeat::park_seated_with_retention(&mut ctx, &retention)
-                        .expect("park seated Baton worker");
+                    let parked = unsafe {
+                        ParkedWorldSeat::park_seated_with_retention(&mut ctx, &retention)
+                    }
+                    .expect("park seated Baton worker");
                     drop(retention);
                     ready_tx.send(()).expect("signal seated worker parked");
 
@@ -866,7 +870,7 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                     );
                     ctx.return_parked_root_buffer(private_roots);
 
-                    let (parked, lend, returned) = active.exit(&mut ctx);
+                    let (parked, lend, returned) = unsafe { active.exit(&mut ctx) };
                     let (turn2, second_epoch, lend2) = group
                         .collect(lend, returned, Some(report_tx))
                         .ok()
@@ -903,12 +907,12 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                     ctx.set_variable("gc-cons-threshold", saved_threshold);
                     ctx.unbind_to(specpdl_base);
 
-                    let (parked, lend2, returned2) = active2.exit(&mut ctx);
+                    let (parked, lend2, returned2) = unsafe { active2.exit(&mut ctx) };
                     group.give_back(lend2, returned2);
                     group.exit();
 
                     retire_rx.recv_timeout(BOUND).expect("teardown signal");
-                    parked.retire_parked_for_teardown_for_test(&mut ctx);
+                    unsafe { parked.retire_parked_for_teardown_for_test(&mut ctx) };
                     ctx.retire_green_owner();
                     (survivor_alive, garbage_alive, survivor_printed)
                 });
@@ -978,7 +982,7 @@ fn l67b_b4_collect_parallel_world_roots_refuses_held_green_runtime() {
         stopped.complete().expect("complete held-refusal stop");
 
         // Stowing back to CarriedHolder::Stowed unblocks collection.
-        let parked = ParkedWorldSeat::park_seated_with_retention(&mut ctx, &retention)
+        let parked = unsafe { ParkedWorldSeat::park_seated_with_retention(&mut ctx, &retention) }
             .expect("stow before collect");
         drop(retention);
         assert!(ctx.serial_world_is_stowed());
@@ -996,7 +1000,7 @@ fn l67b_b4_collect_parallel_world_roots_refuses_held_green_runtime() {
         assert!(report.epoch >= 1);
         stopped.complete().expect("complete stowed collection stop");
 
-        parked.retire_parked_for_teardown_for_test(&mut ctx);
+        unsafe { parked.retire_parked_for_teardown_for_test(&mut ctx) };
         ctx.retire_green_owner();
     });
 }
@@ -1014,7 +1018,7 @@ fn l67b_b4_deferred_retirement_under_held_reader_and_later_retire() {
     let mut main = seated_green_main();
     let real_heap = main.tagged_heap.heap_identity();
     let key = main.green_key().expect("seated main has ThreadKey");
-    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    let parked = unsafe { ParkedWorldSeat::park_seated(&mut main) }.expect("park seated main");
     assert_eq!(main.parked_owner_len_for_test(), 1);
     assert!(
         !main.parked_root_batch_is_cached_for_test(),
@@ -1058,7 +1062,7 @@ fn l67b_b4_deferred_retirement_under_held_reader_and_later_retire() {
     // Also verify switch_out while a second reader is STILL held preserves the
     // deferred lease in `retained` alongside the fresh census, and both retire
     // on the next switch_in once that reader finishes.
-    let (parked, turn, lend) = active.switch_out(&mut main);
+    let (parked, turn, lend) = unsafe { active.switch_out(&mut main) };
     assert_eq!(main.parked_owner_len_for_test(), 1);
     let reader2 = main
         .admit_parked_root_reader_for_test()
@@ -1067,7 +1071,7 @@ fn l67b_b4_deferred_retirement_under_held_reader_and_later_retire() {
         .switch_in(&mut main, turn, lend)
         .expect("switch_in succeeds while second reader defers retirement");
     assert_eq!(main.parked_owner_len_for_test(), 1);
-    let (parked, turn, lend) = active.switch_out(&mut main);
+    let (parked, turn, lend) = unsafe { active.switch_out(&mut main) };
     assert_eq!(
         main.parked_owner_len_for_test(),
         2,
@@ -1086,9 +1090,9 @@ fn l67b_b4_deferred_retirement_under_held_reader_and_later_retire() {
         "current lease recycles onto GreenSeat after second reader clears"
     );
 
-    let (parked, lend, returned) = active.exit(&mut main);
+    let (parked, lend, returned) = unsafe { active.exit(&mut main) };
     lend.give_back(returned);
-    parked.retire_parked_for_teardown_for_test(&mut main);
+    unsafe { parked.retire_parked_for_teardown_for_test(&mut main) };
     assert!(main.parked_owners_empty_for_test());
 }
 
@@ -1101,7 +1105,7 @@ fn l67b_b4_q2_phase_guard_refuses_retirement_when_gc_driver_active() {
     let mut main = seated_green_main();
     let real_heap = main.tagged_heap.heap_identity();
     let key = main.green_key().expect("seated main has ThreadKey");
-    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    let parked = unsafe { ParkedWorldSeat::park_seated(&mut main) }.expect("park seated main");
     assert_eq!(main.parked_owner_len_for_test(), 1);
 
     // Violate the Q2 non-marking phase guard during enter.
@@ -1129,9 +1133,9 @@ fn l67b_b4_q2_phase_guard_refuses_retirement_when_gc_driver_active() {
         "clearing Q2 guard lets retirement succeed via try_recycle"
     );
 
-    let (parked, lend, returned) = active.exit(&mut main);
+    let (parked, lend, returned) = unsafe { active.exit(&mut main) };
     lend.give_back(returned);
-    parked.retire_parked_for_teardown_for_test(&mut main);
+    unsafe { parked.retire_parked_for_teardown_for_test(&mut main) };
     assert!(main.parked_owners_empty_for_test());
 }
 
@@ -1145,7 +1149,7 @@ fn l67b_b4_green_serial_finish_retained_drains_seat_retained_leases() {
     let mut main = seated_green_main();
     let real_heap = main.tagged_heap.heap_identity();
     let key = main.green_key().expect("seated main has ThreadKey");
-    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    let parked = unsafe { ParkedWorldSeat::park_seated(&mut main) }.expect("park seated main");
     let reader = main
         .admit_parked_root_reader_for_test()
         .expect("admit reader on initial parked lease");
@@ -1156,7 +1160,7 @@ fn l67b_b4_green_serial_finish_retained_drains_seat_retained_leases() {
     let active = parked
         .enter(&mut main, turn, lend)
         .expect("enter with reader");
-    let (parked, turn, lend) = active.switch_out(&mut main);
+    let (parked, turn, lend) = unsafe { active.switch_out(&mut main) };
     assert_eq!(main.parked_owner_len_for_test(), 2);
 
     // switch_in retires L2 from `owners[key]`, leaving ONLY L1 in `retained`.
@@ -1183,9 +1187,9 @@ fn l67b_b4_green_serial_finish_retained_drains_seat_retained_leases() {
         "finish_retained_parked_roots must drain WorldRootRegistry::retained"
     );
 
-    let (parked, lend, returned) = active.exit(&mut main);
+    let (parked, lend, returned) = unsafe { active.exit(&mut main) };
     lend.give_back(returned);
-    parked.retire_parked_for_teardown_for_test(&mut main);
+    unsafe { parked.retire_parked_for_teardown_for_test(&mut main) };
     assert!(main.parked_owners_empty_for_test());
 }
 
@@ -1198,7 +1202,7 @@ fn l67b_b4_q2_phase_guard_refuses_retirement_during_stopped_marking() {
     let mut main = seated_green_main();
     let real_heap = main.tagged_heap.heap_identity();
     let key = main.green_key().expect("seated main has ThreadKey");
-    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    let parked = unsafe { ParkedWorldSeat::park_seated(&mut main) }.expect("park seated main");
     assert_eq!(main.parked_owner_len_for_test(), 1);
 
     // Put the heap into MarkPhase::StoppedMarking before enter.
@@ -1241,9 +1245,9 @@ fn l67b_b4_q2_phase_guard_refuses_retirement_during_stopped_marking() {
     );
 
     main.gc_collect_exact();
-    let (parked, lend, returned) = active.exit(&mut main);
+    let (parked, lend, returned) = unsafe { active.exit(&mut main) };
     lend.give_back(returned);
-    parked.retire_parked_for_teardown_for_test(&mut main);
+    unsafe { parked.retire_parked_for_teardown_for_test(&mut main) };
     assert!(main.parked_owners_empty_for_test());
 }
 
@@ -1256,7 +1260,7 @@ fn l67b_b4_green_serial_finish_retained_does_not_fail_other_owner_on_held_reader
     let mut main = seated_green_main();
     let real_heap = main.tagged_heap.heap_identity();
     let other_owner = crate::emacs_core::eval::green::ThreadKey::Worker(nonzero(99));
-    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    let parked = unsafe { ParkedWorldSeat::park_seated(&mut main) }.expect("park seated main");
     let reader = main
         .admit_parked_root_reader_for_test()
         .expect("admit reader on initial parked lease");
@@ -1267,7 +1271,7 @@ fn l67b_b4_green_serial_finish_retained_does_not_fail_other_owner_on_held_reader
     let active = parked
         .enter(&mut main, turn, lend)
         .expect("enter with reader");
-    let (parked, turn, lend) = active.switch_out(&mut main);
+    let (parked, turn, lend) = unsafe { active.switch_out(&mut main) };
     let active = parked
         .switch_in(&mut main, turn, lend)
         .expect("switch_in retires L2 while L1 stays in retained");
@@ -1290,9 +1294,9 @@ fn l67b_b4_green_serial_finish_retained_does_not_fail_other_owner_on_held_reader
         .expect("best-effort drain succeeds once reader clears");
     assert!(main.parked_owners_empty_for_test());
 
-    let (parked, lend, returned) = active.exit(&mut main);
+    let (parked, lend, returned) = unsafe { active.exit(&mut main) };
     lend.give_back(returned);
-    parked.retire_parked_for_teardown_for_test(&mut main);
+    unsafe { parked.retire_parked_for_teardown_for_test(&mut main) };
     assert!(main.parked_owners_empty_for_test());
 }
 
@@ -1308,19 +1312,19 @@ fn l67b_b4_world_seat_retention_and_cached_batch_release_before_world_drop() {
     let baton = main.start_green_runtime().expect("start Green runtime");
     main.seat_green_main_for_test(baton);
 
-    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    let parked = unsafe { ParkedWorldSeat::park_seated(&mut main) }.expect("park seated main");
     let (turn, lend, _rx) = make_test_turn(real_heap, 31);
     let active = parked
         .enter(&mut main, turn, lend)
         .expect("enter recycles batch");
-    let (parked, turn, lend) = active.switch_out(&mut main);
+    let (parked, turn, lend) = unsafe { active.switch_out(&mut main) };
     let active = parked.switch_in(&mut main, turn, lend).expect("switch_in");
-    let (parked, lend, returned) = active.exit(&mut main);
+    let (parked, lend, returned) = unsafe { active.exit(&mut main) };
     lend.give_back(returned);
 
     // Retire parked lease, drop cached PreparedRootBatch, and drop the seat's
     // FacadeEpochRetention before releasing the GreenSeat (which drops Baton).
-    parked.retire_parked_for_teardown_for_test(&mut main);
+    unsafe { parked.retire_parked_for_teardown_for_test(&mut main) };
     assert!(main.parked_owners_empty_for_test());
     main.green_release_seat();
     assert!(
@@ -1361,8 +1365,9 @@ fn l67b_b4_world_seat_switch_out_and_switch_in_handoff_between_baton_threads() {
 
             let thread_a = scope.spawn(move || {
                 let (mut ctx_a, ret_a) = handle_a.spawn_seated_context_for_test(10);
-                let parked_a = ParkedWorldSeat::park_seated_with_retention(&mut ctx_a, &ret_a)
-                    .expect("park thread A");
+                let parked_a =
+                    unsafe { ParkedWorldSeat::park_seated_with_retention(&mut ctx_a, &ret_a) }
+                        .expect("park thread A");
                 drop(ret_a);
                 a_parked_tx.send(()).expect("signal A parked");
                 b_parked_rx.recv_timeout(BOUND).expect("wait B parked");
@@ -1383,7 +1388,7 @@ fn l67b_b4_world_seat_switch_out_and_switch_in_handoff_between_baton_threads() {
 
                 // Intra-interval switch_out: stows carriers and publishes parked
                 // roots WITHOUT consuming WorldTurn.
-                let (parked_a, turn, lend) = active_a.switch_out(&mut ctx_a);
+                let (parked_a, turn, lend) = unsafe { active_a.switch_out(&mut ctx_a) };
                 assert!(names_no_heap());
                 assert!(ctx_a.serial_world_is_stowed());
                 handoff_tx
@@ -1400,7 +1405,7 @@ fn l67b_b4_world_seat_switch_out_and_switch_in_handoff_between_baton_threads() {
                 group.exit();
 
                 teardown_a_rx.recv_timeout(BOUND).expect("teardown A");
-                parked_a.retire_parked_for_teardown_for_test(&mut ctx_a);
+                unsafe { parked_a.retire_parked_for_teardown_for_test(&mut ctx_a) };
                 ctx_a.retire_green_owner();
             });
 
@@ -1409,8 +1414,9 @@ fn l67b_b4_world_seat_switch_out_and_switch_in_handoff_between_baton_threads() {
             let (b_ready_tx, b_ready_rx) = mpsc::channel::<()>();
             let thread_b = scope.spawn(move || {
                 let (mut ctx_b, ret_b) = handle_b.spawn_seated_context_for_test(11);
-                let parked_b = ParkedWorldSeat::park_seated_with_retention(&mut ctx_b, &ret_b)
-                    .expect("park thread B");
+                let parked_b =
+                    unsafe { ParkedWorldSeat::park_seated_with_retention(&mut ctx_b, &ret_b) }
+                        .expect("park thread B");
                 drop(ret_b);
                 b_ready_tx.send(()).expect("signal keeper B parked");
                 b_parked_tx.send(()).expect("signal A B parked");
@@ -1439,14 +1445,14 @@ fn l67b_b4_world_seat_switch_out_and_switch_in_handoff_between_baton_threads() {
                 ctx_b.display_var_change_count = 628;
 
                 // Sole production mint of WorldReturned via ActiveWorldSeat::exit.
-                let (parked_b, lend, returned) = active_b.exit(&mut ctx_b);
+                let (parked_b, lend, returned) = unsafe { active_b.exit(&mut ctx_b) };
                 assert!(names_no_heap());
                 assert!(ctx_b.serial_world_is_stowed());
                 lend.give_back(returned);
                 b_done_tx.send(during).expect("notify thread A");
 
                 teardown_b_rx.recv_timeout(BOUND).expect("teardown B");
-                parked_b.retire_parked_for_teardown_for_test(&mut ctx_b);
+                unsafe { parked_b.retire_parked_for_teardown_for_test(&mut ctx_b) };
                 ctx_b.retire_green_owner();
             });
 
@@ -1489,15 +1495,16 @@ fn l67b_b4_unwind_between_switch_out_and_switch_in_poisons_era() {
             let end = std::thread::scope(|scope| {
                 let thread_a = scope.spawn(move || {
                     let (mut ctx_a, ret_a) = handle_a.spawn_seated_context_for_test(20);
-                    let parked_a = ParkedWorldSeat::park_seated_with_retention(&mut ctx_a, &ret_a)
-                        .expect("park A");
+                    let parked_a =
+                        unsafe { ParkedWorldSeat::park_seated_with_retention(&mut ctx_a, &ret_a) }
+                            .expect("park A");
                     drop(ret_a);
                     ready_tx.send(()).expect("A parked");
 
                     let (turn, _epoch, lend) =
                         group.request_world().ok().expect("group lent WorldTurn");
                     let active_a = parked_a.enter(&mut ctx_a, turn, lend).expect("A enters");
-                    let (parked_a, turn, lend) = active_a.switch_out(&mut ctx_a);
+                    let (parked_a, turn, lend) = unsafe { active_a.switch_out(&mut ctx_a) };
 
                     // Unwind BEFORE another thread can switch_in.
                     let caught =
@@ -1509,7 +1516,7 @@ fn l67b_b4_unwind_between_switch_out_and_switch_in_poisons_era() {
                     group.exit();
 
                     teardown_rx.recv_timeout(BOUND).expect("teardown A");
-                    parked_a.retire_parked_for_teardown_for_test(&mut ctx_a);
+                    unsafe { parked_a.retire_parked_for_teardown_for_test(&mut ctx_a) };
                     ctx_a.retire_green_owner();
                 });
 
@@ -1545,13 +1552,13 @@ fn l67b_b4_world_seat_refuses_wrong_context_slab() {
         let handle = era.keeper_baton_for_test().test_world_handle_for_test();
 
         let (mut ctx_a, ret_a) = handle.spawn_seated_context_for_test(30);
-        let parked_a =
-            ParkedWorldSeat::park_seated_with_retention(&mut ctx_a, &ret_a).expect("park ctx_a");
+        let parked_a = unsafe { ParkedWorldSeat::park_seated_with_retention(&mut ctx_a, &ret_a) }
+            .expect("park ctx_a");
         drop(ret_a);
 
         let (mut ctx_b, ret_b) = handle.spawn_seated_context_for_test(31);
-        let parked_b =
-            ParkedWorldSeat::park_seated_with_retention(&mut ctx_b, &ret_b).expect("park ctx_b");
+        let parked_b = unsafe { ParkedWorldSeat::park_seated_with_retention(&mut ctx_b, &ret_b) }
+            .expect("park ctx_b");
         drop(ret_b);
 
         let (turn, lend, _rx) = make_test_turn(heap, 41);
@@ -1568,9 +1575,9 @@ fn l67b_b4_world_seat_refuses_wrong_context_slab() {
         assert_eq!(refusal, WorldSeatRefusal::WrongContext);
         lend.give_back(WorldReturned::from_end(turn));
 
-        parked_b.retire_parked_for_teardown_for_test(&mut ctx_b);
+        unsafe { parked_b.retire_parked_for_teardown_for_test(&mut ctx_b) };
         ctx_b.retire_green_owner();
-        parked_a.retire_parked_for_teardown_for_test(&mut ctx_a);
+        unsafe { parked_a.retire_parked_for_teardown_for_test(&mut ctx_a) };
         ctx_a.retire_green_owner();
     });
 }

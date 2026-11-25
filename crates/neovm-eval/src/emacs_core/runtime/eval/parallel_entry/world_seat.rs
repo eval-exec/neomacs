@@ -213,10 +213,26 @@ impl ParkedWorldSeat {
     /// Park a live seated Green `Context` (holding its `Baton` inline on its
     /// `GreenSeat`) off this OS thread so a parallel era can lend World turns
     /// through the keeper ring.
+    ///
+    /// # Safety
+    ///
+    /// On `Ok(parked)`, `ctx`'s TLS heap slot is cleared via
+    /// [`park_carrier_tls`] and its owner/World state is stowed while `ctx`
+    /// remains live:
+    ///
+    /// 1. The caller must not re-enter, allocate, collect, or evaluate on
+    ///    `ctx` until `parked.enter(...)` / `parked.switch_in(...)` reinstalls
+    ///    it (or `ctx` is retired/dropped).
+    /// 2. The caller must not reuse this OS thread for another `Context`
+    ///    without first completing [`reset_carrier_tls`] (e.g. via `enter` /
+    ///    `switch_in`).
     #[cold]
     #[inline(never)]
-    pub(crate) fn park_seated(ctx: &mut Context) -> Result<Self, WorldSeatRefusal> {
-        Self::park_seated_inner(ctx, None)
+    #[allow(unsafe_code)]
+    pub(crate) unsafe fn park_seated(ctx: &mut Context) -> Result<Self, WorldSeatRefusal> {
+        // SAFETY: caller upholds `park_seated`'s dormancy and deferred-reset
+        // contract above.
+        unsafe { Self::park_seated_inner(ctx, None) }
     }
 
     /// Test-only helper: park a live seated Green `Context` during an
@@ -224,19 +240,27 @@ impl ParkedWorldSeat {
     /// `Baton`, using an explicit retained facade epoch token (Q3). Callers
     /// must serialize against the era's turns; production callers must hold a
     /// `Baton` (`park_seated`) or `WorldTurn` (`ActiveWorldSeat::switch_out`).
+    ///
+    /// # Safety
+    ///
+    /// Same dormancy and deferred-reset contract as [`Self::park_seated`].
     #[cfg(test)]
     #[cold]
     #[inline(never)]
-    pub(crate) fn park_seated_with_retention(
+    #[allow(unsafe_code)]
+    pub(crate) unsafe fn park_seated_with_retention(
         ctx: &mut Context,
         retention: &FacadeEpochRetention,
     ) -> Result<Self, WorldSeatRefusal> {
-        Self::park_seated_inner(ctx, Some(retention))
+        // SAFETY: caller upholds `park_seated`'s dormancy and deferred-reset
+        // contract above.
+        unsafe { Self::park_seated_inner(ctx, Some(retention)) }
     }
 
     #[cold]
     #[inline(never)]
-    fn park_seated_inner(
+    #[allow(unsafe_code)]
+    unsafe fn park_seated_inner(
         ctx: &mut Context,
         retention: Option<&FacadeEpochRetention>,
     ) -> Result<Self, WorldSeatRefusal> {
@@ -269,9 +293,9 @@ impl ParkedWorldSeat {
             "verified World carrier holder must stow into GreenRuntime"
         );
         // SAFETY: `ctx` parked its seat/roots and stowed carried World state
-        // under `AbortOnPanic`; no TLS heap loan is live, and `enter` runs
-        // `reset_carrier_tls()` before reusing this thread.
-        #[allow(unsafe_code)]
+        // under `AbortOnPanic`, no TLS heap loan is live, and the caller of
+        // `park_seated` / `park_seated_with_retention` upholds the dormancy and
+        // deferred `reset_carrier_tls()` obligations.
         unsafe {
             park_carrier_tls();
         }
@@ -346,8 +370,15 @@ impl ParkedWorldSeat {
     /// `RootBatchLease`, clear any cached `PreparedRootBatch`, stow World
     /// carriers back to `Stowed`, and drop the seat's `FacadeEpochRetention`
     /// before `World::finish_green_registry` / final `TaggedHeap::drop` (Q3).
+    ///
+    /// # Safety
+    ///
+    /// Leaves `ctx` parked with carrier TLS cleared via [`park_carrier_tls`];
+    /// caller must drop `ctx` without re-entering it and must not reuse this OS
+    /// thread for another `Context` without running [`reset_carrier_tls`].
     #[cfg(test)]
-    pub(crate) fn retire_parked_for_teardown_for_test(self, ctx: &mut Context) {
+    #[allow(unsafe_code)]
+    pub(crate) unsafe fn retire_parked_for_teardown_for_test(self, ctx: &mut Context) {
         let _abort = AbortOnPanic("world-seat-teardown");
         reset_carrier_tls();
         ctx.unstow_serial_world_state();
@@ -357,8 +388,8 @@ impl ParkedWorldSeat {
         let stowed = ctx.stow_serial_world_state();
         assert!(stowed, "teardown must stow World carriers back to Stowed");
         // SAFETY: test teardown parked `ctx` and stowed World carriers under
-        // `AbortOnPanic`; no TLS heap loan is live and `ctx` is not re-entered.
-        #[allow(unsafe_code)]
+        // `AbortOnPanic`, no TLS heap loan is live, and caller upholds the
+        // teardown dormancy/deferred-reset contract above.
         unsafe {
             park_carrier_tls();
         }
@@ -437,9 +468,21 @@ impl ActiveWorldSeat {
     /// `CarriedHolder::Stowed`, and park carrier TLS WITHOUT consuming
     /// `WorldTurn`, returning `(ParkedWorldSeat, WorldTurn, WorldLend)` so
     /// another Baton thread can `switch_in` during the same keeper stop.
+    ///
+    /// # Safety
+    ///
+    /// Same dormancy and deferred-reset contract as
+    /// [`ParkedWorldSeat::park_seated`]: after returning, `ctx`'s TLS heap slot
+    /// is cleared via [`park_carrier_tls`] and caller must not re-enter `ctx`
+    /// or reuse this OS thread for another `Context` without completing
+    /// [`reset_carrier_tls`] (e.g. via `enter`/`switch_in`).
     #[cold]
     #[inline(never)]
-    pub(crate) fn switch_out(self, ctx: &mut Context) -> (ParkedWorldSeat, WorldTurn, WorldLend) {
+    #[allow(unsafe_code)]
+    pub(crate) unsafe fn switch_out(
+        self,
+        ctx: &mut Context,
+    ) -> (ParkedWorldSeat, WorldTurn, WorldLend) {
         let (roots, retention) = {
             let _abort = AbortOnPanic("world-seat-switch-out");
             let current_slab = ctx.owner.slab().map(|s| s as *const _ as usize);
@@ -461,9 +504,9 @@ impl ActiveWorldSeat {
                 "active World seat must stow World carriers into GreenRuntime on switch_out"
             );
             // SAFETY: active World seat parked its roots and stowed carried
-            // World state under `AbortOnPanic`; no TLS heap loan is live and
-            // the next seat runs `reset_carrier_tls()` on `enter`/`switch_in`.
-            #[allow(unsafe_code)]
+            // World state under `AbortOnPanic`, no TLS heap loan is live, and
+            // caller of `switch_out` upholds the dormancy and deferred
+            // `reset_carrier_tls()` obligations.
             unsafe {
                 park_carrier_tls();
             }
@@ -486,15 +529,26 @@ impl ActiveWorldSeat {
     /// parked roots, stow World carriers to `CarriedHolder::Stowed`, and park
     /// carrier TLS, and ONLY THEN consume `WorldTurn` into [`WorldReturned`]
     /// via [`WorldReturned::from_stowed_seat`] (Nit 6).
+    ///
+    /// # Safety
+    ///
+    /// Same dormancy and deferred-reset contract as [`Self::switch_out`].
     #[cold]
     #[inline(never)]
-    pub(crate) fn exit(self, ctx: &mut Context) -> (ParkedWorldSeat, WorldLend, WorldReturned) {
-        let (parked, turn, lend) = self.switch_out(ctx);
+    #[allow(unsafe_code)]
+    pub(crate) unsafe fn exit(
+        self,
+        ctx: &mut Context,
+    ) -> (ParkedWorldSeat, WorldLend, WorldReturned) {
+        // SAFETY: caller upholds `switch_out`'s dormancy and deferred-reset
+        // contract above.
+        let (parked, turn, lend) = unsafe { self.switch_out(ctx) };
         let returned = WorldReturned::from_stowed_seat(turn, StowedForReturn(()));
         (parked, lend, returned)
     }
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 #[path = "tests/world_seat_test.rs"]
 mod tests;

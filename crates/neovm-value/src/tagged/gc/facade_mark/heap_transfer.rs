@@ -19,7 +19,7 @@ use crate::tagged::value::TaggedValue;
 
 use super::super::{
     EraWorldLoan, FrozenFunctionRoots, FrozenLegacyRoots, Gen1Admission, HeapIdentity, WorldLoan,
-    clear_tagged_heap_if_installed, tagged_heap_is_installed,
+    clear_tagged_heap_root_if_installed, tagged_heap_is_installed,
 };
 use super::QuiescentCollector;
 
@@ -486,9 +486,15 @@ unsafe fn retire_transfer_tls(
     if installed {
         heap.preflight_source_store_retirement()
             .map_err(TransferError::Observations)?;
-        // SAFETY: source heap is being retired for era transfer; no active
-        // `Context` evaluates on it while transferred.
-        unsafe { clear_tagged_heap_if_installed(heap) };
+        heap.detach_store_protocol();
+        // SAFETY: `retire_transfer_tls`'s caller uniquely retains the live
+        // backing at `root` and every callback, collector, or era frame has
+        // returned or unwound, so no other live `TaggedHeap` can share
+        // `root`'s address. Detaching store protocol above and clearing by
+        // address retires both normal `set_tagged_heap` installs and
+        // address-only test fault injection (`poke_installed_heap_address`)
+        // without failing on an unpopulated `TAGGED_HEAP_ID`.
+        unsafe { clear_tagged_heap_root_if_installed(root) };
     }
     heap.retire_source_observation_membership()
         .map_err(TransferError::Observations)

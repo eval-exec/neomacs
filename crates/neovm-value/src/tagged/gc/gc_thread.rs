@@ -1839,9 +1839,35 @@ pub fn carrier_heap_is_acceptable_for_job_start() -> bool {
 /// use-after-free, and the next heap to reuse that storage turns its header
 /// into garbage.
 ///
-/// The pointer identity check makes this safe to call unconditionally from a
-/// drop hook: an owner whose heap was already displaced by a later
-/// `set_tagged_heap` leaves the newer installation alone.
+/// Shared identity-checked TLS match predicate used by both foreign-heap
+/// refusal and conditional TLS clearing so install and uninstall cannot drift.
+///
+/// When `expected_id` is `Some(id)`, both the raw pointer and `TAGGED_HEAP_ID`
+/// must match (preventing same-address ABA reuse via `std::mem::replace` or
+/// free/realloc). When `None`, matches by raw pointer alone without
+/// dereferencing the heap (used by `clear_tagged_heap_root_if_installed` while
+/// an exclusive collector loan is held).
+#[inline]
+fn slot_matches_heap(
+    current: *mut TaggedHeap,
+    target: *const TaggedHeap,
+    expected_id: Option<usize>,
+) -> bool {
+    if current != (target as *mut TaggedHeap) {
+        return false;
+    }
+    match expected_id {
+        Some(id) => TAGGED_HEAP_ID
+            .try_with(|slot| slot.get() == Some(id))
+            .unwrap_or(false),
+        None => true,
+    }
+}
+
+/// The pointer and heap-identity (`TAGGED_HEAP_ID`) check makes this safe to
+/// call unconditionally from a drop hook: an owner whose heap was already
+/// displaced by a later `set_tagged_heap` (or a same-address `mem::replace`d
+/// heap with a different identity) leaves the installed heap alone.
 ///
 /// # Safety
 ///
@@ -1853,9 +1879,16 @@ pub fn carrier_heap_is_acceptable_for_job_start() -> bool {
 #[doc(hidden)]
 pub unsafe fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
     heap.detach_store_protocol();
-    // SAFETY: caller upholds `clear_tagged_heap_root_if_installed`'s contract
-    // and `detach_store_protocol()` just detached the store protocol above.
-    unsafe { clear_tagged_heap_root_if_installed(std::ptr::NonNull::from(heap)) };
+    // SAFETY: caller upholds `clear_tagged_heap_root_matching`'s contract,
+    // `detach_store_protocol()` detached `heap`'s store protocol above, and
+    // passing `Some(heap.tagged_heap_identity())` prevents a same-address heap
+    // with a different identity from clearing another live heap's TLS slot.
+    unsafe {
+        clear_tagged_heap_root_matching(
+            std::ptr::NonNull::from(heap),
+            Some(heap.tagged_heap_identity()),
+        );
+    }
 }
 
 /// Uninstall by address alone, without creating a heap reference. Admission
@@ -1871,9 +1904,17 @@ pub unsafe fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
 /// the store protocol for `root` must already be detached.
 #[doc(hidden)]
 pub unsafe fn clear_tagged_heap_root_if_installed(root: std::ptr::NonNull<TaggedHeap>) {
+    // SAFETY: caller upholds the address-only uninstall contract above.
+    unsafe { clear_tagged_heap_root_matching(root, None) };
+}
+
+unsafe fn clear_tagged_heap_root_matching(
+    root: std::ptr::NonNull<TaggedHeap>,
+    expected_id: Option<usize>,
+) {
     let owned = root.as_ptr();
     let _ = TAGGED_HEAP.try_with(|h| {
-        if h.get() == owned {
+        if slot_matches_heap(h.get(), owned, expected_id) {
             super::super::collection_reads::clear_installed_store_heap(owned);
             super::super::collection_reads::reset_recent_reads_for_heap_installation();
             h.set(std::ptr::null_mut());
@@ -2043,8 +2084,7 @@ pub fn refuse_if_live_heap_installed() {
 #[inline]
 fn refuse_if_foreign_heap_installed(target: *const TaggedHeap, target_id: usize) {
     let current = TAGGED_HEAP.with(|slot| slot.get());
-    let same_heap = current == (target as *mut TaggedHeap)
-        && TAGGED_HEAP_ID.with(|id| id.get()) == Some(target_id);
+    let same_heap = slot_matches_heap(current, target, Some(target_id));
     if !current.is_null() && !same_heap && !installed_slot_is_armed_test_fallback() {
         refuse_foreign_heap_install();
     }

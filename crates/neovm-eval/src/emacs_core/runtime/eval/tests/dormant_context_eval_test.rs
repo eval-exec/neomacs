@@ -665,3 +665,48 @@ fn set_tagged_heap_refuses_same_address_mem_replace_heap() {
     drop(second_dropped);
     drop(slot);
 }
+
+#[test]
+fn drop_of_mem_replaced_heap_at_same_address_does_not_clear_original_tls() {
+    let mut slot = Box::new(neovm_value::tagged::gc::TaggedHeap::new());
+    let first_id = slot.tagged_heap_identity();
+    neovm_value::tagged::gc::set_tagged_heap(&mut slot);
+    assert_eq!(current_tagged_heap_identity(), Some(first_id));
+
+    // Replace `*slot` in place at the exact same heap allocation address while
+    // `first_live` stays live.
+    let first_live = std::mem::replace(&mut *slot, neovm_value::tagged::gc::TaggedHeap::new());
+    let second_id = slot.tagged_heap_identity();
+    assert_ne!(first_id, second_id);
+
+    // Dropping `slot` runs `TaggedHeap::drop` for `second_id` at the exact
+    // address still recorded in `TAGGED_HEAP`. Because `TAGGED_HEAP_ID` names
+    // `first_id`, `clear_tagged_heap_if_installed` must NOT clear TLS.
+    drop(slot);
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(first_id),
+        "dropping a mem::replaced heap at the same address must not clear the original heap's TLS"
+    );
+
+    // Installing a third heap must still be refused while `first_live` remains
+    // installed in TLS.
+    let mut third = Box::new(neovm_value::tagged::gc::TaggedHeap::new());
+    let refused = catch_unwind(AssertUnwindSafe(|| {
+        neovm_value::tagged::gc::set_tagged_heap(&mut third);
+    }));
+    let text = panic_text(refused.expect_err(
+        "installing a third heap after dropping a same-address replacement must still refuse",
+    ));
+    assert!(
+        text.contains("dormant Context"),
+        "refusal after same-address replacement drop must name dormant Context, got {text}"
+    );
+    assert_eq!(current_tagged_heap_identity(), Some(first_id));
+
+    // SAFETY: test cleanup; no active `Context` or TLS heap loan is live, and
+    // `first_live`'s drop detaches its own store protocol afterwards.
+    unsafe { neovm_value::tagged::gc::clear_carrier_heap_tls() };
+    drop(third);
+    drop(first_live);
+}

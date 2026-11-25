@@ -313,8 +313,8 @@ impl Context {
         .expect("collection fixture drain");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        // SAFETY: `context` is not evaluated during the era and its heap is
-        // reinstalled right after the era ends before `after(&mut context, ...)`.
+        // SAFETY: `context` is owned locally by this fixture, is never
+        // evaluated during the era, and is dropped on exit without re-entry.
         unsafe {
             neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
                 context.tagged_heap.heap_root(),

@@ -148,12 +148,28 @@ impl Context {
             AdmissionScope<'heap>,
         ) -> (QuiescentCollector<'heap>, super::Baton, R),
     ) -> Result<R, OwnedParallelError> {
-        // SAFETY: `self` is not re-entered while `prepared` lives, and
-        // `recover_serial_context(recovery)` unconditionally reinstalls
-        // `self`'s heap before `admit_owned_with` returns.
+        struct AbortOnPanic(&'static str);
+        impl Drop for AbortOnPanic {
+            fn drop(&mut self) {
+                if std::thread::panicking() {
+                    eprintln!(
+                        "fatal: panic while Context TLS heap is cleared in {}",
+                        self.0
+                    );
+                    std::process::abort();
+                }
+            }
+        }
+        // SAFETY: `abort_on_unwind` arms immediately after
+        // `prepare_owned_admission` succeeds and is disarmed only after
+        // `recover_serial_context(recovery)` completes, so a panic inside
+        // `prepared.run` or recovery aborts the process rather than returning
+        // a cleared/abandoned `&mut Context` to a `catch_unwind` caller.
         let prepared = unsafe { self.prepare_owned_admission()? };
+        let abort_on_unwind = AbortOnPanic("admit-owned-with");
         let (recovery, result) = prepared.run(plan, body);
         self.recover_serial_context(recovery);
+        std::mem::forget(abort_on_unwind);
         result
     }
 
