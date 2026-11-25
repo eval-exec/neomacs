@@ -872,6 +872,48 @@ pub(crate) fn builtin_image_size(args: Vec<Value>) -> EvalResult {
     ))
 }
 
+/// GNU `DEFAULT_IMAGE_WIDTH` / `DEFAULT_IMAGE_HEIGHT` (`src/dispextern.h`).
+const DEFAULT_IMAGE_WIDTH: i64 = 30;
+const DEFAULT_IMAGE_HEIGHT: i64 = 30;
+
+/// Placeholder size for an image whose load failed, matching GNU
+/// `lookup_image` (`src/image.c:3573-3583`): explicit non-negative fixnum
+/// `:width`/`:height` from the spec, falling back to 30×30. `:margin` and
+/// `:relief` are not applied to failed images in GNU.
+fn failed_image_placeholder_size(spec: &Value) -> (i64, i64) {
+    let mut width = None;
+    let mut height = None;
+    if let Some(items) = list_to_vec(spec) {
+        let mut i = 1usize;
+        while i + 1 < items.len() {
+            match ImageSpecKey::from_lisp_value(items[i]) {
+                Some(ImageSpecKey::Width) if width.is_none() => {
+                    width = Some(
+                        items[i + 1]
+                            .as_int()
+                            .filter(|&n| n >= 0)
+                            .unwrap_or(DEFAULT_IMAGE_WIDTH),
+                    );
+                }
+                Some(ImageSpecKey::Height) if height.is_none() => {
+                    height = Some(
+                        items[i + 1]
+                            .as_int()
+                            .filter(|&n| n >= 0)
+                            .unwrap_or(DEFAULT_IMAGE_HEIGHT),
+                    );
+                }
+                _ => {}
+            }
+            i += 2;
+        }
+    }
+    (
+        width.unwrap_or(DEFAULT_IMAGE_WIDTH),
+        height.unwrap_or(DEFAULT_IMAGE_HEIGHT),
+    )
+}
+
 /// `(image-size SPEC &optional PIXELS FRAME)` → `(WIDTH . HEIGHT)`.
 ///
 /// Mirrors GNU `Fimage_size` (`src/image.c`): after resolving the image on
@@ -915,18 +957,37 @@ pub fn builtin_image_size_in_context(eval: &mut Context, args: Vec<Value>) -> Ev
         ));
     };
 
-    let resolved = display_host
-        .resolve_image_sync(request, environment.size_limit())
-        .map_err(|message| {
-            // `image-size` on a failing image logs in GNU (`lookup_image` runs
-            // inside `Fimage_size`) even though it also returns the
-            // placeholder size rather than signalling. The message is reported
-            // here, on the way out, so the diagnostic does not have to wait for
-            // a redisplay that may never come.
+    let pixels = args.get(1).copied().unwrap_or(Value::NIL);
+    let resolved = match display_host.resolve_image_sync(request, environment.size_limit()) {
+        Ok(resolved) => {
             eval.log_pending_image_diagnostics();
-            signal("error", vec![Value::string(message)])
-        })?;
-    eval.log_pending_image_diagnostics();
+            resolved
+        }
+        Err(_) => {
+            // `image-size` on a failing image logs in GNU (`lookup_image` runs
+            // inside `Fimage_size`) and returns the failed-image placeholder
+            // size without signalling (`src/image.c:1666-1689`, `3568-3583`).
+            eval.log_pending_image_diagnostics();
+            let (width_px, height_px) = failed_image_placeholder_size(&args[0]);
+            if !pixels.is_nil() {
+                return Ok(Value::cons(
+                    Value::fixnum(width_px),
+                    Value::fixnum(height_px),
+                ));
+            }
+            let (column_width, line_height) = image_frame_char_cell_pixels(eval, args.get(2))
+                .ok_or_else(|| {
+                    signal(
+                        "error",
+                        vec![Value::string("Window system frame should be used")],
+                    )
+                })?;
+            return Ok(Value::cons(
+                Value::make_float(width_px as f64 / column_width),
+                Value::make_float(height_px as f64 / line_height),
+            ));
+        }
+    };
     let Some(image) = resolved else {
         return Err(signal(
             "error",
@@ -940,7 +1001,6 @@ pub fn builtin_image_size_in_context(eval: &mut Context, args: Vec<Value>) -> Ev
     // Margins/relief are added in each space separately so HiDPI `:scale
     // default` does not re-scale absolute margin integers.
     let margins = ImageSpecMargins::from_image_spec(&args[0]);
-    let pixels = args.get(1).copied().unwrap_or(Value::NIL);
     if !pixels.is_nil() {
         let (width_px, height_px) = margins.add_to_pixel_size(
             i64::from(image.metadata.reported.width()),

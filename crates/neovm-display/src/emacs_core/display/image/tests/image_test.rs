@@ -1978,6 +1978,104 @@ fn image_size_pixels_nil_returns_character_units_as_floats() {
     assert_eq!(in_pixels.cons_cdr(), Value::fixnum(30));
 }
 
+struct SyncFailingImageDisplayHost(&'static str);
+
+impl DisplayHost for SyncFailingImageDisplayHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resolve_image_sync(
+        &self,
+        _request: ImageResolveRequest,
+        _limit: ImageSizeLimit,
+    ) -> Result<Option<ReadyImage>, String> {
+        Err(self.0.to_owned())
+    }
+}
+
+/// GNU `lookup_image` + `Fimage_size` (`src/image.c:3568-3583`, `1666-1689`):
+/// a failed image returns the 30×30 placeholder (or explicit fixnum `:width` /
+/// `:height`, without `:margin`/`:relief`) rather than signalling an error.
+#[test]
+fn image_size_failed_image_returns_gnu_placeholder_without_signalling() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    {
+        let frame = eval
+            .frame_manager_mut()
+            .get_mut(frame_id)
+            .expect("selected frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.char_width = 10.0;
+        frame.char_height = 20.0;
+    }
+    eval.set_display_host(Box::new(SyncFailingImageDisplayHost(
+        "Unable to create image",
+    )));
+
+    let default_spec = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword("type"),
+        Value::symbol("gif"),
+        Value::keyword("data"),
+        Value::string("corrupt"),
+    ]);
+    let px = builtin_image_size_in_context(&mut eval, vec![default_spec, Value::T])
+        .expect("failed image must return placeholder, not signal");
+    assert_eq!(px.cons_car(), Value::fixnum(30));
+    assert_eq!(px.cons_cdr(), Value::fixnum(30));
+
+    let chars = builtin_image_size_in_context(&mut eval, vec![default_spec])
+        .expect("failed image in character units must not signal");
+    assert_eq!(chars.cons_car(), Value::make_float(3.0)); // 30 / 10
+    assert_eq!(chars.cons_cdr(), Value::make_float(1.5)); // 30 / 20
+
+    // Explicit fixnum :width/:height override the 30×30 default; :margin and
+    // :relief are not applied to failed images in GNU `lookup_image`.
+    let sized_spec = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword("type"),
+        Value::symbol("gif"),
+        Value::keyword("data"),
+        Value::string("corrupt"),
+        Value::keyword("width"),
+        Value::fixnum(64),
+        Value::keyword("height"),
+        Value::fixnum(48),
+        Value::keyword("margin"),
+        Value::fixnum(5),
+        Value::keyword("relief"),
+        Value::fixnum(2),
+    ]);
+    let sized_px = builtin_image_size_in_context(&mut eval, vec![sized_spec, Value::T])
+        .expect("failed image with explicit dimensions must not signal");
+    assert_eq!(sized_px.cons_car(), Value::fixnum(64));
+    assert_eq!(sized_px.cons_cdr(), Value::fixnum(48));
+
+    // Non-fixnum :width falls back to DEFAULT_IMAGE_WIDTH (30).
+    let partial_spec = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword("type"),
+        Value::symbol("gif"),
+        Value::keyword("data"),
+        Value::string("corrupt"),
+        Value::keyword("width"),
+        Value::make_float(12.5),
+        Value::keyword("height"),
+        Value::fixnum(20),
+    ]);
+    let partial_px = builtin_image_size_in_context(&mut eval, vec![partial_spec, Value::T])
+        .expect("failed image with partial dimensions must not signal");
+    assert_eq!(partial_px.cons_car(), Value::fixnum(30));
+    assert_eq!(partial_px.cons_cdr(), Value::fixnum(20));
+}
+
 #[test]
 fn image_spec_parse_reduces_rotation_to_a_quarter_turn() {
     crate::test_utils::init_test_tracing();
