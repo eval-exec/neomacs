@@ -761,6 +761,35 @@ fn status_line_layout_mutation_rejects_rows_built_from_the_old_geometry() {
     let _ = redisplay.discard(&mut eval);
 }
 
+fn window_mode_line_text(
+    state: &neomacs_display_protocol::glyph_matrix::FrameDisplayState,
+    window_id: WindowId,
+) -> String {
+    use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
+    use neomacs_display_protocol::glyph_matrix::{GlyphArea, GlyphType};
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == window_id.0 as i64)
+        .expect("window matrix entry");
+    let mut out = String::new();
+    for row in entry
+        .matrix
+        .rows
+        .iter()
+        .filter(|row| row.enabled && row.role == GlyphRowRole::ModeLine)
+    {
+        for glyph in &row.glyphs[GlyphArea::Text.index()] {
+            match &glyph.glyph_type {
+                GlyphType::Char { ch } => out.push(*ch),
+                GlyphType::Composite { text } => out.push_str(text),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 #[test]
 fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
     let (mut eval, _buffer_id, frame_id, window_id) = initialized_redisplay_test_frame(
@@ -782,11 +811,15 @@ fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
     eval.eval_str(
         "(progn
            (setq neomacs-rejected-end-attempt 0)
+           (setq neomacs-rejected-end-seen nil)
            (set (make-local-variable 'mode-line-format)
                 '((:eval
                    (progn
                      (setq neomacs-rejected-end-attempt
                            (1+ neomacs-rejected-end-attempt))
+                     (setq neomacs-rejected-end-seen
+                           (cons (window-end (selected-window) nil)
+                                 neomacs-rejected-end-seen))
                      (set-window-margins
                       (selected-window) neomacs-rejected-end-attempt 0)
                      \"RETRY\"))))
@@ -794,17 +827,41 @@ fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
     )
     .expect("install non-converging status line");
 
+    // 1. Strict non-fallback layout (`Snapshot`) rejects at exhaustion and
+    //    rolls back every rejected attempt's provisional window-end.
     let rejected = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Snapshot,
     );
     let rejected_attempts = eval
         .eval_str("neomacs-rejected-end-attempt")
         .expect("rejected attempt count");
     assert!(
         rejected.is_none(),
-        "continuously changing layout inputs must exhaust the bounded coordinator; attempts={rejected_attempts}"
+        "strict snapshot must exhaust the bounded coordinator without publishing; attempts={rejected_attempts}"
+    );
+    assert_eq!(
+        rejected_attempts.as_fixnum(),
+        Some(13),
+        "strict snapshot must exhaust all 13 bounded attempts"
+    );
+    assert_eq!(
+        super::super::frame_layout::last_layout_stats_for_test().exhaustion_snapshot_passes,
+        0,
+        "strict snapshot must not enter ExhaustionSnapshot"
+    );
+    let seen_provisional_ends = list_to_vec(
+        &eval
+            .eval_str("neomacs-rejected-end-seen")
+            .expect("provisional ends observed by chrome"),
+    )
+    .expect("provisional end list");
+    assert!(
+        seen_provisional_ends
+            .iter()
+            .any(|end| end.as_fixnum().is_some_and(|pos| pos != accepted_end)),
+        "chrome must observe the speculative body's provisional end before rejection: {seen_provisional_ends:?}"
     );
     let after = eval
         .eval_form(Value::list(vec![
@@ -818,6 +875,83 @@ fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
     assert_eq!(
         after, accepted_end,
         "a rejected body's provisional end is visible to its chrome, but must never become previous accepted viewport evidence"
+    );
+
+    // 2. Live `Redisplay` exhausts the same 13 converging attempts, rolls back
+    //    those rejected attempts, then publishes one callback-inhibited
+    //    ExhaustionSnapshot (GNU safety net) with reused chrome and live margins.
+    eval.eval_str(
+        "(progn
+           (setq neomacs-rejected-end-attempt 0)
+           (set-window-margins (selected-window) 0 0))",
+    )
+    .expect("reset counter and margins for live redisplay");
+    let published = super::super::frame_layout::layout_frame_display_state(
+        &mut eval,
+        frame_id,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
+    )
+    .expect("live redisplay must publish callback-inhibited ExhaustionSnapshot at exhaustion");
+    assert_eq!(
+        eval.eval_str("neomacs-rejected-end-attempt")
+            .expect("redisplay attempt count")
+            .as_fixnum(),
+        Some(13),
+        "ExhaustionSnapshot must inhibit mode-line :eval after the 13 converging attempts"
+    );
+    assert_eq!(
+        super::super::frame_layout::last_layout_stats_for_test().exhaustion_snapshot_passes,
+        1,
+        "exactly one ExhaustionSnapshot pass must publish"
+    );
+    let info = published
+        .window_infos
+        .iter()
+        .find(|info| info.window_id.get() == window_id.0 as i64)
+        .expect("published window info");
+    let neomacs_display_protocol::frame_glyphs::PresentedWindowGeometry::Complete {
+        regions, ..
+    } = info.geometry
+    else {
+        panic!("published ExhaustionSnapshot window must have complete geometry")
+    };
+    assert_eq!(
+        (regions.left_margin_columns, regions.right_margin_columns),
+        (13, 0),
+        "ExhaustionSnapshot must reflect the final post-exhaustion live margins, not an earlier rejected attempt"
+    );
+    let ml_text = window_mode_line_text(&published, window_id);
+    assert!(
+        ml_text.contains("RETRY"),
+        "ExhaustionSnapshot must reuse the last captured mode-line string: {ml_text:?}"
+    );
+    let _ = published.discard(&mut eval);
+
+    let after_publish_cached = eval
+        .eval_form(Value::list(vec![
+            Value::symbol("window-end"),
+            Value::make_window(window_id.0),
+            Value::NIL,
+        ]))
+        .expect("cached window-end after ExhaustionSnapshot")
+        .as_fixnum()
+        .expect("cached end position");
+    let after_publish_update = eval
+        .eval_form(Value::list(vec![
+            Value::symbol("window-end"),
+            Value::make_window(window_id.0),
+            Value::T,
+        ]))
+        .expect("updated window-end after ExhaustionSnapshot")
+        .as_fixnum()
+        .expect("updated end position");
+    assert_ne!(
+        after_publish_cached, accepted_end,
+        "published ExhaustionSnapshot at window-start 300 must advance accepted viewport end"
+    );
+    assert_eq!(
+        after_publish_cached, after_publish_update,
+        "cached window-end after ExhaustionSnapshot must match the published viewport (GNU parity)"
     );
 }
 
@@ -879,14 +1013,28 @@ fn later_sibling_failure_restores_every_earlier_provisional_window_end() {
     )
     .expect("install later-sibling convergence failure");
 
+    // 1. Strict non-fallback layout (`Snapshot`) rejects the whole frame at
+    //    exhaustion and rolls back the earlier sibling's provisional end.
     assert!(
         super::super::frame_layout::layout_frame_display_state(
             &mut eval,
             frame_id,
-            super::super::frame_layout::FrameLayoutPurpose::Redisplay,
+            super::super::frame_layout::FrameLayoutPurpose::Snapshot,
         )
         .is_none(),
-        "the later sibling must exhaust the bounded frame coordinator"
+        "the later sibling must exhaust the strict bounded frame coordinator"
+    );
+    assert_eq!(
+        eval.eval_str("neomacs-later-sibling-attempt")
+            .expect("later sibling attempt count")
+            .as_fixnum(),
+        Some(13),
+        "strict snapshot must exhaust all 13 bounded attempts"
+    );
+    assert_eq!(
+        super::super::frame_layout::last_layout_stats_for_test().exhaustion_snapshot_passes,
+        0,
+        "strict snapshot must not enter ExhaustionSnapshot"
     );
     assert_eq!(
         eval.eval_form(Value::list(vec![
@@ -898,6 +1046,83 @@ fn later_sibling_failure_restores_every_earlier_provisional_window_end() {
         .as_fixnum(),
         Some(accepted_earlier_end),
         "leaf window ends become accepted evidence only when the entire frame converges"
+    );
+
+    // 2. Live `Redisplay` exhausts the bounded coordinator on the later sibling
+    //    and publishes both siblings cleanly in one callback-inhibited
+    //    ExhaustionSnapshot pass.
+    eval.eval_str(
+        "(progn
+           (setq neomacs-later-sibling-attempt 0)
+           (set-window-margins neomacs-failing-later-window 0 0))",
+    )
+    .expect("reset later sibling counter and margins");
+    let published = super::super::frame_layout::layout_frame_display_state(
+        &mut eval,
+        frame_id,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
+    )
+    .expect("live redisplay must publish ExhaustionSnapshot when later sibling exhausts");
+    assert_eq!(
+        eval.eval_str("neomacs-later-sibling-attempt")
+            .expect("later sibling redisplay attempt count")
+            .as_fixnum(),
+        Some(13),
+        "ExhaustionSnapshot must inhibit later sibling mode-line :eval"
+    );
+    assert_eq!(
+        super::super::frame_layout::last_layout_stats_for_test().exhaustion_snapshot_passes,
+        1,
+        "exactly one ExhaustionSnapshot pass must publish"
+    );
+    let later_info = published
+        .window_infos
+        .iter()
+        .find(|info| info.window_id.get() == later_window.0 as i64)
+        .expect("published later sibling info");
+    let neomacs_display_protocol::frame_glyphs::PresentedWindowGeometry::Complete {
+        regions, ..
+    } = later_info.geometry
+    else {
+        panic!("published later sibling must have complete geometry")
+    };
+    assert_eq!(
+        (regions.left_margin_columns, regions.right_margin_columns),
+        (13, 0),
+        "later sibling must publish with post-exhaustion live margins"
+    );
+    let later_ml = window_mode_line_text(&published, later_window);
+    assert!(
+        later_ml.contains("RETRY"),
+        "later sibling must reuse captured mode-line string: {later_ml:?}"
+    );
+    let _ = published.discard(&mut eval);
+
+    let earlier_after_publish = eval
+        .eval_form(Value::list(vec![
+            Value::symbol("window-end"),
+            Value::make_window(earlier_window.0),
+            Value::NIL,
+        ]))
+        .expect("earlier cached window-end after ExhaustionSnapshot")
+        .as_fixnum()
+        .expect("earlier cached end");
+    let earlier_after_update = eval
+        .eval_form(Value::list(vec![
+            Value::symbol("window-end"),
+            Value::make_window(earlier_window.0),
+            Value::T,
+        ]))
+        .expect("earlier updated window-end after ExhaustionSnapshot")
+        .as_fixnum()
+        .expect("earlier updated end");
+    assert_ne!(
+        earlier_after_publish, accepted_earlier_end,
+        "published ExhaustionSnapshot must advance earlier sibling's accepted viewport end"
+    );
+    assert_eq!(
+        earlier_after_publish, earlier_after_update,
+        "earlier sibling's cached window-end must match its published ExhaustionSnapshot viewport"
     );
 }
 
