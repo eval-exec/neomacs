@@ -79,6 +79,7 @@ fn l67b_b3_world_seat_refuses_unseated_and_sim_contexts() {
         WorldSeatRefusal::Unseated,
         "a Sim Context has no Green seat"
     );
+    drop(sim);
 
     let mut unseated_green =
         Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
