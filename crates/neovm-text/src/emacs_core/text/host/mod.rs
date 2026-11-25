@@ -65,6 +65,13 @@ pub trait TextHost: EditHost {
     /// variable view (borrowck): close the view first. TEXT-HOST row.
     fn buffers_mut(&mut self) -> &mut BufferManager;
 
+    /// Non-swappable mutable buffer capability for a write phase. Cannot
+    /// coexist with a live variable view (borrowck): close the view first.
+    /// TEXT-HOST row.
+    fn buffers_view_mut(&mut self) -> neovm_edit::buffer::BufferManagerMut<'_> {
+        neovm_edit::buffer::BufferManagerMut::new(self.buffers_mut())
+    }
+
     // -------------------------------------------------------------------------
     // Text-specific services (cired2's 09:52Z GO batch; one TEXT-HOST row
     // each, or EDIT-HOST when it is a generic eval service)

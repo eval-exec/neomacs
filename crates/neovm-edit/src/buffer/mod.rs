@@ -10,6 +10,7 @@ mod edit_runtime;
 mod edit_transaction;
 #[cfg(any(test, feature = "test-support"))]
 pub mod edit_transaction;
+mod manager_view;
 #[doc(hidden)]
 pub mod storage_string;
 #[doc(hidden)]
@@ -58,6 +59,7 @@ pub(crate) use edit_transaction::TranspositionAnchorPolicy;
 pub use edit_transaction::TranspositionAnchorPolicy;
 #[doc(hidden)]
 pub use edit_transaction::{PreparedBufferEdit, TextMeasurement};
+pub use manager_view::{BufferManagerMut, EditRuntimeMut};
 pub use overlay::{LiveOverlayView, Overlay, OverlayList, OverlayRead};
 #[cfg(not(any(test, feature = "test-support")))]
 pub(crate) use position::BufferLispPos;

@@ -52,6 +52,16 @@ fn obarray_view_swap_compile_contracts() {
     cases.compile_fail("tests/thread_safety_ui/nest_foreign_heap_borrows_the_context.rs");
 }
 
+// rt A3 2c (d): non-swappable BufferManagerMut / EditRuntimeMut capabilities.
+// Kept in its own runner so local golden blesses cannot touch other suites.
+#[test]
+#[cfg(feature = "contract-fixtures")]
+fn buffer_manager_view_compile_contracts() {
+    let cases = trybuild::TestCases::new();
+    cases.pass("tests/buffer_manager_view_pass/*.rs");
+    cases.compile_fail("tests/buffer_manager_view_ui/*.rs");
+}
+
 // The sole-owner eval phase's fixtures sit next to its unit tests, but the
 // runner lives here: trybuild compiles them against the non-test lib, so the
 // contract jobs need no opt-level-2 build of the whole lib unit-test binary.

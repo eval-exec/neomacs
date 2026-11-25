@@ -438,6 +438,13 @@ impl EditHost for Context {
         )
     }
 
+    fn edit_view_and_vars(&mut self) -> (neovm_edit::buffer::EditRuntimeMut<'_>, Self::Vars<'_>) {
+        (
+            neovm_edit::buffer::EditRuntimeMut::new(&mut self.edit),
+            VariableView::new(&self.obarray, &self.owner),
+        )
+    }
+
     // --- display/system queries (C4b, C5, C15) ---
 
     fn resolve_filename(&self, filename: &LispString) -> LispString {

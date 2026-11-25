@@ -399,6 +399,13 @@ pub trait EditHost {
     /// allows.
     fn edit_and_vars(&mut self) -> (&mut EditRuntime, Self::Vars<'_>);
 
+    /// Non-swappable edit-phase capability: an [`EditRuntimeMut`] view and
+    /// its variable-read view, from DISJOINT field borrows.
+    fn edit_view_and_vars(&mut self) -> (crate::buffer::EditRuntimeMut<'_>, Self::Vars<'_>) {
+        let (edit, vars) = self.edit_and_vars();
+        (crate::buffer::EditRuntimeMut::new(edit), vars)
+    }
+
     // -------------------------------------------------------------------------
     // display/system queries (stage-3 display-seam lane: C4b, C5, C15)
     // -------------------------------------------------------------------------

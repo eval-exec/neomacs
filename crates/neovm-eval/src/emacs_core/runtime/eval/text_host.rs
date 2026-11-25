@@ -38,6 +38,11 @@ impl TextHost for Context {
         &mut self.edit.buffers
     }
 
+    #[inline(always)]
+    fn buffers_view_mut(&mut self) -> neovm_edit::buffer::BufferManagerMut<'_> {
+        neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers)
+    }
+
     fn font_glyph_text_metrics(
         &mut self,
         font: Value,

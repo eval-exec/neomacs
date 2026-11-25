@@ -331,6 +331,13 @@ impl Context {
         &mut self.edit
     }
 
+    /// Non-swappable exclusive capability over the edit runtime.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn edit_view_mut(&mut self) -> neovm_edit::buffer::EditRuntimeMut<'_> {
+        neovm_edit::buffer::EditRuntimeMut::new(&mut self.edit)
+    }
+
     /// R-b (PC11-F f1): the thread-projection binding authority (read).
     #[doc(hidden)]
     #[inline(always)]
@@ -604,6 +611,12 @@ impl Context {
     /// Public mutable access to the buffer manager.
     pub fn buffer_manager_mut(&mut self) -> &mut BufferManager {
         &mut self.edit.buffers
+    }
+
+    /// Public non-swappable mutable capability over the buffer manager.
+    #[inline(always)]
+    pub fn buffer_manager_view_mut(&mut self) -> neovm_edit::buffer::BufferManagerMut<'_> {
+        neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers)
     }
 
     /// Public read access to the frame manager.
@@ -1537,6 +1550,232 @@ impl Context {
             &mut self.processes,
             &self.threads,
             &mut self.edit.buffers,
+            &mut self.coding_systems,
+        )
+    }
+
+    // --- Non-swappable BufferManagerMut split-borrow capabilities (rt A3 2c (d)) ---
+
+    /// Split borrow: the frame manager mutably and the buffer manager via its
+    /// non-swappable [`neovm_edit::buffer::BufferManagerMut`] capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_and_buffer_view_mut(
+        &mut self,
+    ) -> (&mut FrameManager, neovm_edit::buffer::BufferManagerMut<'_>) {
+        (
+            &mut self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: the frame manager by shared reference and the buffer
+    /// manager via its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_read_and_buffer_view_mut(
+        &mut self,
+    ) -> (&FrameManager, neovm_edit::buffer::BufferManagerMut<'_>) {
+        (
+            &self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: the process manager mutably and the buffer manager via
+    /// its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes_and_buffer_view_mut(
+        &mut self,
+    ) -> (
+        &mut ProcessManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+    ) {
+        (
+            &mut self.processes,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: the frame manager, non-swappable buffer view, and the
+    /// two minibuffer selection slots, all mutably.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_buffer_view_and_minibuffer_selection_mut(
+        &mut self,
+    ) -> (
+        &mut FrameManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+        &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+        &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+    ) {
+        (
+            &mut self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+            &mut self.minibuffer_selected_window,
+            &mut self.active_minibuffer_window,
+        )
+    }
+
+    /// Same split as [`Self::frame_manager_buffer_view_and_minibuffer_selection_mut`],
+    /// passed to `body` so the borrows end when `body` returns.
+    #[doc(hidden)]
+    pub fn with_frame_buffer_view_and_minibuffer_selection_mut<R>(
+        &mut self,
+        body: impl FnOnce(
+            &mut FrameManager,
+            neovm_edit::buffer::BufferManagerMut<'_>,
+            &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+            &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+        ) -> R,
+    ) -> R {
+        #[cfg(any(test, feature = "test-support"))]
+        let _guard = MinibufferFieldBorrowGuard::enter(&self.minibuffers.field_borrows_live);
+        body(
+            &mut self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+            &mut self.minibuffer_selected_window,
+            &mut self.active_minibuffer_window,
+        )
+    }
+
+    /// Split borrow: the obarray by shared reference and the buffer manager
+    /// via its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn obarray_and_buffer_view_mut(
+        &mut self,
+    ) -> (&Obarray, neovm_edit::buffer::BufferManagerMut<'_>) {
+        (
+            &self.obarray,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: both the buffer manager and the obarray view through
+    /// their non-swappable capabilities.
+    #[doc(hidden)]
+    #[inline]
+    pub fn buffer_view_and_obarray_view_mut(
+        &mut self,
+    ) -> (neovm_edit::buffer::BufferManagerMut<'_>, ObarrayViewMut<'_>) {
+        (
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+            ObarrayViewMut::new(&mut self.obarray),
+        )
+    }
+
+    /// Split borrow: the obarray and owner bindings by shared reference, and
+    /// the buffer manager via its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn variable_view_and_buffer_view_mut(
+        &mut self,
+    ) -> (
+        &Obarray,
+        &owner_bindings::OwnerSlot,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+    ) {
+        (
+            &self.obarray,
+            &self.owner,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: the frame manager, non-swappable buffer view, and
+    /// display host, all mutably.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_buffer_view_and_display_host_mut(
+        &mut self,
+    ) -> (
+        &mut FrameManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+        &mut Option<Box<dyn DisplayHost>>,
+    ) {
+        (
+            &mut self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+            &mut self.display_host,
+        )
+    }
+
+    /// Split borrow for variable reads that also scroll a window: the obarray
+    /// and owner bindings by shared reference, the frame manager mutably, and
+    /// the buffer manager via its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn variable_view_and_frames_buffer_view_mut(
+        &mut self,
+    ) -> (
+        &Obarray,
+        &owner_bindings::OwnerSlot,
+        &mut FrameManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+    ) {
+        (
+            &self.obarray,
+            &self.owner,
+            &mut self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: the frame manager mutably, the buffer manager via its
+    /// non-swappable capability, and the minibuffer manager by shared
+    /// reference.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_buffer_view_and_minibuffers_mut(
+        &mut self,
+    ) -> (
+        &mut FrameManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+        &MinibufferManager,
+    ) {
+        (
+            &mut self.frames,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+            &self.minibuffers,
+        )
+    }
+
+    /// Split borrow: the process manager mutably, the thread manager by shared
+    /// reference, and the buffer manager via its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes_threads_and_buffer_view_mut(
+        &mut self,
+    ) -> (
+        &mut ProcessManager,
+        &ThreadManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+    ) {
+        (
+            &mut self.processes,
+            &self.threads,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
+        )
+    }
+
+    /// Split borrow: processes and coding systems mutably, threads by shared
+    /// reference, and the buffer manager via its non-swappable capability.
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes_threads_buffer_view_and_coding_systems_mut(
+        &mut self,
+    ) -> (
+        &mut ProcessManager,
+        &ThreadManager,
+        neovm_edit::buffer::BufferManagerMut<'_>,
+        &mut CodingSystemManager,
+    ) {
+        (
+            &mut self.processes,
+            &self.threads,
+            neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
             &mut self.coding_systems,
         )
     }
