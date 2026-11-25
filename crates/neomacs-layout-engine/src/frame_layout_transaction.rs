@@ -177,7 +177,8 @@ pub(crate) enum LayoutConvergenceFailureReason {
     SharedBudgetExhausted,
     /// One specific relayout cause reached its per-cause retry bound.
     CauseRetryBudgetExhausted { cause_limit: usize },
-    /// Window chrome height returned to an earlier assumed height for the same window.
+    /// Window chrome repeated an earlier `(assumed, measured)` height transition
+    /// for the same window.
     ChromeHeightCycle,
 }
 
@@ -194,21 +195,28 @@ pub(crate) struct FrameLayoutCoordinator {
     max_retries: usize,
     cause_counts: [Option<(RelayoutCauseKey, usize)>; MAX_TRACKED_CAUSES],
     cause_count_len: usize,
-    /// Previously assumed `(window_id, chrome_metrics_bits)` pairs for
-    /// oscillation detection on `FrameRelayoutRequest::WindowChrome`.
-    seen_chrome_heights: [Option<(DisplayWindowId, [u32; 3])>; MAX_TRACKED_CAUSES],
-    seen_chrome_height_len: usize,
+    /// Previously taken `(window_id, assumed_bits, measured_bits)` transitions
+    /// for oscillation detection on `FrameRelayoutRequest::WindowChrome`.
+    seen_chrome_transitions: [Option<(DisplayWindowId, [u32; 3], [u32; 3])>; MAX_TRACKED_CAUSES],
+    seen_chrome_transition_len: usize,
 }
 
 impl FrameLayoutCoordinator {
     pub(crate) fn new(max_retries: usize) -> Self {
+        // At most one `WindowChrome` request can occur per attempt, so keeping
+        // `max_retries <= MAX_TRACKED_CAUSES` guarantees `seen_chrome_transitions`
+        // can never silently saturate before the shared retry budget expires.
+        debug_assert!(
+            max_retries <= MAX_TRACKED_CAUSES,
+            "FrameLayoutCoordinator max_retries ({max_retries}) exceeds MAX_TRACKED_CAUSES ({MAX_TRACKED_CAUSES})"
+        );
         Self {
             retry_count: 0,
             max_retries,
             cause_counts: [None; MAX_TRACKED_CAUSES],
             cause_count_len: 0,
-            seen_chrome_heights: [None; MAX_TRACKED_CAUSES],
-            seen_chrome_height_len: 0,
+            seen_chrome_transitions: [None; MAX_TRACKED_CAUSES],
+            seen_chrome_transition_len: 0,
         }
     }
 
@@ -216,31 +224,33 @@ impl FrameLayoutCoordinator {
         self.retry_count
     }
 
-    fn record_chrome_assumed_and_check_cycle(
+    fn record_chrome_transition_and_check_cycle(
         &mut self,
         window_id: DisplayWindowId,
         assumed: WindowChromeMetrics,
         measured: WindowChromeMetrics,
     ) -> bool {
-        let assumed_bits = chrome_metrics_bits(assumed);
-        let measured_bits = chrome_metrics_bits(measured);
-        let assumed_seen = self.seen_chrome_heights[..self.seen_chrome_height_len]
+        let transition = (
+            window_id,
+            chrome_metrics_bits(assumed),
+            chrome_metrics_bits(measured),
+        );
+        // Refuse only when the exact `(assumed, measured)` transition repeats
+        // for this window: a stateful single excursion `A -> B -> A` then
+        // stable at `A` takes distinct transitions `(A, B)` and `(B, A)` and
+        // converges cleanly on pass 3, whereas true oscillation `A <-> B`
+        // repeats `(A, B)` on pass 3 and is caught immediately.
+        if self.seen_chrome_transitions[..self.seen_chrome_transition_len]
             .iter()
-            .any(|slot| *slot == Some((window_id, assumed_bits)));
-        if !assumed_seen && self.seen_chrome_height_len < MAX_TRACKED_CAUSES {
-            self.seen_chrome_heights[self.seen_chrome_height_len] = Some((window_id, assumed_bits));
-            self.seen_chrome_height_len += 1;
+            .any(|slot| *slot == Some(transition))
+        {
+            return true;
         }
-        // If `measured` returns to any previously assumed height for this
-        // window, treat the chrome height as oscillating (e.g. toggling
-        // 1.0 <-> 2.0). Known limitation (W3): a stateful chrome callback that
-        // makes a single excursion A -> B -> A and then stabilizes at A is also
-        // flagged here; tracking repeated `(assumed, measured)` transition pairs
-        // would allow single excursions at the cost of one extra retry on real
-        // cycles.
-        self.seen_chrome_heights[..self.seen_chrome_height_len]
-            .iter()
-            .any(|slot| *slot == Some((window_id, measured_bits)))
+        if self.seen_chrome_transition_len < MAX_TRACKED_CAUSES {
+            self.seen_chrome_transitions[self.seen_chrome_transition_len] = Some(transition);
+            self.seen_chrome_transition_len += 1;
+        }
+        false
     }
 
     pub(crate) fn request_retry(
@@ -260,7 +270,7 @@ impl FrameLayoutCoordinator {
             assumed,
             measured,
         } = request
-            && self.record_chrome_assumed_and_check_cycle(window_id, assumed, measured)
+            && self.record_chrome_transition_and_check_cycle(window_id, assumed, measured)
         {
             return Err(LayoutConvergenceError {
                 retry_count: self.retry_count,

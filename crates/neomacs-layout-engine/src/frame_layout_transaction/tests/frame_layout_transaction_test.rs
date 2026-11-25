@@ -141,16 +141,28 @@ fn coordinator_allows_monotonic_chrome_heights_and_detects_oscillation_cycles() 
         Ok(())
     );
 
-    // Returning to an earlier assumed height (oscillation cycle) exhausts immediately.
+    // A single excursion back to an earlier assumed height (40 -> 16) is allowed
+    // because the transition pair (40, 16) has not been taken before.
+    assert_eq!(
+        coordinator.request_retry(FrameRelayoutRequest::WindowChrome {
+            window_id: w1,
+            assumed: h(40.0),
+            measured: h(16.0),
+        }),
+        Ok(())
+    );
+
+    // Repeating an already-taken (assumed, measured) transition pair (16 -> 24)
+    // is a proven cycle and exhausts immediately.
     let cycle = FrameRelayoutRequest::WindowChrome {
         window_id: w1,
-        assumed: h(40.0),
-        measured: h(16.0),
+        assumed: h(16.0),
+        measured: h(24.0),
     };
     assert_eq!(
         coordinator.request_retry(cycle),
         Err(LayoutConvergenceError {
-            retry_count: 3,
+            retry_count: 4,
             max_retries: 12,
             reason: LayoutConvergenceFailureReason::ChromeHeightCycle,
             last_request: cycle,

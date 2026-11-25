@@ -1007,8 +1007,8 @@ fn converging_mode_line_height_growth_converges_without_snapshot() {
 
 /// R3 Case G: a mode-line `:eval` oscillating between `:height 2.0` and `:height 1.0`
 /// (unbounded `fonts_changed` loop in GNU 31.1, probe G = 22 until test cap) is
-/// detected as a height cycle after 1 retry (2 calls) and published via
-/// `ExhaustionSnapshot`.
+/// detected as a repeated `(assumed, measured)` transition cycle on pass 3
+/// (`A -> B`, `B -> A`, `A -> B` repeats) and published via `ExhaustionSnapshot`.
 #[test]
 fn oscillating_mode_line_height_publishes_via_exhaustion_snapshot() {
     let (mut eval, frame, _buffer, window) = incr_editing_frame("height osc test\n", 800, 240);
@@ -1045,12 +1045,297 @@ fn oscillating_mode_line_height_publishes_via_exhaustion_snapshot() {
     );
     let calls = eval.eval_str("g-calls").unwrap().as_fixnum().unwrap();
     assert_eq!(
-        calls, 2,
-        "height cycle must be detected after 1 retry (2 calls, vs GNU's unbounded 22): {calls}"
+        calls, 3,
+        "repeated (A, B) transition cycle must be detected on pass 3 (vs GNU's unbounded 22): {calls}"
     );
     let ml = window_role_text(&state, window, GlyphRowRole::ModeLine);
     assert!(
-        ml.contains("OSC:2"),
-        "ExhaustionSnapshot must reuse last captured OSC:2 mode-line: {ml:?}"
+        ml.contains("OSC:3"),
+        "ExhaustionSnapshot must reuse last captured OSC:3 mode-line: {ml:?}"
+    );
+
+    // LOW-7: strict Snapshot must still abort on a genuine A <-> B height
+    // oscillation (W3's single-excursion tolerance must not weaken cycle abort).
+    // Use a fresh engine starting from the 1.0x baseline height so pass 1
+    // measures 2.0x (A -> B), pass 2 measures 1.0x (B -> A), and pass 3 repeats
+    // (A -> B) and aborts.
+    eval.eval_str("(setq g-calls 0)").unwrap();
+    let mut snap_engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut snap_engine);
+    let snap_outcome = snap_engine.snapshot_frame_attempt(&mut eval, frame);
+    assert!(
+        matches!(snap_outcome, FrameLayoutAttempt::Aborted),
+        "strict Snapshot must abort on true A<->B chrome height oscillation"
+    );
+    assert_eq!(
+        snap_engine.last_layout_stats().exhaustion_snapshot_passes,
+        0,
+        "strict Snapshot must not enter ExhaustionSnapshot on height cycle"
+    );
+    assert_eq!(
+        eval.eval_str("g-calls").unwrap().as_fixnum(),
+        Some(3),
+        "strict Snapshot detects repeated (A, B) transition on pass 3"
+    );
+}
+
+/// W2: a repeating declining sparse fontifier on one sibling window must not
+/// cut off another sibling window that needs 3 visible rounds to converge
+/// (`MID` collapses `fold_b1` -> exposes `TAIL` -> collapses `fold_b2` ->
+/// exposes `TAIL2`). Tested in both sibling orders (declining-first and
+/// progressing-first) so neither first-window-only nor last-window-only
+/// recording can pass.
+fn run_w2_declining_and_three_round_progressing_siblings(declining_first: bool) {
+    const PREFIX: &str = "seed\nBEFORE\n";
+    let hidden_a = "hidden-a\n".repeat(2_000);
+    const TAIL_A: &str = "TAIL-A\n";
+    let text_a = format!("{PREFIX}{hidden_a}{TAIL_A}");
+    let hidden_a_start = (PREFIX.chars().count() + 1) as i64;
+    let tail_a_start = hidden_a_start + hidden_a.chars().count() as i64;
+
+    let hidden_b = "hidden-b\n".repeat(2_000);
+    const MID_B: &str = "MID\n";
+    let fold_b1 = "fold-b1\n".repeat(40);
+    const TAIL_B: &str = "TAIL\n";
+    let fold_b2 = "fold-b2\n".repeat(40);
+    const TAIL2_B: &str = "FINAL\n";
+    let text_b = format!("{PREFIX}{hidden_b}{MID_B}{fold_b1}{TAIL_B}{fold_b2}{TAIL2_B}");
+    let hidden_b_start = (PREFIX.chars().count() + 1) as i64;
+    let mid_b_start = hidden_b_start + hidden_b.chars().count() as i64;
+    let fold_b1_start = mid_b_start + MID_B.chars().count() as i64;
+    let tail_b_start = fold_b1_start + fold_b1.chars().count() as i64;
+    let fold_b2_start = tail_b_start + TAIL_B.chars().count() as i64;
+    let tail2_b_start = fold_b2_start + fold_b2.chars().count() as i64;
+
+    let (first_text, second_text) = if declining_first {
+        (&text_a, &text_b)
+    } else {
+        (&text_b, &text_a)
+    };
+    let (mut eval, frame, first_buf, first_win) = incr_editing_frame(first_text, 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    let second_buf = eval.buffer_manager_mut().create_buffer(if declining_first {
+        "*w2-progress-b*"
+    } else {
+        "*w2-declining-a*"
+    });
+    eval.buffer_manager_mut()
+        .get_mut(second_buf)
+        .unwrap()
+        .insert(second_text);
+    let second_win = eval
+        .frame_manager_mut()
+        .split_window(
+            frame,
+            first_win,
+            neovm_core::window::SplitDirection::Horizontal,
+            second_buf,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .expect("split two siblings");
+    let (buf_a, buf_b, win_b) = if declining_first {
+        (first_buf, second_buf, second_win)
+    } else {
+        (second_buf, first_buf, first_win)
+    };
+
+    eval.set_variable("w2-buf-a", Value::make_buffer(buf_a));
+    eval.set_variable("w2-buf-b", Value::make_buffer(buf_b));
+    eval.eval_str(&format!(
+        r#"(progn
+      (setq w2-a-calls 0 w2-b-positions nil)
+      ;; Declining sibling A: sparse hook always mutates face at tail_a
+      (save-current-buffer
+        (set-buffer w2-buf-a)
+        (set (make-local-variable 'buffer-invisibility-spec) t)
+        (set (make-local-variable 'header-line-format) nil)
+        (set (make-local-variable 'tab-line-format) nil)
+        (set (make-local-variable 'mode-line-format) '("A-ML"))
+        (put-text-property (point-min) (point-max) 'fontified t)
+        (put-text-property {hidden_a_start} {tail_a_start} 'invisible t)
+        (put-text-property {tail_a_start} (1+ {tail_a_start}) 'fontified nil)
+        (put-text-property 6 12 'face 'bold)
+        (set (make-local-variable 'fontification-functions)
+             (list (lambda (_pos)
+                     (setq w2-a-calls (1+ w2-a-calls))
+                     (put-text-property 6 12 'face
+                       (if (= (% w2-a-calls 2) 0) 'bold 'italic))
+                     nil))))
+      ;; Progressing sibling B: 3 visible rounds (MID -> TAIL -> FINAL)
+      (save-current-buffer
+        (set-buffer w2-buf-b)
+        (set (make-local-variable 'buffer-invisibility-spec) t)
+        (set (make-local-variable 'header-line-format) nil)
+        (set (make-local-variable 'tab-line-format) nil)
+        (set (make-local-variable 'mode-line-format) '("B-ML"))
+        (put-text-property (point-min) (point-max) 'fontified t)
+        (put-text-property {hidden_b_start} {mid_b_start} 'invisible t)
+        (put-text-property {mid_b_start} (+ {mid_b_start} 4) 'fontified nil)
+        (put-text-property {tail_b_start} (+ {tail_b_start} 5) 'fontified nil)
+        (put-text-property {tail2_b_start} (+ {tail2_b_start} 6) 'fontified nil)
+        (set (make-local-variable 'fontification-functions)
+             (list (lambda (pos)
+                     (setq w2-b-positions (cons pos w2-b-positions))
+                     (cond
+                      ((= pos {mid_b_start})
+                       (put-text-property {mid_b_start} (+ {mid_b_start} 4) 'face 'bold)
+                       (put-text-property {mid_b_start} (+ {mid_b_start} 4) 'fontified t)
+                       (put-text-property {fold_b1_start} {tail_b_start} 'invisible t))
+                      ((= pos {tail_b_start})
+                       (put-text-property {tail_b_start} (+ {tail_b_start} 5) 'face 'bold)
+                       (put-text-property {tail_b_start} (+ {tail_b_start} 5) 'fontified t)
+                       (put-text-property {fold_b2_start} {tail2_b_start} 'invisible t))
+                      ((= pos {tail2_b_start})
+                       (put-text-property {tail2_b_start} (+ {tail2_b_start} 6) 'face 'italic)
+                       (put-text-property {tail2_b_start} (+ {tail2_b_start} 6) 'fontified t))))))))"#
+    ))
+    .expect("install W2 declining + 3-round converging sibling hooks");
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    let FrameLayoutAttempt::Prepared(state) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("two-sibling source-only retry episode must publish");
+    };
+    assert_eq!(
+        engine.last_layout_stats().exhaustion_snapshot_passes,
+        0,
+        "source-only retries publish the assembled frame directly without ExhaustionSnapshot"
+    );
+    let b_positions = neovm_core::emacs_core::value::list_to_vec(
+        &eval.eval_str("(reverse w2-b-positions)").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        b_positions,
+        vec![
+            Value::fixnum(mid_b_start),
+            Value::fixnum(tail_b_start),
+            Value::fixnum(tail2_b_start),
+        ],
+        "progressing sibling B must complete all 3 visible rounds (declining_first={declining_first}): {b_positions:?}"
+    );
+    let entry_b = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == win_b.0 as i64)
+        .expect("progressing sibling B matrix");
+    let final_row_b = entry_b
+        .matrix
+        .rows
+        .iter()
+        .find(|row| {
+            row.enabled
+                && row.role == GlyphRowRole::Text
+                && glyphs_logical_text(&row.glyphs[GlyphArea::Text.index()]).contains("FINAL")
+        })
+        .expect("published FINAL row in sibling B (requires round 3 to not be truncated)");
+    let final_glyphs_b: Vec<_> = final_row_b.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .filter(|g| matches!(g.glyph_type, GlyphType::Char { ch } if "FINAL".contains(ch)))
+        .collect();
+    assert_eq!(
+        final_glyphs_b.len(),
+        5,
+        "expected 5 FINAL glyphs in sibling B"
+    );
+    assert!(
+        final_glyphs_b
+            .iter()
+            .all(|g| state.faces.get(&g.face_id).is_some_and(|f| f.is_italic())),
+        "sibling B's published FINAL glyphs must carry the round-3 italic face (declining_first={declining_first})"
+    );
+    let a_calls = eval.eval_str("w2-a-calls").unwrap().as_fixnum().unwrap();
+    assert!(
+        (4..=5).contains(&a_calls),
+        "declining sibling A must still terminate well below 13x once B settles (declining_first={declining_first}): {a_calls}"
+    );
+}
+
+#[test]
+fn w2_repeating_earlier_sibling_does_not_truncate_progressing_later_sibling() {
+    run_w2_declining_and_three_round_progressing_siblings(true);
+    run_w2_declining_and_three_round_progressing_siblings(false);
+}
+
+/// W3: a stateful mode-line `:eval` that makes a single height excursion
+/// (`A -> B -> A` then holds at `A`) must converge cleanly in 3 passes for both
+/// `Redisplay` (no `ExhaustionSnapshot`) and strict `Snapshot` (no `Aborted`),
+/// because no `(assumed, measured)` transition pair repeats.
+#[test]
+fn w3_single_chrome_height_excursion_converges_for_redisplay_and_snapshot() {
+    let (mut eval, frame, _buffer, window) = incr_editing_frame("excursion test\n", 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str(
+        r#"(setq header-line-format nil tab-line-format nil mode-line-format '("INIT"))"#,
+    )
+    .expect("settle baseline mode-line");
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    let FrameLayoutAttempt::Prepared(_) = engine.redisplay_frame_attempt(&mut eval, frame) else {
+        panic!("baseline frame must prepare");
+    };
+
+    eval.eval_str(
+        r#"(progn
+      (setq ex-calls 0)
+      (setq mode-line-format
+            '((:eval (progn
+                       (setq ex-calls (1+ ex-calls))
+                       (propertize (format "EX:%d" ex-calls)
+                                   'face (list :height (if (= ex-calls 1) 2.0 1.0))))))))"#,
+    )
+    .expect("install single-excursion mode-line");
+
+    // 1. Live Redisplay converges in 3 calls without ExhaustionSnapshot.
+    let FrameLayoutAttempt::Prepared(redisplay_state) =
+        engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("single height excursion must converge in Redisplay");
+    };
+    assert_eq!(
+        engine.last_layout_stats().exhaustion_snapshot_passes,
+        0,
+        "single height excursion A->B->A->A must converge without ExhaustionSnapshot"
+    );
+    assert_eq!(
+        eval.eval_str("ex-calls").unwrap().as_fixnum(),
+        Some(3),
+        "single excursion takes 3 evaluations: A->B (1), B->A (2), A->A converged (3)"
+    );
+    let ml = window_role_text(&redisplay_state, window, GlyphRowRole::ModeLine);
+    assert!(
+        ml.contains("EX:3"),
+        "mode-line must show converged EX:3: {ml:?}"
+    );
+    assert!(
+        engine
+            .retained_window_matrices
+            .contains_key(&DisplayWindowId::new(window.0 as i64)),
+        "converged single excursion must retain its matrix normally"
+    );
+
+    // 2. Strict Snapshot also converges in 3 calls instead of aborting
+    //    (using a fresh force-mode-line-update so it actually evaluates chrome
+    //    instead of reusing Part 1's clean retained matrix).
+    eval.eval_str("(progn (setq ex-calls 0) (force-mode-line-update t))")
+        .unwrap();
+    let FrameLayoutAttempt::Prepared(snapshot_state) =
+        engine.snapshot_frame_attempt(&mut eval, frame)
+    else {
+        panic!("single height excursion must also converge under strict Snapshot");
+    };
+    assert_eq!(engine.last_layout_stats().exhaustion_snapshot_passes, 0);
+    assert_eq!(
+        eval.eval_str("ex-calls").unwrap().as_fixnum(),
+        Some(3),
+        "strict Snapshot must complete the same 3-pass convergence"
+    );
+    let snap_ml = window_role_text(&snapshot_state, window, GlyphRowRole::ModeLine);
+    assert!(
+        snap_ml.contains("EX:3"),
+        "snapshot mode-line must show converged EX:3: {snap_ml:?}"
     );
 }

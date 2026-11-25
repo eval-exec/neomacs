@@ -1275,13 +1275,12 @@ struct RedisplayLispLedger {
     /// Cleared on physical frame retry; completed siblings retain their owner
     /// identities until final whole-frame admission, independently of source freshness.
     completed_body_inputs: rustc_hash::FxHashMap<DisplayWindowId, CompletedBodyIdentity>,
-    /// First window whose finished walk asked for one source-only frame retry,
-    /// paired with a fingerprint of the visible unfontified spans it fontified.
-    /// Counted once, after every sibling has been assembled, not once per leaf.
-    /// Known limitation (W2): recording only the first window means a repeating
-    /// declining hook on an earlier sibling can stop retries while a later
-    /// sibling is still making progress; folding every window's `(window_id,
-    /// spans)` into a single attempt fingerprint is a straightforward follow-up.
+    /// Attempt-wide source-only retry request: the first window that requested
+    /// a source-only retry (for diagnostics) paired with a combined fingerprint
+    /// folding every requesting window's `(window_id, visible_unfontified_spans)`
+    /// in this attempt. Progress on any sibling changes the combined fingerprint
+    /// so a repeating declining hook on an earlier sibling cannot truncate a
+    /// later sibling that is still converging.
     source_only_retry: Option<(DisplayWindowId, u64)>,
     /// Original source observations commit only with the accepted matrices.
     cursor_sources: rustc_hash::FxHashMap<
@@ -7978,18 +7977,22 @@ impl LayoutEngine {
                     // topology changes stay on the discard path above.
                     if seals_completed_body && source_only {
                         fontification_source_baseline = freshness_after_visible_fontification;
-                        if lisp_ledger.source_only_retry.is_none() {
-                            let mut stops_fingerprint: u64 = 0xcbf29ce484222325;
-                            for span in &spans {
-                                for word in [span.start() as u64, span.end() as u64] {
-                                    stops_fingerprint ^= word;
-                                    stops_fingerprint =
-                                        stops_fingerprint.wrapping_mul(0x100000001b3);
-                                }
-                            }
-                            lisp_ledger.source_only_retry =
-                                Some((DisplayWindowId::new(params.window_id), stops_fingerprint));
+                        let (first_window, mut stops_fingerprint) =
+                            lisp_ledger.source_only_retry.unwrap_or((
+                                DisplayWindowId::new(params.window_id),
+                                0xcbf29ce484222325,
+                            ));
+                        for word in [params.window_id as u64, spans.len() as u64] {
+                            stops_fingerprint ^= word;
+                            stops_fingerprint = stops_fingerprint.wrapping_mul(0x100000001b3);
                         }
+                        for span in &spans {
+                            for word in [span.start() as u64, span.end() as u64] {
+                                stops_fingerprint ^= word;
+                                stops_fingerprint = stops_fingerprint.wrapping_mul(0x100000001b3);
+                            }
+                        }
+                        lisp_ledger.source_only_retry = Some((first_window, stops_fingerprint));
                     } else {
                         if let Some(attempt) = window_end_attempt.take() {
                             evaluator.reject_redisplay_window_end_attempt(attempt);
