@@ -10246,6 +10246,954 @@ fn window_text_pixel_size_unified_tty_fringe_when_and_space_list() {
     );
 }
 
+fn pixel_size_tty_80_context() -> (Context, i64) {
+    let mut eval = crate::test_utils::xdisp_test_upper_layer_helpers::interactive_context(|| {
+        neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime())
+    });
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("xdisp-xlimit-rewind-80", 80, 24, buf_id);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+        frame.font_pixel_size = 1.0;
+        frame.set_window_system(None);
+    }
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
+    (eval, selected_window)
+}
+
+fn run_x_limit_rewind_tty_case(
+    setup: &dyn Fn(&mut neovm_eval::emacs_core::eval::Context, BufferId),
+    from: Value,
+    to: Value,
+    x_limit: Value,
+    y_limit: Value,
+) -> (i64, i64) {
+    let (mut eval, selected_window) = pixel_size_tty_80_context();
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    setup(&mut eval, buf_id);
+    let result = builtin_window_text_pixel_size_ctx(
+        &mut eval,
+        vec![
+            Value::make_window(selected_window as u64),
+            from,
+            to,
+            x_limit,
+            y_limit,
+        ],
+    )
+    .expect("window-text-pixel-size");
+    (
+        result.cons_car().as_int().expect("width"),
+        result.cons_cdr().as_int().expect("height"),
+    )
+}
+
+fn x_limit_put_prop(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    start: i64,
+    end: i64,
+    name: &'static str,
+    value: Value,
+) {
+    neovm_edit::emacs_core::textprop::builtin_put_text_property(
+        eval,
+        vec![
+            Value::fixnum(start),
+            Value::fixnum(end),
+            Value::symbol(name),
+            value,
+        ],
+    )
+    .expect("put-text-property");
+}
+
+fn x_limit_add_ov(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    start: i64,
+    end: i64,
+    props: &[(&'static str, Value)],
+) {
+    let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(start), Value::fixnum(end)],
+    )
+    .expect("make-overlay");
+    for &(k, v) in props {
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(eval, vec![ov, Value::symbol(k), v])
+            .expect("overlay-put");
+    }
+}
+
+#[test]
+fn window_text_pixel_size_x_limit_overlay_at_from_rewinds_at_body_edge() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let space_fringe = Value::list(vec![
+        Value::list(vec![sym("space"), sym(":width"), Value::fixnum(2)]),
+        Value::list(vec![sym("left-fringe"), sym("left-arrow")]),
+    ]);
+
+    // N5-g LOW-1: 3..4 space+fringe, ov4 "ZZZZ", FROM=3, X-LIMIT=4 -> GNU (4 . 3).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", space_fringe);
+                x_limit_add_ov(eval, 4, 4, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for 3..4 space+fringe ov4 ZZZZ FROM=3 X-LIMIT=4"
+    );
+    // TO=4 variant -> GNU (4 . 2).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", space_fringe);
+                x_limit_add_ov(eval, 4, 4, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::fixnum(4),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) for 3..4 space+fringe ov4 ZZZZ FROM=3 TO=4 X-LIMIT=4"
+    );
+    // BEGV space+fringe variant -> GNU (3 . 4).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_put_prop(eval, 1, 2, "display", space_fringe);
+                x_limit_add_ov(eval, 2, 2, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (3, 4),
+        "GNU: (3 . 4) for 1..2 space+fringe ov2 ZZZZ FROM=1 X-LIMIT=3"
+    );
+    // Plain mid-line overlay at FROM=3 -> GNU (4 . 3) and TO=4 -> GNU (4 . 2).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(eval, 3, 3, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for plain ov3 ZZZZ FROM=3 X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(eval, 3, 3, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::fixnum(4),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) for plain ov3 ZZZZ FROM=3 TO=4 X-LIMIT=4"
+    );
+    // Plain BEGV overlay at FROM=1 -> GNU (3 . 3).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_add_ov(eval, 1, 1, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (3, 3),
+        "GNU: (3 . 3) for plain ov1 ZZZZ FROM=1 X-LIMIT=3"
+    );
+    // Multi-overlay at mid-line FROM=3 (F1): earlier overlay ends in `\n`
+    // (calling reset_after_from_rewind(false) and clearing before_origin()),
+    // then next overlay "ZZZZZ" must run with RewindBreakProbe active so its
+    // X-LIMIT=4 soft-wrap does not trigger a spurious MidOverlayString reset.
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[
+                        ("priority", Value::fixnum(1)),
+                        ("before-string", Value::string("A\n")),
+                    ],
+                );
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[
+                        ("priority", Value::fixnum(2)),
+                        ("before-string", Value::string("ZZZZZ")),
+                    ],
+                );
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for multi-overlay o1=A\\n + o2=ZZZZZ at FROM=3 X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[
+                        ("priority", Value::fixnum(1)),
+                        ("before-string", Value::string("A\n")),
+                    ],
+                );
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[
+                        ("priority", Value::fixnum(2)),
+                        ("before-string", Value::string("ZZZZZ")),
+                    ],
+                );
+            },
+            Value::fixnum(3),
+            Value::fixnum(4),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) for multi-overlay o1=A\\n + o2=ZZZZZ at FROM=3 TO=4 X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(eval, 1, 3, &[("after-string", Value::string("A\n"))]);
+                x_limit_add_ov(eval, 3, 3, &[("before-string", Value::string("ZZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for after-string A\\n + before-string ZZZZZ at FROM=3 X-LIMIT=4"
+    );
+    // Multi-overlay control: o1="A\n" + o2=85*'Z' MUST still rewind at body_edge=79 -> GNU (4 . 2).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[
+                        ("priority", Value::fixnum(1)),
+                        ("before-string", Value::string("A\n")),
+                    ],
+                );
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[
+                        ("priority", Value::fixnum(2)),
+                        ("before-string", Value::string("Z".repeat(85))),
+                    ],
+                );
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) control — multi-overlay o1=A\\n + o2=85*Z at FROM=3 X-LIMIT=4 still rewinds"
+    );
+}
+
+#[test]
+fn window_text_pixel_size_x_limit_display_string_at_from_rewinds_at_body_edge() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", Value::string("ZZZZ"));
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for display string ZZZZ at FROM=3 X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_put_prop(eval, 1, 2, "display", Value::string("ZZZZ"));
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (3, 3),
+        "GNU: (3 . 3) for display string ZZZZ at FROM=1 X-LIMIT=3"
+    );
+}
+
+#[test]
+fn window_text_pixel_size_x_limit_plain_prefix_switches_edge_at_origin() {
+    crate::test_utils::init_test_tracing();
+    // Prefix (5 cols) > X-LIMIT (4) stays on row 1 during rewind, then wraps at X-LIMIT=4.
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit
+                    .buffers
+                    .get_mut(buf_id)
+                    .unwrap()
+                    .insert("abcdefghij");
+            },
+            Value::fixnum(6),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for plain prefix > X-LIMIT (abcdefghij FROM=6 X-LIMIT=4)"
+    );
+    // TO=7 variant -> GNU (4 . 2).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit
+                    .buffers
+                    .get_mut(buf_id)
+                    .unwrap()
+                    .insert("abcdefghij");
+            },
+            Value::fixnum(6),
+            Value::fixnum(7),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) for plain prefix > X-LIMIT TO=7 (abcdefghij FROM=6 TO=7 X-LIMIT=4)"
+    );
+    // Exact origin switch proof on 80-col TTY (body_edge = 79):
+    // 1. 82 'a's wraps against body_edge=79 before origin (landing at origin_x=3 on row 2),
+    //    then switches to X-LIMIT=4 at origin for "bcdef":
+    //    - TO=85 ("bc"): row 1 = 3 + 'b' (4), row 2 = 'c' (1) -> (4 . 2)
+    //      (wrapping prefix at X-LIMIT=4 would give origin_x=2 -> (2 . 1)).
+    //    - TO=nil ("bcdef"): row 1 = 3 + 'b' (4), row 2 = "cdef" (4) -> (4 . 2)
+    //      (no pre-origin wrap would give origin_x=82 -> 3 rows (4 . 3)).
+    // 2. 85 'a's wraps against body_edge=79 before origin (origin_x=6 > X-LIMIT=4),
+    //    then switches to X-LIMIT=4 at origin for "bcdef" -> (4 . 3).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                let s = format!("{}bcdef", "a".repeat(82));
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert(&s);
+            },
+            Value::fixnum(83),
+            Value::fixnum(85),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) for wrap before origin (82 a's at body_edge=79 -> col 3) + TO=85 at X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                let s = format!("{}bcdef", "a".repeat(82));
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert(&s);
+            },
+            Value::fixnum(83),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) for wrap before origin (82 a's at body_edge=79 -> col 3) + wider-than-X-LIMIT bcdef"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                let s = format!("{}bcdef", "a".repeat(85));
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert(&s);
+            },
+            Value::fixnum(86),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 3),
+        "GNU: (4 . 3) for wrap before origin (85 a's at body_edge=79 -> col 6) + wider-than-X-LIMIT run after origin"
+    );
+}
+
+#[test]
+fn window_text_pixel_size_x_limit_truncate_prefix_clamps_before_origin_sub() {
+    crate::test_utils::init_test_tracing();
+    // GNU clamps x <= max_x (4) before subtracting start_x (5) -> (-1 . 1).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit
+                    .buffers
+                    .get_mut(buf_id)
+                    .unwrap()
+                    .insert("abcdefghij");
+                eval.set_variable("truncate-lines", Value::T);
+            },
+            Value::fixnum(6),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (-1, 1),
+        "GNU: (-1 . 1) for truncate-lines prefix > X-LIMIT (abcdefghij FROM=6 X-LIMIT=4)"
+    );
+    // N3: FROM == TO with origin_x >= X-LIMIT: wrapping -> (4 . 1), truncating -> (-1 . 1).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit
+                    .buffers
+                    .get_mut(buf_id)
+                    .unwrap()
+                    .insert("abcdefghij");
+            },
+            Value::fixnum(6),
+            Value::fixnum(6),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 1),
+        "GNU: (4 . 1) for N3 FROM==TO=6 wrapping X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit
+                    .buffers
+                    .get_mut(buf_id)
+                    .unwrap()
+                    .insert("abcdefghij");
+                eval.set_variable("truncate-lines", Value::T);
+            },
+            Value::fixnum(6),
+            Value::fixnum(6),
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (-1, 1),
+        "GNU: (-1 . 1) for N3 FROM==TO=6 truncating X-LIMIT=4"
+    );
+}
+
+#[test]
+fn window_text_pixel_size_x_limit_from_rewind_controls_and_single_pass() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let space_fringe = Value::list(vec![
+        Value::list(vec![sym("space"), sym(":width"), Value::fixnum(2)]),
+        Value::list(vec![sym("left-fringe"), sym("left-arrow")]),
+    ]);
+
+    // Controls: 85 'Z's wraps past body_edge=79 and still triggers FROM-rewind under
+    // X-LIMIT=4, X-LIMIT=100, and X-LIMIT=t.
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_add_ov(
+                    eval,
+                    3,
+                    3,
+                    &[("before-string", Value::string("Z".repeat(85)))],
+                );
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 2),
+        "GNU: (4 . 2) control — 85 Z's ov at FROM=3 wraps body_edge=79 and resets under X-LIMIT=4"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_add_ov(
+                    eval,
+                    1,
+                    1,
+                    &[("before-string", Value::string("Z".repeat(85)))],
+                );
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::fixnum(100),
+            Value::NIL,
+        ),
+        (5, 1),
+        "GNU: (5 . 1) control — 85 Z's ov at BEGV wraps body_edge=79 under X-LIMIT=100 (without rewind: (90 . 1))"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_add_ov(
+                    eval,
+                    1,
+                    1,
+                    &[("before-string", Value::string("Z".repeat(85)))],
+                );
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::T,
+            Value::NIL,
+        ),
+        (5, 1),
+        "GNU: (5 . 1) control — 85 Z's ov at BEGV wraps body_edge=79 under X-LIMIT=t (without rewind: (90 . 1))"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", Value::string("Z".repeat(85)));
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 1),
+        "GNU: (4 . 1) control — 85 Z's display string at FROM=3 wraps body_edge=79 and resets"
+    );
+    // Explicit newline in run_end overlay still triggers FROM-rewind.
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", space_fringe);
+                x_limit_add_ov(eval, 4, 4, &[("before-string", Value::string("A\nZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::NIL,
+        ),
+        (4, 1),
+        "GNU: (4 . 1) control — A\\nZZZZ run_end ov still triggers FROM-rewind"
+    );
+    // Y-LIMIT + X-LIMIT combinations (with and without rewind breaks).
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", space_fringe);
+                x_limit_add_ov(eval, 4, 4, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::fixnum(1),
+        ),
+        (4, 1),
+        "GNU: (4 . 1) control — LOW-1 with X-LIMIT=4 Y-LIMIT=1"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                x_limit_put_prop(eval, 3, 4, "display", space_fringe);
+                x_limit_add_ov(eval, 4, 4, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+            Value::fixnum(4),
+            Value::fixnum(2),
+        ),
+        (4, 2),
+        "GNU: (4 . 2) control — LOW-1 with X-LIMIT=4 Y-LIMIT=2"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("ab");
+                x_limit_add_ov(
+                    eval,
+                    1,
+                    1,
+                    &[("before-string", Value::string("Z".repeat(85)))],
+                );
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::fixnum(10),
+            Value::fixnum(1),
+        ),
+        (2, 1),
+        "GNU: (2 . 1) control — BEGV 85 Z's ov with X-LIMIT=10 Y-LIMIT=1 still rewinds"
+    );
+    assert_eq!(
+        run_x_limit_rewind_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("ab");
+                x_limit_add_ov(
+                    eval,
+                    1,
+                    1,
+                    &[("before-string", Value::string("123456789012345\nBB"))],
+                );
+            },
+            Value::fixnum(1),
+            Value::NIL,
+            Value::fixnum(10),
+            Value::fixnum(1),
+        ),
+        (2, 1),
+        "GNU: (2 . 1) control — BEGV multiline ov with X-LIMIT=10 Y-LIMIT=1 still rewinds"
+    );
+
+    // Single-pass proof: an overlay string carrying a Lisp-evaluated `(when ...)` display
+    // spec at FROM under X-LIMIT=3 is evaluated exactly ONCE (RewindBreakProbe runs in
+    // lockstep in the single walk rather than re-walking the overlay string).
+    {
+        let (mut eval, selected_window) = pixel_size_tty_80_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+        eval.eval_str(
+            r#"(progn
+                 (setq neomacs--xlimit-eval-count 0)
+                 (let ((s (copy-sequence "x"))
+                       (ov (make-overlay 1 1)))
+                   (put-text-property
+                    0 1 'display
+                    '(when (progn (setq neomacs--xlimit-eval-count
+                                        (1+ neomacs--xlimit-eval-count))
+                                  t)
+                       . "ZZZZ")
+                    s)
+                   (overlay-put ov 'before-string s)))"#,
+        )
+        .expect("install counting overlay");
+        let result = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                Value::fixnum(1),
+                Value::NIL,
+                Value::fixnum(3),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                result.cons_car().as_int().expect("width"),
+                result.cons_cdr().as_int().expect("height"),
+            ),
+            (3, 3),
+            "GNU: (3 . 3) for single-pass counting overlay at FROM=1 X-LIMIT=3"
+        );
+        let count = eval
+            .eval_str("neomacs--xlimit-eval-count")
+            .expect("read count")
+            .as_int()
+            .expect("fixnum count");
+        assert_eq!(
+            count, 1,
+            "RewindBreakProbe must evaluate Lisp overlay display spec in a single pass (got {count})"
+        );
+    }
+
+    // F4: Single-pass proof for a buffer `display` `(when ... . "ZZZZ")` at BEGV under X-LIMIT=3.
+    {
+        let (mut eval, selected_window) = pixel_size_tty_80_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+        eval.eval_str(
+            r#"(progn
+                 (setq neomacs--xlimit-buf-eval-count 0)
+                 (put-text-property
+                  1 2 'display
+                  '(when (progn (setq neomacs--xlimit-buf-eval-count
+                                      (1+ neomacs--xlimit-buf-eval-count))
+                                t)
+                     . "ZZZZ")))"#,
+        )
+        .expect("install counting buffer display");
+        let result = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                Value::fixnum(1),
+                Value::NIL,
+                Value::fixnum(3),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                result.cons_car().as_int().expect("width"),
+                result.cons_cdr().as_int().expect("height"),
+            ),
+            (3, 3),
+            "GNU: (3 . 3) for single-pass counting buffer display at FROM=1 X-LIMIT=3"
+        );
+        let count = eval
+            .eval_str("neomacs--xlimit-buf-eval-count")
+            .expect("read count")
+            .as_int()
+            .expect("fixnum count");
+        assert_eq!(
+            count, 1,
+            "RewindBreakProbe must evaluate buffer display spec in a single pass (got {count})"
+        );
+    }
+
+    // F4: Single-pass proof for a frozen `y_limit_stop` overlay walk where `RewindBreakProbe`
+    // continues scanning a later `(when ... . "A\nBB")` span past column 10 under X-LIMIT=10, Y-LIMIT=1.
+    {
+        let (mut eval, selected_window) = pixel_size_tty_80_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit.buffers.get_mut(buf_id).unwrap().insert("ab");
+        eval.eval_str(
+            r#"(progn
+                 (setq neomacs--xlimit-ylim-eval-count 0)
+                 (let ((s (copy-sequence "123456789012x"))
+                       (ov (make-overlay 1 1)))
+                   (put-text-property
+                    12 13 'display
+                    '(when (progn (setq neomacs--xlimit-ylim-eval-count
+                                        (1+ neomacs--xlimit-ylim-eval-count))
+                                  t)
+                       . "A\nBB")
+                    s)
+                   (overlay-put ov 'before-string s)))"#,
+        )
+        .expect("install counting frozen y_limit overlay");
+        let result = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                Value::fixnum(1),
+                Value::NIL,
+                Value::fixnum(10),
+                Value::fixnum(1),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                result.cons_car().as_int().expect("width"),
+                result.cons_cdr().as_int().expect("height"),
+            ),
+            (1, 1),
+            "GNU: (1 . 1) for frozen y_limit_stop overlay with late nested display (when ... . \"A\\nBB\") (string_from_display_prop_p == 1)"
+        );
+        let count = eval
+            .eval_str("neomacs--xlimit-ylim-eval-count")
+            .expect("read count")
+            .as_int()
+            .expect("fixnum count");
+        assert_eq!(
+            count, 1,
+            "Frozen y_limit_stop probe continuation must evaluate late (when ...) once (got {count})"
+        );
+    }
+    // Companion F4 check where the `\n` lives in the overlay string itself after `(when ... . "A")`:
+    // GNU returns `(2 . 1)` (`MidOverlayString`), and `RewindBreakProbe` evaluates `(when ...)` once.
+    {
+        let (mut eval, selected_window) = pixel_size_tty_80_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit.buffers.get_mut(buf_id).unwrap().insert("ab");
+        eval.eval_str(
+            r#"(progn
+                 (setq neomacs--xlimit-ylim2-eval-count 0)
+                 (let ((s (copy-sequence "123456789012x\nBB"))
+                       (ov (make-overlay 1 1)))
+                   (put-text-property
+                    12 13 'display
+                    '(when (progn (setq neomacs--xlimit-ylim2-eval-count
+                                        (1+ neomacs--xlimit-ylim2-eval-count))
+                                  t)
+                       . "A")
+                    s)
+                   (overlay-put ov 'before-string s)))"#,
+        )
+        .expect("install counting frozen y_limit overlay with outer newline");
+        let result = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                Value::fixnum(1),
+                Value::NIL,
+                Value::fixnum(10),
+                Value::fixnum(1),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                result.cons_car().as_int().expect("width"),
+                result.cons_cdr().as_int().expect("height"),
+            ),
+            (2, 1),
+            "GNU: (2 . 1) for frozen y_limit_stop overlay with outer \\n after (when ... . \"A\")"
+        );
+        let count = eval
+            .eval_str("neomacs--xlimit-ylim2-eval-count")
+            .expect("read count")
+            .as_int()
+            .expect("fixnum count");
+        assert_eq!(
+            count, 1,
+            "Frozen y_limit_stop outer-newline probe must evaluate (when ...) once (got {count})"
+        );
+    }
+
+    // F5: `buffer-text-pixel-size` forwards `rewind_edge: body_edge` (matching GNU `Fbuffer_text_pixel_size`).
+    let run_buffer_pixel_size_tty_case =
+        |setup: &dyn Fn(&mut Context, BufferId), x_limit: Value| -> (i64, i64) {
+            let (mut eval, selected_window) = pixel_size_tty_80_context();
+            let buf_id = eval
+                .edit
+                .buffers
+                .current_buffer()
+                .expect("current buffer")
+                .id();
+            setup(&mut eval, buf_id);
+            let result = builtin_buffer_text_pixel_size(
+                &mut eval,
+                vec![
+                    Value::NIL,
+                    Value::make_window(selected_window as u64),
+                    x_limit,
+                ],
+            )
+            .expect("buffer-text-pixel-size");
+            (
+                result.cons_car().as_int().expect("width"),
+                result.cons_cdr().as_int().expect("height"),
+            )
+        };
+    assert_eq!(
+        run_buffer_pixel_size_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_add_ov(eval, 1, 1, &[("before-string", Value::string("ZZZZ"))]);
+            },
+            Value::fixnum(3),
+        ),
+        (3, 3),
+        "GNU: (3 . 3) for buffer-text-pixel-size BEGV ov ZZZZ X-LIMIT=3"
+    );
+    assert_eq!(
+        run_buffer_pixel_size_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_put_prop(eval, 1, 2, "display", Value::string("ZZZZ"));
+            },
+            Value::fixnum(3),
+        ),
+        (3, 3),
+        "GNU: (3 . 3) for buffer-text-pixel-size BEGV display ZZZZ X-LIMIT=3"
+    );
+    assert_eq!(
+        run_buffer_pixel_size_tty_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                x_limit_add_ov(
+                    eval,
+                    1,
+                    1,
+                    &[("before-string", Value::string("Z".repeat(85)))],
+                );
+            },
+            Value::fixnum(4),
+        ),
+        (4, 2),
+        "GNU: (4 . 2) control — buffer-text-pixel-size BEGV 85 Z's ov X-LIMIT=4 still rewinds"
+    );
+}
+
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_test.rs"]
 mod mode_line_min_width_boundary_test;

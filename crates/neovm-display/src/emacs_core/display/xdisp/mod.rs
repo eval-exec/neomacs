@@ -1251,6 +1251,8 @@ pub(crate) fn region_text_metrics_with_display(
     cell: TextCellPixels,
     char_width: CharColumnWidth,
     edge: Option<RowEdge>,
+    rewind_edge: Option<RowEdge>,
+    explicit_x_limit: bool,
     y_limit: Option<f32>,
 ) -> Result<RegionTextMetrics, Flow> {
     use crate::emacs_core::display_when::DisplayWhenContextExt;
@@ -1295,6 +1297,8 @@ pub(crate) fn region_text_metrics_with_display(
             cell,
             char_width,
             edge,
+            rewind_edge,
+            explicit_x_limit,
             y_limit,
             range.from,
             origin_is_newline,
@@ -1323,7 +1327,7 @@ pub(crate) fn region_text_metrics_with_display(
         // those same overlay strings.
         let mut skip_overlay_strings_at_byte: Option<usize> = None;
         while scan < end {
-            if state.y_limit_reached() {
+            if from_rewind == FromRewindState::None && state.y_limit_reached() {
                 break;
             }
 
@@ -1463,7 +1467,7 @@ pub(crate) fn region_text_metrics_with_display(
                         next_prop_check_byte = 0;
                     }
                     skip_overlay_strings_at_byte = Some(run_end);
-                    if state.y_limit_reached() {
+                    if from_rewind == FromRewindState::None && state.y_limit_reached() {
                         break;
                     }
                 }
@@ -1518,7 +1522,7 @@ pub(crate) fn region_text_metrics_with_display(
             if ov_ran_lisp {
                 next_prop_check_byte = 0;
             }
-            if state.y_limit_reached() {
+            if from_rewind == FromRewindState::None && state.y_limit_reached() {
                 break;
             }
 
@@ -1545,13 +1549,17 @@ pub(crate) fn region_text_metrics_with_display(
                 && run_end > scan
             {
                 if at_origin_rewind {
-                    let saved_y_limit = state.y_limit.take();
-                    let breaks_before = state.line_breaks;
                     let is_text = matches!(resolved.element, DisplayElement::Text(_));
+                    if is_text {
+                        state.start_rewind_probe();
+                    }
+                    let breaks_before = state.rewind_break_count();
                     state.push_display_element(eval, buffer_id, resolved.element, &prop_env);
-                    state.y_limit = saved_y_limit;
-                    if is_text && state.line_breaks > breaks_before {
-                        if !state.glyphs_after_last_break {
+                    let broke = is_text && state.rewind_break_count() > breaks_before;
+                    let glyphs_after = state.rewind_glyphs_after_last_break();
+                    state.stop_rewind_probe();
+                    if broke {
+                        if !glyphs_after {
                             state.reset_after_from_rewind(false);
                             from_rewind = FromRewindState::None;
                         } else {
@@ -1660,10 +1668,183 @@ pub(crate) fn region_text_metrics_with_display(
             state.reset_after_from_rewind(true);
         } else if state.before_origin() {
             state.reach_origin();
+            // GNU `move_it_to` (`src/xdisp.c:11936`) on a non-truncating window
+            // wraps past `last_visible_x` before stopping at `end == start`,
+            // clearing `start_x = 0` (`(4 . 1)` on `"abcdefghij" FROM=5..6 TO=FROM X-LIMIT=4`),
+            // while `truncate-lines = t` stays on row 0 (`(0 . 1)` / `(-1 . 1)`).
+            if !origin_is_newline
+                && state
+                    .wrapping_edge()
+                    .is_some_and(|edge| state.line_width() >= edge)
+            {
+                state.crossed_display_line = true;
+            }
         }
 
         Ok(state.finish())
     })?
+}
+
+/// Lightweight lockstep tracker for GNU's `FROM`-rewind line-break check
+/// (`move_it_by_lines (&it, 0)`, `src/xdisp.c:11268-11347, 11867-11868`)
+/// during an `at_origin_rewind` overlay-string or `display`-string walk once
+/// `ScanState` has passed `reach_origin()` (so its live measurement edge is
+/// `measure_edge` and `y_limit` is active).
+///
+/// Tracks hard newlines and soft-wraps against `rewind_edge` (`body_edge`) in
+/// the same single pass as `ScanState` (so Lisp `display`/`when` specs inside
+/// the string are evaluated at most once), ignoring `measure_edge` and
+/// `y_limit_stop`.
+#[derive(Clone, Copy, Debug)]
+struct RewindBreakProbe {
+    edge: Option<RowEdge>,
+    line_x: f32,
+    truncated: bool,
+    breaks: u64,
+    glyphs_after_last_break: bool,
+}
+
+impl RewindBreakProbe {
+    fn new(edge: Option<RowEdge>, initial_line_x: f32) -> Self {
+        Self {
+            edge,
+            line_x: initial_line_x.max(0.0),
+            truncated: false,
+            breaks: 0,
+            glyphs_after_last_break: false,
+        }
+    }
+
+    fn wrapping_edge(&self) -> Option<f32> {
+        self.edge
+            .filter(|edge| !edge.wrap.truncates())
+            .map(|edge| edge.x)
+    }
+
+    fn truncating_edge(&self) -> Option<f32> {
+        self.edge
+            .filter(|edge| edge.wrap.truncates())
+            .map(|edge| edge.x)
+    }
+
+    fn reset_line(&mut self) {
+        self.line_x = 0.0;
+        self.truncated = false;
+        self.glyphs_after_last_break = false;
+    }
+
+    fn newline(&mut self) {
+        self.breaks += 1;
+        self.reset_line();
+    }
+
+    fn note_margin_baseline(&mut self) {
+        self.glyphs_after_last_break = true;
+    }
+
+    fn push_pixels(&mut self, advance: f32) {
+        if self.truncated {
+            return;
+        }
+        let advance = advance.max(0.0);
+        if let Some(limit) = self.truncating_edge() {
+            let room = (limit - self.line_x).max(0.0);
+            if room <= 0.0 {
+                self.truncated = true;
+                return;
+            }
+            if advance > room {
+                self.line_x = limit;
+                self.glyphs_after_last_break = true;
+                self.truncated = true;
+                return;
+            }
+        }
+        if let Some(wrap_at) = self.wrapping_edge()
+            && self.line_x + advance > wrap_at
+            && self.line_x > 0.0
+        {
+            self.breaks += 1;
+            self.line_x = 0.0;
+        }
+        self.line_x += advance;
+        self.glyphs_after_last_break = true;
+        if let Some(limit) = self.truncating_edge()
+            && self.line_x >= limit
+        {
+            self.truncated = true;
+        }
+    }
+
+    fn advance_columns(&mut self, columns: f32, cell_width: f32) {
+        if self.truncated {
+            return;
+        }
+        if let Some(limit) = self.truncating_edge() {
+            let room = (limit - self.line_x).max(0.0);
+            if columns * cell_width > room {
+                self.line_x = limit;
+                self.glyphs_after_last_break = true;
+                self.truncated = true;
+                return;
+            }
+        }
+        let mut remaining = columns;
+        while remaining > 0.0 {
+            match self.wrapping_edge() {
+                Some(wrap_at) if wrap_at > 0.0 => {
+                    if self.line_x >= wrap_at {
+                        self.breaks += 1;
+                        self.line_x = 0.0;
+                    }
+                    let available = wrap_at - self.line_x;
+                    let advanced = (available / cell_width).min(remaining);
+                    if advanced <= 0.0 {
+                        break;
+                    }
+                    self.line_x += advanced * cell_width;
+                    self.glyphs_after_last_break = true;
+                    remaining -= advanced;
+                    if remaining > 0.0 {
+                        self.breaks += 1;
+                        self.line_x = 0.0;
+                    }
+                }
+                _ => {
+                    self.line_x += remaining * cell_width;
+                    self.glyphs_after_last_break = true;
+                    remaining = 0.0;
+                }
+            }
+            if let Some(limit) = self.truncating_edge()
+                && self.line_x >= limit
+            {
+                self.truncated = true;
+                break;
+            }
+        }
+    }
+
+    fn align_to_cells(&mut self, target: usize, cell_width: f32) {
+        let cols = (self.line_x / cell_width).round().max(0.0) as usize;
+        let advance = target.saturating_sub(cols);
+        self.advance_columns(advance as f32, cell_width);
+    }
+
+    fn align_to_pixels(&mut self, target: f32) {
+        let advance = (target - self.line_x).max(0.0);
+        self.push_pixels(advance);
+    }
+
+    fn push_tab(&mut self, cell_width: f32) {
+        if self.truncated {
+            return;
+        }
+        let tab_width = 8.0 * cell_width;
+        let next_tab_x = (1.0 + (self.line_x / tab_width).floor()) * tab_width;
+        let advance = (next_tab_x - self.line_x).max(0.0);
+        self.advance_columns((advance / cell_width).round(), cell_width);
+    }
 }
 
 /// Mutable accounting state shared between the buffer-text scan and the
@@ -1674,10 +1855,22 @@ pub(crate) fn region_text_metrics_with_display(
 struct ScanState {
     cell: TextCellPixels,
     char_width: CharColumnWidth,
-    /// GNU's row edge (`it.last_visible_x`) and what the window does there.
+    /// GNU's post-rewind measurement row edge (`it.last_visible_x = max_x`,
+    /// `src/xdisp.c:11922-11924`, or window body width when `X-LIMIT` is nil).
     /// `None` means an unbounded row, which only `buffer-text-pixel-size`
     /// reaches when the window has no geometry at all.
-    edge: Option<RowEdge>,
+    measure_edge: Option<RowEdge>,
+    /// GNU's `FROM`-rewind row edge: the window's body width installed by
+    /// `start_display` -> `init_iterator` (`src/xdisp.c:3507-3518, 11812`)
+    /// before `move_it_by_lines (&it, 0)` + `move_it_to (&it, start)`.
+    rewind_edge: Option<RowEdge>,
+    /// True when the caller supplied a non-nil `X-LIMIT` (GNU `!NILP (x_limit)`,
+    /// `src/xdisp.c:11985-11990`), which is the only case where GNU clamps
+    /// `widest` to `max_x` before subtracting `start_x`.
+    explicit_x_limit: bool,
+    /// Lockstep rewind-break probe active only during post-`reach_origin()`
+    /// `at_origin_rewind` overlay/display-string walks.
+    rewind_probe: Option<RewindBreakProbe>,
     /// GNU's Y-LIMIT in pixels.  It stops the walk at the first row whose
     /// pixel span contains it and clamps the returned height to it.
     y_limit: Option<f32>,
@@ -1727,10 +1920,13 @@ struct ScanState {
 }
 
 impl ScanState {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         cell: TextCellPixels,
         char_width: CharColumnWidth,
-        edge: Option<RowEdge>,
+        measure_edge: Option<RowEdge>,
+        rewind_edge: Option<RowEdge>,
+        explicit_x_limit: bool,
         y_limit: Option<f32>,
         origin: EmacsBytePos,
         origin_is_newline: bool,
@@ -1739,7 +1935,10 @@ impl ScanState {
         Self {
             cell,
             char_width,
-            edge: edge.filter(|edge| edge.x.is_finite()),
+            measure_edge: measure_edge.filter(|edge| edge.x.is_finite()),
+            rewind_edge: rewind_edge.filter(|edge| edge.x.is_finite()),
+            explicit_x_limit,
+            rewind_probe: None,
             y_limit: y_limit.filter(|limit| limit.is_finite() && *limit >= 0.0),
             y_limit_stop: None,
             origin_x: 0.0,
@@ -1756,6 +1955,40 @@ impl ScanState {
             line_breaks: 0,
             glyphs_after_last_break: false,
         }
+    }
+
+    /// The row edge currently governing wrapping/truncation: `rewind_edge`
+    /// (`body_edge`) before reaching `FROM` (`src/xdisp.c:3507, 11867-11912`),
+    /// switching to `measure_edge` (`explicit_x_limit.or(body_edge)`) at
+    /// `reach_origin()` (`src/xdisp.c:11922-11924`).
+    fn active_edge(&self) -> Option<RowEdge> {
+        if self.before_origin() {
+            self.rewind_edge
+        } else {
+            self.measure_edge
+        }
+    }
+
+    fn start_rewind_probe(&mut self) {
+        if !self.before_origin() {
+            self.rewind_probe = Some(RewindBreakProbe::new(self.rewind_edge, self.line_width()));
+        }
+    }
+
+    fn stop_rewind_probe(&mut self) {
+        self.rewind_probe = None;
+    }
+
+    fn rewind_break_count(&self) -> u64 {
+        self.rewind_probe
+            .map_or(self.line_breaks, |probe| probe.breaks)
+    }
+
+    fn rewind_glyphs_after_last_break(&self) -> bool {
+        self.rewind_probe
+            .map_or(self.glyphs_after_last_break, |probe| {
+                probe.glyphs_after_last_break
+            })
     }
 
     /// Whether the walk has passed GNU's FROM yet.
@@ -1815,6 +2048,9 @@ impl ScanState {
         self.line.restart();
         self.last_code = None;
         self.glyphs_after_last_break = false;
+        if let Some(probe) = self.rewind_probe.as_mut() {
+            probe.reset_line();
+        }
         if !keep_baseline {
             self.line_ascent = 0.0;
             self.line_descent = 0.0;
@@ -1846,20 +2082,20 @@ impl ScanState {
     fn line_at_limit(&self) -> bool {
         self.line.truncated_at.is_some()
             || self
-                .edge
+                .active_edge()
                 .is_some_and(|edge| edge.wrap.truncates() && self.line_width() >= edge.x)
     }
 
     /// How much room is left on a truncating row before the edge.
     fn room_to_limit(&self) -> Option<f32> {
-        self.edge
+        self.active_edge()
             .filter(|edge| edge.wrap.truncates())
             .map(|edge| (edge.x - self.line_width()).max(0.0))
     }
 
     /// End the row at the edge, as GNU's `MOVE_LINE_TRUNCATED` does.
     fn truncate_at_limit(&mut self) {
-        self.line.truncated_at = self.edge.map(|edge| edge.x);
+        self.line.truncated_at = self.active_edge().map(|edge| edge.x);
     }
 
     /// One ellipsis glyph for an ellipsis-bearing invisible run.  GNU shows a
@@ -1886,40 +2122,61 @@ impl ScanState {
         match element {
             DisplayElement::Cells(columns) => {
                 self.advance_columns(columns);
-                self.last_code = None;
+                if self.y_limit_stop.is_none() {
+                    self.last_code = None;
+                }
             }
             DisplayElement::AlignToCells(target) => {
-                let advance = target.saturating_sub(self.line_columns());
-                self.advance_columns(advance as f32);
-                self.last_code = None;
+                if let Some(probe) = self.rewind_probe.as_mut() {
+                    probe.align_to_cells(target, self.cell.width);
+                }
+                if self.y_limit_stop.is_none() {
+                    let advance = target.saturating_sub(self.line_columns());
+                    self.advance_columns_no_probe(advance as f32);
+                    self.last_code = None;
+                }
             }
             DisplayElement::Pixels(extent) => {
                 self.push_element(extent);
-                self.last_code = None;
+                if self.y_limit_stop.is_none() {
+                    self.last_code = None;
+                }
             }
             DisplayElement::AlignToPixels {
                 target,
                 ascent,
                 descent,
             } => {
-                let origin = self.line_columns() as f32 * self.cell.width;
-                self.push_element(ElementExtent {
-                    advance: (target - origin).max(0.0),
-                    ascent,
-                    descent,
-                });
-                self.last_code = None;
+                if let Some(probe) = self.rewind_probe.as_mut() {
+                    probe.align_to_pixels(target);
+                }
+                if self.y_limit_stop.is_none() {
+                    let origin = self.line_columns() as f32 * self.cell.width;
+                    self.push_element_no_probe(ElementExtent {
+                        advance: (target - origin).max(0.0),
+                        ascent,
+                        descent,
+                    });
+                    self.last_code = None;
+                }
             }
             DisplayElement::Text(string) => {
                 self.push_display_string(eval, buffer_id, string, prop_env);
             }
             DisplayElement::MarginBaseline => {
-                self.note_text_baseline();
-                self.glyphs_after_last_break = true;
-                self.last_code = None;
+                if let Some(probe) = self.rewind_probe.as_mut() {
+                    probe.note_margin_baseline();
+                }
+                if self.y_limit_stop.is_none() {
+                    self.note_text_baseline();
+                    self.glyphs_after_last_break = true;
+                    self.last_code = None;
+                }
             }
             DisplayElement::Consumed => {
-                self.last_code = None;
+                if self.y_limit_stop.is_none() {
+                    self.last_code = None;
+                }
             }
         }
     }
@@ -1959,7 +2216,7 @@ impl ScanState {
         let mut char_index = 0usize;
         let mut byte_off = 0usize;
         while char_index < schars && byte_off < bytes.len() {
-            if self.y_limit_reached() {
+            if self.y_limit_reached() && self.rewind_probe.is_none() {
                 return;
             }
             if char_index >= next_invis_check_char {
@@ -2036,7 +2293,14 @@ impl ScanState {
     /// to it (`produce_image_glyph`, src/xdisp.c:32500-32514) while still
     /// contributing its height: the row is as tall as what it draws.
     fn push_element(&mut self, extent: ElementExtent) {
-        if self.line.truncated_at.is_some() {
+        if let Some(probe) = self.rewind_probe.as_mut() {
+            probe.push_pixels(extent.advance);
+        }
+        self.push_element_no_probe(extent);
+    }
+
+    fn push_element_no_probe(&mut self, extent: ElementExtent) {
+        if self.y_limit_stop.is_some() || self.line.truncated_at.is_some() {
             return;
         }
         if let Some(room) = self.room_to_limit() {
@@ -2059,6 +2323,9 @@ impl ScanState {
             && self.line_width() > 0.0
         {
             self.soft_wrap();
+            if self.y_limit_stop.is_some() {
+                return;
+            }
         }
         self.note_text_baseline();
         self.line.pixels += extent.advance.max(0.0);
@@ -2071,7 +2338,7 @@ impl ScanState {
 
     /// The row edge when the window continues past it instead of truncating.
     fn wrapping_edge(&self) -> Option<f32> {
-        self.edge
+        self.active_edge()
             .filter(|edge| !edge.wrap.truncates())
             .map(|edge| edge.x)
     }
@@ -2085,7 +2352,14 @@ impl ScanState {
 
     /// Advance the running line by `columns` text cells.
     fn advance_columns(&mut self, columns: f32) {
-        if self.line.truncated_at.is_some() {
+        if let Some(probe) = self.rewind_probe.as_mut() {
+            probe.advance_columns(columns, self.cell.width);
+        }
+        self.advance_columns_no_probe(columns);
+    }
+
+    fn advance_columns_no_probe(&mut self, columns: f32) {
+        if self.y_limit_stop.is_some() || self.line.truncated_at.is_some() {
             return;
         }
         // A run that straddles the truncation edge is displayed up to the edge,
@@ -2108,6 +2382,9 @@ impl ScanState {
                 Some(wrap_at) => {
                     if self.line_width() >= wrap_at {
                         self.soft_wrap();
+                        if self.y_limit_stop.is_some() {
+                            return;
+                        }
                         self.note_text_baseline();
                     }
                     let available = wrap_at - self.line_width();
@@ -2117,6 +2394,9 @@ impl ScanState {
                     remaining -= advanced;
                     if remaining > 0.0 {
                         self.soft_wrap();
+                        if self.y_limit_stop.is_some() {
+                            return;
+                        }
                         self.note_text_baseline();
                     }
                 }
@@ -2200,22 +2480,34 @@ impl ScanState {
         } else {
             self.max_width.max(self.line_width())
         };
+        // GNU clamps `x` to `max_x` (`if (!NILP (x_limit)) if (x > max_x) x = max_x`,
+        // src/xdisp.c:11985-11990) BEFORE subtracting `start_x` (src/xdisp.c:12052),
+        // which produces `max_x - start_x` (negative) when a truncated line's
+        // pre-FROM prefix already exceeded an explicit `X-LIMIT`.
+        let widest = if self.explicit_x_limit {
+            match self.measure_edge {
+                Some(edge) => widest.min(edge.x),
+                None => widest,
+            }
+        } else {
+            widest
+        };
         let from_origin = if self.crossed_display_line {
             0.0
         } else {
             self.origin_x
         };
-        let width = widest - from_origin;
-        // GNU: `if (x > max_x) x = max_x;` (src/xdisp.c:12000), the row edge
-        // when the caller supplied X-LIMIT and the body width otherwise.
-        match self.edge {
-            Some(edge) => width.min(edge.x),
-            None => width,
-        }
+        widest - from_origin
     }
 
     /// End the current line, record its width, and reset for the next line.
     fn newline(&mut self) {
+        if let Some(probe) = self.rewind_probe.as_mut() {
+            probe.newline();
+        }
+        if self.y_limit_stop.is_some() {
+            return;
+        }
         // The newline is a produced element like any other: GNU's iterator
         // produces it, so `it.max_ascent + it.max_descent` holds the font's
         // split by the time the row closes and an empty display line is one
@@ -2230,8 +2522,11 @@ impl ScanState {
     fn push_char(&mut self, code: u32) {
         if code == '\n' as u32 {
             self.newline();
-        } else if self.line.truncated_at.is_none() {
-            if code == '\t' as u32 {
+        } else if code == '\t' as u32 {
+            if let Some(probe) = self.rewind_probe.as_mut() {
+                probe.push_tab(self.cell.width);
+            }
+            if self.y_limit_stop.is_none() && self.line.truncated_at.is_none() {
                 // GNU's tab stops are pixel multiples of
                 // `tab_width * FRAME_COLUMN_WIDTH` from the row's left edge
                 // (`gui_produce_glyphs`, src/xdisp.c), so text after an image
@@ -2244,25 +2539,27 @@ impl ScanState {
                 if self.line.pixels == 0.0 {
                     // A text-only row's stops are whole columns; rounding the
                     // division keeps that exact for a fractional cell width.
-                    self.advance_columns((advance / self.cell.width).round());
+                    self.advance_columns_no_probe((advance / self.cell.width).round());
                 } else {
-                    self.push_element(ElementExtent {
+                    self.push_element_no_probe(ElementExtent {
                         advance,
                         ascent: self.cell.ascent,
                         descent: self.cell.descent(),
                     });
                 }
-            } else {
-                let columns = match self.char_width {
-                    CharColumnWidth::One => 1.0,
-                    CharColumnWidth::DisplayWidth => char::from_u32(code)
-                        .map(neovm_text::encoding::char_width)
-                        .unwrap_or(1) as f32,
-                };
-                self.advance_columns(columns);
             }
+        } else {
+            let columns = match self.char_width {
+                CharColumnWidth::One => 1.0,
+                CharColumnWidth::DisplayWidth => char::from_u32(code)
+                    .map(neovm_text::encoding::char_width)
+                    .unwrap_or(1) as f32,
+            };
+            self.advance_columns(columns);
         }
-        self.last_code = Some(code);
+        if self.y_limit_stop.is_none() {
+            self.last_code = Some(code);
+        }
     }
 
     fn finish(mut self) -> RegionTextMetrics {
@@ -3082,14 +3379,16 @@ fn process_overlay_strings_at(
             eval.push_specpdl_root(entry.string);
         }
     }
-    let saved_y_limit = if at_origin_rewind {
-        state.y_limit.take()
-    } else {
-        None
-    };
     let outcome = (|| -> Result<bool, Flow> {
         for entry in entries {
-            let breaks_before = state.line_breaks;
+            // Re-check per entry: at mid-line `FROM`, an earlier overlay string
+            // ending in `\n` calls `reset_after_from_rewind(false)` and clears
+            // `before_origin()`, switching `active_edge()` to `measure_edge`
+            // while `rewind_probe` was still `None` before the loop.
+            if at_origin_rewind && state.rewind_probe.is_none() {
+                state.start_rewind_probe();
+            }
+            let breaks_before = state.rewind_break_count();
             let mid_display_break = walk_overlay_string(
                 eval,
                 frame,
@@ -3099,8 +3398,8 @@ fn process_overlay_strings_at(
                 prop_env,
                 state,
             )?;
-            if at_origin_rewind && state.line_breaks > breaks_before {
-                if !state.glyphs_after_last_break {
+            if at_origin_rewind && state.rewind_break_count() > breaks_before {
+                if !state.rewind_glyphs_after_last_break() {
                     // The last screen-line break ended right at the end of this
                     // overlay string: `IT_POS_VALID_AFTER_MOVE_P` holds at char 0
                     // of the next overlay string (or buffer `FROM`), so reset now.
@@ -3116,7 +3415,7 @@ fn process_overlay_strings_at(
         Ok(true)
     })();
     if at_origin_rewind {
-        state.y_limit = saved_y_limit;
+        state.stop_rewind_probe();
     }
     eval.restore_specpdl_roots(root_scope);
     outcome
@@ -3168,7 +3467,7 @@ fn walk_overlay_string(
     let mut char_index = 0usize; // 0-based char position into the string
     let mut byte_off = 0usize;
     while char_index < schars && byte_off < byte_len {
-        if state.y_limit_reached() {
+        if state.y_limit_reached() && state.rewind_probe.is_none() {
             return Ok(mid_display_break);
         }
 
@@ -3217,10 +3516,10 @@ fn walk_overlay_string(
                 && run_end_char > char_index
             {
                 let is_text = matches!(element, DisplayElement::Text(_));
-                let b_before = state.line_breaks;
+                let b_before = state.rewind_break_count();
                 state.push_display_element(eval, buffer_id, element, prop_env);
-                if state.line_breaks > b_before {
-                    mid_display_break = is_text && state.glyphs_after_last_break;
+                if state.rewind_break_count() > b_before {
+                    mid_display_break = is_text && state.rewind_glyphs_after_last_break();
                 }
                 let Some(bytes) = string.as_lisp_string().map(|s| s.as_bytes()) else {
                     return Ok(mid_display_break);
@@ -3255,9 +3554,9 @@ fn walk_overlay_string(
                 && run_end_char > char_index
             {
                 if invisibility.shows_ellipsis() {
-                    let b_before = state.line_breaks;
+                    let b_before = state.rewind_break_count();
                     state.push_ellipsis();
-                    if state.line_breaks > b_before {
+                    if state.rewind_break_count() > b_before {
                         mid_display_break = false;
                     }
                 }
@@ -3294,9 +3593,9 @@ fn walk_overlay_string(
         } else {
             (bytes[byte_off] as u32, 1)
         };
-        let b_before = state.line_breaks;
+        let b_before = state.rewind_break_count();
         state.push_char(code);
-        if state.line_breaks > b_before {
+        if state.rewind_break_count() > b_before {
             mid_display_break = false;
         }
         byte_off += len;
@@ -8051,6 +8350,8 @@ pub fn builtin_window_text_pixel_size_ctx(
         cell,
         columns: CharColumnWidth::One,
         edge,
+        rewind_edge: body_edge,
+        explicit_x_limit: explicit_x_limit.is_some(),
         y_limit,
     }
     .measure(eval)?;
@@ -12592,20 +12893,21 @@ pub fn builtin_buffer_text_pixel_size(
     // X-LIMIT nil means WINDOW's body width here too and the row edge is the
     // window's.  There is no display line to rewind to: the measurement starts
     // at the accessible portion's start.
+    let body_edge = eval.frame_manager().get(fid).and_then(|frame| {
+        let window = frame.find_window(window_id)?;
+        window_body_row_edge(
+            &eval.frame_manager(),
+            fid,
+            window,
+            is_terminal,
+            char_width,
+            line_wrap,
+        )
+    });
     let edge = match x_limit {
         Some(pixels) => Some(RowEdge::new(pixels as f32, line_wrap)),
         None if args.get(2).is_some_and(|limit| limit.is_t()) => None,
-        None => eval.frame_manager().get(fid).and_then(|frame| {
-            let window = frame.find_window(window_id)?;
-            window_body_row_edge(
-                &eval.frame_manager(),
-                fid,
-                window,
-                is_terminal,
-                char_width,
-                line_wrap,
-            )
-        }),
+        None => body_edge,
     };
     let metrics = TextMeasurement {
         frame: fid,
@@ -12616,6 +12918,8 @@ pub fn builtin_buffer_text_pixel_size(
         cell,
         columns: CharColumnWidth::DisplayWidth,
         edge,
+        rewind_edge: body_edge,
+        explicit_x_limit: x_limit.is_some(),
         y_limit: y_limit.map(|pixels| pixels as f32),
     }
     .measure(eval)?;

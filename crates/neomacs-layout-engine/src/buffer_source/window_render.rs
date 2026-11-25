@@ -646,8 +646,11 @@ where
             remaining_visibility_retries
         };
 
-        let reserve_right_special_col =
-            !frame_params.window_system && params.right_fringe_width == 0.0;
+        let reserve_right_border_col =
+            reserve_right_border_col && params.measurement_width.is_none();
+        let reserve_right_special_col = params.measurement_width.is_none()
+            && !frame_params.window_system
+            && params.right_fringe_width == 0.0;
         let mut walk_setup = BufferSourceWalkSetupRequest::from_window_geometry(
             text_source,
             params,

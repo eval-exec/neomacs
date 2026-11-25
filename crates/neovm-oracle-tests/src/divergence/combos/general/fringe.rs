@@ -1036,3 +1036,105 @@ fn divergence_unified_tty_fringe_when_and_space_list_batch() {
         expect,
     );
 }
+
+#[test]
+fn divergence_window_text_pixel_size_x_limit_from_rewind_batch() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((4 . 3) (4 . 2) (3 . 4) (4 . 3) (4 . 2) (3 . 3) (4 . 3) (4 . 2) (4 . 3) (4 . 2) (4 . 3) (3 . 3) (4 . 3) (4 . 2) (4 . 2) (4 . 2) (4 . 3) (-1 . 1) (4 . 1) (-1 . 1) (4 . 2) (5 . 1) (5 . 1) (4 . 1) (4 . 1) (4 . 1) (4 . 2) (2 . 1) (2 . 1) (3 . 3) (3 . 3) (4 . 2))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((measure (lambda (setup &optional from to xlim ylim)
+                  (with-temp-buffer
+                    (funcall setup)
+                    (switch-to-buffer (current-buffer))
+                    (window-text-pixel-size nil from to xlim ylim))))
+      (measure-buf (lambda (setup &optional xlim ylim)
+                     (with-temp-buffer
+                       (funcall setup)
+                       (switch-to-buffer (current-buffer))
+                       (buffer-text-pixel-size nil nil xlim ylim))))
+      (ov (lambda (b e &rest props)
+            (let ((o (make-overlay b e)))
+              (while props (overlay-put o (pop props) (pop props)))
+              o))))
+  (list
+   ;; N5-g LOW-1: space+fringe + run_end overlay under X-LIMIT
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 3 4 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 4 4 'before-string "ZZZZ")) 3 nil 4)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 3 4 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 4 4 'before-string "ZZZZ")) 3 4 4)
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 2 2 'before-string "ZZZZ")) 1 nil 3)
+   ;; Plain overlay at FROM under X-LIMIT
+   (funcall measure (lambda () (insert "abhello")
+                      (funcall ov 3 3 'before-string "ZZZZ")) 3 nil 4)
+   (funcall measure (lambda () (insert "abhello")
+                      (funcall ov 3 3 'before-string "ZZZZ")) 3 4 4)
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 1 'before-string "ZZZZ")) 1 nil 3)
+   ;; Multi-overlay at mid-line FROM (F1): earlier overlay ending in \n resets before_origin
+   (funcall measure (lambda () (insert "abhello")
+                      (funcall ov 3 3 'priority 1 'before-string "A\n")
+                      (funcall ov 3 3 'priority 2 'before-string "ZZZZZ")) 3 nil 4)
+   (funcall measure (lambda () (insert "abhello")
+                      (funcall ov 3 3 'priority 1 'before-string "A\n")
+                      (funcall ov 3 3 'priority 2 'before-string "ZZZZZ")) 3 4 4)
+   (funcall measure (lambda () (insert "abhello")
+                      (funcall ov 1 3 'after-string "A\n")
+                      (funcall ov 3 3 'before-string "ZZZZZ")) 3 nil 4)
+   (funcall measure (lambda () (insert "abhello")
+                      (funcall ov 3 3 'priority 1 'before-string "A\n")
+                      (funcall ov 3 3 'priority 2 'before-string (make-string 85 ?Z))) 3 nil 4)
+   ;; Display string at FROM under X-LIMIT
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 3 4 'display "ZZZZ")) 3 nil 4)
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display "ZZZZ")) 1 nil 3)
+   ;; Plain prefix > X-LIMIT + wrap before origin (82/85 a's at body_edge=79) then X-LIMIT=4
+   (funcall measure (lambda () (insert "abcdefghij")) 6 nil 4)
+   (funcall measure (lambda () (insert "abcdefghij")) 6 7 4)
+   (funcall measure (lambda () (insert (concat (make-string 82 ?a) "bcdef"))) 83 85 4)
+   (funcall measure (lambda () (insert (concat (make-string 82 ?a) "bcdef"))) 83 nil 4)
+   (funcall measure (lambda () (insert (concat (make-string 85 ?a) "bcdef"))) 86 nil 4)
+   ;; truncate-lines prefix > X-LIMIT clamps before subtracting start_x -> (-1 . 1)
+   (funcall measure (lambda () (setq truncate-lines t) (insert "abcdefghij")) 6 nil 4)
+   ;; N3: FROM == TO with origin_x > X-LIMIT: wrapping -> (4 . 1), truncating -> (-1 . 1)
+   (funcall measure (lambda () (insert "abcdefghij")) 6 6 4)
+   (funcall measure (lambda () (setq truncate-lines t) (insert "abcdefghij")) 6 6 4)
+   ;; Controls: wrap past body_edge=79 and explicit \n still rewind; Y-LIMIT + X-LIMIT
+   (funcall measure (lambda () (insert "abhello")
+                      (funcall ov 3 3 'before-string (make-string 85 ?Z))) 3 nil 4)
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 1 'before-string (make-string 85 ?Z))) 1 nil 100)
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 1 'before-string (make-string 85 ?Z))) 1 nil t)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 3 4 'display (make-string 85 ?Z))) 3 nil 4)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 3 4 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 4 4 'before-string "A\nZZZZ")) 3 nil 4)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 3 4 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 4 4 'before-string "ZZZZ")) 3 nil 4 1)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 3 4 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 4 4 'before-string "ZZZZ")) 3 nil 4 2)
+   (funcall measure (lambda () (insert "ab")
+                      (funcall ov 1 1 'before-string (make-string 85 ?Z))) 1 nil 10 1)
+   (funcall measure (lambda () (insert "ab")
+                      (funcall ov 1 1 'before-string "123456789012345\nBB")) 1 nil 10 1)
+   ;; F5: buffer-text-pixel-size BEGV overlay/display under X-LIMIT + 85-Z rewind control
+   (funcall measure-buf (lambda () (insert "hello")
+                          (funcall ov 1 1 'before-string "ZZZZ")) 3)
+   (funcall measure-buf (lambda () (insert "hello")
+                          (put-text-property 1 2 'display "ZZZZ")) 3)
+   (funcall measure-buf (lambda () (insert "hello")
+                          (funcall ov 1 1 'before-string (make-string 85 ?Z))) 4)))"#,
+        expect,
+    );
+}
