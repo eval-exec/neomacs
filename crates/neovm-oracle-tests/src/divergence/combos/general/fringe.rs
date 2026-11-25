@@ -865,3 +865,62 @@ fn divergence_from_rewind_f5_and_nits_batch() {
         expect,
     );
 }
+
+#[test]
+fn divergence_display_before_invisible_and_tty_fringe_batch() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((3 . 1) (3 . 1) (4 . 1) (4 . 1) (8 . 1) (8 . 1) (8 . 1) (5 . 1) (6 . 1) (4 . 1) (4 . 1) (4 . 1) (6 . 1) (6 . 1))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((measure (lambda (setup &optional from to)
+                  (with-temp-buffer
+                    (funcall setup)
+                    (switch-to-buffer (current-buffer))
+                    (window-text-pixel-size nil from to))))
+      (ov (lambda (b e &rest props)
+            (let ((o (make-overlay b e)))
+              (while props (overlay-put o (pop props) (pop props)))
+              o))))
+  (list
+   ;; E5: display runs before invisible (GNU it_props[]), hiding current char too
+   (funcall measure (lambda ()
+                      (insert "abc" (propertize "d" 'display '(when (progn (setq-local default-text-properties '(invisible t)) nil) . "Q")) "ef")))
+   (funcall measure (lambda ()
+                      (insert "abc" (propertize "ddd" 'display '(when (progn (setq-local default-text-properties '(invisible t)) nil) . "Q")) "ef")))
+   ;; Overlay string equivalent: when-nil enabling buffer-invisibility-spec hides Y itself
+   (funcall measure (lambda () (setq buffer-invisibility-spec nil) (insert "ab")
+                      (funcall ov 2 2 'before-string
+                        (concat "X" (propertize "Y" 'invisible t 'display '(when (progn (setq buffer-invisibility-spec t) nil) . "Q")) "Z"))))
+   ;; F5: replacing display beats invisible at FROM (and rewinds before-string ZZ)
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'invisible t)
+                      (put-text-property 1 2 'display "A\nB")
+                      (funcall ov 1 1 'before-string "ZZ")))
+   ;; Display beats invisible: text-prop, overlay display, overlay invisible, partial overlap, overlay string
+   (funcall measure (lambda () (insert "hello") (put-text-property 2 4 'invisible t) (put-text-property 2 4 'display "QQQQQ")))
+   (funcall measure (lambda () (insert "hello") (put-text-property 2 4 'invisible t) (funcall ov 2 4 'display "QQQQQ")))
+   (funcall measure (lambda () (insert "hello") (put-text-property 2 4 'display "QQQQQ") (funcall ov 2 4 'invisible t)))
+   (funcall measure (lambda () (insert "hello") (put-text-property 2 4 'display "QQQ") (put-text-property 2 5 'invisible t)))
+   (funcall measure (lambda () (insert "x")
+                      (funcall ov 1 1 'before-string (propertize "ab" 'invisible t 'display "QQQQQ"))))
+   ;; F4 & TTY fringe overlay-string skip (src/xdisp.c:6387-6402) + controls
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((left-fringe left-arrow) "A\nB"))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(left-fringe left-arrow))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 2 3 'display '(left-fringe left-arrow))
+                      (funcall ov 1 2 'after-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 2 3 'display '(left-fringe left-arrow))
+                      (funcall ov 2 3 'after-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((margin left-margin) "M"))
+                      (funcall ov 1 1 'before-string "ZZ")))))"#,
+        expect,
+    );
+}

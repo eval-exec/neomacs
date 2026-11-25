@@ -9663,6 +9663,187 @@ fn window_text_pixel_size_from_rewind_f5_and_nits() {
     );
 }
 
+#[test]
+fn window_text_pixel_size_display_before_invisible_and_tty_fringe() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let run_case =
+        |setup: &dyn Fn(&mut neovm_eval::emacs_core::eval::Context, BufferId)| -> (i64, i64) {
+            let (mut eval, selected_window) = pixel_size_tty_context();
+            let buf_id = eval
+                .edit
+                .buffers
+                .current_buffer()
+                .expect("current buffer")
+                .id();
+            setup(&mut eval, buf_id);
+            let res = builtin_window_text_pixel_size_ctx(
+                &mut eval,
+                vec![Value::make_window(selected_window as u64)],
+            )
+            .expect("window-text-pixel-size");
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            )
+        };
+    let put_prop = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                    start: i64,
+                    end: i64,
+                    prop: &'static str,
+                    val: Value| {
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                Value::symbol(prop),
+                val,
+            ],
+        )
+        .expect("put-text-property");
+    };
+    let add_ov = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                  start: i64,
+                  end: i64,
+                  props: &[(&'static str, Value)]| {
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(start), Value::fixnum(end)],
+        )
+        .expect("make-overlay");
+        for &(k, v) in props {
+            neovm_edit::emacs_core::buffer::builtin_overlay_put(
+                eval,
+                vec![ov, Value::symbol(k), v],
+            )
+            .expect("overlay-put");
+        }
+    };
+
+    // E5: display runs before invisible (GNU it_props[], src/xdisp.c:1018-1019),
+    // so a when-nil display spec that sets default-text-properties '(invisible t)
+    // falls through to invisible at the SAME position -> hides "d", "e", "f" -> (3 . 1).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("abcdef");
+            let when_spec = eval
+                .eval_str(
+                    "'(when (progn (setq default-text-properties '(invisible t)) nil) . \"Q\")",
+                )
+                .expect("when spec");
+            put_prop(eval, 4, 5, "display", when_spec);
+        }),
+        (3, 1),
+        "E5: when-nil display setting default-text-properties hides current char too"
+    );
+
+    // F5: replacing display beats invisible at the same position (including FROM rewind).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            put_prop(eval, 1, 2, "invisible", Value::T);
+            put_prop(eval, 1, 2, "display", Value::string("A\nB"));
+            add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+        }),
+        (4, 1),
+        "F5: display A\\nB beats invisible t at FROM and rewinds ZZ"
+    );
+
+    // Replacing display beats invisible in mid-buffer (text-prop, overlay, partial overlap)
+    // and in overlay strings.
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            put_prop(eval, 2, 4, "invisible", Value::T);
+            put_prop(eval, 2, 4, "display", Value::string("QQQQQ"));
+        }),
+        (8, 1),
+        "display beats invisible (both text properties)"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            put_prop(eval, 2, 4, "display", Value::string("QQQ"));
+            put_prop(eval, 2, 5, "invisible", Value::T);
+        }),
+        (5, 1),
+        "display covers 2..4 while invisible hides 4..5"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("x");
+            let s = Value::string("ab");
+            set_string_text_properties_for_value(
+                s,
+                vec![StringTextPropertyRun {
+                    start: 0,
+                    end: 2,
+                    plist: Value::list(vec![
+                        sym("invisible"),
+                        Value::T,
+                        sym("display"),
+                        Value::string("QQQQQ"),
+                    ]),
+                }],
+            );
+            add_ov(eval, 1, 1, &[("before-string", s)]);
+        }),
+        (6, 1),
+        "overlay string display beats invisible at same char"
+    );
+
+    // F4: on a TTY frame, (left-fringe ...) / (right-fringe ...) advances directly
+    // to run_end without pushing (GNU src/xdisp.c:6387-6402), skipping overlay strings
+    // anchored at the start of the fringe run (while after-strings at run_end still show).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let spec = Value::list(vec![
+                Value::list(vec![sym("left-fringe"), sym("left-arrow")]),
+                Value::string("A\nB"),
+            ]);
+            put_prop(eval, 1, 2, "display", spec);
+            add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+        }),
+        (4, 1),
+        "F4: TTY fringe spec advances past pos 1 without showing before-string ZZ"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let spec = Value::list(vec![sym("left-fringe"), sym("left-arrow")]);
+            put_prop(eval, 2, 3, "display", spec);
+            add_ov(eval, 1, 2, &[("after-string", Value::string("ZZ"))]);
+        }),
+        (4, 1),
+        "TTY fringe at pos 2 skips after-string anchored at pos 2"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let spec = Value::list(vec![sym("left-fringe"), sym("left-arrow")]);
+            put_prop(eval, 2, 3, "display", spec);
+            add_ov(eval, 2, 3, &[("after-string", Value::string("ZZ"))]);
+        }),
+        (6, 1),
+        "TTY fringe at pos 2..3 still shows after-string anchored at pos 3"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let spec = Value::list(vec![
+                Value::list(vec![sym("margin"), sym("left-margin")]),
+                Value::string("M"),
+            ]);
+            put_prop(eval, 1, 2, "display", spec);
+            add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+        }),
+        (6, 1),
+        "control: margin spec still shows before-string ZZ"
+    );
+}
+
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_test.rs"]
 mod mode_line_min_width_boundary_test;
