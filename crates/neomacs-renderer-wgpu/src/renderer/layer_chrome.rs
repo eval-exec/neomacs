@@ -220,7 +220,7 @@ impl WgpuRenderer {
 
     pub(super) fn draw_pre_text_cursor_layers(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         cursor_bg_vertices: &[RectVertex],
         behind_text_cursor_vertices: &[RectVertex],
     ) {

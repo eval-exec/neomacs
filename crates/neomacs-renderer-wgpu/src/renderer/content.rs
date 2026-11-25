@@ -1316,8 +1316,6 @@ impl WgpuRenderer {
         };
 
         #[cfg(feature = "video")]
-        let mut video_submission_token = None;
-        #[cfg(feature = "video")]
         let mut encoder = self.caches.video.create_command_encoder(
             &self.device,
             &wgpu::CommandEncoderDescriptor {
@@ -1713,20 +1711,18 @@ impl WgpuRenderer {
                     &frame.glyphs,
                     offset_x,
                     offset_y,
-                ) {
-                    if !prepared.quads.is_empty() {
-                        self.media_budget.touch(
-                            crate::media_budget::MediaType::Video,
-                            crate::video_cache::VIDEO_GPU_POOL_ACCOUNTING_ID,
-                        );
-                        if let Some(upload) =
-                            prepared.upload(&mut self.arenas.image, &self.device, &self.queue)
-                        {
-                            submitted_video_ids.extend(prepared.quads.iter().map(|quad| quad.id));
-                            prepared.draw(&mut pass, &upload, image_pl, bi_planar_video_pl);
-                        }
+                ) && !prepared.quads.is_empty()
+                {
+                    self.media_budget.touch(
+                        crate::media_budget::MediaType::Video,
+                        crate::video_cache::VIDEO_GPU_POOL_ACCOUNTING_ID,
+                    );
+                    if let Some(upload) =
+                        prepared.upload(&mut self.arenas.image, &self.device, &self.queue)
+                    {
+                        submitted_video_ids.extend(prepared.quads.iter().map(|quad| quad.id));
+                        prepared.draw(&mut pass, &upload, image_pl, bi_planar_video_pl);
                     }
-                    video_submission_token = Some(prepared.into_submission_token());
                 }
             }
 
@@ -1858,12 +1854,7 @@ impl WgpuRenderer {
         stats.log_if_enabled();
 
         #[cfg(feature = "video")]
-        self.submit_video_frame_content_pass(
-            encoder,
-            gpu_timing,
-            submitted_video_ids,
-            video_submission_token,
-        );
+        self.submit_video_frame_content_pass(encoder, gpu_timing, submitted_video_ids);
         #[cfg(not(feature = "video"))]
         self.queue.submit([encoder.finish()]);
         tracing::debug!("render_frame_content: submitted (1 encoder, 1 pass)");

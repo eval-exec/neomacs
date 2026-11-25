@@ -14,7 +14,7 @@ use crate::mailbox::PresentationFrameQueue;
 use crate::platform::CurrentPlatform;
 use crate::sampling::{
     DrawRetirementGate, GpuVideoContext, GpuVideoFrame, PreparedVideoDraws, VideoCommandEncoder,
-    VideoSamplingResources, VideoSubmissionToken,
+    VideoSamplingResources,
 };
 use crate::{
     FrameImportPolicy, GpuGeneration, MediaTime, PlaybackAction, PlaybackEpoch, PlaybackRate,
@@ -345,7 +345,7 @@ impl VideoSystem {
 
     /// Create a command encoder bound by type to this `VideoSystem`'s own
     /// `wgpu::Device`, suitable for [`Self::submit_command_encoder`] or
-    /// [`Self::submit_idle_encoder`].
+    /// [`Self::discard_command_encoder`].
     pub fn create_command_encoder(
         &self,
         desc: &wgpu::CommandEncoderDescriptor<'_>,
@@ -365,14 +365,14 @@ impl VideoSystem {
             .map(GpuVideoFrame::geometry)
     }
 
-    /// Snapshot generation-valid frames for recording into a command encoder.
+    /// Snapshot generation-valid frames for recording into a
+    /// [`crate::VideoRenderPass`].
     ///
-    /// The returned [`PreparedVideoDraws`] owns an affine
-    /// [`VideoSubmissionToken`] that holds back foreign-surface release
-    /// barriers and native lease retirement across subsequent `service()`,
-    /// `command()`, or `set_presentation()` calls until the caller consumes the
-    /// token via [`Self::submit_command_encoder`],
-    /// [`Self::finish_draw_submission`], or [`Self::discard_unsubmitted_draws`].
+    /// Calling [`crate::PreparedVideoDraw::bind_to_pass`] arms a private
+    /// retirement hold inside the owning [`VideoCommandEncoder`] so subsequent
+    /// `service()`, `command()`, or `set_presentation()` calls cannot emit a
+    /// `FOREIGN` release barrier or return native leases before
+    /// [`Self::submit_command_encoder`] submits the encoder.
     pub fn prepare_draws(&self, ids: impl IntoIterator<Item = VideoId>) -> PreparedVideoDraws<'_> {
         let frames: HashMap<_, _> = ids
             .into_iter()
@@ -383,60 +383,40 @@ impl VideoSystem {
                     .map(|frame| (id, frame))
             })
             .collect();
-        let token = self.retirement_gate.issue_token(!frames.is_empty());
-        PreparedVideoDraws::new(frames, token)
+        PreparedVideoDraws::new(frames, self.retirement_gate.registry())
     }
 
-    /// Submit a device-bound [`VideoCommandEncoder`] together with its
-    /// [`VideoSubmissionToken`]. Any staged foreign-surface release barriers
-    /// are recorded in a separate raw-only encoder submitted right after the
-    /// draw buffer in the same `queue.submit` batch, and retired frames stay
-    /// alive until that submission completes on the GPU.
+    /// Submit a device-bound [`VideoCommandEncoder`] together with any private
+    /// draw-retirement hold attached to it. Any staged foreign-surface release
+    /// barriers are recorded in a separate raw-only encoder submitted right
+    /// after the draw buffer in the same `queue.submit` batch, and retired
+    /// frames stay alive until that submission completes on the GPU.
     pub fn submit_command_encoder(
         &mut self,
         encoder: VideoCommandEncoder,
-        token: VideoSubmissionToken,
     ) -> wgpu::SubmissionIndex {
         assert_eq!(
             encoder.system_id(),
             self.retirement_gate.system_id(),
             "VideoCommandEncoder belongs to a different VideoSystem"
         );
-        let retired = self.retirement_gate.consume_token(token);
-        self.gpu
-            .submit_buffer_with_retirements(encoder.finish(), retired)
+        let (buffer, token) = encoder.into_buffer_and_token();
+        let retired = self.retirement_gate.finish_encoder_token(token);
+        self.gpu.submit_buffer_with_retirements(buffer, retired)
     }
 
-    /// Submit a device-bound [`VideoCommandEncoder`] that recorded no video
-    /// draws without clearing any outstanding [`VideoSubmissionToken`].
-    pub fn submit_idle_encoder(&self, encoder: VideoCommandEncoder) -> wgpu::SubmissionIndex {
+    /// Abandon an unsubmitted [`VideoCommandEncoder`], destroying its private
+    /// `wgpu::CommandEncoder` before releasing its retirement hold and
+    /// immediately flushing any staged retirements if no other video-bearing
+    /// encoders remain live.
+    pub fn discard_command_encoder(&mut self, encoder: VideoCommandEncoder) {
         assert_eq!(
             encoder.system_id(),
             self.retirement_gate.system_id(),
             "VideoCommandEncoder belongs to a different VideoSystem"
         );
-        self.gpu.submit_command_buffer(encoder.finish())
-    }
-
-    /// Mark draws covered by `token` as already submitted on this system's
-    /// queue (evidenced by `_submission` from `queue.submit`), flushing any
-    /// staged frame retirements in a fresh release encoder after that submit.
-    pub fn finish_draw_submission(
-        &mut self,
-        token: VideoSubmissionToken,
-        _submission: wgpu::SubmissionIndex,
-    ) {
-        let retired = self.retirement_gate.consume_token(token);
-        if !retired.is_empty() {
-            self.gpu.retire_after_submitted_work(retired);
-        }
-    }
-
-    /// Consume `token` when a prepared render pass was abandoned without
-    /// submitting its command encoder, flushing any staged retirements if no
-    /// other draw tokens remain active.
-    pub fn discard_unsubmitted_draws(&mut self, token: VideoSubmissionToken) {
-        let retired = self.retirement_gate.consume_token(token);
+        let token = encoder.discard_and_take_token();
+        let retired = self.retirement_gate.finish_encoder_token(token);
         if !retired.is_empty() {
             self.gpu.retire_after_submitted_work(retired);
         }

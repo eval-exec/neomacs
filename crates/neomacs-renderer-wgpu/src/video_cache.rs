@@ -278,7 +278,6 @@ impl CachedVideo {
 
 /// Renderer preparation keyed by stable declarative ids while the native
 /// subsystem is free to replace parked decoder-session ids.
-#[must_use = "consume PreparedVideoDraws via into_submission_token() and pass the token to submit_command_encoder, finish_draw_submission, or discard_unsubmitted_draws"]
 pub struct PreparedVideoDraws<'a> {
     native: neomacs_video::PreparedVideoDraws<'a>,
     native_ids: HashMap<VideoId, NativeVideoSessionId>,
@@ -287,10 +286,6 @@ pub struct PreparedVideoDraws<'a> {
 impl<'a> PreparedVideoDraws<'a> {
     pub fn get(&self, id: VideoId) -> Option<neomacs_video::PreparedVideoDraw<'a>> {
         self.native.get(self.native_ids.get(&id)?.protocol())
-    }
-
-    pub fn into_submission_token(self) -> neomacs_video::VideoSubmissionToken {
-        self.native.into_submission_token()
     }
 }
 
@@ -305,10 +300,14 @@ impl FrameCommandEncoder {
     pub(crate) fn begin_render_pass<'a>(
         &'a mut self,
         desc: &wgpu::RenderPassDescriptor<'_>,
-    ) -> wgpu::RenderPass<'a> {
+    ) -> crate::renderer::frame_pass::FrameRenderPass<'a> {
         match self {
-            Self::Plain(encoder) => encoder.begin_render_pass(desc),
-            Self::Video(encoder) => encoder.begin_render_pass(desc),
+            Self::Plain(encoder) => {
+                crate::renderer::frame_pass::FrameRenderPass::Plain(encoder.begin_render_pass(desc))
+            }
+            Self::Video(encoder) => {
+                crate::renderer::frame_pass::FrameRenderPass::Video(encoder.begin_render_pass(desc))
+            }
         }
     }
 
@@ -358,7 +357,7 @@ impl FrameCommandEncoder {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VideoChannelPreparation {
-    ReusePacked,
+    CopyPacked,
     ConvertBiPlanar,
 }
 
@@ -366,7 +365,7 @@ const fn video_channel_preparation(
     kind: neomacs_video::VideoSampleKind,
 ) -> VideoChannelPreparation {
     match kind {
-        neomacs_video::VideoSampleKind::Packed => VideoChannelPreparation::ReusePacked,
+        neomacs_video::VideoSampleKind::Packed => VideoChannelPreparation::CopyPacked,
         neomacs_video::VideoSampleKind::BiPlanar => VideoChannelPreparation::ConvertBiPlanar,
     }
 }
@@ -843,44 +842,15 @@ impl VideoCache {
     pub(crate) fn submit_command_encoder(
         &mut self,
         encoder: FrameCommandEncoder,
-        token: Option<neomacs_video::VideoSubmissionToken>,
         queue: &wgpu::Queue,
     ) -> wgpu::SubmissionIndex {
-        match (encoder, token) {
-            (FrameCommandEncoder::Video(encoder), Some(token)) => self
+        match encoder {
+            FrameCommandEncoder::Video(encoder) => self
                 .system
                 .ready_mut()
-                .expect("VideoCommandEncoder and token require an initialized VideoSystem")
-                .submit_command_encoder(encoder, token),
-            (FrameCommandEncoder::Video(encoder), None) => self
-                .system
-                .ready()
                 .expect("VideoCommandEncoder requires an initialized VideoSystem")
-                .submit_idle_encoder(encoder),
-            (FrameCommandEncoder::Plain(encoder), Some(token)) => {
-                let submission = queue.submit([encoder.finish()]);
-                if let Some(system) = self.system.ready_mut() {
-                    system.finish_draw_submission(token, submission.clone());
-                }
-                submission
-            }
-            (FrameCommandEncoder::Plain(encoder), None) => queue.submit([encoder.finish()]),
-        }
-    }
-
-    pub(crate) fn finish_draw_submission(
-        &mut self,
-        token: neomacs_video::VideoSubmissionToken,
-        submission: wgpu::SubmissionIndex,
-    ) {
-        if let Some(system) = self.system.ready_mut() {
-            system.finish_draw_submission(token, submission);
-        }
-    }
-
-    pub(crate) fn discard_unsubmitted_draws(&mut self, token: neomacs_video::VideoSubmissionToken) {
-        if let Some(system) = self.system.ready_mut() {
-            system.discard_unsubmitted_draws(token);
+                .submit_command_encoder(encoder),
+            FrameCommandEncoder::Plain(encoder) => queue.submit([encoder.finish()]),
         }
     }
 
@@ -1021,118 +991,92 @@ impl VideoCache {
         }
     }
 
-    /// Resolve shader-surface video channels to ordinary RGB texture views.
-    /// Packed frames can be reused directly; native planes are converted by
-    /// one GPU draw only for this legacy single-texture consumer. Inline video
-    /// remains on the fused final-composition path.
+    /// Resolve shader-surface video channels to renderer-owned RGB texture
+    /// views. Both packed and bi-planar native frames are copied into
+    /// `channel_targets` through a `VideoCommandEncoder` submitted on
+    /// `VideoSystem`, so no native video `TextureView` ever escapes past
+    /// submission. Inline video remains on the fused final-composition path.
     pub(crate) fn prepare_channel_views(
         &mut self,
         ids: impl IntoIterator<Item = VideoId>,
         device: &wgpu::Device,
-        pipeline: &wgpu::RenderPipeline,
+        packed_pipeline: &wgpu::RenderPipeline,
+        bi_planar_pipeline: &wgpu::RenderPipeline,
         uniform_bind_group: &wgpu::BindGroup,
-    ) -> (
-        HashMap<VideoId, wgpu::TextureView>,
-        Option<neomacs_video::VideoSubmissionToken>,
-    ) {
+    ) -> HashMap<VideoId, wgpu::TextureView> {
         let native_ids: Vec<_> = ids
             .into_iter()
             .filter_map(|id| Some((id, self.videos.get(&id)?.native_id?)))
             .collect();
         let mut views = HashMap::with_capacity(native_ids.len());
         let mut encoder = None;
-        let mut reused_packed = false;
-        let token = {
+        {
             let Some(system) = self.system.ready() else {
-                return (HashMap::new(), None);
+                return HashMap::new();
             };
             let draws = system.prepare_draws(native_ids.iter().map(|(_, id)| id.protocol()));
             let Some(targets) = self.channel_targets.as_mut() else {
-                let token = draws.into_submission_token();
-                self.discard_unsubmitted_draws(token);
-                return (HashMap::new(), None);
+                return HashMap::new();
             };
             for (external_id, native_id) in native_ids {
                 let Some(frame) = draws.get(native_id.protocol()) else {
                     continue;
                 };
-                match video_channel_preparation(frame.sample_kind()) {
-                    VideoChannelPreparation::ReusePacked => {
-                        if let Some(view) = frame.packed_view() {
-                            views.insert(external_id, view.clone());
-                            reused_packed = true;
-                        }
-                    }
-                    VideoChannelPreparation::ConvertBiPlanar => {
-                        let geometry = frame.geometry();
-                        let (view, allocated_bytes) = targets.prepare(
-                            device,
-                            external_id,
-                            geometry.coded_width,
-                            geometry.coded_height,
-                        );
-                        if let Some(size_bytes) = allocated_bytes {
-                            self.accounting.push(
-                                crate::media_budget::MediaAccounting::Registered {
-                                    media_type: crate::media_budget::MediaType::Video,
-                                    id: external_id.get(),
-                                    size_bytes,
-                                },
-                            );
-                        }
-                        let encoder = encoder.get_or_insert_with(|| {
-                            system.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                label: Some("Neomacs native-video shader-channel conversion"),
-                            })
+                let pipeline = match video_channel_preparation(frame.sample_kind()) {
+                    VideoChannelPreparation::CopyPacked => packed_pipeline,
+                    VideoChannelPreparation::ConvertBiPlanar => bi_planar_pipeline,
+                };
+                let geometry = frame.geometry();
+                let (view, allocated_bytes) = targets.prepare(
+                    device,
+                    external_id,
+                    geometry.coded_width,
+                    geometry.coded_height,
+                );
+                if let Some(size_bytes) = allocated_bytes {
+                    self.accounting
+                        .push(crate::media_budget::MediaAccounting::Registered {
+                            media_type: crate::media_budget::MediaType::Video,
+                            id: external_id.get(),
+                            size_bytes,
                         });
-                        {
-                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("Neomacs native-video shader-channel conversion"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view,
-                                    resolve_target: None,
-                                    depth_slice: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                                multiview_mask: None,
-                            });
-                            pass.set_pipeline(pipeline);
-                            pass.set_bind_group(0, uniform_bind_group, &[]);
-                            frame.bind_to_pass(&mut pass, 1);
-                            pass.draw(0..3, 0..1);
-                        }
-                        views.insert(external_id, view.clone());
-                    }
                 }
-            }
-            draws.into_submission_token()
-        };
-        if reused_packed {
-            if let Some(encoder) = encoder {
-                // Submit the bi-planar conversion encoder while keeping `token`
-                // armed until the caller submits the shader-surface pass
-                // sampling the packed views.
-                if let Some(system) = self.system.ready() {
-                    let _ = system.submit_idle_encoder(encoder);
+                let encoder = encoder.get_or_insert_with(|| {
+                    system.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Neomacs native-video shader-channel copy"),
+                    })
+                });
+                {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Neomacs native-video shader-channel copy"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, uniform_bind_group, &[]);
+                    frame.bind_to_pass(&mut pass, 1);
+                    pass.draw(0..3, 0..1);
                 }
+                views.insert(external_id, view.clone());
             }
-            (views, Some(token))
-        } else {
-            if let Some(encoder) = encoder {
-                if let Some(system) = self.system.ready_mut() {
-                    let _ = system.submit_command_encoder(encoder, token);
-                }
-            } else {
-                self.discard_unsubmitted_draws(token);
-            }
-            (views, None)
         }
+        if let Some(encoder) = encoder
+            && let Some(system) = self.system.ready_mut()
+        {
+            let _ = system.submit_command_encoder(encoder);
+        }
+        views
     }
 
     fn update_parked(

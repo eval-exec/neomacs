@@ -713,7 +713,7 @@ impl WgpuRenderer {
 
     pub(super) fn draw_non_overlay_backgrounds(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         non_overlay_rect_vertices: &[RectVertex],
         opacity: f32,
     ) {
@@ -722,7 +722,7 @@ impl WgpuRenderer {
 
     pub(super) fn draw_background_rects(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut super::frame_pass::FrameRenderPass<'_>,
         vertices: &[RectVertex],
         opacity: f32,
     ) {
@@ -755,7 +755,7 @@ impl WgpuRenderer {
 
     pub(super) fn draw_background_rounded_rects(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut super::frame_pass::FrameRenderPass<'_>,
         vertices: &[RoundedRectVertex],
         opacity: f32,
     ) {

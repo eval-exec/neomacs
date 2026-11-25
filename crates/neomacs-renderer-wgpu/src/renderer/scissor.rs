@@ -29,7 +29,7 @@ impl SurfaceScissor {
         })
     }
 
-    pub(super) fn apply(self, pass: &mut wgpu::RenderPass<'_>) {
+    pub(super) fn apply(self, pass: &mut super::frame_pass::FrameRenderPass<'_>) {
         pass.set_scissor_rect(self.x, self.y, self.width.get(), self.height.get());
     }
 }

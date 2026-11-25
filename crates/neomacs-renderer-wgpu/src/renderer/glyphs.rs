@@ -1659,8 +1659,6 @@ impl WgpuRenderer {
         #[cfg(feature = "video")]
         let submitted_video_ids;
         #[cfg(feature = "video")]
-        let video_submission_token;
-        #[cfg(feature = "video")]
         let gpu_timing = self.begin_video_frame_content_pass(
             frame_glyphs
                 .glyphs
@@ -1705,7 +1703,7 @@ impl WgpuRenderer {
             })
         };
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let pass_desc = wgpu::RenderPassDescriptor {
                 label: Some("Frame Glyphs Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
@@ -1720,7 +1718,12 @@ impl WgpuRenderer {
                 timestamp_writes,
                 occlusion_query_set: None,
                 multiview_mask: None,
-            });
+            };
+            #[cfg(feature = "video")]
+            let mut render_pass = encoder.begin_render_pass(&pass_desc);
+            #[cfg(not(feature = "video"))]
+            let mut render_pass =
+                super::frame_pass::FrameRenderPass::Plain(encoder.begin_render_pass(&pass_desc));
             // Group 0 belongs to this pass's destination. Layer painters inherit
             // it and must not replace it with a renderer-global projection.
             render_pass.set_bind_group(0, draw.binding(), &[]);
@@ -1792,7 +1795,7 @@ impl WgpuRenderer {
             self.draw_inline_images(&mut ctx);
             #[cfg(feature = "video")]
             {
-                (submitted_video_ids, video_submission_token) = self.draw_inline_videos(&mut ctx);
+                submitted_video_ids = self.draw_inline_videos(&mut ctx);
             }
             #[cfg(all(feature = "webview", target_os = "linux"))]
             self.draw_inline_webkit_views(&mut ctx);
@@ -1814,12 +1817,7 @@ impl WgpuRenderer {
         stats.log_if_enabled();
 
         #[cfg(feature = "video")]
-        self.submit_video_frame_content_pass(
-            encoder,
-            gpu_timing,
-            submitted_video_ids,
-            video_submission_token,
-        );
+        self.submit_video_frame_content_pass(encoder, gpu_timing, submitted_video_ids);
         #[cfg(not(feature = "video"))]
         self.queue.submit([encoder.finish()]);
     }
@@ -1872,22 +1870,24 @@ impl WgpuRenderer {
                 label: Some("Cursor-Only Encoder"),
             });
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Cursor-Only Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut render_pass = super::frame_pass::FrameRenderPass::Plain(
+                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Cursor-Only Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                }),
+            );
             // As in the full frame pass, layers inherit the target's group 0.
             render_pass.set_bind_group(0, draw.binding(), &[]);
             // Filled-box inverse-video parts (cursor_bg, behind-text trail) are
@@ -2106,7 +2106,7 @@ impl WgpuRenderer {
 
     pub(super) fn draw_rect_vertex_layer(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         rect_vertices: &[RectVertex],
     ) {
         let Some(upload) = self

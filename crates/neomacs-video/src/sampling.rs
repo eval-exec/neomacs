@@ -84,34 +84,161 @@ fn next_video_system_id() -> NonZeroU64 {
     NonZeroU64::new(raw).expect("video system ID counter must not wrap to zero")
 }
 
-/// Command encoder bound by type to one [`crate::VideoSystem`] and its owning
-/// `wgpu::Device`.
-///
-/// The raw inner `wgpu::CommandEncoder` is private so safe callers cannot swap
-/// in an encoder created on a different device before submitting.
-pub struct VideoCommandEncoder {
+/// Shared registry of unsubmitted video-bearing command encoders belonging to
+/// one [`crate::VideoSystem`].
+pub(crate) struct ActiveTokenRegistry {
     system_id: NonZeroU64,
-    encoder: wgpu::CommandEncoder,
+    next_token_id: AtomicU64,
+    active_tokens: Mutex<Vec<u64>>,
 }
 
-impl VideoCommandEncoder {
-    pub(crate) const fn new(system_id: NonZeroU64, encoder: wgpu::CommandEncoder) -> Self {
-        Self { system_id, encoder }
+impl ActiveTokenRegistry {
+    fn new() -> Self {
+        Self {
+            system_id: next_video_system_id(),
+            next_token_id: AtomicU64::new(1),
+            active_tokens: Mutex::new(Vec::new()),
+        }
     }
 
     pub(crate) const fn system_id(&self) -> NonZeroU64 {
         self.system_id
     }
 
-    pub(crate) fn finish(self) -> wgpu::CommandBuffer {
-        self.encoder.finish()
+    pub(crate) fn issue(self: &Arc<Self>) -> VideoSubmissionToken {
+        let id = self.next_token_id.fetch_add(1, Ordering::Relaxed);
+        self.active_tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(id);
+        VideoSubmissionToken {
+            registry: Arc::clone(self),
+            state: SubmissionTokenState::Armed(id),
+        }
+    }
+
+    fn remove(&self, token_id: u64) -> bool {
+        let mut active = self
+            .active_tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(pos) = active.iter().position(|&existing| existing == token_id) {
+            active.swap_remove(pos);
+        }
+        active.is_empty()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.active_tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
+    }
+
+    fn clear(&self) {
+        self.active_tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+}
+
+enum SubmissionTokenState {
+    Empty,
+    Armed(u64),
+}
+
+/// Private affine retirement hold owned exclusively by one
+/// [`VideoCommandEncoder`].
+///
+/// Safe code cannot extract, forge, or clear this token while the owning
+/// encoder remains live. Dropping an unsubmitted [`VideoCommandEncoder`]
+/// destroys its private `wgpu::CommandEncoder` before dropping this token, so
+/// abandoned encoders never submit draws after release and never permanently
+/// stall future frame retirements.
+pub(crate) struct VideoSubmissionToken {
+    registry: Arc<ActiveTokenRegistry>,
+    state: SubmissionTokenState,
+}
+
+impl VideoSubmissionToken {
+    fn release_on_registry(&mut self) -> bool {
+        match std::mem::replace(&mut self.state, SubmissionTokenState::Empty) {
+            SubmissionTokenState::Empty => self.registry.is_empty(),
+            SubmissionTokenState::Armed(token_id) => self.registry.remove(token_id),
+        }
+    }
+}
+
+impl Drop for VideoSubmissionToken {
+    fn drop(&mut self) {
+        if let SubmissionTokenState::Armed(token_id) =
+            std::mem::replace(&mut self.state, SubmissionTokenState::Empty)
+        {
+            self.registry.remove(token_id);
+        }
+    }
+}
+
+/// Command encoder bound by type to one [`crate::VideoSystem`] and its owning
+/// `wgpu::Device`.
+///
+/// Both the inner `wgpu::CommandEncoder` and the retirement token are private:
+/// safe callers cannot extract or swap the inner encoder, cannot clear the
+/// hold while the encoder remains live, and can only submit it through
+/// [`crate::VideoSystem::submit_command_encoder`].
+pub struct VideoCommandEncoder {
+    system_id: NonZeroU64,
+    // Drop order invariant: `encoder` MUST drop before `token` so an
+    // unsubmitted `wgpu::CommandEncoder` is destroyed before its retirement
+    // hold is released. `Drop::drop` enforces this explicitly too.
+    encoder: Option<wgpu::CommandEncoder>,
+    token: Option<VideoSubmissionToken>,
+}
+
+impl VideoCommandEncoder {
+    pub(crate) const fn new(system_id: NonZeroU64, encoder: wgpu::CommandEncoder) -> Self {
+        Self {
+            system_id,
+            encoder: Some(encoder),
+            token: None,
+        }
+    }
+
+    pub(crate) const fn system_id(&self) -> NonZeroU64 {
+        self.system_id
+    }
+
+    pub(crate) fn into_buffer_and_token(
+        mut self,
+    ) -> (wgpu::CommandBuffer, Option<VideoSubmissionToken>) {
+        let buffer = self
+            .encoder
+            .take()
+            .expect("VideoCommandEncoder inner encoder is live until submission or drop")
+            .finish();
+        let token = self.token.take();
+        (buffer, token)
+    }
+
+    pub(crate) fn discard_and_take_token(mut self) -> Option<VideoSubmissionToken> {
+        drop(self.encoder.take());
+        self.token.take()
     }
 
     pub fn begin_render_pass<'a>(
         &'a mut self,
         desc: &wgpu::RenderPassDescriptor<'_>,
-    ) -> wgpu::RenderPass<'a> {
-        self.encoder.begin_render_pass(desc)
+    ) -> VideoRenderPass<'a> {
+        let encoder = self
+            .encoder
+            .as_mut()
+            .expect("VideoCommandEncoder inner encoder is live until submission or drop");
+        VideoRenderPass {
+            system_id: self.system_id,
+            pass: encoder.begin_render_pass(desc),
+            encoder_token: &mut self.token,
+        }
     }
 
     pub fn resolve_query_set(
@@ -122,6 +249,8 @@ impl VideoCommandEncoder {
         destination_offset: wgpu::BufferAddress,
     ) {
         self.encoder
+            .as_mut()
+            .expect("VideoCommandEncoder inner encoder is live until submission or drop")
             .resolve_query_set(query_set, query_range, destination, destination_offset);
     }
 
@@ -133,74 +262,132 @@ impl VideoCommandEncoder {
         destination_offset: wgpu::BufferAddress,
         copy_size: wgpu::BufferAddress,
     ) {
-        self.encoder.copy_buffer_to_buffer(
-            source,
-            source_offset,
-            destination,
-            destination_offset,
-            copy_size,
-        );
-    }
-}
-
-enum SubmissionTokenState {
-    Empty,
-    Armed(u64),
-}
-
-/// Affine token representing draws prepared from a [`crate::VideoSystem`] that
-/// have not yet been submitted to its queue.
-///
-/// Dropping a token without passing it to
-/// [`crate::VideoSystem::submit_command_encoder`],
-/// [`crate::VideoSystem::finish_draw_submission`], or
-/// [`crate::VideoSystem::discard_unsubmitted_draws`] intentionally leaves the
-/// retirement hold armed until [`crate::VideoSystem`] drops, so an accidental
-/// early drop cannot emit a `FOREIGN` release barrier ahead of an unsubmitted
-/// draw.
-#[must_use = "consume a VideoSubmissionToken via submit_command_encoder, finish_draw_submission, or discard_unsubmitted_draws"]
-pub struct VideoSubmissionToken {
-    system_id: NonZeroU64,
-    state: SubmissionTokenState,
-}
-
-impl VideoSubmissionToken {
-    const fn empty(system_id: NonZeroU64) -> Self {
-        Self {
-            system_id,
-            state: SubmissionTokenState::Empty,
-        }
-    }
-
-    const fn armed(system_id: NonZeroU64, token_id: u64) -> Self {
-        Self {
-            system_id,
-            state: SubmissionTokenState::Armed(token_id),
-        }
-    }
-}
-
-impl Drop for VideoSubmissionToken {
-    fn drop(&mut self) {
-        if let SubmissionTokenState::Armed(token_id) = self.state {
-            tracing::warn!(
-                system_id = self.system_id.get(),
-                token_id,
-                "VideoSubmissionToken dropped unconsumed; keeping staged video retirements held until VideoSystem drop"
+        self.encoder
+            .as_mut()
+            .expect("VideoCommandEncoder inner encoder is live until submission or drop")
+            .copy_buffer_to_buffer(
+                source,
+                source_offset,
+                destination,
+                destination_offset,
+                copy_size,
             );
-        }
     }
 }
 
-/// Gates replaced-frame retirement on affine [`VideoSubmissionToken`]s so a
-/// `service()`, `command()`, or `set_presentation()` call between
-/// `prepare_draws()` and queue submission cannot emit a `FOREIGN` release
-/// barrier or return native leases before every recorded draw reaches the GPU
-/// queue.
-pub(crate) struct DrawRetirementGate<T> {
+impl Drop for VideoCommandEncoder {
+    fn drop(&mut self) {
+        // Destroy the unsubmitted `wgpu::CommandEncoder` BEFORE releasing any
+        // retirement token so recorded draws can never be submitted after the
+        // hold clears.
+        drop(self.encoder.take());
+        drop(self.token.take());
+    }
+}
+
+/// Render pass bound by type to one [`VideoCommandEncoder`] and its owning
+/// [`crate::VideoSystem`].
+///
+/// The inner `wgpu::RenderPass` is private (and deliberately does not expose
+/// `&mut wgpu::RenderPass` or `DerefMut`) so safe code cannot `std::mem::swap`
+/// an untracked render pass into this wrapper before calling
+/// [`PreparedVideoDraw::bind_to_pass`].
+pub struct VideoRenderPass<'a> {
     system_id: NonZeroU64,
-    next_token_id: AtomicU64,
-    active_tokens: Mutex<Vec<u64>>,
+    pass: wgpu::RenderPass<'a>,
+    encoder_token: &'a mut Option<VideoSubmissionToken>,
+}
+
+impl VideoRenderPass<'_> {
+    pub(crate) fn bind_video_frame(
+        &mut self,
+        registry: &Arc<ActiveTokenRegistry>,
+        group_index: u32,
+        bind_group: &wgpu::BindGroup,
+    ) {
+        assert_eq!(
+            self.system_id,
+            registry.system_id(),
+            "PreparedVideoDraw belongs to a different VideoSystem than VideoRenderPass"
+        );
+        if self.encoder_token.is_none() {
+            *self.encoder_token = Some(registry.issue());
+        }
+        self.pass.set_bind_group(group_index, bind_group, &[]);
+    }
+
+    pub fn set_pipeline(&mut self, pipeline: &wgpu::RenderPipeline) {
+        self.pass.set_pipeline(pipeline);
+    }
+
+    pub fn set_bind_group<'b>(
+        &mut self,
+        index: u32,
+        bind_group: impl Into<Option<&'b wgpu::BindGroup>>,
+        offsets: &[wgpu::DynamicOffset],
+    ) {
+        self.pass.set_bind_group(index, bind_group.into(), offsets);
+    }
+
+    pub fn set_vertex_buffer(&mut self, slot: u32, buffer_slice: wgpu::BufferSlice<'_>) {
+        self.pass.set_vertex_buffer(slot, buffer_slice);
+    }
+
+    pub fn set_index_buffer(
+        &mut self,
+        buffer_slice: wgpu::BufferSlice<'_>,
+        index_format: wgpu::IndexFormat,
+    ) {
+        self.pass.set_index_buffer(buffer_slice, index_format);
+    }
+
+    pub fn set_scissor_rect(&mut self, x: u32, y: u32, width: u32, height: u32) {
+        self.pass.set_scissor_rect(x, y, width, height);
+    }
+
+    pub fn set_viewport(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        min_depth: f32,
+        max_depth: f32,
+    ) {
+        self.pass
+            .set_viewport(x, y, width, height, min_depth, max_depth);
+    }
+
+    pub fn set_blend_constant(&mut self, color: wgpu::Color) {
+        self.pass.set_blend_constant(color);
+    }
+
+    pub fn set_stencil_reference(&mut self, reference: u32) {
+        self.pass.set_stencil_reference(reference);
+    }
+
+    pub fn draw(&mut self, vertices: std::ops::Range<u32>, instances: std::ops::Range<u32>) {
+        self.pass.draw(vertices, instances);
+    }
+
+    pub fn draw_indexed(
+        &mut self,
+        indices: std::ops::Range<u32>,
+        base_vertex: i32,
+        instances: std::ops::Range<u32>,
+    ) {
+        self.pass.draw_indexed(indices, base_vertex, instances);
+    }
+}
+
+/// Gates replaced-frame retirement on private [`VideoSubmissionToken`]s owned
+/// by [`VideoCommandEncoder`]s so a `service()`, `command()`, or
+/// `set_presentation()` call between recording draws and
+/// [`crate::VideoSystem::submit_command_encoder`] cannot emit a `FOREIGN`
+/// release barrier or return native leases before every recorded draw reaches
+/// the GPU queue.
+pub(crate) struct DrawRetirementGate<T> {
+    registry: Arc<ActiveTokenRegistry>,
     pending: Vec<T>,
 }
 
@@ -213,66 +400,53 @@ impl<T> Default for DrawRetirementGate<T> {
 impl<T> DrawRetirementGate<T> {
     pub(crate) fn new() -> Self {
         Self {
-            system_id: next_video_system_id(),
-            next_token_id: AtomicU64::new(1),
-            active_tokens: Mutex::new(Vec::new()),
+            registry: Arc::new(ActiveTokenRegistry::new()),
             pending: Vec::new(),
         }
     }
 
-    pub(crate) const fn system_id(&self) -> NonZeroU64 {
-        self.system_id
+    pub(crate) fn system_id(&self) -> NonZeroU64 {
+        self.registry.system_id()
     }
 
-    pub(crate) fn issue_token(&self, armed: bool) -> VideoSubmissionToken {
-        if !armed {
-            return VideoSubmissionToken::empty(self.system_id);
-        }
-        let id = self.next_token_id.fetch_add(1, Ordering::Relaxed);
-        self.active_tokens
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(id);
-        VideoSubmissionToken::armed(self.system_id, id)
+    pub(crate) const fn registry(&self) -> &Arc<ActiveTokenRegistry> {
+        &self.registry
+    }
+
+    #[cfg(test)]
+    pub(crate) fn issue_token(&self) -> VideoSubmissionToken {
+        self.registry.issue()
     }
 
     pub(crate) fn has_unsubmitted_draws(&self) -> bool {
-        !self
-            .active_tokens
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .is_empty()
+        !self.registry.is_empty()
     }
 
     pub(crate) fn stage_or_retire(&mut self, retired: Vec<T>) -> Vec<T> {
-        if retired.is_empty() {
-            return Vec::new();
-        }
         if self.has_unsubmitted_draws() {
             self.pending.extend(retired);
             Vec::new()
-        } else {
+        } else if self.pending.is_empty() {
             retired
+        } else {
+            let mut ready = std::mem::take(&mut self.pending);
+            ready.extend(retired);
+            ready
         }
     }
 
-    pub(crate) fn consume_token(&mut self, mut token: VideoSubmissionToken) -> Vec<T> {
-        assert_eq!(
-            token.system_id, self.system_id,
-            "VideoSubmissionToken belongs to a different VideoSystem"
-        );
-        let state = std::mem::replace(&mut token.state, SubmissionTokenState::Empty);
-        let mut active = self
-            .active_tokens
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let SubmissionTokenState::Armed(id) = state
-            && let Some(pos) = active.iter().position(|&existing| existing == id)
-        {
-            active.swap_remove(pos);
-        }
-        let all_submitted = active.is_empty();
-        drop(active);
+    pub(crate) fn finish_encoder_token(&mut self, token: Option<VideoSubmissionToken>) -> Vec<T> {
+        let all_submitted = match token {
+            Some(mut token) => {
+                assert_eq!(
+                    token.registry.system_id(),
+                    self.system_id(),
+                    "VideoSubmissionToken belongs to a different VideoSystem"
+                );
+                token.release_on_registry()
+            }
+            None => self.registry.is_empty(),
+        };
         if all_submitted {
             std::mem::take(&mut self.pending)
         } else {
@@ -281,10 +455,7 @@ impl<T> DrawRetirementGate<T> {
     }
 
     pub(crate) fn take_all_on_drop(&mut self) -> Vec<T> {
-        self.active_tokens
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
+        self.registry.clear();
         std::mem::take(&mut self.pending)
     }
 
@@ -563,13 +734,6 @@ impl GpuVideoContext {
                 .on_submitted_work_done(retirement.into_completion_callback());
         }
         submission
-    }
-
-    pub(crate) fn submit_command_buffer(
-        &self,
-        command_buffer: wgpu::CommandBuffer,
-    ) -> wgpu::SubmissionIndex {
-        self.queue.submit(std::iter::once(command_buffer))
     }
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -949,7 +1113,7 @@ pub(crate) struct GpuVideoFrame {
 enum GpuVideoSample {
     Packed {
         _texture: wgpu::Texture,
-        view: wgpu::TextureView,
+        _view: wgpu::TextureView,
         bind_group: wgpu::BindGroup,
         _allocation: Arc<GpuAllocation>,
     },
@@ -982,7 +1146,7 @@ impl GpuVideoFrame {
             generation,
             sample: GpuVideoSample::Packed {
                 _texture: texture,
-                view,
+                _view: view,
                 bind_group,
                 _allocation: allocation,
             },
@@ -1032,13 +1196,6 @@ impl GpuVideoFrame {
         }
     }
 
-    fn packed_view(&self) -> Option<&wgpu::TextureView> {
-        match &self.sample {
-            GpuVideoSample::Packed { view, .. } => Some(view),
-            GpuVideoSample::BiPlanar { .. } => None,
-        }
-    }
-
     fn bind_group(&self) -> &wgpu::BindGroup {
         match &self.sample {
             GpuVideoSample::Packed { bind_group, .. }
@@ -1080,11 +1237,13 @@ fn create_mapped_uniform(
     Ok(buffer)
 }
 
-/// One prepared video sampling operation. Native leases and raw frame objects
-/// remain private; the renderer sees only a pipeline kind and bind group.
+/// One prepared video sampling operation. Native leases, texture views, and
+/// bind groups remain private; the renderer can only bind this frame into a
+/// [`VideoRenderPass`] created from the same [`crate::VideoSystem`].
 #[derive(Clone, Copy)]
 pub struct PreparedVideoDraw<'a> {
     frame: &'a GpuVideoFrame,
+    registry: &'a Arc<ActiveTokenRegistry>,
 }
 
 impl<'a> PreparedVideoDraw<'a> {
@@ -1100,46 +1259,38 @@ impl<'a> PreparedVideoDraw<'a> {
         self.frame.sample_kind()
     }
 
-    /// Packed RGB view for legacy single-texture consumers. Native bi-planar
-    /// samples deliberately do not pretend to be an RGB texture.
-    pub fn packed_view(&self) -> Option<&'a wgpu::TextureView> {
-        self.frame.packed_view()
-    }
-
-    /// Bind this prepared video frame's sampling resources directly into a
-    /// render pass without handing out a cloneable `wgpu::BindGroup`.
-    pub fn bind_to_pass(&self, render_pass: &mut wgpu::RenderPass<'_>, group_index: u32) {
-        render_pass.set_bind_group(group_index, self.frame.bind_group(), &[]);
+    /// Bind this prepared video frame's sampling resources into a
+    /// [`VideoRenderPass`] belonging to the same [`crate::VideoSystem`], arming
+    /// the owning [`VideoCommandEncoder`]'s retirement hold until submission.
+    pub fn bind_to_pass(&self, render_pass: &mut VideoRenderPass<'_>, group_index: u32) {
+        render_pass.bind_video_frame(self.registry, group_index, self.frame.bind_group());
     }
 }
 
 /// Stable preparation boundary for a renderer pass. It snapshots the set of
-/// generation-valid frames once and carries an affine [`VideoSubmissionToken`]
-/// holding back frame retirement until the recorded work is submitted.
-#[must_use = "extract the VideoSubmissionToken via into_submission_token once draws are recorded"]
+/// generation-valid frames while borrowing [`crate::VideoSystem`]; binding any
+/// frame into a [`VideoRenderPass`] attaches a private retirement hold to the
+/// owning [`VideoCommandEncoder`].
 pub struct PreparedVideoDraws<'a> {
     frames: HashMap<VideoId, &'a GpuVideoFrame>,
-    token: VideoSubmissionToken,
+    registry: &'a Arc<ActiveTokenRegistry>,
 }
 
 impl<'a> PreparedVideoDraws<'a> {
     pub(crate) fn new(
         frames: HashMap<VideoId, &'a GpuVideoFrame>,
-        token: VideoSubmissionToken,
+        registry: &'a Arc<ActiveTokenRegistry>,
     ) -> Self {
-        Self { frames, token }
+        Self { frames, registry }
     }
 
     pub fn get(&self, id: VideoId) -> Option<PreparedVideoDraw<'a>> {
         self.frames
             .get(&id)
             .copied()
-            .map(|frame| PreparedVideoDraw { frame })
-    }
-
-    /// Release the borrow on [`crate::VideoSystem`] while retaining the affine
-    /// submission token that keeps staged frame retirements held until submit.
-    pub fn into_submission_token(self) -> VideoSubmissionToken {
-        self.token
+            .map(|frame| PreparedVideoDraw {
+                frame,
+                registry: self.registry,
+            })
     }
 }

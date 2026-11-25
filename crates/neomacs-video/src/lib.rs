@@ -35,8 +35,8 @@ pub(crate) use sampling::GpuVideoFrame;
 #[cfg(target_os = "linux")]
 pub use sampling::linux_render_device_numbers;
 pub use sampling::{
-    GpuGeneration, PreparedVideoDraw, PreparedVideoDraws, VideoCommandEncoder,
-    VideoSamplingResources, VideoSubmissionToken,
+    GpuGeneration, PreparedVideoDraw, PreparedVideoDraws, VideoCommandEncoder, VideoRenderPass,
+    VideoSamplingResources,
 };
 pub use system::{VideoSystem, VideoWake};
 

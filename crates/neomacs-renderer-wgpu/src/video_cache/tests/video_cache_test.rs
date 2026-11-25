@@ -28,7 +28,7 @@ fn native_bi_planar_shader_parses_and_validates() {
 fn shader_channels_materialize_native_video_instead_of_dropping_it() {
     assert_eq!(
         video_channel_preparation(neomacs_video::VideoSampleKind::Packed),
-        VideoChannelPreparation::ReusePacked
+        VideoChannelPreparation::CopyPacked
     );
     assert_eq!(
         video_channel_preparation(neomacs_video::VideoSampleKind::BiPlanar),

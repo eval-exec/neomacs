@@ -63,10 +63,93 @@ pub(super) struct FrameParams<'a> {
     pub(super) row_damage: Option<&'a super::row_reuse::FrameRowDamage>,
 }
 
+/// Active frame render pass that records into a `VideoRenderPass` when native
+/// video is initialized, or a plain `wgpu::RenderPass` otherwise.
+///
+/// The inner pass is kept private so video draws can only bind into a
+/// `VideoRenderPass` whose owning `VideoCommandEncoder` holds the retirement
+/// token until submission.
+pub(crate) enum FrameRenderPass<'a> {
+    Plain(wgpu::RenderPass<'a>),
+    #[cfg(feature = "video")]
+    Video(neomacs_video::VideoRenderPass<'a>),
+}
+
+impl<'a> FrameRenderPass<'a> {
+    pub(crate) fn set_pipeline(&mut self, pipeline: &wgpu::RenderPipeline) {
+        match self {
+            Self::Plain(pass) => pass.set_pipeline(pipeline),
+            #[cfg(feature = "video")]
+            Self::Video(pass) => pass.set_pipeline(pipeline),
+        }
+    }
+
+    pub(crate) fn set_bind_group<'b>(
+        &mut self,
+        index: u32,
+        bind_group: impl Into<Option<&'b wgpu::BindGroup>>,
+        offsets: &[wgpu::DynamicOffset],
+    ) {
+        match self {
+            Self::Plain(pass) => pass.set_bind_group(index, bind_group.into(), offsets),
+            #[cfg(feature = "video")]
+            Self::Video(pass) => pass.set_bind_group(index, bind_group, offsets),
+        }
+    }
+
+    pub(crate) fn set_vertex_buffer(&mut self, slot: u32, buffer_slice: wgpu::BufferSlice<'_>) {
+        match self {
+            Self::Plain(pass) => pass.set_vertex_buffer(slot, buffer_slice),
+            #[cfg(feature = "video")]
+            Self::Video(pass) => pass.set_vertex_buffer(slot, buffer_slice),
+        }
+    }
+
+    pub(crate) fn set_scissor_rect(&mut self, x: u32, y: u32, width: u32, height: u32) {
+        match self {
+            Self::Plain(pass) => pass.set_scissor_rect(x, y, width, height),
+            #[cfg(feature = "video")]
+            Self::Video(pass) => pass.set_scissor_rect(x, y, width, height),
+        }
+    }
+
+    pub(crate) fn set_blend_constant(&mut self, color: wgpu::Color) {
+        match self {
+            Self::Plain(pass) => pass.set_blend_constant(color),
+            #[cfg(feature = "video")]
+            Self::Video(pass) => pass.set_blend_constant(color),
+        }
+    }
+
+    pub(crate) fn set_stencil_reference(&mut self, reference: u32) {
+        match self {
+            Self::Plain(pass) => pass.set_stencil_reference(reference),
+            #[cfg(feature = "video")]
+            Self::Video(pass) => pass.set_stencil_reference(reference),
+        }
+    }
+
+    pub(crate) fn draw(&mut self, vertices: std::ops::Range<u32>, instances: std::ops::Range<u32>) {
+        match self {
+            Self::Plain(pass) => pass.draw(vertices, instances),
+            #[cfg(feature = "video")]
+            Self::Video(pass) => pass.draw(vertices, instances),
+        }
+    }
+
+    #[cfg(feature = "video")]
+    pub(crate) fn as_video_pass_mut(&mut self) -> Option<&mut neomacs_video::VideoRenderPass<'a>> {
+        match self {
+            Self::Plain(_) => None,
+            Self::Video(pass) => Some(pass),
+        }
+    }
+}
+
 /// The active render pass plus the per-frame params, handed to each draw
 /// phase in z-order.
 pub(super) struct FramePassCtx<'e, 'a> {
-    pub(super) pass: wgpu::RenderPass<'e>,
+    pub(super) pass: FrameRenderPass<'e>,
     pub(super) params: &'e FrameParams<'a>,
 }
 

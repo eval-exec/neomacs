@@ -31,7 +31,7 @@ mod target;
 pub use target::{NativeContentPlacement, NativePlacementError, RenderTarget, SnapshotRegion};
 mod effect_common;
 mod effects_state;
-mod frame_pass;
+pub(crate) mod frame_pass;
 mod fringe_paint;
 mod full_frame_texture;
 pub use full_frame_texture::FullFrameTexture;
@@ -117,14 +117,15 @@ fn create_bi_planar_video_pipeline(
 }
 
 #[cfg(feature = "video")]
-fn create_bi_planar_video_copy_pipeline(
+fn create_video_copy_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
     target_format: wgpu::TextureFormat,
+    label: &str,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Bi-planar Video Shader-channel Copy Pipeline"),
+        label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
@@ -895,11 +896,20 @@ impl WgpuRenderer {
             "Bi-planar Video Pipeline",
         );
         #[cfg(feature = "video")]
-        let bi_planar_video_copy_pipeline = create_bi_planar_video_copy_pipeline(
+        let packed_video_copy_pipeline = create_video_copy_pipeline(
+            &device,
+            &image_shader,
+            &image_pipeline_layout,
+            crate::video_cache::VIDEO_CHANNEL_FORMAT,
+            "Packed Video Shader-channel Copy Pipeline",
+        );
+        #[cfg(feature = "video")]
+        let bi_planar_video_copy_pipeline = create_video_copy_pipeline(
             &device,
             &bi_planar_video_shader,
             &bi_planar_video_pipeline_layout,
             crate::video_cache::VIDEO_CHANNEL_FORMAT,
+            "Bi-planar Video Shader-channel Copy Pipeline",
         );
 
         // Opaque image pipeline — for XRGB/BGRX DMA-BUF textures where alpha=0x00.
@@ -1236,6 +1246,8 @@ impl WgpuRenderer {
                 picture_interpolate: picture_interpolate_pipeline,
                 #[cfg(feature = "video")]
                 bi_planar_video: bi_planar_video_pipeline,
+                #[cfg(feature = "video")]
+                packed_video_copy: packed_video_copy_pipeline,
                 #[cfg(feature = "video")]
                 bi_planar_video_copy: bi_planar_video_copy_pipeline,
                 opaque_image: opaque_image_pipeline,

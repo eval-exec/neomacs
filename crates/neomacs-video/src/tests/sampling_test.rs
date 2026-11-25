@@ -2,14 +2,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::sampling::{DrawRetirementGate, GpuAllocationTracker, SubmittedWorkRetirement};
-use crate::{PreparedVideoDraw, VideoSampleKind, VideoWake};
+use crate::{PreparedVideoDraw, VideoRenderPass, VideoSampleKind, VideoWake};
 
 #[test]
 fn prepared_draw_exposes_one_renderer_facing_sample_contract() {
-    fn renderer_contract(draw: PreparedVideoDraw<'_>, pass: &mut wgpu::RenderPass<'_>) {
+    fn renderer_contract(draw: PreparedVideoDraw<'_>, pass: &mut VideoRenderPass<'_>) {
         match draw.sample_kind() {
-            VideoSampleKind::Packed => assert!(draw.packed_view().is_some()),
-            VideoSampleKind::BiPlanar => assert!(draw.packed_view().is_none()),
+            VideoSampleKind::Packed | VideoSampleKind::BiPlanar => {}
         }
         draw.bind_to_pass(pass, 1);
     }
@@ -74,22 +73,43 @@ fn prepared_draw_and_retirement_are_tied_to_submission() {
         !sampling_src.contains("pub fn bind_group(&self) -> &'a wgpu::BindGroup"),
         "PreparedVideoDraw must not leak a cloneable &wgpu::BindGroup past submission (B8)"
     );
+    assert!(
+        !sampling_src.contains("pub fn packed_view("),
+        "PreparedVideoDraw must not leak a cloneable &wgpu::TextureView past submission (B8)"
+    );
+    assert!(
+        !sampling_src.contains("pub struct VideoSubmissionToken"),
+        "VideoSubmissionToken must stay private inside VideoCommandEncoder (B8)"
+    );
     let system_src = include_str!("../system.rs");
     assert!(
         system_src.contains("pub fn submit_command_encoder("),
         "VideoSystem must tie frame retirement to draw submission (B8)"
     );
+    assert!(
+        !system_src.contains("pub fn finish_draw_submission("),
+        "finish_draw_submission must be removed so foreign SubmissionIndex values cannot clear the gate (B8)"
+    );
+    assert!(
+        !system_src.contains("pub fn discard_unsubmitted_draws("),
+        "discard_unsubmitted_draws must be removed so live encoders cannot outlive their token (B8)"
+    );
+    assert!(
+        !system_src.contains("pub fn submit_idle_encoder("),
+        "submit_idle_encoder must be unified into submit_command_encoder (B8)"
+    );
 
-    // Compile-time signature witnesses: submission requires device-bound
-    // VideoCommandEncoder + affine VideoSubmissionToken, and
-    // finish_draw_submission requires both a token and a real SubmissionIndex.
-    let _: fn(
-        &mut crate::VideoSystem,
-        crate::VideoCommandEncoder,
-        crate::VideoSubmissionToken,
-    ) -> wgpu::SubmissionIndex = crate::VideoSystem::submit_command_encoder;
-    let _: fn(&mut crate::VideoSystem, crate::VideoSubmissionToken, wgpu::SubmissionIndex) =
-        crate::VideoSystem::finish_draw_submission;
+    // Compile-time signature witnesses: draws bind only into VideoRenderPass
+    // and submission consumes VideoCommandEncoder directly (carrying its
+    // private retirement token).
+    fn witness_bind<'a>(draw: &PreparedVideoDraw<'a>, pass: &mut VideoRenderPass<'_>, group: u32) {
+        draw.bind_to_pass(pass, group);
+    }
+    let _ = witness_bind;
+    let _: fn(&mut crate::VideoSystem, crate::VideoCommandEncoder) -> wgpu::SubmissionIndex =
+        crate::VideoSystem::submit_command_encoder;
+    let _: fn(&mut crate::VideoSystem, crate::VideoCommandEncoder) =
+        crate::VideoSystem::discard_command_encoder;
 }
 
 #[test]
@@ -118,9 +138,9 @@ fn retirement_gate_defers_replaced_frames_until_draw_submission() {
     drop(immediate);
     assert_eq!(drops.load(Ordering::Relaxed), 1);
 
-    // Two overlapping draw tokens hold replaced frames until BOTH are consumed.
-    let token_a = gate.issue_token(true);
-    let token_b = gate.issue_token(true);
+    // Two overlapping encoder tokens hold replaced frames until BOTH finish.
+    let token_a = gate.issue_token();
+    let token_b = gate.issue_token();
     assert!(gate.has_unsubmitted_draws());
     let deferred_first = gate.stage_or_retire(vec![NativeLease {
         id: 2,
@@ -135,13 +155,17 @@ fn retirement_gate_defers_replaced_frames_until_draw_submission() {
     assert_eq!(gate.pending_len(), 2);
     assert_eq!(drops.load(Ordering::Relaxed), 1);
 
+    // Submitting an idle encoder (`None`) while tokens remain live does NOT flush pending.
+    assert!(gate.finish_encoder_token(None).is_empty());
+    assert_eq!(gate.pending_len(), 2);
+
     // Consuming only token_a keeps pending frames held while token_b is live.
-    assert!(gate.consume_token(token_a).is_empty());
+    assert!(gate.finish_encoder_token(Some(token_a)).is_empty());
     assert!(gate.has_unsubmitted_draws());
     assert_eq!(gate.pending_len(), 2);
 
     // Consuming token_b drains all staged frames in order and clears the hold.
-    let submitted = gate.consume_token(token_b);
+    let submitted = gate.finish_encoder_token(Some(token_b));
     assert!(!gate.has_unsubmitted_draws());
     assert_eq!(gate.pending_len(), 0);
     let ids: Vec<u32> = submitted.iter().map(|lease| lease.id).collect();
@@ -150,11 +174,11 @@ fn retirement_gate_defers_replaced_frames_until_draw_submission() {
     drop(submitted);
     assert_eq!(drops.load(Ordering::Relaxed), 3);
 
-    // Dropping a token unconsumed must NOT release the hold early; only
-    // teardown (`take_all_on_drop`) drains it.
-    let dropped_early = gate.issue_token(true);
-    drop(dropped_early);
-    assert!(gate.has_unsubmitted_draws());
+    // Dropping a private token (only reachable after VideoCommandEncoder::drop
+    // destroys its unsubmitted wgpu::CommandEncoder) releases its active hold so
+    // the next service (`stage_or_retire`) flushes pending frames cleanly without
+    // stalling the decoder pool.
+    let abandoned = gate.issue_token();
     assert!(
         gate.stage_or_retire(vec![NativeLease {
             id: 4,
@@ -163,17 +187,19 @@ fn retirement_gate_defers_replaced_frames_until_draw_submission() {
         .is_empty()
     );
     assert_eq!(gate.pending_len(), 1);
-    let flushed_on_drop = gate.take_all_on_drop();
-    assert_eq!(flushed_on_drop.len(), 1);
-    assert_eq!(flushed_on_drop[0].id, 4);
-    drop(flushed_on_drop);
+    drop(abandoned);
+    assert!(!gate.has_unsubmitted_draws());
+    let flushed_after_abandon = gate.stage_or_retire(Vec::new());
+    assert_eq!(flushed_after_abandon.len(), 1);
+    assert_eq!(flushed_after_abandon[0].id, 4);
+    drop(flushed_after_abandon);
     assert_eq!(drops.load(Ordering::Relaxed), 4);
 
     // A token from another VideoSystem is rejected.
     let other_gate: DrawRetirementGate<NativeLease> = DrawRetirementGate::new();
-    let foreign_token = other_gate.issue_token(true);
+    let foreign_token = other_gate.issue_token();
     let mismatched = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = gate.consume_token(foreign_token);
+        let _ = gate.finish_encoder_token(Some(foreign_token));
     }));
     assert!(
         mismatched.is_err(),
@@ -334,9 +360,9 @@ fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() 
     );
 
     // Record a real wgpu RenderPass (`EncodingApi::Wgpu`), stage the replaced
-    // frame behind a live submission token, and submit them together.
+    // frame behind a live encoder token, and submit them together.
     let mut gate = DrawRetirementGate::new();
-    let token = gate.issue_token(true);
+    let token = gate.issue_token();
     assert!(gate.stage_or_retire(vec![frame]).is_empty());
     assert_eq!(release_calls.load(Ordering::Relaxed), 0);
     assert_eq!(lease_drops.load(Ordering::Relaxed), 0);
@@ -363,7 +389,7 @@ fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() 
         });
     }
 
-    let retired = gate.consume_token(token);
+    let retired = gate.finish_encoder_token(Some(token));
     assert_eq!(retired.len(), 1);
     let _submission = gpu.submit_buffer_with_retirements(draw_encoder.finish(), retired);
     assert_eq!(
@@ -380,8 +406,8 @@ fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() 
     );
 
     // Also drive the public VideoSystem submission glue (`create_command_encoder`
-    // + `prepare_draws` + `into_submission_token` + `submit_command_encoder`) and
-    // verify cross-system VideoCommandEncoder rejection on the live Vulkan device.
+    // + `begin_render_pass` + `submit_command_encoder`) and verify cross-system
+    // VideoCommandEncoder rejection on the live Vulkan device.
     let system_sampling = VideoSamplingResources::new(&device, &packed_layout, &sampler);
     if let Ok(mut system) = crate::VideoSystem::with_sampling_resources(
         device.clone(),
@@ -412,10 +438,7 @@ fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() 
                 multiview_mask: None,
             });
         }
-        let sys_token = system
-            .prepare_draws(std::iter::empty())
-            .into_submission_token();
-        let _sys_submission = system.submit_command_encoder(sys_encoder, sys_token);
+        let _sys_submission = system.submit_command_encoder(sys_encoder);
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
 
         let other_sampling = VideoSamplingResources::new(&device, &packed_layout, &sampler);
@@ -431,11 +454,8 @@ fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() 
                 other_system.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("video-b8-foreign-encoder"),
                 });
-            let local_token = system
-                .prepare_draws(std::iter::empty())
-                .into_submission_token();
             let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = system.submit_command_encoder(foreign_encoder, local_token);
+                let _ = system.submit_command_encoder(foreign_encoder);
             }));
             assert!(
                 rejected.is_err(),
