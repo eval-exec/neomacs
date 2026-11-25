@@ -32,13 +32,15 @@ import sys
 EXPECTED = {
     "p0s3_contracts": 1,
     "p1rv_contracts": 3,
-    "thread_safety_contracts": 18,
+    # 19 since rt A3 2c(d) Slice 1 Commit A added
+    # `buffer_manager_view_compile_contracts` (BufferManagerMut/EditRuntimeMut).
+    "thread_safety_contracts": 19,
     "chartable_write_contracts": 1,
     "mint_seal_contracts": 1,
     "heap_capability_contracts": 1,
     "retained_leaf_contracts": 1,
 }
-EXPECTED_TOTAL = sum(EXPECTED.values())  # 26 nextest test functions
+EXPECTED_TOTAL = sum(EXPECTED.values())  # 27 nextest test functions
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 STATUS = re.compile(
@@ -181,7 +183,7 @@ SELF_TEST_CASES = {
             overrides={("thread_safety_contracts", 0): "FAIL"},
             replay=[("thread_safety_contracts", 0)],
         ),
-        "thread_safety_contracts: 18 runners (expected 18)",
+        "thread_safety_contracts: 19 runners (expected 19)",
     ),
     "timeout-runner": (False, _nextest_log(overrides={("p1rv_contracts", 0): "TIMEOUT"})),
     "missing-runner": (
