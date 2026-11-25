@@ -198,9 +198,9 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
     pub(crate) fn owns_heap_word_for_test(
         &self,
         stopped: &AllStopped<'_>,
-        word: usize,
+        proof: neovm_value::tagged::gc::HeapWord,
     ) -> Result<bool, CollectionError> {
-        self.era.owns_heap_word_for_test(stopped, word)
+        self.era.owns_heap_word_for_test(stopped, proof)
     }
 
     #[cfg(test)]

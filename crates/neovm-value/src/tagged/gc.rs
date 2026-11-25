@@ -2658,6 +2658,8 @@ pub use facade_mark::{
     QuiescentCollector, heap_transfer,
 };
 pub use mutator_registration::FunctionCallCache;
+#[cfg(any(test, feature = "test-support"))]
+pub use mutator_registration::HeapWord;
 pub use mutator_registration::KeeperTableMut;
 pub use mutator_registration::MutatorPermit;
 pub use mutator_registration::NativeRoots;

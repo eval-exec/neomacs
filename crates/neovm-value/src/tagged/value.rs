@@ -582,6 +582,18 @@ impl TaggedValue {
         self.0
     }
 
+    /// Test-support [`HeapWord`] proof for this value's raw word.
+    ///
+    /// Only this crate can mint a `HeapWord`, so the ownership probe stays a
+    /// safe function even though it rebuilds a `TaggedValue` internally.
+    ///
+    /// [`HeapWord`]: crate::tagged::gc::HeapWord
+    #[cfg(any(test, feature = "test-support"))]
+    #[inline(always)]
+    pub fn heap_word_for_test(self) -> crate::tagged::gc::HeapWord {
+        crate::tagged::gc::HeapWord::new(self.0)
+    }
+
     /// Reconstruct a value from its raw tagged bits (the inverse of [`bits`]).
     ///
     /// `pub(crate)` and unchecked: the caller must supply bits that originated

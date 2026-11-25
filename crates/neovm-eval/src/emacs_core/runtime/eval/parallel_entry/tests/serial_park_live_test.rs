@@ -1910,8 +1910,11 @@ fn complete_retrying(label: &str, mut result: Result<(), AllStoppedFailure<'_>>)
 /// one unrooted garbage cons on the source heap before admission.
 fn with_live_era_with_garbage(
     label: &'static str,
-    body: impl for<'k, 'service, 'heap> FnOnce(&'k KeeperEra<'service, 'heap>, usize, usize)
-    + Send
+    body: impl for<'k, 'service, 'heap> FnOnce(
+        &'k KeeperEra<'service, 'heap>,
+        neovm_value::tagged::gc::HeapWord,
+        neovm_value::tagged::gc::HeapWord,
+    ) + Send
     + 'static,
 ) {
     let mut source = ready();
@@ -1924,8 +1927,8 @@ fn with_live_era_with_garbage(
     let garbage = source
         .tagged_heap
         .alloc_cons(Value::fixnum(999), Value::NIL)
-        .bits();
-    let survivor_word = survivor.bits();
+        .heap_word_for_test();
+    let survivor_word = survivor.heap_word_for_test();
     source.tagged_heap.close_alloc_regions();
     let (shell, start) = close(source).prepare_era().unwrap();
     let (tx, rx) = mpsc::channel();
@@ -1953,9 +1956,8 @@ fn l67a_collection_request_rides_batch_stop_once() {
     with_live_era_with_garbage("l67a-k5-d8", |era, survivor, garbage| {
         let before = {
             let stopped = stop_retrying(era);
-            // SAFETY: `survivor` and `garbage` are allocations on this era's heap.
-            assert!(unsafe { era.owns_heap_word_for_test(&stopped, survivor).unwrap() });
-            assert!(unsafe { era.owns_heap_word_for_test(&stopped, garbage).unwrap() });
+            assert!(era.owns_heap_word_for_test(&stopped, survivor).unwrap());
+            assert!(era.owns_heap_word_for_test(&stopped, garbage).unwrap());
             let cycles = era.gc_collections_for_test(&stopped).unwrap();
             complete_retrying("baseline stop", stopped.complete());
             cycles
@@ -2285,7 +2287,7 @@ fn l67a_real_serial_turn_allocation_drives_due_collection() {
                                         heap.owns_heap_value_for_test(v),
                                         "positive control: freshly allocated Turn 1 vector must be owned by era heap"
                                     );
-                                    first = Some(v.bits());
+                                    first = Some(v.heap_word_for_test());
                                 }
                             }
                             (
@@ -2317,7 +2319,7 @@ fn l67a_real_serial_turn_allocation_drives_due_collection() {
                             // on this era heap earlier in Turn 1.
                             assert!(
                                 heap.owns_heap_value_for_test(unsafe {
-                                    Value::from_bits(first_word)
+                                    Value::from_bits(first_word.bits())
                                 }),
                                 "Turn 1 vector must remain owned until Stop #2 collects"
                             );
@@ -2356,7 +2358,7 @@ fn l67a_real_serial_turn_allocation_drives_due_collection() {
                             // allocated on this heap (positive-controlled above).
                             assert!(
                                 !heap.owns_heap_value_for_test(unsafe {
-                                    Value::from_bits(first_word)
+                                    Value::from_bits(first_word.bits())
                                 }),
                                 "Stop #2 collection must reclaim the unrooted Turn 1 vector before Turn 2 evaluates"
                             );
@@ -2826,7 +2828,11 @@ fn l67b_b5_world_turn_cons_survives_or_reclaims_across_group_collect() {
                             let _ = heap.alloc_cons(Value::fixnum(i as i64), Value::NIL);
                         }
                         heap.close_alloc_regions();
-                        (rooted.bits(), garbage.bits(), handle)
+                        (
+                            rooted.heap_word_for_test(),
+                            garbage.heap_word_for_test(),
+                            handle,
+                        )
                     };
                     let (turn2, _again, lend2) = group
                         .collect(lend, WorldReturned::from_end(turn), Some(report_tx))
@@ -2845,7 +2851,7 @@ fn l67b_b5_world_turn_cons_survives_or_reclaims_across_group_collect() {
                             .materialize(heap)
                             .expect("rooted cons survives on this heap")
                             .value();
-                        assert_eq!(survived.bits(), rooted_word);
+                        assert_eq!(survived.bits(), rooted_word.bits());
                         assert_eq!(survived.cons_car_unobserved(), Value::fixnum(4242));
                         assert_eq!(survived.cons_cdr_unobserved(), Value::fixnum(9090));
                         let _post = heap.alloc_cons(Value::fixnum(1234), Value::NIL);
@@ -2945,7 +2951,11 @@ fn l67b_b5_world_turn_collect_cons_collect_again() {
                             "positive control: garbage cons owned before Collect #2"
                         );
                         heap.close_alloc_regions();
-                        (rooted.bits(), garbage.bits(), handle)
+                        (
+                            rooted.heap_word_for_test(),
+                            garbage.heap_word_for_test(),
+                            handle,
+                        )
                     };
                     // Collect #2: merges the resident shell via the empty-frozen swap path.
                     let (turn3, _e3, lend3) = group
@@ -2961,7 +2971,7 @@ fn l67b_b5_world_turn_collect_cons_collect_again() {
                             .materialize(heap)
                             .expect("rooted cons survives Collect #2")
                             .value();
-                        assert_eq!(survived.bits(), rooted_word);
+                        assert_eq!(survived.bits(), rooted_word.bits());
                         assert_eq!(survived.cons_car_unobserved(), Value::fixnum(5150));
                         assert_eq!(survived.cons_cdr_unobserved(), Value::fixnum(6260));
                     }

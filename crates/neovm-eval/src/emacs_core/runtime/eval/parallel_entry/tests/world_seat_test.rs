@@ -545,8 +545,11 @@ fn with_live_green_era(
 fn with_live_green_era_with_transfer_words(
     label: &'static str,
     setup: impl FnOnce(&mut Context),
-    body: impl for<'k, 'service, 'heap> FnOnce(&'k KeeperEra<'service, 'heap>, usize, usize)
-    + Send
+    body: impl for<'k, 'service, 'heap> FnOnce(
+        &'k KeeperEra<'service, 'heap>,
+        neovm_value::tagged::gc::HeapWord,
+        neovm_value::tagged::gc::HeapWord,
+    ) + Send
     + 'static,
 ) {
     let mut source = ready();
@@ -556,12 +559,12 @@ fn with_live_green_era_with_transfer_words(
     let survivor = source
         .tagged_heap
         .alloc_cons(Value::fixnum(111), Value::fixnum(222));
-    let survivor_word = survivor.bits();
+    let survivor_word = survivor.heap_word_for_test();
     source.set_variable("l67b-b4-transfer-survivor", survivor);
     let garbage_word = source
         .tagged_heap
         .alloc_cons(Value::fixnum(333), Value::fixnum(444))
-        .bits();
+        .heap_word_for_test();
     source.tagged_heap.close_alloc_regions();
     let bootstrap = source.capture_green_bootstrap_for_test();
     let (shell, start) = close(source).prepare_era().unwrap();
@@ -638,7 +641,7 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
                         .obarray()
                         .symbol_value_copied("l67b-b4-transfer-survivor")
                         .expect("transfer symbol holds survivor cons");
-                    assert_eq!(survivor.bits(), survivor_word);
+                    assert_eq!(survivor.bits(), survivor_word.bits());
                     ctx.lexenv = survivor;
                     ctx.set_variable("l67b-b4-transfer-survivor", Value::NIL);
 
@@ -683,13 +686,12 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
                         Err(other) => panic!("verify stop: {other:?}"),
                     }
                 };
-                // SAFETY: both words are allocations made on this era's heap.
-                let era_owns_survivor =
-                    unsafe { era.owns_heap_word_for_test(&stopped, survivor_word) }
-                        .expect("check survivor word");
-                let era_owns_garbage =
-                    unsafe { era.owns_heap_word_for_test(&stopped, garbage_word) }
-                        .expect("check garbage word");
+                let era_owns_survivor = era
+                    .owns_heap_word_for_test(&stopped, survivor_word)
+                    .expect("check survivor word");
+                let era_owns_garbage = era
+                    .owns_heap_word_for_test(&stopped, garbage_word)
+                    .expect("check garbage word");
                 stopped.trace_serial().expect("trace verify stop");
                 stopped.complete().expect("complete verify stop");
 
@@ -769,7 +771,7 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                         Ok(crate::emacs_core::eval::SymbolValueLookup::Bound(val)) => val,
                         other => panic!("transfer symbol holds survivor cons, got {other:?}"),
                     };
-                    assert_eq!(survivor.bits(), survivor_word);
+                    assert_eq!(survivor.bits(), survivor_word.bits());
                     ctx.try_specbind(symbol, survivor)
                         .expect("bind survivor on OwnerSlab");
                     ctx.set_variable("l67b-b4-transfer-survivor", Value::NIL);
@@ -781,7 +783,9 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                     // Prove survivor is NOT in private parked roots — ONLY in OwnerSlab.
                     let private_roots = ctx.collect_parked_roots();
                     assert!(
-                        !private_roots.iter().any(|v| v.bits() == survivor_word),
+                        !private_roots
+                            .iter()
+                            .any(|v| v.bits() == survivor_word.bits()),
                         "OwnerSlab-only dynamic binding must not appear in private parked roots"
                     );
                     ctx.return_parked_root_buffer(private_roots);
@@ -829,13 +833,12 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                         Err(other) => panic!("verify stop: {other:?}"),
                     }
                 };
-                // SAFETY: both words are allocations made on this era's heap.
-                let era_owns_survivor =
-                    unsafe { era.owns_heap_word_for_test(&stopped, survivor_word) }
-                        .expect("check survivor word");
-                let era_owns_garbage =
-                    unsafe { era.owns_heap_word_for_test(&stopped, garbage_word) }
-                        .expect("check garbage word");
+                let era_owns_survivor = era
+                    .owns_heap_word_for_test(&stopped, survivor_word)
+                    .expect("check survivor word");
+                let era_owns_garbage = era
+                    .owns_heap_word_for_test(&stopped, garbage_word)
+                    .expect("check garbage word");
                 stopped.trace_serial().expect("trace verify stop");
                 stopped.complete().expect("complete verify stop");
 

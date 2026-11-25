@@ -451,19 +451,17 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         self.with_stopped_heap_for_test(stopped, |heap| heap.gc_collections())
     }
 
-    /// # Safety
-    ///
-    /// `word` must be a `TaggedValue` bit pattern produced by an allocation on
-    /// this heap. `TaggedValue::from_bits` over any other word is caller UB.
     #[cfg(any(test, feature = "test-support"))]
-    pub(super) unsafe fn owns_heap_word_for_test(
+    pub(super) fn owns_heap_word_for_test(
         &self,
         stopped: &AllStopped<'_>,
-        word: usize,
+        proof: super::HeapWord,
     ) -> Result<bool, CollectionError> {
         self.with_stopped_heap_for_test(stopped, |heap| {
-            // SAFETY: test observation bit pattern from an object allocated on this heap.
-            heap.owns_heap_value_for_test(unsafe { TaggedValue::from_bits(word) })
+            // SAFETY: a `HeapWord` is minted only in this crate from a live
+            // `TaggedValue`, so its bits are a valid value; the ownership probe
+            // compares heap ranges and never dereferences outside them.
+            heap.owns_heap_value_for_test(unsafe { TaggedValue::from_bits(proof.bits()) })
         })
     }
 
@@ -471,7 +469,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
     pub(super) fn alloc_serial_cons_for_test(
         &self,
         stopped: &AllStopped<'_>,
-    ) -> Result<usize, CollectionError> {
+    ) -> Result<super::HeapWord, CollectionError> {
         self.check_collection(stopped)?;
         let mut collector = self
             .collector
@@ -483,7 +481,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             .registration_heap_mut();
         let cons = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::fixnum(2));
         heap.close_alloc_regions();
-        Ok(cons.bits())
+        Ok(super::HeapWord::new(cons.bits()))
     }
 
     #[cfg(any(test, feature = "test-support"))]

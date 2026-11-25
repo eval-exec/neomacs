@@ -1395,3 +1395,25 @@ pub(crate) mod retry;
 #[cfg(all(test, miri))]
 #[path = "mutator_registration/numeric_storage_miri.rs"]
 mod numeric_storage_miri;
+
+/// A heap-word proof for the test-support ownership probes.
+///
+/// `TaggedValue` is thread-confined, so tests that hand a value's word to
+/// another thread carry this type instead. Its constructor is crate-private:
+/// only a live `TaggedValue` can mint one, so a safe caller cannot pass an
+/// arbitrary word to `owns_heap_word_for_test`.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct HeapWord(usize);
+
+#[cfg(any(test, feature = "test-support"))]
+impl HeapWord {
+    pub(crate) fn new(bits: usize) -> Self {
+        Self(bits)
+    }
+
+    pub fn bits(self) -> usize {
+        self.0
+    }
+}

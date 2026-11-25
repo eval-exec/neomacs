@@ -510,7 +510,7 @@ macro_rules! era_operations {
             pub fn alloc_serial_cons_for_test(
                 &self,
                 stopped: &AllStopped<'_>,
-            ) -> Result<usize, CollectionError> {
+            ) -> Result<HeapWord, CollectionError> {
                 self.core.alloc_serial_cons_for_test(stopped)
             }
 
@@ -544,17 +544,12 @@ macro_rules! era_operations {
 
             #[cfg(any(test, feature = "test-support"))]
             #[doc(hidden)]
-            /// # Safety
-            ///
-            /// `word` must be a `TaggedValue` bit pattern produced by an
-            /// allocation on this heap.
-            pub unsafe fn owns_heap_word_for_test(
+            pub fn owns_heap_word_for_test(
                 &self,
                 stopped: &AllStopped<'_>,
-                word: usize,
+                proof: HeapWord,
             ) -> Result<bool, CollectionError> {
-                // SAFETY: forwarded from this function's caller contract.
-                unsafe { self.core.owns_heap_word_for_test(stopped, word) }
+                self.core.owns_heap_word_for_test(stopped, proof)
             }
 
             #[cfg(any(test, feature = "test-support"))]
