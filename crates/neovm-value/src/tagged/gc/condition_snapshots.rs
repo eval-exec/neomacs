@@ -110,7 +110,11 @@ impl ConditionPayload {
     }
 }
 
-impl PublicationPayload for ConditionPayload {
+// SAFETY: `self.table` is a heap-allocated `Box<ConditionSnapshotTable>`, so
+// the pointee address returned by `published_address` is deterministic,
+// immutable to shared readers, and stays valid and stable when
+// `ConditionPayload` moves into the predecessor vector until drop.
+unsafe impl PublicationPayload for ConditionPayload {
     type Error = ();
     type Generation = u64;
 

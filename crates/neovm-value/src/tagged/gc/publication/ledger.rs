@@ -97,27 +97,30 @@ pub(crate) struct Accounted<'owner, P: PublicationPayload, T> {
     pub(crate) charged: RetainedBytes,
 }
 
-/// Names a payload for the auto-trait assertions and the compile-fail fixture.
-pub(crate) struct BoundWitness;
+/// Uninhabited witness naming a payload type for auto-trait assertions and
+/// compile-fail fixtures without permitting a value to be constructed.
+pub(crate) enum BoundWitness {}
 
-impl PublicationPayload for BoundWitness {
+// SAFETY: `BoundWitness` is uninhabited (`enum BoundWitness {}`), so no
+// instance can exist and every method is vacuously sound.
+unsafe impl PublicationPayload for BoundWitness {
     type Error = ();
     type Generation = u64;
 
     fn published_address(&self) -> *mut u8 {
-        std::ptr::null_mut()
+        match *self {}
     }
 
     fn retained_bytes(&self) -> RetainedBytes {
-        RetainedBytes::new(0)
+        match *self {}
     }
 
     fn generation(&self) -> u64 {
-        0
+        match *self {}
     }
 
-    fn prepare(_current: &Self) -> Result<PayloadPlan<Self>, Self::Error> {
-        Ok(PayloadPlan::Unchanged)
+    fn prepare(current: &Self) -> Result<PayloadPlan<Self>, Self::Error> {
+        match *current {}
     }
 }
 
@@ -657,7 +660,9 @@ mod tests {
         static PLAN: Cell<Option<u64>> = const { Cell::new(None) };
     }
 
-    impl PublicationPayload for Toy {
+    // SAFETY: `self.value` is a heap-allocated `Box<u64>`, so its address
+    // stays valid and unmoved across moves of `Toy` until drop.
+    unsafe impl PublicationPayload for Toy {
         type Error = ();
         type Generation = u64;
 

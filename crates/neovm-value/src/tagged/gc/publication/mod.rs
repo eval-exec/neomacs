@@ -148,10 +148,19 @@ pub(crate) enum PayloadPlan<T> {
 
 /// Closed, monomorphized payload. Prefix laws stay in the adapter.
 ///
-/// `published_address` is stable when the owner moves into the predecessor
-/// vector. `prepare` returns `Unchanged` or a checked replacement; it does
-/// not publish.
-pub(crate) trait PublicationPayload: Sized {
+/// `prepare` returns `Unchanged` or a checked replacement; it does not publish.
+///
+/// # Safety
+/// Implementors guarantee that:
+/// - [`Self::published_address`] is deterministic for a given `Self` value and
+///   returns a valid, readable pointer to its owned backing.
+/// - That backing remains valid, readable, immutable to concurrent shared
+///   readers, and at the exact same address when `Self` moves into the
+///   ledger's predecessor vector and until `Self` is dropped.
+///
+/// Callers (such as symbol-table and condition-snapshot readers) dereference
+/// `published_address()` under that stability and immutability contract.
+pub(crate) unsafe trait PublicationPayload: Sized {
     type Error;
     type Generation: Copy;
 

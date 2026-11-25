@@ -191,7 +191,10 @@ struct SymbolPublication {
     table: OwnedSymbolTable,
 }
 
-impl crate::tagged::gc::publication::PublicationPayload for SymbolPublication {
+// SAFETY: `self.table` is an `OwnedSymbolTable` heap allocation whose raw
+// descriptor pointer remains valid and stable across moves into the
+// predecessor vector until `SymbolPublication` is dropped.
+unsafe impl crate::tagged::gc::publication::PublicationPayload for SymbolPublication {
     type Error = TableError;
     type Generation = PointerTableGeneration;
 
