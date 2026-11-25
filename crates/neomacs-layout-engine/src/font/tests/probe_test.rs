@@ -227,3 +227,39 @@ fn fixture_default_and_explicit_hinting_policies_stay_independent() {
         "default before/after full"
     );
 }
+
+#[test]
+fn named_instance_mm_var_queries_variable_font_via_raw_mut() {
+    let file = neomacs_test_fonts::noto_sans_mono_variable();
+    let path = file.to_str().expect("UTF-8 variable font path");
+
+    let weights = named_instance_wght_values(path, 0);
+    assert!(
+        weights.len() >= 2,
+        "bundled variable font must expose multiple named-instance weights: {weights:?}"
+    );
+    assert!(
+        weights.windows(2).all(|w| w[0] < w[1]),
+        "weights must be strictly sorted and deduplicated: {weights:?}"
+    );
+    assert!(
+        weights.contains(&400) && weights.contains(&700),
+        "expected Regular (400) and Bold (700) named instances: {weights:?}"
+    );
+
+    // Instance 0 (no named-instance bits) returns empty; a valid non-default
+    // named instance returns decoded non-default variation coordinates.
+    assert!(named_instance_variation_coords(path, 0).is_empty());
+    let non_default_coords = (1u32..=32)
+        .find_map(|idx| {
+            let coords = named_instance_variation_coords(path, idx << 16);
+            (!coords.is_empty()).then_some(coords)
+        })
+        .expect("bundled variable font must have a non-default named instance");
+    assert!(
+        non_default_coords
+            .iter()
+            .any(|c| c.tag() == u32::from_be_bytes(*b"wght")),
+        "expected wght axis in named-instance coords: {non_default_coords:?}"
+    );
+}

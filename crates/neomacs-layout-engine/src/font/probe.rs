@@ -401,12 +401,12 @@ std::cfg_select! {
             let Ok(library) = Library::init() else {
                 return Vec::new();
             };
-            let Ok(face) = library.new_face(file, face_index as isize) else {
+            let Ok(mut face) = library.new_face(file, face_index as isize) else {
                 return Vec::new();
             };
             let mut weights = Vec::new();
             unsafe {
-                let raw = face.raw() as *const ft::FT_FaceRec as *mut ft::FT_FaceRec;
+                let raw = std::ptr::from_mut(face.raw_mut());
                 let mut mm: *mut ft::FT_MM_Var = std::ptr::null_mut();
                 if ft::FT_Get_MM_Var(raw, &mut mm) != 0 || mm.is_null() {
                     return Vec::new();
@@ -448,11 +448,11 @@ std::cfg_select! {
             let Ok(library) = Library::init() else {
                 return Vec::new();
             };
-            let Ok(face) = library.new_face(file, (face_selector & 0xffff) as isize) else {
+            let Ok(mut face) = library.new_face(file, (face_selector & 0xffff) as isize) else {
                 return Vec::new();
             };
             unsafe {
-                let raw = face.raw() as *const ft::FT_FaceRec as *mut ft::FT_FaceRec;
+                let raw = std::ptr::from_mut(face.raw_mut());
                 let mut mm: *mut ft::FT_MM_Var = std::ptr::null_mut();
                 if ft::FT_Get_MM_Var(raw, &mut mm) != 0 || mm.is_null() {
                     return Vec::new();
