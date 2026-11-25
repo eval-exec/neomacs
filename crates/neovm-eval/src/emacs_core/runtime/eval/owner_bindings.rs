@@ -824,17 +824,19 @@ impl OwnerSlabRegistry {
     }
 
     /// Visit every registered slab's values under `AllStopped` in a stowed
-    /// Green World, verifying each slab belongs to `heap`. Requiring
-    /// `&AllStopped` enforces exclusive stopped-world access at compile time.
+    /// Green World, validating that `stopped` proves exclusive stopped-world
+    /// access for `heap` before reading any slab.
     pub(crate) fn trace_roots_for_heap(
         &self,
-        _stopped: &neovm_value::tagged::gc::AllStopped<'_>,
+        stopped: &neovm_value::tagged::gc::AllStopped<'_>,
         heap: neovm_value::tagged::gc::HeapIdentity,
         visit: &mut dyn FnMut(Value),
-    ) {
+    ) -> Result<(), neovm_value::tagged::gc::RendezvousError> {
+        stopped.check_world_roots(heap)?;
         for slab in &self.slabs {
             // SAFETY: the registry owns every registered slab until World drop,
-            // and `AllStopped` excludes every mutator from mutating any slab.
+            // and `stopped.check_world_roots(heap)` proved `AllStopped` excludes
+            // every mutator on this heap from mutating any slab.
             let slab = unsafe { slab.as_ref() };
             debug_assert_eq!(
                 neovm_value::tagged::gc::HeapIdentity::from_legacy_word(slab.heap),
@@ -843,6 +845,7 @@ impl OwnerSlabRegistry {
             );
             slab.trace_roots(visit);
         }
+        Ok(())
     }
 }
 

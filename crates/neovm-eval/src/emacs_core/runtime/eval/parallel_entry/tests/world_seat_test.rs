@@ -1092,6 +1092,113 @@ fn l67b_b4_green_serial_finish_retained_drains_seat_retained_leases() {
     assert!(main.parked_owners_empty_for_test());
 }
 
+/// L6.7b b4 Q2 (Nit #3): when `mark_phase()` is `StoppedMarking`,
+/// `ParkedWorldSeat::enter` fails closed on retirement (keeping the lease live
+/// in `runtime.parked`); once marking finishes into `MarkPhase::Sweeping`,
+/// retirement succeeds via `RootBatchLease::try_recycle`.
+#[test]
+fn l67b_b4_q2_phase_guard_refuses_retirement_during_stopped_marking() {
+    let mut main = seated_green_main();
+    let real_heap = main.tagged_heap.heap_identity();
+    let key = main.green_key().expect("seated main has ThreadKey");
+    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    assert_eq!(main.parked_owner_len_for_test(), 1);
+
+    // Put the heap into MarkPhase::StoppedMarking before enter.
+    if main.tagged_heap.tagged_heap_generational_enabled() {
+        let _ = main.tagged_heap.begin_minor_collection_for_test();
+    } else {
+        let _ = main.tagged_heap.begin_stw_collection_for_test();
+    }
+    assert!(
+        main.tagged_heap.mark_in_progress(),
+        "begun collection enters StoppedMarking"
+    );
+    let (turn, lend, _rx) = make_test_turn(real_heap, 27);
+    let active = parked
+        .enter(&mut main, turn, lend)
+        .expect("enter succeeds while StoppedMarking defers lease retirement");
+    assert_eq!(
+        main.parked_owner_len_for_test(),
+        1,
+        "StoppedMarking keeps parked lease live in runtime.parked"
+    );
+    assert!(
+        !main.parked_root_batch_is_cached_for_test(),
+        "StoppedMarking must not retire or recycle the batch"
+    );
+
+    // Finish marking into MarkPhase::Sweeping -> Q2 guard allows try_recycle.
+    main.finish_stopped_mark_into_sweep_for_test();
+    assert!(!main.tagged_heap.mark_in_progress());
+    assert!(main.tagged_heap.sweep_in_progress());
+
+    main.try_retire_world_seat_parked_roots(key);
+    assert!(
+        main.parked_owners_empty_for_test(),
+        "MarkPhase::Sweeping allows deferred lease retirement"
+    );
+    assert!(
+        main.parked_root_batch_is_cached_for_test(),
+        "MarkPhase::Sweeping retirement succeeds via try_recycle"
+    );
+
+    main.gc_collect_exact();
+    let (parked, lend, returned) = active.exit(&mut main);
+    lend.give_back(returned);
+    parked.retire_parked_for_teardown_for_test(&mut main);
+    assert!(main.parked_owners_empty_for_test());
+}
+
+/// L6.7b b4 Finding #1 (best-effort serial drain): a still-live lease in
+/// `WorldRootRegistry::retained` with a held reader MUST NOT cause an
+/// unrelated owner's serial `finish_retained_parked_roots` to fail with a Lisp
+/// error; it stays retained fail-closed and drains once the reader finishes.
+#[test]
+fn l67b_b4_green_serial_finish_retained_does_not_fail_other_owner_on_held_reader() {
+    let mut main = seated_green_main();
+    let real_heap = main.tagged_heap.heap_identity();
+    let other_owner = crate::emacs_core::eval::green::ThreadKey::Worker(nonzero(99));
+    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    let reader = main
+        .admit_parked_root_reader_for_test()
+        .expect("admit reader on initial parked lease");
+
+    // Defer L1 on enter, move L1 to `retained` via switch_out, then retire L2
+    // on switch_in so ONLY L1 (with held reader) sits in `retained`.
+    let (turn, lend, _rx) = make_test_turn(real_heap, 28);
+    let active = parked
+        .enter(&mut main, turn, lend)
+        .expect("enter with reader");
+    let (parked, turn, lend) = active.switch_out(&mut main);
+    let active = parked
+        .switch_in(&mut main, turn, lend)
+        .expect("switch_in retires L2 while L1 stays in retained");
+    assert_eq!(main.parked_owner_len_for_test(), 1);
+    assert!(!main.parked_contains_main_for_test());
+
+    // An unrelated owner's serial park checks `finish_retained_parked_roots`:
+    // the held reader on `retained` MUST NOT turn into a Lisp error.
+    main.finish_retained_parked_roots(other_owner)
+        .expect("still-live retained lease must not fail another owner's serial park");
+    assert_eq!(
+        main.parked_owner_len_for_test(),
+        1,
+        "held-reader lease stays live in retained fail-closed"
+    );
+
+    // Once the reader finishes, the next best-effort drain retires L1 cleanly.
+    reader.finish().expect("finish held reader");
+    main.finish_retained_parked_roots(other_owner)
+        .expect("best-effort drain succeeds once reader clears");
+    assert!(main.parked_owners_empty_for_test());
+
+    let (parked, lend, returned) = active.exit(&mut main);
+    lend.give_back(returned);
+    parked.retire_parked_for_teardown_for_test(&mut main);
+    assert!(main.parked_owners_empty_for_test());
+}
+
 /// L6.7b b4 Q3 teardown order: dropping `ParkedWorldSeat` (its retained
 /// `FacadeEpochRetention`) and clearing cached `GreenSeat.parked_root_batch`
 /// before final `World::finish_green_registry` / `TaggedHeap::drop` leaves

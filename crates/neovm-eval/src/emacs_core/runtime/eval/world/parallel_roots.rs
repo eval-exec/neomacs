@@ -220,7 +220,7 @@ impl Baton {
                     stopped,
                     self.parallel_heap_identity(),
                     &mut visit,
-                );
+                )?;
             }
             (&*world.owned_roots.get()).trace_roots_with_buffers(&*world.buffers.get(), &mut visit);
             for value in (&*world.treesit.get()).roots() {

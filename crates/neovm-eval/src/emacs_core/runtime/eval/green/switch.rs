@@ -1492,35 +1492,31 @@ impl Context {
     }
 
     pub(crate) fn finish_retained_parked_roots(&mut self, key: ThreadKey) -> Result<(), Flow> {
-        let has_pending = self.with_green_runtime(|runtime| {
+        let (has_own_key, has_retained) = self.with_green_runtime(|runtime| {
             let parked = runtime.parked.borrow();
-            parked.contains_key(&key) || parked.has_retained()
+            (parked.contains_key(&key), parked.has_retained())
         });
-        if !has_pending {
+        if !has_own_key && !has_retained {
             return Ok(());
         }
-        self.prepare_parked_root_retirement()?;
-        let retained = self.with_green_runtime(|runtime| runtime.parked.borrow_mut().remove(&key));
-        if let Some(publication) = retained {
-            self.finish_restored_publication(key, publication)?;
+        if has_own_key {
+            self.prepare_parked_root_retirement()?;
+            if let Some(publication) =
+                self.with_green_runtime(|runtime| runtime.parked.borrow_mut().remove(&key))
+            {
+                self.finish_restored_publication(key, publication)?;
+            }
         }
-        let mut first_error = None;
-        self.with_green_runtime(|runtime| {
-            runtime.parked.borrow_mut().drain_retained_with(|lease| {
-                match super::root_registry::finish(lease) {
-                    Ok(()) => Ok(()),
-                    Err(failure) => {
-                        let (lease, error) = failure.into_parts();
-                        if first_error.is_none() {
-                            first_error = Some(error.to_string());
-                        }
-                        Err(lease)
-                    }
-                }
+        // Drain stale duplicate leases in `WorldRootRegistry::retained`
+        // best-effort: never force `drain_to_quiescent` for an unrelated
+        // owner's stuck lease and never turn a still-live reader into a Lisp
+        // error (over-rooting is safe, matching `try_retire_world_seat_parked_roots`).
+        if has_retained && (has_own_key || self.world_seat_retirement_phase_is_safe()) {
+            self.with_green_runtime(|runtime| {
+                runtime.parked.borrow_mut().drain_retained_with(|lease| {
+                    super::root_registry::finish(lease).map_err(|failure| failure.into_parts().0)
+                });
             });
-        });
-        if let Some(message) = first_error {
-            return Err(signal("error", vec![Value::string(message)]));
         }
         Ok(())
     }
@@ -1828,6 +1824,21 @@ impl Context {
                 .expect("parked owner has an active RootBatchLease");
             lease.admit_detached_reader_for_test(&self.tagged_heap)
         })
+    }
+
+    /// Test-only helper: finish an already-started stopped mark extent into
+    /// `MarkPhase::Sweeping` so `#![forbid(unsafe_code)]` tests can exercise
+    /// the Q2 `StoppedMarking -> Sweeping` transition.
+    #[cfg(test)]
+    pub(crate) fn finish_stopped_mark_into_sweep_for_test(&mut self) {
+        let heap: *mut neovm_value::tagged::gc::TaggedHeap = self.tagged_heap.heap_root().as_ptr();
+        // SAFETY: sole owner in a single-threaded unit test; no concurrent
+        // collector, callback, or handoff runs during this root seed.
+        unsafe { self.seed_registered_mutator_roots_world_stopped(heap) };
+        self.tagged_heap.incremental_drain_all();
+        let bytes = self.tagged_heap.live_bytes();
+        self.tagged_heap
+            .incremental_finish_for_test(bytes, std::time::Instant::now());
     }
 
     /// Test-only helper: whether this seated owner holds a recycled

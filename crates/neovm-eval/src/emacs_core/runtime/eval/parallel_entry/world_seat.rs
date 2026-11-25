@@ -9,13 +9,12 @@
 //! `GreenRuntime`'s carried TLS and warm `OwnerCarried` slots (`green/switch.rs`).
 //!
 //! Contracts:
-//! - [`ParkedWorldSeat::park_seated`] (and [`ParkedWorldSeat::park_seated_with_retention`])
-//!   accepts only a seated Green `Context` whose own heap is currently installed
-//!   on this OS thread and that holds the World's carried state here; it closes
-//!   open bump-allocation regions, parks host bindings + JIT pins, publishes the
-//!   seated `Context`'s private roots into `GreenRuntime::parked` as a
-//!   `RootBatchLease` (P1), stows the World's carriers to
-//!   `CarriedHolder::Stowed`, and parks carrier TLS.
+//! - [`ParkedWorldSeat::park_seated`] accepts only a seated Green `Context`
+//!   whose own heap is currently installed on this OS thread and that holds the
+//!   World's carried state here; it closes open bump-allocation regions, parks
+//!   host bindings + JIT pins, publishes the seated `Context`'s private roots
+//!   into `GreenRuntime::parked` as a `RootBatchLease` (P1), stows the World's
+//!   carriers to `CarriedHolder::Stowed`, and parks carrier TLS.
 //! - [`ParkedWorldSeat::enter`] and [`ParkedWorldSeat::switch_in`] fail closed
 //!   on every invariant before mutating TLS or World state: seated Green host,
 //!   matching parked `OwnerSlab` identity (`WorldSeatRefusal::WrongContext`,
