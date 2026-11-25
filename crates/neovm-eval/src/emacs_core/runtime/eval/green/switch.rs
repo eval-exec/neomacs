@@ -2046,23 +2046,45 @@ impl Context {
         //    World to this Baton group at ring HEAD. `Control::collect_era_interval`
         //    holds `GroupTurn::Collecting` unlocked across `GroupPort::collect`
         //    so sibling wakes join FIFO without emitting a duplicate request.
+        //
+        //    Fail-closed policy (LOW-2, matching b4.3's poisoned-era abort in
+        //    `Control::await_era_world_with_port` / `EraTransitionAbortOnPanic`):
+        //    once `WorldReturn` is in flight (`GroupPort::collect` cleared
+        //    `lend.armed`), carrier TLS is parked and `parked` holds a retained
+        //    `RootBatchLease` in `GreenRuntime::parked`. Unwinding a Baton
+        //    thread without a `WorldTurn` would leak that lease and leave a
+        //    half-parked seat, so a refusal or closed report channel aborts the
+        //    process cleanly rather than panicking or falling through to direct
+        //    `TaggedHeap` collection.
         let (report_tx, report_rx) = mpsc::sync_channel(1);
-        let (turn2, _epoch2, lend2) =
-            match control.collect_era_interval(lend, returned, Some(report_tx)) {
-                Ok(resumed) => resumed,
-                Err(refusal) => {
-                    // Fail closed: era is poisoned or closed and carrier TLS is
-                    // parked with no WorldTurn; never fall through to direct GC.
-                    panic!("era collection refused by keeper driver: {refusal:?}");
-                }
-            };
+        let (turn2, _epoch2, lend2) = match control.collect_era_interval(
+            lend,
+            returned,
+            Some(report_tx),
+        ) {
+            Ok(resumed) => resumed,
+            Err(refusal) => {
+                tracing::error!(
+                    ?refusal,
+                    "era collection refused by keeper driver while seat is parked; aborting per b4.3 poisoned-era policy"
+                );
+                std::process::abort();
+            }
+        };
         let report = match report_rx.recv() {
             Ok(Ok(report)) => report,
             Ok(Err(refusal)) => {
-                panic!("era collection report refused after re-grant: {refusal:?}");
+                tracing::error!(
+                    ?refusal,
+                    "era collection report refused after re-grant while seat is parked; aborting per b4.3 poisoned-era policy"
+                );
+                std::process::abort();
             }
             Err(_) => {
-                panic!("era collection report channel closed after re-grant");
+                tracing::error!(
+                    "era collection report channel closed after re-grant while seat is parked; aborting per b4.3 poisoned-era policy"
+                );
+                std::process::abort();
             }
         };
 

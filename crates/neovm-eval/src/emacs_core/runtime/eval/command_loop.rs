@@ -2063,8 +2063,10 @@ impl Context {
 
     /// Shared post-collection bookkeeping for a keeper-driven stopped major
     /// collection (used by L6.7b b4.4 `gc_collect_era_interval` and planned
-    /// L6.7c (c) `gc_collect_serial_turn`). Sourced from the keeper's
-    /// completed cycle with no second local scan.
+    /// L6.7c (c) `gc_collect_serial_turn`). Syncs `gc_count` / `gcs-done` from
+    /// the keeper's authoritative `report.cycle` (`heap.gc_collections()`) so
+    /// a newly attached Context or autonomous keeper collection never causes
+    /// `gcs-done` to lag the shared heap, with no second local scan.
     #[cold]
     #[inline(never)]
     pub(crate) fn finish_keeper_collection(
@@ -2074,7 +2076,7 @@ impl Context {
     ) -> Result<(), Flow> {
         debug_assert!(report.major, "keeper collection runs a major cycle");
         self.gc_pending = false;
-        self.gc_count += 1;
+        self.gc_count = report.cycle as u64;
         self.publish_completed_cycle(start.elapsed());
         self.sync_gc_threshold_from_runtime_settings();
         self.tagged_heap.drain_pending_native_destroys();

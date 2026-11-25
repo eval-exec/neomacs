@@ -1431,11 +1431,10 @@ fn l67b_b44_garbage_collect_subr_and_bytecode_in_era_collect_before_queued_owner
                 .green_era_turn_epoch_for_test()
                 .expect("main holds TurnRight::Era");
             let gc0 = main.tagged_heap.gc_collections();
-            let gcs_done_0 = main
-                .eval_str("gcs-done")
-                .expect("read gcs-done")
-                .as_int()
-                .expect("gcs-done int");
+            assert!(
+                gc0 >= 1,
+                "pre-era setup collection must make tagged_heap.gc_collections() >= 1"
+            );
             let gc_elapsed_0 = main
                 .eval_str("gc-elapsed")
                 .expect("read gc-elapsed")
@@ -1472,7 +1471,8 @@ fn l67b_b44_garbage_collect_subr_and_bytecode_in_era_collect_before_queued_owner
             assert_eq!(main.tagged_heap.gc_collections(), gc0 + 1);
             assert_eq!(
                 main.eval_str("gcs-done").unwrap().as_int().unwrap(),
-                gcs_done_0 + 1
+                (gc0 + 1) as i64,
+                "LOW-1: gcs-done must match keeper report.cycle == tagged_heap.gc_collections()"
             );
             assert_eq!(eval(main, "b44-fin-ran"), "t", "doomed finalizer ran");
             assert_eq!(eval(main, "b44-hook-count"), "1", "post-gc-hook ran once");
@@ -1500,7 +1500,8 @@ fn l67b_b44_garbage_collect_subr_and_bytecode_in_era_collect_before_queued_owner
             assert_eq!(main.tagged_heap.gc_collections(), gc0 + 2);
             assert_eq!(
                 main.eval_str("gcs-done").unwrap().as_int().unwrap(),
-                gcs_done_0 + 2
+                (gc0 + 2) as i64,
+                "LOW-1: gcs-done must stay synced with keeper report.cycle after bytecode GC"
             );
             assert_eq!(
                 eval(main, "b44-hook-count"),
