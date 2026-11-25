@@ -824,9 +824,11 @@ impl OwnerSlabRegistry {
     }
 
     /// Visit every registered slab's values under `AllStopped` in a stowed
-    /// Green World, verifying each slab belongs to `heap`.
+    /// Green World, verifying each slab belongs to `heap`. Requiring
+    /// `&AllStopped` enforces exclusive stopped-world access at compile time.
     pub(crate) fn trace_roots_for_heap(
         &self,
+        _stopped: &neovm_value::tagged::gc::AllStopped<'_>,
         heap: neovm_value::tagged::gc::HeapIdentity,
         visit: &mut dyn FnMut(Value),
     ) {

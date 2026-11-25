@@ -464,6 +464,9 @@ impl WorldRootRegistry {
     pub(crate) fn pop_retained(&mut self) -> Option<RootBatchLease> {
         self.retained.pop()
     }
+    pub(crate) fn has_retained(&self) -> bool {
+        !self.retained.is_empty()
+    }
     pub(crate) fn push_retained(&mut self, roots: RootBatchLease) {
         self.retained.push(roots);
     }

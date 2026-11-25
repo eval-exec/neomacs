@@ -216,10 +216,11 @@ impl Baton {
                 // `pending_starts`, `standard_case_table`, stowed `owner_carried`)
                 // and every registered `OwnerSlab`'s dynamic-binding roots.
                 runtime.trace_roots(&mut visit);
-                world
-                    .owner_slabs
-                    .borrow()
-                    .trace_roots_for_heap(self.parallel_heap_identity(), &mut visit);
+                world.owner_slabs.borrow().trace_roots_for_heap(
+                    stopped,
+                    self.parallel_heap_identity(),
+                    &mut visit,
+                );
             }
             (&*world.owned_roots.get()).trace_roots_with_buffers(&*world.buffers.get(), &mut visit);
             for value in (&*world.treesit.get()).roots() {

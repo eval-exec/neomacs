@@ -590,10 +590,16 @@ fn with_live_green_era_with_transfer_words(
 }
 
 /// L6.7b b4 P1 (Row a): a seated Baton `Context` parked via `WorldSeat` holds
-/// the ONLY reference to a fresh cons (`ctx.lexenv`) alongside an unreachable
-/// fresh cons. When the Baton group collects via `GroupPort::collect` (b5),
+/// the ONLY reference to a cons cell (`ctx.lexenv`) alongside an unreachable
+/// cons cell. When the Baton group collects via `GroupPort::collect` (b5),
 /// the parked Context's cons MUST survive and the unreachable cons MUST be
 /// reclaimed.
+///
+/// Note (#14164/#14165): both conses are currently allocated on `source` before
+/// `prepare_era()` and `survivor` is transferred into `ctx.lexenv` without
+/// consing inside the `WorldTurn` to avoid the `restore_legacy_for_collection`
+/// `YoungBlockLog` merge bug; flip to in-turn consing once `peer-gcfix` lands
+/// that fix.
 #[test]
 fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() {
     with_live_green_era_with_transfer_words(
@@ -712,6 +718,10 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
 /// `OwnerSlab` (not in `collect_parked_roots()` private roots). When the group
 /// collects via `GroupPort::collect`, the `OwnerSlab` binding survives and
 /// unreachable garbage is reclaimed.
+///
+/// Note (#14164/#14165): allocates `survivor` and `garbage` on `source` before
+/// `prepare_era()` to avoid the `restore_legacy_for_collection` `YoungBlockLog`
+/// merge bug; flip to in-turn consing once `peer-gcfix` lands that fix.
 #[test]
 fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
     let symbol = neovm_value::intern::intern("l67b-b4-slab-binding");
@@ -977,6 +987,103 @@ fn l67b_b4_deferred_retirement_under_held_reader_and_later_retire() {
     assert!(
         main.parked_root_batch_is_cached_for_test(),
         "current lease recycles onto GreenSeat after second reader clears"
+    );
+
+    let (parked, lend, returned) = active.exit(&mut main);
+    lend.give_back(returned);
+    parked.retire_parked_for_teardown_for_test(&mut main);
+    assert!(main.parked_owners_empty_for_test());
+}
+
+/// L6.7b b4 Q2 (Finding #7): when the Q2 non-marking phase guard is false
+/// (`gc_driver_active == true`), `ParkedWorldSeat::enter` succeeds and fails
+/// closed by keeping the parked `RootBatchLease` live in `GreenRuntime::parked`;
+/// clearing the guard lets later retirement recycle the lease onto `GreenSeat`.
+#[test]
+fn l67b_b4_q2_phase_guard_refuses_retirement_when_gc_driver_active() {
+    let mut main = seated_green_main();
+    let real_heap = main.tagged_heap.heap_identity();
+    let key = main.green_key().expect("seated main has ThreadKey");
+    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    assert_eq!(main.parked_owner_len_for_test(), 1);
+
+    // Violate the Q2 non-marking phase guard during enter.
+    main.gc_driver_active = true;
+    let (turn, lend, _rx) = make_test_turn(real_heap, 25);
+    let active = parked
+        .enter(&mut main, turn, lend)
+        .expect("enter succeeds while Q2 phase guard defers lease retirement");
+    assert_eq!(
+        main.parked_owner_len_for_test(),
+        1,
+        "Q2 guard refusal keeps parked lease live in runtime.parked"
+    );
+    assert!(
+        !main.parked_root_batch_is_cached_for_test(),
+        "Q2 guard refusal must not retire or recycle the batch"
+    );
+
+    // Clear the guard -> retirement succeeds through try_recycle.
+    main.gc_driver_active = false;
+    main.try_retire_world_seat_parked_roots(key);
+    assert!(main.parked_owners_empty_for_test());
+    assert!(
+        main.parked_root_batch_is_cached_for_test(),
+        "clearing Q2 guard lets retirement succeed via try_recycle"
+    );
+
+    let (parked, lend, returned) = active.exit(&mut main);
+    lend.give_back(returned);
+    parked.retire_parked_for_teardown_for_test(&mut main);
+    assert!(main.parked_owners_empty_for_test());
+}
+
+/// L6.7b b4 Finding #2 (seat-to-serial-Green handoff): when a prior seat
+/// deferral moved an older lease into `WorldRootRegistry::retained`, Green's
+/// serial `finish_retained_parked_roots` MUST drain `retained` as well as
+/// `owners[key]` so serial Green parking neither panics nor over-roots until
+/// World teardown.
+#[test]
+fn l67b_b4_green_serial_finish_retained_drains_seat_retained_leases() {
+    let mut main = seated_green_main();
+    let real_heap = main.tagged_heap.heap_identity();
+    let key = main.green_key().expect("seated main has ThreadKey");
+    let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
+    let reader = main
+        .admit_parked_root_reader_for_test()
+        .expect("admit reader on initial parked lease");
+
+    // Defer L1 on enter, then switch_out so L1 moves into `retained` while L2
+    // occupies `owners[key]`.
+    let (turn, lend, _rx) = make_test_turn(real_heap, 26);
+    let active = parked
+        .enter(&mut main, turn, lend)
+        .expect("enter with reader");
+    let (parked, turn, lend) = active.switch_out(&mut main);
+    assert_eq!(main.parked_owner_len_for_test(), 2);
+
+    // switch_in retires L2 from `owners[key]`, leaving ONLY L1 in `retained`.
+    let active = parked
+        .switch_in(&mut main, turn, lend)
+        .expect("switch_in retires L2 while L1 stays in retained");
+    assert_eq!(
+        main.parked_owner_len_for_test(),
+        1,
+        "L1 remains in WorldRootRegistry::retained while reader is held"
+    );
+    assert!(
+        !main.parked_contains_main_for_test(),
+        "owners[Main] is now empty; only retained holds L1"
+    );
+
+    // Reader finishes -> Green's serial `finish_retained_parked_roots` MUST
+    // drain `retained` before a subsequent serial Green park.
+    reader.finish().expect("finish reader on retained L1");
+    main.finish_retained_parked_roots(key)
+        .expect("finish_retained_parked_roots drains retained seat leases");
+    assert!(
+        main.parked_owners_empty_for_test(),
+        "finish_retained_parked_roots must drain WorldRootRegistry::retained"
     );
 
     let (parked, lend, returned) = active.exit(&mut main);

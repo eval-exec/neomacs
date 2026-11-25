@@ -140,9 +140,12 @@ impl ParkedWorldSeat {
         Self::park_seated_inner(ctx, None)
     }
 
-    /// Park a live seated Green `Context` during an already-open era where the
-    /// keeper retains the World's `Baton`, using an explicit retained facade
-    /// epoch token (Q3).
+    /// Test-only helper: park a live seated Green `Context` during an
+    /// already-open era test fixture where the keeper retains the World's
+    /// `Baton`, using an explicit retained facade epoch token (Q3). Callers
+    /// must serialize against the era's turns; production callers must hold a
+    /// `Baton` (`park_seated`) or `WorldTurn` (`ActiveWorldSeat::switch_out`).
+    #[cfg(test)]
     #[cold]
     #[inline(never)]
     pub(crate) fn park_seated_with_retention(
@@ -174,10 +177,13 @@ impl ParkedWorldSeat {
         if !ctx.holds_serial_world_here() {
             return Err(WorldSeatRefusal::WorldNotHeldHere);
         }
+        // Guard the entire park + root-publication + stow + TLS sequence
+        // (matching `switch_out`): an `Err` return does not panic, while an
+        // unwind midway aborts before bindings and carriers can split.
+        let _abort = AbortOnPanic("world-seat-park");
         let (roots, retention) = ctx
             .park_world_seat_with_roots(retention)
             .map_err(|_| WorldSeatRefusal::RootPublication)?;
-        let _abort = AbortOnPanic("world-seat-park");
         let stowed = ctx.stow_serial_world_state();
         assert!(
             stowed,

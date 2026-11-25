@@ -1492,15 +1492,37 @@ impl Context {
     }
 
     pub(crate) fn finish_retained_parked_roots(&mut self, key: ThreadKey) -> Result<(), Flow> {
-        if !self.with_green_runtime(|runtime| runtime.parked.borrow().contains_key(&key)) {
+        let has_pending = self.with_green_runtime(|runtime| {
+            let parked = runtime.parked.borrow();
+            parked.contains_key(&key) || parked.has_retained()
+        });
+        if !has_pending {
             return Ok(());
         }
         self.prepare_parked_root_retirement()?;
         let retained = self.with_green_runtime(|runtime| runtime.parked.borrow_mut().remove(&key));
-        match retained {
-            Some(publication) => self.finish_restored_publication(key, publication),
-            None => Ok(()),
+        if let Some(publication) = retained {
+            self.finish_restored_publication(key, publication)?;
         }
+        let mut first_error = None;
+        self.with_green_runtime(|runtime| {
+            runtime.parked.borrow_mut().drain_retained_with(|lease| {
+                match super::root_registry::finish(lease) {
+                    Ok(()) => Ok(()),
+                    Err(failure) => {
+                        let (lease, error) = failure.into_parts();
+                        if first_error.is_none() {
+                            first_error = Some(error.to_string());
+                        }
+                        Err(lease)
+                    }
+                }
+            });
+        });
+        if let Some(message) = first_error {
+            return Err(signal("error", vec![Value::string(message)]));
+        }
+        Ok(())
     }
 
     pub(crate) fn finish_restored_publication(
