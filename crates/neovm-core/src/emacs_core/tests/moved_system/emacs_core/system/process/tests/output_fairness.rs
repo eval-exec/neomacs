@@ -71,13 +71,13 @@ fn ready_process(eval: &mut Context, name: &str, chunks: usize) -> (ProcessId, A
     let (processes, buffers) = eval.processes_and_buffers_mut();
     processes.sync_process_mark(buffers, id).unwrap();
     let reads = Arc::new(AtomicUsize::new(0));
-    // SAFETY: `pty_reader` is not a poll-registered descriptor.
-    unsafe { eval.processes_mut().get_mut(id).unwrap().live_io_mut() }.set_pty_reader(Some(
-        PtyOutputReader::new(Box::new(ReadyChunks {
+    eval.processes_mut()
+        .get_mut(id)
+        .unwrap()
+        .set_pty_reader(Some(PtyOutputReader::new(Box::new(ReadyChunks {
             remaining: chunks,
             reads: Arc::clone(&reads),
-        })),
-    ));
+        }))));
     (id, reads)
 }
 

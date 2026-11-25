@@ -172,15 +172,12 @@ impl ProcessInputEndpoint {
     }
 
     fn write_once(self, proc: &mut Process, bytes: &[u8]) -> Option<std::io::Result<usize>> {
-        // SAFETY: every arm below only writes bytes to an existing handle and
-        // never replaces, closes, or drops a poll-registered descriptor.
-        let io = unsafe { proc.live_io_mut() };
         match self {
-            Self::Pty => Some(io.pty_writer_mut()?.write(bytes)),
+            Self::Pty => Some(proc.pty_writer_mut()?.write(bytes)),
             Self::ChildPipe => {
                 // SAFETY: only sets non-blocking and writes to `stdin`; does
                 // not close or replace the child handle.
-                let stdin = unsafe { io.child_mut() }.stdin_mut()?;
+                let stdin = unsafe { proc.live_io_mut().child_mut() }.stdin_mut()?;
                 #[cfg(unix)]
                 {
                     use std::os::unix::io::AsRawFd;
@@ -192,7 +189,7 @@ impl ProcessInputEndpoint {
             Self::Tls => Some(
                 // SAFETY: writes to the live TLS stream without replacing or
                 // dropping its underlying descriptor.
-                unsafe { io.tls_stream_mut() }?.write_process_input_once(bytes),
+                unsafe { proc.live_io_mut().tls_stream_mut() }?.write_process_input_once(bytes),
             ),
             Self::Network => {
                 let datagram_address = proc.datagram_socket_addr;
@@ -209,7 +206,7 @@ impl ProcessInputEndpoint {
             }
             // SAFETY: writes to the live serial port without replacing or
             // dropping its descriptor.
-            Self::Serial => Some(unsafe { io.serial_port_mut() }?.write(bytes)),
+            Self::Serial => Some(unsafe { proc.live_io_mut().serial_port_mut() }?.write(bytes)),
         }
     }
 
@@ -223,8 +220,7 @@ impl ProcessInputEndpoint {
     fn disconnect(self, poller: Option<&polling::Poller>, proc: &mut Process) {
         match self {
             Self::Pty => {
-                // SAFETY: `pty_writer` is not a poll-registered descriptor.
-                unsafe { proc.live_io_mut() }.set_pty_writer(None);
+                proc.set_pty_writer(None);
             }
             Self::ChildPipe => {
                 if let (Some(poller), Some(stdin)) = (poller, proc.live_io().child().stdin()) {

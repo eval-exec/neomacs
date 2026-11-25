@@ -423,23 +423,16 @@ pub(crate) fn builtin_gnutls_bye(
     }
 }
 
-#[doc(hidden)]
-pub(crate) fn builtin_gnutls_deinit(
-    eval: &mut neovm_eval::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("gnutls-deinit", &args, 1)?;
-    let id = resolve_process_object_or_wrong_type_any_in_manager(&eval.processes(), &args[0])?;
+pub(super) fn deinit_process_tls(processes: &mut ProcessManager, id: ProcessId) -> EvalResult {
     if let (Some(poller), Some(tls)) = (
-        eval.processes().wait_backend.poller(),
-        eval.processes()
+        processes.wait_backend.poller(),
+        processes
             .get(id)
             .and_then(|proc| proc.live_io().tls_stream()),
     ) {
         let _ = poller.delete(tls.tcp_stream());
     }
-    let proc = eval
-        .processes_mut()
+    let proc = processes
         .get_mut(id)
         .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
     // SAFETY: `tls_stream`'s underlying TCP socket was deleted from the poller
@@ -451,6 +444,16 @@ pub(crate) fn builtin_gnutls_deinit(
     } else {
         Ok(Value::NIL)
     }
+}
+
+#[doc(hidden)]
+pub(crate) fn builtin_gnutls_deinit(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("gnutls-deinit", &args, 1)?;
+    let id = resolve_process_object_or_wrong_type_any_in_manager(&eval.processes(), &args[0])?;
+    deinit_process_tls(eval.processes_mut(), id)
 }
 
 #[doc(hidden)]
@@ -555,42 +558,70 @@ pub(super) fn begin_process_tls<B: TlsClientBackend>(
         ));
     }
 
-    // Take the plain TCP stream; it will be owned by the TLS stream.
-    let tcp_stream = match unsafe { proc.live_io_mut().take_network_socket() } {
-        Some(NetworkSocket::TcpStream(stream)) => stream,
-        Some(other) => {
-            unsafe { proc.live_io_mut().set_network_socket(Some(other)) };
-            return Err(signal(
+    if !matches!(
+        proc.live_io().network_socket(),
+        Some(NetworkSocket::TcpStream(_))
+    ) {
+        return match proc.live_io().network_socket() {
+            Some(_) => Err(signal(
                 "error",
                 vec![Value::string(format!(
                     "{operation}: process is not a TCP stream"
                 ))],
-            ));
-        }
-        None => {
-            return Err(signal(
+            )),
+            None => Err(signal(
                 "error",
                 vec![Value::string(format!(
                     "{operation}: no socket (already TLS or closed)"
                 ))],
-            ));
-        }
+            )),
+        };
+    }
+
+    // Delete the plain TCP socket from the poller before moving ownership into
+    // `B::start_client`: if TLS startup fails, `start_client` drops the stream
+    // without leaving a registered descriptor behind.
+    if let (Some(poller), Some(socket)) = (
+        processes.wait_backend.poller(),
+        processes
+            .get(id)
+            .and_then(|proc| proc.live_io().network_socket()),
+    ) {
+        socket.unregister_readable(poller);
+    }
+
+    let proc = processes
+        .get_mut(id)
+        .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
+    // SAFETY: `network_socket` was unregistered from the poller above.
+    let Some(NetworkSocket::TcpStream(tcp_stream)) =
+        (unsafe { proc.live_io_mut().take_network_socket() })
+    else {
+        return Err(signal(
+            "error",
+            vec![Value::string(format!(
+                "{operation}: process is not a TCP stream"
+            ))],
+        ));
     };
 
     proc.gnutls_initstage = GnutlsInitStage::HandshakeTried;
     let tls_stream = match B::start_client(tcp_stream, parameters) {
         Ok(stream) => stream,
         Err(error) => {
-            // TCP ownership has transferred; a failed configuration cannot
-            // leave an apparently live process without any transport.
+            // TCP ownership has transferred (and was already unregistered from
+            // the poller above); a failed configuration cannot leave an
+            // apparently live process without any transport.
             processes.delete_process(id);
             return Err(map_error(error));
         }
     };
 
-    // Store the TLS stream. The poller still watches the underlying fd
-    // (which is the same fd that was registered for the plain socket).
+    // SAFETY: the previous plain socket was already unregistered and taken
+    // above, and no TLS stream was previously registered on this process.
     unsafe { proc.live_io_mut().set_tls_stream(Some(tls_stream)) };
+    let accepts_output = process_filter_accepts_output(proc);
+    processes.set_process_output_read_interest(id, accepts_output);
     Ok(())
 }
 
@@ -1121,6 +1152,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                         proc.thread = current_thread_handle(threads);
                         proc.plist = plist_val;
                         proc.status = ProcessStatusSymbol::Open.value();
+                        // SAFETY: fresh network process has no previously registered socket.
                         unsafe {
                             proc.live_io_mut()
                                 .set_network_socket(Some(NetworkSocket::UdpSocket(socket)))
@@ -1180,6 +1212,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                 let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
                 processes.sync_process_mark(buffers, id)?;
                 if let Some(proc) = processes.get_mut(id) {
+                    // SAFETY: fresh network process has no previously registered socket.
                     unsafe {
                         proc.live_io_mut()
                             .set_network_socket(Some(NetworkSocket::UdpSocket(socket)))
@@ -1258,6 +1291,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                     proc.childp = contact;
                     proc.thread = current_thread_handle(threads);
                     proc.plist = plist_val;
+                    // SAFETY: fresh network process has no previously registered socket.
                     unsafe {
                         proc.live_io_mut()
                             .set_network_socket(Some(NetworkSocket::TcpListener(listener)))
@@ -1335,17 +1369,16 @@ pub(super) fn connect_network_process_at_explicit_address(
                     match start {
                         PendingNetworkConnectStart::Started(started) => {
                             let local_addr = started.stream.local_addr().ok();
+                            // SAFETY: fresh network process has no previously registered socket.
                             unsafe {
                                 proc.live_io_mut().set_network_socket(Some(
                                     NetworkSocket::TcpStream(started.stream),
                                 ))
                             };
-                            unsafe { proc.live_io_mut() }.set_pending_network_connect(Some(
-                                PendingNetworkConnect::Tcp {
-                                    remaining_addrs: started.remaining_addrs,
-                                    socket_options: socket_options.clone(),
-                                },
-                            ));
+                            proc.set_pending_network_connect(Some(PendingNetworkConnect::Tcp {
+                                remaining_addrs: started.remaining_addrs,
+                                socket_options: socket_options.clone(),
+                            }));
                             ProcessManager::update_tcp_client_contact(
                                 proc,
                                 started.remote_addr,
@@ -1393,6 +1426,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                 )?;
             }
             if let Some(proc) = processes.get_mut(id) {
+                // SAFETY: fresh network process has no previously registered socket.
                 unsafe {
                     proc.live_io_mut()
                         .set_network_socket(Some(NetworkSocket::TcpStream(stream)))
@@ -1483,6 +1517,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                         proc.thread = current_thread_handle(threads);
                         proc.plist = plist_val;
                         proc.status = ProcessStatusSymbol::Open.value();
+                        // SAFETY: fresh network process has no previously registered socket.
                         unsafe {
                             proc.live_io_mut()
                                 .set_network_socket(Some(NetworkSocket::UnixDatagram(socket)))
@@ -1535,6 +1570,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                 let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
                 processes.sync_process_mark(buffers, id)?;
                 if let Some(proc) = processes.get_mut(id) {
+                    // SAFETY: fresh network process has no previously registered socket.
                     unsafe {
                         proc.live_io_mut()
                             .set_network_socket(Some(NetworkSocket::UnixDatagram(socket)))
@@ -1597,6 +1633,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                         proc.childp = contact;
                         proc.thread = current_thread_handle(threads);
                         proc.plist = plist_val;
+                        // SAFETY: fresh network process has no previously registered socket.
                         unsafe {
                             proc.live_io_mut().set_network_socket(Some(
                                 NetworkSocket::SeqpacketListener(listener),
@@ -1651,6 +1688,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                 let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
                 processes.sync_process_mark(buffers, id)?;
                 if let Some(proc) = processes.get_mut(id) {
+                    // SAFETY: fresh network process has no previously registered socket.
                     unsafe {
                         proc.live_io_mut()
                             .set_network_socket(Some(NetworkSocket::SeqpacketStream(socket)))
@@ -1706,6 +1744,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                     proc.childp = contact;
                     proc.thread = current_thread_handle(threads);
                     proc.plist = plist_val;
+                    // SAFETY: fresh network process has no previously registered socket.
                     unsafe {
                         proc.live_io_mut()
                             .set_network_socket(Some(NetworkSocket::UnixListener(listener)))
@@ -1715,7 +1754,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                         let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
                             network_socket_io_error("Cannot identify server socket", error)
                         })?;
-                        unsafe { proc.live_io_mut() }.set_unix_listener_path(Some((
+                        proc.set_unix_listener_path(Some((
                             path.clone(),
                             metadata.dev(),
                             metadata.ino(),
@@ -1795,12 +1834,12 @@ pub(super) fn connect_network_process_at_explicit_address(
                     }
                     match start {
                         Ok(stream) => {
+                            // SAFETY: fresh network process has no previously registered socket.
                             unsafe {
                                 proc.live_io_mut()
                                     .set_network_socket(Some(NetworkSocket::UnixStream(stream)))
                             };
-                            unsafe { proc.live_io_mut() }
-                                .set_pending_network_connect(Some(PendingNetworkConnect::Local));
+                            proc.set_pending_network_connect(Some(PendingNetworkConnect::Local));
                         }
                         Err(err) => {
                             proc.status = process_status_failed_value(io_error_status_code(&err));
@@ -1824,6 +1863,7 @@ pub(super) fn connect_network_process_at_explicit_address(
             let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
             processes.sync_process_mark(buffers, id)?;
             if let Some(proc) = processes.get_mut(id) {
+                // SAFETY: fresh network process has no previously registered socket.
                 unsafe {
                     proc.live_io_mut()
                         .set_network_socket(Some(NetworkSocket::UnixStream(stream)))
@@ -1924,6 +1964,7 @@ pub(super) fn connect_datagram_network_process(
             proc.thread = current_thread_handle(threads);
             proc.plist = plist_val;
             proc.status = ProcessStatusSymbol::Open.value();
+            // SAFETY: fresh network process has no previously registered socket.
             unsafe {
                 proc.live_io_mut()
                     .set_network_socket(Some(NetworkSocket::UdpSocket(socket)))
@@ -1978,6 +2019,7 @@ pub(super) fn connect_datagram_network_process(
     let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
     processes.sync_process_mark(buffers, id)?;
     if let Some(proc) = processes.get_mut(id) {
+        // SAFETY: fresh network process has no previously registered socket.
         unsafe {
             proc.live_io_mut()
                 .set_network_socket(Some(NetworkSocket::UdpSocket(socket)))
@@ -2067,6 +2109,7 @@ pub(super) fn listen_stream_network_process(
         proc.childp = contact;
         proc.thread = current_thread_handle(threads);
         proc.plist = plist_val;
+        // SAFETY: fresh network process has no previously registered socket.
         unsafe {
             proc.live_io_mut()
                 .set_network_socket(Some(NetworkSocket::TcpListener(listener)))
@@ -2204,6 +2247,7 @@ pub(super) fn connect_local_socket_process(
                     proc.thread = current_thread_handle(threads);
                     proc.plist = plist_val;
                     proc.status = ProcessStatusSymbol::Open.value();
+                    // SAFETY: fresh network process has no previously registered socket.
                     unsafe {
                         proc.live_io_mut()
                             .set_network_socket(Some(NetworkSocket::UnixDatagram(socket)))
@@ -2259,6 +2303,7 @@ pub(super) fn connect_local_socket_process(
             let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
             processes.sync_process_mark(buffers, id)?;
             if let Some(proc) = processes.get_mut(id) {
+                // SAFETY: fresh network process has no previously registered socket.
                 unsafe {
                     proc.live_io_mut()
                         .set_network_socket(Some(NetworkSocket::UnixDatagram(socket)))
@@ -2322,6 +2367,7 @@ pub(super) fn connect_local_socket_process(
                     proc.childp = contact;
                     proc.thread = current_thread_handle(threads);
                     proc.plist = plist_val;
+                    // SAFETY: fresh network process has no previously registered socket.
                     unsafe {
                         proc.live_io_mut()
                             .set_network_socket(Some(NetworkSocket::SeqpacketListener(listener)))
@@ -2377,6 +2423,7 @@ pub(super) fn connect_local_socket_process(
             let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
             processes.sync_process_mark(buffers, id)?;
             if let Some(proc) = processes.get_mut(id) {
+                // SAFETY: fresh network process has no previously registered socket.
                 unsafe {
                     proc.live_io_mut()
                         .set_network_socket(Some(NetworkSocket::SeqpacketStream(socket)))
@@ -2437,6 +2484,7 @@ pub(super) fn connect_local_socket_process(
                 proc.childp = contact;
                 proc.thread = current_thread_handle(threads);
                 proc.plist = plist_val;
+                // SAFETY: fresh network process has no previously registered socket.
                 unsafe {
                     proc.live_io_mut()
                         .set_network_socket(Some(NetworkSocket::UnixListener(listener)))
@@ -2446,7 +2494,7 @@ pub(super) fn connect_local_socket_process(
                     let metadata = std::fs::symlink_metadata(&service_path).map_err(|error| {
                         network_socket_io_error("Cannot identify server socket", error)
                     })?;
-                    unsafe { proc.live_io_mut() }.set_unix_listener_path(Some((
+                    proc.set_unix_listener_path(Some((
                         service_path.clone(),
                         metadata.dev(),
                         metadata.ino(),
@@ -2544,12 +2592,12 @@ pub(super) fn connect_local_socket_process(
                 }
                 match start {
                     Ok(stream) => {
+                        // SAFETY: fresh network process has no previously registered socket.
                         unsafe {
                             proc.live_io_mut()
                                 .set_network_socket(Some(NetworkSocket::UnixStream(stream)))
                         };
-                        unsafe { proc.live_io_mut() }
-                            .set_pending_network_connect(Some(PendingNetworkConnect::Local));
+                        proc.set_pending_network_connect(Some(PendingNetworkConnect::Local));
                     }
                     Err(err) => {
                         proc.status = process_status_failed_value(io_error_status_code(&err));
@@ -2573,6 +2621,7 @@ pub(super) fn connect_local_socket_process(
         let (processes, threads, buffers) = eval.processes_threads_and_buffers_mut();
         processes.sync_process_mark(buffers, id)?;
         if let Some(proc) = processes.get_mut(id) {
+            // SAFETY: fresh network process has no previously registered socket.
             unsafe {
                 proc.live_io_mut()
                     .set_network_socket(Some(NetworkSocket::UnixStream(stream)))
@@ -2941,16 +2990,15 @@ pub(crate) fn builtin_make_network_process(
                 match start {
                     PendingNetworkConnectStart::Started(started) => {
                         let local_addr = started.stream.local_addr().ok();
+                        // SAFETY: fresh network process has no previously registered socket.
                         unsafe {
                             proc.live_io_mut()
                                 .set_network_socket(Some(NetworkSocket::TcpStream(started.stream)))
                         };
-                        unsafe { proc.live_io_mut() }.set_pending_network_connect(Some(
-                            PendingNetworkConnect::Tcp {
-                                remaining_addrs: started.remaining_addrs,
-                                socket_options: socket_options.clone(),
-                            },
-                        ));
+                        proc.set_pending_network_connect(Some(PendingNetworkConnect::Tcp {
+                            remaining_addrs: started.remaining_addrs,
+                            socket_options: socket_options.clone(),
+                        }));
                         ProcessManager::update_tcp_client_contact(
                             proc,
                             started.remote_addr,
@@ -2962,8 +3010,7 @@ pub(crate) fn builtin_make_network_process(
                     }
                 }
             } else if let Some(pending_dns) = pending_dns {
-                unsafe { proc.live_io_mut() }
-                    .set_pending_network_connect(Some(PendingNetworkConnect::Dns(pending_dns)));
+                proc.set_pending_network_connect(Some(PendingNetworkConnect::Dns(pending_dns)));
             }
             if proc.live_io().pending_network_connect().is_some() {
                 proc.gnutls_boot_parameters = tls_parameters_val;
@@ -3002,6 +3049,7 @@ pub(crate) fn builtin_make_network_process(
         )?;
     }
     if let Some(proc) = processes.get_mut(id) {
+        // SAFETY: fresh network process has no previously registered socket.
         unsafe {
             proc.live_io_mut()
                 .set_network_socket(Some(NetworkSocket::TcpStream(stream)))
@@ -5825,8 +5873,17 @@ pub(crate) fn builtin_process_send_eof(
     builtin_process_send_eof_impl(processes, buffers, args)
 }
 
+/// Send EOF to a non-PTY process, unregistering pipe `stdin` from `poller`
+/// before closing it.
+///
+/// # Safety
+/// `poller` must be the poller where `proc`'s pipe `stdin` was registered (or
+/// `None` only when no poller is active / `proc`'s `stdin` was never registered).
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(super) fn send_eof_to_process(proc: &mut Process) -> EvalResult {
+pub(super) unsafe fn send_eof_to_process(
+    poller: Option<&polling::Poller>,
+    proc: &mut Process,
+) -> EvalResult {
     // GNU returns a datagram process untouched before both the liveness gate
     // and every EOF state mutation (src/process.c:7444-7445).
     if process_has_datagram_semantics(proc) {
@@ -5850,6 +5907,8 @@ pub(super) fn send_eof_to_process(proc: &mut Process) -> EvalResult {
         return Ok(Value::NIL);
     }
 
+    // SAFETY: `send_close_notify` writes TLS close_notify without replacing or
+    // dropping the stream.
     if let Some(tls) = unsafe { proc.live_io_mut().tls_stream_mut() } {
         tls.send_close_notify(false)
             .map(|_| ())
@@ -5866,8 +5925,11 @@ pub(super) fn send_eof_to_process(proc: &mut Process) -> EvalResult {
         return Ok(Value::NIL);
     }
 
-    // SAFETY: `send_eof_to_process`'s callers unregister any poller-backed
-    // child stdin before calling it (or run on an unregistered test record).
+    if let (Some(poller), Some(stdin)) = (poller, proc.live_io().child().stdin()) {
+        ProcessManager::unregister_child_stdin_writable_from_poller(poller, stdin);
+    }
+    // SAFETY: any registered child `stdin` was deleted from `poller` above
+    // under this function's `# Safety` contract.
     let _ = unsafe { proc.live_io_mut().child_mut() }.close_stdin();
     // GNU opens the null output device even when there was no old descriptor
     // to close. `Discard` models that sink without allocating an OS fd.
@@ -5900,31 +5962,19 @@ pub(crate) fn builtin_process_send_eof_impl(
         }
         let id = resolve_get_process_designator_in_state(processes, buffers, process)?;
         process_send_eof_liveness_gate(processes, id)?;
-        if let (Some(poller), Some(stdin)) = (
-            processes.wait_backend.poller(),
-            processes
-                .get(id)
-                .and_then(|proc| proc.live_io().child().stdin()),
-        ) {
-            ProcessManager::unregister_child_stdin_writable_from_poller(poller, stdin);
-        }
+        let poller = processes.wait_backend.poller_arc();
         if let Some(proc) = processes.get_mut(id) {
-            send_eof_to_process(proc)?;
+            // SAFETY: `poller` is this `ProcessManager`'s own wait backend poller.
+            unsafe { send_eof_to_process(poller.as_deref(), proc)? };
         }
         return Ok(*process);
     }
     let id = resolve_optional_process_or_current_buffer_in_state(processes, buffers, args.first())?;
     process_send_eof_liveness_gate(processes, id)?;
-    if let (Some(poller), Some(stdin)) = (
-        processes.wait_backend.poller(),
-        processes
-            .get(id)
-            .and_then(|proc| proc.live_io().child().stdin()),
-    ) {
-        ProcessManager::unregister_child_stdin_writable_from_poller(poller, stdin);
-    }
+    let poller = processes.wait_backend.poller_arc();
     if let Some(proc) = processes.get_mut(id) {
-        send_eof_to_process(proc)?;
+        // SAFETY: `poller` is this `ProcessManager`'s own wait backend poller.
+        unsafe { send_eof_to_process(poller.as_deref(), proc)? };
     }
     Ok(Value::NIL)
 }

@@ -1,0 +1,16 @@
+error[E0599]: no associated function or constant named `deactivate_process_io` found for struct `ProcessManager` in the current scope
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/deactivate_process_io_not_public.rs
+  |
+  |     ProcessManager::deactivate_process_io(None, proc);
+  |                     ^^^^^^^^^^^^^^^^^^^^^ associated function or constant not found in `ProcessManager`
+  |
+note: if you're trying to build a new `ProcessManager`, consider using `ProcessManager::new` which returns `ProcessManager`
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs
+  |
+  |     pub fn new() -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^
+help: there is a method `live_process_ids` with a similar name, but with different arguments
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs
+  |
+  |     pub fn live_process_ids(&self) -> Vec<ProcessId> {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

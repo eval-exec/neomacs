@@ -56,14 +56,11 @@ fn recorded_pty_status_before_read(interruptions: usize) -> (Context, ProcessId,
     // SAFETY: fixture process has no poller-registered descriptors.
     unsafe { proc.live_io_mut().set_child(ChildOwnership::Reaped) };
     let calls = Arc::new(AtomicUsize::new(0));
-    // SAFETY: `pty_reader` is not a poll-registered descriptor.
-    unsafe { proc.live_io_mut() }.set_pty_reader(Some(PtyOutputReader::new(Box::new(
-        InterruptedPtyRead {
-            inner: Box::new(Cursor::new(b"process-output\n".to_vec())),
-            interruptions,
-            calls: Arc::clone(&calls),
-        },
-    ))));
+    proc.set_pty_reader(Some(PtyOutputReader::new(Box::new(InterruptedPtyRead {
+        inner: Box::new(Cursor::new(b"process-output\n".to_vec())),
+        interruptions,
+        calls: Arc::clone(&calls),
+    }))));
     // The same status-recording seam used after the owning WNOHANG reaper.
     eval.processes_mut()
         .set_child_status_pending(id, process_status_exit_value(0));
@@ -156,10 +153,8 @@ fn accept_process_output_pty_eio_keeps_master_for_exit_drain() {
     eval.processes_mut().clear_status_notify_pending(id);
     eval.processes_mut().mark_status_change_notified(id);
     let proc = eval.processes_mut().get_mut(id).expect("live process");
-    // SAFETY: `pty_reader` is not a poll-registered descriptor.
-    let io = unsafe { proc.live_io_mut() };
-    let reader = io.take_pty_reader().expect("PTY reader");
-    io.set_pty_reader(Some(PtyOutputReader::new(Box::new(
+    let reader = proc.take_pty_reader().expect("PTY reader");
+    proc.set_pty_reader(Some(PtyOutputReader::new(Box::new(
         EioBeforeFinalPtyRead {
             inner: Box::new(reader),
             step: EioReadStep::Prefix,
@@ -182,10 +177,8 @@ fn pty_eof_zero_timeout_polls_do_not_read_master() {
     eval.processes_mut().clear_status_notify_pending(id);
     eval.processes_mut().mark_status_change_notified(id);
     let proc = eval.processes_mut().get_mut(id).expect("live process");
-    // SAFETY: `pty_reader` is not a poll-registered descriptor.
-    let io = unsafe { proc.live_io_mut() };
-    let reader = io.take_pty_reader().expect("PTY reader");
-    io.set_pty_reader(Some(PtyOutputReader::new(Box::new(
+    let reader = proc.take_pty_reader().expect("PTY reader");
+    proc.set_pty_reader(Some(PtyOutputReader::new(Box::new(
         EioBeforeFinalPtyRead {
             inner: Box::new(reader),
             step: EioReadStep::Prefix,

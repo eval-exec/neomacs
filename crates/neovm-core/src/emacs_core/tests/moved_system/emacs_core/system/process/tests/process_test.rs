@@ -669,13 +669,13 @@ fn epipe_closes_the_exact_selected_pty_writer() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    // SAFETY: `pty_writer` is not a poll-registered descriptor.
-    unsafe { pm.processes.get_mut(&id).expect("process").live_io_mut() }
+    pm.get_mut(id)
+        .expect("process")
         .set_pty_writer(Some(Box::new(BrokenPipeWriter)));
 
     assert!(pm.write_process_input_once(id, b"x").is_err());
 
-    let process = pm.processes.get(&id).expect("process remains live");
+    let process = pm.get(id).expect("process remains live");
     assert!(
         process.live_io().pty_writer().is_none(),
         "EPIPE must close the selected PTY endpoint, not an unrelated child stdin"
@@ -710,7 +710,7 @@ fn send_eof_after_epipe_installs_discard_sink_and_clears_queued_input() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let proc = pm.processes.get_mut(&id).expect("process");
+    let proc = pm.get_mut(id).expect("process");
     proc.input_disposition = ProcessInputDisposition::Disconnected;
     proc.write_queue = write_queue_push(
         Value::NIL,
@@ -718,7 +718,9 @@ fn send_eof_after_epipe_installs_discard_sink_and_clears_queued_input() {
         false,
     );
 
-    send_eof_to_process(pm.processes.get_mut(&id).expect("process"))
+    let poller = pm.wait_backend.poller_arc();
+    // SAFETY: `poller` is `pm`'s own wait backend poller.
+    unsafe { send_eof_to_process(poller.as_deref(), pm.get_mut(id).expect("process")) }
         .expect("GNU installs /dev/null even when the old outfd is already -1");
 
     assert_eq!(
@@ -747,10 +749,7 @@ fn sends_after_epipe_do_not_accumulate_unsendable_input() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    pm.processes
-        .get_mut(&id)
-        .expect("process")
-        .input_disposition = ProcessInputDisposition::Disconnected;
+    pm.get_mut(id).expect("process").input_disposition = ProcessInputDisposition::Disconnected;
 
     pm.send_input(id, &LispString::from_utf8("one"))
         .expect("process still exists");
@@ -2488,14 +2487,10 @@ fn stderr_pipe_wait_notifies_a_pending_owner_stop_first() {
         owner.status_notify_pending = true;
         owner.sentinel = Value::NIL;
     }
-    // SAFETY: `stderr_pipe_owner` is not a poll-registered descriptor.
-    unsafe {
-        eval.processes_mut()
-            .get_mut(stderr_id)
-            .expect("stderr pipe")
-            .live_io_mut()
-    }
-    .set_stderr_pipe_owner(Some(owner_id));
+    eval.processes_mut()
+        .get_mut(stderr_id)
+        .expect("stderr pipe")
+        .set_stderr_pipe_owner(Some(owner_id));
 
     let mut outcome = ProcessOutputServiceOutcome::default();
     let pipe_may_notify = eval
@@ -9358,15 +9353,12 @@ fn make_network_process_nowait_hostname_dns_failure_is_async_like_gnu() {
         ProcessKeyword::Nowait.value(),
         Value::T,
     ]);
-    // SAFETY: `pending_network_connect` is not a poll-registered descriptor.
-    unsafe { proc.live_io_mut() }.set_pending_network_connect(Some(PendingNetworkConnect::Dns(
-        PendingDnsRequest {
-            host: "-bad.example".to_string(),
-            receiver,
-            ready: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            socket_options: Vec::new(),
-        },
-    )));
+    proc.set_pending_network_connect(Some(PendingNetworkConnect::Dns(PendingDnsRequest {
+        host: "-bad.example".to_string(),
+        receiver,
+        ready: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        socket_options: Vec::new(),
+    })));
 
     let outcome = eval
         .wait_for_process_output(ProcessOutputWaitRequest::new(
@@ -9589,8 +9581,7 @@ fn process_contact_no_block_returns_nil_for_pending_nowait_network_like_gnu() {
             Value::fixnum(9),
         ]),
     ]);
-    // SAFETY: `pending_network_connect` is not a poll-registered descriptor.
-    unsafe { proc.live_io_mut() }.set_pending_network_connect(Some(PendingNetworkConnect::Tcp {
+    proc.set_pending_network_connect(Some(PendingNetworkConnect::Tcp {
         remaining_addrs: Vec::new(),
         socket_options: Vec::new(),
     }));
@@ -12133,9 +12124,14 @@ fn with_stderr_fixture_child<T>(
 ) -> T {
     let id = owner.as_process_id().expect("fixture owner is a process");
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(eval)));
+    let poller = eval.processes().wait_backend.poller_arc();
     if let Some(process) = eval.processes_mut().get_mut(id) {
-        // SAFETY: only polls/signals the child handle without replacing or
-        // closing a poller-registered stdin descriptor.
+        if let (Some(poller), Some(stdin)) = (poller.as_deref(), process.live_io().child().stdin())
+        {
+            let _ = poller.delete(stdin);
+        }
+        // SAFETY: any poller-backed `stdin` was deleted from `poller` above
+        // before polling/killing the fixture child.
         let child = unsafe { process.live_io_mut().child_mut() };
         child.poll_status();
         if child.pid_if_unreaped().is_some() {
@@ -19256,11 +19252,11 @@ fn garbage_collect_reclaims_a_dead_process_nothing_refers_to() {
         ),
     );
     assert_eq!(setup, "OK (t exit t 1)");
-    assert_eq!(ev.processes().deleted_processes.len(), 1);
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
 
     let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
     assert_eq!(format_eval_result(&after), "OK 0");
-    assert_eq!(ev.processes().deleted_processes.len(), 0);
+    assert_eq!(ev.processes().deleted_process_map().len(), 0);
 }
 
 /// #776: GNU keeps a killed process's sentinel, filter and plist as long as Lisp
@@ -19343,7 +19339,7 @@ fn automatic_cycles_keep_a_dead_but_referenced_processes_fields() {
              (null (get-process "retired-live-ref")))"#,
     );
     assert_eq!(killed, "OK t");
-    assert_eq!(ev.processes().deleted_processes.len(), 1);
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
     // Read the process while a concurrent mark is in flight between safe
     // points (the recipe of gc_safe_point_runs_concurrent_cycles_without_a_
     // dump). A dead but referenced process must resolve at that instant: the
@@ -19751,7 +19747,7 @@ fn explicit_gc_inside_an_in_flight_automatic_cycle_keeps_referenced_processes() 
         "an explicit GC must leave no retired id armed"
     );
     assert_eq!(
-        ev.processes().deleted_processes.len(),
+        ev.processes().deleted_process_map().len(),
         1,
         "the explicit GC must reclaim the unreferenced record and restore the referenced one"
     );
@@ -19831,7 +19827,7 @@ fn a_referenced_dead_process_forces_at_most_one_major() {
              (null (get-process "forced-once")))"#,
     );
     assert_eq!(killed, "OK t");
-    assert_eq!(ev.processes().deleted_processes.len(), 1);
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
 
     // The cycle right after retirement is the one forced major.
     drive_one_automatic_cycle(&mut ev);
@@ -19869,7 +19865,7 @@ fn a_referenced_dead_process_forces_at_most_one_major() {
         );
         assert_eq!(format_eval_result(&alive[0]), "OK (\"forced-once\" 1)");
     }
-    assert_eq!(ev.processes().deleted_processes.len(), 1);
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
 }
 
 /// Once the deciding major has run, a dropped reference to the old dead
@@ -19930,24 +19926,24 @@ fn a_dropped_reference_to_a_decided_dead_process_frees_at_the_next_due_major() {
              (null (get-process "decided-once")))"#,
     );
     assert_eq!(killed, "OK t");
-    assert_eq!(ev.processes().deleted_processes.len(), 1);
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
 
     // The forced major settles the record while Lisp still references it.
     drive_one_automatic_cycle(&mut ev);
     let kept = ev.eval_str_each("(mapcar #'hash-table-count decided-payloads)");
     assert_eq!(format_eval_result(&kept[0]), "OK (1 1 1)");
-    assert_eq!(ev.processes().deleted_processes.len(), 1);
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
 
     // Drop the last reference. No major is forced for this decided record;
     // reclamation waits for the next naturally due major.
     ev.eval_str_each("(setq decided-proc nil)");
     let mut cycles = 0;
-    while ev.processes().deleted_processes.len() > 0 && cycles < 400 {
+    while ev.processes().deleted_process_map().len() > 0 && cycles < 400 {
         drive_one_automatic_cycle(&mut ev);
         cycles += 1;
     }
     assert_eq!(
-        ev.processes().deleted_processes.len(),
+        ev.processes().deleted_process_map().len(),
         0,
         "a naturally due major must reclaim the decided record"
     );
@@ -20055,7 +20051,7 @@ fn automatic_consing_collections_reclaim_a_dead_processes_fields() {
     );
     assert_eq!(killed, "OK (t \"retired-fields-auto\" (1 1 1))");
     ev.eval_str_each("(setq retired-fields-proc nil)");
-    assert_eq!(ev.processes().deleted_processes.len(), 1);
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
 
     // Only automatic collections from here: a tiny threshold plus consing,
     // driven through the evaluator's safe points. No `garbage-collect`.
@@ -20077,7 +20073,7 @@ fn automatic_consing_collections_reclaim_a_dead_processes_fields() {
     let advanced = ev.eval_str_each("(> gcs-done 0)");
     assert_eq!(format_eval_result(&advanced[0]), "OK t");
     assert_eq!(
-        ev.processes().deleted_processes.len(),
+        ev.processes().deleted_process_map().len(),
         0,
         "the automatic cycle must drop the retired record"
     );
@@ -20186,7 +20182,7 @@ fn an_automatic_collection_reclaims_a_dead_process_nothing_refers_to() {
         ),
     );
     assert_eq!(setup, "OK (t exit t 1)");
-    assert_eq!(ev.processes().deleted_processes.len(), 1);
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
 
     // SAFETY: the fixture Context is between evaluations and this test holds
     // it exclusively; no callback or collector runs across the switch.
@@ -20201,7 +20197,7 @@ fn an_automatic_collection_reclaims_a_dead_process_nothing_refers_to() {
     let after = ev.eval_str("(hash-table-count retired-payloads)");
     assert_eq!(format_eval_result(&after), "OK 0");
     assert_eq!(
-        ev.processes().deleted_processes.len(),
+        ev.processes().deleted_process_map().len(),
         0,
         "the automatic cycle must drop the retired record"
     );
@@ -20270,7 +20266,7 @@ fn a_dead_process_lisp_still_holds_keeps_every_field_across_garbage_collect() {
                  (eq retired-held retired-held))"#,
     );
     assert_eq!(format_eval_result(&fields_after), result);
-    assert_eq!(ev.processes().deleted_processes.len(), 1);
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
 }
 
 #[test]
@@ -20301,11 +20297,11 @@ fn garbage_collect_reclaims_a_dead_process_whose_own_fields_refer_to_it() {
         ),
     );
     assert_eq!(setup, "OK t");
-    assert_eq!(ev.processes().deleted_processes.len(), 1);
+    assert_eq!(ev.processes().deleted_process_map().len(), 1);
 
     let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
     assert_eq!(format_eval_result(&after), "OK 0");
-    assert_eq!(ev.processes().deleted_processes.len(), 0);
+    assert_eq!(ev.processes().deleted_process_map().len(), 0);
 }
 
 #[test]
@@ -20358,11 +20354,11 @@ fn a_dead_process_reached_only_through_another_dead_process_is_kept_with_it() {
         ),
     );
     assert_eq!(result, r#"OK ("retired-inner" exit ("inner payload") 0)"#);
-    assert_eq!(ev.processes().deleted_processes.len(), 2);
+    assert_eq!(ev.processes().deleted_process_map().len(), 2);
 
     let after = ev.eval_str("(progn (setq retired-outer nil) (garbage-collect) t)");
     assert_eq!(format_eval_result(&after), "OK t");
-    assert_eq!(ev.processes().deleted_processes.len(), 0);
+    assert_eq!(ev.processes().deleted_process_map().len(), 0);
 }
 
 #[test]
@@ -20416,9 +20412,209 @@ fn a_thousand_short_lived_processes_leave_nothing_retired_after_garbage_collect(
         .parse()
         .expect("payload count from the retired-wait result");
     assert!(alive_before <= 1000, "payloads alive: {alive_before}");
-    assert!(ev.processes().deleted_processes.len() <= 1000);
+    assert!(ev.processes().deleted_process_map().len() <= 1000);
 
     let after = ev.eval_str("(progn (garbage-collect) (hash-table-count retired-payloads))");
     assert_eq!(format_eval_result(&after), "OK 0");
-    assert_eq!(ev.processes().deleted_processes.len(), 0);
+    assert_eq!(ev.processes().deleted_process_map().len(), 0);
+}
+
+/// Behavioural epoll regression for B5 (b) (`process-send-eof`):
+/// keeping a `dup` (`try_clone`) of the child stdin pipe open across
+/// `process-send-eof` keeps the kernel open file description alive in Linux
+/// epoll unless `poller.delete(stdin)` ran BEFORE closing `stdin`.
+#[cfg(target_os = "linux")]
+#[test]
+fn b5_process_send_eof_unregisters_stdin_from_poller_before_closing() {
+    crate::test_utils::init_test_tracing();
+    let sleep = find_bin("sleep");
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let proc_val = eval
+        .eval_str(&format!(
+            r#"(make-process :name "b5-eof-poller" :command '("{sleep}" "5") :connection-type 'pipe)"#,
+        ))
+        .expect("spawn sleep");
+    let id = proc_val.as_process_id().expect("process id");
+    let poller = eval.processes().wait_backend.poller_arc().expect("poller");
+    let keep_open = {
+        use std::os::fd::AsFd;
+        let stdin = eval
+            .processes()
+            .get(id)
+            .expect("proc")
+            .live_io()
+            .child()
+            .stdin()
+            .expect("pipe stdin");
+        // SAFETY: `process-send-eof` below unregisters `stdin` before closing it.
+        unsafe {
+            ProcessManager::register_writable_raw_fd(&poller, stdin.as_fd(), id)
+                .expect("register pipe stdin writable");
+        }
+        stdin.try_clone().expect("dup stdin")
+    };
+
+    let mut events = polling::Events::new();
+    poller
+        .wait(&mut events, Some(Duration::from_millis(200)))
+        .expect("poll before eof");
+    assert!(
+        events.iter().any(|ev| ev.key == id as usize),
+        "registered pipe stdin must report writable before process-send-eof"
+    );
+
+    eval.obarray_mut().set_symbol_value("b5-eof-proc", proc_val);
+    eval.eval_str("(process-send-eof b5-eof-proc)")
+        .expect("process-send-eof");
+
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll after eof");
+    assert!(
+        events.iter().all(|ev| ev.key != id as usize),
+        "stale epoll event remained after process-send-eof: stdin was not unregistered before close"
+    );
+
+    drop(keep_open);
+    eval.eval_str("(delete-process b5-eof-proc)")
+        .expect("delete-process");
+}
+
+/// Behavioural epoll regression for B5 (a) (`gnutls-deinit`) and F3.4
+/// (`gnutls-boot` failure): keeping a `dup` (`try_clone`) of the TCP socket
+/// open proves `poller.delete` ran BEFORE dropping the socket.
+#[cfg(target_os = "linux")]
+#[test]
+fn b5_gnutls_deinit_and_boot_failure_unregister_socket_before_dropping() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::net::{TcpListener, TcpStream};
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let poller = eval.processes().wait_backend.poller_arc().expect("poller");
+
+    // --- Part 1: gnutls-deinit unregisters TLS TCP socket before drop ---
+    let tls_peer = loopback::TlsPeer::spawn(1, Duration::ZERO, false);
+    let id1 = eval.processes_mut().create_process_with_kind(
+        "b5-tls-deinit".into(),
+        Value::NIL,
+        "network".into(),
+        vec![],
+        ProcessKindWithoutDevice::Network,
+        crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
+    );
+    let client1 = TcpStream::connect(("127.0.0.1", tls_peer.port)).expect("connect tls loopback");
+    let keep_open1 = client1.try_clone().expect("dup client1");
+    {
+        let proc = eval.processes_mut().get_mut(id1).expect("proc1");
+        // SAFETY: fresh network process has no previously registered socket;
+        // `gnutls-boot` -> `gnutls-deinit` below deletes it before drop.
+        unsafe {
+            proc.live_io_mut()
+                .set_network_socket(Some(NetworkSocket::TcpStream(client1)));
+        }
+    }
+    eval.obarray_mut()
+        .set_symbol_value("b5-tls-p1", Value::make_process(id1));
+    eval.eval_str(&format!(
+        r#"(gnutls-boot b5-tls-p1 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{}") :complete-negotiation t))"#,
+        loopback::resources().join("ca.pem").display()
+    ))
+    .expect("gnutls-boot completes handshake against loopback TlsPeer");
+    // Ensure writable interest is active so epoll reports ready immediately.
+    {
+        let tls = eval
+            .processes()
+            .get(id1)
+            .expect("proc1")
+            .live_io()
+            .tls_stream()
+            .expect("tls stream");
+        let _ = ProcessManager::modify_poll_source(
+            &poller,
+            tls.tcp_stream(),
+            polling::Event::all(id1 as usize),
+        );
+    }
+
+    let mut events = polling::Events::new();
+    poller
+        .wait(&mut events, Some(Duration::from_millis(200)))
+        .expect("poll before gnutls-deinit");
+    assert!(
+        events.iter().any(|ev| ev.key == id1 as usize),
+        "registered TLS socket must report writable before gnutls-deinit"
+    );
+
+    let deinit_ret = eval
+        .eval_str("(gnutls-deinit b5-tls-p1)")
+        .expect("gnutls-deinit");
+    assert!(deinit_ret.is_truthy());
+
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll after gnutls-deinit");
+    assert!(
+        events.iter().all(|ev| ev.key != id1 as usize),
+        "stale epoll event remained after gnutls-deinit: socket was not unregistered before drop"
+    );
+    drop(keep_open1);
+
+    // --- Part 2: gnutls-boot failure unregisters plain TCP socket before drop ---
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+    let id2 = eval.processes_mut().create_process_with_kind(
+        "b5-tls-boot-fail".into(),
+        Value::NIL,
+        "network".into(),
+        vec![],
+        ProcessKindWithoutDevice::Network,
+        crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
+    );
+    let client2 = TcpStream::connect(addr).expect("connect loopback 2");
+    let _server2 = listener.accept().expect("accept loopback 2");
+    let keep_open2 = client2.try_clone().expect("dup client2");
+    {
+        let proc = eval.processes_mut().get_mut(id2).expect("proc2");
+        // SAFETY: fresh network process has no previously registered socket;
+        // failed `gnutls-boot` below deletes it before dropping it.
+        unsafe {
+            proc.live_io_mut()
+                .set_network_socket(Some(NetworkSocket::TcpStream(client2)));
+        }
+    }
+    eval.processes()
+        .register_socket_writable_fd(id2)
+        .expect("register plain tcp socket writable");
+
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::from_millis(200)))
+        .expect("poll before failed gnutls-boot");
+    assert!(
+        events.iter().any(|ev| ev.key == id2 as usize),
+        "registered plain TCP socket must report writable before failed gnutls-boot"
+    );
+
+    eval.obarray_mut()
+        .set_symbol_value("b5-tls-p2", Value::make_process(id2));
+    assert!(
+        eval.eval_str(
+            r#"(gnutls-boot b5-tls-p2 'gnutls-x509pki '(:hostname "bad host with spaces"))"#
+        )
+        .is_err(),
+        "invalid hostname must fail gnutls-boot"
+    );
+
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll after failed gnutls-boot");
+    assert!(
+        events.iter().all(|ev| ev.key != id2 as usize),
+        "stale epoll event remained after failed gnutls-boot: socket was not unregistered before drop"
+    );
+    drop(keep_open2);
 }

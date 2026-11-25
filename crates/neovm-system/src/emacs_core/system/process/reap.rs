@@ -685,6 +685,7 @@ pub trait ChildOwnershipIo {
     /// longer, this port's to wait for -- which is GNU's `p->alive &&` at
     /// :7741 rather than an early `continue` inside the loop.
     fn poll_status(&mut self) -> ChildStatusChange;
+    fn poll_status_releasing_stdin(&mut self) -> (ChildStatusChange, Option<std::fs::File>);
     /// GNU's `record_kill_process` (src/callproc.c:196-211): signal, then leave
     /// the sole child handle for a later nonblocking deleted-pid sweep.
     ///
@@ -812,17 +813,29 @@ impl ChildOwnershipIo for ChildOwnership {
     /// longer, this port's to wait for -- which is GNU's `p->alive &&` at
     /// :7741 rather than an early `continue` inside the loop.
     fn poll_status(&mut self) -> ChildStatusChange {
+        self.poll_status_releasing_stdin().0
+    }
+
+    /// Like [`Self::poll_status`], but when a pipe child is reaped or gone,
+    /// extracts and returns its `stdin` handle instead of dropping it inline so
+    /// callers can unregister `stdin` from a `polling::Poller` before closing.
+    fn poll_status_releasing_stdin(&mut self) -> (ChildStatusChange, Option<std::fs::File>) {
         let Self::Unreaped(child) = self else {
-            return ChildStatusChange::NoChange;
+            return (ChildStatusChange::NoChange, None);
         };
         let change = child.probe();
         if matches!(
             change,
             ChildStatusChange::Reaped(_) | ChildStatusChange::Gone
         ) {
+            let stdin = match &mut child.handle {
+                ChildHandle::Pipe(pipe_child) => pipe_child.stdin.take(),
+                ChildHandle::Pty(_) => None,
+            };
             *self = Self::Reaped;
+            return (change, stdin);
         }
-        change
+        (change, None)
     }
 
     /// GNU's `record_kill_process` (src/callproc.c:196-211): signal, then leave

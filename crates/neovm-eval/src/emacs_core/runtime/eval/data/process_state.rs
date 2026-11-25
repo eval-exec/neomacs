@@ -395,8 +395,11 @@ pub struct Process {
 /// Uses `polling::Poller` for efficient I/O multiplexing (epoll on Linux,
 /// kqueue on macOS, wepoll on Windows) instead of sleep-based polling.
 pub struct ProcessManager {
-    pub processes: HashMap<ProcessId, Process>,
-    pub deleted_processes: HashMap<ProcessId, Process>,
+    /// Kept private so safe code outside `neovm-eval` cannot remove, clear, or
+    /// overwrite a `Process` record while its `LiveProcessIo` descriptors are
+    /// still registered in `wait_backend`'s poller (soundness B5).
+    processes: HashMap<ProcessId, Process>,
+    deleted_processes: HashMap<ProcessId, Process>,
     // WorldSlot reserves ProcessManager's original size in Context. Keep the
     // new read cursor behind the word formerly occupied by next_id so adding
     // scheduling state does not shift Context's pinned offsets/JIT ABI.
@@ -1638,6 +1641,66 @@ impl Process {
     pub unsafe fn clear_live_io(&mut self) {
         drop(std::mem::take(&mut self.live_io));
     }
+
+    // --- Safe delegators for non-polled `LiveProcessIo` fields ---
+
+    pub fn set_module_pipe_writer(&mut self, writer: Option<os_pipe::PipeWriter>) {
+        self.live_io.set_module_pipe_writer(writer);
+    }
+
+    pub fn take_module_pipe_writer(&mut self) -> Option<os_pipe::PipeWriter> {
+        self.live_io.take_module_pipe_writer()
+    }
+
+    pub fn set_stderr_pipe_owner(&mut self, owner: Option<ProcessId>) {
+        self.live_io.set_stderr_pipe_owner(owner);
+    }
+
+    pub fn pty_reader_mut(&mut self) -> Option<&mut PtyOutputReader> {
+        self.live_io.pty_reader_mut()
+    }
+
+    pub fn set_pty_reader(&mut self, reader: Option<PtyOutputReader>) {
+        self.live_io.set_pty_reader(reader);
+    }
+
+    pub fn take_pty_reader(&mut self) -> Option<PtyOutputReader> {
+        self.live_io.take_pty_reader()
+    }
+
+    pub fn pty_writer_mut(&mut self) -> Option<&mut Box<dyn std::io::Write + Send>> {
+        self.live_io.pty_writer_mut()
+    }
+
+    pub fn set_pty_writer(&mut self, writer: Option<Box<dyn std::io::Write + Send>>) {
+        self.live_io.set_pty_writer(writer);
+    }
+
+    #[cfg(unix)]
+    pub fn set_unix_listener_path(&mut self, path: Option<(PathBuf, u64, u64)>) {
+        self.live_io.set_unix_listener_path(path);
+    }
+
+    #[cfg(unix)]
+    pub fn take_unix_listener_path(&mut self) -> Option<(PathBuf, u64, u64)> {
+        self.live_io.take_unix_listener_path()
+    }
+
+    pub fn pending_network_connect_mut(&mut self) -> Option<&mut PendingNetworkConnect> {
+        self.live_io.pending_network_connect_mut()
+    }
+
+    pub fn set_pending_network_connect(&mut self, pending: Option<PendingNetworkConnect>) {
+        self.live_io.set_pending_network_connect(pending);
+    }
+
+    pub fn take_pending_network_connect(&mut self) -> Option<PendingNetworkConnect> {
+        self.live_io.take_pending_network_connect()
+    }
+
+    pub fn set_tls_polling(&mut self, polling: TlsPolling) {
+        self.live_io.set_tls_polling(polling);
+    }
 }
 
 impl LiveProcessIo {
@@ -2041,6 +2104,10 @@ impl ProcessWaitBackend {
 
     pub fn poller(&self) -> Option<&polling::Poller> {
         self.poller.as_deref()
+    }
+
+    pub fn poller_arc(&self) -> Option<Arc<polling::Poller>> {
+        self.poller.clone()
     }
 
     /// A shared handle producers use to wake a blocked wait (cross-platform).
@@ -3071,6 +3138,34 @@ impl ProcessManager {
     }
 
     /// Get a process by id.
+    /// Read-only view of the live process table.
+    pub fn process_map(&self) -> &HashMap<ProcessId, Process> {
+        &self.processes
+    }
+
+    /// Read-only view of the retired process table.
+    pub fn deleted_process_map(&self) -> &HashMap<ProcessId, Process> {
+        &self.deleted_processes
+    }
+
+    /// Remove a process record from the live table.
+    ///
+    /// # Safety
+    /// The caller must delete any poll-registered descriptors owned by the
+    /// removed `Process` from `self.wait_backend.poller()` before dropping it.
+    pub unsafe fn remove_live_process_record(&mut self, id: ProcessId) -> Option<Process> {
+        self.processes.remove(&id)
+    }
+
+    /// Insert a retired process record into the deleted table.
+    ///
+    /// # Safety
+    /// Neither `proc` nor any existing entry for `id` may hold descriptors
+    /// currently registered in a `polling::Poller`.
+    pub unsafe fn insert_deleted_process_record(&mut self, id: ProcessId, proc: Process) {
+        self.deleted_processes.insert(id, proc);
+    }
+
     pub fn get(&self, id: ProcessId) -> Option<&Process> {
         self.processes.get(&id)
     }

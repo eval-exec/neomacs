@@ -58,12 +58,14 @@ fn arm_unreferenced_records(ev: &mut Context) -> ArmedRecords {
             encode: Value::NIL,
         },
     );
-    let record = ev
-        .processes_mut()
-        .processes
-        .remove(&process)
+    // SAFETY: newly created test process has no poll-registered descriptors.
+    let record = unsafe { ev.processes_mut().remove_live_process_record(process) }
         .expect("the new process is live");
-    ev.processes_mut().deleted_processes.insert(process, record);
+    // SAFETY: synthetic retired test record owns no poll-registered descriptors.
+    unsafe {
+        ev.processes_mut()
+            .insert_deleted_process_record(process, record);
+    }
     let _ = Value::make_process(process);
 
     let frames = ev.frame_manager_mut();
@@ -96,7 +98,7 @@ fn arm_unreferenced_records(ev: &mut Context) -> ArmedRecords {
         "the killed buffer starts in the dead-buffer map"
     );
     assert!(
-        ev.processes().deleted_processes.contains_key(&process),
+        ev.processes().deleted_process_map().contains_key(&process),
         "the retired process starts in the deleted-process map"
     );
     assert!(
@@ -121,7 +123,7 @@ fn records_intact(ev: &Context, armed: &ArmedRecords) -> bool {
         .is_some();
     let process_kept = ev
         .processes()
-        .deleted_processes
+        .deleted_process_map()
         .contains_key(&armed.process);
     let window_kept = ev
         .frame_manager()
@@ -178,7 +180,7 @@ fn panic_inside_the_armed_window_restores_records_and_the_next_collection_reclai
     );
     assert!(
         !ev.processes()
-            .deleted_processes
+            .deleted_process_map()
             .contains_key(&armed.process),
         "the next explicit collection did not reclaim the retired process"
     );

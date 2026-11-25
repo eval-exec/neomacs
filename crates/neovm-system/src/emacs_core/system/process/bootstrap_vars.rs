@@ -377,9 +377,7 @@ fn send_signal_via_terminal_character(proc: &mut Process, signal_num: i32) -> bo
     if character == libc::_POSIX_VDISABLE as libc::cc_t {
         return false;
     }
-    // SAFETY: `pty_writer` is not a poll-registered descriptor; we only write
-    // a control byte to it without replacing any registered descriptor.
-    let Some(writer) = unsafe { proc.live_io_mut() }.pty_writer_mut() else {
+    let Some(writer) = proc.pty_writer_mut() else {
         return false;
     };
     // The master fd is non-blocking (PTY registration sets O_NONBLOCK), so a
@@ -457,9 +455,16 @@ pub(super) fn kill_real_process_child(proc: &mut Process, signal_num: i32) {
 /// GNU asynchronous delete transfers the child to deleted_pid_list
 /// (callproc.c:202-207); handle_child_signal later reaps it with WNOHANG
 /// (process.c:7700-7715). Never block while the child can need its PTY drained.
-pub(super) fn defer_real_process_child_reaping(proc: &mut Process) {
-    // SAFETY: callers unregister poll sources before tearing down the process
-    // (`deactivate_process_io` calls `unregister_process_poll_sources` first).
+///
+/// # Safety
+/// The caller must have unregistered any poll-registered child descriptors
+/// (notably pipe `stdin`) from the manager's `polling::Poller` before calling
+/// this function, because transferring the handle to the deferred reaper moves
+/// ownership of `stdin` out of `proc.live_io` where `unregister_process_poll_sources`
+/// can no longer see it.
+pub(super) unsafe fn defer_real_process_child_reaping(proc: &mut Process) {
+    // SAFETY: forwarded from `defer_real_process_child_reaping`'s caller
+    // contract (poll sources were already unregistered before deferral).
     unsafe { proc.live_io_mut().child_mut() }.defer_reaping();
 }
 
