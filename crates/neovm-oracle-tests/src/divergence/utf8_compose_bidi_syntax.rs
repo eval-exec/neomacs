@@ -131,3 +131,38 @@ fn div_utf8_prin1_vector_alist_with_multibyte() {
         expect,
     );
 }
+
+#[test]
+fn div_utf8_find_composition_automatic_no_lisp_font_at() {
+    // GNU `autocmp_chars` (src/composite.c:958-971) resolves the font natively
+    // on graphical frames and passes `win->frame` on TTY/batch frames without
+    // ever invoking Lisp `font-at`. Assert BOTH facts: `font-at` call count is
+    // 0 AND `find-composition` returns the shaped terminal gstring spans.
+    let expect = expect_test::expect![[
+        r#""OK ((4 6 [[utf-8-unix 101 769] nil [0 1 101 101 1 0 1 1 0 nil] [0 1 769 769 0 0 0 1 0 nil] nil nil nil nil nil nil]) (4 6 [[utf-8-unix 101 769] nil [0 1 101 101 1 0 1 1 0 nil] [0 1 769 769 0 0 0 1 0 nil] nil nil nil nil nil nil]) nil (8 10 [[utf-8-unix 97 776] nil [0 1 97 97 1 0 1 1 0 nil] [0 1 776 776 0 0 0 1 0 nil] nil nil nil nil nil nil]) (14 16 [[utf-8-unix 10084 65039] nil [0 1 10084 10084 1 0 1 1 0 nil] [0 1 65039 65039 0 0 0 1 0 nil] nil nil nil nil nil nil]) (3 5 [[utf-8-unix 101 769] nil [0 1 101 101 1 0 1 1 0 nil] [0 1 769 769 0 0 0 1 0 nil] nil nil nil nil nil nil]) nil (4 6 [[utf-8-unix 101 769] nil [0 1 101 101 1 0 1 1 0 nil] [0 1 769 769 0 0 0 1 0 nil] nil nil nil nil nil nil]) 0)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"
+(let ((font-at-calls 0)
+      (snap (lambda (x)
+              (and x (list (car x) (cadr x) (copy-tree (caddr x) t))))))
+  (advice-add 'font-at :before (lambda (&rest _) (setq font-at-calls (1+ font-at-calls))))
+  (with-temp-buffer
+    (insert "cafe\u0301 na\u0308ive \u2764\ufe0f\n")
+    (set-window-buffer (selected-window) (current-buffer))
+    (goto-char (point-min))
+    (list (funcall snap (find-composition 4 nil nil t))
+          (funcall snap (find-composition 4 nil nil nil))
+          (funcall snap (find-composition 1 nil nil t))
+          (funcall snap (find-composition 9 nil nil t))
+          (funcall snap (find-composition 14 nil nil t))
+          (funcall snap (find-composition 3 nil "cafe\u0301" t))
+          (let ((auto-composition-mode nil))
+            (funcall snap (find-composition 4 nil nil t)))
+          (let ((auto-composition-mode "dummy"))
+            (funcall snap (find-composition 4 nil nil t)))
+          font-at-calls)))
+"#,
+        expect,
+    );
+}

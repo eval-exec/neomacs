@@ -4491,6 +4491,103 @@ fn realized_frame_face_table(
     eval.face_table().clone()
 }
 
+/// Resolve GNU `autocmp_chars`'s `font_object` (`src/composite.c:958-971`)
+/// natively without invoking Lisp `font-at`.
+///
+/// Mirrors GNU `find_automatic_composition` (`src/composite.c:1655-1658`) and
+/// `inhibit_auto_composition` (`src/composite.c:1008-1022`):
+/// - Returns `None` when `auto-composition-mode` is nil or a string equal to
+///   `(tty-type)`, or when the current buffer is not displayed in any window.
+/// - On a non-window (TTY/batch) frame, returns `Some(frame)` (`win->frame`),
+///   so `auto-compose-chars` runs `compose-gstring-for-terminal`.
+/// - On a graphical frame, resolves the font object via the frame's cached
+///   [`realized_frame_face_table`] and [`realized_face_font_object`] (the same
+///   cache `internal-char-font` uses), returning `None` if no font opens.
+pub(crate) fn composition_font_or_frame_at(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    pos: i64,
+    string: Value,
+) -> Option<Value> {
+    let mode = eval.visible_variable_value_or_nil("auto-composition-mode");
+    if mode.is_nil() {
+        return None;
+    }
+    if let Some(inhibited_tty) = mode.as_utf8_str()
+        && let Ok(tty) = super::terminal::pure::builtin_tty_type(eval, vec![])
+        && tty.as_utf8_str() == Some(inhibited_tty)
+    {
+        return None;
+    }
+
+    let current_buffer_id = eval.edit.buffers.current_buffer_id()?;
+    let window = super::window_cmds::builtin_get_buffer_window(
+        eval,
+        vec![Value::make_buffer(current_buffer_id)],
+    )
+    .ok()?;
+    let window_id = window.as_window_id().map(crate::window::WindowId)?;
+    let frame_id = eval.frame_manager().find_window_frame_id(window_id)?;
+    let has_window_system = eval
+        .frame_manager()
+        .get(frame_id)
+        .is_some_and(|frame| frame.effective_window_system().is_some());
+
+    if !has_window_system {
+        return Some(Value::make_frame(frame_id.0));
+    }
+
+    if !string.is_nil() {
+        let (char_pos, character) = {
+            let lisp_str = string.as_lisp_string()?;
+            let char_len = lisp_str.schars() as i64;
+            if !(0 <= pos && pos < char_len) {
+                return None;
+            }
+            let char_pos = usize::try_from(pos).ok()?;
+            let bytepos = if lisp_str.is_multibyte() {
+                neovm_value::emacs_char::char_to_byte_pos(lisp_str.as_bytes(), char_pos)
+            } else {
+                char_pos
+            };
+            let code = if lisp_str.is_multibyte() {
+                neovm_value::emacs_char::string_char(&lisp_str.as_bytes()[bytepos..])
+                    .0
+                    .code()
+            } else {
+                lisp_str.as_bytes()[bytepos] as u32
+            };
+            (
+                char_pos,
+                neovm_value::emacs_char::EmacsChar::from_code(code)?,
+            )
+        };
+        let face_table = realized_frame_face_table(eval, frame_id);
+        let face =
+            resolved_face_at_string_char_pos(eval, &face_table, string, CharPos0::new(char_pos));
+        let matched = resolve_font_match(eval, frame_id, character, &face, None)?;
+        return Some(realized_face_font_object(eval, frame_id, &face, &matched));
+    }
+
+    let face_table = realized_frame_face_table(eval, frame_id);
+    let (character, face) = {
+        let buffer = eval.edit.buffers.get(current_buffer_id)?;
+        let beg = buffer.point_min_lisp_char_pos().as_i64();
+        let end = buffer.point_max_lisp_char_pos().as_i64();
+        if !(beg <= pos && pos < end) {
+            return None;
+        }
+        let bytepos = buffer.lisp_pos_to_accessible_emacs_byte_pos(LispCharPos1::new(pos));
+        let character = buffer
+            .char_code_at_emacs_byte_pos(bytepos)
+            .and_then(neovm_value::emacs_char::EmacsChar::from_code)?;
+        let face = resolved_face_at_buffer_byte(eval, &face_table, buffer, bytepos);
+        (character, face)
+    };
+    let realized_fontset = realized_fontset_at(eval, frame_id, window_id, pos);
+    let matched = resolve_font_match(eval, frame_id, character, &face, realized_fontset)?;
+    Some(realized_face_font_object(eval, frame_id, &face, &matched))
+}
+
 /// `(internal-char-font POSITION &optional CH)` -- the `(FONT-OBJECT . GLYPH-CODE)`
 /// that `describe-char` uses for its "display:" line and character-code-property
 /// section. A non-nil POSITION resolves the face in a window displaying the

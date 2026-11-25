@@ -1483,11 +1483,10 @@ fn find_default_combining_composition_in_string<H: TextHost>(
 /// `auto-composition-mode` enabled, and the current buffer displayed in some
 /// window (`Fget_buffer_window (Fcurrent_buffer (), Qnil)`).
 ///
-/// GNU's `inhibit_auto_composition` also disables composition when
-/// `auto-composition-mode` is a string equal to the selected terminal's tty
-/// type.  That case is left to the shaping gate: on a tty the evaluator below
-/// resolves no font object and the scan yields nothing, matching GNU's
-/// outcome through the window-system branch `autocmp_chars` skips.
+/// GNU's `inhibit_auto_composition` (src/composite.c:1008-1022) also disables
+/// composition when `auto-composition-mode` is a string equal to the selected
+/// terminal's `tty-type`; that check runs in
+/// `TextHost::composition_font_or_frame_at` where terminal state lives.
 fn automatic_composition_enabled<H: TextHost>(ctx: &H, multibyte: bool) -> bool {
     multibyte
         && ctx.current_buffer_is_displayed()
@@ -1497,20 +1496,17 @@ fn automatic_composition_enabled<H: TextHost>(ctx: &H, multibyte: bool) -> bool 
 }
 
 /// Build and shape the gstring of one composition as GNU's `autocmp_chars`
-/// does: `composition-get-gstring`, then the rule function — which for the
-/// shaping rules of the default table (Arabic, the Indic scripts, and the
-/// graphic default) bottoms out in `font-shape-gstring` — runs through the
-/// evaluator against the displayed window's font.
+/// does (src/composite.c:929-984): resolve `font_object` natively (the
+/// displaying window's frame on non-window/TTY frames, or the resolved font
+/// object on graphical frames — never by calling Lisp `font-at`), consult
+/// `composition-get-gstring`, and when the gstring has no cached ID call
+/// `auto-composition-function` with the matched rule's FUNC.
 ///
 /// A font or shaping failure yields `None`, matching `autocmp_chars`'s nil
 /// return that keeps GNU's scan moving to the next candidate.  One
-/// simplification against `autocmp_chars` is deliberate: the font comes from
-/// `font-at` at the composition start rather than GNU's whole-range
+/// simplification against `autocmp_chars` is deliberate: on graphical frames
+/// the font comes from the composition start rather than GNU's whole-range
 /// `font_range` walk (equivalent whenever one face covers the composition).
-/// Otherwise this mirrors `autocmp_chars`: an already-cached shaped gstring
-/// (non-nil LGSTRING_ID) is returned without running the rule, and otherwise
-/// the buffer-local `auto-composition-function` is called with the rule's
-/// FUNC (src/composite.c:941-975).
 fn shape_composition_gstring<H: TextHost>(
     ctx: &mut H,
     start: i64,
@@ -1518,16 +1514,7 @@ fn shape_composition_gstring<H: TextHost>(
     func: Value,
     string: Value,
 ) -> Option<Value> {
-    let font_at = Value::symbol(neovm_value::intern::intern("font-at"));
-    let font_form = if string.is_nil() {
-        Value::list(vec![font_at.clone(), Value::fixnum(start)])
-    } else {
-        Value::list(vec![font_at, Value::fixnum(start), Value::NIL, string])
-    };
-    let font = ctx.eval_sub(font_form).ok()?;
-    if !font.is_font_object() {
-        return None;
-    }
+    let font = ctx.composition_font_or_frame_at(start, string)?;
     let gstring = composition_get_gstring(
         ctx,
         vec![Value::fixnum(start), Value::fixnum(end), font, string],
@@ -1547,9 +1534,10 @@ fn shape_composition_gstring<H: TextHost>(
     // (`auto-compose-chars`) with the matched rule's FUNC and the metric-
     // filled gstring; that default builds/looks up the gstring and calls
     // FUNC, which decides whether to shape (compose-gstring-for-graphic's
-    // lone-mark branch only sets an adjustment).  Calling
-    // `font-shape-gstring` directly here would skip both the user's
-    // buffer-local function and the rule's non-shaping branches.
+    // lone-mark branch only sets an adjustment, and non-window frames pass
+    // `win->frame` so `auto-compose-chars` runs `compose-gstring-for-terminal`).
+    // Calling `font-shape-gstring` directly here would skip both the user's
+    // buffer-local function and the rule's non-shaping / terminal branches.
     let auto_composition =
         ctx.visible_variable_value_or_nil(neovm_value::intern::intern("auto-composition-function"));
     tracing::debug!(
@@ -1564,8 +1552,8 @@ fn shape_composition_gstring<H: TextHost>(
         return None;
     }
     // GNU `autocmp_chars` uses `safe_calln`, not `eval`: the arguments are
-    // VALUES (the rule's FUNC symbol, the font object) and must not be
-    // evaluated as variables.  Its `record_unwind_save_match_data`
+    // VALUES (the rule's FUNC symbol, the font/frame object, STRING) and must
+    // not be evaluated as variables.  Its `record_unwind_save_match_data`
     // (composite.c:941) and the point save around the call are mirrored by
     // `save-match-data` + `save-excursion`, so a rule's `string-match` cannot
     // leak out of the composition search.
@@ -1595,8 +1583,8 @@ fn shape_composition_gstring<H: TextHost>(
                 quote(func),
                 Value::fixnum(start),
                 Value::fixnum(end),
-                font,
-                string,
+                quote(font),
+                quote(string),
                 Value::NIL,
             ]),
         ]),
@@ -1799,6 +1787,24 @@ pub fn find_composition_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> 
                 end,
                 property,
             })
+        } else if !ctx
+            .visible_variable_value_or_nil(neovm_value::intern::intern("auto-composition-function"))
+            .is_nil()
+        {
+            let text_str = text.as_utf8_str().map(str::to_owned).unwrap_or_default();
+            find_automatic_composition_in_string(
+                ctx,
+                args[2],
+                &text_str,
+                text.is_multibyte(),
+                pos as usize,
+                limit,
+            )
+            .map(|(start, end, gstring)| LocatedComposition::Automatic {
+                start,
+                end,
+                gstring,
+            })
         } else if let Some(range) =
             find_default_combining_composition_in_string(ctx, text, pos as usize, limit)
         {
@@ -1819,20 +1825,7 @@ pub fn find_composition_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> 
                 gstring,
             })
         } else {
-            let text_str = text.as_utf8_str().map(str::to_owned).unwrap_or_default();
-            find_automatic_composition_in_string(
-                ctx,
-                args[2],
-                &text_str,
-                text.is_multibyte(),
-                pos as usize,
-                limit,
-            )
-            .map(|(start, end, gstring)| LocatedComposition::Automatic {
-                start,
-                end,
-                gstring,
-            })
+            None
         }
     } else {
         let (begv, zv) = {

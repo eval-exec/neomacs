@@ -76,6 +76,10 @@ impl TextHost for Context {
         });
     }
 
+    fn composition_font_or_frame_at(&mut self, pos: i64, string: Value) -> Option<Value> {
+        super::display_query_hooks::composition_font_or_frame_at(self, pos, string)
+    }
+
     fn eval_sub(&mut self, form: Value) -> EvalResult {
         Context::eval_sub(self, form)
     }

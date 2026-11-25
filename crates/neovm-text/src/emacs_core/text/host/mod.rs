@@ -103,6 +103,16 @@ pub trait TextHost: EditHost {
         let _ = font;
     }
 
+    /// GNU `autocmp_chars`'s font/frame resolution (`src/composite.c:958-971`)
+    /// without invoking Lisp `font-at`.  Returns the displaying window's frame
+    /// on non-window (TTY/batch) frames, the resolved font object on graphical
+    /// frames, or `None` when automatic composition is inhibited or no font
+    /// object can be resolved.  TEXT-HOST row.
+    fn composition_font_or_frame_at(&mut self, pos: i64, string: Value) -> Option<Value> {
+        let _ = (pos, string);
+        None
+    }
+
     /// GNU `font->driver->text_extents` for character CH of FONT-OBJECT,
     /// with the driver's encoded font code.  `composition-get-gstring` fills
     /// every glyph with these before any automatic-composition rule runs

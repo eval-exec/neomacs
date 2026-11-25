@@ -1900,6 +1900,122 @@ fn internal_char_font_nil_position_does_not_rebuild_the_face_table_per_call() {
 }
 
 #[test]
+fn composition_font_or_frame_at_returns_tty_frame_and_honors_tty_type_inhibition() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("cafe\u{0301}\n");
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("tty-comp", 80, 24, buf_id);
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-mode", Value::T);
+
+    let result = composition_font_or_frame_at(&mut eval, 4, Value::NIL);
+    assert_eq!(
+        result,
+        Some(Value::make_frame(frame_id.0)),
+        "non-window frame must return win->frame per GNU autocmp_chars"
+    );
+
+    // Non-matching string auto-composition-mode does not inhibit.
+    eval.obarray_mut().set_symbol_value(
+        "auto-composition-mode",
+        Value::string("non-matching-tty-type"),
+    );
+    assert_eq!(
+        composition_font_or_frame_at(&mut eval, 4, Value::NIL),
+        Some(Value::make_frame(frame_id.0)),
+    );
+
+    // Matching tty-type string inhibits (GNU inhibit_auto_composition).
+    let tty_type =
+        crate::emacs_core::terminal::pure::builtin_tty_type(&mut eval, vec![]).expect("tty-type");
+    if tty_type.is_string() {
+        eval.obarray_mut()
+            .set_symbol_value("auto-composition-mode", tty_type);
+        assert_eq!(
+            composition_font_or_frame_at(&mut eval, 4, Value::NIL),
+            None,
+            "matching tty-type string must inhibit automatic composition"
+        );
+    }
+
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-mode", Value::NIL);
+    assert_eq!(composition_font_or_frame_at(&mut eval, 4, Value::NIL), None);
+}
+
+#[test]
+fn composition_font_or_frame_at_gui_uses_cached_realized_face_table() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    ensure_selected_gui_frame(&mut eval);
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert("cafe\u{0301}\n");
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-mode", Value::T);
+    eval.set_display_host(Box::new(FontAtDisplayHost {
+        matched: Some(resolved_font_match(
+            "DejaVu Sans Mono",
+            None,
+            Some("DejaVuSansMono"),
+            Some(0x45),
+            FontPxProbeResult {
+                pixel_size: 14,
+                height: 16,
+                ascent: 12,
+                descent: 4,
+                max_width: 8,
+                space_width: 8,
+                average_width: 8,
+            },
+            None,
+        )),
+        match_char: Some(u32::from('e')),
+        ..Default::default()
+    }));
+
+    reset_frame_lisp_face_table_rebuilds();
+    const CALLS: u64 = 16;
+    let mut first = None;
+    for _ in 0..CALLS {
+        let font = composition_font_or_frame_at(&mut eval, 4, Value::NIL)
+            .expect("GUI frame must resolve a font object");
+        assert!(font.is_font_object(), "GUI result must be a font object");
+        if let Some(prev) = first {
+            assert_eq!(font, prev, "realized face font object must be reused");
+        } else {
+            first = Some(font);
+        }
+    }
+    let string = Value::string("cafe\u{0301}");
+    let string_font = composition_font_or_frame_at(&mut eval, 3, string)
+        .expect("GUI frame must resolve a font object for string position");
+    assert_eq!(
+        Some(string_font),
+        first,
+        "GUI string position must reuse the realized font object"
+    );
+    let rebuilds = frame_lisp_face_table_rebuilds();
+    assert!(
+        rebuilds <= 1,
+        "{CALLS} composition_font_or_frame_at calls rebuilt the face table {rebuilds} times"
+    );
+}
+
+#[test]
 fn internal_char_font_uses_the_default_face_after_a_face_attribute_change() {
     // GNU `Finternal_char_font` reads the realized default face, so a
     // `set-face-attribute` on `default` changes the font object on the next

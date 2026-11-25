@@ -204,6 +204,83 @@ fn parse_stat_field(line: &str, key: &str) -> usize {
         .unwrap_or_else(|| panic!("missing {key}=... in layout stats line: {line:?}"))
 }
 
+struct CompositionStaleFontHost;
+
+impl neovm_core::emacs_core::eval::DisplayHost for CompositionStaleFontHost {
+    fn realize_gui_frame(
+        &mut self,
+        _request: neovm_core::emacs_core::eval::GuiFrameHostRequest,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(
+        &mut self,
+        _request: neovm_core::emacs_core::eval::GuiFrameHostRequest,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resolve_font_for_char(
+        &mut self,
+        _request: neovm_core::emacs_core::display_host::FontResolveRequest,
+    ) -> Result<Option<neovm_core::emacs_core::eval::ResolvedFontMatch>, String> {
+        use neomacs_display_protocol::font::{
+            FontBackendKind, FontMemoryAsset, FontOutlineAsset, FontReplay, FontSlantKind,
+            ResolvedFont, ResolvedFontId, ResolvedFontIdentity,
+        };
+        let metrics = neovm_core::emacs_core::eval::FontPxProbeResult {
+            pixel_size: 14,
+            height: 16,
+            ascent: 12,
+            descent: 4,
+            max_width: 8,
+            space_width: 8,
+            average_width: 8,
+        };
+        Ok(Some(neovm_core::emacs_core::eval::ResolvedFontMatch {
+            font: neovm_core::emacs_core::eval::ResolvedOpenedFont {
+                resolved: ResolvedFont {
+                    id: ResolvedFontId(0),
+                    identity: ResolvedFontIdentity::from_memory(
+                        FontBackendKind::Fontconfig,
+                        "test:composition-stale".to_owned(),
+                        0,
+                        None,
+                    ),
+                    replay: FontReplay::Swash {
+                        asset: FontOutlineAsset::Memory(
+                            FontMemoryAsset::new(
+                                "test:composition-stale".to_owned(),
+                                std::sync::Arc::new(vec![0, 1, 0, 0]),
+                                0,
+                            )
+                            .expect("non-empty test font"),
+                        ),
+                    },
+                    family: "Monospace".to_owned(),
+                    full_name: None,
+                    postscript_name: None,
+                    weight: 400,
+                    slant: FontSlantKind::Normal,
+                    width: 5,
+                    pixel_size: 14.0,
+                    ascent_px: 12.0,
+                    descent_px: 4.0,
+                    space_advance_px: 8.0,
+                    glyph_advance: Default::default(),
+                    spacing: None,
+                },
+                foundry: None,
+                slant: neovm_core::face::FontSlant::Normal,
+                metrics,
+                capability: None,
+            },
+            glyph_code: Some(1),
+        }))
+    }
+}
+
 fn run_composition_stale_scenario(
     mode: OverlaySourceMode,
     mutate_limit: i64,
@@ -212,12 +289,15 @@ fn run_composition_stale_scenario(
     let text = "xy hello live overlay fallback\nsecond line\n";
     let (mut eval, frame, _, _) = incr_editing_frame(text, 800, 300);
     realize_test_gui_frame(&mut eval, frame);
+    eval.set_display_host(Box::new(CompositionStaleFontHost));
     eval.eval_str(&format!(
         r##"(progn
+              (fset 'save-match-data
+                (cons 'macro (lambda (&rest body) (cons 'progn body))))
               (setq comp-mut-count 0)
               (setq comp-ov (make-overlay 1 6))
               (overlay-put comp-ov 'face '(:background "#123456"))
-              (fset 'font-at
+              (fset 'auto-compose-chars
                 (lambda (&rest _args)
                   (setq comp-mut-count (1+ comp-mut-count))
                   (if (<= comp-mut-count {mutate_limit})

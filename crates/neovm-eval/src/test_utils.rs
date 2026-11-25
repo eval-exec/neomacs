@@ -934,6 +934,7 @@ mod unit_runtime {
             s::display_window_window_hscroll,
             s::display_window_invisible_status,
             s::display_window_invisible_source_run_end,
+            s::display_window_composition_font_or_frame_at,
         );
 
     static DISPLAY_QUERY: DisplayQueryHooks = DisplayQueryHooks::new(

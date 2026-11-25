@@ -812,6 +812,10 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER display::display_window.invisible_source_run_end");
             }
 
+            pub(crate) fn display_window_composition_font_or_frame_at(ctx: &mut Context, pos: i64, string: Value) -> Option<Value> {
+                absent_layer_panic("ABSENT-LAYER display::display_window.composition_font_or_frame_at");
+            }
+
             pub(crate) fn perf_record(op: PerfOp, elapsed: std::time::Duration) {
                 absent_layer_panic("ABSENT-LAYER system::perf.record (no unit path: the unit SET has perf_enabled=false)");
             }
