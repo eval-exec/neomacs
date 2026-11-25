@@ -841,6 +841,219 @@ fn check_secondary_tty_delete_and_exit_isolation(program: &Path, label: &str, is
     );
 }
 
+fn check_cannot_suspend_real_subshell_survives_sigint(program: &Path, label: &str, is_gnu: bool) {
+    let sh = Path::new("/bin/sh");
+    assert!(sh.is_file(), "/bin/sh must exist for subshell test");
+    let mut session = spawn_editor_with(program, label, is_gnu, Some(SETUP_EL), &[("SHELL", sh)]);
+    session.clear_recent_output();
+
+    // Submit `(let ((cannot-suspend t)) (suspend-emacs))` without waiting for
+    // minibuffer exit, because the subshell owns the terminal until it exits.
+    session.send_key("M-:");
+    let prompt_ready = |grid: &[String]| grid.last().is_some_and(|row| row.contains("Eval:"));
+    session.read_until(Duration::from_secs(8), prompt_ready);
+    session.read(Duration::from_millis(200));
+    session.paste("(let ((cannot-suspend t)) (suspend-emacs))");
+    session.send_key("RET");
+
+    wait_for_bytes(&mut session, TERM_TE, Duration::from_secs(10));
+
+    // Use `printf` concatenation so the expected marker cannot be satisfied by
+    // cooked-mode TTY input echo alone: `/bin/sh` must actually execute it.
+    session.send(b"printf '%s-%s\\n' NEOMACS SUBSHELL_READY\n");
+    wait_for_bytes(
+        &mut session,
+        b"NEOMACS-SUBSHELL_READY",
+        Duration::from_secs(10),
+    );
+
+    // Send C-c (0x03) AND explicitly deliver SIGINT/SIGQUIT/SIGTERM to `$PPID`
+    // (the waiting editor): some `/bin/sh` builds (like interactive bash) move
+    // themselves into a new foreground pgrp, which shields `$PPID` from PTY C-c
+    // while non-job-control shells (`dash`, POSIX `sh`) leave the editor in the
+    // foreground pgrp. GNU `sys_subshell` ignores SIGINT/SIGQUIT/SIGTERM/SIGIO
+    // in the parent until the subshell exits (`src/sysdep.c:674-688,747-753`).
+    session.send(b"\x03");
+    session.read(Duration::from_millis(250));
+    session.send(
+        b"kill -INT $PPID; kill -QUIT $PPID; kill -TERM $PPID; printf '%s-%s\\n' NEOMACS AFTER_SIGNALS\nexit 0\n",
+    );
+    wait_for_bytes(&mut session, MOUSE_ENABLE, Duration::from_secs(10));
+
+    let output = session.recent_output().to_vec();
+    let after_te = assert_reset_order(&output, label, "cannot-suspend /bin/sh");
+    let ready_pos = find_subslice_from(&output, after_te, b"NEOMACS-SUBSHELL_READY")
+        .unwrap_or_else(|| {
+            panic!(
+                "{label}: /bin/sh did not execute READY printf: {:?}",
+                String::from_utf8_lossy(&output[after_te..])
+            )
+        });
+    let after_sigint = find_subslice_from(&output, ready_pos + 1, b"NEOMACS-AFTER_SIGNALS")
+        .unwrap_or_else(|| {
+            panic!(
+                "{label}: /bin/sh did not execute AFTER_SIGNALS printf after signals: {:?}",
+                String::from_utf8_lossy(&output[ready_pos..])
+            )
+        });
+    assert_set_order(
+        &output,
+        after_sigint,
+        label,
+        "cannot-suspend /bin/sh resume",
+    );
+
+    session.send_keys("C-x C-c");
+    assert_eq!(
+        session.run_to_completion(Duration::from_secs(15)),
+        TuiProcessOutcome::Exited,
+        "{label}: editor did not survive subshell signals and exit cleanly"
+    );
+}
+
+fn check_emergency_escape_mode_strings(program: &Path, label: &str, is_gnu: bool) {
+    // Non-orphaned job-control wrapper (same topology as `tty_emergency_escape.rs`)
+    // so the 2nd C-g under `inhibit-quit` genuinely delivers `SIGTSTP`.
+    const HELPER: &str = r#"import os, signal, sys, time
+signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+signal.signal(signal.SIGTTIN, signal.SIG_IGN)
+stopped_path, resume_path = sys.argv[1:3]
+cmd = sys.argv[3:]
+pid = os.fork()
+if pid == 0:
+    os.setpgid(0, 0)
+    signal.signal(signal.SIGTTOU, signal.SIG_DFL)
+    signal.signal(signal.SIGTTIN, signal.SIG_DFL)
+    os.execvp(cmd[0], cmd)
+try:
+    os.setpgid(pid, pid)
+except PermissionError:
+    pass
+os.tcsetpgrp(0, pid)
+while True:
+    _, st = os.waitpid(pid, os.WUNTRACED)
+    if os.WIFSTOPPED(st):
+        os.tcsetpgrp(0, os.getpgrp())
+        with open(stopped_path, "w") as f:
+            f.write(str(os.WSTOPSIG(st)))
+        while not os.path.exists(resume_path):
+            time.sleep(0.01)
+        os.tcsetpgrp(0, pid)
+        os.kill(-pid, signal.SIGCONT)
+        continue
+    sys.exit(0 if os.WIFEXITED(st) and os.WEXITSTATUS(st) == 0 else 1)
+"#;
+
+    let temp = tempfile::tempdir().expect("tempdir for emergency-escape mode-strings test");
+    let helper = temp.path().join("job_control.py");
+    let script = temp.path().join("probe.el");
+    let ready = temp.path().join("ready");
+    let done = temp.path().join("done");
+    let stopped = temp.path().join("stopped");
+    let resume = temp.path().join("resume");
+    std::fs::write(&helper, HELPER).expect("write job-control helper");
+
+    let probe = format!(
+        "{SETUP_EL}\n\
+         (let ((inhibit-quit t))\n\
+           (with-temp-file {:?} (insert \"ready\\n\"))\n\
+           (while (not (file-exists-p {:?}))\n\
+             (sleep-for 0.02))\n\
+           (setq quit-flag nil))\n\
+         (kill-emacs 0)\n",
+        ready.to_str().expect("UTF-8 ready path"),
+        done.to_str().expect("UTF-8 done path"),
+    );
+    std::fs::write(&script, probe).expect("write probe script");
+
+    let mut launch = TuiLaunch::new("python3")
+        .with_uncertified_startup()
+        .arg("-I")
+        .arg(&helper)
+        .arg(&stopped)
+        .arg(&resume)
+        .arg(program)
+        .arg("-nw")
+        .arg("-Q");
+    if is_gnu {
+        launch = launch
+            .arg("-no-comp-spawn")
+            .arg(QUIET_NATIVE_COMP_EVAL)
+            .arg(QUIET_MX_SUGGESTION_EVAL);
+    } else {
+        launch = launch.arg(QUIET_MX_SUGGESTION_EVAL);
+    }
+    launch = launch
+        .arg("-l")
+        .arg(&script)
+        .env("HOME", temp.path())
+        .env("TMPDIR", temp.path());
+
+    let mut session = TuiSession::spawn_launch_on_terminal(
+        launch,
+        label,
+        TuiTerminalConfig::new(TERM_TYPE, 24, 80),
+    );
+    let deadline = Instant::now() + Duration::from_secs(25);
+    while !ready.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "{label}: emergency-escape probe did not reach inhibit-quit loop"
+        );
+        session.read(Duration::from_millis(40));
+    }
+    session.read(Duration::from_millis(150));
+    session.clear_recent_output();
+
+    // 1st C-g sets quit-flag; 2nd C-g enters emergency escape and stops via SIGTSTP.
+    session.send(b"\x07");
+    session.read(Duration::from_millis(150));
+    session.send(b"\x07");
+    let stop_deadline = Instant::now() + Duration::from_secs(15);
+    while !stopped.exists() {
+        assert!(
+            Instant::now() < stop_deadline,
+            "{label}: editor did not stop on 2nd C-g emergency escape; raw: {:?}",
+            String::from_utf8_lossy(session.recent_output())
+        );
+        session.read(Duration::from_millis(40));
+    }
+    session.read(Duration::from_millis(200));
+    let before_cont = session.recent_output().to_vec();
+    assert_reset_order(&before_cont, label, "emergency escape before SIGCONT");
+    assert!(
+        find_subslice(&before_cont, MOUSE_ENABLE).is_none(),
+        "{label}: mouse enable arrived before SIGCONT on emergency escape"
+    );
+
+    // Resume via SIGCONT and answer Auto-save=n, Abort=n -> Continuing...
+    session.clear_recent_output();
+    std::fs::write(&resume, "go\n").expect("signal SIGCONT");
+    wait_for_bytes(
+        &mut session,
+        b"Auto-save? (y or n) ",
+        Duration::from_secs(10),
+    );
+    session.send(b"n\n");
+    wait_for_bytes(
+        &mut session,
+        b"Abort (and dump core)? (y or n) ",
+        Duration::from_secs(10),
+    );
+    session.send(b"n\n");
+    wait_for_bytes(&mut session, MOUSE_ENABLE, Duration::from_secs(10));
+    let after_cont = session.recent_output().to_vec();
+    assert_set_order(&after_cont, 0, label, "emergency escape resume");
+
+    // Release the probe loop so the editor exits cleanly.
+    std::fs::write(&done, "done\n").expect("release probe");
+    assert_eq!(
+        session.run_to_completion(Duration::from_secs(15)),
+        TuiProcessOutcome::Exited,
+        "{label}: emergency-escape probe did not exit cleanly"
+    );
+}
+
 #[test]
 fn tty_mode_reset_strings_emitted_on_exit_like_gnu() {
     let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
@@ -914,4 +1127,20 @@ fn secondary_tty_delete_terminal_and_exit_isolate_reset_strings_like_gnu() {
     let neo = neomacs_tui_tests::neomacs_binary();
     check_secondary_tty_delete_and_exit_isolation(&gnu, "GNU", true);
     check_secondary_tty_delete_and_exit_isolation(&neo, "Neomacs", false);
+}
+
+#[test]
+fn tty_mode_cannot_suspend_real_subshell_survives_sigint_like_gnu() {
+    let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
+    let neo = neomacs_tui_tests::neomacs_binary();
+    check_cannot_suspend_real_subshell_survives_sigint(&gnu, "GNU", true);
+    check_cannot_suspend_real_subshell_survives_sigint(&neo, "Neomacs", false);
+}
+
+#[test]
+fn tty_mode_strings_emitted_on_emergency_escape_like_gnu() {
+    let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
+    let neo = neomacs_tui_tests::neomacs_binary();
+    check_emergency_escape_mode_strings(&gnu, "GNU", true);
+    check_emergency_escape_mode_strings(&neo, "Neomacs", false);
 }

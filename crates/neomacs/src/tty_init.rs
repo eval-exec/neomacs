@@ -694,9 +694,11 @@ pub fn tty_resume_terminal(set_strings: &[u8]) -> Result<(), String> {
 
 #[cfg(unix)]
 fn stuff_tty_input(stuff: &[u8]) {
-    // GNU `stuff_buffered_input` (`src/keyboard.c:12485-12495`): push each byte
+    // GNU `stuff_buffered_input` (`src/keyboard.c:12485-12512`): push each byte
     // plus `\n` back into the terminal input queue via `TIOCSTI`, silently
     // stopping if the kernel refuses (e.g. `dev.tty.legacy_tiocsti=0`).
+    // Limitation: unlike GNU, bytes already read ahead into Neomacs's internal
+    // keyboard queue are not re-stuffed into the TTY before suspending.
     for &byte in stuff.iter().chain(std::iter::once(&b'\n')) {
         let ch = byte as libc::c_char;
         // SAFETY: `STDIN_FILENO` is a valid fd and `TIOCSTI` reads one byte.
@@ -706,9 +708,58 @@ fn stuff_tty_input(stuff: &[u8]) {
     }
 }
 
+/// RAII guard mirroring GNU `save_signal_handlers` / `restore_signal_handlers`
+/// around `sys_subshell`'s `wait_for_termination` (`src/sysdep.c:674-688,747-753`).
+///
+/// Installed in the parent AFTER spawning the subshell (so the child does not
+/// inherit `SIG_IGN` across `exec`), and restored on drop.
+#[cfg(unix)]
+struct SubshellSignalGuard {
+    saved: [(libc::c_int, libc::sigaction); 4],
+    count: usize,
+}
+
+#[cfg(unix)]
+impl SubshellSignalGuard {
+    fn ignore_subshell_signals() -> Self {
+        const SIGNALS: [libc::c_int; 4] = [libc::SIGINT, libc::SIGQUIT, libc::SIGTERM, libc::SIGIO];
+        // SAFETY: `sigaction` is a plain C struct; zero-initialization is valid
+        // storage before `sigaction(2)` populates each saved slot.
+        let mut saved: [(libc::c_int, libc::sigaction); 4] = unsafe { std::mem::zeroed() };
+        let mut count = 0;
+        for sig in SIGNALS {
+            // SAFETY: initialize `ignore` with `SIG_IGN` and an empty mask.
+            let mut ignore: libc::sigaction = unsafe { std::mem::zeroed() };
+            ignore.sa_sigaction = libc::SIG_IGN;
+            unsafe { libc::sigemptyset(&mut ignore.sa_mask) };
+            ignore.sa_flags = 0;
+            // SAFETY: `sig` is a valid POSIX signal, `ignore` is initialized,
+            // and `saved[count].1` is valid writable storage.
+            if unsafe { libc::sigaction(sig, &ignore, &mut saved[count].1) } == 0 {
+                saved[count].0 = sig;
+                count += 1;
+            }
+        }
+        Self { saved, count }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SubshellSignalGuard {
+    fn drop(&mut self) {
+        for &(sig, ref prev) in &self.saved[..self.count] {
+            // SAFETY: each `(sig, prev)` was populated by a successful
+            // `sigaction(2)` call in `ignore_subshell_signals`.
+            unsafe {
+                libc::sigaction(sig, prev, std::ptr::null_mut());
+            }
+        }
+    }
+}
+
 /// Stop the process group with `SIGTSTP`, or spawn `$SHELL` when
 /// `cannot_suspend` is set, after the primary interactive TTY has been
-/// suspended (GNU `sys_suspend` / `sys_subshell`, `src/sysdep.c:629-750`).
+/// suspended (GNU `sys_suspend` / `sys_subshell`, `src/sysdep.c:629-754`).
 pub fn tty_sys_suspend(
     stuffstring: Option<&[u8]>,
     cannot_suspend: bool,
@@ -732,8 +783,13 @@ pub fn tty_sys_suspend(
         if let Some(dir) = cwd {
             command.current_dir(dir);
         }
-        return command
-            .status()
+        let mut child = command
+            .spawn()
+            .map_err(|_| "Can't spawn subshell".to_owned())?;
+        #[cfg(unix)]
+        let _signal_guard = SubshellSignalGuard::ignore_subshell_signals();
+        return child
+            .wait()
             .map(|_| ())
             .map_err(|_| "Can't spawn subshell".to_owned());
     }

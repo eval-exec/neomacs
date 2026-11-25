@@ -293,7 +293,7 @@ fn missing_terminal_description_is_an_initialization_error() {
 }
 
 #[test]
-fn mode_strings_respect_gnu_order_and_bypass_padding() {
+fn mode_strings_position_and_bypass_padding() {
     let mut database = Database(
         [
             ("cm", b"\x1b[%i%d;%dH".as_slice()),
@@ -312,7 +312,9 @@ fn mode_strings_respect_gnu_order_and_bypass_padding() {
     let caps = Capabilities::from_database(&mut database, "").unwrap();
     // Literal `$<10/>` in mode strings must be emitted verbatim (GNU `fwrite`,
     // never `tputs`), with `tty-mode-reset-strings` first on leave and
-    // `tty-mode-set-strings` last on enter.
+    // `tty-mode-set-strings` last on enter (note: Neomacs's internal `ei`/`me`
+    // order after reset strings is pre-existing and distinct from GNU's
+    // `me`/`ei`/`ke`/`ve`/`te`/`orig_pair` sequence in `src/term.c:230-247`).
     let reset = b"<RESET-A>$<10/><RESET-B>";
     let leave = caps.leave_with(reset);
     assert!(leave.padded.is_empty());

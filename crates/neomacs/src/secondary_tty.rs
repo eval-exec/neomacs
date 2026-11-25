@@ -406,6 +406,23 @@ impl TtyDevice {
             .leave_with(reset_strings)
             .write_to(&mut self.file, &self.capabilities)
             .map_err(|error| format!("cannot suspend TTY renderer: {error}"));
+        // Mirror GNU `reset_sys_modes` (`src/sysdep.c:1536`) by draining output
+        // before restoring termios on non-macOS Unix. On macOS (XNU), `tcdrain`
+        // on a PTY slave blocks until the master consumes queued output, which
+        // wedges teardown if a secondary client stops reading.
+        #[cfg(not(target_os = "macos"))]
+        {
+            use std::os::fd::AsRawFd;
+            loop {
+                // SAFETY: `self.file` owns a live TTY descriptor.
+                let rc = unsafe { libc::tcdrain(self.file.as_raw_fd()) };
+                if rc == 0
+                    || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
+                {
+                    break;
+                }
+            }
+        }
         let restore_result = rustix::termios::tcsetattr(
             &self.file,
             rustix::termios::OptionalActions::Now,

@@ -256,12 +256,21 @@ impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
         let _ = io::stdout().flush();
         // Scope note: resets/re-initializes only the primary controlling TTY
         // (GNU's `reset_all_sys_modes`/`init_all_sys_modes` also cover
-        // secondary TTYs).
-        super::tty_init::tty_shutdown_terminal();
+        // secondary TTYs). Route through `tty_suspend_terminal` /
+        // `tty_sys_suspend` / `tty_resume_terminal` so Lisp-configured
+        // `tty-mode-reset-strings` and `tty-mode-set-strings` fire on 2nd-C-g
+        // emergency escape as in GNU (`src/keyboard.c:12636,12710`).
+        let reset_strings = neovm_core::emacs_core::terminal::pure::terminal_mode_strings_bytes(
+            neovm_core::emacs_core::terminal::pure::TERMINAL_ID,
+            "tty-mode-reset-strings",
+        );
+        super::tty_init::tty_suspend_terminal(&reset_strings);
         let _ = io::stdout().flush();
 
         #[cfg(unix)]
-        let mut suspend = sys_suspend_process_group;
+        let mut suspend = || {
+            let _ = super::tty_init::tty_sys_suspend(None, false, None);
+        };
         run_emergency_escape_session(
             read_stdin_unbuffered_byte,
             write_stdout_unbuffered,
@@ -275,7 +284,11 @@ impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
             },
         );
 
-        if let Err(err) = super::tty_init::tty_init_terminal() {
+        let set_strings = neovm_core::emacs_core::terminal::pure::terminal_mode_strings_bytes(
+            neovm_core::emacs_core::terminal::pure::TERMINAL_ID,
+            "tty-mode-set-strings",
+        );
+        if let Err(err) = super::tty_init::tty_resume_terminal(&set_strings) {
             tracing::warn!(%err, "emergency escape failed to reinitialize TTY");
         }
         self.force_full_redraw.store(true, Ordering::Release);
@@ -384,16 +397,6 @@ impl Drop for SigintBlockGuard {
             }
             self.restored = true;
         }
-    }
-}
-
-#[cfg(unix)]
-fn sys_suspend_process_group() {
-    // GNU `sys_suspend` (`src/sysdep.c:632`): `kill (0, SIGTSTP);`.
-    // SAFETY: sending `SIGTSTP` to the current process group is a standard
-    // POSIX job-control suspend; `SIGTSTP` disposition is `SIG_DFL`.
-    unsafe {
-        libc::kill(0, libc::SIGTSTP);
     }
 }
 

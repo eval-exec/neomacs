@@ -90,8 +90,19 @@ impl Session {
                     | DISABLE_NEWLINE_AUTO_RETURN,
             )?;
             self.active = true;
-            self.console()
-                .write_char_buffer(super::super::tty_init::tty_enter_sequence())?;
+            let enter = super::super::tty_init::tty_enter_sequence();
+            // Avoid double-emitting bracketed-paste enable when `term/xterm.el`
+            // already supplies it via `tty-mode-set-strings`.
+            let bp_enable = b"\x1b[?2004h";
+            if set_strings.windows(bp_enable.len()).any(|w| w == bp_enable)
+                && let Some(pos) = enter.windows(bp_enable.len()).position(|w| w == bp_enable)
+            {
+                self.console().write_char_buffer(&enter[..pos])?;
+                self.console()
+                    .write_char_buffer(&enter[pos + bp_enable.len()..])?;
+            } else {
+                self.console().write_char_buffer(enter)?;
+            }
             if !set_strings.is_empty() {
                 self.console().write_char_buffer(set_strings)?;
             }
@@ -114,8 +125,23 @@ impl Session {
                     if !reset_strings.is_empty() {
                         self.console().write_char_buffer(reset_strings)?;
                     }
-                    self.console()
-                        .write_char_buffer(super::super::tty_init::tty_leave_sequence())?;
+                    let leave = super::super::tty_init::tty_leave_sequence();
+                    // Avoid double-emitting bracketed-paste disable when
+                    // `term/xterm.el` already supplies it via `tty-mode-reset-strings`.
+                    let bp_disable = b"\x1b[?2004l";
+                    if reset_strings
+                        .windows(bp_disable.len())
+                        .any(|w| w == bp_disable)
+                        && let Some(pos) = leave
+                            .windows(bp_disable.len())
+                            .position(|w| w == bp_disable)
+                    {
+                        self.console().write_char_buffer(&leave[..pos])?;
+                        self.console()
+                            .write_char_buffer(&leave[pos + bp_disable.len()..])?;
+                    } else {
+                        self.console().write_char_buffer(leave)?;
+                    }
                 } else {
                     self.original.show()?;
                     self.alternate = None;

@@ -1151,7 +1151,9 @@ fn terminal_params_for_id(id: u64) -> Vec<(Value, Value)> {
 ///
 /// Walks the parameter value as a cons list in car-to-cdr order, appending raw
 /// string bytes verbatim and ignoring non-string elements or improper tails.
-/// Never signals or quits, and guards against circular lists.
+/// Never signals or quits. Deliberate safety divergence from GNU: terminates on
+/// circular lists via Floyd's cycle detector (GNU's loop does not guard against
+/// cycles and would hang indefinitely).
 pub fn terminal_mode_strings_bytes(terminal_id: u64, param_name: &'static str) -> Vec<u8> {
     let key = Value::symbol(param_name);
     let value = lookup_terminal_parameter_value(&terminal_params_for_id(terminal_id), &key);
@@ -1913,6 +1915,10 @@ pub fn builtin_suspend_emacs(
             with_terminal_host_for_id(terminal_id, |host| host.resume_tty(&set_strings));
         suspend_result?;
         resume_result?;
+        // Limitation vs GNU `Fsuspend_emacs` (`src/keyboard.c:12460-12472`):
+        // post-resume terminal size changes are picked up asynchronously on
+        // the input reader's `QuerySize` transition / next redisplay rather
+        // than synchronously via `get_tty_size` + `change_frame_size`.
         eval.invalidate_redisplay();
     }
 
