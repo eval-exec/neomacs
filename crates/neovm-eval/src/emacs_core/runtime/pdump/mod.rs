@@ -828,98 +828,22 @@ impl Drop for RestoreActiveSourceAfterClone<'_> {
     }
 }
 
-struct RestoreImmutableSourceAfterClone<'a> {
-    eval: &'a Context,
-    restore_root: Option<std::ptr::NonNull<neovm_value::tagged::gc::TaggedHeap>>,
-    saved_fontset: Option<FontsetRegistrySnapshot>,
-    saved_loaded_dump: Option<SavedLoadedDumpStats>,
-}
-
-impl<'a> RestoreImmutableSourceAfterClone<'a> {
-    fn enter(eval: &'a Context) -> Self {
-        let restore_root = neovm_value::tagged::gc::tagged_heap_is_current(&eval.tagged_heap)
-            .then(|| eval.tagged_heap.heap_root());
-        let saved_fontset = Some(crate::emacs_core::eval::lifecycle::fontset_registry_snapshot());
-        let saved_loaded_dump = Some(snapshot_loaded_dump_stats());
-        if restore_root.is_some() {
-            neovm_value::tagged::gc::clear_tagged_heap_if_installed(&eval.tagged_heap);
-        }
-        Self {
-            eval,
-            restore_root,
-            saved_fontset,
-            saved_loaded_dump,
-        }
-    }
-}
-
-impl Drop for RestoreImmutableSourceAfterClone<'_> {
-    fn drop(&mut self) {
-        if let Some(root) = self.restore_root {
-            // SAFETY: `self.eval` borrows the source `Context` for the entire
-            // clone nest, keeping `root` live with no heap reference held here.
-            unsafe { neovm_value::tagged::gc::set_tagged_heap_root(root) };
-            neovm_text::emacs_core::ccl::install_ccl_registry_handle(&self.eval.ccl_registry);
-            neovm_text::emacs_core::charset::install_charset_registry_handle(
-                &self.eval.charset_registry,
-            );
-            crate::emacs_core::eval::lifecycle::install_font_registry_handle(
-                &self.eval.font_registry,
-            );
-            crate::emacs_core::eval::lifecycle::install_terminal_registry_handle(
-                &self.eval.terminal_registry,
-            );
-            crate::emacs_core::builtins::install_hash_table_test_registry_handle(
-                &self.eval.hash_table_test_registry,
-            );
-            crate::emacs_core::builtins::install_file_notify_registry_handle(
-                &self.eval.file_notify_registry,
-            );
-            crate::emacs_core::builtins::install_window_configuration_registry_handle(
-                &self.eval.window_configuration_registry,
-            );
-            crate::emacs_core::eval::data::dynamic_module_registry::install_dynamic_module_registry_handle(
-                &self.eval.dynamic_module_registry,
-            );
-            neovm_value::error::install_in_flight_registry_handle(&self.eval.in_flight_registry);
-            neovm_text::emacs_core::casetab::activate_casetab_thread_locals(
-                self.eval.cached_standard_case_table,
-            );
-            neovm_text::emacs_core::syntax::restore_standard_syntax_table_object(
-                self.eval.standard_syntax_table,
-            );
-            neovm_text::emacs_core::syntax::restore_syntax_code_objects(
-                self.eval.syntax_code_objects,
-            );
-            neovm_text::emacs_core::category::restore_standard_category_table_object(
-                self.eval.standard_category_table,
-            );
-            neovm_value::quit::install_quit_requested_tls(self.eval.quit_requested.clone());
-        }
-        if let Some(fontset) = self.saved_fontset.take() {
-            crate::emacs_core::eval::lifecycle::restore_fontset_registry(fontset);
-        }
-        if let Some(stats) = self.saved_loaded_dump.take() {
-            restore_loaded_dump_stats(stats);
-        }
-    }
-}
-
 /// Clone a live evaluator through the pdump conversion pipeline.
 ///
-/// Builds the clone under a scoped nest that restores `eval`'s heap and
-/// thread-local registries on exit, and returns the clone parked
-/// ([`ParkedContext`]). The caller keeps `eval` active and resumes the clone
-/// only after parking or dropping `eval`.
+/// Builds the clone under a scoped nest that fully reactivates `eval` (heap,
+/// thread-local registries, heap-keyed caches, integer-width context, JIT
+/// stack limit, fontset registry, and loaded-dump stats) on exit, and returns
+/// the clone parked ([`ParkedContext`]). The caller keeps `eval` active and
+/// resumes the clone only after parking or dropping `eval`.
 ///
 /// Refuses if a foreign live `Context`'s heap (other than `eval`) is installed.
-pub fn clone_evaluator(eval: &Context) -> Result<ParkedContext, DumpError> {
+pub fn clone_evaluator(eval: &mut Context) -> Result<ParkedContext, DumpError> {
     if !neovm_value::tagged::gc::tagged_heap_is_current(&eval.tagged_heap) {
         neovm_value::tagged::gc::refuse_if_live_heap_installed();
     }
     let state = snapshot_evaluator(eval);
     let proof = eval.hooks_installed();
-    let _guard = RestoreImmutableSourceAfterClone::enter(eval);
+    let _guard = RestoreActiveSourceAfterClone::enter(eval);
     let cloned = reconstruct_evaluator(&state, None, proof)?;
     Ok(cloned.park())
 }
@@ -929,7 +853,12 @@ pub fn clone_evaluator(eval: &Context) -> Result<ParkedContext, DumpError> {
 /// Builds the clone under a scoped nest that restores `eval` as the active
 /// `Context` on exit, and returns the clone parked ([`ParkedContext`]).
 /// The caller resumes the clone only after parking or dropping `eval`.
+///
+/// Refuses if a foreign live `Context`'s heap (other than `eval`) is installed.
 pub fn clone_active_evaluator(eval: &mut Context) -> Result<ParkedContext, DumpError> {
+    if !neovm_value::tagged::gc::tagged_heap_is_current(&eval.tagged_heap) {
+        neovm_value::tagged::gc::refuse_if_live_heap_installed();
+    }
     let state = snapshot_active_evaluator(eval);
     let proof = eval.hooks_installed();
     let _guard = RestoreActiveSourceAfterClone::enter(eval);

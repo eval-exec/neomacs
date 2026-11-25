@@ -275,11 +275,45 @@ fn pdump_clone_keeps_source_active_and_not_dormant() {
     assert_eq!(current_tagged_heap_identity(), Some(source_id));
     let cloned = err.into_parked();
 
-    // 3. clone_evaluator(&Context) also returns a ParkedContext and keeps
-    // source active.
-    let cloned_imm = crate::emacs_core::pdump::clone_evaluator(&source)
+    // 3. clone_evaluator(&mut Context) also returns a ParkedContext and keeps
+    // source active with all heap-keyed caches (string-pos, regex) keyed to
+    // source, verified through non-reactivating `source.apply` calls.
+    let cloned_imm = crate::emacs_core::pdump::clone_evaluator(&mut source)
         .expect("clone_evaluator should succeed");
     assert_eq!(current_tagged_heap_identity(), Some(source_id));
+    let cons_after = source
+        .apply(
+            Value::symbol("cons"),
+            vec![Value::fixnum(10), Value::fixnum(20)],
+        )
+        .expect("source.apply after clone_evaluator must succeed");
+    assert!(
+        source.tagged_heap().owns_heap_value_for_test(cons_after),
+        "source.apply after clone_evaluator must allocate on source's heap"
+    );
+    let multi = Value::string("αβγδεζηθικλμνξοπρστυφχψω");
+    let ch = source
+        .apply(Value::symbol("aref"), vec![multi, Value::fixnum(12)])
+        .expect("source.apply(aref) on multibyte string after clone_evaluator");
+    assert_eq!(ch, Value::fixnum('ν' as i64));
+    let mut sp_roots = Vec::new();
+    neovm_value::string_pos_cache::collect_string_pos_cache_gc_roots(
+        &mut sp_roots,
+        source_id,
+        source.tagged_heap().gc_collections(),
+        neovm_value::tagged::gc::CacheRootScan::Parked,
+    );
+    assert!(
+        sp_roots.contains(&multi),
+        "string-pos cache must be keyed to source's heap after clone_evaluator"
+    );
+    let matched = source
+        .apply(
+            Value::symbol("string-match"),
+            vec![Value::string("γ.*ν"), multi],
+        )
+        .expect("source.apply(string-match) after clone_evaluator");
+    assert_eq!(matched, Value::fixnum(2));
     assert_eq!(
         source
             .eval_str("pdump-clone-source-token")
@@ -320,21 +354,34 @@ fn pdump_clone_keeps_source_active_and_not_dormant() {
 
 #[test]
 fn pdump_clone_evaluator_refuses_under_foreign_heap() {
-    let source = Context::new(crate::test_utils::unit_runtime());
+    let mut source = Context::new(crate::test_utils::unit_runtime());
     let foreign =
         neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
     let foreign_id = foreign.tagged_heap_identity();
     // SAFETY: `foreign` and `source` both outlive `nest`.
     let nest = unsafe { NestedTaggedHeapInstall::install_bare(foreign.root()) };
-    let refused = catch_unwind(AssertUnwindSafe(|| {
-        let _ = crate::emacs_core::pdump::clone_evaluator(&source);
-    }));
-    let text = panic_text(refused.expect_err("clone_evaluator must refuse under a foreign heap"));
-    assert!(
-        text.contains("dormant Context"),
-        "clone_evaluator refusal must name dormant Context, got {text}"
-    );
-    assert_eq!(current_tagged_heap_identity(), Some(foreign_id));
+    for (label, call) in [
+        (
+            "clone_evaluator",
+            crate::emacs_core::pdump::clone_evaluator
+                as fn(&mut Context) -> Result<super::parked_context::ParkedContext, crate::emacs_core::pdump::DumpError>,
+        ),
+        (
+            "clone_active_evaluator",
+            crate::emacs_core::pdump::clone_active_evaluator
+                as fn(&mut Context) -> Result<super::parked_context::ParkedContext, crate::emacs_core::pdump::DumpError>,
+        ),
+    ] {
+        let refused = catch_unwind(AssertUnwindSafe(|| {
+            let _ = call(&mut source);
+        }));
+        let text = panic_text(refused.expect_err(label));
+        assert!(
+            text.contains("dormant Context"),
+            "{label} refusal must name dormant Context, got {text}"
+        );
+        assert_eq!(current_tagged_heap_identity(), Some(foreign_id));
+    }
     drop(nest);
 }
 
@@ -343,9 +390,10 @@ fn pdump_reload_written_bootstrap_dump_round_trips_ok_and_err() {
     let dir = tempfile::tempdir().expect("tempdir");
     let good_path = dir.path().join("good.pdmp");
     let bad_path = dir.path().join("bad.pdmp");
+    let late_bad_path = dir.path().join("late_bad.pdmp");
     std::fs::write(&bad_path, b"not a valid pdump image").expect("write bad dump");
 
-    // Err path: failed reload drops its partial heap and resumes the original eval.
+    // Early Err path: invalid magic header fails before reconstruction and resumes eval.
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str("(setq reload-roundtrip-token 77)")
         .expect("bind on original eval");
@@ -367,8 +415,32 @@ fn pdump_reload_written_bootstrap_dump_round_trips_ok_and_err() {
         Value::fixnum(77)
     );
 
-    // Ok path: valid reload parks eval, loads the new Context, and drops parked eval.
+    // Late Err path: dump fails AFTER symbol-table loading (corrupted ObjectStarts),
+    // and still restores fontset, runtime bindings, and eval cleanly.
     crate::emacs_core::pdump::dump_to_file(&eval, &good_path).expect("dump valid image");
+    std::fs::copy(&good_path, &late_bad_path).expect("copy good dump for late failure");
+    crate::emacs_core::pdump::mmap_image::corrupt_section_on_disk_for_test(
+        &late_bad_path,
+        crate::emacs_core::pdump::mmap_image::DumpSectionKind::ObjectStarts,
+    )
+    .expect("corrupt ObjectStarts section");
+    let (mut eval, _late_err) =
+        match crate::emacs_core::load::reload_written_bootstrap_dump(eval, &late_bad_path, proof) {
+            Err(pair) => pair,
+            Ok(_) => panic!("late-corrupt dump must fail reload"),
+        };
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(orig_id),
+        "late-failed reload must resume the original Context"
+    );
+    assert_eq!(
+        eval.eval_str("reload-roundtrip-token")
+            .expect("resumed eval after late failure stays usable"),
+        Value::fixnum(77)
+    );
+
+    // Ok path: valid reload parks eval, loads the new Context, and drops parked eval.
     let mut loaded =
         match crate::emacs_core::load::reload_written_bootstrap_dump(eval, &good_path, proof) {
             Ok(loaded) => loaded,

@@ -7192,6 +7192,7 @@ pub(crate) fn reload_written_bootstrap_dump(
         crate::emacs_core::pdump::DumpError,
     ),
 > {
+    let saved_fontset = crate::emacs_core::eval::lifecycle::fontset_registry_snapshot();
     let parked_eval = eval.park();
     match crate::emacs_core::pdump::load_from_dump_with_proof(dump_path, proof) {
         Ok(loaded) => {
@@ -7199,9 +7200,12 @@ pub(crate) fn reload_written_bootstrap_dump(
             Ok(loaded)
         }
         Err(err) => {
-            let eval = parked_eval
+            crate::emacs_core::eval::lifecycle::restore_fontset_registry(saved_fontset);
+            let mut eval = parked_eval
                 .resume()
                 .expect("failed pdump load leaves the heap slot empty");
+            eval.sync_thread_runtime_bindings();
+            eval.sync_current_thread_buffer_state();
             Err((eval, err))
         }
     }
