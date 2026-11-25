@@ -314,6 +314,24 @@ impl TestBatonWorldHandle {
             .expect("retain facade epoch for seated world handle");
         (ctx, retention)
     }
+
+    pub(crate) fn era_world_handle_for_test(&self) -> EraWorldHandle {
+        EraWorldHandle {
+            _retention: self
+                .retention
+                .retain()
+                .expect("retain facade epoch for EraWorldHandle"),
+            world: Arc::clone(&self.world),
+        }
+    }
+
+    pub(crate) fn green_control_for_test(&self) -> std::sync::Arc<super::super::green::Control> {
+        let runtime = self.world.green.borrow();
+        let runtime = runtime
+            .as_ref()
+            .expect("era test installs GreenRuntime before reading Control");
+        std::sync::Arc::clone(&runtime.control)
+    }
 }
 
 fn retire_thread_completion_with(
@@ -383,6 +401,20 @@ impl EraWorldHandle {
             world: Arc::clone(&self.world),
         })
     }
+
+    /// Check whether this World's Green carriers are `CarriedHolder::Stowed`
+    /// while holding a keeper-lent `WorldTurn` of matching heap identity.
+    pub(crate) fn serial_world_is_stowed_under_turn(
+        &self,
+        turn: &super::super::parallel_entry::world_turn::WorldTurn,
+    ) -> bool {
+        if turn.identity().heap != self.heap_identity() {
+            return false;
+        }
+        self.world.green.borrow().as_ref().is_some_and(|runtime| {
+            runtime.carried_holder.get() == super::super::green::CarriedHolder::Stowed
+        })
+    }
 }
 
 /// The Baton group's active era turn right (L6.7b r1 §2): pairs the keeper's
@@ -395,6 +427,12 @@ pub(crate) struct EraTurnRight {
     turn: super::super::parallel_entry::world_turn::WorldTurn,
     lend: super::super::parallel_entry::keeper_driver::WorldLend,
     world: EraWorldHandle,
+    /// `World::baton_holder` observed when the keeper lent `turn` (the keeper's
+    /// OS thread), restored strictly before `WorldReturn` is sent back so
+    /// subsequent keeper operations (`collect_parallel_world_roots`, teardown)
+    /// observe `Baton::held_here() == true`.
+    keeper_holder: Option<std::thread::ThreadId>,
+    stowed: Option<super::super::parallel_entry::world_seat::StowedForReturn>,
 }
 
 static_assertions::assert_impl_all!(EraTurnRight: Send, fmt::Debug);
@@ -426,13 +464,38 @@ impl EraTurnRight {
         if turn.identity().heap != world.heap_identity() {
             return Err((turn, lend, world));
         }
-        Ok(Self { turn, lend, world })
+        let keeper_holder = world.world.baton_holder.get();
+        Ok(Self {
+            turn,
+            lend,
+            world,
+            keeper_holder,
+            stowed: None,
+        })
     }
 
     pub(crate) fn turn_identity(
         &self,
     ) -> super::super::parallel_entry::world_turn::WorldTurnIdentity {
         self.turn.identity()
+    }
+
+    pub(crate) fn set_stowed(
+        &mut self,
+        proof: super::super::parallel_entry::world_seat::StowedForReturn,
+    ) {
+        self.stowed = Some(proof);
+    }
+
+    pub(crate) fn clear_stowed(&mut self) {
+        self.stowed = None;
+    }
+
+    /// Restore `World::baton_holder` to the keeper OS thread that lent this
+    /// turn. Must be called strictly before sending `KeeperMsg::WorldReturn`
+    /// (channel send synchronizes-with keeper receive).
+    pub(crate) fn restore_keeper_holder(&self) {
+        self.world.world.baton_holder.set(self.keeper_holder);
     }
 
     pub(crate) fn into_parts(
@@ -442,7 +505,20 @@ impl EraTurnRight {
         super::super::parallel_entry::keeper_driver::WorldLend,
         EraWorldHandle,
     ) {
+        self.restore_keeper_holder();
         (self.turn, self.lend, self.world)
+    }
+
+    pub(crate) fn into_parts_with_stowed(
+        self,
+    ) -> (
+        super::super::parallel_entry::world_turn::WorldTurn,
+        super::super::parallel_entry::keeper_driver::WorldLend,
+        EraWorldHandle,
+        Option<super::super::parallel_entry::world_seat::StowedForReturn>,
+    ) {
+        self.restore_keeper_holder();
+        (self.turn, self.lend, self.world, self.stowed)
     }
 }
 
@@ -496,13 +572,44 @@ impl TurnRight {
         matches!(self, Self::Era(_))
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "L6.7b b4.3 Slice 2 era interval wiring is the caller"
-        )
-    )]
+    /// Cold metadata retention for parallel root publications, with no heap loan.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn parallel_epoch_retention(
+        &self,
+    ) -> Result<
+        neovm_value::tagged::gc::FacadeEpochRetention,
+        neovm_value::tagged::gc::FacadeMarkExclusionError,
+    > {
+        self.world_and_retention().1.retain()
+    }
+
+    pub(crate) fn serial_world_is_stowed(&self) -> bool {
+        self.world_and_retention()
+            .0
+            .green
+            .borrow()
+            .as_ref()
+            .is_some_and(|runtime| {
+                runtime.carried_holder.get() == super::super::green::CarriedHolder::Stowed
+            })
+    }
+
+    pub(crate) fn set_stowed_for_return(
+        &mut self,
+        proof: super::super::parallel_entry::world_seat::StowedForReturn,
+    ) {
+        if let Self::Era(era) = self {
+            era.set_stowed(proof);
+        }
+    }
+
+    pub(crate) fn clear_stowed_for_return(&mut self) {
+        if let Self::Era(era) = self {
+            era.clear_stowed();
+        }
+    }
+
     pub(crate) fn from_era(
         turn: super::super::parallel_entry::world_turn::WorldTurn,
         lend: super::super::parallel_entry::keeper_driver::WorldLend,

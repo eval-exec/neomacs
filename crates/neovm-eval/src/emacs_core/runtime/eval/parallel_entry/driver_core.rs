@@ -404,6 +404,11 @@ impl RingWaiter {
     fn set(&self, raised: bool) {
         self.0.store(raised, sync::atomic::Ordering::Release);
     }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Self {
+        Self::new()
+    }
 }
 
 /// Called after each pending stop attempt, once the keeper has served its

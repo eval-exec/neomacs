@@ -34,6 +34,8 @@ pub(crate) use bootstrap::GreenBootstrap;
 #[cfg(debug_assertions)]
 pub(crate) use bootstrap::debug_assert_native_tables_open;
 pub(crate) use carried::SourceWorldCarriers;
+#[cfg(test)]
+pub(crate) use scheduler::Control;
 pub(crate) use scheduler::{ConditionId, MutexId, ThreadKey, Wait};
 pub(crate) use switch::WorldSeatParkedRoots;
 #[doc(hidden)]
@@ -645,6 +647,46 @@ impl Context {
         );
         let (_tx, rx) = std::sync::mpsc::channel();
         owner.take_green_seat_without_baton_for_test(key, control, rx);
+        owner.unstow_serial_world_state();
+        owner
+    }
+
+    /// Test-only: construct a seated `ThreadKey::Main` `Context` inside an
+    /// already-open live `KeeperEra` fixture, installing its `SelectHandleToken`
+    /// and seating it with the initial keeper-lent `TurnRight::Era`.
+    pub(crate) fn new_seated_era_main_for_test(
+        handle: &super::world::TestBatonWorldHandle,
+        mut initial_turn: super::world::TurnRight,
+    ) -> Self {
+        initial_turn.clear_stowed_for_return();
+        initial_turn.enter();
+        neovm_value::intern::prepare_thread_symbol_caches();
+        let (seed, current, case_table, control) = {
+            let runtime = handle.green_runtime_for_test();
+            let runtime = runtime
+                .as_ref()
+                .expect("era test installs GreenRuntime before spawning seated main");
+            runtime.bootstrap.install_native_tables();
+            (
+                runtime.bootstrap.seed(),
+                runtime.bootstrap.current_buffer,
+                runtime.standard_case_table.get(),
+                std::sync::Arc::clone(&runtime.control),
+            )
+        };
+        let mut views = handle.owner_views_for_test(current);
+        views.tagged_heap.install_tagged_heap();
+        let mut owner = Context::assemble(views, seed);
+        owner.cached_standard_case_table = case_table;
+        owner.gc_count = owner.tagged_heap.gc_collections() as u64;
+        owner.ensure_owner_slab();
+        owner.setup_thread_locals();
+        owner.republish_owner_mirrors();
+        control.install_select(crate::emacs_core::eval::process_hooks::select_handle(
+            &mut owner,
+        ));
+        let receiver = control.register_main();
+        owner.take_green_seat(ThreadKey::Main, control, receiver, initial_turn);
         owner.unstow_serial_world_state();
         owner
     }

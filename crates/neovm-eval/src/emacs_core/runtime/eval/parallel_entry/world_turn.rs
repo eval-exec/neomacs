@@ -86,11 +86,11 @@ impl WorldTurn {
 }
 
 impl WorldReturned {
-    /// Production mint (Nit 6): only `ActiveWorldSeat::exit` can construct
-    /// `StowedForReturn`, proving World carriers are stowed, parked roots are
-    /// published, and carrier TLS is parked before the turn returns to the
-    /// keeper.
-    pub(super) fn from_stowed_seat(
+    /// Production mint (Nit 6): only `world_seat` can construct
+    /// `StowedForReturn`, proving alloc regions are closed, World carriers are
+    /// stowed, parked roots are published, and carrier TLS is parked before the
+    /// turn returns to the keeper.
+    pub(crate) fn from_stowed_seat(
         turn: WorldTurn,
         _proof: super::world_seat::StowedForReturn,
     ) -> Self {

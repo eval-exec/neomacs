@@ -771,13 +771,20 @@ impl Context {
         };
         let key = seat.key;
         let control = Arc::clone(&seat.control);
+        let is_era_park = seat.baton.as_ref().is_some_and(TurnRight::is_era);
         if let Some(refusal) = switch_refusal(self) {
             self.abandon_unpublished_park_request(request)?;
             return Err(signal("error", vec![Value::string(refusal)]));
         }
         // A failed retirement kept the restored owner's lease in the World.
         // Finish that obligation before publishing another census for this key.
-        if let Err(error) = self.finish_retained_parked_roots(key) {
+        // Inside an open era, use the Q2 non-marking phase guard without
+        // `drain_to_quiescent` and close open bump-allocation regions so
+        // stopped collections or era exit never see `OpenRegion`.
+        if is_era_park {
+            self.try_retire_world_seat_parked_roots(key);
+            self.tagged_heap.close_alloc_regions();
+        } else if let Err(error) = self.finish_retained_parked_roots(key) {
             self.abandon_unpublished_park_request(request)?;
             return Err(error);
         }
@@ -864,7 +871,7 @@ impl Context {
         // can be cleared and retained before another owner receives the Baton.
         self.return_parked_root_buffer(roots);
         let seat = self.green_seat().expect("seated above");
-        let baton = seat
+        let mut baton = seat
             .baton
             .take()
             .expect("the running thread holds the Baton");
@@ -881,7 +888,15 @@ impl Context {
         }
         stow_owner_state(self, &baton);
         stow_carried_state(&baton);
-        self.publish_parked_roots(&baton, key, publication);
+        let parked_era_tls = baton.is_era();
+        if parked_era_tls {
+            self.publish_parked_roots_retaining(&baton, key, publication);
+            super::carrier_tls::park_carrier_tls();
+            let proof = super::super::parallel_entry::world_seat::prove_stowed_for_era_switch(self);
+            baton.set_stowed_for_return(proof);
+        } else {
+            self.publish_parked_roots(&baton, key, publication);
+        }
         // All World/registry borrows have ended before the unique Baton moves.
         let (outcome, host_resume, native_resume) = match request {
             ParkRequest::Ordinary(wait) => (
@@ -938,8 +953,15 @@ impl Context {
             .display_host
             .as_mut()
             .map(|host| &mut **host as &mut dyn crate::emacs_core::eval::protocol::DisplayHost);
-        let RestoringTurn { baton, disposition } =
-            receive_owner_turn(key, wake, &control, &mut receiver, &mut host);
+        let RestoringTurn {
+            mut baton,
+            disposition,
+        } = receive_owner_turn(key, wake, &control, &mut receiver, &mut host);
+        let resumed_era = parked_era_tls || baton.is_era();
+        if resumed_era {
+            baton.clear_stowed_for_return();
+            super::carrier_tls::reset_carrier_tls();
+        }
         // Only the returning continuation refreshes its private dispatch
         // header from canonical cells. A peer's function write updates its own
         // header, so comparing our stale header would miss that redefinition.
@@ -1032,7 +1054,12 @@ impl Context {
             },
         };
         self.green_seat().expect("restored owner is seated").baton = Some(baton);
-        let retirement = self.retire_parked_roots(key);
+        let retirement = if resumed_era {
+            self.try_retire_world_seat_parked_roots(key);
+            Ok(())
+        } else {
+            self.retire_parked_roots(key)
+        };
         if let Some(request) = exit {
             // The process exits: like GNU's `exit`, no cleanup form of this
             // thread runs on the way out.
@@ -1453,6 +1480,61 @@ impl Context {
     pub(crate) fn green_release_seat(&mut self) {
         if let Some(slab) = self.owner.slab_mut() {
             drop(slab.take_green_seat());
+        }
+    }
+
+    /// Test-only: borrow this seated owner's `Control` handle.
+    #[cfg(test)]
+    pub(crate) fn green_control_for_test(&self) -> Option<Arc<Control>> {
+        self.owner
+            .slab()
+            .and_then(|slab| slab.green_seat())
+            .map(|seat| Arc::clone(&seat.control))
+    }
+
+    /// Test-only: drain carrier pool, retire seated era main's Context, close
+    /// alloc regions, stow World carriers, park carrier TLS, and return its
+    /// final `TurnRight::Era` carrying `StowedForReturn`.
+    #[cfg(test)]
+    pub(crate) fn retire_seated_era_main_for_test(mut self) -> TurnRight {
+        self.with_green_runtime(|runtime| runtime.carriers.drain());
+        if let Some(key) = self.green_key() {
+            self.try_retire_world_seat_parked_roots(key);
+        }
+        self.clear_cached_parked_root_batch_for_test();
+        self.tagged_heap.close_alloc_regions();
+        let mut baton = self
+            .green_seat()
+            .expect("seated era main")
+            .baton
+            .take()
+            .expect("seated era main holds TurnRight::Era");
+        stow_owner_state(&mut self, &baton);
+        self.green_release_seat();
+        self.retire_green_owner();
+        stow_carried_state(&baton);
+        super::carrier_tls::park_carrier_tls();
+        let proof =
+            super::super::parallel_entry::world_seat::prove_retired_worker_stowed_for_era(&baton);
+        baton.set_stowed_for_return(proof);
+        baton
+    }
+
+    /// Keep ROOTS traced while KEY is parked inside an open era, preserving any
+    /// previously deferred lease in `retained` rather than panicking (Q2).
+    fn publish_parked_roots_retaining(
+        &self,
+        baton: &TurnRight,
+        key: ThreadKey,
+        publication: neovm_value::tagged::transport::RootBatchLease,
+    ) {
+        let runtime = baton.green_runtime();
+        let Some(runtime) = runtime.as_ref() else {
+            return;
+        };
+        let mut parked = runtime.parked.borrow_mut();
+        if let Some(previous) = parked.insert(key, publication) {
+            parked.push_retained(previous);
         }
     }
 
@@ -2118,6 +2200,7 @@ pub(super) fn run_carrier_job(
         None;
     let mut baton =
         receive_owner_turn(key, wake, &control, &mut receiver, &mut no_host).into_ordinary_baton();
+    baton.clear_stowed_for_return();
     baton.enter();
     set_job_thread_name(key);
     #[cfg(feature = "jit")]
@@ -2141,6 +2224,9 @@ pub(super) fn run_carrier_job(
         if let Some(runtime) = baton.green_runtime().as_ref() {
             runtime.pending_starts.borrow_mut().remove(&key);
         }
+        if baton.is_era() {
+            owner.tagged_heap.close_alloc_regions();
+        }
         stow_owner_state(&mut owner, &baton);
         owner.retire_green_owner();
         stow_carried_state(&baton);
@@ -2150,6 +2236,13 @@ pub(super) fn run_carrier_job(
         // Baton until `finish` hands it on, so the idle registration is
         // visible to any dispatcher that runs after `exited` is observed.
         super::carrier_tls::park_carrier_tls();
+        if baton.is_era() {
+            let proof =
+                super::super::parallel_entry::world_seat::prove_retired_worker_stowed_for_era(
+                    &baton,
+                );
+            baton.set_stowed_for_return(proof);
+        }
         let parked = pool.park(carrier);
         let retired = baton.retire_thread_completion(completion);
         control.finish(retired, baton);
@@ -2237,6 +2330,9 @@ pub(super) fn run_carrier_job(
         runtime.exit.set(Some(request));
         control.prioritize(ThreadKey::Main);
     }
+    if baton.is_era() {
+        owner.tagged_heap.close_alloc_regions();
+    }
     stow_owner_state(&mut owner, &baton);
     owner.retire_green_owner();
     stow_carried_state(&baton);
@@ -2245,6 +2341,11 @@ pub(super) fn run_carrier_job(
     // registration precedes the exit publication so a dispatcher that runs
     // after `exited` is observed always finds the slot parked.
     super::carrier_tls::park_carrier_tls();
+    if baton.is_era() {
+        let proof =
+            super::super::parallel_entry::world_seat::prove_retired_worker_stowed_for_era(&baton);
+        baton.set_stowed_for_return(proof);
+    }
     let parked = pool.park(carrier);
     let retired = baton.retire_thread_completion(completion);
     control.finish(retired, baton);

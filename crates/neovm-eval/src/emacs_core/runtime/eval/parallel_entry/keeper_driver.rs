@@ -372,6 +372,64 @@ impl<'era> ChannelPort<'era> {
         self.publish().map(drop)
     }
 
+    /// Test-only helper: publish and stay `NativeStopped` while returning the
+    /// `PublishedOwner` receipt so a test can later enqueue `KeeperMsg::Request`
+    /// while a keeper stop is already held (exercising `await_world`'s live
+    /// `RingWaiter` raise during an active Baton-group interval).
+    #[cfg(test)]
+    pub(crate) fn publish_idle_receipt_for_test(&mut self) -> Result<PublishedOwner, PortRefusal> {
+        self.publish()
+    }
+
+    /// Test-only helper: send `KeeperMsg::Request` using a pre-published
+    /// `PublishedOwner` receipt (falling back to normal `publish()` if the
+    /// keeper asks for `Republish`), then wait for `GrantMsg::Grant`.
+    #[cfg(test)]
+    pub(crate) fn request_turn_with_receipt_for_test(
+        &mut self,
+        initial_receipt: PublishedOwner,
+    ) -> Result<(Grant, ChannelLend), PortRefusal> {
+        let mut pending = Some(initial_receipt);
+        for _ in 0..=REPUBLISH_LIMIT {
+            let receipt = match pending.take() {
+                Some(receipt) => receipt,
+                None => self.publish()?,
+            };
+            let (_, generation, _) = receipt.serial_facts();
+            if self
+                .inbox
+                .send(KeeperMsg::Request {
+                    owner: self.owner,
+                    receipt,
+                })
+                .is_err()
+            {
+                return Err(PortRefusal::Poisoned);
+            }
+            match self.grants.recv() {
+                Ok(GrantMsg::Grant { ticket, epoch }) => {
+                    return Ok((
+                        Grant {
+                            ticket,
+                            generation,
+                            epoch,
+                        },
+                        ChannelLend {
+                            owner: self.owner,
+                            inbox: self.inbox.clone(),
+                            armed: true,
+                        },
+                    ));
+                }
+                Ok(GrantMsg::Republish) => continue,
+                Ok(GrantMsg::Poisoned) | Err(mpsc::RecvError) => {
+                    return Err(PortRefusal::Poisoned);
+                }
+            }
+        }
+        Err(PortRefusal::Retry)
+    }
+
     /// Publish again: leave native first if the last request entered it.
     fn publish(&mut self) -> Result<PublishedOwner, PortRefusal> {
         let mutator = &mut self.mutator;
@@ -494,6 +552,40 @@ impl Drop for WorldLend {
     }
 }
 
+/// Non-blocking Baton-group request handle (L6.7b r1 §3, QD3).
+///
+/// Sends `KeeperMsg::BatonRequest` at the ring TAIL, visibly distinct from
+/// `GroupPort::collect` (b5's synchronous-GC ring HEAD re-insert).
+#[derive(Clone, Debug)]
+pub(crate) struct GroupRequestSender {
+    inbox: mpsc::Sender<KeeperMsg>,
+}
+
+impl GroupRequestSender {
+    /// Enqueue the group's coalesced request at the ring tail (QD3).
+    pub(crate) fn request_tail(&self) -> Result<(), PortRefusal> {
+        self.inbox
+            .send(KeeperMsg::BatonRequest)
+            .map_err(|_| PortRefusal::Poisoned)
+    }
+
+    /// Conservative QD2 deadlock-idle query (`KeeperMsg::IdleQuery`), matching
+    /// [`GroupPort::idle_for_deadlock`] without requiring `&GroupPort`.
+    /// Answers `Ok(false)` conservatively if the keeper does not reply within
+    /// `bound` (lead #14206).
+    pub(crate) fn idle_for_deadlock(&self, bound: Duration) -> Result<bool, PortRefusal> {
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.inbox
+            .send(KeeperMsg::IdleQuery { reply })
+            .map_err(|_| PortRefusal::Poisoned)?;
+        match answer.recv_timeout(bound) {
+            Ok(idle) => Ok(idle),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(false),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(PortRefusal::Poisoned),
+        }
+    }
+}
+
 /// The Baton group's side of the keeper protocol (L6.7b b3): one request
 /// for the whole group, the World turn it is lent, and the guard over it.
 /// The group's runner (pentry's seat) activates the World host under the
@@ -502,6 +594,14 @@ pub(crate) struct GroupPort {
     inbox: mpsc::Sender<KeeperMsg>,
     world: mpsc::Receiver<GroupMsg>,
     waiter: Arc<driver_core::RingWaiter>,
+}
+
+impl std::fmt::Debug for GroupPort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroupPort")
+            .field("ring_waiter", &self.waiter.raised())
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg_attr(
@@ -516,6 +616,36 @@ impl GroupPort {
             inbox,
             world,
             waiter,
+        }
+    }
+
+    /// Test-only constructor for synthetic channel unit tests (without a live
+    /// `Driver`). Production callers use [`Self::new`] with `Driver::enroll_group()`.
+    #[cfg(test)]
+    pub(crate) fn from_raw_parts_for_test(
+        inbox: mpsc::Sender<KeeperMsg>,
+        world: mpsc::Receiver<GroupMsg>,
+        waiter: Arc<driver_core::RingWaiter>,
+    ) -> Self {
+        Self {
+            inbox,
+            world,
+            waiter,
+        }
+    }
+
+    /// Clone the lock-free waiter word so Green switch points can read it with
+    /// one Acquire load even while another thread holds `&mut GroupPort` in
+    /// `await_world()`.
+    pub(crate) fn waiter_handle(&self) -> Arc<driver_core::RingWaiter> {
+        Arc::clone(&self.waiter)
+    }
+
+    /// Clone the non-blocking ring-tail request sender for coalesced wakes and
+    /// Case-(ii) re-requests (r1 §3, QD3).
+    pub(crate) fn request_sender(&self) -> GroupRequestSender {
+        GroupRequestSender {
+            inbox: self.inbox.clone(),
         }
     }
 

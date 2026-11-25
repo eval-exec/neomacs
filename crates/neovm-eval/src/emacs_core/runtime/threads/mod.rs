@@ -1057,12 +1057,12 @@ pub fn builtin_thread_signal(
         ctx.threads
             .queue_thread_event(target, &event)
             .map_err(mailbox::event_error)?;
-        if ctx.green_threads_running() {
+        if ctx.green_runtime_started() {
             ctx.green_wake_main_for_thread_event();
         }
         return Ok(Value::NIL);
     }
-    if ctx.green_threads_running() {
+    if ctx.green_runtime_started() {
         return ctx.green_thread_signal(args[0], error_symbol, data);
     }
     let target_waits = ctx.threads.blocked_wait_ends_on_signal(id);
@@ -1352,7 +1352,7 @@ pub fn builtin_mutex_unlock(
             vec![Value::string("Cannot unlock mutex owned by another thread")],
         ));
     }
-    if ctx.green_threads_running() {
+    if ctx.green_runtime_started() {
         return ctx.green_mutex_unlock(id);
     }
     match ctx.threads.mutex_unlock(id) {
@@ -1590,7 +1590,7 @@ pub fn builtin_condition_notify(
         Some(all) if all.is_truthy() => NotificationScope::All,
         Some(_) | None => NotificationScope::One,
     };
-    if ctx.green_threads_running() {
+    if ctx.green_runtime_started() {
         return ctx.green_condition_notify(id, scope);
     }
     let Some(depth) = ctx.threads.mutex_unlock_for_wait(mutex_id) else {

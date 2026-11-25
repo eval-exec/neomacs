@@ -17,3 +17,7 @@ mod sync;
 mod text_caches;
 pub(crate) mod world_seat;
 pub(crate) mod world_turn;
+
+#[cfg(test)]
+#[path = "../tests/green_era_switch_test.rs"]
+mod green_era_switch_tests;

@@ -54,10 +54,82 @@ use super::world_turn::{WorldReturned, WorldTurn, WorldTurnIdentity};
 use neovm_value::tagged::gc::FacadeEpochRetention;
 use std::marker::PhantomData;
 
-/// Private proof constructed solely by [`ActiveWorldSeat::exit`] after
-/// [`ActiveWorldSeat::switch_out`] has published parked roots, stowed World
-/// carriers, and parked carrier TLS (Nit 6).
-pub(super) struct StowedForReturn(());
+/// Private proof constructed solely by `world_seat` after verifying that open
+/// bump-allocation regions are closed, World carriers are `CarriedHolder::Stowed`,
+/// and carrier TLS is parked (Nit 6).
+#[derive(Debug)]
+#[must_use = "consume StowedForReturn in WorldReturned::from_stowed_seat or drop on seat entry"]
+pub(crate) struct StowedForReturn(());
+
+/// Mint [`StowedForReturn`] after a seated Green switch point (`green_park_impl`)
+/// has closed open alloc regions, published parked roots, stowed World carriers
+/// to `CarriedHolder::Stowed`, and parked carrier TLS.
+#[cold]
+#[inline(never)]
+pub(crate) fn prove_stowed_for_era_switch(ctx: &mut Context) -> StowedForReturn {
+    ctx.tagged_heap.close_alloc_regions();
+    #[cfg(any(test, feature = "test-support"))]
+    assert!(
+        !ctx.tagged_heap.alloc_regions_open(),
+        "Nit 6: open alloc regions must be closed before returning an era WorldTurn"
+    );
+    assert!(
+        ctx.serial_world_is_stowed(),
+        "Nit 6 / A-1: World carriers must be Stowed before returning an era WorldTurn"
+    );
+    assert!(
+        neovm_value::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
+        "Nit 6: carrier TLS must be parked before returning an era WorldTurn"
+    );
+    StowedForReturn(())
+}
+
+/// Mint [`StowedForReturn`] when an exiting Green worker has retired its
+/// Context, closed alloc regions, stowed World carriers, and parked carrier TLS.
+#[cold]
+#[inline(never)]
+pub(crate) fn prove_retired_worker_stowed_for_era(
+    baton: &super::super::world::TurnRight,
+) -> StowedForReturn {
+    assert!(
+        baton.is_era(),
+        "Nit 6: retired worker stow proof requires TurnRight::Era"
+    );
+    assert!(
+        baton.serial_world_is_stowed(),
+        "Nit 6 / A-1: World carriers must be Stowed on retired worker exit"
+    );
+    assert!(
+        neovm_value::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
+        "Nit 6: carrier TLS must be parked on retired worker exit"
+    );
+    StowedForReturn(())
+}
+
+/// Mint [`StowedForReturn`] for a freshly keeper-lent [`WorldTurn`] before any
+/// Baton thread enters it (World carriers are already `CarriedHolder::Stowed`
+/// and carrier TLS is parked on this thread).
+#[cold]
+#[inline(never)]
+pub(crate) fn prove_lent_world_stowed(
+    turn: &WorldTurn,
+    world: &super::super::world::EraWorldHandle,
+) -> StowedForReturn {
+    assert_eq!(
+        turn.identity().heap,
+        world.heap_identity(),
+        "A-3: freshly lent WorldTurn heap must match EraWorldHandle"
+    );
+    assert!(
+        world.serial_world_is_stowed_under_turn(turn),
+        "A-1: World carriers must be Stowed when keeper lends WorldTurn"
+    );
+    assert!(
+        neovm_value::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
+        "Nit 6: carrier TLS must be parked when receiving a keeper-lent WorldTurn"
+    );
+    StowedForReturn(())
+}
 
 /// Why a seated Green host refused to park or enter a [`WorldTurn`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,6 +354,54 @@ impl ParkedWorldSeat {
 impl ActiveWorldSeat {
     pub(crate) fn identity(&self) -> WorldTurnIdentity {
         self.turn.identity()
+    }
+
+    /// Adopt a currently running seated Green `Context` that holds an active
+    /// `TurnRight::Era` (decomposed into `(turn, lend, retention)`) into an
+    /// [`ActiveWorldSeat`] so `b4.4` (`gc_collect_from_current_roots_impl_flow`)
+    /// can end the interval via [`Self::exit`] and re-enter via
+    /// [`ParkedWorldSeat::enter`] while preserving Nit 6.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn from_active_green_seat(
+        ctx: &Context,
+        turn: WorldTurn,
+        lend: WorldLend,
+        retention: FacadeEpochRetention,
+    ) -> Result<Self, (WorldTurn, WorldLend, FacadeEpochRetention, WorldSeatRefusal)> {
+        let Some(slab_ref) = ctx.owner.slab() else {
+            return Err((turn, lend, retention, WorldSeatRefusal::Unseated));
+        };
+        if slab_ref.green_seat().is_none() {
+            return Err((turn, lend, retention, WorldSeatRefusal::Unseated));
+        }
+        if ctx.green_runtime_ref().is_none() {
+            return Err((turn, lend, retention, WorldSeatRefusal::NotGreenWorld));
+        }
+        if turn.identity().heap != ctx.tagged_heap.heap_identity() {
+            return Err((turn, lend, retention, WorldSeatRefusal::WrongHeap));
+        }
+        if !neovm_value::tagged::gc::tagged_heap_is_current(&ctx.tagged_heap) {
+            return Err((turn, lend, retention, WorldSeatRefusal::NotInstalled));
+        }
+        if !ctx.holds_serial_world_here() {
+            return Err((turn, lend, retention, WorldSeatRefusal::WorldNotHeldHere));
+        }
+        Ok(Self {
+            slab: slab_ref as *const _ as usize,
+            turn,
+            lend,
+            retention,
+            _thread: PhantomData,
+        })
+    }
+
+    /// Decompose a resumed [`ActiveWorldSeat`] back into `(turn, lend, retention)`
+    /// so `GreenSeat` can restore its `TurnRight::Era`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn into_active_green_parts(self) -> (WorldTurn, WorldLend, FacadeEpochRetention) {
+        (self.turn, self.lend, self.retention)
     }
 
     /// Intra-interval Baton-group handoff (b4.2): publish parked private

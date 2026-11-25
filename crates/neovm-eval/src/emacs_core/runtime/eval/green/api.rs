@@ -26,6 +26,15 @@ impl Context {
         self.green_seat().is_some()
     }
 
+    /// Whether this World has a started `GreenRuntime`, including for unseated
+    /// parallel owners running a serial turn on the same World so waking
+    /// operations (`mutex-unlock`, `condition-notify`, `thread-signal`) wake
+    /// blocked Baton-group waiters (L6.7b r1 §4).
+    #[doc(hidden)]
+    pub fn green_runtime_started(&self) -> bool {
+        self.green_runtime_ref().is_some()
+    }
+
     /// The running thread's id in the World's `ThreadManager`.
     pub(crate) fn green_current_id(&mut self) -> u64 {
         self.green_key().map_or(0, ThreadKey::id)
@@ -293,9 +302,14 @@ impl Context {
         result
     }
 
-    /// The runtime's scheduler.
+    /// The runtime's scheduler (reachable from both seated Green threads and
+    /// unseated parallel owners running a serial turn on the same Green World).
     pub(crate) fn green_control(&mut self) -> std::sync::Arc<super::scheduler::Control> {
-        std::sync::Arc::clone(&self.green_seat().expect("a Green thread").control)
+        if let Some(seat) = self.green_seat() {
+            std::sync::Arc::clone(&seat.control)
+        } else {
+            self.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control))
+        }
     }
 }
 
