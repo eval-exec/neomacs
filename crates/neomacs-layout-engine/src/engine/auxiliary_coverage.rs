@@ -249,6 +249,11 @@ impl LayoutEngine {
                 })
             }
             Err(refusal) => {
+                tracing::debug!(
+                    target: "neomacs_layout_engine::scroll_coverage",
+                    ?refusal,
+                    "refused auxiliary compositor coverage"
+                );
                 if let Some(withdrawal) =
                     self.maybe_build_refusal_withdrawal(evaluator, refusal, refused_key)
                 {
@@ -266,6 +271,34 @@ impl LayoutEngine {
 
     /// Commit an auxiliary publication after native transport accepted it.
     pub fn commit_auxiliary_scroll_coverage(&mut self, prepared: PreparedAuxiliaryScrollCoverage) {
+        if prepared.update.surfaces.is_empty() {
+            tracing::debug!(
+                target: "neomacs_layout_engine::scroll_coverage",
+                base = prepared.update.base.get(),
+                refusal = ?prepared.refusal_reason(),
+                "withdrew auxiliary compositor coverage"
+            );
+        } else {
+            for surface in &prepared.update.surfaces {
+                let coverage = surface.coverage();
+                let window = WindowId(coverage.content.window_id.get() as u64);
+                tracing::debug!(
+                    target: "neomacs_layout_engine::scroll_coverage",
+                    predict_pixels = coverage.predict_pixels,
+                    compositor_enabled = coverage.compositor_enabled,
+                    window = window.0,
+                    base = prepared.update.base.get(),
+                    epoch = coverage.epoch,
+                    publication = coverage.publication.get(),
+                    anchor_row = coverage.anchor_row,
+                    origin = coverage.origin,
+                    source_first = ?coverage.content.matrix.rows.first().map(|row| row.start_charpos),
+                    source_last = ?coverage.content.matrix.rows.last().map(|row| row.end_charpos),
+                    text_bounds = ?coverage.content.text_clip_bounds,
+                    "published auxiliary compositor coverage"
+                );
+            }
+        }
         self.scroll_preview_coverage
             .apply_auxiliary(&prepared.update);
         if let Some(staged) = prepared.staged_exports {

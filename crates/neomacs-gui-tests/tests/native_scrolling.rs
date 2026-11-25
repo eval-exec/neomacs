@@ -420,14 +420,19 @@ focus_follows_mouse yes
             "stall proof requires pixel and presentation evidence"
         );
         let deadline = Instant::now() + Duration::from_secs(8);
-        while !fs::read_to_string(artifacts.join("neomacs.log"))
-            .unwrap_or_default()
-            .contains(if resolved {
-                "exported compositor coverage"
-            } else {
-                "predict_pixels=true"
+        let has_certified_coverage = |log: &str| {
+            log.lines().any(|line| {
+                let auxiliary_ok = line.contains("installed auxiliary compositor coverage")
+                    && line.contains("compositor_enabled=true")
+                    && (resolved || line.contains("predict_pixels=true"));
+                let in_frame_ok = line.contains("exported compositor coverage")
+                    && (resolved || line.contains("predict_pixels=true"));
+                auxiliary_ok || in_frame_ok
             })
-        {
+        };
+        while !has_certified_coverage(
+            &fs::read_to_string(artifacts.join("neomacs.log")).unwrap_or_default(),
+        ) {
             assert!(
                 Instant::now() < deadline,
                 "no certified prediction policy: {artifacts:?}"

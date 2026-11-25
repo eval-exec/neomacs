@@ -822,3 +822,48 @@ fn own_late_chrome_base_refuses_auxiliary_and_withdraws_without_dropping_pages()
     );
     eval.redisplay_fn = None;
 }
+
+#[test]
+fn tty_physical_redraw_does_not_refuse_gui_auxiliary_publication() {
+    let _policy = RedisplayHookPolicyGuard::legacy();
+    let mut fix = AuxFixture::new(None);
+    // Real GUI startup leaves a TTY physical-redraw request on the initial
+    // terminal frame that GUI renderers never drain via
+    // `gnu_take_tty_frame_redraw`. That TTY-only state must not refuse native
+    // auxiliary publication for the active GUI frame.
+    let initial_tty_frame = neovm_core::window::FrameId(1);
+    fix.eval.gnu_request_frame_redraw(initial_tty_frame);
+    assert_eq!(
+        fix.eval
+            .auxiliary_redisplay_readiness(fix.eval.redisplay_generation()),
+        Ok(())
+    );
+    fix.drain_worker_prefix(4);
+    let prepared = match fix
+        .engine
+        .borrow_mut()
+        .prepare_auxiliary_scroll_coverage(&fix.eval)
+    {
+        AuxiliaryPreparation::Ready(prepared) => prepared,
+        AuxiliaryPreparation::NoChange => {
+            panic!("expected Ready auxiliary publication, got NoChange")
+        }
+        AuxiliaryPreparation::Refused(refusal) => {
+            panic!("TTY physical redraw must not refuse GUI auxiliary publication: {refusal:?}")
+        }
+    };
+    assert!(
+        !prepared.is_withdrawal_only() && !prepared.update().surfaces.is_empty(),
+        "expected non-empty auxiliary scroll surface"
+    );
+    fix.engine
+        .borrow_mut()
+        .commit_auxiliary_scroll_coverage(prepared);
+    assert!(
+        fix.engine
+            .borrow()
+            .published_scroll_coverage(fix.frame, fix.owner)
+            .is_some(),
+        "GUI auxiliary publication must commit despite pending TTY physical redraw"
+    );
+}

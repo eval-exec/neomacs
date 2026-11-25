@@ -133,7 +133,6 @@ pub enum AuxiliaryRedisplayRefusal {
     PendingFrameTargets,
     PendingModeLineTargets,
     PendingTextTargets,
-    PendingPhysicalRedraw,
     MissingSignature,
     ChangedSignature,
 }
@@ -440,9 +439,12 @@ impl Context {
             // caught by `redisplay_frames`, `redisplay_windows`, and
             // `last_redisplay_signature`.
         }
-        if !pending.physical_redraw_frames.is_empty() {
-            return Err(Refusal::PendingPhysicalRedraw);
-        }
+        // Note: `physical_redraw_frames` is intentionally NOT checked here,
+        // matching `RedisplayTransaction::run`'s skip predicate. It tracks
+        // TTY-only physical terminal damage consumed exclusively by
+        // `gnu_take_tty_frame_redraw` (`tty_rif.force_redraw()`); GUI frames
+        // never drain it, and startup's initial terminal frame can leave an
+        // entry in it for the lifetime of a GUI process.
         let Some(previous) = self.last_redisplay_signature.as_ref() else {
             return Err(Refusal::MissingSignature);
         };
