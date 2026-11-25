@@ -2532,7 +2532,7 @@ impl GuiFrameWindowManager {
                     if matches!(req.visibility, WindowVisibility::Iconified) {
                         window.set_minimized(true);
                     }
-                    window_icon.apply(window.as_ref());
+                    window_icon.apply(window.as_ref(), event_loop.owned_display_handle());
                     let raw_scale_factor = window.scale_factor();
                     let scale_factor = effective_window_scale_factor(raw_scale_factor);
                     let phys =

@@ -185,6 +185,8 @@ impl RenderApp {
                             tracing::error!("Failed to initialize clipboard service: {err}");
                         }
                     }
+                    self.presentation_observer
+                        .attach_display(event_loop.owned_display_handle());
 
                     let raw_scale_factor = window.scale_factor();
                     let effective_scale = effective_window_scale_factor(raw_scale_factor);
@@ -253,7 +255,8 @@ impl RenderApp {
                         apply_window_geometry_hints(window.as_ref(), geometry_hints);
                     }
 
-                    self.window_icon.apply(window.as_ref());
+                    self.window_icon
+                        .apply(window.as_ref(), event_loop.owned_display_handle());
                 }
                 Err(e) => {
                     tracing::error!("Failed to create window: {:?}", e);
