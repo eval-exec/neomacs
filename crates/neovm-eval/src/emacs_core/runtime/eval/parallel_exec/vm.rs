@@ -40,9 +40,9 @@ use super::effective::{
 };
 use super::engine::{CoreOutcome, EngineFault, RecordStack};
 use super::frames::{
-    ExitFlags, FrameArena, FrameId, HandlerMark, OperandCursor, OwnerRecord, OwnerRecordMark, Pc,
-    PollBudget, ReturnTo, RootGroup, RootHandle, RootRevokeError, SerialHandlerToken,
-    SerialRecordToken, VmFrame,
+    ExitFlags, FrameArena, FrameId, HandlerMark, LandingPad, OperandCursor, OwnerHandler,
+    OwnerRecord, OwnerRecordMark, Pc, PollBudget, ReturnTo, RootGroup, RootHandle,
+    RootPublishError, RootRevokeError, SerialHandlerToken, SerialRecordToken, VmFrame,
 };
 use crate::emacs_core::bytecode::arith_kind::ArithGenericKind;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
@@ -301,6 +301,18 @@ pub(crate) trait VmPlain: PlainAccess {
     fn generation(&self) -> (EraId, ShapeGeneration);
 }
 
+/// One serial unwind step, issued by the VM's unwind loop (V8 L3) or `Unbind`
+/// walk (V2 migration, V8 §10) in GNU `unwind_to_catch`/`unbind_to` order
+/// (`src/eval.c:1445-1454, 3946-3957`).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SerialUnwind {
+    /// Serial handler markers to remove first, innermost first (popped after
+    /// their records per L3 / `src/eval.c:1449-1452`).
+    pub pop_handlers: Vec<SerialHandlerToken>,
+    /// Contiguous run of serial records to unbind, innermost first.
+    pub unbind: Vec<SerialRecordToken>,
+}
+
 /// Why an opcode escaped.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EscapeWhy {
@@ -313,22 +325,20 @@ pub(crate) enum EscapeWhy {
         access: PlainVarAccess,
         refusal: PlainRefusal,
     },
-    /// `Unbind n` reached a run of consecutive serial records (R1b): the
-    /// request names exactly those tokens, innermost first, and the
-    /// completion's `popped` is that run.
-    SerialUnbind {
-        records: Vec<SerialRecordToken>,
-    },
-    /// `Unbind n` reached an owner binding whose symbol the unbind-time
-    /// re-validation refused (N-v2-unbind-revalidate): GNU's `do_one_unbind`
-    /// for a `SPECPDL_LET` re-reads the symbol as the binding leaves
-    /// (eval.c:3848-3870), so a watcher added while the binding was live is
-    /// notified through `set_internal`. The serial side undoes this one
-    /// binding, the slow path of `unbind_owner_binding`
-    /// (owner_bindings.rs:1276-1360), taking the slab record `record`; the
-    /// owner restored nothing. The executor's entry left before the escape
-    /// (GNU's order, eval.c:3940-3954), so the walk's check after it is that
-    /// the record is gone from the slab.
+    /// Unified serial unwind step (V8 §4/§10, replacing V2's `SerialUnbind`):
+    /// `Unbind n` emits `pop_handlers: []` and `unbind: run`; V8's unwind loop
+    /// batches finished intermediate handlers into `pop_handlers` and issues
+    /// one final `unbind: []` pop+landing request.
+    SerialUnwind(SerialUnwind),
+    /// `Unbind n` or V8's L3 unwind reached an owner binding whose symbol the
+    /// unbind-time re-validation refused (N-v2-unbind-revalidate): GNU's
+    /// `do_one_unbind` for a `SPECPDL_LET` re-reads the symbol as the binding
+    /// leaves (`src/eval.c:3848-3870`), so a watcher added while the binding
+    /// was live is notified through `set_internal`. The serial side undoes
+    /// this one binding, taking the slab record `record`; the owner restored
+    /// nothing. The executor's entry left before the escape (GNU's order,
+    /// `src/eval.c:3948-3957`), so the walk's check after it is that the
+    /// record is gone from the slab.
     PlainUnbind {
         symbol: SymId,
         record: OwnerRecordId,
@@ -353,14 +363,20 @@ pub(crate) enum EscapeStack {
     /// The fall-through effect. `jump` is a branch target inside the same
     /// code, taken in place of the next pc; only `Switch` reports one (a hit
     /// leaves through `op_branch`, bytecode.c:1752-1758). Any other opcode
-    /// reporting a jump is a [`EngineFault::DispatchContract`]. V8's handler
-    /// landing pads get their own shape.
+    /// reporting a jump is a [`EngineFault::DispatchContract`].
     Completed {
         consumed: u16,
         produced: Vec<Value>,
         jump: Option<u32>,
     },
-    /// The serial side signaled or threw.
+    /// A handler the owner holds was selected by serial `signal_or_quit` or
+    /// `Fthrow` (`src/eval.c:1464-1481, 1996-2064`; V8 L2). The serial side
+    /// unwound only what this escape pushed; the VM drives the owner unwind.
+    Caught {
+        handler: SerialHandlerToken,
+        value: Value,
+    },
+    /// The serial side signaled or threw past every owner handler (V8 L7).
     Flow(Flow),
 }
 
@@ -1750,7 +1766,7 @@ where
                             // the serial side to take.
                             self.arena.bindings_mut().pop();
                             let len_before = self.arena.bindings().above(bind_base).count();
-                            if let Step::Stop(outcome) = self.escape(
+                            match self.escape(
                                 op.clone(),
                                 EscapeWhy::PlainUnbind {
                                     symbol,
@@ -1761,7 +1777,10 @@ where
                                 branch_pc,
                                 program,
                             ) {
-                                return Step::Stop(outcome);
+                                Step::Continue => {}
+                                step @ (Step::Frame | Step::Stop(_) | Step::Refill(_)) => {
+                                    return step;
+                                }
                             }
                             if let Err(fault) = self.set_pc(frame, branch_pc) {
                                 return Step::Stop(VmOutcome::Fault(fault));
@@ -1822,15 +1841,19 @@ where
                     // named. The walk counts the originals, so a pushed record
                     // is added to `remaining`, not taken from it.
                     let len_before = self.arena.bindings().above(bind_base).count();
-                    if let Step::Stop(outcome) = self.escape(
+                    match self.escape(
                         op.clone(),
-                        EscapeWhy::SerialUnbind { records },
+                        EscapeWhy::SerialUnwind(SerialUnwind {
+                            pop_handlers: Vec::new(),
+                            unbind: records,
+                        }),
                         frame,
                         operands,
                         branch_pc,
                         program,
                     ) {
-                        return Step::Stop(outcome);
+                        Step::Continue => {}
+                        step @ (Step::Frame | Step::Stop(_) | Step::Refill(_)) => return step,
                     }
                     // The escape's store advanced the pc; the walk is still
                     // at this opcode.
@@ -2039,6 +2062,32 @@ where
         let debug_updates = self.escape.take_debug_on_exit_updates();
         let (consumed, produced, jump) = match completion.stack {
             EscapeStack::Flow(flow) => return Step::Stop(VmOutcome::Signaled(flow)),
+            EscapeStack::Caught { handler, value } => {
+                // V8 L2: the serial side unwound only what this escape pushed;
+                // deltas must report nothing beyond it before VM unwind starts.
+                if !completion.handlers.popped.is_empty() || !completion.handlers.pushed.is_empty()
+                {
+                    return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                        RecordStack::Handlers,
+                    )));
+                }
+                if !completion.records.popped.is_empty() || !completion.records.pushed.is_empty() {
+                    return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                        RecordStack::Bindings,
+                    )));
+                }
+                if !debug_updates.is_empty() {
+                    let mut stopped = StoppedOwnerBacktrace::from_escape_park(&mut self.arena);
+                    for update in debug_updates {
+                        let _ = stopped.set_debug_on_exit(update.frame, update.debug_on_exit);
+                    }
+                }
+                if let Some(env) = self.escape.refresh_call_env() {
+                    self.set_call_env(env);
+                }
+                self.stop_state = OwnerStopState::Running;
+                return self.unwind_to_handler(handler, value, op, branch_pc);
+            }
             EscapeStack::Completed {
                 consumed,
                 produced,
@@ -2107,38 +2156,38 @@ where
         // request: the walk would then count the extra as pushed, or clamp
         // the loss away, and unbind past n. GNU `unbind_to` walks to the
         // absolute index the opcode named (eval.c:3940-3954).
-        let popped_as_named = match &named {
-            EscapeWhy::SerialUnbind { records } => completion.records.popped == *records,
-            EscapeWhy::PlainUnbind { .. } => completion.records.popped.is_empty(),
+        let (records_popped_ok, handlers_popped_ok) = match &named {
+            EscapeWhy::SerialUnwind(unwind) => (
+                completion.records.popped == unwind.unbind,
+                completion.handlers.popped == unwind.pop_handlers,
+            ),
+            EscapeWhy::PlainUnbind { .. } => (
+                completion.records.popped.is_empty(),
+                completion.handlers.popped.is_empty(),
+            ),
             // A refused Plain access pushes (a refused bind) or reads; it
             // never pops a record. A sealed cons op pops none.
-            EscapeWhy::PlainRefused { .. } | EscapeWhy::UnimplementedSealed(_) => {
-                completion.records.popped.is_empty()
-            }
+            EscapeWhy::PlainRefused { .. } | EscapeWhy::UnimplementedSealed(_) => (
+                completion.records.popped.is_empty(),
+                completion.handlers.popped.is_empty(),
+            ),
             // A World escape names no token: `WorldSplit::Escape` is one
             // variant for every World op, so its pop is checked as the top
-            // run only, as before, and is the one residual. A handler-pop
-            // op legitimately pops the pair its push made; a `symbol-value`
-            // popping a token is the same hole as the Unbind arms had, and
-            // closes when `why` names the pair (V8's `SerialUnwind` is that
-            // naming). Named, not fixed here: N-world-escape-popped-as-named.
-            //
-            // V7 (F6): completion pops are bounded above `bind_base` and
-            // `handler_base` below, so a child frame's cleanup cannot pop a
-            // caller's serial markers.
-            _ => true,
+            // run strictly above `bind_base`/`handler_base` (V7 F6).
+            _ => (true, true),
         };
         let contract = if !self
             .arena
             .bindings()
             .serial_run_matches_above(bind_base, &completion.records.popped)
-            || !popped_as_named
+            || !records_popped_ok
         {
             Some(RecordStack::Bindings)
         } else if !self
             .arena
             .handlers()
             .serial_run_matches_above(handler_base, &completion.handlers.popped)
+            || !handlers_popped_ok
         {
             Some(RecordStack::Handlers)
         } else {
@@ -2152,6 +2201,22 @@ where
                 "escape completion pops serial tokens that are not the top run, or not the ones the request named"
             );
             return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(stack)));
+        }
+        // V8 L1: only `PushCatch`, `PushConditionCase`, and `PushConditionCaseRaw`
+        // may leave a surviving serial handler token, and the VM computes its
+        // `LandingPad` from the frame state right here before mutating either stack.
+        let handler_dest = match &op {
+            Op::PushCatch(dest) | Op::PushConditionCase(dest) | Op::PushConditionCaseRaw(dest) => {
+                Some(*dest)
+            }
+            _ => None,
+        };
+        if !completion.handlers.pushed.is_empty() && handler_dest.is_none() {
+            tracing::error!(
+                op = ?op,
+                "only handler-push opcodes may leave a surviving serial handler token"
+            );
+            return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op)));
         }
         if self
             .arena
@@ -2176,8 +2241,23 @@ where
         for token in &completion.records.pushed {
             self.arena.bindings_mut().push(*token);
         }
-        for token in &completion.handlers.pushed {
-            self.arena.handlers_mut().push(*token);
+        if let Some(dest) = handler_dest {
+            // V8 L1 & S2: GNU `Bpushcatch`/`Bpushconditioncase` (`src/bytecode.c:974-976`)
+            // computes `c->bytecode_top = top` AFTER `POP` of the tag/handlers operand,
+            // and `push_handler_nosignal` (`src/eval.c:1857-1859`) records
+            // `f_lisp_eval_depth`, `pdlcount`, and `act_rec`.
+            let pad = LandingPad {
+                frame,
+                dest,
+                operand_len: available as usize - consumed as usize,
+                bind_mark: self.arena.bindings().mark(),
+                depth: self.arena.depth(),
+            };
+            for token in &completion.handlers.pushed {
+                self.arena
+                    .handlers_mut()
+                    .push(OwnerHandler::Serial { token: *token, pad });
+            }
         }
         if !debug_updates.is_empty() {
             let mut stopped = StoppedOwnerBacktrace::from_escape_park(&mut self.arena);
@@ -2435,5 +2515,564 @@ where
                 Err(error) => Step::Stop(VmOutcome::Fault(EngineFault::Root(error))),
             },
         }
+    }
+
+    /// V8 L3–L7, S1–S3: unwind frames, owner Plain bindings, serial records,
+    /// and intermediate handlers in GNU `unwind_to_catch` / `unbind_to` order
+    /// (`src/eval.c:1445-1461`, `src/eval.c:3946-3958`, `src/eval.c:3848-3870`),
+    /// then land on `target`'s [`LandingPad`] (`src/bytecode.c:983-1003`) with
+    /// no poll at landing.
+    fn unwind_to_handler(
+        &mut self,
+        mut target: SerialHandlerToken,
+        initial_value: Value,
+        origin_op: Op,
+        origin_pc: usize,
+    ) -> Step {
+        let mut value_root = match self
+            .arena
+            .roots_mut()
+            .push(RootGroup::Handlers, initial_value)
+        {
+            Ok(handle) => handle,
+            Err(error) => return Step::Stop(VmOutcome::Fault(EngineFault::Root(error))),
+        };
+
+        'restart: loop {
+            let Some(target_pad) = self.arena.handlers().find_serial(target) else {
+                tracing::error!(
+                    target = target.0,
+                    "Caught named a serial handler token absent from HandlerStack"
+                );
+                return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                    RecordStack::Handlers,
+                )));
+            };
+            if !self.arena.contains_vm_frame(target_pad.frame) {
+                tracing::error!(
+                    target = target.0,
+                    frame = ?target_pad.frame,
+                    "Caught target handler's frame is no longer live in FrameArena"
+                );
+                return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                    RecordStack::Handlers,
+                )));
+            }
+            let Some(chain) = self.arena.handlers().serial_above_inclusive(target) else {
+                return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                    RecordStack::Handlers,
+                )));
+            };
+
+            let mut pending_handlers: Vec<SerialHandlerToken> = Vec::new();
+            for (h_token, h_pad) in chain {
+                loop {
+                    // L4 / S1: pop any drained callee frames strictly above
+                    // this handler's frame before unwinding further.
+                    if let Err(fault) = self.pop_drained_frames_above(h_pad.frame) {
+                        return Step::Stop(VmOutcome::Fault(fault));
+                    }
+                    let Some(top_record) = self.arena.bindings().above(h_pad.bind_mark).last()
+                    else {
+                        break;
+                    };
+                    match top_record {
+                        OwnerRecord::Plain(record) => {
+                            // N-v2-unbind-revalidate (GNU `do_one_unbind` for
+                            // `SPECPDL_LET`, `src/eval.c:3848-3870`): re-check
+                            // whether the symbol gained a watcher or redirect.
+                            match effective_plain_unbind_checked(&mut self.plain, record) {
+                                Ok(PlainUnbind::Done) => {
+                                    self.arena.bindings_mut().pop();
+                                }
+                                Ok(PlainUnbind::NeedsSerial { symbol }) => {
+                                    if self.plain.top_record() != Some(record.record) {
+                                        tracing::error!(
+                                            record = ?record,
+                                            "L3 unwind Plain binding does not name slab top"
+                                        );
+                                        return Self::record_contract_fault();
+                                    }
+                                    // Flush any intermediate handlers that left
+                                    // above this outer binding before running
+                                    // its watcher (GNU `src/eval.c:1449-1454`).
+                                    if !pending_handlers.is_empty() {
+                                        let flush = SerialUnwind {
+                                            pop_handlers: std::mem::take(&mut pending_handlers),
+                                            unbind: Vec::new(),
+                                        };
+                                        match self
+                                            .unwind_serial_escape(flush, &origin_op, origin_pc)
+                                        {
+                                            Ok(UnwindEscapeOutcome::Done) => {}
+                                            Ok(UnwindEscapeOutcome::Restart { .. })
+                                            | Ok(UnwindEscapeOutcome::Flow(_)) => {
+                                                return Step::Stop(VmOutcome::Fault(
+                                                    EngineFault::DispatchContract(Op::PopHandler),
+                                                ));
+                                            }
+                                            Err(fault) => {
+                                                return Step::Stop(VmOutcome::Fault(fault));
+                                            }
+                                        }
+                                    }
+                                    // GNU `unbind_to` (`src/eval.c:3948-3957`):
+                                    // decrement before running the unbind so a
+                                    // signaling watcher never unbinds it twice.
+                                    self.arena.bindings_mut().pop();
+                                    match self.unwind_plain_escape(
+                                        symbol,
+                                        record.record,
+                                        &origin_op,
+                                        origin_pc,
+                                    ) {
+                                        Ok(UnwindEscapeOutcome::Done) => {}
+                                        Ok(UnwindEscapeOutcome::Restart {
+                                            target: new_target,
+                                            value: new_value,
+                                        }) => {
+                                            if let Err(error) =
+                                                self.arena.roots_mut().pop(value_root)
+                                            {
+                                                return Step::Stop(VmOutcome::Fault(
+                                                    root_revoke_fault(error),
+                                                ));
+                                            }
+                                            value_root = match self
+                                                .arena
+                                                .roots_mut()
+                                                .push(RootGroup::Handlers, new_value)
+                                            {
+                                                Ok(handle) => handle,
+                                                Err(error) => {
+                                                    return Step::Stop(VmOutcome::Fault(
+                                                        EngineFault::Root(error),
+                                                    ));
+                                                }
+                                            };
+                                            target = new_target;
+                                            continue 'restart;
+                                        }
+                                        Ok(UnwindEscapeOutcome::Flow(flow)) => {
+                                            return Step::Stop(VmOutcome::Signaled(flow));
+                                        }
+                                        Err(fault) => {
+                                            return Step::Stop(VmOutcome::Fault(fault));
+                                        }
+                                    }
+                                }
+                                Err(_) => return Self::record_contract_fault(),
+                            }
+                        }
+                        OwnerRecord::Serial(innermost) => {
+                            let mut run = vec![innermost];
+                            for entry in self.arena.bindings().above(h_pad.bind_mark).rev().skip(1)
+                            {
+                                match entry {
+                                    OwnerRecord::Serial(next) => run.push(next),
+                                    OwnerRecord::Plain(_) => break,
+                                }
+                            }
+                            let unwind = SerialUnwind {
+                                pop_handlers: std::mem::take(&mut pending_handlers),
+                                unbind: run,
+                            };
+                            match self.unwind_serial_escape(unwind, &origin_op, origin_pc) {
+                                Ok(UnwindEscapeOutcome::Done) => {}
+                                Ok(UnwindEscapeOutcome::Restart {
+                                    target: new_target,
+                                    value: new_value,
+                                }) => {
+                                    if let Err(error) = self.arena.roots_mut().pop(value_root) {
+                                        return Step::Stop(VmOutcome::Fault(root_revoke_fault(
+                                            error,
+                                        )));
+                                    }
+                                    value_root = match self
+                                        .arena
+                                        .roots_mut()
+                                        .push(RootGroup::Handlers, new_value)
+                                    {
+                                        Ok(handle) => handle,
+                                        Err(error) => {
+                                            return Step::Stop(VmOutcome::Fault(
+                                                EngineFault::Root(error),
+                                            ));
+                                        }
+                                    };
+                                    target = new_target;
+                                    continue 'restart;
+                                }
+                                Ok(UnwindEscapeOutcome::Flow(flow)) => {
+                                    return Step::Stop(VmOutcome::Signaled(flow));
+                                }
+                                Err(fault) => return Step::Stop(VmOutcome::Fault(fault)),
+                            }
+                        }
+                    }
+                }
+                if h_token != target {
+                    // GNU `src/eval.c:1451-1452`: intermediate handler leaves
+                    // AFTER all records above `h_pad.bind_mark` have unwound.
+                    pending_handlers.push(h_token);
+                }
+            }
+
+            // Drain any remaining callee frames above `target_pad.frame`.
+            if let Err(fault) = self.pop_drained_frames_above(target_pad.frame) {
+                return Step::Stop(VmOutcome::Fault(fault));
+            }
+            if self.arena.top_vm_id() != Some(target_pad.frame)
+                || self.arena.depth() != target_pad.depth
+            {
+                tracing::error!(
+                    expected_frame = ?target_pad.frame,
+                    top_frame = ?self.arena.top_vm_id(),
+                    expected_depth = target_pad.depth,
+                    got_depth = self.arena.depth(),
+                    "unwind reached target handler with mismatched frame or depth"
+                );
+                return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                    RecordStack::Handlers,
+                )));
+            }
+
+            // Final Lisp-free request: pop remaining intermediate handlers +
+            // `target` (`unbind: []`). Neither `Flow` nor `Caught` is legal
+            // here (§10 rows 10 & 11).
+            pending_handlers.push(target);
+            let final_unwind = SerialUnwind {
+                pop_handlers: pending_handlers,
+                unbind: Vec::new(),
+            };
+            match self.unwind_serial_escape(final_unwind, &origin_op, origin_pc) {
+                Ok(UnwindEscapeOutcome::Done) => {}
+                Ok(UnwindEscapeOutcome::Restart { .. }) | Ok(UnwindEscapeOutcome::Flow(_)) => {
+                    return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(
+                        Op::PopHandler,
+                    )));
+                }
+                Err(fault) => return Step::Stop(VmOutcome::Fault(fault)),
+            }
+
+            // Land (V8 L6, S2, S3; GNU `src/bytecode.c:983-1003`):
+            // restore `operand_len`, push caught `value`, branch to `dest`,
+            // with NO poll at landing.
+            let value = match self.arena.roots_mut().pop(value_root) {
+                Ok(value) => value,
+                Err(error) => return Step::Stop(VmOutcome::Fault(root_revoke_fault(error))),
+            };
+            if self
+                .arena
+                .vm_truncate_operands(target_pad.frame, target_pad.operand_len)
+                .is_none()
+            {
+                return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                    RecordStack::Handlers,
+                )));
+            }
+            if self.arena.vm_push(target_pad.frame, value).is_none() {
+                return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
+            }
+            if let Err(fault) = self.set_pc(target_pad.frame, target_pad.dest as usize) {
+                return Step::Stop(VmOutcome::Fault(fault));
+            }
+            return Step::Frame;
+        }
+    }
+
+    /// Pop any callee `VmFrame` strictly above `stop_frame` whose dynamic
+    /// bindings have all been unwound (V8 L4 / S1). Refunds `CallDepth` and
+    /// `bc_position`; never fires `debug-on-exit` (GNU `src/bytecode.c:900`).
+    fn pop_drained_frames_above(&mut self, stop_frame: FrameId) -> Result<(), EngineFault> {
+        while let Some(top) = self.arena.top_vm_id() {
+            if top == stop_frame {
+                break;
+            }
+            let Some((bind_base, frame_bytes)) =
+                self.arena.vm(top).map(|vm| (vm.bind_base, vm.frame_bytes))
+            else {
+                return Err(EngineFault::StaleFrame);
+            };
+            if self.arena.bindings().above(bind_base).next().is_some() {
+                break;
+            }
+            if self.arena.vm_truncate_operands(top, 0).is_none() || self.arena.pop(top).is_none() {
+                return Err(EngineFault::StaleFrame);
+            }
+            self.arena.refund_bc_position(frame_bytes);
+        }
+        Ok(())
+    }
+
+    /// Issue one `EscapeWhy::SerialUnwind` request during `unwind_to_handler`.
+    /// Enforces §10 rows 10 & 11 (`Flow`/`Caught` forbidden when `unbind` is
+    /// empty) and exact handler/record token contracts before mutating LIFOs.
+    fn unwind_serial_escape(
+        &mut self,
+        unwind: SerialUnwind,
+        origin_op: &Op,
+        origin_pc: usize,
+    ) -> Result<UnwindEscapeOutcome, EngineFault> {
+        let runs_lisp = !unwind.unbind.is_empty();
+        let top = self.arena.top_vm_id().ok_or(EngineFault::NoFrame)?;
+        let operands = self
+            .arena
+            .vm(top)
+            .map(|vm| vm.operands)
+            .ok_or(EngineFault::StaleFrame)?;
+        self.stop_state = OwnerStopState::Stopped;
+        if let Err(error) = self.poll.serial_request(&self.arena) {
+            return Err(EngineFault::Poll(error));
+        }
+        let request = VmEscapeRequest {
+            op: origin_op.clone(),
+            why: EscapeWhy::SerialUnwind(unwind.clone()),
+            pc: Pc::new(origin_pc),
+            frame: top,
+            operands,
+        };
+        let completion = self.escape.escape(request, &self.arena, &mut self.plain);
+        let debug_updates = self.escape.take_debug_on_exit_updates();
+        match completion.stack {
+            EscapeStack::Flow(flow) => {
+                if !runs_lisp {
+                    tracing::error!(
+                        op = ?origin_op,
+                        "Lisp-free SerialUnwind(unbind=[]) illegally delivered Flow"
+                    );
+                    return Err(EngineFault::DispatchContract(Op::PopHandler));
+                }
+                Ok(UnwindEscapeOutcome::Flow(flow))
+            }
+            EscapeStack::Caught {
+                handler: new_target,
+                value: new_value,
+            } => {
+                if !runs_lisp {
+                    tracing::error!(
+                        op = ?origin_op,
+                        "Lisp-free SerialUnwind(unbind=[]) illegally restarted with Caught"
+                    );
+                    return Err(EngineFault::DispatchContract(Op::PopHandler));
+                }
+                if !completion.handlers.pushed.is_empty() {
+                    return Err(EngineFault::DispatchContract(origin_op.clone()));
+                }
+                if completion.handlers.popped != unwind.pop_handlers
+                    || !self
+                        .arena
+                        .handlers()
+                        .serial_run_matches(&completion.handlers.popped)
+                {
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Handlers));
+                }
+                if !unwind.unbind.starts_with(&completion.records.popped)
+                    || !self
+                        .arena
+                        .bindings()
+                        .serial_run_matches(&completion.records.popped)
+                {
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
+                }
+                self.arena
+                    .handlers_mut()
+                    .pop_serial_run(&completion.handlers.popped)
+                    .map_err(|()| EngineFault::EscapeRecordContract(RecordStack::Handlers))?;
+                self.arena
+                    .bindings_mut()
+                    .pop_serial_run(&completion.records.popped)
+                    .map_err(|()| EngineFault::EscapeRecordContract(RecordStack::Bindings))?;
+                for token in &completion.records.pushed {
+                    self.arena.bindings_mut().push(*token);
+                }
+                if !debug_updates.is_empty() {
+                    let mut stopped = StoppedOwnerBacktrace::from_escape_park(&mut self.arena);
+                    for update in debug_updates {
+                        let _ = stopped.set_debug_on_exit(update.frame, update.debug_on_exit);
+                    }
+                }
+                if let Some(env) = self.escape.refresh_call_env() {
+                    self.set_call_env(env);
+                }
+                self.stop_state = OwnerStopState::Running;
+                Ok(UnwindEscapeOutcome::Restart {
+                    target: new_target,
+                    value: new_value,
+                })
+            }
+            EscapeStack::Completed {
+                consumed,
+                produced,
+                jump,
+            } => {
+                if consumed != 0 || !produced.is_empty() || jump.is_some() {
+                    return Err(EngineFault::DispatchContract(origin_op.clone()));
+                }
+                if !completion.handlers.pushed.is_empty() {
+                    return Err(EngineFault::DispatchContract(origin_op.clone()));
+                }
+                if completion.handlers.popped != unwind.pop_handlers
+                    || !self
+                        .arena
+                        .handlers()
+                        .serial_run_matches(&completion.handlers.popped)
+                {
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Handlers));
+                }
+                if completion.records.popped != unwind.unbind
+                    || !self
+                        .arena
+                        .bindings()
+                        .serial_run_matches(&completion.records.popped)
+                {
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
+                }
+                self.arena
+                    .handlers_mut()
+                    .pop_serial_run(&completion.handlers.popped)
+                    .map_err(|()| EngineFault::EscapeRecordContract(RecordStack::Handlers))?;
+                self.arena
+                    .bindings_mut()
+                    .pop_serial_run(&completion.records.popped)
+                    .map_err(|()| EngineFault::EscapeRecordContract(RecordStack::Bindings))?;
+                for token in &completion.records.pushed {
+                    self.arena.bindings_mut().push(*token);
+                }
+                if !debug_updates.is_empty() {
+                    let mut stopped = StoppedOwnerBacktrace::from_escape_park(&mut self.arena);
+                    for update in debug_updates {
+                        let _ = stopped.set_debug_on_exit(update.frame, update.debug_on_exit);
+                    }
+                }
+                if let Some(env) = self.escape.refresh_call_env() {
+                    self.set_call_env(env);
+                }
+                self.stop_state = OwnerStopState::Running;
+                Ok(UnwindEscapeOutcome::Done)
+            }
+        }
+    }
+
+    /// Issue one `EscapeWhy::PlainUnbind` hand-off during `unwind_to_handler`
+    /// for a Plain binding whose symbol gained a watcher or redirect (V8 §10
+    /// row 12; GNU `src/eval.c:3848-3870`).
+    fn unwind_plain_escape(
+        &mut self,
+        symbol: SymId,
+        record: OwnerRecordId,
+        origin_op: &Op,
+        origin_pc: usize,
+    ) -> Result<UnwindEscapeOutcome, EngineFault> {
+        let top = self.arena.top_vm_id().ok_or(EngineFault::NoFrame)?;
+        let operands = self
+            .arena
+            .vm(top)
+            .map(|vm| vm.operands)
+            .ok_or(EngineFault::StaleFrame)?;
+        self.stop_state = OwnerStopState::Stopped;
+        if let Err(error) = self.poll.serial_request(&self.arena) {
+            return Err(EngineFault::Poll(error));
+        }
+        let request = VmEscapeRequest {
+            op: origin_op.clone(),
+            why: EscapeWhy::PlainUnbind { symbol, record },
+            pc: Pc::new(origin_pc),
+            frame: top,
+            operands,
+        };
+        let completion = self.escape.escape(request, &self.arena, &mut self.plain);
+        let debug_updates = self.escape.take_debug_on_exit_updates();
+        match completion.stack {
+            EscapeStack::Flow(flow) => Ok(UnwindEscapeOutcome::Flow(flow)),
+            EscapeStack::Caught {
+                handler: new_target,
+                value: new_value,
+            } => {
+                if !completion.handlers.pushed.is_empty() {
+                    return Err(EngineFault::DispatchContract(origin_op.clone()));
+                }
+                if !completion.handlers.popped.is_empty() {
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Handlers));
+                }
+                if !completion.records.popped.is_empty() {
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
+                }
+                for token in &completion.records.pushed {
+                    self.arena.bindings_mut().push(*token);
+                }
+                if !debug_updates.is_empty() {
+                    let mut stopped = StoppedOwnerBacktrace::from_escape_park(&mut self.arena);
+                    for update in debug_updates {
+                        let _ = stopped.set_debug_on_exit(update.frame, update.debug_on_exit);
+                    }
+                }
+                if let Some(env) = self.escape.refresh_call_env() {
+                    self.set_call_env(env);
+                }
+                self.stop_state = OwnerStopState::Running;
+                Ok(UnwindEscapeOutcome::Restart {
+                    target: new_target,
+                    value: new_value,
+                })
+            }
+            EscapeStack::Completed {
+                consumed,
+                produced,
+                jump,
+            } => {
+                if consumed != 0 || !produced.is_empty() || jump.is_some() {
+                    return Err(EngineFault::DispatchContract(origin_op.clone()));
+                }
+                if !completion.handlers.pushed.is_empty() {
+                    return Err(EngineFault::DispatchContract(origin_op.clone()));
+                }
+                if !completion.handlers.popped.is_empty() {
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Handlers));
+                }
+                if !completion.records.popped.is_empty() {
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
+                }
+                if self.plain.record_live(record) {
+                    tracing::error!(
+                        op = ?origin_op,
+                        "L3 PlainUnbind escape left the owner record it was asked to undo"
+                    );
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
+                }
+                for token in &completion.records.pushed {
+                    self.arena.bindings_mut().push(*token);
+                }
+                if !debug_updates.is_empty() {
+                    let mut stopped = StoppedOwnerBacktrace::from_escape_park(&mut self.arena);
+                    for update in debug_updates {
+                        let _ = stopped.set_debug_on_exit(update.frame, update.debug_on_exit);
+                    }
+                }
+                if let Some(env) = self.escape.refresh_call_env() {
+                    self.set_call_env(env);
+                }
+                self.stop_state = OwnerStopState::Running;
+                Ok(UnwindEscapeOutcome::Done)
+            }
+        }
+    }
+}
+
+enum UnwindEscapeOutcome {
+    Done,
+    Restart {
+        target: SerialHandlerToken,
+        value: Value,
+    },
+    Flow(Flow),
+}
+
+fn root_revoke_fault(error: RootRevokeError) -> EngineFault {
+    match error {
+        RootRevokeError::GenerationExhausted => {
+            EngineFault::Root(RootPublishError::GenerationExhausted)
+        }
+        RootRevokeError::Stale => EngineFault::DispatchContract(Op::PopHandler),
     }
 }

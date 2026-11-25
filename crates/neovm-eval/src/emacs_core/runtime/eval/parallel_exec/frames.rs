@@ -613,6 +613,21 @@ pub(crate) struct SerialRecordToken(pub(crate) u64);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SerialHandlerToken(pub(crate) u64);
 
+/// Landing pad computed by the VM when mirroring a serial handler push
+/// (`PushCatch`, `PushConditionCase`, `PushConditionCaseRaw`; V8 L1, S2).
+///
+/// Mirrors GNU `struct handler` (`bytecode_dest`, `bytecode_top` at
+/// `src/bytecode.c:974-976`; `f_lisp_eval_depth`, `pdlcount`, `act_rec` at
+/// `src/eval.c:1857-1859`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LandingPad {
+    pub(crate) frame: FrameId,
+    pub(crate) dest: u32,
+    pub(crate) operand_len: usize,
+    pub(crate) bind_mark: OwnerRecordMark,
+    pub(crate) depth: u32,
+}
+
 /// One entry of the owner's dynamic-record LIFO: an owner binding, or the
 /// marker of a record the serial side holds. Neither entry publishes a
 /// root: a [`SlotRecord`] only names the slab record that stores and roots
@@ -635,22 +650,19 @@ impl From<SerialRecordToken> for OwnerRecord {
     }
 }
 
-/// One entry of the owner's handler LIFO. See [`OwnerRecord`].
+/// One entry of the owner's handler LIFO (V8 L1, §4).
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum OwnerHandler {
     Owner(HandlerRecord),
-    Serial(SerialHandlerToken),
+    Serial {
+        token: SerialHandlerToken,
+        pad: LandingPad,
+    },
 }
 
 impl From<HandlerRecord> for OwnerHandler {
     fn from(record: HandlerRecord) -> Self {
         Self::Owner(record)
-    }
-}
-
-impl From<SerialHandlerToken> for OwnerHandler {
-    fn from(token: SerialHandlerToken) -> Self {
-        Self::Serial(token)
     }
 }
 
@@ -707,7 +719,34 @@ impl HandlerStack {
     #[doc(hidden)]
     pub fn has_serial_above(&self, mark: HandlerMark) -> bool {
         self.above(mark)
-            .any(|entry| matches!(entry, OwnerHandler::Serial(_)))
+            .any(|entry| matches!(entry, OwnerHandler::Serial { .. }))
+    }
+
+    /// Find the [`LandingPad`] of `target` in the live handler LIFO (V8 §5).
+    pub(crate) fn find_serial(&self, target: SerialHandlerToken) -> Option<LandingPad> {
+        self.records.iter().rev().find_map(|entry| match *entry {
+            OwnerHandler::Serial { token, pad } if token == target => Some(pad),
+            _ => None,
+        })
+    }
+
+    /// Every serial handler from the top down to `target` (inclusive),
+    /// innermost first (V8 L3, GNU `src/eval.c:1445-1454`). Returns `None`
+    /// when `target` is absent from the stack.
+    pub(crate) fn serial_above_inclusive(
+        &self,
+        target: SerialHandlerToken,
+    ) -> Option<Vec<(SerialHandlerToken, LandingPad)>> {
+        let mut chain = Vec::new();
+        for entry in self.records.iter().rev() {
+            if let OwnerHandler::Serial { token, pad } = *entry {
+                chain.push((token, pad));
+                if token == target {
+                    return Some(chain);
+                }
+            }
+        }
+        None
     }
 
     /// Whether exactly these serial markers are the top run, `tokens[0]`
@@ -734,7 +773,9 @@ impl HandlerStack {
             .is_some_and(|keep| {
                 keep >= floor
                     && self.records[keep..].iter().rev().zip(tokens).all(
-                        |(entry, token)| matches!(entry, OwnerHandler::Serial(seen) if *seen == *token),
+                        |(entry, token)| {
+                            matches!(entry, OwnerHandler::Serial { token: seen, .. } if *seen == *token)
+                        },
                     )
             })
     }
@@ -1676,6 +1717,20 @@ impl FrameArena {
             };
             visit(id, &slot.frame, operands);
         }
+    }
+
+    /// Whether `id` names a live `VmFrame` anywhere in the arena (top or
+    /// ancestor), verifying depth and generation (V8 §6).
+    pub(crate) fn contains_vm_frame(&self, id: FrameId) -> bool {
+        let Some(index) = usize::try_from(id.depth.get())
+            .ok()
+            .and_then(|depth| depth.checked_sub(1))
+        else {
+            return false;
+        };
+        self.frames.get(index).is_some_and(|slot| {
+            slot.generation == id.generation && matches!(slot.frame, OwnedFrame::Vm(_))
+        })
     }
 
     /// Read the exit flags of any live `VmFrame` named by `id` (top or

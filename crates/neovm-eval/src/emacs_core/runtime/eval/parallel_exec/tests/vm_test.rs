@@ -17,19 +17,19 @@ use super::effective::{
 use super::engine::{CoreOutcome, EngineFault, RecordStack, apply_one};
 use super::frames::{
     BindStack, ExitFlags, FrameArena, FrameId, FrameKind, HandlerKind, HandlerMark, HandlerRecord,
-    HandlerStack, InterpFrame, OperandCursor, OwnerHandler, OwnerRecord, OwnerRecordMark,
-    OwnerScanJoin, Pc, PollBudget, RootGroup, SerialHandlerToken, SerialRecordToken, SlotRecord,
-    VmFrame,
+    HandlerStack, InterpFrame, LandingPad, OperandCursor, OwnerHandler, OwnerRecord,
+    OwnerRecordMark, OwnerScanJoin, Pc, PollBudget, RootGroup, SerialHandlerToken,
+    SerialRecordToken, SlotRecord, VmFrame,
 };
 use super::poll_tests::{
     OWNER, activate, collect, end_epoch, finish, lend, recv, request_stop, retire, retry,
 };
 use super::vm::{
     ArithOps, ArithRefusal, CallClass, CallEnv, CallEscape, CodeRefusal, EscapeCompletion,
-    EscapeStack, EscapeWhy, HandlerDelta, NumericClass, RecordDelta, SymbolCallLookup, VmCode,
-    VmEntry, VmEscape, VmEscapeRequest, VmExec, VmOutcome, VmPlain, VmPoll, VmProgram, VmSealed,
-    classify_bytecode_function, classify_call_with_symbols, program_from_bytecode,
-    static_stack_effect,
+    EscapeStack, EscapeWhy, HandlerDelta, NumericClass, RecordDelta, SerialUnwind,
+    SymbolCallLookup, VmCode, VmEntry, VmEscape, VmEscapeRequest, VmExec, VmOutcome, VmPlain,
+    VmPoll, VmProgram, VmSealed, classify_bytecode_function, classify_call_with_symbols,
+    program_from_bytecode, static_stack_effect,
 };
 use crate::emacs_core::builtins::{
     builtin_car_1, builtin_car_safe_1, builtin_cdr_1, builtin_cdr_safe_1, builtin_div, builtin_mul,
@@ -197,7 +197,7 @@ fn serial_records(records: impl Iterator<Item = OwnerRecord>) -> Lifo {
 fn serial_handlers(records: impl Iterator<Item = OwnerHandler>) -> Lifo {
     records
         .map(|record| match record {
-            OwnerHandler::Serial(token) => Some(token.0),
+            OwnerHandler::Serial { token, .. } => Some(token.0),
             OwnerHandler::Owner(_) => None,
         })
         .collect()
@@ -359,14 +359,35 @@ impl VmEscape for RecordingEscape {
         let top = segment.last().copied();
         if let Some(log) = &self.log {
             let why = match &request.why {
-                EscapeWhy::SerialUnbind { records } => format!(
-                    " [{}]",
-                    records
-                        .iter()
-                        .map(|token| token.0.to_string())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                ),
+                EscapeWhy::SerialUnwind(unwind) => {
+                    if unwind.pop_handlers.is_empty() {
+                        format!(
+                            " [{}]",
+                            unwind
+                                .unbind
+                                .iter()
+                                .map(|token| token.0.to_string())
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        )
+                    } else {
+                        format!(
+                            " [h:{} r:{}]",
+                            unwind
+                                .pop_handlers
+                                .iter()
+                                .map(|token| token.0.to_string())
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                            unwind
+                                .unbind
+                                .iter()
+                                .map(|token| token.0.to_string())
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        )
+                    }
+                }
                 EscapeWhy::PlainUnbind { .. } => " [plain]".to_string(),
                 _ => String::new(),
             };
@@ -442,7 +463,7 @@ impl VmEscape for RecordingEscape {
                 }
                 EscapeCompletion::fall_through(&request.op)
             });
-        if !matches!(completion.stack, EscapeStack::Flow(_)) {
+        if matches!(completion.stack, EscapeStack::Completed { .. }) {
             for record in taken {
                 restore_taken_binding(plain, record);
             }
@@ -2173,7 +2194,18 @@ fn vm_a_completion_that_pops_a_non_top_serial_record_faults_and_applies_nothing(
     assert_eq!(bindings.pop_serial_run(&[token(2), token(1)]), Ok(2));
     assert_eq!(bindings.len(), 0);
     let mut handlers = HandlerStack::new();
-    handlers.push(handler(1));
+    let mut dummy_arena = FrameArena::new(4);
+    let dummy_frame = dummy_arena.push_interp(interp_frame()).expect("frame");
+    handlers.push(OwnerHandler::Serial {
+        token: handler(1),
+        pad: LandingPad {
+            frame: dummy_frame,
+            dest: 0,
+            operand_len: 0,
+            bind_mark: OwnerRecordMark::EMPTY,
+            depth: 1,
+        },
+    });
     assert!(!handlers.serial_run_matches(&[handler(2)]));
     assert_eq!(handlers.pop_serial_run(&[handler(2)]), Err(()));
     assert_eq!(handlers.len(), 1);
@@ -2246,7 +2278,16 @@ fn vm_serial_markers_and_owner_binding_entries_publish_no_roots() {
     assert_eq!(handler_and_specpdls(&arena), owner_records);
     // Markers join both LIFOs above the owner records and publish nothing.
     let mark = arena.handlers_mut().mark();
-    arena.handlers_mut().push(handler(1));
+    arena.handlers_mut().push(OwnerHandler::Serial {
+        token: handler(1),
+        pad: LandingPad {
+            frame,
+            dest: 0,
+            operand_len: 0,
+            bind_mark: OwnerRecordMark::EMPTY,
+            depth: 1,
+        },
+    });
     arena.bindings_mut().push(token(2));
     assert!(arena.handlers().has_serial_above(mark));
     assert!(arena.bindings().has_serial_above(OwnerRecordMark::EMPTY));
@@ -4803,7 +4844,8 @@ fn vm_unbind_walks_mixed_records_in_lifo_order() {
         assert!(
             matches!(
                 escape.requests[1].why,
-                EscapeWhy::SerialUnbind { ref records } if records.len() == 1
+                EscapeWhy::SerialUnwind(ref unwind)
+                    if unwind.pop_handlers.is_empty() && unwind.unbind.len() == 1
             ),
             "{name}"
         );
@@ -5025,8 +5067,10 @@ fn vm_unbind_walks_a_record_the_hand_off_pushes_in_addition_to_n() {
     assert!(
         matches!(
             escape.requests[3].why,
-            EscapeWhy::SerialUnbind { ref records }
-                if records.len() == 1 && records[0] == token(7)
+            EscapeWhy::SerialUnwind(ref unwind)
+                if unwind.pop_handlers.is_empty()
+                    && unwind.unbind.len() == 1
+                    && unwind.unbind[0] == token(7)
         ),
         "the pushed record is the next run"
     );
@@ -5594,15 +5638,17 @@ fn vm_unbind_splits_into_minimal_serial_runs_in_order() {
     assert_eq!(escape.requests[2].pc, unbind_pc);
     assert_eq!(
         escape.requests[2].why,
-        EscapeWhy::SerialUnbind {
-            records: vec![token(2)]
-        }
+        EscapeWhy::SerialUnwind(SerialUnwind {
+            pop_handlers: Vec::new(),
+            unbind: vec![token(2)],
+        })
     );
     assert_eq!(
         escape.requests[3].why,
-        EscapeWhy::SerialUnbind {
-            records: vec![token(1)]
-        }
+        EscapeWhy::SerialUnwind(SerialUnwind {
+            pop_handlers: Vec::new(),
+            unbind: vec![token(1)],
+        })
     );
     assert_eq!(
         escape.requests[3].pc, unbind_pc,
@@ -5650,9 +5696,10 @@ fn vm_unbind_walks_a_run_of_serial_records_as_one_escape_naming_the_tokens_inner
     );
     assert_eq!(
         escape.requests[2].why,
-        EscapeWhy::SerialUnbind {
-            records: vec![token(2), token(1)]
-        }
+        EscapeWhy::SerialUnwind(SerialUnwind {
+            pop_handlers: Vec::new(),
+            unbind: vec![token(2), token(1)],
+        })
     );
     assert_eq!(escape.lifos[2].0, vec![Some(1), Some(2)]);
     assert_clear(&engine);
@@ -5683,9 +5730,10 @@ fn vm_unbind_walks_a_run_of_serial_records_as_one_escape_naming_the_tokens_inner
     );
     assert_eq!(
         escape.requests[2].why,
-        EscapeWhy::SerialUnbind {
-            records: vec![token(2)]
-        }
+        EscapeWhy::SerialUnwind(SerialUnwind {
+            pop_handlers: Vec::new(),
+            unbind: vec![token(2)],
+        })
     );
     assert_finished_with_records(&engine, 0);
     assert!(
@@ -11180,4 +11228,1016 @@ fn vm_owner_local_call_with_bad_nonrest_contract_poisons_with_dispatch_contract(
         matches!(second, VmOutcome::Fault(EngineFault::Poisoned)),
         "DispatchContract fault must poison the engine, got {second:?}"
     );
+}
+
+// =========================================================================
+// V8 — Handler landing pads and GNU-order unwind (V8-LANDING-PADS.md r1)
+// =========================================================================
+
+fn v8_push_handler(op: &Op, tok: SerialHandlerToken) -> EscapeCompletion {
+    EscapeCompletion {
+        handlers: HandlerDelta {
+            popped: Vec::new(),
+            pushed: vec![tok],
+        },
+        ..EscapeCompletion::fall_through(op)
+    }
+}
+
+fn v8_caught(tok: SerialHandlerToken, value: Value) -> EscapeCompletion {
+    EscapeCompletion {
+        stack: EscapeStack::Caught {
+            handler: tok,
+            value,
+        },
+        records: RecordDelta::default(),
+        handlers: HandlerDelta::default(),
+    }
+}
+
+fn v8_unwind_done(
+    pop_handlers: &[SerialHandlerToken],
+    pop_records: &[SerialRecordToken],
+) -> EscapeCompletion {
+    EscapeCompletion {
+        stack: EscapeStack::Completed {
+            consumed: 0,
+            produced: Vec::new(),
+            jump: None,
+        },
+        records: RecordDelta {
+            popped: pop_records.to_vec(),
+            pushed: Vec::new(),
+        },
+        handlers: HandlerDelta {
+            popped: pop_handlers.to_vec(),
+            pushed: Vec::new(),
+        },
+    }
+}
+
+fn v8_unwind_restart(
+    pop_handlers: &[SerialHandlerToken],
+    pop_records: &[SerialRecordToken],
+    new_target: SerialHandlerToken,
+    value: Value,
+) -> EscapeCompletion {
+    EscapeCompletion {
+        stack: EscapeStack::Caught {
+            handler: new_target,
+            value,
+        },
+        records: RecordDelta {
+            popped: pop_records.to_vec(),
+            pushed: Vec::new(),
+        },
+        handlers: HandlerDelta {
+            popped: pop_handlers.to_vec(),
+            pushed: Vec::new(),
+        },
+    }
+}
+
+#[test]
+fn vm_a_caught_signal_restores_the_operand_depth_marks_and_dest_in_the_same_frame() {
+    // V8 §7 row 1 & S2.
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/bytecode.c:970-976 (`Bpushconditioncase`: `push_handler(POP, type)`,
+    //   `c->bytecode_dest = FETCH2`, `c->bytecode_top = top` after operand pop);
+    // - src/eval.c:1857-1859 (`push_handler_nosignal`: records `f_lisp_eval_depth`,
+    //   `pdlcount`, `act_rec`);
+    // - src/bytecode.c:983-1003 (landing: `handlerlist = c->next`,
+    //   `top = c->bytecode_top`, `arg = c->bytecode_dest`, `PUSH(c->val)`,
+    //   `goto op_branch`).
+    // Mirrors Elisp:
+    //   (let ((a 10))
+    //     (+ a (condition-case e
+    //              (let ((x 99)) (progn (push-temps) (signal 'error '(42))))
+    //            (error e))))  => 52, with operand_len == 1 restored before push.
+    let mut ctx = context();
+    let x = plain_sym("pvm-v8-same-frame-x");
+    let h1 = handler(11);
+    let constants = [
+        Value::fixnum(10),     // 0: caller operand kept below handler (`operand_len == 1`)
+        Value::from_sym_id(x), // 1: dynamic var bound inside protected body
+        Value::fixnum(99),     // 2: temporary binding value
+        Value::fixnum(777),    // 3: extra operand junk pushed inside body
+        Value::fixnum(888),    // 4: extra operand junk pushed inside body
+    ];
+    let ops = [
+        Op::Constant(0),          // 0: [10] -> operand_len at push = 1 (explicit S2 constant)
+        Op::PushConditionCase(9), // 1: installs h1 with operand_len=1, bind_mark=0, dest=9
+        Op::Constant(2),          // 2: [10, 99]
+        Op::VarBind(1),           // 3: binds x=99 (bind_mark 0 -> 1)
+        Op::Constant(3),          // 4: [10, 777] (extra temp)
+        Op::Constant(4),          // 5: [10, 777, 888] (extra temp)
+        Op::SymbolValue,          // 6: signals -> Caught { h1, 42 }
+        Op::PopHandler,           // 7: skipped
+        Op::Return,               // 8: skipped
+        // dest = 9: segment truncated to operand_len=1 ([10]) + caught value 42 => [10, 42]
+        Op::Add,    // 9: 10 + 42 = 52
+        Op::Return, // 10
+    ];
+    let script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(9), h1)),
+        Some(v8_caught(h1, Value::fixnum(42))),
+        Some(v8_unwind_done(&[h1], &[])),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new().admit(x),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(52));
+    assert!(
+        engine.plain_handler().live_records().is_empty(),
+        "body's Plain binding x=99 must be unwound back to bind_mark=0"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_the_landing_pad_pc_is_the_handler_dest_not_the_next_pc() {
+    // V8 §7 row 2 (GNU-observable shape: condition-case body after signal never executes).
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/bytecode.c:975 (`c->bytecode_dest = FETCH2`);
+    // - src/bytecode.c:986, 1003 (`arg = c->bytecode_dest; ... goto op_branch`).
+    // Mirrors Elisp:
+    //   (condition-case e
+    //       (progn (signal 'error '(777)) 999)
+    //     (error e))  => 777 (not 999 at next_pc).
+    let mut ctx = context();
+    let h1 = handler(21);
+    let constants = [Value::fixnum(999), Value::fixnum(1000)];
+    let ops = [
+        Op::PushConditionCase(6), // 0: dest = 6
+        Op::Nil,                  // 1
+        Op::SymbolValue,          // 2: signals -> Caught { h1, 777 }
+        // next_pc = 3 MUST NOT execute (would push 999 and return 999)
+        Op::Constant(0), // 3: unreachable
+        Op::PopHandler,  // 4: unreachable
+        Op::Return,      // 5: unreachable
+        // dest = 6: handler body receives 777 on stack and adds 1000 -> 1777
+        Op::Constant(1), // 6
+        Op::Add,         // 7
+        Op::Return,      // 8
+    ];
+    let script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(6), h1)),
+        Some(v8_caught(h1, Value::fixnum(777))),
+        Some(v8_unwind_done(&[h1], &[])),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(
+        done_value(&mut engine, outcome),
+        Value::fixnum(1777),
+        "execution must land at handler dest=6 (777 + 1000), never fall through to next_pc=3"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_signal_with_no_matching_handler_still_settles_to_idle() {
+    // V8 §7 row 3 / L7 (GNU-observable shape: unmatched signal propagates out).
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/eval.c:1897-1928 (`Fsignal` -> `signal_or_quit`);
+    // - src/eval.c:1996-2070 (`signal_or_quit`: walks `handlerlist`, no matching
+    //   `CONDITION_CASE` clause -> escapes to top-level / thread boundary);
+    // - src/eval.c:1722-1741 (`internal_condition_case_1`).
+    // Mirrors Elisp:
+    //   (condition-case nil (signal 'arith-error nil) (wrong-type-argument 'nope))
+    //   => uncaught `arith-error`.
+    let mut ctx = context();
+    let h1 = handler(31);
+    let ops = [
+        Op::PushConditionCase(4), // 0: non-matching handler
+        Op::Nil,                  // 1
+        Op::SymbolValue,          // 2: serial returns Flow (no owner handler matched)
+        Op::PopHandler,           // 3
+        Op::Return,               // 4
+    ];
+    let script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(4), h1)),
+        Some(EscapeCompletion {
+            stack: EscapeStack::Flow(signal("arith-error", vec![])),
+            records: RecordDelta::default(),
+            handlers: HandlerDelta::default(),
+        }),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program(&ops));
+    let VmOutcome::Signaled(flow) = outcome else {
+        panic!("expected Signaled for unmatched Flow, got {outcome:?}");
+    };
+    assert_eq!(signal_key(&flow).0, "arith-error");
+    assert_eq!(engine.arena_depth(), 0);
+    assert_eq!(engine.arena().bc_position(), 0);
+    assert_eq!(engine.live_root_count(), 0);
+    assert_clear(&engine);
+
+    // Subsequent run on the settled Idle engine works cleanly.
+    let ok = engine.run(
+        &mut ctx,
+        program_with(&[Op::Constant(0), Op::Return], &[Value::fixnum(7)]),
+    );
+    assert_eq!(done_value(&mut engine, ok), Value::fixnum(7));
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_signal_in_a_v7_callee_lands_in_the_callers_handler_and_pops_the_callee_frames() {
+    // V8 §7 row 4 / L4: depth 3 down to 1, CallDepth & bc_position refunded per
+    // popped frame, no exit hooks fired on popped callees, caller segment
+    // restored to `operand_len + 1`.
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/eval.c:1445-1459 (`unwind_to_catch`: `unbind_to`,
+    //   `lisp_eval_depth = catch->f_lisp_eval_depth`, `set_act_rec`);
+    // - src/bytecode.c:983-1003 (restores caller's `fp`, `top`, `pc`);
+    // - src/bytecode.c:900 (`debug-on-exit` runs only on normal `Breturn`,
+    //   never on nonlocal unwind).
+    // Mirrors Elisp:
+    //   (+ 100 (condition-case e (mid (leaf-that-signals)) (error e))) => 155.
+    let mut ctx = context();
+    let h1 = handler(41);
+    let leaf_x = plain_sym("pvm-v8-leaf-x");
+
+    // Depth 3: leaf binds leaf_x=5 then escapes on SymbolValue -> Caught { h1, 55 }
+    let leaf = make_v7_bytecode(
+        0,
+        0,
+        vec![
+            Op::Constant(0), // 5
+            Op::VarBind(1),  // bind leaf_x = 5
+            Op::Nil,
+            Op::SymbolValue, // signals -> Caught { h1, 55 }
+            Op::Unbind(1),
+            Op::Return,
+        ],
+        vec![Value::fixnum(5), Value::from_sym_id(leaf_x)],
+        8,
+    );
+    // Depth 2: mid calls leaf
+    let mid = make_v7_bytecode(
+        0,
+        0,
+        vec![Op::Constant(0), Op::Call(0), Op::Return],
+        vec![leaf],
+        6,
+    );
+    let caller_bytes = bytecode_frame_bytes(4);
+    let entry_code = Value::symbol("pvm-v8-depth3-caller");
+    let code = HarnessVmCode::new(OwnedEntryProgram {
+        ops: vec![
+            Op::Constant(0),          // 0: [100] (operand_len = 1 at PushConditionCase)
+            Op::PushConditionCase(6), // 1: installs h1 at depth=1, operand_len=1, dest=6
+            Op::Constant(1),          // 2: [100, mid]
+            Op::Call(0),              // 3: depth 1 -> 2 (mid) -> 3 (leaf)
+            Op::PopHandler,           // 4: skipped
+            Op::Return,               // 5: skipped
+            // dest = 6: [100, 55] -> 155
+            Op::Add,    // 6
+            Op::Return, // 7
+        ],
+        constants: vec![Value::fixnum(100), mid],
+        function: entry_code,
+        code: entry_code,
+    });
+    let script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(6), h1)),
+        Some(v8_caught(h1, Value::fixnum(55))),
+        Some(v8_unwind_done(&[h1], &[])),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new().admit(leaf_x),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run_with_code(
+        &mut ctx,
+        &code,
+        VmEntry {
+            function: entry_code,
+            code: entry_code,
+            frame_bytes: caller_bytes,
+        },
+    );
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(155));
+    assert_eq!(
+        engine.max_depth(),
+        3,
+        "reached depth 3 before catching at depth 1"
+    );
+    assert_eq!(
+        engine.arena().bc_position(),
+        0,
+        "bc_position refunded for both popped callees and returning caller"
+    );
+    assert!(engine.plain_handler().live_records().is_empty());
+    assert_eq!(
+        engine.escape_handler().requests.len(),
+        3,
+        "PushConditionCase, SymbolValue(Caught), final SerialUnwind(pop h1); no Return/debug-on-exit escape"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_interleaved_owner_and_serial_records_unwind_in_lifo_order() {
+    // V8 §7 row 5 & #14586 condition 4 (highest-risk interleaved Plain/Serial row):
+    // Explicit LIFO above h1's bind_mark:
+    //   [Plain a=1, Serial u1, Plain w=2 (gains watcher!), Plain b=3, Serial u2]
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/eval.c:1445-1454 (`unwind_to_catch`: `unbind_to(handlerlist->pdlcount, Qnil)`);
+    // - src/eval.c:3946-3958 (`unbind_to`: LIFO decrement-before-do_one_unbind);
+    // - src/eval.c:3848-3870 (`do_one_unbind` for `SPECPDL_LET`: re-reads
+    //   `redirect`/`trapped_write`; untrapped plain restores directly, watched
+    //   routes through `set_internal(..., SET_INTERNAL_UNBIND)`).
+    // Mirrors Elisp:
+    //   (condition-case e
+    //       (let ((a 1))
+    //         (unwind-protect
+    //             (let ((w 2)) ;; w gains watcher before unwind!
+    //               (let ((b 3))
+    //                 (unwind-protect (signal 'error '(boom)) (u2))))
+    //           (u1)))
+    //     (error e))
+    let mut ctx = context();
+    let a = plain_sym("pvm-v8-interleave-a");
+    let w = plain_sym("pvm-v8-interleave-w");
+    let b = plain_sym("pvm-v8-interleave-b");
+    let h1 = handler(51);
+    let u1 = token(101);
+    let u2 = token(202);
+    let log = EffectLog::default();
+
+    let constants = [
+        Value::from_sym_id(a), // 0
+        Value::from_sym_id(w), // 1
+        Value::from_sym_id(b), // 2
+        Value::fixnum(1),      // 3
+        Value::fixnum(2),      // 4
+        Value::fixnum(3),      // 5
+    ];
+    let ops = [
+        Op::PushConditionCase(12), // 0: installs h1 at bind_mark=0, dest=12
+        Op::Constant(3),           // 1: 1
+        Op::VarBind(0),            // 2: Plain a = 1
+        Op::SaveExcursion,         // 3: Serial u1
+        Op::Constant(4),           // 4: 2
+        Op::VarBind(1),            // 5: Plain w = 2 (will be watched at unbind!)
+        Op::Constant(5),           // 6: 3
+        Op::VarBind(2),            // 7: Plain b = 3
+        Op::SaveExcursion,         // 8: Serial u2
+        Op::Nil,                   // 9
+        Op::SymbolValue,           // 10: signals -> Caught { h1, 505 }
+        Op::Return,                // 11: skipped
+        Op::Return,                // 12: dest -> returns caught 505
+    ];
+    let script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(12), h1)),
+        Some(completion_pushing(&Op::SaveExcursion, u1)),
+        Some(completion_pushing(&Op::SaveExcursion, u2)),
+        Some(v8_caught(h1, Value::fixnum(505))),
+        // Unwind step 1: Serial u2 (while b=3 is still bound!)
+        Some(v8_unwind_done(&[], &[u2])),
+        // Unwind step 2: Plain b=3 undone owner-locally -> slot restored to 2!
+        // Unwind step 3: Plain w=2 gained a watcher -> PlainUnbind handoff to serial!
+        Some(v8_unwind_done(&[], &[])),
+        // Unwind step 4: Serial u1 (runs AFTER b and w were both unbound!)
+        Some(v8_unwind_done(&[], &[u1])),
+        // Unwind step 5: Plain a=1 undone owner-locally -> slot restored to none!
+        // Unwind step 6: Final Lisp-free handler pop of h1 + landing!
+        Some(v8_unwind_done(&[h1], &[])),
+    ];
+    let plain = HarnessPlain::new()
+        .admit(a)
+        .admit(w)
+        .admit(b)
+        .watched(w)
+        .logging(log.clone());
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::logging_with_script(script, log.clone()),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        plain,
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(505));
+    assert_eq!(
+        log.entries(),
+        vec![
+            "escape PushConditionCase(12)",
+            "slot <- 1",
+            "escape SaveExcursion",
+            "slot <- 2",
+            "slot <- 3",
+            "escape SaveExcursion",
+            "escape SymbolValue",
+            // Exact LIFO unwind: u2 -> b (owner) -> w (watched serial handoff) -> u1 -> a (owner) -> pop h1
+            "escape SymbolValue [202]",
+            "slot <- 2",
+            "escape SymbolValue [plain]",
+            "slot <- 1",
+            "escape SymbolValue [101]",
+            "slot <- none",
+            "escape SymbolValue [h:51 r:]",
+        ],
+        "exact GNU LIFO unwind order across Plain, watched Plain, and Serial records"
+    );
+    assert!(engine.plain_handler().live_records().is_empty());
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_handler_pops_interleave_with_record_unbinding_in_gnu_order() {
+    // V8 §7 row 6 / L3:
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/eval.c:1445-1454 (`unwind_to_catch`: `do { unbind_to(handlerlist->pdlcount, Qnil);
+    //   last_time = handlerlist == catch; if (!last_time) handlerlist = handlerlist->next; }`).
+    // Mirrors Elisp:
+    //   (condition-case e1
+    //       (unwind-protect
+    //           (condition-case e2
+    //               (unwind-protect (signal 'e1 nil) (u-inner))
+    //             (e2 'inner))
+    //         (u-outer))
+    //     (e1 'outer))
+    // Proves h2 stays installed on HandlerStack while u-inner runs (`pop_handlers: []`),
+    // then h2 is popped in `pop_handlers: [h2]` alongside u-outer, then h1 is popped last.
+    let mut ctx = context();
+    let h1 = handler(61);
+    let h2 = handler(62);
+    let u_outer = token(601);
+    let u_inner = token(602);
+    let ops = [
+        Op::PushConditionCase(8), // 0: h1, dest=8
+        Op::SaveExcursion,        // 1: u_outer
+        Op::PushConditionCase(7), // 2: h2, dest=7
+        Op::SaveExcursion,        // 3: u_inner
+        Op::Nil,                  // 4
+        Op::SymbolValue,          // 5: Caught { h1, 610 }
+        Op::Return,               // 6: skipped
+        Op::Return,               // 7: h2 dest (skipped)
+        Op::Return,               // 8: h1 dest -> 610
+    ];
+    let script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(8), h1)),
+        Some(completion_pushing(&Op::SaveExcursion, u_outer)),
+        Some(v8_push_handler(&Op::PushConditionCase(7), h2)),
+        Some(completion_pushing(&Op::SaveExcursion, u_inner)),
+        Some(v8_caught(h1, Value::fixnum(610))),
+        // Step 1: u_inner runs with h2 STILL installed (`pop_handlers: []`)!
+        Some(v8_unwind_done(&[], &[u_inner])),
+        // Step 2: h2 popped before u_outer runs (`pop_handlers: [h2], unbind: [u_outer]`)!
+        Some(v8_unwind_done(&[h2], &[u_outer])),
+        // Step 3: final pop of h1 + land!
+        Some(v8_unwind_done(&[h1], &[])),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program(&ops));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(610));
+    let esc = engine.escape_handler();
+    assert_eq!(esc.requests.len(), 8);
+    // Request 5: u_inner with h2 STILL on HandlerStack!
+    assert_eq!(
+        esc.requests[5].why,
+        EscapeWhy::SerialUnwind(SerialUnwind {
+            pop_handlers: vec![],
+            unbind: vec![u_inner],
+        })
+    );
+    assert_eq!(
+        esc.lifos[5].1,
+        vec![Some(h1.0), Some(h2.0)],
+        "h2 must remain installed while its own records (u_inner) unbind (eval.c:1449-1452)"
+    );
+    // Request 6: h2 popped alongside u_outer!
+    assert_eq!(
+        esc.requests[6].why,
+        EscapeWhy::SerialUnwind(SerialUnwind {
+            pop_handlers: vec![h2],
+            unbind: vec![u_outer],
+        })
+    );
+    // Request 7: final pop of h1!
+    assert_eq!(
+        esc.requests[7].why,
+        EscapeWhy::SerialUnwind(SerialUnwind {
+            pop_handlers: vec![h1],
+            unbind: vec![],
+        })
+    );
+    assert_eq!(esc.lifos[7].1, vec![Some(h1.0)]);
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_cleanup_that_signals_during_unwind_is_caught_by_the_intermediate_handler() {
+    // V8 §7 row 7 / L5 & #14586 condition 4:
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/eval.c:1445-1454 (`h2` stays installed while `unbind_to(h2->pdlcount)` runs);
+    // - src/eval.c:3948-3957 (`specpdl_ptr` decremented BEFORE `do_one_unbind`, so
+    //   records already unbound before the cleanup signals are NOT unbound again);
+    // - src/eval.c:1996-2064 (nested `signal_or_quit` redirects to `h2`).
+    // Mirrors Elisp:
+    //   (condition-case e1
+    //       (unwind-protect
+    //           (condition-case e2
+    //               (unwind-protect
+    //                   (let ((p 1))
+    //                     (unwind-protect (signal 'e1 nil) (u-done)))
+    //                 (u-raises-e2))
+    //             (e2 e2))
+    //         (u-outer))
+    //     (e1 'outer))
+    //   => e2 caught by h2; u-done & p_done & u-raises-e2 each unwound ONCE;
+    //      u-outer NOT unwound during catch (still live for normal exit).
+    let mut ctx = context();
+    let p = plain_sym("pvm-v8-restart-p");
+    let h1 = handler(71);
+    let h2 = handler(72);
+    let u_outer = token(701);
+    let u_raises = token(702);
+    let u_done = token(703);
+    let log = EffectLog::default();
+
+    let constants = [Value::from_sym_id(p), Value::fixnum(1)];
+    let ops = [
+        Op::PushConditionCase(12), // 0: h1, dest=12
+        Op::SaveExcursion,         // 1: u_outer (below h2)
+        Op::PushConditionCase(9),  // 2: h2, dest=9
+        Op::SaveExcursion,         // 3: u_raises (signals e2 during unwind!)
+        Op::Constant(1),           // 4: 1
+        Op::VarBind(0),            // 5: Plain p = 1 (above u_raises)
+        Op::SaveExcursion,         // 6: u_done (already unbound before u_raises!)
+        Op::Nil,                   // 7
+        Op::SymbolValue,           // 8: initial signal targeting h1!
+        // dest = 9 (h2 handler!): caught 404, then cleanly unbind u_outer & pop h1
+        Op::Unbind(1),  // 9: unbind u_outer cleanly after landing in h2
+        Op::PopHandler, // 10: pop h1 cleanly
+        Op::Return,     // 11: return 404
+        Op::Return,     // 12: h1 dest (never reached!)
+    ];
+    let script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(12), h1)),
+        Some(completion_pushing(&Op::SaveExcursion, u_outer)),
+        Some(v8_push_handler(&Op::PushConditionCase(9), h2)),
+        Some(completion_pushing(&Op::SaveExcursion, u_raises)),
+        Some(completion_pushing(&Op::SaveExcursion, u_done)),
+        // Initial signal targets outer h1:
+        Some(v8_caught(h1, Value::fixnum(111))),
+        // Step 1: u_done runs and succeeds -> popped!
+        Some(v8_unwind_done(&[], &[u_done])),
+        // Step 2: Plain p=1 unwinds owner-locally -> restored to none!
+        // Step 3: u_raises runs and SIGNALS -> caught by intermediate h2!
+        // u_raises itself left specpdl before its body ran (`eval.c:3955`).
+        Some(v8_unwind_restart(&[], &[u_raises], h2, Value::fixnum(404))),
+        // Restarted unwind targets h2: all records above h2.bind_mark are ALREADY
+        // gone (u_done, p, u_raises are NOT unbound a second time!). One final
+        // pop of h2 + land at dest=9!
+        Some(v8_unwind_done(&[h2], &[])),
+        // Normal exit after h2 landed: Unbind(1) pops u_outer, PopHandler pops h1!
+        Some(completion_popping(&Op::Unbind(1), &[u_outer])),
+        Some(EscapeCompletion {
+            handlers: HandlerDelta {
+                popped: vec![h1],
+                pushed: vec![],
+            },
+            ..EscapeCompletion::fall_through(&Op::PopHandler)
+        }),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::logging_with_script(script, log.clone()),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new().admit(p).logging(log.clone()),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(
+        done_value(&mut engine, outcome),
+        Value::fixnum(404),
+        "restart must land in intermediate h2 with 404, not outer h1"
+    );
+    assert_eq!(
+        log.entries(),
+        vec![
+            "escape PushConditionCase(12)",
+            "escape SaveExcursion",
+            "escape PushConditionCase(9)",
+            "escape SaveExcursion",
+            "slot <- 1",
+            "escape SaveExcursion",
+            "escape SymbolValue",
+            // Unwind toward h1: u_done once, p once, u_raises once (restarts to h2!)
+            "escape SymbolValue [703]",
+            "slot <- none",
+            "escape SymbolValue [702]",
+            // Restarted unwind to h2: zero double-unbinds, pops h2 and lands at pc=9
+            "escape SymbolValue [h:72 r:]",
+            // Post-landing normal execution inside h1: u_outer still ran on normal Unbind!
+            "escape Unbind(1) [701]",
+            "escape PopHandler",
+        ],
+        "already-unbound records (u_done, p, u_raises) must never be unbound twice on restart"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_throw_to_an_owner_catch_lands_with_the_thrown_value() {
+    // V8 §7 row 8 (GNU-observable shape: `(catch 'k (throw 'k 314))`).
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/bytecode.c:967-969, 974-1004 (`Bpushcatch` pops tag, sets `bytecode_top`
+    //   and `bytecode_dest`; landing pushes `c->val` and branches to `dest`);
+    // - src/eval.c:1464-1481 (`Fthrow`: matches `CATCHER` by `EQ(tag)`, calls
+    //   `unwind_to_catch(c, NONLOCAL_EXIT_THROW, value)`).
+    // Mirrors Elisp:
+    //   (+ 1 (catch 'k (let ((x 9)) (throw 'k 314))))  => 315.
+    let mut ctx = context();
+    let x = plain_sym("pvm-v8-catch-x");
+    let tag = Value::symbol("pvm-v8-catch-tag");
+    let h_catch = handler(81);
+    let constants = [
+        Value::fixnum(1),      // 0: preserved below catch (`operand_len == 1`)
+        tag,                   // 1: catch tag
+        Value::from_sym_id(x), // 2: let-bound symbol
+        Value::fixnum(9),      // 3: let value
+        Value::fixnum(314),    // 4: thrown value
+    ];
+    let ops = [
+        Op::Constant(0),  // 0: [1]
+        Op::Constant(1),  // 1: [1, 'k]
+        Op::PushCatch(9), // 2: pops 'k -> operand_len == 1 ([1]), dest = 9
+        Op::Constant(3),  // 3: [1, 9]
+        Op::VarBind(2),   // 4: bind x = 9
+        Op::Constant(1),  // 5: [1, 'k]
+        Op::Constant(4),  // 6: [1, 'k, 314]
+        Op::Throw,        // 7: escapes -> Caught { h_catch, 314 }
+        Op::Return,       // 8: skipped
+        // dest = 9: [1, 314] -> Add -> 315
+        Op::Add,    // 9
+        Op::Return, // 10
+    ];
+    let script = vec![
+        Some(v8_push_handler(&Op::PushCatch(9), h_catch)),
+        Some(v8_caught(h_catch, Value::fixnum(314))),
+        Some(v8_unwind_done(&[h_catch], &[])),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new().admit(x),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(315));
+    assert!(engine.plain_handler().live_records().is_empty());
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_pure_owner_unwind_issues_exactly_one_escape() {
+    // V8 §7 row 9 (§5 :108): with only owner-local Plain bindings and zero
+    // serial records above the handler's `bind_mark`, the unwind loop issues
+    // EXACTLY ONE escape (the final handler pop + landing).
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/eval.c:1445-1454, 3848-3859 (untrapped PLAINVAL bindings restore
+    //   inline with no Lisp callbacks).
+    let mut ctx = context();
+    let x = plain_sym("pvm-v8-pure-x");
+    let y = plain_sym("pvm-v8-pure-y");
+    let h1 = handler(91);
+    let constants = [
+        Value::from_sym_id(x),
+        Value::from_sym_id(y),
+        Value::fixnum(1),
+        Value::fixnum(2),
+    ];
+    let ops = [
+        Op::PushConditionCase(8), // 0: h1
+        Op::Constant(2),          // 1
+        Op::VarBind(0),           // 2: Plain x = 1
+        Op::Constant(3),          // 3
+        Op::VarBind(1),           // 4: Plain y = 2
+        Op::Nil,                  // 5
+        Op::SymbolValue,          // 6: Caught { h1, 910 }
+        Op::Return,               // 7: skipped
+        Op::Return,               // 8: dest -> 910
+    ];
+    let script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(8), h1)),
+        Some(v8_caught(h1, Value::fixnum(910))),
+        Some(v8_unwind_done(&[h1], &[])),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new().admit(x).admit(y),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(910));
+    let esc = engine.escape_handler();
+    let unwind_requests: Vec<_> = esc
+        .requests
+        .iter()
+        .filter(|r| matches!(r.why, EscapeWhy::SerialUnwind(_)))
+        .collect();
+    assert_eq!(
+        unwind_requests.len(),
+        1,
+        "pure owner unwind must issue exactly ONE SerialUnwind escape (the final pop+landing)"
+    );
+    assert_eq!(
+        unwind_requests[0].why,
+        EscapeWhy::SerialUnwind(SerialUnwind {
+            pop_handlers: vec![h1],
+            unbind: vec![],
+        })
+    );
+    assert!(engine.plain_handler().live_records().is_empty());
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_pending_signal_is_not_delivered_inside_the_final_unwind_request() {
+    // V8 §10 row 10: a `SerialUnwind` with empty `unbind` runs NO Lisp and is
+    // NOT a pending-signal delivery point.
+    // GNU function ordering mirrored (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - Pending signals (`Vquit_flag` / `pending_signals`) are delivered ONLY
+    //   at explicit `maybe_quit()` (`src/lisp.h:3897-3901`) -> `probably_quit()`
+    //   (`src/eval.c:1887-1895`) -> `process_quit_flag()` (`:1875-1884`) /
+    //   `process_pending_signals()` (`:1892-1893`) -> `quit()` / `Fsignal`
+    //   (`src/eval.c:1897-1935`).
+    // - `unwind_to_catch` (`src/eval.c:1423-1462`) NEVER calls `maybe_quit()`:
+    //   it restores C counters (`:1435-1443`), calls `unbind_to(pdlcount, Qnil)`
+    //   (`:1449`, which saves & clears `Vquit_flag` at `:3942-3944` and restores
+    //   it at `:3960-3961` without polling), pops `handlerlist = handlerlist->next`
+    //   (`:1452`), sets `lisp_eval_depth`/`act_rec` (`:1458-1459`), and calls
+    //   `sys_longjmp(catch->jmp, 1)` (`:1461`).
+    // - Because the final `SerialUnwind { pop_handlers, unbind: [] }` runs zero
+    //   Lisp cleanups (only handler pops `src/bytecode.c:1010` and C-side
+    //   restores), neither `maybe_quit()` nor `Fsignal` can execute inside it, so
+    //   a pending signal or restart is structurally impossible there. Instead,
+    //   landing sets `quitcounter = (unsigned char)-1` (`src/bytecode.c:982, 1003`)
+    //   so any pending signal is observed AFTER landing at the next poll/escape.
+    let mut ctx = context();
+    let h1 = handler(101);
+    let ops = [
+        Op::PushConditionCase(4), // 0: dest = 4
+        Op::Nil,                  // 1
+        Op::SymbolValue,          // 2: Caught { h1, 10 }
+        Op::Return,               // 3: skipped
+        // dest = 4: landing performs NO poll; handler body's next escape (SymbolValue)
+        // is where a deferred pending signal is observed.
+        Op::SymbolValue, // 4: pending quit delivered here AFTER landing!
+        Op::Return,      // 5
+    ];
+    // Part A: normal deferred delivery — final request completes cleanly, landing
+    // takes NO poll, and the pending quit arrives only at pc=4 after landing.
+    let ok_script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(4), h1)),
+        Some(v8_caught(h1, Value::fixnum(10))),
+        Some(v8_unwind_done(&[h1], &[])),
+        Some(EscapeCompletion {
+            stack: EscapeStack::Flow(signal("quit", vec![])),
+            records: RecordDelta::default(),
+            handlers: HandlerDelta::default(),
+        }),
+    ];
+    let mut ok_engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(ok_script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let ok_out = ok_engine.run(&mut ctx, program(&ops));
+    let VmOutcome::Signaled(flow) = ok_out else {
+        panic!("expected deferred quit after landing, got {ok_out:?}");
+    };
+    assert_eq!(signal_key(&flow).0, "quit");
+    assert_eq!(
+        ok_engine.escape_handler().requests[3].pc,
+        Pc::new(4),
+        "pending quit was observed AFTER landing at dest=4"
+    );
+    assert_clear(&ok_engine);
+
+    // Part B: structural contract — if a buggy serial side illegally delivers
+    // `EscapeStack::Flow` inside the Lisp-free final `SerialUnwind { unbind: [] }`
+    // request, the VM refuses it as a contract fault (`DispatchContract`) and poisons.
+    let bad_script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(4), h1)),
+        Some(v8_caught(h1, Value::fixnum(10))),
+        Some(EscapeCompletion {
+            stack: EscapeStack::Flow(signal("quit", vec![])),
+            records: RecordDelta::default(),
+            handlers: HandlerDelta::default(),
+        }),
+    ];
+    let mut bad_engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(bad_script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let fault = fault_of(bad_engine.run(&mut ctx, program(&ops)));
+    assert!(
+        matches!(fault, EngineFault::DispatchContract(Op::PopHandler)),
+        "Flow inside Lisp-free final SerialUnwind(unbind=[]) must fault as DispatchContract(PopHandler), got {fault:?}"
+    );
+    assert_eq!(
+        bad_engine.escape_handler().requests.len(),
+        3,
+        "fault must happen at the final Lisp-free SerialUnwind request, not earlier"
+    );
+    assert!(
+        matches!(
+            bad_engine.run(&mut ctx, program(&ops)),
+            VmOutcome::Fault(EngineFault::Poisoned)
+        ),
+        "illegal Flow inside final unwind request must poison"
+    );
+}
+
+#[test]
+fn vm_a_restart_only_follows_a_cleanup_that_ran_lisp() {
+    // V8 §10 row 11: a restart (`EscapeStack::Caught`) is legal ONLY from a
+    // `SerialUnwind` with non-empty `unbind` (a cleanup that ran Lisp). Returning
+    // `Caught` from a Lisp-free `SerialUnwind { unbind: [] }` is a contract fault.
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/bytecode.c:1010 (`Bpophandler` runs no Lisp);
+    // - src/eval.c:1445-1461 (only `unbind_to` cleanups execute Lisp and can signal).
+    let mut ctx = context();
+    let h1 = handler(111);
+    let h2 = handler(112);
+    let ops = [
+        Op::PushConditionCase(5), // 0: h1
+        Op::PushConditionCase(4), // 1: h2
+        Op::Nil,                  // 2
+        Op::SymbolValue,          // 3: Caught { h1, 1 }
+        Op::Return,               // 4: h2 dest
+        Op::Return,               // 5: h1 dest
+    ];
+    // No serial records exist above h1 or h2, so the unwind issues ONE Lisp-free
+    // final `SerialUnwind { pop_handlers: [h2, h1], unbind: [] }`. Returning
+    // `Caught` (restart) from it violates the structural rule -> DispatchContract!
+    let bad_script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(5), h1)),
+        Some(v8_push_handler(&Op::PushConditionCase(4), h2)),
+        Some(v8_caught(h1, Value::fixnum(1))),
+        Some(v8_unwind_restart(&[h2, h1], &[], h2, Value::fixnum(2))),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(bad_script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let fault = fault_of(engine.run(&mut ctx, program(&ops)));
+    assert!(
+        matches!(fault, EngineFault::DispatchContract(Op::PopHandler)),
+        "Caught/restart from Lisp-free SerialUnwind(unbind=[]) must fault as DispatchContract(PopHandler), got {fault:?}"
+    );
+    assert_eq!(
+        engine.escape_handler().requests.len(),
+        4,
+        "fault must happen at the final Lisp-free SerialUnwind request, not earlier"
+    );
+    assert!(
+        matches!(
+            engine.run(&mut ctx, program(&ops)),
+            VmOutcome::Fault(EngineFault::Poisoned)
+        ),
+        "illegal restart from Lisp-free unwind must poison"
+    );
+}
+
+#[test]
+fn vm_an_unwind_over_a_record_whose_symbol_gained_a_watcher_takes_the_serial_unbind() {
+    // V8 §10 row 12 (lead #11987, N-v2-unbind-revalidate in L3 unwind loop):
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/eval.c:3848-3870 (`do_one_unbind` for `SPECPDL_LET`: re-reads
+    //   `trapped_write`; watched symbol routes through `set_internal(..., SET_INTERNAL_UNBIND)`);
+    // - src/eval.c:3948-3957 (`specpdl_ptr` decremented BEFORE `do_one_unbind`).
+    // Mirrors Elisp:
+    //   (let ((x 10))
+    //     (condition-case e
+    //         (let ((x 20)) (add-variable-watcher 'x fn) (signal 'error '(99)))
+    //       (error (list x e))))  => (10 99), with watcher notified on unlet.
+    let mut ctx = context();
+    let x = plain_sym("pvm-v8-watched-unwind-x");
+    let h1 = handler(121);
+    let log = EffectLog::default();
+    let constants = [
+        Value::from_sym_id(x), // 0
+        Value::fixnum(10),     // 1: outer x
+        Value::fixnum(20),     // 2: inner x (gained watcher!)
+    ];
+    let ops = [
+        Op::Constant(1),          // 0: 10
+        Op::VarBind(0),           // 1: outer x = 10 (stays bound across catch!)
+        Op::PushConditionCase(8), // 2: h1 at bind_mark = 1, dest = 8
+        Op::Constant(2),          // 3: 20
+        Op::VarBind(0),           // 4: inner x = 20 (above h1.bind_mark)
+        Op::Nil,                  // 5
+        Op::SymbolValue,          // 6: Caught { h1, 99 }
+        Op::Return,               // 7: skipped
+        // dest = 8: x was restored to 10 by serial PlainUnbind; compute (+ 99 x) = 109!
+        Op::VarRef(0), // 8: reads outer x == 10
+        Op::Add,       // 9: 99 + 10 = 109
+        Op::Unbind(1), // 10: outer x = 10 also watched -> serial PlainUnbind
+        Op::Return,    // 11
+    ];
+    let script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(8), h1)),
+        Some(v8_caught(h1, Value::fixnum(99))),
+        // Watched inner x=20 handed to serial PlainUnbind during L3 unwind!
+        Some(v8_unwind_done(&[], &[])),
+        // Final pop of h1 + landing at dest = 8!
+        Some(v8_unwind_done(&[h1], &[])),
+        // Outer Unbind(1) also hands watched outer x=10 to serial PlainUnbind!
+        Some(EscapeCompletion::fall_through(&Op::Unbind(1))),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::logging_with_script(script, log.clone()),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new().admit(x).watched(x).logging(log.clone()),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(109));
+    assert_eq!(
+        log.entries(),
+        vec![
+            "slot <- 10",
+            "escape PushConditionCase(8)",
+            "slot <- 20",
+            "escape SymbolValue",
+            // L3 unwind hands watched inner x=20 to serial PlainUnbind -> restores 10
+            "escape SymbolValue [plain]",
+            "slot <- 10",
+            // Final pop of h1 + land at dest=8
+            "escape SymbolValue [h:121 r:]",
+            // Normal Unbind(1) of outer x=10 -> restores none
+            "escape Unbind(1) [plain]",
+            "slot <- none",
+        ],
+        "watched Plain binding inside L3 unwind must route through serial PlainUnbind"
+    );
+    let esc = engine.escape_handler();
+    assert!(
+        matches!(
+            esc.requests[2].why,
+            EscapeWhy::PlainUnbind { symbol, .. } if symbol == x
+        ),
+        "L3 unwind must hand off watched x via EscapeWhy::PlainUnbind"
+    );
+    assert!(engine.plain_handler().live_records().is_empty());
+    assert_clear(&engine);
 }
