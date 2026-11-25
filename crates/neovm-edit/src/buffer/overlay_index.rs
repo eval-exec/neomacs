@@ -10,6 +10,8 @@
 //! | `NEOVM_OVERLAY_LOCAL_MOVE` | off | Update neighbor-preserving B+ records in place and reinsert every start-changing move in the GNU topology mirror using its authoritative successor. |
 
 use std::cell::Cell;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
@@ -517,6 +519,8 @@ enum EndpointScanDirection {
 struct LiveEndpointRecords<'a> {
     intervals: &'a Arc<RwLock<IntervalBPlusTree>>,
     core: &'a Arc<RwLock<OverlayIndexCore>>,
+    #[cfg(test)]
+    cold_intervals_probe: &'a ColdIntervalsLockProbe,
     stale: &'a Cell<bool>,
     stamp: u64,
     bounds: EmacsByteRange,
@@ -529,19 +533,29 @@ struct LiveEndpointRecords<'a> {
 }
 
 impl<'a> LiveEndpointRecords<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         intervals: &'a Arc<RwLock<IntervalBPlusTree>>,
         core: &'a Arc<RwLock<OverlayIndexCore>>,
+        #[cfg(test)] cold_intervals_probe: &'a ColdIntervalsLockProbe,
         stale: &'a Cell<bool>,
         stamp: u64,
         bounds: EmacsByteRange,
         property_filter: OverlayPropertyFilter,
         direction: EndpointScanDirection,
     ) -> Self {
-        let exhausted = !publish_endpoints_for(intervals, core, Some((stale, stamp)));
+        let exhausted = !publish_endpoints_for(
+            intervals,
+            core,
+            Some((stale, stamp)),
+            #[cfg(test)]
+            Some(cold_intervals_probe),
+        );
         Self {
             intervals,
             core,
+            #[cfg(test)]
+            cold_intervals_probe,
             stale,
             stamp,
             bounds,
@@ -562,7 +576,13 @@ impl<'a> LiveEndpointRecords<'a> {
             self.exhausted = true;
             return;
         }
-        if !publish_endpoints_for(self.intervals, self.core, Some((self.stale, self.stamp))) {
+        if !publish_endpoints_for(
+            self.intervals,
+            self.core,
+            Some((self.stale, self.stamp)),
+            #[cfg(test)]
+            Some(self.cold_intervals_probe),
+        ) {
             self.exhausted = true;
             return;
         }
@@ -910,6 +930,53 @@ fn write_core_lock<R>(
     result
 }
 
+/// Deterministic test-only lock-order probe for cold-path `intervals.read()`
+/// acquisitions.
+///
+/// When armed on a single-threaded test index, every cold-path acquisition of
+/// `intervals.read()` records itself and checks `core.try_write().is_none()`
+/// at the exact acquisition point, proving deterministically that `core` was
+/// dropped beforehand (`intervals -> core` lock order) without helper-thread
+/// timing races.
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct ColdIntervalsLockProbe {
+    armed: AtomicBool,
+    intervals_reads: AtomicUsize,
+    saw_core_held: AtomicBool,
+}
+
+#[cfg(test)]
+impl ColdIntervalsLockProbe {
+    fn arm(&self) {
+        self.intervals_reads.store(0, Ordering::Relaxed);
+        self.saw_core_held.store(false, Ordering::Relaxed);
+        self.armed.store(true, Ordering::Release);
+    }
+
+    fn disarm(&self) {
+        self.armed.store(false, Ordering::Release);
+    }
+
+    #[inline]
+    fn record_intervals_read(&self, core_lock: &RwLock<OverlayIndexCore>) {
+        if !self.armed.load(Ordering::Acquire) {
+            return;
+        }
+        self.intervals_reads.fetch_add(1, Ordering::Relaxed);
+        if core_lock.try_write().is_none() {
+            self.saw_core_held.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn snapshot(&self) -> (usize, bool) {
+        (
+            self.intervals_reads.load(Ordering::Acquire),
+            self.saw_core_held.load(Ordering::Acquire),
+        )
+    }
+}
+
 /// Publish the lazy endpoint index if absent. For live views (`live = Some`),
 /// checks the generation stamp before and after building; returns `false` and
 /// latches `stale` if the index changed, without publishing stale state.
@@ -919,6 +986,7 @@ fn publish_endpoints_for(
     intervals_lock: &RwLock<IntervalBPlusTree>,
     core_lock: &RwLock<OverlayIndexCore>,
     live: Option<(&Cell<bool>, u64)>,
+    #[cfg(test)] probe: Option<&ColdIntervalsLockProbe>,
 ) -> bool {
     {
         let core = core_lock.read();
@@ -939,6 +1007,10 @@ fn publish_endpoints_for(
         // endpoints, then drop `intervals` while keeping `core.read()` held so
         // `core.property_masks` stays coherent with `entries` without walking
         // Lisp plists inside an observed read capture.
+        #[cfg(test)]
+        if let Some(probe) = probe {
+            probe.record_intervals_read(core_lock);
+        }
         let intervals = intervals_lock.read();
         let core = core_lock.read();
         if let Some((stale, stamp)) = live
@@ -977,6 +1049,8 @@ fn publish_endpoints_for(
 pub(super) struct LiveOverlayIndex {
     intervals: Arc<RwLock<IntervalBPlusTree>>,
     core: Arc<RwLock<OverlayIndexCore>>,
+    #[cfg(test)]
+    cold_intervals_probe: Arc<ColdIntervalsLockProbe>,
     stamp: u64,
 }
 
@@ -1007,6 +1081,8 @@ impl LiveOverlayIndex {
         if stale.get() {
             return None;
         }
+        #[cfg(test)]
+        self.cold_intervals_probe.record_intervals_read(&self.core);
         let intervals = self.intervals.read();
         if self.core.read().generation != self.stamp {
             stale.set(true);
@@ -1185,6 +1261,8 @@ impl LiveOverlayIndex {
             LiveEndpointRecords::new(
                 &self.intervals,
                 &self.core,
+                #[cfg(test)]
+                self.cold_intervals_probe.as_ref(),
                 stale,
                 self.stamp,
                 bounds,
@@ -1204,6 +1282,8 @@ impl LiveOverlayIndex {
             LiveEndpointRecords::new(
                 &self.intervals,
                 &self.core,
+                #[cfg(test)]
+                self.cold_intervals_probe.as_ref(),
                 stale,
                 self.stamp,
                 bounds,
@@ -1255,6 +1335,8 @@ pub(super) struct OverlayIndex {
     /// `intervals`; this field stores only identity and tree shape.
     gnu_order: GnuOverlayOrder<OverlayIdentity>,
     core: Arc<RwLock<OverlayIndexCore>>,
+    #[cfg(test)]
+    cold_intervals_probe: Arc<ColdIntervalsLockProbe>,
     /// Lock-free owner-side cache of `core.direct_property_keys` so the
     /// default (`OverlayList`) `may_contain_property` path pays no `core.read()`
     /// lock or HashMap probe for absent keys or when <= 8 distinct keys exist.
@@ -1274,6 +1356,8 @@ impl OverlayIndex {
                 property_masks: FxHashMap::default(),
                 generation: 0,
             })),
+            #[cfg(test)]
+            cold_intervals_probe: Arc::new(ColdIntervalsLockProbe::default()),
             direct_property_key_bloom: 0,
             direct_property_keys_inline: [0; DIRECT_PROPERTY_KEYS_INLINE_CAP],
             direct_property_keys_inline_len: 0,
@@ -1314,6 +1398,8 @@ impl OverlayIndex {
         LiveOverlayIndex {
             intervals: Arc::clone(&self.intervals),
             core: Arc::clone(&self.core),
+            #[cfg(test)]
+            cold_intervals_probe: Arc::clone(&self.cold_intervals_probe),
             stamp,
         }
     }
@@ -1334,7 +1420,12 @@ impl OverlayIndex {
 
     #[cfg(test)]
     fn publish_endpoints(&self) {
-        let _ = publish_endpoints_for(&self.intervals, &self.core, None);
+        let _ = publish_endpoints_for(
+            &self.intervals,
+            &self.core,
+            None,
+            Some(self.cold_intervals_probe.as_ref()),
+        );
     }
 
     #[cfg(test)]
@@ -2395,7 +2486,13 @@ impl OverlayIndex {
         bounds: EmacsByteRange,
         property_filter: OverlayPropertyFilter,
     ) -> OverlayEndpointRecords<'_> {
-        let _ = publish_endpoints_for(&self.intervals, &self.core, None);
+        let _ = publish_endpoints_for(
+            &self.intervals,
+            &self.core,
+            None,
+            #[cfg(test)]
+            Some(self.cold_intervals_probe.as_ref()),
+        );
         let records = RwLockReadGuard::map(self.core.read(), |core| {
             &core
                 .endpoints
@@ -2419,7 +2516,13 @@ impl OverlayIndex {
         bounds: EmacsByteRange,
         property_filter: OverlayPropertyFilter,
     ) -> OverlayEndpointRecords<'_> {
-        let _ = publish_endpoints_for(&self.intervals, &self.core, None);
+        let _ = publish_endpoints_for(
+            &self.intervals,
+            &self.core,
+            None,
+            #[cfg(test)]
+            Some(self.cold_intervals_probe.as_ref()),
+        );
         let records = RwLockReadGuard::map(self.core.read(), |core| {
             &core
                 .endpoints
@@ -2541,6 +2644,8 @@ impl OverlayIndex {
         }
         // Drop `core` before acquiring `intervals` so readers never invert the
         // `intervals -> core` lock order used by writers.
+        #[cfg(test)]
+        self.cold_intervals_probe.record_intervals_read(&self.core);
         let intervals = self.intervals.read();
         let mut next = intervals.next_start_after(pos, limit);
         // The nearest later endpoint is either the next start, found above,
@@ -2575,6 +2680,8 @@ impl OverlayIndex {
         }
         // Drop `core` before acquiring `intervals` so readers never invert the
         // `intervals -> core` lock order used by writers.
+        #[cfg(test)]
+        self.cold_intervals_probe.record_intervals_read(&self.core);
         let intervals = self.intervals.read();
         let start = intervals.previous_start_before(pos, limit);
         let candidate = start.unwrap_or(limit);

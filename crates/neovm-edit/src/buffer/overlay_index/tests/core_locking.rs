@@ -129,10 +129,11 @@ fn property_mask_writers_advance_generation() {
     );
 }
 
-fn assert_cold_boundary_does_not_hold_core_across_intervals(
+fn assert_cold_query_drops_core_before_intervals<R: Eq + std::fmt::Debug>(
     label: &str,
-    query: impl FnOnce(&OverlayIndex) -> Option<EmacsBytePos>,
-    expected: Option<EmacsBytePos>,
+    query: impl FnOnce(&OverlayIndex) -> R,
+    expected: R,
+    expect_published_after: bool,
 ) {
     let mut index = OverlayIndex::new();
     assert!(index.attach(overlay(10, 20), range(10, 20)));
@@ -141,58 +142,82 @@ fn assert_cold_boundary_does_not_hold_core_across_intervals(
         "test requires a cold endpoint index"
     );
 
-    let intervals = Arc::clone(&index.intervals);
-    let core = Arc::clone(&index.core);
-    let intervals_probe = LockProbe(intervals.as_ref());
-    let core_probe = LockProbe(core.as_ref());
-    let holding = AtomicBool::new(false);
+    // Deterministically probe `core.try_write()` at the exact cold-path
+    // `intervals.read()` acquisition on this private single-threaded index.
+    // Because no other thread touches `index`, `try_write()` fails if and only
+    // if `query` still holds `core.read()` when acquiring `intervals.read()`.
+    index.cold_intervals_probe.arm();
+    let result = query(&index);
+    let (intervals_reads, saw_core_held) = index.cold_intervals_probe.snapshot();
+    index.cold_intervals_probe.disarm();
 
-    let (result, saw_core_held) = std::thread::scope(|scope| {
-        let holder = scope.spawn(|| {
-            let intervals_probe = intervals_probe;
-            let core_probe = core_probe;
-            let guard = intervals_probe.0.write();
-            holding.store(true, Ordering::Release);
-            let deadline = Instant::now() + Duration::from_millis(50);
-            let mut saw_core_held = false;
-            while Instant::now() < deadline {
-                if core_probe.0.try_write().is_none() {
-                    saw_core_held = true;
-                    break;
-                }
-                std::thread::yield_now();
-            }
-            drop(guard);
-            saw_core_held
-        });
-
-        while !holding.load(Ordering::Acquire) {
-            std::thread::yield_now();
-        }
-        let result = query(&index);
-        let saw_core_held = holder.join().expect("holder thread finished");
-        (result, saw_core_held)
-    });
-
-    assert_eq!(result, expected);
+    assert_eq!(result, expected, "{label}: unexpected query result");
+    assert_eq!(
+        intervals_reads, 1,
+        "M4: {label} must execute its cold intervals.read() path exactly once"
+    );
     assert!(
         !saw_core_held,
-        "M4: {label} held core.read() while waiting on intervals.read() (lock-order inversion)"
+        "M4: {label} held core.read() while acquiring intervals.read() (lock-order inversion)"
+    );
+    assert_eq!(
+        index.is_endpoints_published(),
+        expect_published_after,
+        "{label}: unexpected endpoint publication state"
     );
 }
 
 #[test]
 fn cold_boundary_queries_drop_core_lock_before_reading_intervals() {
     crate::test_utils::init_test_tracing();
-    assert_cold_boundary_does_not_hold_core_across_intervals(
+    assert_cold_query_drops_core_before_intervals(
         "next_boundary_after_no_alloc",
         |index| index.next_boundary_after_no_alloc(EmacsBytePos::new(0), EmacsBytePos::new(100)),
         Some(EmacsBytePos::new(10)),
+        false,
     );
-    assert_cold_boundary_does_not_hold_core_across_intervals(
+    assert_cold_query_drops_core_before_intervals(
         "previous_boundary_before",
         |index| index.previous_boundary_before(EmacsBytePos::new(100), EmacsBytePos::new(0)),
         Some(EmacsBytePos::new(20)),
+        false,
+    );
+    assert_cold_query_drops_core_before_intervals(
+        "LiveOverlayIndex::next_boundary_after",
+        |index| {
+            let live = index.live_handle();
+            let stale = Cell::new(false);
+            let next =
+                live.next_boundary_after(EmacsBytePos::new(0), EmacsBytePos::new(100), &stale);
+            assert!(!stale.get(), "live handle must stay fresh");
+            next
+        },
+        Some(EmacsBytePos::new(10)),
+        false,
+    );
+    assert_cold_query_drops_core_before_intervals(
+        "publish_endpoints",
+        |index| index.publish_endpoints(),
+        (),
+        true,
+    );
+    assert_cold_query_drops_core_before_intervals(
+        "LiveOverlayIndex::endpoint_records_strictly_within",
+        |index| {
+            let live = index.live_handle();
+            let stale = Cell::new(false);
+            let count = live
+                .endpoint_records_strictly_within(
+                    range(0, 100),
+                    OverlayPropertyFilter::unfiltered(),
+                    &stale,
+                )
+                .count();
+            assert!(!stale.get(), "live handle must stay fresh");
+            count
+        },
+        2,
+        true,
     );
 }
 
