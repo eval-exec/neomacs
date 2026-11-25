@@ -182,6 +182,37 @@ impl<'era> Mutator<'era> {
         self.poll_stopped(roots)
     }
 
+    /// Check under the canonical gate whether an active stop epoch targets
+    /// this owner. Returns `Ok(Some(epoch))` only when this owner is frozen in
+    /// `Phase::Stopping(epoch)` and must publish + ACK; returns `Ok(None)`
+    /// when a non-admissible phase word was `Phase::DrainingResumes` (peers
+    /// still finishing `restore_wait`), a transient catalog `BLOCKED_BIT`, or
+    /// `Phase::Idle` by the time the gate was acquired.
+    fn poll_target_epoch(&self) -> Result<Option<NonZeroU64>, RendezvousError> {
+        self.check_thread()?;
+        let gate = self.registry.lock()?;
+        let request = self.registry.request_epoch.load(Ordering::Acquire);
+        let e = entry_state(&self.entry)?;
+        if !matches!(e.rendezvous.mode, Mode::Running | Mode::StartingStopped) {
+            return Err(RendezvousError::Busy);
+        }
+        match gate.rendezvous.phase {
+            Phase::Stopping(epoch)
+                if gate.rendezvous.frozen.contains(&self.entry.key)
+                    && e.rendezvous.mode == Mode::Running =>
+            {
+                if request != epoch.get() {
+                    return Err(RendezvousError::Publication);
+                }
+                Ok(Some(epoch))
+            }
+            Phase::Idle | Phase::DrainingResumes | Phase::Stopping(_) | Phase::Tracing(_) => {
+                Ok(None)
+            }
+            Phase::Poisoned => Err(RendezvousError::Poisoned),
+        }
+    }
+
     #[cold]
     #[inline(never)]
     fn poll_stopped(
@@ -192,14 +223,21 @@ impl<'era> Mutator<'era> {
         if self.thread == self.registry.keeper_thread {
             return Ok(PollOutcome::Continue);
         }
-        let batch = roots()?;
+        // `!phase_admissible` also fires during `Phase::DrainingResumes`
+        // (after `end_epoch` while a peer is still exiting `restore_wait`) or
+        // a transient catalog `BLOCKED_BIT`. Verify under the gate that a stop
+        // epoch actually targets this owner before building roots or parking:
+        // otherwise a resumed owner polling during `DrainingResumes` would
+        // enter `wait_request()` and deadlock once the era returns to `Idle`.
         let epoch = loop {
-            match self.wait_request() {
-                Ok(epoch) => break epoch,
+            match self.poll_target_epoch() {
+                Ok(Some(epoch)) => break epoch,
+                Ok(None) => return Ok(PollOutcome::Continue),
                 Err(RendezvousError::Busy) => std::thread::yield_now(),
                 Err(error) => return Err(error),
             }
         };
+        let batch = roots()?;
         loop {
             match self.acknowledge(epoch, &batch) {
                 Ok(()) => break,
