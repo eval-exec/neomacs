@@ -187,6 +187,13 @@ impl SuiteId {
             Self::OrgEditingGuard => true,
         }
     }
+
+    pub const fn required_counter_scope(self) -> Option<CounterScope> {
+        match self {
+            Self::Standard => None,
+            Self::OrgEditingGuard => Some(CounterScope::EditLoop),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -200,6 +207,8 @@ pub struct SuiteRequest {
     pub(crate) counters: Option<CounterScope>,
     pub(crate) previous_suite: Option<PathBuf>,
     pub(crate) baseline_manifest: Option<PathBuf>,
+    #[cfg(test)]
+    pub(crate) guard_path_override: Option<std::ffi::OsString>,
 }
 
 impl SuiteRequest {
@@ -219,6 +228,8 @@ impl SuiteRequest {
             counters: None,
             previous_suite: None,
             baseline_manifest: None,
+            #[cfg(test)]
+            guard_path_override: None,
         }
     }
 
@@ -247,6 +258,20 @@ impl SuiteRequest {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_guard_path_override(mut self, path: Option<std::ffi::OsString>) -> Self {
+        self.guard_path_override = path;
+        self
+    }
+
+    fn guard_path_env(&self) -> Option<std::ffi::OsString> {
+        #[cfg(test)]
+        if let Some(override_path) = &self.guard_path_override {
+            return Some(override_path.clone());
+        }
+        std::env::var_os("PATH")
+    }
+
     /// Reject invalid suite configurations before any artifact directory or
     /// editor process is created.
     pub fn validate(&self) -> Result<(), PerfError> {
@@ -263,6 +288,15 @@ impl SuiteRequest {
                 scenarios: instruction_scenarios,
             });
         }
+        if let (Some(expected), Some(actual)) = (self.suite.required_counter_scope(), self.counters)
+            && actual != expected
+        {
+            return Err(PerfError::CounterScopeMismatch {
+                suite: self.suite,
+                expected,
+                actual,
+            });
+        }
         if self.suite.requires_baseline_manifest() && self.baseline_manifest.is_none() {
             return Err(PerfError::BaselineManifestRequired { suite: self.suite });
         }
@@ -274,21 +308,24 @@ impl SuiteRequest {
         suite_scenario: &SuiteScenario,
         expected_baseline: Option<VerifiedBaselineManifest>,
         guard_tools: Option<ResolvedGuardTools>,
+        canonical_candidate_editor: Option<&Path>,
     ) -> ComparisonRequest {
         let spec = scenario(suite_scenario.scenario);
-        // Thread the canonical absolute baseline path from the verified
-        // manifest into every downstream provenance check and execution
-        // command so verify and exec cannot resolve a relative path against
-        // different directories (process CWD vs workspace_root).
+        // Thread canonical absolute editor paths for manifest-pinned runs into
+        // every downstream provenance check and execution command so verify and
+        // exec cannot resolve relative paths against different directories
+        // (process CWD vs workspace_root) on either arm.
         let baseline_editor = expected_baseline
             .as_ref()
             .map_or(self.baseline_editor.as_path(), |verified| {
                 verified.binary_path.as_path()
             });
+        let candidate_editor =
+            canonical_candidate_editor.unwrap_or(self.candidate_editor.as_path());
         ComparisonRequest::new(
             suite_scenario.scenario,
             baseline_editor,
-            &self.candidate_editor,
+            candidate_editor,
             self.samples,
             spec.default_iterations,
         )
@@ -410,9 +447,16 @@ impl PerfHarness {
             }
             None => None,
         };
+        let canonical_candidate = if baseline_manifest.is_some() {
+            Some(resolve_canonical_candidate_editor(
+                &request.candidate_editor,
+            )?)
+        } else {
+            None
+        };
         let guard_tools = if baseline_manifest.is_some() {
             Some(resolve_guard_tools(
-                std::env::var_os("PATH").as_deref(),
+                request.guard_path_env().as_deref(),
                 request.machine.cpu.is_some(),
             )?)
         } else {
@@ -459,6 +503,7 @@ impl PerfHarness {
                 suite_scenario,
                 baseline_manifest.clone(),
                 guard_tools.clone(),
+                canonical_candidate.as_deref(),
             );
             let report = self.compare(&comparison)?;
             let percent_change = match &report.artifact.verdict {
@@ -483,7 +528,8 @@ impl PerfHarness {
                 || request.baseline_editor.clone(),
                 |v| v.binary_path.clone(),
             ),
-            candidate_editor: request.candidate_editor.clone(),
+            candidate_editor: canonical_candidate
+                .unwrap_or_else(|| request.candidate_editor.clone()),
             samples_per_side: request.samples,
             machine: request.machine.clone(),
             counters: request.counters,
@@ -563,6 +609,24 @@ pub(crate) fn evaluate_suite(
     } else {
         SuiteVerdict::Drifted { drifts }
     }
+}
+
+fn resolve_canonical_candidate_editor(path: &Path) -> Result<PathBuf, PerfError> {
+    let canonical = fs::canonicalize(path).map_err(|error| PerfError::CandidateEditorInvalid {
+        path: path.to_path_buf(),
+        reason: format!("cannot resolve candidate binary: {error}"),
+    })?;
+    let metadata = fs::metadata(&canonical).map_err(|error| PerfError::CandidateEditorInvalid {
+        path: canonical.clone(),
+        reason: format!("cannot stat candidate binary: {error}"),
+    })?;
+    if !metadata.is_file() {
+        return Err(PerfError::CandidateEditorInvalid {
+            path: canonical,
+            reason: "candidate editor path is not a regular file".to_owned(),
+        });
+    }
+    Ok(canonical)
 }
 
 #[cfg(test)]

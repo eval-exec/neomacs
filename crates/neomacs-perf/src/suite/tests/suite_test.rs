@@ -1,16 +1,20 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
 
 use crate::{
-    ComparisonObservation, ComparisonRejection, ComparisonRun, ComparisonRunOutcome,
-    ComparisonRunRole, ComparisonSampleCount, ComparisonVerdict, CounterScope, EditorCapabilities,
-    EditorKind, EditorProvenance, Frontend, MachinePolicy, Measurement, MetricName, MetricUnit,
-    PerfError, PerfHarness, PortableDumpProvenance, ResolvedGuardTools, RunVerdict,
+    ARTIFACT_SCHEMA_VERSION, ComparisonObservation, ComparisonRejection, ComparisonRun,
+    ComparisonRunOutcome, ComparisonRunRole, ComparisonSampleCount, ComparisonVerdict,
+    CounterScope, EditorCapabilities, EditorKind, EditorProvenance, Frontend, HostProvenance,
+    MachinePolicy, Measurement, MetricName, MetricUnit, PerfError, PerfHarness,
+    PortableDumpProvenance, ResolvedGuardTools, RunArtifact, RunReport, RunVerdict,
     SUITE_ARTIFACT_SCHEMA_VERSION, ScenarioId, SuiteArtifact, SuiteGateMetric, SuiteId,
-    SuiteRequest, SuiteScenarioResult, SuiteVerdict, VerifiedBaselineManifest, evaluate_comparison,
-    evaluate_suite, read_history_link, resolve_guard_tools,
+    SuiteRequest, SuiteScenarioResult, SuiteVerdict, VerifiedBaselineManifest,
+    comparison_run_from_child, evaluate_comparison, evaluate_suite, read_history_link,
+    resolve_guard_tools,
 };
 
 fn result(scenario: ScenarioId, threshold: f64, change: Option<f64>) -> SuiteScenarioResult {
@@ -267,6 +271,8 @@ fn guard_provenance(role: ComparisonRunRole) -> EditorProvenance {
     }
 }
 
+const CANONICAL_TEST_CANDIDATE: &str = "/opt/neomacs-perf/Candidate/neomacs";
+
 fn guard_observation(
     scenario: ScenarioId,
     iterations: u32,
@@ -286,7 +292,7 @@ fn guard_observation(
             frontend: Frontend::Batch,
             editor: PathBuf::from(match role {
                 ComparisonRunRole::Baseline => "/opt/neomacs-perf/v0.0.21/bin/neomacs",
-                ComparisonRunRole::Candidate => "target/release/neomacs",
+                ComparisonRunRole::Candidate => CANONICAL_TEST_CANDIDATE,
             }),
             iterations,
             editor_provenance: Some(guard_provenance(role)),
@@ -467,6 +473,7 @@ fn org_editing_guard_rejects_missing_instructions_metric_without_wall_time_fallb
                 row,
                 Some(verified.clone()),
                 Some(resolved_test_guard_tools()),
+                Some(Path::new(CANONICAL_TEST_CANDIDATE)),
             )
             .build_input();
         assert_eq!(input.primary_metric, MetricName::Instructions);
@@ -558,6 +565,7 @@ fn org_editing_guard_rejects_shadowed_pdump_and_mismatched_baseline_provenance()
             row,
             Some(verified.clone()),
             Some(resolved_test_guard_tools()),
+            Some(Path::new(CANONICAL_TEST_CANDIDATE)),
         )
         .build_input();
 
@@ -788,6 +796,7 @@ fn org_editing_guard_canonicalizes_relative_baseline_editor_and_rejects_mismatch
             row,
             Some(verified.clone()),
             Some(resolved_test_guard_tools()),
+            Some(Path::new(CANONICAL_TEST_CANDIDATE)),
         )
         .build_input();
 
@@ -951,7 +960,12 @@ fn assert_guard_env_class_blocked_and_rejected(
     .with_baseline_manifest(Some(verified.manifest_path.clone()));
     let guard_row = &SuiteId::OrgEditingGuard.scenarios()[0];
     let guard_comparison = guard_request
-        .comparison_request_for(guard_row, Some(verified), Some(tools))
+        .comparison_request_for(
+            guard_row,
+            Some(verified),
+            Some(tools),
+            Some(Path::new(CANONICAL_TEST_CANDIDATE)),
+        )
         .with_inherited_environment(ambient_env.clone());
 
     // Production ComparisonRequest::run_request_for constructs a closed empty
@@ -981,7 +995,7 @@ fn assert_guard_env_class_blocked_and_rejected(
         .find(|row| row.scenario == ScenarioId::OrgEditing)
         .expect("standard org-editing row");
     let standard_comparison = standard_request
-        .comparison_request_for(standard_row, None, None)
+        .comparison_request_for(standard_row, None, None, None)
         .with_inherited_environment(ambient_env);
     for role in [ComparisonRunRole::Baseline, ComparisonRunRole::Candidate] {
         let std_env = standard_comparison
@@ -1119,8 +1133,12 @@ fn org_editing_guard_rejects_path_shadowing_taskset_and_path_in_child_env() {
     .with_counters(Some(CounterScope::EditLoop))
     .with_baseline_manifest(Some(verified.manifest_path.clone()));
     let row = &SuiteId::OrgEditingGuard.scenarios()[0];
-    let comparison =
-        guard_request.comparison_request_for(row, Some(verified), Some(resolved.clone()));
+    let comparison = guard_request.comparison_request_for(
+        row,
+        Some(verified),
+        Some(resolved.clone()),
+        Some(Path::new(CANONICAL_TEST_CANDIDATE)),
+    );
     let baseline_run = comparison.run_request_for(ComparisonRunRole::Baseline);
     assert_eq!(
         baseline_run.resolved_perf(),
@@ -1190,4 +1208,460 @@ fn org_editing_guard_rejects_neovm_jit_zero_and_tuning_knobs_on_both_arms() {
 #[test]
 fn org_editing_guard_rejects_neomacs_runtime_root_on_both_arms() {
     assert_guard_env_class_blocked_and_rejected("NEOMACS_RUNTIME_ROOT", "/tmp/alt-runtime", &[]);
+}
+
+/// #14946 candidate canonicalization: a relative `--candidate-editor` must be
+/// replaced by its canonical absolute path on manifest-pinned guard runs, and
+/// `evaluate_comparison` must reject any relative candidate path or observed
+/// canonical path mismatch on the Candidate arm.
+#[test]
+fn org_editing_guard_canonicalizes_relative_candidate_editor_and_rejects_mismatch() {
+    let samples = ComparisonSampleCount::new(3).expect("valid sample count");
+    let verified = verified_guard_baseline();
+    let canonical_candidate = PathBuf::from(CANONICAL_TEST_CANDIDATE);
+    let suite_request = SuiteRequest::new(
+        SuiteId::OrgEditingGuard,
+        &verified.binary_path,
+        "./target/release/neomacs",
+        samples,
+    )
+    .with_counters(Some(CounterScope::EditLoop))
+    .with_baseline_manifest(Some(verified.manifest_path.clone()));
+
+    let row = &SuiteId::OrgEditingGuard.scenarios()[0];
+    let input = suite_request
+        .comparison_request_for(
+            row,
+            Some(verified),
+            Some(resolved_test_guard_tools()),
+            Some(&canonical_candidate),
+        )
+        .build_input();
+
+    assert_eq!(input.candidate_editor, canonical_candidate);
+    assert!(input.candidate_editor.is_absolute());
+
+    let build_observations = |candidate_editor: &Path| {
+        let mut observations = Vec::new();
+        for sample_index in 0..samples.get() {
+            observations.push(guard_observation(
+                row.scenario,
+                input.iterations.get(),
+                ComparisonRunRole::Baseline,
+                sample_index,
+                guard_measurements(1000.0, 5_000_000.0, Some(10_000_000.0)),
+            ));
+            let mut cand = guard_observation(
+                row.scenario,
+                input.iterations.get(),
+                ComparisonRunRole::Candidate,
+                sample_index,
+                guard_measurements(1000.0, 5_000_000.0, Some(10_050_000.0)),
+            );
+            cand.run.editor = candidate_editor.to_path_buf();
+            observations.push(cand);
+        }
+        observations
+    };
+
+    assert!(
+        evaluate_comparison(&input, &build_observations(&input.candidate_editor)).is_valid(),
+        "canonicalized candidate editor must pass"
+    );
+
+    // Case 1: relative candidate_editor reaching evaluate_comparison is rejected.
+    let mut relative_input = input.clone();
+    relative_input.candidate_editor = PathBuf::from("./target/release/neomacs");
+    let ComparisonVerdict::Rejected { reasons } = evaluate_comparison(
+        &relative_input,
+        &build_observations(&relative_input.candidate_editor),
+    ) else {
+        panic!("relative candidate_editor must be rejected on manifest-pinned guard");
+    };
+    assert!(
+        reasons.iter().any(|reason| matches!(
+            reason,
+            ComparisonRejection::BaselineManifestProvenanceMismatch {
+                role: ComparisonRunRole::Candidate,
+                sample_index: 0,
+                reason,
+                ..
+            } if reason.contains("canonical absolute candidate")
+        )),
+        "expected canonical candidate path rejection, got {reasons:?}"
+    );
+
+    // Case 2: observed canonical candidate path differs from configured canonical path.
+    let mut wrong_candidate_path = build_observations(&input.candidate_editor);
+    for obs in &mut wrong_candidate_path {
+        if obs.run.role == ComparisonRunRole::Candidate {
+            obs.run.editor_provenance.as_mut().unwrap().path =
+                "/other/workspace/target/release/neomacs".to_string();
+        }
+    }
+    let ComparisonVerdict::Rejected { reasons } =
+        evaluate_comparison(&input, &wrong_candidate_path)
+    else {
+        panic!("mismatched observed candidate canonical path must be rejected");
+    };
+    assert!(
+        reasons.iter().any(|reason| matches!(
+            reason,
+            ComparisonRejection::BaselineManifestProvenanceMismatch {
+                role: ComparisonRunRole::Candidate,
+                sample_index: 0,
+                reason,
+                ..
+            } if reason.contains("/other/workspace/target/release/neomacs")
+        )),
+        "expected observed candidate path mismatch rejection, got {reasons:?}"
+    );
+
+    // Case 3: PerfHarness::suite rejects a missing candidate editor before
+    // creating any suite artifacts.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (manifest_path, bin_path) = write_temp_verified_baseline(dir.path());
+    let missing_candidate_req = SuiteRequest::new(
+        SuiteId::OrgEditingGuard,
+        &bin_path,
+        dir.path().join("does-not-exist-candidate"),
+        samples,
+    )
+    .with_counters(Some(CounterScope::EditLoop))
+    .with_baseline_manifest(Some(manifest_path));
+    let err = PerfHarness::new(dir.path())
+        .suite(&missing_candidate_req)
+        .expect_err("missing candidate editor must fail before launch");
+    assert!(
+        matches!(err, PerfError::CandidateEditorInvalid { .. }),
+        "expected CandidateEditorInvalid, got {err:?}"
+    );
+    assert!(
+        !dir.path().join("tmp/perf-suites").exists(),
+        "invalid candidate must not create suite artifacts"
+    );
+}
+
+/// #14946 counter-scope binding: `OrgEditingGuard` requires
+/// `CounterScope::EditLoop` in both `SuiteRequest::validate()` and
+/// `evaluate_comparison`, while `SuiteId::Standard` continues to accept any
+/// counter scope.
+#[test]
+fn org_editing_guard_binds_counter_scope_to_edit_loop() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let samples = ComparisonSampleCount::new(3).expect("valid sample count");
+    let verified = verified_guard_baseline();
+
+    for wrong_scope in [
+        CounterScope::WholeProcess,
+        CounterScope::EditLoopMainThread,
+        CounterScope::WholeProcessMainThread,
+    ] {
+        let request = SuiteRequest::new(
+            SuiteId::OrgEditingGuard,
+            &verified.binary_path,
+            CANONICAL_TEST_CANDIDATE,
+            samples,
+        )
+        .with_counters(Some(wrong_scope))
+        .with_baseline_manifest(Some(verified.manifest_path.clone()));
+
+        let err = request
+            .validate()
+            .expect_err("non-edit-loop counter scope must fail OrgEditingGuard validation");
+        assert!(
+            matches!(
+                err,
+                PerfError::CounterScopeMismatch {
+                    suite: SuiteId::OrgEditingGuard,
+                    expected: CounterScope::EditLoop,
+                    actual,
+                } if actual == wrong_scope
+            ),
+            "expected CounterScopeMismatch for {wrong_scope:?}, got {err:?}"
+        );
+
+        let run_err = PerfHarness::new(dir.path())
+            .suite(&request)
+            .expect_err("PerfHarness::suite must reject non-edit-loop counter scope");
+        assert!(matches!(run_err, PerfError::CounterScopeMismatch { .. }));
+        assert!(
+            !dir.path().join("tmp/perf-suites").exists(),
+            "rejected counter scope must not create suite artifacts"
+        );
+
+        // evaluate_comparison also rejects non-EditLoop instruction guard inputs.
+        let row = &SuiteId::OrgEditingGuard.scenarios()[0];
+        let input = request
+            .comparison_request_for(
+                row,
+                Some(verified.clone()),
+                Some(resolved_test_guard_tools()),
+                Some(Path::new(CANONICAL_TEST_CANDIDATE)),
+            )
+            .build_input();
+        let observations = guard_observations_with_env(
+            row,
+            input.iterations.get(),
+            samples,
+            ComparisonRunRole::Baseline,
+            BTreeMap::new(),
+        );
+        let ComparisonVerdict::Rejected { reasons } = evaluate_comparison(&input, &observations)
+        else {
+            panic!("evaluate_comparison must reject {wrong_scope:?} on instruction guard");
+        };
+        assert!(
+            reasons.iter().any(|reason| matches!(
+                reason,
+                ComparisonRejection::BaselineManifestProvenanceMismatch { reason, .. }
+                    if reason.contains("EditLoop")
+            )),
+            "expected EditLoop counter scope rejection for {wrong_scope:?}, got {reasons:?}"
+        );
+
+        // Ruling 4: SuiteId::Standard still accepts every CounterScope.
+        SuiteRequest::new(
+            SuiteId::Standard,
+            "reference/gnu-emacs",
+            "target/release/neomacs",
+            samples,
+        )
+        .with_counters(Some(wrong_scope))
+        .validate()
+        .expect("SuiteId::Standard must keep accepting arbitrary counter scopes");
+    }
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn write_temp_verified_baseline(root: &Path) -> (PathBuf, PathBuf) {
+    let bin_dir = root.join("bin");
+    let pdump_dir = root.join("libexec/neomacs/0.0.21");
+    fs::create_dir_all(&bin_dir).expect("bin dir");
+    fs::create_dir_all(&pdump_dir).expect("pdump dir");
+    let bin_path = bin_dir.join("neomacs");
+    let pdump_path = pdump_dir.join("neomacs.pdump");
+    let bin_bytes = b"fake-baseline-binary";
+    let pdump_bytes = b"fake-baseline-pdump";
+    fs::write(&bin_path, bin_bytes).expect("write bin");
+    fs::write(&pdump_path, pdump_bytes).expect("write pdump");
+    let manifest_path = root.join("v0.0.21.json");
+    let manifest_json = serde_json::json!({
+        "schema_version": 1,
+        "version": "v0.0.21",
+        "git_commit": "7b3fa9d698ba41fdbabccd9bd3e547a0afa7164a",
+        "target": "x86_64-unknown-linux-gnu",
+        "release_asset": {
+            "name": "neomacs.tar.gz",
+            "url": "https://example.invalid/neomacs.tar.gz",
+            "size_bytes": 1,
+            "sha256": hex_sha256(b"tarball")
+        },
+        "binary": {
+            "archive_path": "bin/neomacs",
+            "size_bytes": bin_bytes.len(),
+            "sha256": hex_sha256(bin_bytes)
+        },
+        "pdump": {
+            "archive_path": "libexec/neomacs/0.0.21/neomacs.pdump",
+            "relative_to_binary": "../libexec/neomacs/0.0.21/neomacs.pdump",
+            "size_bytes": pdump_bytes.len(),
+            "sha256": hex_sha256(pdump_bytes)
+        }
+    });
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest_json).expect("serialize manifest"),
+    )
+    .expect("write manifest");
+    (manifest_path, bin_path)
+}
+
+/// #14946 wiring-edge test: `PerfHarness::suite` itself MUST invoke
+/// `resolve_guard_tools` before creating suite artifacts so a shadowed
+/// `taskset` in `PATH` fails with `GuardToolPathViolation`. Reverting the call
+/// in `PerfHarness::suite` fails this test.
+#[cfg(unix)]
+#[test]
+fn perf_harness_suite_rejects_shadowed_taskset_via_resolve_guard_tools() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (manifest_path, bin_path) = write_temp_verified_baseline(dir.path());
+    let candidate_path = dir.path().join("candidate-neomacs");
+    fs::write(&candidate_path, b"fake-candidate-binary").expect("write candidate");
+
+    let shadow_dir = dir.path().join("shadow");
+    let sys_dir = dir.path().join("sys");
+    fs::create_dir_all(&shadow_dir).expect("shadow dir");
+    fs::create_dir_all(&sys_dir).expect("sys dir");
+    for tool in [
+        shadow_dir.join("taskset"),
+        sys_dir.join("taskset"),
+        sys_dir.join("perf"),
+    ] {
+        fs::write(&tool, b"#!/bin/sh\nexit 0\n").expect("write stub");
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).expect("chmod +x");
+    }
+    let shadowed_path = std::env::join_paths([&shadow_dir, &sys_dir]).expect("join PATH");
+
+    let request = SuiteRequest::new(
+        SuiteId::OrgEditingGuard,
+        &bin_path,
+        &candidate_path,
+        ComparisonSampleCount::new(3).expect("valid sample count"),
+    )
+    .with_machine_policy(MachinePolicy {
+        cpu: Some(0),
+        required_governor: None,
+    })
+    .with_counters(Some(CounterScope::EditLoop))
+    .with_baseline_manifest(Some(manifest_path))
+    .with_guard_path_override(Some(shadowed_path));
+
+    let err = PerfHarness::new(dir.path())
+        .suite(&request)
+        .expect_err("PerfHarness::suite must reject shadowed taskset before launch");
+    let PerfError::GuardToolPathViolation { tool, reason } = err else {
+        panic!("expected GuardToolPathViolation, got {err:?}");
+    };
+    assert_eq!(tool, "taskset");
+    assert!(
+        reason.contains("PATH") && reason.contains("taskset") && reason.contains("shadows"),
+        "expected PATH shadowing message, got: {reason}"
+    );
+    assert!(
+        !dir.path().join("tmp/perf-suites").exists(),
+        "shadowed tool must fail before creating suite artifacts"
+    );
+}
+
+/// #14946 wiring-edge test: `comparison_run_from_child` (the production helper
+/// called by `PerfHarness::compare`) MUST read the full unfiltered
+/// `passthrough_environment` from serialized `input-provenance.json` into
+/// `ComparisonRun.passthrough_environment`, and `evaluate_comparison` must
+/// reject every deviated key by name. Reverting `comparison_run_from_child`
+/// to filter or drop `passthrough_environment` fails this test.
+#[test]
+fn comparison_run_from_child_reads_full_passthrough_environment_and_rejects_deviations() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let samples = ComparisonSampleCount::new(3).expect("valid sample count");
+    let verified = verified_guard_baseline();
+    let row = &SuiteId::OrgEditingGuard.scenarios()[0];
+    let suite_request = SuiteRequest::new(
+        SuiteId::OrgEditingGuard,
+        &verified.binary_path,
+        CANONICAL_TEST_CANDIDATE,
+        samples,
+    )
+    .with_counters(Some(CounterScope::EditLoop))
+    .with_baseline_manifest(Some(verified.manifest_path.clone()));
+    let input = suite_request
+        .comparison_request_for(
+            row,
+            Some(verified),
+            Some(resolved_test_guard_tools()),
+            Some(Path::new(CANONICAL_TEST_CANDIDATE)),
+        )
+        .build_input();
+
+    let run_dir = dir.path().join("child-run-0");
+    fs::create_dir_all(&run_dir).expect("create child run dir");
+    let artifact_path = run_dir.join("artifact.json");
+    let provenance_path = run_dir.join("input-provenance.json");
+    let leaked_env = BTreeMap::from([
+        (
+            "LD_LIBRARY_PATH".to_string(),
+            "/tmp/evil-shim-lib".to_string(),
+        ),
+        (
+            "NEOMACS_RUNTIME_ROOT".to_string(),
+            "/tmp/alt-runtime".to_string(),
+        ),
+        ("NEOVM_GC_STRESS".to_string(), "1".to_string()),
+        ("NEOVM_JIT".to_string(), "0".to_string()),
+    ]);
+    let provenance_doc = serde_json::json!({
+        "editor": guard_provenance(ComparisonRunRole::Baseline),
+        "passthrough_environment": leaked_env,
+    });
+    fs::write(
+        &provenance_path,
+        serde_json::to_vec_pretty(&provenance_doc).expect("serialize provenance"),
+    )
+    .expect("write input-provenance.json");
+
+    let child_report = RunReport {
+        artifact: RunArtifact {
+            schema_version: ARTIFACT_SCHEMA_VERSION,
+            run_id: "org-editing-Baseline-0".to_string(),
+            scenario: row.scenario,
+            frontend: Frontend::Batch,
+            editor: input.baseline_editor.clone(),
+            iterations: input.iterations.get(),
+            started_unix_ms: 1,
+            total_elapsed_us: 2,
+            host: HostProvenance {
+                operating_system: "linux".to_string(),
+                architecture: "x86_64".to_string(),
+                kernel_release: None,
+                cpu_model: None,
+                logical_cpu_count: 1,
+                allowed_cpus: None,
+                selected_cpu: None,
+                scaling_governor: None,
+                perf_event_paranoid: None,
+                continuous_integration: false,
+            },
+            native_video_execution: None,
+            verdict: RunVerdict::Valid {
+                measurements: guard_measurements(1000.0, 5_000_000.0, Some(10_000_000.0)),
+            },
+            files: Vec::new(),
+        },
+        artifact_path,
+    };
+
+    let extracted_run = comparison_run_from_child(ComparisonRunRole::Baseline, 0, &child_report);
+    assert_eq!(
+        extracted_run.passthrough_environment.as_ref(),
+        Some(&leaked_env),
+        "comparison_run_from_child must preserve the full unfiltered passthrough_environment"
+    );
+
+    let mut observations = guard_observations_with_env(
+        row,
+        input.iterations.get(),
+        samples,
+        ComparisonRunRole::Baseline,
+        BTreeMap::new(),
+    );
+    observations[0] = ComparisonObservation {
+        run: extracted_run,
+        verdict: child_report.artifact.verdict,
+    };
+    let ComparisonVerdict::Rejected { reasons } = evaluate_comparison(&input, &observations) else {
+        panic!("full passthrough_environment read from disk must reject comparison");
+    };
+    assert!(
+        reasons.iter().any(|reason| matches!(
+            reason,
+            ComparisonRejection::BaselineManifestProvenanceMismatch {
+                role: ComparisonRunRole::Baseline,
+                sample_index: 0,
+                reason,
+                ..
+            } if reason.contains("LD_LIBRARY_PATH")
+                && reason.contains("NEOMACS_RUNTIME_ROOT")
+                && reason.contains("NEOVM_GC_STRESS")
+                && reason.contains("NEOVM_JIT")
+        )),
+        "expected rejection naming all 4 leaked vars from disk provenance, got {reasons:?}"
+    );
 }

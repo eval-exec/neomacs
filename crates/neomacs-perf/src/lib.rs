@@ -32,7 +32,8 @@ pub use catalog::{
 pub use cli::{PerfCliError, PerfCommand, parse_perf_command, run_cli};
 #[cfg(test)]
 pub(crate) use comparison::{
-    COMPARISON_ARTIFACT_SCHEMA_VERSION, ComparisonObservation, evaluate_comparison,
+    COMPARISON_ARTIFACT_SCHEMA_VERSION, ComparisonObservation, comparison_run_from_child,
+    evaluate_comparison,
 };
 pub use comparison::{
     ComparisonArtifact, ComparisonInput, ComparisonMetricSummary, ComparisonPairedSample,

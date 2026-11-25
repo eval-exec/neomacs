@@ -737,19 +737,39 @@ pub(crate) fn evaluate_comparison(
                         run_id: run.run_id.clone(),
                     });
                 }
-                if run.role == ComparisonRunRole::Baseline {
-                    if let Some(expected_baseline) = &input.expected_baseline {
-                        if let Err(reason) = validate_baseline_manifest_provenance(
-                            expected_baseline,
-                            &input.baseline_editor,
-                            actual,
-                        ) {
-                            reasons.push(ComparisonRejection::BaselineManifestProvenanceMismatch {
-                                role: run.role,
-                                sample_index: run.sample_index,
-                                run_id: run.run_id.clone(),
-                                reason,
-                            });
+                if let Some(expected_baseline) = &input.expected_baseline {
+                    match run.role {
+                        ComparisonRunRole::Baseline => {
+                            if let Err(reason) = validate_baseline_manifest_provenance(
+                                expected_baseline,
+                                &input.baseline_editor,
+                                actual,
+                            ) {
+                                reasons.push(
+                                    ComparisonRejection::BaselineManifestProvenanceMismatch {
+                                        role: run.role,
+                                        sample_index: run.sample_index,
+                                        run_id: run.run_id.clone(),
+                                        reason,
+                                    },
+                                );
+                            }
+                        }
+                        ComparisonRunRole::Candidate => {
+                            if let Err(reason) = validate_candidate_guard_provenance(
+                                expected_baseline,
+                                &input.candidate_editor,
+                                actual,
+                            ) {
+                                reasons.push(
+                                    ComparisonRejection::BaselineManifestProvenanceMismatch {
+                                        role: run.role,
+                                        sample_index: run.sample_index,
+                                        run_id: run.run_id.clone(),
+                                        reason,
+                                    },
+                                );
+                            }
                         }
                     }
                 }
@@ -994,6 +1014,22 @@ fn validate_guard_run_environment(
             overrides
         ));
     }
+    if input.primary_metric == MetricName::Instructions
+        && input.counters != Some(crate::CounterScope::EditLoop)
+    {
+        return Err(format!(
+            "manifest-pinned instruction guard requires counter scope EditLoop (manifest={}), got {:?}",
+            expected.manifest_path.display(),
+            input.counters
+        ));
+    }
+    if !input.candidate_editor.is_absolute() {
+        return Err(format!(
+            "manifest-pinned guard requires canonical absolute candidate executable path (manifest={}), got {}",
+            expected.manifest_path.display(),
+            input.candidate_editor.display()
+        ));
+    }
     match &input.guard_tools {
         None => {
             return Err(format!(
@@ -1052,6 +1088,30 @@ fn validate_guard_run_environment(
             run.role,
             expected.manifest_path.display(),
             unexpected
+        ));
+    }
+    Ok(())
+}
+
+fn validate_candidate_guard_provenance(
+    expected: &crate::VerifiedBaselineManifest,
+    configured_candidate_editor: &Path,
+    actual: &EditorProvenance,
+) -> Result<(), String> {
+    if !configured_candidate_editor.is_absolute() {
+        return Err(format!(
+            "manifest-pinned guard candidate executable must use a canonical absolute path (manifest={}, configured={})",
+            expected.manifest_path.display(),
+            configured_candidate_editor.display(),
+        ));
+    }
+    let expected_candidate_path = configured_candidate_editor.to_string_lossy();
+    if actual.path != expected_candidate_path {
+        return Err(format!(
+            "candidate observed canonical executable path mismatch (manifest={}): expected {}, observed {}",
+            expected.manifest_path.display(),
+            expected_candidate_path,
+            actual.path,
         ));
     }
     Ok(())
@@ -1186,35 +1246,10 @@ impl PerfHarness {
         for (role, sample_index) in comparison_schedule(request.samples_per_side) {
             let run_request = request.run_request_for(role);
             let report = self.run(&run_request)?;
-            let child_provenance = read_child_provenance(&report.artifact_path);
-            let child = report.artifact;
-            let outcome = ComparisonRunOutcome::from(&child.verdict);
+            let run = comparison_run_from_child(role, sample_index, &report);
             observations.push(ComparisonObservation {
-                run: ComparisonRun {
-                    role,
-                    sample_index,
-                    run_id: child.run_id,
-                    artifact_path: report.artifact_path,
-                    scenario: child.scenario,
-                    frontend: child.frontend,
-                    editor: child.editor,
-                    iterations: child.iterations,
-                    editor_provenance: child_provenance
-                        .as_ref()
-                        .map(|provenance| provenance.editor.clone()),
-                    execution_environment: child_provenance
-                        .as_ref()
-                        .and_then(|p| p.passthrough_environment.as_ref())
-                        .map(extract_execution_environment),
-                    passthrough_environment: child_provenance
-                        .as_ref()
-                        .and_then(|p| p.passthrough_environment.clone()),
-                    native_video_input: child_provenance
-                        .and_then(|provenance| provenance.comparison_identity),
-                    native_video_execution: child.native_video_execution,
-                    outcome,
-                },
-                verdict: child.verdict,
+                run,
+                verdict: report.artifact.verdict,
             });
         }
         let verdict = evaluate_comparison(&input, &observations);
@@ -1237,6 +1272,39 @@ impl PerfHarness {
             artifact,
             artifact_path,
         })
+    }
+}
+
+pub(crate) fn comparison_run_from_child(
+    role: ComparisonRunRole,
+    sample_index: u32,
+    report: &crate::RunReport,
+) -> ComparisonRun {
+    let child_provenance = read_child_provenance(&report.artifact_path);
+    let child = &report.artifact;
+    let outcome = ComparisonRunOutcome::from(&child.verdict);
+    ComparisonRun {
+        role,
+        sample_index,
+        run_id: child.run_id.clone(),
+        artifact_path: report.artifact_path.clone(),
+        scenario: child.scenario,
+        frontend: child.frontend,
+        editor: child.editor.clone(),
+        iterations: child.iterations,
+        editor_provenance: child_provenance
+            .as_ref()
+            .map(|provenance| provenance.editor.clone()),
+        execution_environment: child_provenance
+            .as_ref()
+            .and_then(|p| p.passthrough_environment.as_ref())
+            .map(extract_execution_environment),
+        passthrough_environment: child_provenance
+            .as_ref()
+            .and_then(|p| p.passthrough_environment.clone()),
+        native_video_input: child_provenance.and_then(|provenance| provenance.comparison_identity),
+        native_video_execution: child.native_video_execution.clone(),
+        outcome,
     }
 }
 

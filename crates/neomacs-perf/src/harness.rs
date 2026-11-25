@@ -283,6 +283,14 @@ pub enum PerfError {
     },
     #[error("guard host tool `{tool}` resolution failed: {reason}")]
     GuardToolPathViolation { tool: &'static str, reason: String },
+    #[error("invalid candidate editor {path}: {reason}")]
+    CandidateEditorInvalid { path: PathBuf, reason: String },
+    #[error("suite `{suite}` requires --counter-scope {expected:?}, got {actual:?}")]
+    CounterScopeMismatch {
+        suite: crate::SuiteId,
+        expected: CounterScope,
+        actual: CounterScope,
+    },
 }
 
 #[derive(Clone, Debug)]

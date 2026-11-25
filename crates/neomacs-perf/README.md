@@ -406,15 +406,17 @@ budget against the frozen `v0.0.21` release asset pinned in
 editor, and any sample missing `MetricName::Instructions` is rejected rather
 than falling back to wall time). The manifest verifies the SHA-256 and byte
 size of both the baseline binary and its sibling portable dump before running,
-threads the canonical absolute binary path through verify, provenance, and
-execution, resolves `perf` (and `taskset` when `--cpu` is set) to unambiguous
-canonical absolute paths while rejecting `PATH` shadowing, constructs a closed
-empty inherited environment for BOTH baseline and candidate arms (no
-`LD_LIBRARY_PATH`, `PATH`, `NEOMACS_RUNTIME_ROOT`, or `NEOVM_*`/`NEOMACS_*`
-knobs forwarded), and set-compares the full recorded `passthrough_environment`
-alongside canonical executable path, executable SHA-256/size, and loaded
-portable dump SHA-256/size on every sample. `SuiteId::Standard` keeps its
-existing `2.0%` wall-time drift ratchet and environment forwarding untouched.
+threads canonical absolute paths for BOTH baseline and candidate editors
+through verify, provenance, and execution, binds `--counter-scope` strictly to
+`edit-loop`, resolves `perf` (and `taskset` when `--cpu` is set) to
+unambiguous canonical absolute paths while rejecting `PATH` shadowing,
+constructs a closed empty inherited environment for BOTH baseline and
+candidate arms (no `LD_LIBRARY_PATH`, `PATH`, `NEOMACS_RUNTIME_ROOT`, or
+`NEOVM_*`/`NEOMACS_*` knobs forwarded), and set-compares the full recorded
+`passthrough_environment` alongside canonical executable paths, baseline
+executable SHA-256/size, and loaded portable dump SHA-256/size on every
+sample. `SuiteId::Standard` keeps its existing `2.0%` wall-time drift ratchet
+and environment forwarding untouched.
 
 ## `rust-lsp-typing`
 
