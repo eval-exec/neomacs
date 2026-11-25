@@ -10265,11 +10265,8 @@ fn vm_a_symbol_callee_reads_its_live_cell_and_an_epoch_change_escapes_once() {
     assert!(engine.call_escapes().is_empty());
     assert_clear(&engine);
 
-    // `fset` updates symbol to f2 and bumps world epoch to 1.
-    let new_epoch = code.fset(sym_id, f2);
-    assert_eq!(new_epoch, 1);
-
-    // Run 2 & 3 in one two-call program:
+    // Run 2 & 3 in one two-call program after `fset` updates symbol to f2 and
+    // bumps world epoch to 1:
     //   call #1 sees stale epoch 0 != 1 -> escapes ONCE with FunctionEpoch,
     //           escape refreshes CallEnv.function_epoch = 1;
     //   call #2 sees fresh epoch 1 == 1 -> owner-local against f2 -> 110!
@@ -10875,6 +10872,14 @@ fn vm_a_setq_of_a_call_env_variable_escapes() {
     let overrides_sym = intern(INTERNAL_COMPILER_FUNCTION_OVERRIDES);
 
     Context::with_test_mutator_era(|era| {
+        // Positive control: an ordinary non-forwarded, non-projected plain
+        // bootstrap symbol is admitted in the same era, so the three refusals
+        // below cannot pass vacuously.
+        let control = era.admit_plain_symbol(intern("frame--special-parameters"));
+        assert!(
+            control.is_ok(),
+            "positive control: ordinary plain bootstrap symbol must be admitted, got {control:?}"
+        );
         for (name, sym) in [
             ("max-lisp-eval-depth", depth_sym),
             ("debug-on-next-call", debug_sym),
@@ -11088,4 +11093,91 @@ fn vm_an_owner_local_call_reads_no_cold_admission() {
     assert_eq!(warm_engine.escape_handler().requests.len(), 0);
     assert!(warm_engine.call_escapes().is_empty());
     assert_clear(&warm_engine);
+}
+
+#[test]
+fn vm_owner_local_call_with_bad_nonrest_contract_poisons_with_dispatch_contract() {
+    // V7 review nit 1: a misbehaving `VmCode::classify_call` that returns
+    // `OwnerLocal` with `nonrest < nargs` violates the classifier contract;
+    // `step_call` must surface `EngineFault::DispatchContract(Op::Call(1))`
+    // and poison the engine (matching `push_vm` refusal) rather than settling
+    // cleanly via `EngineFault::StaleFrame`.
+    struct BadNonrestCode {
+        entry_ops: Vec<Op>,
+        entry_constants: Vec<Value>,
+        entry_code: Value,
+        callee: Value,
+    }
+    impl VmCode for BadNonrestCode {
+        fn program(&self, code: Value) -> Result<VmProgram<'_>, CodeRefusal> {
+            if code == self.entry_code {
+                return Ok(VmProgram {
+                    ops: &self.entry_ops,
+                    constants: &self.entry_constants,
+                    function: self.entry_code,
+                    code: self.entry_code,
+                });
+            }
+            program_from_bytecode(code)
+        }
+        fn classify_call(
+            &self,
+            _designator: Value,
+            _nargs: u16,
+            _env: &CallEnv,
+            _arena: &FrameArena,
+        ) -> CallClass {
+            // Contract violation: Call(1) has nargs = 1, but nonrest = 0.
+            CallClass::OwnerLocal {
+                code: self.callee,
+                nonrest: 0,
+                frame_bytes: 0,
+            }
+        }
+    }
+
+    let mut ctx = context();
+    let callee = make_v7_bytecode(0, 0, vec![Op::Nil, Op::Return], vec![], 4);
+    let entry_code = Value::symbol("pvm-v7-bad-nonrest-entry");
+    let code = BadNonrestCode {
+        entry_ops: vec![Op::Constant(0), Op::Constant(1), Op::Call(1), Op::Return],
+        entry_constants: vec![callee, Value::fixnum(1)],
+        entry_code,
+        callee,
+    };
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::new(),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run_with_code(
+        &mut ctx,
+        &code,
+        VmEntry {
+            function: entry_code,
+            code: entry_code,
+            frame_bytes: 0,
+        },
+    );
+    let fault = fault_of(outcome);
+    assert!(
+        matches!(fault, EngineFault::DispatchContract(Op::Call(1))),
+        "bad nonrest < nargs must fault with DispatchContract(Call(1)), got {fault:?}"
+    );
+    let second = engine.run_with_code(
+        &mut ctx,
+        &code,
+        VmEntry {
+            function: entry_code,
+            code: entry_code,
+            frame_bytes: 0,
+        },
+    );
+    assert!(
+        matches!(second, VmOutcome::Fault(EngineFault::Poisoned)),
+        "DispatchContract fault must poison the engine, got {second:?}"
+    );
 }

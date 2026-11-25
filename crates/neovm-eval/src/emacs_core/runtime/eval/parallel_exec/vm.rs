@@ -1966,7 +1966,7 @@ where
             .vm_copy_args_and_pad(child_id, args_src_start, nargs, nonrest)
             .is_none()
         {
-            return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
+            return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op)));
         }
         self.arena.charge_bc_position(frame_bytes);
         self.max_depth = self.max_depth.max(self.arena.depth());
