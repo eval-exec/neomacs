@@ -88,7 +88,11 @@ const CONTINUE_PROBE: &str = r#";;; -*- lexical-binding: nil; -*-
 
 const ABORT_PROBE: &str = r#";;; -*- lexical-binding: nil; -*-
 (let* ((dir (getenv "EE_DIR"))
+       (target (expand-file-name "draft.txt" dir))
        (ready (expand-file-name "ready" dir)))
+  (find-file target)
+  (auto-save-mode 1)
+  (insert "unsaved abort line\n")
   (let ((inhibit-quit t))
     (with-temp-file ready
       (insert "ready\n"))
@@ -283,13 +287,25 @@ fn run_continue_case(program: &Path, name: &str) -> ContinueObservation {
     }
 }
 
-fn run_abort_case(program: &Path, name: &str) -> (i32, String) {
+#[derive(Debug, PartialEq, Eq)]
+struct AbortObservation {
+    stop_signal: i32,
+    child_status: String,
+    lock_existed_before_abort: bool,
+    lock_exists_after_abort: bool,
+    autosave_contents: Option<String>,
+    saw_fatal_error_line: bool,
+}
+
+fn run_abort_case(program: &Path, name: &str) -> AbortObservation {
     let dir = neomacs_tui_tests::TuiTempDirectory::new("tty-ee-abort-");
     let script = dir.path().join("probe.el");
     let ready = dir.path().join("ready");
     let stopped = dir.path().join("stopped");
     let resume = dir.path().join("resume");
     let status = dir.path().join("status");
+    let autosave_file = dir.path().join("#draft.txt#");
+    let lock_file = dir.path().join(".#draft.txt");
     std::fs::write(&script, ABORT_PROBE).expect("write abort probe");
 
     let mut session = spawn_job_controlled_editor(
@@ -306,6 +322,9 @@ fn run_abort_case(program: &Path, name: &str) -> (i32, String) {
         wait_for_file(&ready, &mut session, Duration::from_secs(30)),
         "{name} did not enter inhibit-quit loop"
     );
+    // Emacs lock files are symlinks whose target does not exist on disk; use
+    // symlink_metadata rather than Path::exists.
+    let lock_existed_before_abort = std::fs::symlink_metadata(&lock_file).is_ok();
 
     session.clear_recent_output();
     session.send(b"\x07");
@@ -332,6 +351,9 @@ fn run_abort_case(program: &Path, name: &str) -> (i32, String) {
         session.wait_for_raw_output(b"Auto-save? (y or n) ", Duration::from_secs(10)),
         "{name} missing Auto-save prompt"
     );
+    // Answer "n" to Auto-save, then "y" to Abort: GNU emacs_abort ->
+    // terminate_due_to_signal(SIGABRT, 40) -> shut_down_emacs STILL auto-saves
+    // modified buffers, unlocks lock files, and writes "Fatal error 6: Aborted".
     session.send(b"n\n");
     assert!(
         session.wait_for_raw_output(b"Abort (and dump core)? (y or n) ", Duration::from_secs(10)),
@@ -345,7 +367,20 @@ fn run_abort_case(program: &Path, name: &str) -> (i32, String) {
         "{name} job-control parent did not exit after Abort=y"
     );
     let child_status = std::fs::read_to_string(&status).expect("read abort status");
-    (stop_signal, child_status)
+    let lock_exists_after_abort = std::fs::symlink_metadata(&lock_file).is_ok();
+    let autosave_contents = std::fs::read_to_string(&autosave_file).ok();
+    let saw_fatal_error_line = session
+        .recent_output()
+        .windows(b"Fatal error 6: Aborted".len())
+        .any(|w| w == b"Fatal error 6: Aborted");
+    AbortObservation {
+        stop_signal,
+        child_status,
+        lock_existed_before_abort,
+        lock_exists_after_abort,
+        autosave_contents,
+        saw_fatal_error_line,
+    }
 }
 
 #[test]
@@ -391,8 +426,15 @@ fn controlling_tty_second_ctrl_g_abort_terminates_with_sigabrt() {
 
     assert_eq!(
         gnu_obs,
-        (libc::SIGTSTP, format!("signal:{}", libc::SIGABRT)),
-        "GNU 31.1 abort contract"
+        AbortObservation {
+            stop_signal: libc::SIGTSTP,
+            child_status: format!("signal:{}", libc::SIGABRT),
+            lock_existed_before_abort: true,
+            lock_exists_after_abort: false,
+            autosave_contents: Some("unsaved abort line\n".to_string()),
+            saw_fatal_error_line: true,
+        },
+        "GNU 31.1 abort orderly shutdown contract"
     );
     assert_eq!(
         neo_obs, gnu_obs,

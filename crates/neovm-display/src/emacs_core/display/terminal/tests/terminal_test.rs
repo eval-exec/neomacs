@@ -1445,10 +1445,10 @@ impl TerminalHost for EmergencyEscapeProbeHost {
         Ok(())
     }
 
-    fn run_emergency_escape(&mut self, auto_save: &mut dyn FnMut()) -> bool {
+    fn run_emergency_escape(&mut self, ops: &mut dyn EmergencyEscapeOps) -> bool {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.trigger_auto_save {
-            auto_save();
+            ops.auto_save();
         }
         true
     }
@@ -1497,6 +1497,15 @@ fn controlling_tty_second_quit_interrupt_triggers_emergency_escape() {
     assert!(eval.quit_flag_value().is_truthy());
     assert!(eval.inhibit_quit.is_truthy());
 
+    // Batched presses (3 at once from quit-flag == nil): press 1 sets
+    // quit-flag, presses 2 and 3 both invoke emergency escape without dropping
+    // the trailing press.
+    eval.set_quit_flag_value(Value::NIL);
+    eval.record_quit_interrupts(3);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+    assert!(eval.quit_flag_value().is_truthy());
+    assert!(eval.inhibit_quit.is_truthy());
+
     reset_terminal_host();
 }
 
@@ -1520,6 +1529,23 @@ fn suspended_or_non_tty_terminal_falls_back_to_force_quit_count() {
 
     // 3rd C-g clears inhibit-quit via force_quit_count == 3.
     eval.record_quit_interrupts(1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(eval.inhibit_quit.is_nil());
+
+    // A secondary termcap TTY (name != "/dev/tty") must NOT trigger
+    // controlling-TTY emergency escape even if its host implements it.
+    configure_terminal_runtime(
+        TerminalRuntimeConfig::interactive(
+            Some("xterm-256color".to_string()),
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+                256,
+            ),
+        )
+        .with_name("/dev/pts/9"),
+    );
+    eval.set_quit_flag_value(Value::NIL);
+    eval.set_variable("inhibit-quit", Value::T);
+    eval.record_quit_interrupts(3);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert!(eval.inhibit_quit.is_nil());
 

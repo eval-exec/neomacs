@@ -166,7 +166,8 @@ impl TerminalRuntime {
 pub use super::config::{TerminalRuntimeConfig, TtyTerminalConfig};
 
 pub use neovm_eval::emacs_core::eval::protocol::tty_host::{
-    OpenedTtyFrameHost, TerminalHost, TtyFrameHostFactory, TtyFrameOpenRequest, TtyFrameSize,
+    EmergencyEscapeOps, OpenedTtyFrameHost, TerminalHost, TtyFrameHostFactory, TtyFrameOpenRequest,
+    TtyFrameSize,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1187,23 +1188,30 @@ fn with_terminal_host_for_id<R>(
     })
 }
 
+#[cfg(windows)]
+const CONTROLLING_DEV_TTY_NAME: &str = "CONOUT$";
+#[cfg(not(windows))]
+const CONTROLLING_DEV_TTY_NAME: &str = "/dev/tty";
+
+/// GNU `get_named_terminal (dev_tty)` (`src/terminal.c:263-277`): matches only
+/// a live, non-suspended (`TERMINAL_ACTIVE_P`) termcap terminal whose name is
+/// `dev_tty` (`"/dev/tty"` on Unix), never secondary TTYs opened via
+/// `make-terminal-frame` or `emacsclient -t`.
 fn is_active_controlling_tty_for_emergency_escape(terminal: &TerminalRecord) -> bool {
-    !terminal.deleted
-        && terminal.output_method == TerminalOutputMethod::Termcap
-        && terminal.runtime.active
-        && terminal.runtime.controlling_tty
-        && !terminal.runtime.suspended
+    terminal.output_method == TerminalOutputMethod::Termcap
+        && terminal.name == CONTROLLING_DEV_TTY_NAME
+        && terminal.is_active()
         && terminal.host.is_some()
 }
 
 /// GNU `handle_interrupt` controlling-TTY emergency escape
 /// (`src/keyboard.c:12622-12711`, `src/terminal.c:263-277`).
 ///
-/// Looks up an active, live, non-suspended controlling termcap terminal,
-/// temporarily takes its host so `TERMINAL_MANAGER` is not borrowed across
-/// Lisp `auto-save-hook`, runs [`TerminalHost::run_emergency_escape`],
-/// restores the host via RAII drop guard, and invalidates redisplay when
-/// handled.
+/// Looks up an active, live, non-suspended controlling termcap terminal named
+/// `"/dev/tty"`, temporarily takes its host so `TERMINAL_MANAGER` is not
+/// borrowed across Lisp `auto-save-hook`, runs
+/// [`TerminalHost::run_emergency_escape`], restores the host via RAII drop
+/// guard, and invalidates redisplay when handled.
 pub fn try_run_controlling_tty_emergency_escape(
     ctx: &mut neovm_eval::emacs_core::eval::Context,
 ) -> bool {
@@ -1240,14 +1248,29 @@ pub fn try_run_controlling_tty_emergency_escape(
         }
     }
 
+    struct ContextEmergencyEscapeOps<'a>(&'a mut neovm_eval::emacs_core::eval::Context);
+
+    impl EmergencyEscapeOps for ContextEmergencyEscapeOps<'_> {
+        fn auto_save(&mut self) {
+            self.0.run_emergency_auto_save();
+        }
+
+        fn abort_orderly(&mut self) -> ! {
+            self.0.run_emergency_abort()
+        }
+    }
+
     let mut guard = RestoreHost {
         id,
         host: Some(host),
     };
-    let handled = guard
-        .host
-        .as_deref_mut()
-        .is_some_and(|host| host.run_emergency_escape(&mut || ctx.run_emergency_auto_save()));
+    let handled = {
+        let mut ops = ContextEmergencyEscapeOps(ctx);
+        guard
+            .host
+            .as_deref_mut()
+            .is_some_and(|host| host.run_emergency_escape(&mut ops))
+    };
     drop(guard);
     if handled {
         ctx.invalidate_redisplay();

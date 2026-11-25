@@ -7833,6 +7833,12 @@ pub(crate) fn builtin_do_auto_save(
     // (`:6482`). There is no `record_unwind_current_buffer`.
     let old_buffer = eval.edit.buffers.current_buffer_id();
 
+    // GNU `Fdo_auto_save` (`fileio.c:6353-6356`): ordinarily don't quit within
+    // auto-save, without making it impossible to quit if hung in I/O. Restored
+    // only on normal return (`fileio.c:6512`).
+    let saved_quit_flag = eval.quit_flag_value();
+    eval.set_quit_flag_value(Value::NIL);
+
     // GNU `Fdo_auto_save` runs this before inspecting or snapshotting any
     // buffer, so edits made by the hook belong to this auto-save pass.  Use
     // the same safe named-hook boundary as the command loop: one broken hook
@@ -8090,6 +8096,9 @@ pub(crate) fn builtin_do_auto_save(
             auto_save_say(eval, "Auto-saving...done");
         }
     }
+
+    // GNU `fileio.c:6512`: restore `Vquit_flag` on normal return only.
+    eval.set_quit_flag_value(saved_quit_flag);
 
     Ok(Value::NIL)
 }

@@ -24,7 +24,7 @@ pub struct TtyTerminalHost {
 }
 
 impl TtyTerminalHost {
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     #[inline(always)]
     pub(crate) fn new(cmd_tx: RenderCommandSender) -> Self {
         Self::with_emergency_escape(
@@ -231,12 +231,18 @@ impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
             .map_err(|err| format!("failed to write to the terminal: {err}"))
     }
 
-    fn run_emergency_escape(&mut self, auto_save: &mut dyn FnMut()) -> bool {
+    fn run_emergency_escape(
+        &mut self,
+        ops: &mut dyn neovm_core::emacs_core::terminal::pure::EmergencyEscapeOps,
+    ) -> bool {
         let _pause_guard = self.input_pause.pause();
         #[cfg(unix)]
         let _sigint_guard = SigintBlockGuard::block();
 
         let _ = io::stdout().flush();
+        // Scope note: resets/re-initializes only the primary controlling TTY
+        // (GNU's `reset_all_sys_modes`/`init_all_sys_modes` also cover
+        // secondary TTYs).
         super::tty_init::tty_shutdown_terminal();
         let _ = io::stdout().flush();
 
@@ -249,8 +255,10 @@ impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
             Some(&mut suspend),
             #[cfg(not(unix))]
             None,
-            auto_save,
-            || std::process::abort(),
+            |action| match action {
+                EmergencyEscapeAction::AutoSave => ops.auto_save(),
+                EmergencyEscapeAction::Abort => ops.abort_orderly(),
+            },
         );
 
         if let Err(err) = super::tty_init::tty_init_terminal() {
@@ -261,14 +269,23 @@ impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EmergencyEscapeAction {
+    AutoSave,
+    Abort,
+}
+
 /// GNU `handle_interrupt` emergency escape prompt sequence
 /// (`src/keyboard.c:12638-12710`).
+///
+/// Scope note: GNU's `gc_in_progress` branch (`src/keyboard.c:12681-12693`) is
+/// intentionally omitted because Neomacs enters emergency escape only at an
+/// evaluator safe point, never asynchronously from inside GC.
 fn run_emergency_escape_session(
     mut read_byte: impl FnMut() -> Option<u8>,
     mut write_bytes: impl FnMut(&[u8]),
     suspend: Option<&mut dyn FnMut()>,
-    auto_save: &mut dyn FnMut(),
-    mut abort_process: impl FnMut(),
+    mut on_action: impl FnMut(EmergencyEscapeAction),
 ) {
     if let Some(suspend_fn) = suspend {
         suspend_fn();
@@ -283,7 +300,7 @@ fn run_emergency_escape_session(
     write_bytes(b"Auto-save? (y or n) ");
     let first = read_byte();
     if matches!(first, Some(b'y' | b'Y')) {
-        auto_save();
+        on_action(EmergencyEscapeAction::AutoSave);
         write_bytes(b"Auto-save done\n");
     }
     drain_to_newline(first, &mut read_byte);
@@ -291,13 +308,17 @@ fn run_emergency_escape_session(
     write_bytes(b"Abort (and dump core)? (y or n) ");
     let first = read_byte();
     if matches!(first, Some(b'y' | b'Y')) {
-        abort_process();
+        on_action(EmergencyEscapeAction::Abort);
     }
     drain_to_newline(first, &mut read_byte);
 
     write_bytes(b"Continuing...\n");
 }
 
+/// Deliberate deviation from GNU `src/keyboard.c:12678-12679,12703-12704`:
+/// GNU's `read_stdin ()` (`:12591-12596`) returns `EOF` on EOF or error and
+/// `while (c != '\n')` spins forever if stdin closes mid-prompt. Neomacs stops
+/// draining on `None` (EOF) so a closed PTY cannot spin.
 fn drain_to_newline(mut last: Option<u8>, read_byte: &mut impl FnMut() -> Option<u8>) {
     while !matches!(last, None | Some(b'\n')) {
         last = read_byte();
@@ -391,6 +412,12 @@ fn write_stdout_unbuffered(bytes: &[u8]) {
     let _ = stdout.flush();
 }
 
+/// Unbuffered 1-byte stdin read for emergency-escape prompts.
+///
+/// Deliberate deviation from GNU `read_stdin ()` (`src/keyboard.c:12591-12596`):
+/// GNU returns `EOF` on `EINTR` as well as real EOF; Neomacs retries `EINTR`
+/// (and `WouldBlock`) so an intervening signal (for example `SIGWINCH`) does
+/// not spuriously answer "not y" to the prompt.
 #[cfg(unix)]
 fn read_stdin_unbuffered_byte() -> Option<u8> {
     let mut byte = 0u8;
@@ -446,8 +473,10 @@ mod tests {
             || bytes.pop_front(),
             |chunk| output.extend_from_slice(chunk),
             supports_suspend.then_some(&mut record_suspend as &mut dyn FnMut()),
-            &mut || auto_saves += 1,
-            || aborts += 1,
+            |action| match action {
+                EmergencyEscapeAction::AutoSave => auto_saves += 1,
+                EmergencyEscapeAction::Abort => aborts += 1,
+            },
         );
         (
             String::from_utf8(output).expect("ASCII prompts"),

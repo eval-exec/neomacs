@@ -1244,6 +1244,41 @@ unsafe extern "C" fn deliver_fatal_fault(
     }
 }
 
+/// Emit GNU `shut_down_emacs`'s `"Fatal error 6: Aborted\n"` diagnostic to
+/// stderr when this process owns the foreground controlling TTY
+/// (`src/emacs.c:3112-3147`).
+pub fn write_fatal_abort_diagnostic() {
+    #[cfg(unix)]
+    // SAFETY: `write_fatal_error_line` performs only `tcgetpgrp`, `getpgrp`,
+    // and raw `write(STDERR_FILENO, ...)` syscalls.
+    unsafe {
+        write_fatal_error_line(libc::SIGABRT);
+    }
+}
+
+/// Finish GNU `emacs_abort ()` -> `terminate_due_to_signal (SIGABRT, 40)`
+/// (`src/sysdep.c:2401`, `src/emacs.c:464-483`): optionally write a 40-frame
+/// backtrace to stderr, then unblock `SIGABRT`, restore `SIG_DFL`, and raise
+/// `SIGABRT`.
+pub fn terminate_with_abort(print_backtrace: bool) -> ! {
+    #[cfg(unix)]
+    // SAFETY: captures and writes stack frames via `backtrace(3)` /
+    // `backtrace_symbols_fd`, then unblocks `SIGABRT`, restores `SIG_DFL`, and
+    // raises `SIGABRT`.
+    unsafe {
+        if print_backtrace {
+            capture_fault_backtrace();
+            write_fault_backtrace();
+        }
+        raise_fault_now(libc::SIGABRT)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = print_backtrace;
+        std::process::abort()
+    }
+}
+
 /// Install our SIGSEGV/SIGBUS actions after Rust std's, saving the previous
 /// action per signal. Idempotent; called by [`install_termination`], which
 /// runs from `main` after the Rust runtime has installed its handler.

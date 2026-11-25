@@ -1323,6 +1323,12 @@ mod unit_runtime {
         s::process_terminate_and_defer_reaping,
     );
 
+    fn display_unit_write_fatal_abort_diagnostic() {}
+
+    fn display_unit_terminate_with_abort(_print_backtrace: bool) -> ! {
+        std::process::abort()
+    }
+
     static INPUT: InputHooks = InputHooks::new(
         s::input_interrupt_for_input_event_if_requested,
         display_unit_os_signal_pending,
@@ -1333,6 +1339,8 @@ mod unit_runtime {
             drain: s::input_drain_signal_wake_pipe,
         },
         crate::emacs_core::terminal::pure::try_run_controlling_tty_emergency_escape,
+        display_unit_write_fatal_abort_diagnostic,
+        display_unit_terminate_with_abort,
     );
 
     static CALL_INTERACTIVELY: CallInteractivelyHooks =

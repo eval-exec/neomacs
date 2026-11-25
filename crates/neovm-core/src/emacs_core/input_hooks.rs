@@ -61,6 +61,14 @@ fn try_controlling_tty_emergency_escape(ctx: &mut crate::emacs_core::eval::Conte
     crate::emacs_core::terminal::pure::try_run_controlling_tty_emergency_escape(ctx)
 }
 
+fn write_fatal_abort_diagnostic() {
+    crate::emacs_core::os_signal::write_fatal_abort_diagnostic();
+}
+
+fn terminate_with_abort(print_backtrace: bool) -> ! {
+    crate::emacs_core::os_signal::terminate_with_abort(print_backtrace)
+}
+
 static CANONICAL_INPUT_HOOKS: InputHooks = InputHooks::new(
     interrupt_for_input_event_if_requested,
     os_signal_pending,
@@ -68,6 +76,8 @@ static CANONICAL_INPUT_HOOKS: InputHooks = InputHooks::new(
     drain_pending_os_signals,
     canonical_signal_wake(),
     try_controlling_tty_emergency_escape,
+    write_fatal_abort_diagnostic,
+    terminate_with_abort,
 );
 
 /// The one canonical input-wait descriptor (published only by the one core

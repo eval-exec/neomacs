@@ -790,6 +790,12 @@ mod unit_runtime {
         false
     }
 
+    fn unit_write_fatal_abort_diagnostic() {}
+
+    fn unit_terminate_with_abort(_print_backtrace: bool) -> ! {
+        std::process::abort()
+    }
+
     static INPUT: InputHooks = InputHooks::new(
         s::input_interrupt_for_input_event_if_requested,
         unit_os_signal_pending,
@@ -800,6 +806,8 @@ mod unit_runtime {
             drain: s::input_drain_signal_wake_pipe,
         },
         unit_try_controlling_tty_emergency_escape,
+        unit_write_fatal_abort_diagnostic,
+        unit_terminate_with_abort,
     );
 
     static CALL_INTERACTIVELY: CallInteractivelyHooks =

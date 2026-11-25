@@ -3114,16 +3114,48 @@ impl Context {
     }
 
     /// Run GNU `Fdo_auto_save (Qt, Qnil)` during controlling-TTY emergency
-    /// escape (`src/keyboard.c:12671`, `src/fileio.c:6355-6356,6512`).
+    /// escape (`src/keyboard.c:12671`).
     ///
-    /// Temporarily clears `quit-flag` across auto-save so the pending quit
-    /// does not abort saving, then restores `quit-flag` on return.
+    /// `builtin_do_auto_save` owns GNU's `oquit` save/clear/restore on normal
+    /// return (`src/fileio.c:6355-6356,6512`). Any escaping nonlocal `Flow`
+    /// (for example a `throw` out of `auto-save-hook`) is deliberately
+    /// contained here so control stays inside the emergency-escape prompt loop
+    /// and always finishes re-initializing the TTY rather than unwinding out
+    /// of cooked mode.
     #[doc(hidden)]
     pub fn run_emergency_auto_save(&mut self) {
-        let saved_quit_flag = self.quit_flag;
-        self.set_quit_flag_value(Value::NIL);
         let _ = crate::emacs_core::eval::auto_save_hooks::do_auto_save(self, Value::T, Value::NIL);
-        self.set_quit_flag_value(saved_quit_flag);
+    }
+
+    /// Run GNU `emacs_abort ()` -> `terminate_due_to_signal (SIGABRT, 40)`
+    /// (`src/sysdep.c:2401`, `src/emacs.c:441-483`, `shut_down_emacs` `:3104-3160`).
+    ///
+    /// When `attempt-orderly-shutdown-on-fatal-signal` is non-nil (and no fatal
+    /// abort is already in progress), runs GNU's orderly shutdown:
+    /// 1. `Vrun_hooks = Qnil`, `Vinhibit_redisplay = Qt` (`enter_shut_down`);
+    /// 2. `"Fatal error 6: Aborted\n"` on foreground controlling-TTY stderr;
+    /// 3. `inhibit_sentinels = 1` + `kill_buffer_processes` (`shutdown_processes_for_exit`);
+    /// 4. `Fdo_auto_save (Qt, Qnil)` (`auto_save_hooks::do_auto_save`);
+    /// 5. `unlock_all_files` (`unlock_all_files_for_shutdown`);
+    /// 6. `emacs_backtrace (40)` and `SIG_DFL` + `raise(SIGABRT)`.
+    #[doc(hidden)]
+    pub fn run_emergency_abort(&mut self) -> ! {
+        static FATAL_ABORT_IN_PROGRESS: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+
+        let sym = neovm_value::intern::intern("attempt-orderly-shutdown-on-fatal-signal");
+        let orderly = !self.variable_value_or_nil(sym).is_nil();
+        let mut ran_orderly = false;
+        if orderly && !FATAL_ABORT_IN_PROGRESS.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            ran_orderly = true;
+            self.enter_shut_down();
+            crate::emacs_core::eval::input_hooks::write_fatal_abort_diagnostic();
+            let _ = super::process_hooks::shutdown_processes_for_exit(self);
+            let _ =
+                crate::emacs_core::eval::auto_save_hooks::do_auto_save(self, Value::T, Value::NIL);
+            let _ = self.unlock_all_files_for_shutdown();
+        }
+        crate::emacs_core::eval::input_hooks::terminate_with_abort(ran_orderly)
     }
 
     /// Apply `presses` quit-character interrupts following GNU Emacs
@@ -3141,13 +3173,18 @@ impl Context {
     ///     Vquit_flag = Qt;
     ///   }
     /// ```
+    ///
+    /// Scope note: Neomacs checks `quit_requested` at evaluator safe points
+    /// (`maybe_quit_slow` / `read_char`) rather than from an async `SIGINT`
+    /// signal handler, so Rust code wedged without reaching a quit poll cannot
+    /// be escaped this way (same limitation as the 1st `C-g`).
     #[doc(hidden)]
     pub fn record_quit_interrupts(&mut self, presses: u32) {
         for _ in 0..presses {
             if !self.quit_flag.is_nil()
                 && crate::emacs_core::eval::input_hooks::try_controlling_tty_emergency_escape(self)
             {
-                break;
+                continue;
             }
             let count = self
                 .quit_requested

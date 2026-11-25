@@ -18,6 +18,18 @@ pub const TERMINAL_ID: u64 = 0;
 
 use super::super::Context;
 
+/// Evaluator operations invoked by [`TerminalHost::run_emergency_escape`]
+/// during GNU's controlling-TTY 2nd-`C-g` prompts (`src/keyboard.c:12667-12702`).
+pub trait EmergencyEscapeOps {
+    /// GNU `Fdo_auto_save (Qt, Qnil)` for `"Auto-save? (y or n) "`.
+    fn auto_save(&mut self);
+
+    /// GNU `emacs_abort ()` -> `terminate_due_to_signal (SIGABRT, 40)` for
+    /// `"Abort (and dump core)? (y or n) "` (`src/sysdep.c:2401`,
+    /// `src/emacs.c:441-483`, `shut_down_emacs` `:3104-3160`).
+    fn abort_orderly(&mut self) -> !;
+}
+
 pub trait TerminalHost {
     fn suspend_tty(&mut self) -> Result<(), String>;
     fn resume_tty(&mut self) -> Result<(), String>;
@@ -53,7 +65,7 @@ pub trait TerminalHost {
     /// handled the emergency escape; returns `false` when the host does not
     /// support emergency escape so the evaluator falls back to GNU's
     /// `force_quit_count` path (`src/keyboard.c:12712-12720`).
-    fn run_emergency_escape(&mut self, _auto_save: &mut dyn FnMut()) -> bool {
+    fn run_emergency_escape(&mut self, _ops: &mut dyn EmergencyEscapeOps) -> bool {
         false
     }
 }
