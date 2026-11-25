@@ -1925,6 +1925,7 @@ fn test_window_params() -> WindowParams {
         tab_stop_list: vec![],
         default_fg: 0xFFFFFF,
         frame_foreground: 0xFFFFFF,
+        frame_background: 0x000000,
         default_bg: 0x000000,
         char_width: 8.0,
         char_height: 16.0,

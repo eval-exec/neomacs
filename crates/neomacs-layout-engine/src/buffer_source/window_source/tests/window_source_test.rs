@@ -45,6 +45,7 @@ fn window_params() -> WindowParams {
         tab_stop_list: vec![],
         default_fg: 0x00ff_ffff,
         frame_foreground: 0x00ff_ffff,
+        frame_background: 0,
         default_bg: 0,
         char_width: 8.0,
         char_height: 16.0,

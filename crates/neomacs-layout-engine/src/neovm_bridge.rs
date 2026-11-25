@@ -2110,9 +2110,10 @@ pub fn window_params_from_neovm_with_font_sizing(
     let default_fg = buffer_default_face.fg;
     let default_bg = buffer_default_face.bg;
     // The frame's own `default` face, un-remapped: GNU's `FRAME_FOREGROUND_PIXEL`
-    // (src/image.c:6518), which a buffer's `face-remapping-alist` does not move
-    // (issue #556).
+    // and `FRAME_BACKGROUND_PIXEL` (src/image.c:6518, :10092), which a buffer's
+    // `face-remapping-alist` does not move (issue #556).
     let frame_foreground = face_resolver.default_face().fg;
+    let frame_background = face_resolver.default_face().bg;
 
     let bidi_paragraph_directions = layout_paragraph_directions(buffer, vars);
     let glyph_matrix_input = window.display()?.glyph_matrix_row_scale.snapshot();
@@ -2197,6 +2198,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         default_fg,
         default_bg,
         frame_foreground,
+        frame_background,
         char_width,
         char_height,
         window_system: is_window_system,

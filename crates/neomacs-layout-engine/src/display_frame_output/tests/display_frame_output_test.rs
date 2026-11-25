@@ -76,6 +76,7 @@ fn window_params() -> WindowParams {
         tab_stop_list: Vec::new(),
         default_fg: 0,
         frame_foreground: 0,
+        frame_background: 0,
         default_bg: 0,
         char_width: 8.0,
         char_height: 16.0,

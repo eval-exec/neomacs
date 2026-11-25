@@ -63,6 +63,7 @@ fn window_params_construction() {
         tab_stop_list: vec![],
         default_fg: 0x00FFFFFF,
         frame_foreground: 0x00FFFFFF,
+        frame_background: 0x00000000,
         default_bg: 0x00000000,
         char_width: 8.0,
         char_height: 16.0,
@@ -126,10 +127,14 @@ fn window_params_construction() {
     // for an unresolvable XPM color key (src/image.c:6518).
     let mut params = params;
     params.default_fg = 0x00_aa_00_00;
+    params.default_bg = 0x00_00_aa_00;
     params.frame_foreground = 0x00_12_34_56;
+    params.frame_background = 0x00_65_43_21;
     let inputs = params.space_image_inputs();
     assert_eq!(inputs.default_fg, 0x00_aa_00_00);
+    assert_eq!(inputs.default_bg, 0x00_00_aa_00);
     assert_eq!(inputs.frame_foreground, 0x00_12_34_56);
+    assert_eq!(inputs.frame_background, 0x00_65_43_21);
 }
 
 #[test]
@@ -172,6 +177,7 @@ fn window_params_minibuffer() {
         tab_stop_list: vec![],
         default_fg: 0x00FFFFFF,
         frame_foreground: 0x00FFFFFF,
+        frame_background: 0x00000000,
         default_bg: 0x00000000,
         char_width: 8.0,
         char_height: 16.0,
@@ -263,6 +269,7 @@ fn window_params_clone() {
         tab_stop_list: vec![],
         default_fg: 0,
         frame_foreground: 0,
+        frame_background: 0,
         default_bg: 0,
         char_width: 8.0,
         char_height: 16.0,

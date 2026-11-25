@@ -11657,6 +11657,7 @@ fn test_display_space_window_params() -> WindowParams {
         tab_stop_list: vec![],
         default_fg: 0xFFFFFF,
         frame_foreground: 0xFFFFFF,
+        frame_background: 0x000000,
         default_bg: 0x000000,
         char_width: 8.0,
         char_height: 16.0,
@@ -11983,6 +11984,7 @@ fn display_replacement_media_append_item_resolves_direct_media_property() {
         neovm_core::emacs_core::image_catalog::ImageScaleEnvironment::default(),
         None,
         0,
+        0,
     )
     .expect("direct media replacement");
 
@@ -12010,6 +12012,7 @@ fn display_replacement_media_append_item_resolves_placeholder_item_without_host(
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         neovm_core::emacs_core::image_catalog::ImageScaleEnvironment::default(),
         None,
+        0,
         0,
     )
     .expect("image placeholder");

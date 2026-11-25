@@ -428,6 +428,15 @@ pub struct ImageColorContext {
     /// face and may carry a `:foreground` of its own, and GNU reads neither for
     /// this (issue #550).
     frame_foreground: ImageRgb,
+    /// GNU's `FRAME_BACKGROUND_PIXEL` (src/image.c:10092-10101): the frame's
+    /// background, equal to the `default` face's background. Used by `gif_load`
+    /// for borders outside frame 0 and for transparent GIF pixels when the
+    /// image spec omits `:background`.
+    frame_background: ImageRgb,
+    /// Explicit `:background` from the image spec (GNU `specified_bg`,
+    /// src/image.c:10124-10133, :10216-10217). Distinct from the displaying
+    /// face's background, which `gif_load` ignores.
+    specified_background: Option<ImageRgb>,
     background_policy: ImageBackgroundPolicy,
 }
 
@@ -435,13 +444,18 @@ pub struct ImageColorContext {
 ///
 /// An absent `frame_foreground` reads as the face foreground -- the default
 /// [`ImageColorContext::from_pixels`] documents -- never as black, which is a
-/// real color here and not an "unset" (issue #556).
+/// real color here and not an "unset" (issue #556). Likewise an absent
+/// `frame_background` reads as the face background.
 #[derive(serde::Deserialize)]
 struct ImageColorContextWire {
     foreground: ImageRgb,
     background: ImageRgb,
     #[serde(default)]
     frame_foreground: Option<ImageRgb>,
+    #[serde(default)]
+    frame_background: Option<ImageRgb>,
+    #[serde(default)]
+    specified_background: Option<ImageRgb>,
     #[serde(default)]
     background_policy: ImageBackgroundPolicy,
 }
@@ -452,6 +466,8 @@ impl From<ImageColorContextWire> for ImageColorContext {
             foreground: wire.foreground,
             background: wire.background,
             frame_foreground: wire.frame_foreground.unwrap_or(wire.foreground),
+            frame_background: wire.frame_background.unwrap_or(wire.background),
+            specified_background: wire.specified_background,
             background_policy: wire.background_policy,
         }
     }
@@ -478,15 +494,17 @@ pub enum ImageBackgroundPolicy {
 }
 
 impl ImageColorContext {
-    /// The face's colors, with the frame foreground defaulted to the face's own:
-    /// callers that know the frame replace it with
-    /// [`Self::with_frame_foreground`].
+    /// The face's colors, with the frame foreground and background defaulted
+    /// to the face's own: callers that know the frame replace them with
+    /// [`Self::with_frame_foreground`] and [`Self::with_frame_background`].
     #[must_use]
     pub const fn from_pixels(foreground: u32, background: u32) -> Self {
         Self {
             foreground: ImageRgb::from_pixel(foreground),
             background: ImageRgb::from_pixel(background),
             frame_foreground: ImageRgb::from_pixel(foreground),
+            frame_background: ImageRgb::from_pixel(background),
+            specified_background: None,
             background_policy: ImageBackgroundPolicy::FaceColor,
         }
     }
@@ -513,6 +531,30 @@ impl ImageColorContext {
         self
     }
 
+    /// GNU's `FRAME_BACKGROUND_PIXEL` for the frame this image belongs to.
+    #[must_use]
+    pub const fn frame_background(self) -> ImageRgb {
+        self.frame_background
+    }
+
+    #[must_use]
+    pub const fn with_frame_background(mut self, frame_background: u32) -> Self {
+        self.frame_background = ImageRgb::from_pixel(frame_background);
+        self
+    }
+
+    /// Explicit `:background` from the image spec, when present and resolvable.
+    #[must_use]
+    pub const fn specified_background(self) -> Option<ImageRgb> {
+        self.specified_background
+    }
+
+    #[must_use]
+    pub const fn with_specified_background(mut self, specified_background: u32) -> Self {
+        self.specified_background = Some(ImageRgb::from_pixel(specified_background));
+        self
+    }
+
     #[must_use]
     pub const fn with_background_policy(mut self, policy: ImageBackgroundPolicy) -> Self {
         self.background_policy = policy;
@@ -526,6 +568,25 @@ impl ImageColorContext {
     pub const fn background_rgba8(self) -> [u8; 4] {
         match self.background_policy {
             ImageBackgroundPolicy::FaceColor => self.background.rgba8(),
+            ImageBackgroundPolicy::Transparent => [0; 4],
+        }
+    }
+
+    /// Border color GNU `gif_load` paints outside frame 0 (`src/image.c:10103-10117`).
+    pub const fn gif_frame_background_rgba8(self) -> [u8; 4] {
+        match self.background_policy {
+            ImageBackgroundPolicy::FaceColor => self.frame_background.rgba8(),
+            ImageBackgroundPolicy::Transparent => [0; 4],
+        }
+    }
+
+    /// Transparent-pixel fill color GNU `gif_load` paints (`src/image.c:10215-10217`).
+    pub const fn gif_transparent_background_rgba8(self) -> [u8; 4] {
+        match self.background_policy {
+            ImageBackgroundPolicy::FaceColor => match self.specified_background {
+                Some(bg) => bg.rgba8(),
+                None => self.frame_background.rgba8(),
+            },
             ImageBackgroundPolicy::Transparent => [0; 4],
         }
     }

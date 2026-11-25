@@ -490,6 +490,9 @@ pub(crate) fn image_resolve_request_from_spec(
     let mut animation = ImageAnimationPolicy::disabled();
     // Absent `:scale` is NOT `:scale default` — see ImageScalePolicy.
     let mut scale = ImageScalePolicy::Unspecified;
+    let mut fg_color = default_colors.0;
+    let mut bg_color = default_colors.1;
+    let mut specified_bg = None;
 
     let mut i = 1usize;
     while i + 1 < items.len() {
@@ -534,9 +537,35 @@ pub(crate) fn image_resolve_request_from_spec(
                     .map(ImageScalePolicy::Explicit)
                     .unwrap_or(scale);
             }
+            Some(ImageSpecKey::Foreground) => {
+                if let Some(pixel) = value
+                    .as_lisp_string()
+                    .and_then(|name| crate::face::Color::parse(name.as_utf8_str()?))
+                    .map(|c| ((c.r as u32) << 16) | ((c.g as u32) << 8) | c.b as u32)
+                {
+                    fg_color = pixel;
+                }
+            }
+            Some(ImageSpecKey::Background) => {
+                if let Some(pixel) = value
+                    .as_lisp_string()
+                    .and_then(|name| crate::face::Color::parse(name.as_utf8_str()?))
+                    .map(|c| ((c.r as u32) << 16) | ((c.g as u32) << 8) | c.b as u32)
+                {
+                    bg_color = pixel;
+                    specified_bg = Some(pixel);
+                }
+            }
             _ => {}
         }
         i += 2;
+    }
+
+    let mut colors = ImageColorContext::from_pixels(fg_color, bg_color)
+        .with_frame_foreground(default_colors.0)
+        .with_frame_background(default_colors.1);
+    if let Some(pixel) = specified_bg {
+        colors = colors.with_specified_background(pixel);
     }
 
     Some(ImageResolveRequest {
@@ -554,7 +583,7 @@ pub(crate) fn image_resolve_request_from_spec(
         // resolves through `DEFAULT_FACE_ID` (image.c `lookup_image`). Using
         // zeros here gave the same spec a different key than the one layout
         // builds from the resolved face, so every measured image decoded twice.
-        colors: ImageColorContext::from_pixels(default_colors.0, default_colors.1),
+        colors,
         mask: image_mask_policy_from_items(&items),
         frame,
         realization: environment.resolve(scale),
