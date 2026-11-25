@@ -896,15 +896,23 @@ fn l67b_b4_collect_parallel_world_roots_refuses_held_green_runtime() {
 
 /// L6.7b b4 Q2 (Row c): when a reader holds an active read on a parked
 /// `RootBatchLease`, `ParkedWorldSeat::enter` succeeds and fails closed by
-/// keeping the lease live in `GreenRuntime::parked`; even a subsequent
-/// `switch_out` preserves the deferred lease in `retained`, and both retire
+/// keeping the lease live in `GreenRuntime::parked`; once the reader finishes,
+/// retiring that deferred lease succeeds through `RootBatchLease::try_recycle`
+/// (caching the recycled `PreparedRootBatch` on `GreenSeat`, NOT falling back
+/// to `root_registry::finish`). A subsequent `switch_out` while a reader is
+/// still held preserves the deferred lease in `retained`, and both retire
 /// cleanly on the next safe `switch_in` once the reader finishes.
 #[test]
 fn l67b_b4_deferred_retirement_under_held_reader_and_later_retire() {
     let mut main = seated_green_main();
     let real_heap = main.tagged_heap.heap_identity();
+    let key = main.green_key().expect("seated main has ThreadKey");
     let parked = ParkedWorldSeat::park_seated(&mut main).expect("park seated main");
     assert_eq!(main.parked_owner_len_for_test(), 1);
+    assert!(
+        !main.parked_root_batch_is_cached_for_test(),
+        "no recycled batch cached while initial lease is live"
+    );
 
     let reader = main
         .admit_parked_root_reader_for_test()
@@ -921,24 +929,54 @@ fn l67b_b4_deferred_retirement_under_held_reader_and_later_retire() {
         1,
         "held reader keeps the parked lease live in runtime.parked"
     );
+    assert!(
+        !main.parked_root_batch_is_cached_for_test(),
+        "deferred lease cannot recycle while reader is held"
+    );
 
-    // switch_out while reader is STILL held preserves the deferred lease in
-    // `retained` and publishes the fresh census cleanly.
+    // Finish the reader -> later retirement of THAT lease MUST succeed through
+    // `RootBatchLease::try_recycle` (caching PreparedRootBatch), not fall back
+    // to `root_registry::finish`.
+    reader.finish().expect("finish held reader");
+    main.try_retire_world_seat_parked_roots(key);
+    assert!(
+        main.parked_owners_empty_for_test(),
+        "deferred lease retired once held reader finished"
+    );
+    assert!(
+        main.parked_root_batch_is_cached_for_test(),
+        "later retirement must go through RootBatchLease::try_recycle, not finish fallback"
+    );
+
+    // Also verify switch_out while a second reader is STILL held preserves the
+    // deferred lease in `retained` alongside the fresh census, and both retire
+    // on the next switch_in once that reader finishes.
+    let (parked, turn, lend) = active.switch_out(&mut main);
+    assert_eq!(main.parked_owner_len_for_test(), 1);
+    let reader2 = main
+        .admit_parked_root_reader_for_test()
+        .expect("admit second detached reader");
+    let active = parked
+        .switch_in(&mut main, turn, lend)
+        .expect("switch_in succeeds while second reader defers retirement");
+    assert_eq!(main.parked_owner_len_for_test(), 1);
     let (parked, turn, lend) = active.switch_out(&mut main);
     assert_eq!(
         main.parked_owner_len_for_test(),
         2,
         "deferred lease preserved alongside new parked lease"
     );
-
-    // Finish the reader -> next switch_in retires BOTH leases cleanly.
-    reader.finish().expect("finish held reader");
+    reader2.finish().expect("finish second held reader");
     let active = parked
         .switch_in(&mut main, turn, lend)
-        .expect("switch_in after reader finishes");
+        .expect("switch_in after second reader finishes");
     assert!(
         main.parked_owners_empty_for_test(),
-        "both deferred and current leases retire once reader clears"
+        "both deferred and current leases retire once second reader clears"
+    );
+    assert!(
+        main.parked_root_batch_is_cached_for_test(),
+        "current lease recycles onto GreenSeat after second reader clears"
     );
 
     let (parked, lend, returned) = active.exit(&mut main);

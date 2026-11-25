@@ -1808,6 +1808,16 @@ impl Context {
         })
     }
 
+    /// Test-only helper: whether this seated owner holds a recycled
+    /// `PreparedRootBatch` cached on its `GreenSeat` (proving retirement took
+    /// the `RootBatchLease::try_recycle` fast path rather than the
+    /// `root_registry::finish` fallback).
+    #[cfg(test)]
+    pub(crate) fn parked_root_batch_is_cached_for_test(&mut self) -> bool {
+        self.green_seat()
+            .is_some_and(|seat| seat.parked_root_batch.is_some())
+    }
+
     /// Test-only helper: drop any cached recycled `PreparedRootBatch` on this
     /// seated owner's `GreenSeat` before teardown.
     #[cfg(test)]

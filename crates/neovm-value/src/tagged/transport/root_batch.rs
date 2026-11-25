@@ -586,21 +586,19 @@ impl RootBatchLease {
         heap: &TaggedHeap,
     ) -> Result<HeldRootBatchReaderForTest, RootBatchError> {
         let ownership = self.ownership.as_ref().ok_or(RootBatchError::Retired)?;
-        let reader_owner = BatchOwnership {
-            table: Arc::clone(&ownership.table),
-            control: Arc::clone(&ownership.control),
-            epoch: ownership.epoch.retain()?,
-        };
-        let reader = RootBatchReader::admit(&reader_owner, heap)?;
+        let mut reader = RootBatchReader::admit(ownership, heap)?;
         let control = Arc::clone(&reader.control);
-        // Transfer the active reader count and retained epoch into the detached
-        // test handle without invoking `RootBatchReader::drop`'s abandonment path.
-        let mut reader = std::mem::ManuallyDrop::new(reader);
+        let payload = Arc::clone(&reader.payload);
         let epoch = reader._epoch.take();
+        // Transfer the active reader obligation to `HeldRootBatchReaderForTest`
+        // and let `reader` drop normally so it releases its Arc clones without
+        // decrementing `readers` or triggering abandonment.
+        reader.obligation = ReadObligation::Finished;
+        drop(reader);
         Ok(HeldRootBatchReaderForTest {
             control,
+            _payload: payload,
             _epoch: epoch,
-            _owner: reader_owner,
             finished: false,
         })
     }
@@ -925,8 +923,8 @@ impl fmt::Debug for RootBatchReader<'_> {
 #[must_use = "finish the held test reader before retiring the batch"]
 pub struct HeldRootBatchReaderForTest {
     control: Arc<BatchControl>,
+    _payload: Arc<ImmutableRootBatch>,
     _epoch: Option<FacadeEpochRetention>,
-    _owner: BatchOwnership,
     finished: bool,
 }
 
