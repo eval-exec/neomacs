@@ -351,11 +351,12 @@ fn gif_disposal_and_transparency_match_gnu_gif_load() {
             "Elisp state mismatch for {key}: neo={state} gnu={gnu}"
         );
     }
-    // Pre-existing failed-image `image-size` divergence (separate ledger item):
+    // Pre-existing failed-image `image-size` divergence tracked in GitHub #837:
     // GNU returns the 30x30 placeholder without signalling (src/image.c:3568-3582),
     // whereas Neomacs `builtin_image_size_in_context` signals "Unable to create image"
-    // on any failed decode. Pin the raw outcome explicitly here rather than hiding it
-    // behind `ignore-errors`; neither editor decodes the 48x48 OOB GIFs.
+    // on any failed decode. Pin the raw outcome explicitly here until #837 lands,
+    // rather than hiding it behind `ignore-errors`; neither editor decodes the
+    // 48x48 OOB GIFs.
     for key in ["oob-single-size", "oob-frame1-0-size", "oob-frame1-1-size"] {
         assert_eq!(
             state[key],

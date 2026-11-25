@@ -909,7 +909,9 @@ fn a_frame_that_fails_to_decode_ends_the_stream() {
     let id = sequence(1);
 
     // 1) Invalid LZW minimum code size on frame 2 (> 8): GNU's DGifSlurp
-    //    (giflib 6.1.3) fails the whole GIF up front, so even frame 0 fails.
+    //    (giflib 6.1.3 `DGifSetupDecompress`, `dgif_lib.c:827`,
+    //    `D_GIF_ERR_READ_FAILED`) fails the whole GIF up front, so even frame 0
+    //    fails.
     let mut bad_cs = indexed_gif(4, 3, &frames);
     corrupt_nth_frame_code_size(&mut bad_cs, 2);
     for index in [0, 1] {
@@ -921,7 +923,26 @@ fn a_frame_that_fails_to_decode_ends_the_stream() {
     assert!(!cache.contains(id));
     assert_eq!(cache.resident_bytes(), 0);
 
-    // 2) Valid framing + code size, but corrupted LZW bitstream on frame 2:
+    // 2) Code size 0 on frame 2 is accepted up front like giflib 6.1.3
+    //    (`dgif_lib.c:827` rejects only `> 8`), so `:index 0` still decodes
+    //    matching GNU rather than failing the whole GIF up front. Stepping to
+    //    `:index 1` then hits `gif` 0.14.2's per-frame rejection of code size 0
+    //    and discards the stream cleanly.
+    let mut zero_cs = indexed_gif(4, 3, &frames);
+    let cs_offset = nth_frame_code_size_offset(&zero_cs, 2);
+    zero_cs[cs_offset] = 0;
+    let first_zero = cache
+        .resolve(id, &source(&zero_cs), ImageFrameIndex::new(0), colors)
+        .expect_frame("frame 0 stays decodable when frame 2 has code size 0");
+    assert_eq!(first_zero.rgba(), reference[0].as_slice());
+    assert!(matches!(
+        cache.resolve(id, &source(&zero_cs), ImageFrameIndex::new(1), colors),
+        ImageSequenceResolution::Failed
+    ));
+    assert!(!cache.contains(id));
+    assert_eq!(cache.resident_bytes(), 0);
+
+    // 3) Valid framing + code size, but corrupted LZW bitstream on frame 2:
     //    streaming decodes frame 0, then stepping to frame 1 returns Failed
     //    and discards the stream cleanly.
     let mut bad_lzw = indexed_gif(4, 3, &frames);
@@ -937,7 +958,7 @@ fn a_frame_that_fails_to_decode_ends_the_stream() {
     assert!(!cache.contains(id));
     assert_eq!(cache.resident_bytes(), 0);
 
-    // 3) Invalid LZW minimum code size on frame 1 fails every index.
+    // 4) Invalid LZW minimum code size (> 8) on frame 1 fails every index.
     let mut broken_first = indexed_gif(4, 3, &frames);
     corrupt_nth_frame_code_size(&mut broken_first, 1);
     assert!(matches!(

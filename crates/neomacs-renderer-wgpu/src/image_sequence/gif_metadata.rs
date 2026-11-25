@@ -16,10 +16,13 @@ pub(super) struct GifStructure {
     /// (`left + width <= screen_width && top + height <= screen_height`),
     /// matching GNU `gif_load`'s up-front check (`src/image.c:10018-10035`).
     pub(super) all_subimages_fit_screen: bool,
-    /// True iff every image's LZW minimum code size byte is in `1..=8`.
+    /// True iff every image's LZW minimum code size byte is `<= 8`.
     /// GNU `gif_load` runs `DGifSlurp` up front (`src/image.c:9992`), and
-    /// giflib 6.1.3 rejects `CodeSize > 8` (`D_GIF_ERR_IMAGE_DEFECT`), while
-    /// `gif` 0.14.2 rejects `min_code_size == 0` too.
+    /// giflib 6.1.3 `DGifSetupDecompress` (`dgif_lib.c:827`) rejects only
+    /// `BitsPerPixel > 8` with `D_GIF_ERR_READ_FAILED`. Code size `0` is
+    /// accepted up front to match giflib 6.1.3 so earlier valid frames remain
+    /// decodable; `gif` 0.14.2 rejects code size `0` per-frame as a known
+    /// decoder limitation.
     pub(super) all_code_sizes_valid: bool,
 }
 
@@ -62,7 +65,7 @@ pub(super) fn parse_structure(data: &[u8]) -> Option<GifStructure> {
                 }
                 take(&mut remaining, color_table_length(descriptor[8]))?;
                 let min_code_size = byte(&mut remaining)?; // LZW minimum code size.
-                if min_code_size == 0 || min_code_size > 8 {
+                if min_code_size > 8 {
                     all_code_sizes_valid = false;
                 }
                 while sub_block(&mut remaining)?.is_some() {}
@@ -142,8 +145,9 @@ mod tests {
         assert!(!oob.all_subimages_fit_screen);
         assert!(oob.all_code_sizes_valid);
 
-        // Second frame has LZW min_code_size outside 1..=8 (0, 9, 42).
-        for bad_cs in [0u8, 9, 42] {
+        // Second frame has LZW min_code_size > 8 (9, 42), matching giflib 6.1.3
+        // `DGifSetupDecompress` (`dgif_lib.c:827`, `D_GIF_ERR_READ_FAILED`).
+        for bad_cs in [9u8, 42] {
             let mut bad_image = IMAGE.to_vec();
             bad_image[10] = bad_cs;
             let parsed = parse_structure(&gif(&[IMAGE, &bad_image])).expect("parses structure");
@@ -153,14 +157,15 @@ mod tests {
                 "min_code_size={bad_cs} must fail up-front validation"
             );
         }
-        // Boundary valid min_code_size values 1 and 8 are accepted.
-        for ok_cs in [1u8, 8] {
+        // Code sizes 0..=8 (including 0, accepted by giflib 6.1.3) pass up-front
+        // validation.
+        for ok_cs in [0u8, 1, 8] {
             let mut ok_image = IMAGE.to_vec();
             ok_image[10] = ok_cs;
             let parsed = parse_structure(&gif(&[IMAGE, &ok_image])).expect("parses structure");
             assert!(
                 parsed.all_code_sizes_valid,
-                "min_code_size={ok_cs} is valid"
+                "min_code_size={ok_cs} must pass up-front validation like giflib 6.1.3"
             );
         }
     }
