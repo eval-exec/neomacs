@@ -388,6 +388,119 @@ fn multi_switch_cross_depth_target_is_still_rejected_at_decode() {
     assert_eq!(func.verified_switch_pc(3, 7), None);
 }
 
+/// Backward switch target (loop) verifier pair through the public decode API:
+/// - Consistent-depth back-edge (`target < pc` at the same post-pop depth as
+///   the loop header) is admitted and enforces per-site depth on runtime hits.
+/// - Mismatched-depth back-edge (stack-growing loop jumping back to a shallower
+///   pc, or self-looping onto the switch itself) is rejected and stays on the
+///   checked driver.
+#[test]
+fn backward_switch_target_admits_consistent_loop_and_rejects_depth_mismatch() {
+    crate::test_utils::init_test_tracing();
+    // Program layout (bytes 0..=4 are instructions 0..=4):
+    //   0: constant 2 (depth 0 -> 1)   ; loop-invariant value
+    //   1: constant 1 (depth 1 -> 2)   ; loop header / dispatch key
+    //   2: constant 0 (depth 2 -> 3)   ; jump table
+    //   3: switch     (depth 3 -> 1)   ; fall-through pc 4 at depth 1
+    //   4: return     (depth 1 -> 0)
+    let bytes = [194, 193, 192, 183, 135];
+
+    // 1. Consistent-depth back-edge: switch (post-pop depth 1) -> byte 1 (depth 1).
+    let consistent_constants = vec![
+        jump_table(&[("vsw-loop", Value::fixnum(1))]),
+        Value::symbol("vsw-loop"),
+        Value::fixnum(42),
+    ];
+    let mut decode_constants = consistent_constants.clone();
+    let (ops, offset_map) =
+        decode_gnu_bytecode_with_offset_map(&bytes, &mut decode_constants).expect("decode");
+    let proof = verify_stack_effects_with_tables(
+        &ops,
+        0,
+        3,
+        Some(SwitchTables {
+            constants: &decode_constants,
+            offset_map: Some(&offset_map),
+        }),
+    )
+    .expect("consistent-depth backward switch loop must verify");
+    assert_eq!(proof.proven_depth(0), Some(0));
+    assert_eq!(proof.proven_depth(1), Some(1));
+    assert_eq!(proof.proven_depth(4), Some(1));
+    assert!(proof.proves_depth(1, 1));
+    assert!(!proof.proves_depth(0, 1));
+
+    let mut consistent_func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
+    consistent_func.set_constants(consistent_constants.into());
+    consistent_func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(3));
+    consistent_func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(
+        bytes.to_vec(),
+    )));
+    consistent_func.defer_gnu_decode();
+    if !crate::emacs_core::bytecode::chunk::eager_gnu_bytecode() {
+        assert!(consistent_func.executes_verified_ops());
+        // Fall-through pc 4 has depth 1: byte 1 (depth 1) is admitted, byte 0 (depth 0) is rejected.
+        assert_eq!(consistent_func.verified_switch_pc(4, 1), Some(Some(1)));
+        assert_eq!(consistent_func.verified_switch_pc(4, 0), Some(None));
+    }
+
+    // 2. Stack-growing mismatched-depth back-edge: switch (post-pop depth 1) -> byte 0 (depth 0).
+    let mismatched_constants = vec![
+        jump_table(&[("vsw-loop", Value::fixnum(0))]),
+        Value::symbol("vsw-loop"),
+        Value::fixnum(42),
+    ];
+    let mut decode_constants = mismatched_constants.clone();
+    let (ops, offset_map) =
+        decode_gnu_bytecode_with_offset_map(&bytes, &mut decode_constants).expect("decode");
+    assert_eq!(
+        verify_stack_effects_with_tables(
+            &ops,
+            0,
+            3,
+            Some(SwitchTables {
+                constants: &decode_constants,
+                offset_map: Some(&offset_map),
+            }),
+        ),
+        None,
+        "stack-growing backward switch target (depth 1 -> depth 0) must be rejected"
+    );
+
+    let mut mismatched_func = ByteCodeFunction::new(LambdaParams::simple(vec![]));
+    mismatched_func.set_constants(mismatched_constants.into());
+    mismatched_func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(3));
+    mismatched_func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(
+        bytes.to_vec(),
+    )));
+    mismatched_func.defer_gnu_decode();
+    assert!(!mismatched_func.executes_verified_ops());
+    assert_eq!(mismatched_func.verified_switch_pc(4, 0), None);
+
+    // 3. Self-looping switch (`target == pc`): byte 3 (depth 3) != post-pop depth 1.
+    let self_loop_constants = vec![
+        jump_table(&[("vsw-loop", Value::fixnum(3))]),
+        Value::symbol("vsw-loop"),
+        Value::fixnum(42),
+    ];
+    let mut decode_constants = self_loop_constants;
+    let (ops, offset_map) =
+        decode_gnu_bytecode_with_offset_map(&bytes, &mut decode_constants).expect("decode");
+    assert_eq!(
+        verify_stack_effects_with_tables(
+            &ops,
+            0,
+            3,
+            Some(SwitchTables {
+                constants: &decode_constants,
+                offset_map: Some(&offset_map),
+            }),
+        ),
+        None,
+        "self-looping switch target must be rejected"
+    );
+}
+
 /// Structural regression guard (#14612): every bytecode function in the
 /// shipped `lisp/org/*.elc` tree must pass `verify_stack_effects_with_tables`
 /// and qualify for the verified interpreter driver (`executes_verified_ops`).
@@ -402,6 +515,14 @@ fn org_elc_functions_all_verify_for_verified_driver() {
     use std::collections::{BTreeMap, HashSet};
 
     crate::test_utils::init_test_tracing();
+    if crate::emacs_core::bytecode::chunk::eager_gnu_bytecode() {
+        eprintln!(
+            "SKIP org_elc_functions_all_verify_for_verified_driver: \
+             NEOMACS_EAGER_GNU_BYTECODE is set; eager decode bypasses \
+             verify_stack_effects_with_tables for Op::Switch"
+        );
+        return;
+    }
     let _ctx = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
     let ob = neovm_value::symbol::Obarray::new();
     let org_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
