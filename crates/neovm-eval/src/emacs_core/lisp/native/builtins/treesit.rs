@@ -3574,15 +3574,16 @@ pub fn builtin_treesit_search_forward(
     )
     .kinded()
     {
-        Ok(Some(node)) => {
-            // Neomacs choice, not GNU. After an unguarded dotted reparse, GNU
-            // returns a node of the tree `ts_tree_delete` freed (`src/treesit.c:1945`),
-            // which is UB. This projects the clone node onto the live tree.
-            let raw = project_node_to_parser(eval, handle.parser_id, node, share)
-                .ok_or_else(|| treesit_buffer_changed(args[1]))?;
-            // SAFETY: `project_node_to_parser` returned a `TSNode` from `handle.parser_id`'s live tree.
-            Ok(unsafe { make_node_value_from_raw(eval, handle.parser_id, raw) })
-        }
+        Ok(Some(node)) => match project_node_to_parser(eval, handle.parser_id, node, share) {
+            Some(raw) => {
+                // Neomacs choice, not GNU. After an unguarded dotted reparse, GNU
+                // returns a node of the tree `ts_tree_delete` freed (`src/treesit.c:1945`),
+                // which is UB. This projects the clone node onto the live tree.
+                // SAFETY: `project_node_to_parser` returned a `TSNode` from `handle.parser_id`'s live tree.
+                Ok(unsafe { make_node_value_from_raw(eval, handle.parser_id, raw) })
+            }
+            None => Err(treesit_buffer_changed(args[1])),
+        },
         Ok(None) => Ok(Value::NIL),
         Err(FlowKind::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
             Ok(Value::NIL)
@@ -3637,15 +3638,16 @@ pub fn builtin_treesit_search_subtree(
     )
     .kinded()
     {
-        Ok(Some(node)) => {
-            // Neomacs choice, not GNU. After an unguarded dotted reparse, GNU
-            // returns a node of the tree `ts_tree_delete` freed (`src/treesit.c:1945`),
-            // which is UB. This projects the clone node onto the live tree.
-            let raw = project_node_to_parser(eval, handle.parser_id, node, share)
-                .ok_or_else(|| treesit_buffer_changed(args[1]))?;
-            // SAFETY: `project_node_to_parser` returned a `TSNode` from `handle.parser_id`'s live tree.
-            Ok(unsafe { make_node_value_from_raw(eval, handle.parser_id, raw) })
-        }
+        Ok(Some(node)) => match project_node_to_parser(eval, handle.parser_id, node, share) {
+            Some(raw) => {
+                // Neomacs choice, not GNU. After an unguarded dotted reparse, GNU
+                // returns a node of the tree `ts_tree_delete` freed (`src/treesit.c:1945`),
+                // which is UB. This projects the clone node onto the live tree.
+                // SAFETY: `project_node_to_parser` returned a `TSNode` from `handle.parser_id`'s live tree.
+                Ok(unsafe { make_node_value_from_raw(eval, handle.parser_id, raw) })
+            }
+            None => Err(treesit_buffer_changed(args[1])),
+        },
         Ok(None) => Ok(Value::NIL),
         Err(FlowKind::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
             Ok(Value::NIL)

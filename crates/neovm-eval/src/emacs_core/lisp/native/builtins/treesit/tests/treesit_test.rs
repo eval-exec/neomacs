@@ -1693,3 +1693,69 @@ fn treesit_language_remap_alist_improper_signals_whole_alist_datum_like_gnu() {
         Value::string("(wrong-type-argument listp ((a . b) . 42))")
     );
 }
+
+#[test]
+fn treesit_search_dotted_reparse_error_restores_specpdl_roots() {
+    // Lisp callers unwind `specpdl` through their outer `condition-case` /
+    // `apply` frame, so this early-return leak is only observable to direct
+    // Rust callers of `builtin_treesit_search_subtree` and
+    // `builtin_treesit_search_forward` (leaking up to 3 `SpecBinding::GcRoot`
+    // entries when a dotted `(string . fn)` predicate reparses to a smaller
+    // tree and `project_node_to_parser` returns `None`).
+    {
+        let (mut eval, parser) = eval_with_json_parser(r#"{"a": [1, 2, 3]}"#);
+        let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+        let pred = eval
+            .eval_str(
+                r#"(progn
+                     (defalias 'neomacs--treesit-shrink-on-num
+                       (lambda (node)
+                         (delete-region (point-min) (point-max))
+                         (insert "{}")
+                         (treesit-parser-root-node (treesit-node-parser node))
+                         t))
+                     (cons "number" 'neomacs--treesit-shrink-on-num))"#,
+            )
+            .expect("dotted shrink predicate");
+        let before = eval.specpdl_len_for_test();
+        let _sig = expect_signal(
+            builtin_treesit_search_subtree(&mut eval, vec![root, pred]),
+            "treesit-buffer_changed",
+        );
+        assert_eq!(
+            eval.specpdl_len_for_test(),
+            before,
+            "builtin_treesit_search_subtree leaked specpdl roots on dotted-reparse error"
+        );
+    }
+
+    {
+        let (mut eval, parser) = eval_with_json_parser(r#"{"a": [1, 2, 3]}"#);
+        let root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root");
+        let first_num =
+            builtin_treesit_search_subtree(&mut eval, vec![root, Value::string("number")])
+                .expect("first number");
+        let pred = eval
+            .eval_str(
+                r#"(progn
+                     (defalias 'neomacs--treesit-shrink-on-num-fwd
+                       (lambda (node)
+                         (delete-region (point-min) (point-max))
+                         (insert "{}")
+                         (treesit-parser-root-node (treesit-node-parser node))
+                         t))
+                     (cons "number" 'neomacs--treesit-shrink-on-num-fwd))"#,
+            )
+            .expect("dotted shrink predicate");
+        let before = eval.specpdl_len_for_test();
+        let _sig = expect_signal(
+            builtin_treesit_search_forward(&mut eval, vec![first_num, pred]),
+            "treesit-buffer_changed",
+        );
+        assert_eq!(
+            eval.specpdl_len_for_test(),
+            before,
+            "builtin_treesit_search_forward leaked specpdl roots on dotted-reparse error"
+        );
+    }
+}
