@@ -3,7 +3,9 @@
 use crate::buffer_source::face_resolution::*;
 use crate::buffer_source::loop_context::BufferSourceLoopRequestContext;
 use crate::buffer_source::loop_state::BufferSourceLoopMutableState;
-use crate::buffer_source::render::{BufferSourceRenderRequest, emit_nested_source_visual_wrap};
+use crate::buffer_source::render::{
+    BufferSourceRenderRequest, emit_nested_source_visual_wrap_with_break, emit_word_wrap_rewind,
+};
 use crate::buffer_source::row_lifecycle::{
     BufferSourceHscrollSkipRenderContext, BufferSourceInvisibleTextRenderContext,
     BufferSourceInvisibleTextRenderOutcome,
@@ -67,7 +69,9 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
             }
             self.render_row_prelude(row_prelude_context, params, active_face_state, buffer);
             if let Some(resume_offset) = self.invisible_text_checkpoint.take_deferred_ellipsis() {
-                if loop_context
+                if let BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow(
+                    wrap_break,
+                ) = loop_context
                     .invisible_text_request(
                         text,
                         self.surface.append_surface,
@@ -75,10 +79,14 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                         0.0,
                     )
                     .place_deferred_ellipsis(buffer, resume_offset, self.reborrow())
-                    == BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow
                 {
                     self.row_carryover.line_numbers.mark_continuation_row();
-                    if emit_nested_source_visual_wrap(loop_context, self.reborrow()).should_break()
+                    if emit_nested_source_visual_wrap_with_break(
+                        loop_context,
+                        self.reborrow(),
+                        wrap_break,
+                    )
+                    .should_break()
                     {
                         break;
                     }
@@ -111,9 +119,27 @@ impl<'rows, 'emit, 'surface, FS: crate::neovm_bridge::FaceServices>
                     continue;
                 }
                 BufferSourceInvisibleTextRenderOutcome::HiddenSpanApplied => continue,
-                BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow => {
+                BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow(wrap_break) => {
                     self.row_carryover.line_numbers.mark_continuation_row();
-                    if emit_nested_source_visual_wrap(loop_context, self.reborrow()).should_break()
+                    if emit_nested_source_visual_wrap_with_break(
+                        loop_context,
+                        self.reborrow(),
+                        wrap_break,
+                    )
+                    .should_break()
+                    {
+                        break;
+                    }
+                    continue;
+                }
+                BufferSourceInvisibleTextRenderOutcome::RewindToWordWrap(break_candidate) => {
+                    if emit_word_wrap_rewind(
+                        loop_context,
+                        self.reborrow(),
+                        source_walk,
+                        break_candidate,
+                    )
+                    .should_break()
                     {
                         break;
                     }

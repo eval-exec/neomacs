@@ -1108,10 +1108,13 @@ pub(crate) enum BufferSourceSelectiveDisplayTailRenderOutcome {
     Stop,
 }
 
-/// Folding hidden text does not by itself end the row. The one exception is an
-/// ellipsis that does not fit after glyphs already on the row: that whole
-/// marker continues on the next row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Folding hidden text does not by itself end the row unless its ellipsis
+/// clips on a wrapping row. Under `word-wrap` with an earlier break candidate,
+/// GNU rewinds to that candidate so the preceding word moves down together
+/// with the whole ellipsis (src/xdisp.c:26379-26406); otherwise the fitting
+/// dot(s) remain on this row and the remaining dots continue on the next row
+/// (src/xdisp.c:5653-5672, 9258, 4115-4121).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum BufferSourceInvisibleTextRenderOutcome {
     /// No hidden text begins at the current source position.
     Visible,
@@ -1122,10 +1125,15 @@ pub(crate) enum BufferSourceInvisibleTextRenderOutcome {
     /// The hidden span (and optional ellipsis) was consumed; restart the walk
     /// at its first visible position.
     HiddenSpanApplied,
-    /// The hidden span was consumed, but its ellipsis did not fit. End this row
-    /// as a continuation. The marker is drawn at the start of the next row,
-    /// before the text that follows the span.
-    EllipsisContinuesOnNextRow,
+    /// The hidden span was consumed, but its ellipsis clipped on a wrapping
+    /// row. End this row as a continuation with the given wrap-break kind and
+    /// resume the remaining ellipsis dot(s) at the start of the next row,
+    /// before the text following the span.
+    EllipsisContinuesOnNextRow(crate::display_row::transition::VisualWrapBreak),
+    /// The hidden span's ellipsis clipped under `word-wrap` while an earlier
+    /// word-wrap break candidate stands on this row. Rewind to that candidate
+    /// so the word in front moves down together with the whole ellipsis.
+    RewindToWordWrap(crate::display_row::walk_state::WordWrapBreakCandidate),
 }
 
 /// Where an invisible-text ellipsis landed on the current row.
@@ -1464,6 +1472,7 @@ impl BufferSourceInvisibleTextSkip {
         source_render: &mut TextRowSourceRenderState<'_, FS>,
         row_progress: &mut DisplaySourceRowProgressState<'_>,
         ellipsis_text: Option<&str>,
+        break_at_ellipsis_start: bool,
     ) -> InvisibleEllipsisRowPlacement {
         let position = row_progress.row_position();
         self.capture_cursor_if_point(
@@ -1484,9 +1493,11 @@ impl BufferSourceInvisibleTextSkip {
         // `next_element_from_display_vector` (src/xdisp.c:9258) produce one
         // ellipsis glyph per element. Keep the glyphs that fit on this row;
         // under `LineWrapMode::Wrap` resume the remaining dots at `dpvec_index`
-        // on the next continuation row (xdisp.c:4115-4121). Under
-        // `LineWrapMode::Truncate`, keep the partial dots and stay on this row
-        // so truncation handles the rest of the line without wrapping.
+        // on the next continuation row (xdisp.c:4115-4121), unless a word-wrap
+        // break candidate stands right before the hidden span (in which case
+        // GNU moves all dots onto the next row while keeping `row->end` at the
+        // post-skip position). Under `LineWrapMode::Truncate`, keep the partial
+        // dots and stay on this row so truncation handles the rest of the line.
         place_invisible_ellipsis(
             render_context,
             row_geometry,
@@ -1496,6 +1507,7 @@ impl BufferSourceInvisibleTextSkip {
             0,
             total_chars,
             Some(skip_end),
+            break_at_ellipsis_start,
         )
     }
 }
@@ -1520,9 +1532,12 @@ fn place_invisible_ellipsis<FS: crate::neovm_bridge::FaceServices>(
     start_offset: usize,
     total_chars: usize,
     skip_end: Option<usize>,
+    break_at_ellipsis_start: bool,
 ) -> InvisibleEllipsisRowPlacement {
     let wraps = render_context.wraps();
-    let had_other_glyphs = source_render.capture_glyph_checkpoint().text_glyph_count() > 0;
+    let checkpoint = source_render.capture_glyph_checkpoint();
+    let had_other_glyphs = checkpoint.text_glyph_count() > 0;
+    let position_before = row_progress.row_position();
     let rendered = render_context.render_request_to_text_row(source_render, row_geometry, request);
     if let Some(progress) = &rendered {
         row_progress.apply_position(progress.end());
@@ -1535,6 +1550,14 @@ fn place_invisible_ellipsis<FS: crate::neovm_bridge::FaceServices>(
     };
     if progress.status() == DisplayRowAppendStatus::Complete || !wraps {
         return InvisibleEllipsisRowPlacement::Settled;
+    }
+    if break_at_ellipsis_start && had_other_glyphs {
+        source_render.restore_glyph_checkpoint(checkpoint);
+        row_progress.apply_position(position_before);
+        if let Some(source_end) = skip_end {
+            source_render.advance_current_row_source_end(source_end);
+        }
+        return InvisibleEllipsisRowPlacement::ContinueOnNextRow(0);
     }
     let emitted = progress.emitted_glyphs();
     let next_offset = start_offset.saturating_add(emitted);
@@ -1607,12 +1630,26 @@ impl<'a> BufferSourceInvisibleTextRenderContext<'a> {
             return BufferSourceInvisibleTextRenderOutcome::Visible;
         };
 
-        // Advance display-line-numbers past the buffer lines this fold hid, so
-        // the next visible row's gutter shows its true buffer line number (GNU
-        // counts every buffer newline, including ones inside invisible text).
-        hidden_text.apply_to_line_numbers(row_carryover.line_numbers);
-
         let ellipsis_text = crate::neovm_bridge::buffer_invisible_ellipsis_text(buffer);
+        let first_ellipsis_char = ellipsis_text
+            .as_deref()
+            .and_then(|text| text.chars().next())
+            .or_else(|| SyntheticTextMarker::InvisibleEllipsis.text().chars().next())
+            .unwrap_or('.');
+        let pen_before_ellipsis = progress.row_progress().x();
+        let break_at_ellipsis_start = context.append_surface.line_wrap().is_word_wrap()
+            && row_carryover
+                .word_wrap
+                .can_record_candidate(first_ellipsis_char);
+        let word_wrap_candidate = (!break_at_ellipsis_start
+            && context.append_surface.line_wrap().is_word_wrap()
+            && row_carryover.word_wrap.has_candidate())
+        .then(|| row_carryover.word_wrap.candidate())
+        .filter(|candidate| {
+            candidate.glyph_checkpoint().text_glyph_count() > 0
+                && candidate.row_position().x_px() < pen_before_ellipsis
+        });
+
         let row_height = row_build.row_geometry.height();
         let row_ascent = row_build.row_geometry.ascent();
         let mut row_progress = progress.row_progress_mut().reborrow();
@@ -1629,16 +1666,37 @@ impl<'a> BufferSourceInvisibleTextRenderContext<'a> {
             &mut source_render.reborrow(),
             &mut row_progress,
             ellipsis_text.as_deref(),
+            break_at_ellipsis_start,
         );
         if let InvisibleEllipsisRowPlacement::ContinueOnNextRow(resume_offset) = placement {
+            if let Some(candidate) = word_wrap_candidate {
+                // GNU `wrap_row_used > 0` / `goto back_to_wrap`
+                // (src/xdisp.c:26379-26406) rewinds to the earlier word break
+                // before applying this span's hidden line count (the rewind
+                // replays this hidden span on the continuation row).
+                return BufferSourceInvisibleTextRenderOutcome::RewindToWordWrap(candidate);
+            }
+            // Advance display-line-numbers past the buffer lines this fold hid,
+            // matching GNU's physical line counting across hidden spans.
+            hidden_text.apply_to_line_numbers(row_carryover.line_numbers);
             if resume_offset == 0 {
                 row_build
                     .row_geometry
                     .replace_current_row_metrics(row_height, row_ascent);
             }
             invisible_text_checkpoint.defer_ellipsis_from(resume_offset);
-            return BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow;
+            let wrap_break = if break_at_ellipsis_start && resume_offset == 0 {
+                crate::display_row::transition::VisualWrapBreak::AtWordBoundary
+            } else {
+                crate::display_row::transition::VisualWrapBreak::MidElement
+            };
+            return BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow(wrap_break);
         }
+
+        // Advance display-line-numbers past the buffer lines this fold hid, so
+        // the next visible row's gutter shows its true buffer line number (GNU
+        // counts every buffer newline, including ones inside invisible text).
+        hidden_text.apply_to_line_numbers(row_carryover.line_numbers);
 
         // The strings anchored at the post-skip position are NOT rendered here
         // since P4.6: the producer surfaces them as an element when it produces
@@ -1694,10 +1752,13 @@ impl<'a> BufferSourceInvisibleTextRenderContext<'a> {
             resume_offset,
             total_chars,
             None,
+            false,
         );
         if let InvisibleEllipsisRowPlacement::ContinueOnNextRow(next_offset) = placement {
             invisible_text_checkpoint.defer_ellipsis_from(next_offset);
-            return BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow;
+            return BufferSourceInvisibleTextRenderOutcome::EllipsisContinuesOnNextRow(
+                crate::display_row::transition::VisualWrapBreak::MidElement,
+            );
         }
         BufferSourceInvisibleTextRenderOutcome::HiddenSpanApplied
     }

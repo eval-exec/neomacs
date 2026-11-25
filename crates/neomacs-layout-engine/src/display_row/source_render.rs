@@ -2044,9 +2044,9 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
 
     /// Roll the current row's drawn glyphs back to `checkpoint`.
     ///
-    /// Word wrap drops a partial word this way. A clipped invisible ellipsis
-    /// drops the dots that fit so the whole marker can open the next row.
-    #[cfg(test)]
+    /// Used when a word-wrap break opportunity stands immediately before an
+    /// invisible ellipsis that clips, dropping partial dot(s) so all ellipsis
+    /// dots open the continuation row.
     pub(crate) fn restore_glyph_checkpoint(&mut self, checkpoint: DisplayRowGlyphCheckpoint) {
         self.output_render
             .restore_current_row_glyph_checkpoint(checkpoint, None);

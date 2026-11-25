@@ -1056,3 +1056,132 @@ fn clipped_overlay_string_splits_mid_string_preserving_buffer_anchor() {
     assert_eq!(rows[0].source.end, buf_pos(4));
     assert_eq!(rows[1].source.start, buf_pos(4));
 }
+
+#[test]
+fn clipped_invisible_ellipsis_under_word_wrap_rewinds_to_word_boundary() {
+    use crate::display_row::source_append::SyntheticTextMarker;
+    use neomacs_display_protocol::glyph_matrix::{GlyphArea, GlyphProvenance, GlyphType};
+
+    let face = FaceId::new(1);
+    let faces = vec![DisplayRowFace::from_resolved(
+        face,
+        &ResolvedFace::default(),
+    )];
+    let buffer_id = neovm_core::buffer::BufferId(1);
+    let buf_pos = |pos: usize| {
+        DisplaySourcePosition::buffer(
+            buffer_id,
+            neovm_core::buffer::CharPos0::new(pos),
+            neovm_core::buffer::EmacsBytePos::new(pos),
+        )
+    };
+    let ellipsis = SyntheticTextMarker::InvisibleEllipsis;
+    let chars = |row: &ComputedRow| -> String {
+        row.row.glyphs[GlyphArea::Text.index()]
+            .iter()
+            .filter(|glyph| !glyph.padding)
+            .filter(|glyph| glyph.provenance != GlyphProvenance::line_end())
+            .filter_map(|glyph| match glyph.glyph_type {
+                GlyphType::Char { ch } => Some(ch),
+                _ => None,
+            })
+            .collect()
+    };
+
+    // Case 1: word before hidden span (`aa bbbbbb<hidden>T\n`) in 10-cell (80px) width.
+    let mut ww_geometry = geometry(80.0);
+    ww_geometry.character_wrap = true;
+    ww_geometry.word_wrap = true;
+    let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
+    let program = RowProgram::capture(
+        ww_geometry.clone(),
+        [
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(0), buf_pos(9)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("aa bbbbbb")),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(9), buf_pos(15)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("")),
+            ),
+            DisplayItem::new(
+                SourceSpan::synthetic(ellipsis.source_id(), 0, 3),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent(ellipsis.text())),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(15), buf_pos(16)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("T")),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(16), buf_pos(17)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::RowBreak(DisplayRowBreak {
+                    line_height: DisplayLineHeightPolicy::Default,
+                    line_spacing: DisplayLineSpacingPolicy::Inherit,
+                }),
+            ),
+        ],
+        faces.clone(),
+        &mut measurer,
+        limits(),
+    )
+    .expect("capture word-wrap ellipsis program");
+    let rows = program
+        .compute_visual_rows(4, || false)
+        .expect("word-wrap ellipsis rewinds to preceding word boundary");
+    assert_eq!(chars(&rows[0]), "aa ");
+    assert_eq!(rows[0].source.end, buf_pos(3));
+    assert_eq!(chars(&rows[1]), "bbbbbb...T");
+    assert_eq!(rows[1].source.start, buf_pos(3));
+
+    // Case 2: space immediately before hidden span (`aaaaaaaa <hidden>TAIL\n`) in 10-cell (80px) width.
+    let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
+    let program = RowProgram::capture(
+        ww_geometry,
+        [
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(0), buf_pos(9)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("aaaaaaaa ")),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(9), buf_pos(15)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("")),
+            ),
+            DisplayItem::new(
+                SourceSpan::synthetic(ellipsis.source_id(), 0, 3),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent(ellipsis.text())),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(15), buf_pos(19)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent("TAIL")),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(buf_pos(19), buf_pos(20)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::RowBreak(DisplayRowBreak {
+                    line_height: DisplayLineHeightPolicy::Default,
+                    line_spacing: DisplayLineSpacingPolicy::Inherit,
+                }),
+            ),
+        ],
+        faces.clone(),
+        &mut measurer,
+        limits(),
+    )
+    .expect("capture space-before-ellipsis program");
+    let rows = program
+        .compute_visual_rows(4, || false)
+        .expect("space before ellipsis moves whole ellipsis to row 1");
+    assert_eq!(chars(&rows[0]), "aaaaaaaa ");
+    assert_eq!(rows[0].source.end, buf_pos(15));
+    assert_eq!(chars(&rows[1]), "...TAIL");
+    assert_eq!(rows[1].source.start, buf_pos(15));
+}

@@ -7341,17 +7341,17 @@ fn layout_frame_rust_collapses_consecutive_invisible_runs_to_one_ellipsis() {
     );
 }
 
-/// An invisible ellipsis that does not fit after the visible prefix continues,
-/// whole, on the next fresh row.
+/// A clipped invisible ellipsis under `truncate-lines nil` and `word-wrap nil`
+/// splits per glyph across visual rows, keeping the dots that fit on row 0 and
+/// resuming the remaining dots on row 1 with the saved face from before the
+/// hidden span (GNU `setup_for_ellipsis`, src/xdisp.c:5653-5672;
+/// `next_element_from_display_vector`, xdisp.c:9258; `init_from_display_pos`,
+/// xdisp.c:4115-4121).
 ///
 /// An 88px frame lays out 10 buffer cells
 /// (`p45_word_wrap_break_shadow_pins_the_c9_corpora`). Nine `a`s leave one
-/// cell, which cannot hold the three-dot marker. GNU `setup_for_ellipsis`
-/// (src/xdisp.c:5653) produces that marker, and `display_line` restores the
-/// iterator before an element that draws past the right edge and continues
-/// the row (src/xdisp.c:26433). The fresh walk must do the same before the
-/// text that follows the hidden span. The offscreen worker already continues
-/// the marker as one anchor-preserving operation.
+/// cell, so GNU keeps 1 dot on row 0 and continues the remaining 2 dots before
+/// `TAIL` on row 1, advancing row 0's `end_charpos` past the hidden span.
 #[test]
 fn clipped_invisible_ellipsis_continues_on_the_next_fresh_row() {
     let prefix = "aaaaaaaaa";
@@ -7368,6 +7368,12 @@ fn clipped_invisible_ellipsis_continues_on_the_next_fresh_row() {
             Value::list(vec![Value::cons(Value::symbol("outline"), Value::T)]),
         );
         assert!(buffer.put_text_property(
+            0,
+            hidden_start,
+            Value::symbol("face"),
+            Value::list(vec![Value::keyword("foreground"), Value::string("#cc3311"),]),
+        ));
+        assert!(buffer.put_text_property(
             hidden_start,
             hidden_end,
             Value::symbol("invisible"),
@@ -7375,31 +7381,22 @@ fn clipped_invisible_ellipsis_continues_on_the_next_fresh_row() {
         ));
     });
 
-    // GNU `setup_for_ellipsis` (src/xdisp.c:5653-5672) and
-    // `next_element_from_display_vector` (src/xdisp.c:9258) produce one dot
-    // per element and resume mid-vector on the continuation row (attested on
-    // GNU Emacs 31.1 oracle: 1 dot fits on row 0, remaining 2 dots precede
-    // TAIL on row 1).
+    // Attested on GNU Emacs 31.1 oracle: 1 dot fits on row 0, remaining 2 dots
+    // precede TAIL on row 1, and continued dots keep the pre-span face.
     let rows = row_texts(&trace);
     assert!(
         rows.len() >= 2,
         "expected wrapped ellipsis across two rows, rows={rows:?}"
     );
-    assert!(
-        rows[0].starts_with(prefix) && rows[0].contains('.'),
-        "the prefix row must keep the ellipsis dot(s) that fit, rows={rows:?}"
+    assert_eq!(
+        rows[0],
+        format!("{prefix}.\\"),
+        "row 0 must keep the exact 1 dot that fits before TTY continuation marker, rows={rows:?}"
     );
     let prefix_dots = rows[0].matches('.').count();
     let continued_dots = rows[1].chars().take_while(|ch| *ch == '.').count();
-    assert!(
-        prefix_dots > 0 && prefix_dots < 3,
-        "expected a split ellipsis on the first row, rows={rows:?}"
-    );
-    assert_eq!(
-        prefix_dots + continued_dots,
-        3,
-        "the split ellipsis must preserve all three dots across the wrap, rows={rows:?}"
-    );
+    assert_eq!(prefix_dots, 1, "expected 1 dot on row 0, rows={rows:?}");
+    assert_eq!(continued_dots, 2, "expected 2 dots on row 1, rows={rows:?}");
     assert!(
         rows[1][continued_dots..].starts_with(tail),
         "the continued ellipsis dots must immediately precede the visible tail, rows={rows:?}"
@@ -7421,6 +7418,35 @@ fn clipped_invisible_ellipsis_continues_on_the_next_fresh_row() {
         "the row before a continued invisible ellipsis must advance end_charpos past the skipped hidden span"
     );
     assert_eq!(text_rows[0].end_charpos, hidden_end);
+
+    // GNU `setup_for_ellipsis` saves the active face from before the hidden
+    // span (`it->saved_face_id`): both row 0's dot and row 1's continued dots
+    // must carry the prefix face rather than the following tail's default face.
+    let row0_glyphs =
+        &text_rows[0].glyph_areas[neomacs_display_protocol::glyph_matrix::GlyphArea::Text.index()];
+    let row1_glyphs =
+        &text_rows[1].glyph_areas[neomacs_display_protocol::glyph_matrix::GlyphArea::Text.index()];
+    let prefix_face = &row0_glyphs[0].face;
+    let row0_dot_face = &row0_glyphs
+        .iter()
+        .find(|g| matches!(g.kind, GlyphKindTrace::Char('.')))
+        .expect("row 0 dot glyph")
+        .face;
+    let row1_dot_faces: Vec<_> = row1_glyphs.iter().take(2).map(|g| &g.face).collect();
+    let tail_face = &row1_glyphs[2].face;
+    assert_ne!(
+        prefix_face, tail_face,
+        "fixture must distinguish prefix and tail faces"
+    );
+    assert_eq!(
+        row0_dot_face, prefix_face,
+        "row 0 dot must keep pre-span face"
+    );
+    assert_eq!(
+        row1_dot_faces,
+        vec![prefix_face, prefix_face],
+        "continued ellipsis dots on row 1 must keep pre-span saved face"
+    );
 }
 
 #[test]
@@ -7448,16 +7474,17 @@ fn clipped_invisible_ellipsis_truncates_without_wrapping_when_truncate_lines_is_
     });
 
     // Attested on GNU Emacs 31.1 oracle: under `truncate-lines t`, a clipped
-    // invisible ellipsis truncates in place with no continuation row and NEXT
-    // lands on screen row 1.
+    // invisible ellipsis keeps the partial dot(s) that fit and truncates in
+    // place with no continuation row, so NEXT lands on screen row 1.
     let rows = row_texts(&trace);
     assert!(
         rows.len() >= 2,
         "expected truncated line plus NEXT row, rows={rows:?}"
     );
-    assert!(
-        rows[0].starts_with(prefix),
-        "row 0 must hold the visible prefix, rows={rows:?}"
+    assert_eq!(
+        rows[0],
+        format!("{prefix}.$"),
+        "row 0 must keep the partial dot before TTY truncation marker, rows={rows:?}"
     );
     assert!(
         rows[1].trim_end() == next,
@@ -7479,6 +7506,111 @@ fn clipped_invisible_ellipsis_truncates_without_wrapping_when_truncate_lines_is_
         hidden_end + tail.len() + 1,
         "row 1 must start at NEXT"
     );
+}
+
+#[test]
+fn clipped_invisible_ellipsis_under_word_wrap_rewinds_to_word_boundary() {
+    let run_case = |prefix: &str, hidden: &str, tail: &str| {
+        let text = format!("{prefix}{hidden}{tail}\nNEXT\n");
+        let hidden_start = prefix.len();
+        let hidden_end = hidden_start + hidden.len();
+        let trace = layout_trace_with_buffer_setup(&text, 88, 240, |buffer, _, _| {
+            buffer.set_buffer_local("truncate-lines", Value::NIL);
+            buffer.set_buffer_local("word-wrap", Value::T);
+            buffer.set_buffer_local(
+                "buffer-invisibility-spec",
+                Value::list(vec![Value::cons(Value::symbol("outline"), Value::T)]),
+            );
+            assert!(buffer.put_text_property(
+                hidden_start,
+                hidden_end,
+                Value::symbol("invisible"),
+                Value::symbol("outline"),
+            ));
+        });
+        (trace, hidden_start, hidden_end)
+    };
+
+    // Case 1 (word before hidden): GNU `wrap_row_used > 0` / `goto back_to_wrap`
+    // (xdisp.c:26379-26406) rewinds to the space so the preceding word moves
+    // down together with the whole `...` ellipsis instead of splitting dots.
+    let (trace, _hs, _he) = run_case("aa bbbbbb", "hidden", "T");
+    let rows = row_texts(&trace);
+    assert!(
+        rows.len() >= 3,
+        "expected wrapped line + NEXT, rows={rows:?}"
+    );
+    assert_eq!(
+        rows[0].trim_end(),
+        "aa",
+        "word-wrap must break at the space before the word + ellipsis, rows={rows:?}"
+    );
+    assert_eq!(
+        rows[1].trim_end(),
+        "bbbbbb...T",
+        "the preceding word and whole ellipsis must move together to row 1, rows={rows:?}"
+    );
+    assert_eq!(
+        rows[2].trim_end(),
+        "NEXT",
+        "NEXT must land on row 2, rows={rows:?}"
+    );
+    let text_rows: Vec<_> = trace
+        .matrix_rows
+        .iter()
+        .filter(|row| {
+            row.enabled && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+        })
+        .collect();
+    assert_eq!(text_rows[0].end_charpos, 3, "row 0 ends after 'aa '");
+    assert_eq!(text_rows[1].start_charpos, 3, "row 1 starts at first 'b'");
+
+    // Case 2 (space immediately before hidden): GNU moves all 3 dots onto
+    // row 1 with 0 dots on row 0 and advances row 0's end past the hidden span.
+    let (trace, _hs, hidden_end) = run_case("aaaaaaaa ", "hidden", "TAIL");
+    let rows = row_texts(&trace);
+    assert!(
+        rows.len() >= 3,
+        "expected wrapped line + NEXT, rows={rows:?}"
+    );
+    assert_eq!(
+        rows[0].trim_end(),
+        "aaaaaaaa",
+        "space immediately before hidden must leave 0 dots on row 0, rows={rows:?}"
+    );
+    assert_eq!(
+        rows[1].trim_end(),
+        "...TAIL",
+        "all three ellipsis dots must start row 1 before TAIL, rows={rows:?}"
+    );
+    let text_rows: Vec<_> = trace
+        .matrix_rows
+        .iter()
+        .filter(|row| {
+            row.enabled && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+        })
+        .collect();
+    assert_eq!(
+        text_rows[0].end_charpos, hidden_end,
+        "row 0 end_charpos must match GNU post-skip charpos"
+    );
+    assert_eq!(text_rows[1].start_charpos, hidden_end);
+
+    // Case 3 (no space on row under word-wrap t): no break candidate exists, so
+    // GNU falls back to per-glyph ellipsis splitting.
+    let (trace, _hs, hidden_end) = run_case("aaaaaaaaa", "hidden", "TAIL");
+    let rows = row_texts(&trace);
+    assert_eq!(rows[0], "aaaaaaaaa.\\", "rows={rows:?}");
+    assert_eq!(rows[1].trim_end(), "..TAIL", "rows={rows:?}");
+    let text_rows: Vec<_> = trace
+        .matrix_rows
+        .iter()
+        .filter(|row| {
+            row.enabled && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+        })
+        .collect();
+    assert_eq!(text_rows[0].end_charpos, hidden_end);
+    assert_eq!(text_rows[1].start_charpos, hidden_end);
 }
 
 #[test]

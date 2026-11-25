@@ -1038,8 +1038,9 @@ impl RowProgram {
                 scalar_operations.insert(operation_index);
                 continue;
             }
+            let anchor_preserving = preserves_buffer_anchor(&render_item.source_item().span.start);
             if word_wrap.is_enabled()
-                && !insertion
+                && !anchor_preserving
                 && let DisplayItemKind::TextRun(run) = &render_item.source_item().kind
             {
                 crate::display_row::word_wrap::record_text_progress(
@@ -1094,6 +1095,7 @@ impl RowProgram {
             {
                 word_wrap.allow_after_current_char(last);
             }
+            let position_before_item = position;
             position = progress.end();
             if let DisplayItemKind::SourceMappedText(mapped) = &render_item.source_item().kind
                 && let Some(measurement_face) = mapped.measurement_face
@@ -1208,11 +1210,40 @@ impl RowProgram {
                     row.ascent_px = row_ascent_before_item;
                     row.line_spacing_px = row_spacing_before_item;
                 }
-                let anchor_preserving =
-                    preserves_buffer_anchor(&render_item.source_item().span.start);
                 let mut wrap_extend = active_extend;
-                let (next_index, next_offset) = if !anchor_preserving && word_wrap.has_candidate() {
+                let break_at_ellipsis_start = anchor_preserving
+                    && !insertion
+                    && previous_slots > 0
+                    && matches!(
+                        &render_item.source_item().kind,
+                        DisplayItemKind::TextRun(run)
+                            if run
+                                .text
+                                .chars()
+                                .next()
+                                .is_some_and(|ch| word_wrap.can_record_candidate(ch))
+                    );
+                let (next_index, next_offset) = if break_at_ellipsis_start {
+                    // Word-wrap break immediately before an invisible
+                    // ellipsis (a break opportunity like space directly
+                    // precedes the hidden span): drop any partial dot(s) from
+                    // row 0, keep row 0's end at the post-skip buffer anchor,
+                    // and resume the whole ellipsis on row 1 (matching GNU's
+                    // `wrap_it.current` after `handle_invisible_prop`).
+                    wrap_extend = predecessor_extend;
+                    checkpoint.restore(&mut row);
+                    row.height_px = row_height_before_item;
+                    row.ascent_px = row_ascent_before_item;
+                    row.line_spacing_px = row_spacing_before_item;
+                    slots.truncate(previous_slots);
+                    slot_heights.truncate(previous_slots);
+                    position = position_before_item;
+                    (operation_index, 0)
+                } else if !insertion && word_wrap.has_candidate() {
                     let candidate = word_wrap.candidate();
+                    if candidate.display_point_count() == 0 {
+                        return Err(RowProgramError::Overflow);
+                    }
                     wrap_extend = candidate.row_extend();
                     let boundary = candidate.source_position().charpos();
                     let replay_insertions = match candidate.source_cursor() {
@@ -1247,9 +1278,6 @@ impl RowProgram {
                                 .then_some((index, (boundary - start.get() as i64) as usize))
                         })
                         .ok_or(RowProgramError::Unsupported)?;
-                    if candidate.display_point_count() == 0 {
-                        return Err(RowProgramError::Overflow);
-                    }
                     candidate.glyph_checkpoint().restore(&mut row);
                     slots.truncate(candidate.display_point_count());
                     slot_heights.truncate(candidate.display_point_count());

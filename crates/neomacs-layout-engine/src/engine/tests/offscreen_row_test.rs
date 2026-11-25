@@ -2865,6 +2865,42 @@ fn worker_invisible_spans_preserve_wrapping_faces_and_boundary_strings() {
 }
 
 #[test]
+fn worker_word_wrapped_clipped_invisible_ellipsis_matches_fresh_layout() {
+    // Place the hidden span right near the wrap edge on an 800px GUI window
+    // (after a space + word, and also immediately after a space) so the
+    // worker's `RowProgram` exercises both word-wrap ellipsis rewind paths
+    // and matches fresh layout identically.
+    for (prefix, hidden, tail) in [
+        (
+            format!("{} {}", "a".repeat(80), "b".repeat(14)),
+            "hidden",
+            "TAIL",
+        ),
+        (format!("{} ", "a".repeat(94)), "hidden", "TAIL"),
+    ] {
+        let line = format!("{prefix}{hidden}{tail}\n");
+        let start = 120 * line.len() + 1;
+        let hs = prefix.len();
+        let he = hs + hidden.len();
+        first_visit_with_setup(
+            None,
+            &line,
+            None,
+            0,
+            2,
+            Some(&format!(
+                "(progn (setq truncate-lines nil word-wrap t buffer-invisibility-spec '((worker-hidden . t)))
+                (let ((p {start})) (while (< p {})
+                    (put-text-property (+ p {hs}) (+ p {he}) 'invisible 'worker-hidden)
+                    (setq p (+ p {})))))",
+                start + 40 * line.len(),
+                line.len(),
+            )),
+        );
+    }
+}
+
+#[test]
 fn worker_invisible_spans_coalesce_and_invalidate_when_visibility_changes() {
     let line = "ordinary offscreen text\n";
     let start = 120 * line.len() + 1;

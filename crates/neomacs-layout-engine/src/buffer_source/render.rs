@@ -39,6 +39,14 @@ pub(crate) fn emit_nested_source_visual_wrap<FS: crate::neovm_bridge::FaceServic
     loop_context: BufferSourceLoopRequestContext,
     state: BufferSourceLoopMutableState<'_, '_, '_, FS>,
 ) -> DisplayRowTransitionContinuation {
+    emit_nested_source_visual_wrap_with_break(loop_context, state, VisualWrapBreak::MidElement)
+}
+
+pub(crate) fn emit_nested_source_visual_wrap_with_break<FS: crate::neovm_bridge::FaceServices>(
+    loop_context: BufferSourceLoopRequestContext,
+    state: BufferSourceLoopMutableState<'_, '_, '_, FS>,
+    wrap_break: VisualWrapBreak,
+) -> DisplayRowTransitionContinuation {
     let BufferSourceLoopMutableState {
         mut progress,
         mut source_render,
@@ -69,10 +77,11 @@ pub(crate) fn emit_nested_source_visual_wrap<FS: crate::neovm_bridge::FaceServic
     let charpos = progress.charpos();
     let next_row_start = LayoutCharPos0::new(charpos);
     // A nested display source that runs past the right edge is broken
-    // mid-element, the branch where GNU produces IT_CONTINUATION
-    // (src/xdisp.c:26421-26432).
+    // mid-element (`IT_CONTINUATION`, src/xdisp.c:26421-26432), unless a
+    // word-wrap break stood immediately before the source (`back_to_wrap`,
+    // xdisp.c:26379-26406, which suppresses the TTY continuation marker).
     let transition = DisplayRowOverflowTransitionPlan::visual_wrap(
-        VisualWrapBreak::MidElement,
+        wrap_break,
         TextRowTransitionStatePolicy::visual_wrap(),
     );
     let row_position = progress.row_position();
@@ -145,7 +154,7 @@ pub(crate) fn emit_nested_source_visual_wrap<FS: crate::neovm_bridge::FaceServic
 /// 720 -- and with `word-wrap` t it is [1..42), ending BEFORE the word, with
 /// [42..47) -- "zzz" and the whole 400 px image -- on the next line
 /// (`tmp/midrow-image/case-3.txt`, `case-1.txt`).
-fn emit_word_wrap_rewind<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServices>(
+pub(crate) fn emit_word_wrap_rewind<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServices>(
     loop_context: BufferSourceLoopRequestContext,
     state: BufferSourceLoopMutableState<'_, '_, '_, FS>,
     source_walk: &mut BufferSourceWalk<'_, B>,
