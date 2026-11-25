@@ -289,7 +289,10 @@ fn class2_mode_line_eval_source_invalidated_publishes_last_evaluated_mode_line()
         .expect("class2 exhaustion redisplay");
     assert_eq!(requests.get(), 1);
     let calls = eval.eval_str("ml-calls").unwrap().as_fixnum().unwrap();
-    assert!(calls >= 2, "must actually exhaust retries: {calls}");
+    assert_eq!(
+        calls, 2,
+        "class2 exhaustion must stop after one converging retry instead of repeating 13x: {calls}"
+    );
 
     // Idle quiesce check (N2): subsequent idle redisplays must not spin.
     for _ in 0..3 {
@@ -367,9 +370,11 @@ fn class3_post_walk_display_when_mutating_inputs_publishes_at_exhaustion() {
     eval.eval_str(&format!(
         r#"(progn
       (setq inhibit-redisplay nil buffer-invisibility-spec t
-            when-calls 0 when-inhibit nil
+            when-calls 0 when-inhibit nil when-ml-calls 0
             header-line-format nil tab-line-format nil
-            mode-line-format '("WHEN-ML"))
+            mode-line-format '((:eval (progn
+                                        (setq when-ml-calls (1+ when-ml-calls))
+                                        "WHEN-ML"))))
       (put-text-property 13 {tail} 'invisible t)
       (put-text-property {tail} (+ {tail} 4) 'display
         '(when (progn
@@ -390,7 +395,15 @@ fn class3_post_walk_display_when_mutating_inputs_publishes_at_exhaustion() {
         panic!("post-walk display-when exhaustion must publish via ExhaustionSnapshot");
     };
     let calls = eval.eval_str("when-calls").unwrap().as_fixnum().unwrap();
-    assert!(calls >= 2, "must exhaust retries: {calls}");
+    assert_eq!(
+        calls, 2,
+        "post-walk display-when exhaustion must stop after one retry: {calls}"
+    );
+    let ml_calls = eval.eval_str("when-ml-calls").unwrap().as_fixnum().unwrap();
+    assert_eq!(
+        ml_calls, 2,
+        "post-walk display-when exhaustion must not repeat innocent mode-line :eval 13x: {ml_calls}"
+    );
     assert_eq!(engine.last_layout_stats().exhaustion_snapshot_passes, 1);
     let body = window_role_text(&state, window, GlyphRowRole::Text);
     assert!(body.contains("BEFORE"), "body text: {body:?}");
@@ -425,7 +438,10 @@ fn class4_face_mutation_in_header_line_publishes_with_sealed_faces() {
         panic!("face-mutating header-line must publish at exhaustion with fresh sealed faces");
     };
     let calls = eval.eval_str("face-calls").unwrap().as_fixnum().unwrap();
-    assert!(calls >= 2, "must exhaust retries: {calls}");
+    assert_eq!(
+        calls, 2,
+        "face-mutating header-line exhaustion stops after 1 retry (2 calls; this unsettled-appearance shape gives 3 in GNU 31.1): {calls}"
+    );
     assert_eq!(engine.last_layout_stats().exhaustion_snapshot_passes, 1);
     let header = window_role_text(&state, window, GlyphRowRole::HeaderLine);
     let expected = format!("FACE:{calls}");
@@ -502,7 +518,10 @@ fn class4_unreached_sibling_chrome_falls_back_to_inhibit_lisp() {
     };
     assert_eq!(engine.last_layout_stats().exhaustion_snapshot_passes, 1);
     let w1_calls = eval.eval_str("w1-calls").unwrap().as_fixnum().unwrap();
-    assert!(w1_calls >= 2, "w1 must exhaust retries: {w1_calls}");
+    assert_eq!(
+        w1_calls, 2,
+        "w1 exhaustion must stop after one retry instead of repeating 13x: {w1_calls}"
+    );
     assert_eq!(
         eval.eval_str("w2-evals").unwrap().as_fixnum(),
         Some(0),
@@ -719,7 +738,7 @@ fn n3_exhaustion_snapshot_aborts_on_unexpected_tty_face_mutation() {
     eval.set_variable("n3-buf-a", Value::make_buffer(buffer_a));
     eval.set_variable("n3-buf-b", Value::make_buffer(buffer_b));
     // Switch buffers inside header-line :eval so retries exhaust (`SourceInvalidated`),
-    // and on the final converging attempt (`n3-hl-calls == 13`) apply a fresh named
+    // and on the final converging attempt (`n3-hl-calls == 2`) apply a fresh named
     // TTY color (`n3-cold-color`) to the buffer being switched INTO. That color is
     // realized for the first time during `ExhaustionSnapshot`'s body walk, invoking
     // `tty-color-desc` which mutates `bold` (bumping `face_change_count`).
@@ -741,7 +760,7 @@ fn n3_exhaustion_snapshot_aborts_on_unexpected_tty_face_mutation() {
                      (let ((next (if (eq (window-buffer n3-win) n3-buf-a)
                                      n3-buf-b
                                    n3-buf-a)))
-                       (if (= n3-hl-calls 13)
+                       (if (= n3-hl-calls 2)
                            (save-current-buffer
                              (set-buffer next)
                              (put-text-property 1 5 'face '(:foreground "n3-cold-color"))))
@@ -788,5 +807,250 @@ fn n3_exhaustion_snapshot_aborts_on_unexpected_tty_face_mutation() {
     assert!(
         !eval.frame_redisplay_pending(frame),
         "N3 guard abort must settle NoSafe for the frame"
+    );
+}
+
+/// R1 safety half: a converging visible-pass fontifier that hides text on round 1
+/// (like Org descriptive links / `org-hide-emphasis-markers`), pulling a brand-new
+/// unfontified tail span into the viewport on round 2, must complete BOTH visible
+/// rounds and converge cleanly without `ExhaustionSnapshot` or stale tail rows.
+#[test]
+fn converging_two_round_visible_fontification_converges_without_snapshot() {
+    const PREFIX: &str = "seed\nBEFORE\n";
+    let hidden1 = "hidden1\n".repeat(2_000);
+    const MID: &str = "MID\n";
+    let fold2 = "fold2\n".repeat(40);
+    const TAIL: &str = "TAIL\n";
+    let text = format!("{PREFIX}{hidden1}{MID}{fold2}{TAIL}");
+    let hidden1_start = (PREFIX.chars().count() + 1) as i64;
+    let mid_start = hidden1_start + hidden1.chars().count() as i64;
+    let fold2_start = mid_start + MID.chars().count() as i64;
+    let tail_start = fold2_start + fold2.chars().count() as i64;
+
+    let (mut eval, frame, _buffer, window) = incr_editing_frame(&text, 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str(&format!(
+        r#"(progn
+      (setq buffer-invisibility-spec t fn-positions nil two-round-ml-calls 0
+            header-line-format nil tab-line-format nil
+            mode-line-format '((:eval (progn
+                                        (setq two-round-ml-calls (1+ two-round-ml-calls))
+                                        "OK"))))
+      (put-text-property (point-min) (point-max) 'fontified t)
+      (put-text-property {hidden1_start} {mid_start} 'invisible t)
+      (put-text-property {mid_start} (+ {mid_start} 4) 'fontified nil)
+      (put-text-property {tail_start} (+ {tail_start} 5) 'fontified nil)
+      (setq fontification-functions
+            (list (lambda (pos)
+                    (setq fn-positions (cons pos fn-positions))
+                    (cond
+                     ((= pos {mid_start})
+                      (put-text-property {mid_start} (+ {mid_start} 4) 'face 'bold)
+                      (put-text-property {mid_start} (+ {mid_start} 4) 'fontified t)
+                      (put-text-property {fold2_start} {tail_start} 'invisible t))
+                     ((= pos {tail_start})
+                      (put-text-property {tail_start} (+ {tail_start} 5) 'face 'italic)
+                      (put-text-property {tail_start} (+ {tail_start} 5) 'fontified t)))))))"#
+    ))
+    .expect("install two-round converging visible fontifier");
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    let FrameLayoutAttempt::Prepared(state) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("two-round converging visible fontification must publish");
+    };
+    assert_eq!(
+        engine.last_layout_stats().exhaustion_snapshot_passes,
+        0,
+        "converging two-round fontification must not fall back to ExhaustionSnapshot"
+    );
+    assert_eq!(
+        eval.eval_str("two-round-ml-calls").unwrap().as_fixnum(),
+        Some(3),
+        "must execute round 1 (MID), round 2 (TAIL), and converged round 3 (not publish stale round 2)"
+    );
+    let positions = neovm_core::emacs_core::value::list_to_vec(
+        &eval.eval_str("(reverse fn-positions)").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        positions,
+        vec![Value::fixnum(mid_start), Value::fixnum(tail_start)],
+        "both distinct visible rounds must run in order: {positions:?}"
+    );
+    assert!(
+        eval.eval_str(&format!("(get-text-property {mid_start} 'fontified)"))
+            .unwrap()
+            .is_t(),
+        "round 1 span must remain fontified"
+    );
+    assert!(
+        eval.eval_str(&format!("(get-text-property {tail_start} 'fontified)"))
+            .unwrap()
+            .is_t(),
+        "round 2 newly exposed span must be fontified before publishing"
+    );
+    let body = window_role_text(&state, window, GlyphRowRole::Text);
+    assert!(body.contains("MID"), "body must show MID: {body:?}");
+    assert!(
+        body.contains("TAIL"),
+        "body must show newly exposed TAIL: {body:?}"
+    );
+    assert!(
+        !body.contains("fold2"),
+        "collapsed fold2 must be hidden: {body:?}"
+    );
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == window.0 as i64)
+        .expect("window matrix entry");
+    let tail_row = entry
+        .matrix
+        .rows
+        .iter()
+        .find(|row| {
+            row.enabled
+                && row.role == GlyphRowRole::Text
+                && glyphs_logical_text(&row.glyphs[GlyphArea::Text.index()]).contains("TAIL")
+        })
+        .expect("published TAIL row");
+    let tail_glyphs: Vec<_> = tail_row.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .filter(|g| matches!(g.glyph_type, GlyphType::Char { ch } if "TAIL".contains(ch)))
+        .collect();
+    assert_eq!(tail_glyphs.len(), 4, "expected 4 TAIL glyphs");
+    assert!(
+        tail_glyphs
+            .iter()
+            .all(|g| state.faces.get(&g.face_id).is_some_and(|f| f.is_italic())),
+        "published TAIL glyphs must carry the round-2 italic face (proving converged round 3 published)"
+    );
+    assert!(
+        engine
+            .retained_window_matrices
+            .contains_key(&DisplayWindowId::new(window.0 as i64)),
+        "converged multi-round fontification must retain its matrix normally"
+    );
+}
+
+/// R3 Case F: a mode-line `:eval` whose height grows once (`:height 2.0`)
+/// must converge cleanly without `ExhaustionSnapshot` and publish the taller
+/// mode-line row (Neo evaluates 2 times vs GNU 31.1's 3 due to GNU's extra
+/// `SET_FRAME_GARBAGED` `retry_frame` pass).
+#[test]
+fn converging_mode_line_height_growth_converges_without_snapshot() {
+    let (mut eval, frame, _buffer, window) = incr_editing_frame("height test\n", 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str(
+        r#"(setq header-line-format nil tab-line-format nil mode-line-format '("INIT"))"#,
+    )
+    .expect("settle baseline mode-line");
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    let FrameLayoutAttempt::Prepared(base_state) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("baseline frame must prepare");
+    };
+    let mode_line_height = |state: &neomacs_display_protocol::glyph_matrix::FrameDisplayState| {
+        state
+            .window_matrices
+            .iter()
+            .find(|entry| entry.window_id.get() == window.0 as i64)
+            .expect("window matrix")
+            .matrix
+            .rows
+            .iter()
+            .find(|row| row.enabled && row.role == GlyphRowRole::ModeLine)
+            .expect("enabled mode-line row")
+            .height_px
+    };
+    let base_height = mode_line_height(&base_state);
+
+    eval.eval_str(
+        r#"(progn
+      (setq f-calls 0)
+      (setq mode-line-format
+            '((:eval (progn
+                       (setq f-calls (1+ f-calls))
+                       (propertize (format "TALL:%d" f-calls)
+                                   'face '(:height 2.0)))))))"#,
+    )
+    .expect("install tall mode-line");
+    let FrameLayoutAttempt::Prepared(tall_state) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("height-growing mode-line must converge and prepare");
+    };
+    assert_eq!(
+        engine.last_layout_stats().exhaustion_snapshot_passes,
+        0,
+        "converging mode-line height growth must not enter ExhaustionSnapshot"
+    );
+    let calls = eval.eval_str("f-calls").unwrap().as_fixnum().unwrap();
+    assert_eq!(
+        calls, 2,
+        "one height-discovery retry + one settled pass: {calls}"
+    );
+    let tall_height = mode_line_height(&tall_state);
+    assert!(
+        tall_height > base_height,
+        "published mode-line height must grow: base={base_height}, tall={tall_height}"
+    );
+    let ml = window_role_text(&tall_state, window, GlyphRowRole::ModeLine);
+    assert!(
+        ml.contains("TALL:2"),
+        "mode-line must show converged TALL:2: {ml:?}"
+    );
+}
+
+/// R3 Case G: a mode-line `:eval` oscillating between `:height 2.0` and `:height 1.0`
+/// (unbounded `fonts_changed` loop in GNU 31.1, probe G = 22 until test cap) is
+/// detected as a height cycle after 1 retry (2 calls) and published via
+/// `ExhaustionSnapshot`.
+#[test]
+fn oscillating_mode_line_height_publishes_via_exhaustion_snapshot() {
+    let (mut eval, frame, _buffer, window) = incr_editing_frame("height osc test\n", 800, 240);
+    realize_test_gui_frame(&mut eval, frame);
+    eval.eval_str(
+        r#"(setq header-line-format nil tab-line-format nil mode-line-format '("INIT"))"#,
+    )
+    .expect("settle baseline mode-line");
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
+    let FrameLayoutAttempt::Prepared(_) = engine.redisplay_frame_attempt(&mut eval, frame) else {
+        panic!("baseline frame must prepare");
+    };
+
+    eval.eval_str(
+        r#"(progn
+      (setq g-calls 0)
+      (setq mode-line-format
+            '((:eval (progn
+                       (setq g-calls (1+ g-calls))
+                       (propertize (format "OSC:%d" g-calls)
+                                   'face (list :height (if (= (% g-calls 2) 1) 2.0 1.0))))))))"#,
+    )
+    .expect("install oscillating-height mode-line");
+    let FrameLayoutAttempt::Prepared(state) = engine.redisplay_frame_attempt(&mut eval, frame)
+    else {
+        panic!("oscillating mode-line height must publish via ExhaustionSnapshot");
+    };
+    assert_eq!(
+        engine.last_layout_stats().exhaustion_snapshot_passes,
+        1,
+        "oscillating mode-line height must trigger ExhaustionSnapshot on cycle detection"
+    );
+    let calls = eval.eval_str("g-calls").unwrap().as_fixnum().unwrap();
+    assert_eq!(
+        calls, 2,
+        "height cycle must be detected after 1 retry (2 calls, vs GNU's unbounded 22): {calls}"
+    );
+    let ml = window_role_text(&state, window, GlyphRowRole::ModeLine);
+    assert!(
+        ml.contains("OSC:2"),
+        "ExhaustionSnapshot must reuse last captured OSC:2 mode-line: {ml:?}"
     );
 }

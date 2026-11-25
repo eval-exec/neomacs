@@ -1184,6 +1184,8 @@ enum LeafLayoutAttempt {
     /// without burning a frame retry.
     PrepassInputsChanged(Box<PrepassRecollectState>),
     LogicalInputsChanged,
+    ChromeInputsChanged,
+    PostWalkDisplayWhenInputsChanged,
     MatrixCapacityUnavailable,
     /// A `when` clause the walk took by the structural rule evaluated nil
     /// after the walk: relayout the frame once with the evaluated answers,
@@ -1267,9 +1269,14 @@ struct RedisplayLispLedger {
     /// Cleared on physical frame retry; completed siblings retain their owner
     /// identities until final whole-frame admission, independently of source freshness.
     completed_body_inputs: rustc_hash::FxHashMap<DisplayWindowId, CompletedBodyIdentity>,
-    /// First window whose finished walk asked for one source-only frame retry.
+    /// First window whose finished walk asked for one source-only frame retry,
+    /// paired with a fingerprint of the visible unfontified spans it fontified.
     /// Counted once, after every sibling has been assembled, not once per leaf.
-    source_only_retry: Option<DisplayWindowId>,
+    /// Known limitation (W2): recording only the first window means a repeating
+    /// declining hook on an earlier sibling can stop retries while a later
+    /// sibling is still making progress; folding every window's `(window_id,
+    /// spans)` into a single attempt fingerprint is a straightforward follow-up.
+    source_only_retry: Option<(DisplayWindowId, u64)>,
     /// Original source observations commit only with the accepted matrices.
     cursor_sources: rustc_hash::FxHashMap<
         DisplayWindowId,
@@ -4012,6 +4019,32 @@ impl LayoutEngine {
                             };
                             request_frame_relayout!('frame_layout, request);
                         }
+                        LeafLayoutAttempt::ChromeInputsChanged => {
+                            if evaluator.has_mode_line_display_flow() {
+                                frame_window_end_attempts.reject_all(evaluator);
+                                evaluator.retire_interaction_presentation(presentation_id);
+                                return FrameLayoutInnerOutcome::Aborted {
+                                    settle_no_safe: false,
+                                };
+                            }
+                            let request = FrameRelayoutRequest::WindowChromeInputsChanged {
+                                window_id: DisplayWindowId::new(live_inputs.window.window_id),
+                            };
+                            request_frame_relayout!('frame_layout, request);
+                        }
+                        LeafLayoutAttempt::PostWalkDisplayWhenInputsChanged => {
+                            if evaluator.has_mode_line_display_flow() {
+                                frame_window_end_attempts.reject_all(evaluator);
+                                evaluator.retire_interaction_presentation(presentation_id);
+                                return FrameLayoutInnerOutcome::Aborted {
+                                    settle_no_safe: false,
+                                };
+                            }
+                            let request = FrameRelayoutRequest::PostWalkDisplayWhenInputsChanged {
+                                window_id: DisplayWindowId::new(live_inputs.window.window_id),
+                            };
+                            request_frame_relayout!('frame_layout, request);
+                        }
                         LeafLayoutAttempt::DisplayWhenReplay => {
                             if evaluator.has_mode_line_display_flow() {
                                 frame_window_end_attempts.reject_all(evaluator);
@@ -4681,9 +4714,12 @@ impl LayoutEngine {
             // Spending the budget must not retire this presentation: the
             // ordinary tail below publishes the attempt just assembled.
             if attempt_mode == FrameAttemptMode::Converging
-                && let Some(window_id) = lisp_ledger.source_only_retry.take()
+                && let Some((window_id, stops_fingerprint)) = lisp_ledger.source_only_retry.take()
             {
-                let request = FrameRelayoutRequest::SourceOnlyRetry { window_id };
+                let request = FrameRelayoutRequest::SourceOnlyRetry {
+                    window_id,
+                    stops_fingerprint,
+                };
                 if layout_coordinator.request_retry(request).is_ok() {
                     continue 'frame_layout;
                 }
@@ -7538,7 +7574,8 @@ impl LayoutEngine {
             ),
             BufferSourceRenderAttemptOutcome::Skipped
             | BufferSourceRenderAttemptOutcome::LogicalInputsChanged
-            | BufferSourceRenderAttemptOutcome::OverlayViewExhausted
+            | BufferSourceRenderAttemptOutcome::ChromeSourceInvalidated
+            | BufferSourceRenderAttemptOutcome::OverlayViewUnusable(_)
             | BufferSourceRenderAttemptOutcome::GlyphMatrixCapacityExhausted
             | BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { .. }
             | BufferSourceRenderAttemptOutcome::Retry { .. }
@@ -7576,7 +7613,23 @@ impl LayoutEngine {
             if let Some(attempt) = window_end_attempt.take() {
                 evaluator.reject_redisplay_window_end_attempt(attempt);
             }
-            return LeafLayoutAttempt::LogicalInputsChanged;
+            let chrome_may_have_entered = matches!(
+                &render_outcome,
+                BufferSourceRenderAttemptOutcome::Finished {
+                    chrome_lisp_admission:
+                        crate::attempt_freshness::LayoutLispAdmission::MayHaveEntered,
+                    ..
+                } | BufferSourceRenderAttemptOutcome::EmptyBodyChromeMeasured {
+                    chrome_lisp_admission:
+                        crate::attempt_freshness::LayoutLispAdmission::MayHaveEntered,
+                    ..
+                } | BufferSourceRenderAttemptOutcome::ChromeSourceInvalidated
+            );
+            return if chrome_may_have_entered {
+                LeafLayoutAttempt::ChromeInputsChanged
+            } else {
+                LeafLayoutAttempt::LogicalInputsChanged
+            };
         }
 
         // Two fontification requests precede this comment's pass.  The
@@ -7799,8 +7852,16 @@ impl LayoutEngine {
                     if seals_completed_body && source_only {
                         fontification_source_baseline = freshness_after_visible_fontification;
                         if lisp_ledger.source_only_retry.is_none() {
+                            let mut stops_fingerprint: u64 = 0xcbf29ce484222325;
+                            for span in &spans {
+                                for word in [span.start() as u64, span.end() as u64] {
+                                    stops_fingerprint ^= word;
+                                    stops_fingerprint =
+                                        stops_fingerprint.wrapping_mul(0x100000001b3);
+                                }
+                            }
                             lisp_ledger.source_only_retry =
-                                Some(DisplayWindowId::new(params.window_id));
+                                Some((DisplayWindowId::new(params.window_id), stops_fingerprint));
                         }
                     } else {
                         if let Some(attempt) = window_end_attempt.take() {
@@ -7848,7 +7909,7 @@ impl LayoutEngine {
                     if let Some(attempt) = window_end_attempt.take() {
                         evaluator.reject_redisplay_window_end_attempt(attempt);
                     }
-                    return LeafLayoutAttempt::LogicalInputsChanged;
+                    return LeafLayoutAttempt::PostWalkDisplayWhenInputsChanged;
                 }
                 match settlement {
                     crate::display_when::DisplayWhenSettlement::Replay => {
@@ -7921,7 +7982,11 @@ impl LayoutEngine {
                 reject_changed_cursor_sources(evaluator, &mut window_end_attempt, true);
                 return LeafLayoutAttempt::LogicalInputsChanged;
             }
-            BufferSourceRenderAttemptOutcome::OverlayViewExhausted => {
+            BufferSourceRenderAttemptOutcome::ChromeSourceInvalidated => {
+                reject_changed_cursor_sources(evaluator, &mut window_end_attempt, true);
+                return LeafLayoutAttempt::ChromeInputsChanged;
+            }
+            BufferSourceRenderAttemptOutcome::OverlayViewUnusable(reason) => {
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
                 }

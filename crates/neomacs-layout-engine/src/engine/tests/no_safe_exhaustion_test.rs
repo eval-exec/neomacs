@@ -38,13 +38,10 @@ fn class4_physical_hscroll_retry_publishes_with_last_header_and_quiesces() {
         let prior = eval.eval_str("nosafe-evals").unwrap().as_fixnum().unwrap();
         let outcome = engine.redisplay_frame_attempt(eval, frame);
         let after = eval.eval_str("nosafe-evals").unwrap().as_fixnum().unwrap();
-        assert!(
-            after - prior >= 2,
-            "actual repeated header callback: {prior}..{after}"
-        );
-        assert!(
-            after - prior <= (MAX_FRAME_LAYOUT_RETRIES + 1) as i64,
-            "one physical-refusal episode must terminate: {prior}..{after}"
+        assert_eq!(
+            after - prior,
+            2,
+            "hscroll-toggling header exhaustion must stop after one retry (not 13x): {prior}..{after}"
         );
         let FrameLayoutAttempt::Prepared(state) = outcome else {
             panic!("hscroll-toggling header must publish at exhaustion via ExhaustionSnapshot");

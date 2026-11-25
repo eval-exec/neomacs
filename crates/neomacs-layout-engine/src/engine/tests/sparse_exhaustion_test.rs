@@ -101,15 +101,19 @@ fn exhausted_sparse_fontifier_publishes_one_complete_two_window_attempt() {
     let calls = neovm_core::emacs_core::value::list_to_vec(&eval.eval_str("sparse-calls").unwrap())
         .unwrap();
     // Receipt BEFORE Prepared: bad early-prepass placement cannot count as RED.
-    assert!(events.len() >= 4, "repeated real callbacks: {events:?}");
+    assert_eq!(
+        events.len(),
+        4,
+        "exact two-attempt callback sequence (chrome, font, chrome, font): {events:?}"
+    );
     assert_eq!(
         events.first(),
         Some(&Value::symbol("chrome")),
         "first sparse callback follows real body/chrome: {events:?}"
     );
     assert!(
-        calls.len() >= 2 && calls.iter().all(|p| *p == Value::fixnum(tail)),
-        "only the actual visible sparse stop repeats: {calls:?}"
+        calls.len() == 2 && calls.iter().all(|p| *p == Value::fixnum(tail)),
+        "only the actual visible sparse stop repeats once (2 calls): {calls:?}"
     );
     assert!(
         eval.eval_str(&format!("(get-text-property {tail} 'fontified)"))
@@ -118,18 +122,19 @@ fn exhausted_sparse_fontifier_publishes_one_complete_two_window_attempt() {
         "the hook never marks its stop"
     );
     let chrome_count = sparse_count(&mut eval, "sparse-chrome-count");
-    assert!(
-        chrome_count <= (MAX_FRAME_LAYOUT_RETRIES + 1) as i64,
-        "bounded attempt work: {chrome_count}"
+    assert_eq!(
+        chrome_count, 2,
+        "repeating identical sparse stop must exhaust after 1 retry (2 chrome evals, not 13): {chrome_count}"
     );
     let FrameLayoutAttempt::Prepared(output) = result else {
         panic!(
             "complete sparse retries must publish a whole frame at exhaustion; events={events:?}, calls={calls:?}"
         );
     };
-    assert!(
-        sparse_count(&mut eval, "sparse-sibling-chrome") >= 1,
-        "actually finish the later sibling"
+    let sibling_chrome = sparse_count(&mut eval, "sparse-sibling-chrome");
+    assert_eq!(
+        sibling_chrome, 2,
+        "later sibling chrome must finish on both attempts without repeating 13x: {sibling_chrome}"
     );
     let state = output.state();
     let ids: std::collections::HashSet<_> = state

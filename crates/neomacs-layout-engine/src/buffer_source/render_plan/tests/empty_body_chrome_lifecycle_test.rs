@@ -169,7 +169,7 @@ fn measure_then_capture_next_leaf(source: ChromeSource) {
             assert!(
                 matches!(
                     outcome,
-                    BufferSourceRenderAttemptOutcome::LogicalInputsChanged
+                    BufferSourceRenderAttemptOutcome::ChromeSourceInvalidated
                 ),
                 "the real chrome source changed its window buffer: {outcome:?}"
             );

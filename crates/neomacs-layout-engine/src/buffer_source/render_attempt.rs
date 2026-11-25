@@ -308,14 +308,16 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
         freshness_before_chrome: CompletedBodyCertificate,
         chrome_lisp_admission: crate::attempt_freshness::LayoutLispAdmission,
     },
-    /// Lisp evaluated by a buffer-owned display source changed the window's
-    /// source projection. The frame transaction must discard this attempt and
-    /// recollect the live window/buffer pair.
+    /// Pre-chrome body-certificate validation failed (body inputs or replay
+    /// certificate no longer match the live window/buffer projection).
     LogicalInputsChanged,
-    /// The walk consumed at or past a window-range overlay view's end, so
-    /// some displayed-region overlays were absent. The checkpoint was
-    /// restored; the leaf must retry once with the whole-buffer view.
-    OverlayViewExhausted,
+    /// Window chrome evaluation (`mode-line-format`, `header-line-format`, or
+    /// `tab-line-format`) invalidated the window's live source projection.
+    ChromeSourceInvalidated,
+    /// The overlay view cannot certify the completed walk: either a range view
+    /// was exhausted/underflowed, or a live view went stale after Lisp mutated
+    /// overlays mid-attempt. The checkpoint was restored; the leaf retries.
+    OverlayViewUnusable(crate::neovm_bridge::OverlayViewUnusable),
     /// Actual EOB producer rows did not admit point. The evaluator-owned GNU
     /// mini redisplay must visit its bounded conservative/recenter sites.
     GnuMiniEobCursorUnavailable {

@@ -86,15 +86,28 @@ impl<'chrome> WindowChromeRowSource<'chrome> {
     }
 }
 
-/// The one way chrome preparation fails: Lisp run by a display source changed
-/// the window's projection. The containing attempt reports it as
-/// [`BufferSourceRenderAttemptOutcome::LogicalInputsChanged`] through `From`.
+/// Pre-chrome body-certificate failure (`freshness_before_window_chrome`).
+/// Converts into [`BufferSourceRenderAttemptOutcome::LogicalInputsChanged`] so
+/// non-chrome retries retain the shared frame-layout budget.
 #[derive(Debug)]
 struct LogicalInputsChanged;
 
 impl From<LogicalInputsChanged> for BufferSourceRenderAttemptOutcome {
     fn from(_: LogicalInputsChanged) -> Self {
         Self::LogicalInputsChanged
+    }
+}
+
+/// Window chrome evaluation invalidated the window's live source projection
+/// (`WindowChromeRowsRenderOutcome::SourceInvalidated`). Converts into
+/// [`BufferSourceRenderAttemptOutcome::ChromeSourceInvalidated`] so the frame
+/// coordinator classifies it distinctly from pre-chrome body invalidations.
+#[derive(Debug)]
+struct ChromeSourceInvalidated;
+
+impl From<ChromeSourceInvalidated> for BufferSourceRenderAttemptOutcome {
+    fn from(_: ChromeSourceInvalidated) -> Self {
+        Self::ChromeSourceInvalidated
     }
 }
 
@@ -113,7 +126,7 @@ fn render_or_retain_window_chrome(
         WindowChromeMetrics,
         crate::attempt_freshness::LayoutLispAdmission,
     ),
-    LogicalInputsChanged,
+    ChromeSourceInvalidated,
 > {
     let _cursor_source_pause = crate::cursor_source_dependencies::pause();
     let memo = match source {
@@ -149,7 +162,7 @@ fn render_or_retain_window_chrome(
             metrics,
             lisp_admission,
         } => Ok((metrics, lisp_admission)),
-        WindowChromeRowsRenderOutcome::SourceInvalidated => Err(LogicalInputsChanged),
+        WindowChromeRowsRenderOutcome::SourceInvalidated => Err(ChromeSourceInvalidated),
     }
 }
 

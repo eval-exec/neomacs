@@ -843,8 +843,8 @@ fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
     );
     assert_eq!(
         rejected_attempts.as_fixnum(),
-        Some(13),
-        "strict snapshot must exhaust all 13 bounded attempts"
+        Some(2),
+        "strict snapshot must exhaust repeating window-chrome input invalidation after 2 attempts"
     );
     assert_eq!(
         super::super::frame_layout::last_layout_stats_for_test().exhaustion_snapshot_passes,
@@ -877,7 +877,7 @@ fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
         "a rejected body's provisional end is visible to its chrome, but must never become previous accepted viewport evidence"
     );
 
-    // 2. Live `Redisplay` exhausts the same 13 converging attempts, rolls back
+    // 2. Live `Redisplay` exhausts the same 2 converging attempts, rolls back
     //    those rejected attempts, then publishes one callback-inhibited
     //    ExhaustionSnapshot (GNU safety net) with reused chrome and live margins.
     eval.eval_str(
@@ -896,8 +896,8 @@ fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
         eval.eval_str("neomacs-rejected-end-attempt")
             .expect("redisplay attempt count")
             .as_fixnum(),
-        Some(13),
-        "ExhaustionSnapshot must inhibit mode-line :eval after the 13 converging attempts"
+        Some(2),
+        "ExhaustionSnapshot must inhibit mode-line :eval after repeating window-chrome input invalidation (2 attempts)"
     );
     assert_eq!(
         super::super::frame_layout::last_layout_stats_for_test().exhaustion_snapshot_passes,
@@ -917,7 +917,7 @@ fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
     };
     assert_eq!(
         (regions.left_margin_columns, regions.right_margin_columns),
-        (13, 0),
+        (2, 0),
         "ExhaustionSnapshot must reflect the final post-exhaustion live margins, not an earlier rejected attempt"
     );
     let ml_text = window_mode_line_text(&published, window_id);
@@ -1028,8 +1028,8 @@ fn later_sibling_failure_restores_every_earlier_provisional_window_end() {
         eval.eval_str("neomacs-later-sibling-attempt")
             .expect("later sibling attempt count")
             .as_fixnum(),
-        Some(13),
-        "strict snapshot must exhaust all 13 bounded attempts"
+        Some(2),
+        "strict snapshot must exhaust repeating window-chrome input invalidation after 2 attempts"
     );
     assert_eq!(
         super::super::frame_layout::last_layout_stats_for_test().exhaustion_snapshot_passes,
@@ -1067,8 +1067,8 @@ fn later_sibling_failure_restores_every_earlier_provisional_window_end() {
         eval.eval_str("neomacs-later-sibling-attempt")
             .expect("later sibling redisplay attempt count")
             .as_fixnum(),
-        Some(13),
-        "ExhaustionSnapshot must inhibit later sibling mode-line :eval"
+        Some(2),
+        "ExhaustionSnapshot must inhibit later sibling mode-line :eval after 2 attempts"
     );
     assert_eq!(
         super::super::frame_layout::last_layout_stats_for_test().exhaustion_snapshot_passes,
@@ -1088,7 +1088,7 @@ fn later_sibling_failure_restores_every_earlier_provisional_window_end() {
     };
     assert_eq!(
         (regions.left_margin_columns, regions.right_margin_columns),
-        (13, 0),
+        (2, 0),
         "later sibling must publish with post-exhaustion live margins"
     );
     let later_ml = window_mode_line_text(&published, later_window);
