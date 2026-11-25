@@ -62,7 +62,7 @@ fn check_snapshot_fontification_roots(bounded: bool) {
     .unwrap();
     let buffer = eval.buffer_manager().current_buffer().unwrap();
     let buffer_id = buffer.id();
-    let snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+    let snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_source(
         buffer,
         eval.variables(),
         Some((0, 64)),
@@ -70,6 +70,7 @@ fn check_snapshot_fontification_roots(bounded: bool) {
         crate::display_property::DisplayPropertyTarget::Terminal,
         eval.symbol_mode(),
         &eval.owned_root_retainer(),
+        OverlaySourceMode::Captured,
     );
     let pre_bits: Vec<usize> = snapshot
         .layout_overlays()
@@ -181,7 +182,7 @@ fn check_snapshot_fontification_roots(bounded: bool) {
         eval.eval_str("(overlay-put (car snapshot-root-overlays) 'face 'italic)")
             .unwrap();
         let buffer = eval.buffer_manager().current_buffer().unwrap();
-        let second = LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+        let second = LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_source(
             buffer,
             eval.variables(),
             Some((0, 64)),
@@ -189,6 +190,7 @@ fn check_snapshot_fontification_roots(bounded: bool) {
             crate::display_property::DisplayPropertyTarget::Terminal,
             eval.symbol_mode(),
             &eval.owned_root_retainer(),
+            OverlaySourceMode::Captured,
         );
         let second_copies: Vec<_> = second
             .layout_overlays()
@@ -905,7 +907,7 @@ fn layout_stats_capture_counts_retained_overlay_roots() {
     .unwrap();
     let buffer = eval.buffer_manager().current_buffer().unwrap();
     let before = neovm_core::buffer::overlay::overlay_layout_stats();
-    let _snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+    let _snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_source(
         buffer,
         eval.variables(),
         None,
@@ -913,6 +915,7 @@ fn layout_stats_capture_counts_retained_overlay_roots() {
         crate::display_property::DisplayPropertyTarget::Terminal,
         eval.symbol_mode(),
         &eval.owned_root_retainer(),
+        OverlaySourceMode::Captured,
     );
     let after = neovm_core::buffer::overlay::overlay_layout_stats();
     assert_eq!(
@@ -947,7 +950,7 @@ fn layout_stats_off_leaves_all_five_counters_at_zero() {
     )
     .unwrap();
     let buffer = eval.buffer_manager().current_buffer().unwrap();
-    let _snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+    let _snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_source(
         buffer,
         eval.variables(),
         None,
@@ -955,6 +958,7 @@ fn layout_stats_off_leaves_all_five_counters_at_zero() {
         crate::display_property::DisplayPropertyTarget::Terminal,
         eval.symbol_mode(),
         &eval.owned_root_retainer(),
+        OverlaySourceMode::Captured,
     );
     let stats = neovm_core::buffer::overlay::overlay_layout_stats();
     assert_eq!(

@@ -1,4 +1,5 @@
-//! P4c/P4d: `NEOMACS_LAYOUT_OVERLAY_SOURCE=live` capture, stats, and GC safety
+//! P4c/P4d/P5a: default (live) overlay view capture,
+//! `NEOMACS_LAYOUT_OVERLAY_SOURCE=captured` fallback, stats, and GC safety
 //! across fontification callbacks that delete overlays.
 
 use super::*;
@@ -38,15 +39,11 @@ fn owned_native_root_count(eval: &Context, target_bits: usize) -> usize {
 }
 
 #[test]
-fn overlay_source_mode_defaults_to_captured_and_honors_live_env() {
-    assert_eq!(parse_overlay_source_mode(None), OverlaySourceMode::Captured);
+fn overlay_source_mode_defaults_to_live_and_honors_captured_env() {
+    assert_eq!(parse_overlay_source_mode(None), OverlaySourceMode::Live);
     assert_eq!(
         parse_overlay_source_mode(Some(std::ffi::OsStr::new(""))),
-        OverlaySourceMode::Captured
-    );
-    assert_eq!(
-        parse_overlay_source_mode(Some(std::ffi::OsStr::new("captured"))),
-        OverlaySourceMode::Captured
+        OverlaySourceMode::Live
     );
     assert_eq!(
         parse_overlay_source_mode(Some(std::ffi::OsStr::new("live"))),
@@ -56,12 +53,20 @@ fn overlay_source_mode_defaults_to_captured_and_honors_live_env() {
         parse_overlay_source_mode(Some(std::ffi::OsStr::new("LIVE"))),
         OverlaySourceMode::Live
     );
-    // Default process mode with env unset must stay Captured.
+    assert_eq!(
+        parse_overlay_source_mode(Some(std::ffi::OsStr::new("captured"))),
+        OverlaySourceMode::Captured
+    );
+    assert_eq!(
+        parse_overlay_source_mode(Some(std::ffi::OsStr::new("CAPTURED"))),
+        OverlaySourceMode::Captured
+    );
+    // Default process mode with env unset must be Live (P5a).
     // SAFETY: nextest runs each test in its own process.
     unsafe {
         std::env::remove_var("NEOMACS_LAYOUT_OVERLAY_SOURCE");
     }
-    assert_eq!(overlay_source_mode(), OverlaySourceMode::Captured);
+    assert_eq!(overlay_source_mode(), OverlaySourceMode::Live);
 }
 
 struct ScopedTempDir(std::path::PathBuf);
@@ -94,7 +99,7 @@ fn live_overlay_snapshot_counts_zero_copies_entries_roots_and_nonzero_live_recor
     // SAFETY: nextest runs each test in its own process, before OnceLocks initialize.
     unsafe {
         std::env::set_var("NEOMACS_LAYOUT_STATS_FILE", dir.path().join("stats"));
-        std::env::set_var("NEOMACS_LAYOUT_OVERLAY_SOURCE", "live");
+        std::env::remove_var("NEOMACS_LAYOUT_OVERLAY_SOURCE");
     }
     assert_eq!(overlay_source_mode(), OverlaySourceMode::Live);
     neovm_core::buffer::overlay::reset_overlay_layout_stats();
@@ -158,6 +163,74 @@ fn live_overlay_snapshot_counts_zero_copies_entries_roots_and_nonzero_live_recor
     );
     assert!(!snapshot.layout_overlay_view_stale());
     assert_eq!(snapshot.layout_overlay_view_end_char(), None);
+}
+
+#[test]
+fn captured_env_knob_forces_captured_overlay_source_end_to_end() {
+    let dir = ScopedTempDir::new("neomacs-captured-env-knob-stats");
+    // SAFETY: nextest runs each test in its own process, before OnceLocks initialize.
+    unsafe {
+        std::env::set_var("NEOMACS_LAYOUT_STATS_FILE", dir.path().join("stats"));
+        std::env::set_var("NEOMACS_LAYOUT_OVERLAY_SOURCE", "captured");
+    }
+    assert_eq!(overlay_source_mode(), OverlaySourceMode::Captured);
+    neovm_core::buffer::overlay::reset_overlay_layout_stats();
+
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    eval.eval_str(
+        r#"(progn
+             (insert (make-string 128 ?x))
+             (overlay-put (make-overlay 1 10) 'face 'bold)
+             (overlay-put (make-overlay 20 30) 'face 'italic))"#,
+    )
+    .unwrap();
+    let buffer = eval.buffer_manager().current_buffer().unwrap();
+    let before = neovm_core::buffer::overlay::overlay_layout_stats();
+    // Exercise the env -> OnceLock -> overlay_source_mode() -> capture_buffer path
+    // with no constructor override or test hook.
+    let snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+        buffer,
+        eval.variables(),
+        None,
+        None,
+        crate::display_property::DisplayPropertyTarget::Terminal,
+        eval.symbol_mode(),
+        &eval.owned_root_retainer(),
+    );
+    let overlays = snapshot.layout_overlays();
+    let found = overlays.overlays_at_emacs_byte_pos(EmacsBytePos::new(5));
+    assert_eq!(found.len(), 1);
+    assert!(
+        owned_native_root_count(&eval, found[0].bits()) > 0,
+        "NEOMACS_LAYOUT_OVERLAY_SOURCE=captured must lease copied overlay roots"
+    );
+
+    let after = neovm_core::buffer::overlay::overlay_layout_stats();
+    assert_eq!(
+        after.copies - before.copies,
+        2,
+        "captured env knob must copy both overlays: before={before:?} after={after:?}"
+    );
+    assert_eq!(
+        after.view_entries - before.view_entries,
+        2,
+        "captured env knob must attach both view entries: before={before:?} after={after:?}"
+    );
+    assert_eq!(
+        after.roots - before.roots,
+        2,
+        "captured env knob must retain both overlay roots: before={before:?} after={after:?}"
+    );
+    assert_eq!(
+        after.rebuilds - before.rebuilds,
+        1,
+        "captured env knob whole-buffer capture must count 1 rebuild: before={before:?} after={after:?}"
+    );
+    assert_eq!(
+        after.live_records - before.live_records,
+        0,
+        "captured env knob must visit 0 live records: before={before:?} after={after:?}"
+    );
 }
 
 #[test]

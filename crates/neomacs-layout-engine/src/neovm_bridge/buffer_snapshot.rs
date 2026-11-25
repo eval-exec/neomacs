@@ -35,8 +35,8 @@ mod live_overlay_view_test;
 ///
 /// | Value | Behavior |
 /// | --- | --- |
-/// | `captured` (default / unset) | Copy overlays into a captured `OverlaySnapshot` with native root lease. |
-/// | `live` | Read the buffer's live `OverlayIndex` under a generation stamp (`LiveOverlayView`), with zero overlay copies or root leases. |
+/// | `live` (default / unset) | Read the buffer's live `OverlayIndex` under a generation stamp (`LiveOverlayView`), with zero overlay copies or root leases; falls back to whole-buffer `Captured` after a second `Stale` in one attempt. |
+/// | `captured` | Explicit fallback knob: copy overlays into a captured `OverlaySnapshot` with native root lease. |
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OverlaySourceMode {
     Captured,
@@ -45,8 +45,8 @@ pub(crate) enum OverlaySourceMode {
 
 fn parse_overlay_source_mode(value: Option<&std::ffi::OsStr>) -> OverlaySourceMode {
     match value.and_then(|v| v.to_str()) {
-        Some(raw) if raw.eq_ignore_ascii_case("live") => OverlaySourceMode::Live,
-        _ => OverlaySourceMode::Captured,
+        Some(raw) if raw.eq_ignore_ascii_case("captured") => OverlaySourceMode::Captured,
+        _ => OverlaySourceMode::Live,
     }
 }
 
@@ -629,11 +629,15 @@ mod category_capture_tests {
         .unwrap();
         let id = eval.buffer_manager().current_buffer().unwrap().id();
         let buffer = eval.buffer_manager().get(id).unwrap();
-        let snapshot = LayoutBufferSnapshot::from_buffer_for_window(
+        let snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_source(
             buffer,
             eval.variables(),
             Some((0, 64)),
+            Some((0, 64)),
             crate::display_property::DisplayPropertyTarget::Graphical,
+            SymbolMode::Bare,
+            &eval.owned_root_retainer(),
+            OverlaySourceMode::Captured,
         );
         let view = snapshot.layout_overlays();
         assert_eq!(
@@ -659,7 +663,7 @@ mod category_capture_tests {
         .unwrap();
         let id = eval.buffer_manager().current_buffer().unwrap().id();
         let buffer = eval.buffer_manager().get(id).unwrap();
-        let snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols(
+        let snapshot = LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_source(
             buffer,
             eval.variables(),
             Some((0, 64)),
@@ -667,6 +671,7 @@ mod category_capture_tests {
             crate::display_property::DisplayPropertyTarget::Graphical,
             SymbolMode::Bare,
             &eval.owned_root_retainer(),
+            OverlaySourceMode::Captured,
         );
         let _ = snapshot
             .layout_overlays()
