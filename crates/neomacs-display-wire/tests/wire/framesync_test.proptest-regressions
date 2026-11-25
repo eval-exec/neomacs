@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 24802c10d77c7b42ea6468405acbdcaccf96e4659e368917300eb497621f0036 # shrinks to steps = [Split, Split, Resize { cols: 20, rows: 25 }]
+cc 5b5e1c98127e924c654a647192bed10e1869657f9ef6294c35b2f2c42c93051b # shrinks to with_coverage = true, mutations = [CoverageXwidget { width: 0, offset: 2143289344 }]

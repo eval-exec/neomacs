@@ -37,6 +37,7 @@ const WIRE_ROOTS: &[&str] = &[
     "MenuBarRequestId",
     "FrontendKey",
     "ModifierBits",
+    "ModifierPolicy",
     "DisplayTime",
     "PointerTarget",
     "LiveDisplayFrameId",
@@ -60,6 +61,14 @@ const WIRE_ROOTS: &[&str] = &[
     "TerminalFloatPlacement",
     "GuiResizeRequestId",
     "FrameVisibility",
+    // Named directly by the display wire messages (M2 review r1). `SurfaceId`
+    // is too, but `display_id_type!` defines it (serde derives, no
+    // attributes), which this source scan cannot see.
+    "PopupPlacement",
+    "CoveragePublicationId",
+    "InputSerial",
+    "DesktopFontRenderOptions",
+    "Rect",
 ];
 
 /// Symmetric `skip` fields whose value the receiver rebuilds after decode,

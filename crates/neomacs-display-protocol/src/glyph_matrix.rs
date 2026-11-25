@@ -1822,6 +1822,262 @@ pub struct GlyphPointerRun {
     pub width: f32,
 }
 
+/// Every field of a [`GlyphRow`] a peer needs to rebuild it, borrowed.
+///
+/// The row hash (recomputed by the receiver) and the process-local
+/// appearance (fresh on every rebuilt row) are not part of it. A codec
+/// destructures this without `..`, so a new row field is a compile error
+/// there; [`GlyphRow::view`] destructures the row itself the same way.
+#[derive(Clone, Copy, Debug)]
+pub struct GlyphRowView<'a> {
+    pub glyphs: &'a [Vec<Glyph>; GlyphArea::COUNT],
+    pub pointer_appearances: &'a [GlyphPointerAppearance],
+    pub image_margins: &'a [ImageMargins],
+    pub string_sources: &'a [GlyphStringSource],
+    pub pointer_runs: &'a [GlyphPointerRun],
+    pub enabled: bool,
+    pub role: GlyphRowRole,
+    pub cursor_col: Option<u16>,
+    pub cursor_type: Option<CursorStyle>,
+    pub truncated_left: bool,
+    pub continued: bool,
+    pub reversed_p: bool,
+    pub displays_text: bool,
+    pub ends_at_zv: bool,
+    pub mode_line: bool,
+    pub pixel_x: f32,
+    pub start_col: u16,
+    pub pixel_y: f32,
+    pub height_px: f32,
+    pub line_spacing_px: f32,
+    pub ascent_px: f32,
+    pub start_charpos: usize,
+    pub end_charpos: usize,
+    pub left_fringe_bitmap: Option<FringeBitmapInfo>,
+    pub right_fringe_bitmap: Option<FringeBitmapInfo>,
+    pub overlay_arrow_bitmap: Option<FringeBitmapInfo>,
+}
+
+/// The owned fields a [`GlyphRow`] is rebuilt from ([`GlyphRow::from_parts`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlyphRowParts {
+    pub glyphs: [Vec<Glyph>; GlyphArea::COUNT],
+    pub pointer_appearances: Vec<GlyphPointerAppearance>,
+    pub image_margins: Vec<ImageMargins>,
+    pub string_sources: Vec<GlyphStringSource>,
+    pub pointer_runs: Vec<GlyphPointerRun>,
+    pub enabled: bool,
+    pub role: GlyphRowRole,
+    pub cursor_col: Option<u16>,
+    pub cursor_type: Option<CursorStyle>,
+    pub truncated_left: bool,
+    pub continued: bool,
+    pub reversed_p: bool,
+    pub displays_text: bool,
+    pub ends_at_zv: bool,
+    pub mode_line: bool,
+    pub pixel_x: f32,
+    pub start_col: u16,
+    pub pixel_y: f32,
+    pub height_px: f32,
+    pub line_spacing_px: f32,
+    pub ascent_px: f32,
+    pub start_charpos: usize,
+    pub end_charpos: usize,
+    pub left_fringe_bitmap: Option<FringeBitmapInfo>,
+    pub right_fringe_bitmap: Option<FringeBitmapInfo>,
+    pub overlay_arrow_bitmap: Option<FringeBitmapInfo>,
+}
+
+/// A row-local token that names no entry of its row's table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlyphRowPartsError {
+    DanglingPointerAppearance { area: GlyphArea, index: usize },
+    DanglingStringSource { area: GlyphArea, index: usize },
+    DanglingImageMargins { area: GlyphArea, index: usize },
+    DanglingPointerRun { run: usize },
+}
+
+impl std::fmt::Display for GlyphRowPartsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DanglingPointerAppearance { area, index } => {
+                write!(
+                    f,
+                    "glyph {index} of {area:?} names a missing pointer appearance"
+                )
+            }
+            Self::DanglingStringSource { area, index } => {
+                write!(f, "glyph {index} of {area:?} names a missing string source")
+            }
+            Self::DanglingImageMargins { area, index } => {
+                write!(f, "glyph {index} of {area:?} names missing image margins")
+            }
+            Self::DanglingPointerRun { run } => {
+                write!(f, "pointer run {run} names a missing pointer appearance")
+            }
+        }
+    }
+}
+
+impl std::error::Error for GlyphRowPartsError {}
+
+impl GlyphRow {
+    /// Borrow every field a peer needs to rebuild this row.
+    #[must_use]
+    pub fn view(&self) -> GlyphRowView<'_> {
+        let Self {
+            glyphs,
+            pointer_appearances,
+            image_margins,
+            string_sources,
+            pointer_runs,
+            hash: _,
+            enabled,
+            role,
+            cursor_col,
+            cursor_type,
+            truncated_left,
+            continued,
+            reversed_p,
+            displays_text,
+            ends_at_zv,
+            mode_line,
+            pixel_x,
+            start_col,
+            pixel_y,
+            height_px,
+            line_spacing_px,
+            ascent_px,
+            start_charpos,
+            end_charpos,
+            left_fringe_bitmap,
+            right_fringe_bitmap,
+            overlay_arrow_bitmap,
+            appearance: _,
+        } = self;
+        GlyphRowView {
+            glyphs,
+            pointer_appearances,
+            image_margins,
+            string_sources,
+            pointer_runs,
+            enabled: *enabled,
+            role: *role,
+            cursor_col: *cursor_col,
+            cursor_type: *cursor_type,
+            truncated_left: *truncated_left,
+            continued: *continued,
+            reversed_p: *reversed_p,
+            displays_text: *displays_text,
+            ends_at_zv: *ends_at_zv,
+            mode_line: *mode_line,
+            pixel_x: *pixel_x,
+            start_col: *start_col,
+            pixel_y: *pixel_y,
+            height_px: *height_px,
+            line_spacing_px: *line_spacing_px,
+            ascent_px: *ascent_px,
+            start_charpos: *start_charpos,
+            end_charpos: *end_charpos,
+            left_fringe_bitmap: *left_fringe_bitmap,
+            right_fringe_bitmap: *right_fringe_bitmap,
+            overlay_arrow_bitmap: *overlay_arrow_bitmap,
+        }
+    }
+
+    /// Rebuild a row from its parts, with a fresh appearance and a recomputed
+    /// hash. Every row-local token must name an entry of its table.
+    pub fn from_parts(parts: GlyphRowParts) -> Result<Self, GlyphRowPartsError> {
+        let GlyphRowParts {
+            glyphs,
+            pointer_appearances,
+            image_margins,
+            string_sources,
+            pointer_runs,
+            enabled,
+            role,
+            cursor_col,
+            cursor_type,
+            truncated_left,
+            continued,
+            reversed_p,
+            displays_text,
+            ends_at_zv,
+            mode_line,
+            pixel_x,
+            start_col,
+            pixel_y,
+            height_px,
+            line_spacing_px,
+            ascent_px,
+            start_charpos,
+            end_charpos,
+            left_fringe_bitmap,
+            right_fringe_bitmap,
+            overlay_arrow_bitmap,
+        } = parts;
+        for area in GlyphArea::ALL {
+            for (index, glyph) in glyphs[area.index()].iter().enumerate() {
+                if glyph
+                    .pointer_appearance
+                    .is_some_and(|id| id.index() >= pointer_appearances.len())
+                {
+                    return Err(GlyphRowPartsError::DanglingPointerAppearance { area, index });
+                }
+                if let GlyphProvenance::Str { source, .. } = glyph.provenance
+                    && source.index() >= string_sources.len()
+                {
+                    return Err(GlyphRowPartsError::DanglingStringSource { area, index });
+                }
+                if let GlyphType::Image { margins, .. } = &glyph.glyph_type
+                    && margins.index() >= image_margins.len()
+                {
+                    return Err(GlyphRowPartsError::DanglingImageMargins { area, index });
+                }
+            }
+        }
+        if let Some(run) = pointer_runs
+            .iter()
+            .position(|run| run.appearance.index() >= pointer_appearances.len())
+        {
+            return Err(GlyphRowPartsError::DanglingPointerRun { run });
+        }
+        let mut row = Self {
+            glyphs,
+            pointer_appearances,
+            image_margins,
+            string_sources,
+            pointer_runs,
+            hash: 0,
+            enabled,
+            role,
+            cursor_col,
+            cursor_type,
+            truncated_left,
+            continued,
+            reversed_p,
+            displays_text,
+            ends_at_zv,
+            mode_line,
+            pixel_x,
+            start_col,
+            pixel_y,
+            height_px,
+            line_spacing_px,
+            ascent_px,
+            start_charpos,
+            end_charpos,
+            left_fringe_bitmap,
+            right_fringe_bitmap,
+            overlay_arrow_bitmap,
+            appearance: RowAppearance::fresh(),
+        };
+        row.hash = row.compute_hash();
+        Ok(row)
+    }
+}
+
 /// Copy-on-write row handle. Rows under construction are uniquely owned, so
 /// [`MatrixRow::make_mut`] mutates in place for free; once a frame is
 /// accepted the same rows are SHARED by refcount between the sealed
@@ -2226,11 +2482,411 @@ pub struct FrameDisplayState {
     pub fringe_bitmaps: HashMap<u16, FringeBitmapData>,
 }
 
+/// Every field of a [`FrameDisplayState`], borrowed. A codec that must carry
+/// the whole state destructures this without `..`, so a new field is a
+/// compile error there rather than a field silently left behind.
+#[derive(Clone, Copy, Debug)]
+pub struct FrameDisplayStateView<'a> {
+    pub scroll_input_policy: &'a crate::ScrollInputPolicy,
+    pub scroll_coverage: &'a Vec<std::sync::Arc<crate::scroll_coverage::ScrollCoverage>>,
+    pub scroll_coverage_renewals: &'a Vec<crate::scroll_coverage::ScrollCoverageRenewal>,
+    pub input_checkpoint: &'a Vec<crate::input_progress::FrontierSnapshot>,
+    pub layout_scale: &'a crate::geometry::DeviceScale,
+    pub presentation_id: &'a PresentationId,
+    pub origin: &'a crate::presentation_origin::PresentationOrigin,
+    pub frame_placement: &'a crate::presented_frame::PresentedFramePlacement,
+    pub presented_pointer_source: &'a crate::PresentedPointerSourceMap,
+    pub presented_hit_index: &'a crate::PresentedHitIndex,
+    pub window_matrices: &'a Vec<WindowMatrixEntry>,
+    pub frame_chrome: &'a FrameChrome,
+    pub frame_cols: &'a usize,
+    pub frame_rows: &'a usize,
+    pub frame_pixel_width: &'a f32,
+    pub frame_pixel_height: &'a f32,
+    pub char_width: &'a f32,
+    pub char_height: &'a f32,
+    pub font_pixel_size: &'a f32,
+    pub background: &'a Color,
+    pub faces: &'a FrameFaceMap,
+    pub font_catalog_generation: &'a crate::font::FontCatalogGeneration,
+    pub desktop_font_render_options: &'a Option<crate::DesktopFontRenderOptions>,
+    pub fonts: &'a crate::font::ResolvedFontTable,
+    pub char_fonts: &'a crate::font::CharFontTable,
+    pub shaped_clusters: &'a crate::font::ShapedClusterTable,
+    pub undecorated: &'a bool,
+    pub border_width: &'a f32,
+    pub border_color: &'a Color,
+    pub outer_border_width: &'a f32,
+    pub outer_border_color: &'a Color,
+    pub background_alpha: &'a f32,
+    pub frame_alpha: &'a [f32; 2],
+    pub no_accept_focus: &'a bool,
+    pub window_infos: &'a Vec<WindowInfo>,
+    pub transition_hints: &'a Vec<ContentTransitionHint>,
+    pub backgrounds: &'a Vec<BackgroundItem>,
+    pub face_fills: &'a Vec<FaceFillItem>,
+    pub borders: &'a Vec<BorderItem>,
+    pub cursors: &'a Vec<CursorItem>,
+    pub cursor_effects_by_window: &'a HashMap<DisplayWindowId, EffectsConfig>,
+    pub scroll_bars: &'a Vec<ScrollBarItem>,
+    pub phys_cursor: &'a Option<PhysCursor>,
+    pub fringe_bitmaps: &'a HashMap<u16, FringeBitmapData>,
+}
+
+/// The owned fields a [`FrameDisplayState`] is rebuilt from.
+#[derive(Clone, Debug)]
+pub struct FrameDisplayStateParts {
+    pub scroll_input_policy: crate::ScrollInputPolicy,
+    pub scroll_coverage: Vec<std::sync::Arc<crate::scroll_coverage::ScrollCoverage>>,
+    pub scroll_coverage_renewals: Vec<crate::scroll_coverage::ScrollCoverageRenewal>,
+    pub input_checkpoint: Vec<crate::input_progress::FrontierSnapshot>,
+    pub layout_scale: crate::geometry::DeviceScale,
+    pub presentation_id: PresentationId,
+    pub origin: crate::presentation_origin::PresentationOrigin,
+    pub frame_placement: crate::presented_frame::PresentedFramePlacement,
+    pub presented_pointer_source: crate::PresentedPointerSourceMap,
+    pub presented_hit_index: crate::PresentedHitIndex,
+    pub window_matrices: Vec<WindowMatrixEntry>,
+    pub frame_chrome: FrameChrome,
+    pub frame_cols: usize,
+    pub frame_rows: usize,
+    pub frame_pixel_width: f32,
+    pub frame_pixel_height: f32,
+    pub char_width: f32,
+    pub char_height: f32,
+    pub font_pixel_size: f32,
+    pub background: Color,
+    pub faces: FrameFaceMap,
+    pub font_catalog_generation: crate::font::FontCatalogGeneration,
+    pub desktop_font_render_options: Option<crate::DesktopFontRenderOptions>,
+    pub fonts: crate::font::ResolvedFontTable,
+    pub char_fonts: crate::font::CharFontTable,
+    pub shaped_clusters: crate::font::ShapedClusterTable,
+    pub undecorated: bool,
+    pub border_width: f32,
+    pub border_color: Color,
+    pub outer_border_width: f32,
+    pub outer_border_color: Color,
+    pub background_alpha: f32,
+    pub frame_alpha: [f32; 2],
+    pub no_accept_focus: bool,
+    pub window_infos: Vec<WindowInfo>,
+    pub transition_hints: Vec<ContentTransitionHint>,
+    pub backgrounds: Vec<BackgroundItem>,
+    pub face_fills: Vec<FaceFillItem>,
+    pub borders: Vec<BorderItem>,
+    pub cursors: Vec<CursorItem>,
+    pub cursor_effects_by_window: HashMap<DisplayWindowId, EffectsConfig>,
+    pub scroll_bars: Vec<ScrollBarItem>,
+    pub phys_cursor: Option<PhysCursor>,
+    pub fringe_bitmaps: HashMap<u16, FringeBitmapData>,
+}
+
+impl FrameDisplayStateParts {
+    /// Clone every field of a view.
+    #[must_use]
+    pub fn from_view(view: FrameDisplayStateView<'_>) -> Self {
+        let FrameDisplayStateView {
+            scroll_input_policy,
+            scroll_coverage,
+            scroll_coverage_renewals,
+            input_checkpoint,
+            layout_scale,
+            presentation_id,
+            origin,
+            frame_placement,
+            presented_pointer_source,
+            presented_hit_index,
+            window_matrices,
+            frame_chrome,
+            frame_cols,
+            frame_rows,
+            frame_pixel_width,
+            frame_pixel_height,
+            char_width,
+            char_height,
+            font_pixel_size,
+            background,
+            faces,
+            font_catalog_generation,
+            desktop_font_render_options,
+            fonts,
+            char_fonts,
+            shaped_clusters,
+            undecorated,
+            border_width,
+            border_color,
+            outer_border_width,
+            outer_border_color,
+            background_alpha,
+            frame_alpha,
+            no_accept_focus,
+            window_infos,
+            transition_hints,
+            backgrounds,
+            face_fills,
+            borders,
+            cursors,
+            cursor_effects_by_window,
+            scroll_bars,
+            phys_cursor,
+            fringe_bitmaps,
+        } = view;
+        Self {
+            scroll_input_policy: *scroll_input_policy,
+            scroll_coverage: scroll_coverage.clone(),
+            scroll_coverage_renewals: scroll_coverage_renewals.clone(),
+            input_checkpoint: input_checkpoint.clone(),
+            layout_scale: *layout_scale,
+            presentation_id: *presentation_id,
+            origin: *origin,
+            frame_placement: *frame_placement,
+            presented_pointer_source: presented_pointer_source.clone(),
+            presented_hit_index: presented_hit_index.clone(),
+            window_matrices: window_matrices.clone(),
+            frame_chrome: frame_chrome.clone(),
+            frame_cols: *frame_cols,
+            frame_rows: *frame_rows,
+            frame_pixel_width: *frame_pixel_width,
+            frame_pixel_height: *frame_pixel_height,
+            char_width: *char_width,
+            char_height: *char_height,
+            font_pixel_size: *font_pixel_size,
+            background: *background,
+            faces: faces.clone(),
+            font_catalog_generation: *font_catalog_generation,
+            desktop_font_render_options: *desktop_font_render_options,
+            fonts: fonts.clone(),
+            char_fonts: char_fonts.clone(),
+            shaped_clusters: shaped_clusters.clone(),
+            undecorated: *undecorated,
+            border_width: *border_width,
+            border_color: *border_color,
+            outer_border_width: *outer_border_width,
+            outer_border_color: *outer_border_color,
+            background_alpha: *background_alpha,
+            frame_alpha: *frame_alpha,
+            no_accept_focus: *no_accept_focus,
+            window_infos: window_infos.clone(),
+            transition_hints: transition_hints.clone(),
+            backgrounds: backgrounds.clone(),
+            face_fills: face_fills.clone(),
+            borders: borders.clone(),
+            cursors: cursors.clone(),
+            cursor_effects_by_window: cursor_effects_by_window.clone(),
+            scroll_bars: scroll_bars.clone(),
+            phys_cursor: phys_cursor.clone(),
+            fringe_bitmaps: fringe_bitmaps.clone(),
+        }
+    }
+}
+
+impl FrameDisplayState {
+    /// Borrow every field. The scroll admissions memo is not part of the
+    /// state: `prepare_scroll_coverage` recomputes it.
+    #[must_use]
+    pub fn view(&self) -> FrameDisplayStateView<'_> {
+        let Self {
+            prepared_scroll_admissions: _,
+            scroll_input_policy,
+            scroll_coverage,
+            scroll_coverage_renewals,
+            input_checkpoint,
+            layout_scale,
+            presentation_id,
+            origin,
+            frame_placement,
+            presented_pointer_source,
+            presented_hit_index,
+            window_matrices,
+            frame_chrome,
+            frame_cols,
+            frame_rows,
+            frame_pixel_width,
+            frame_pixel_height,
+            char_width,
+            char_height,
+            font_pixel_size,
+            background,
+            faces,
+            font_catalog_generation,
+            desktop_font_render_options,
+            fonts,
+            char_fonts,
+            shaped_clusters,
+            undecorated,
+            border_width,
+            border_color,
+            outer_border_width,
+            outer_border_color,
+            background_alpha,
+            frame_alpha,
+            no_accept_focus,
+            window_infos,
+            transition_hints,
+            backgrounds,
+            face_fills,
+            borders,
+            cursors,
+            cursor_effects_by_window,
+            scroll_bars,
+            phys_cursor,
+            fringe_bitmaps,
+        } = self;
+        FrameDisplayStateView {
+            scroll_input_policy,
+            scroll_coverage,
+            scroll_coverage_renewals,
+            input_checkpoint,
+            layout_scale,
+            presentation_id,
+            origin,
+            frame_placement,
+            presented_pointer_source,
+            presented_hit_index,
+            window_matrices,
+            frame_chrome,
+            frame_cols,
+            frame_rows,
+            frame_pixel_width,
+            frame_pixel_height,
+            char_width,
+            char_height,
+            font_pixel_size,
+            background,
+            faces,
+            font_catalog_generation,
+            desktop_font_render_options,
+            fonts,
+            char_fonts,
+            shaped_clusters,
+            undecorated,
+            border_width,
+            border_color,
+            outer_border_width,
+            outer_border_color,
+            background_alpha,
+            frame_alpha,
+            no_accept_focus,
+            window_infos,
+            transition_hints,
+            backgrounds,
+            face_fills,
+            borders,
+            cursors,
+            cursor_effects_by_window,
+            scroll_bars,
+            phys_cursor,
+            fringe_bitmaps,
+        }
+    }
+
+    /// Rebuild a state from its fields, with an empty admissions memo.
+    #[must_use]
+    pub fn from_parts(parts: FrameDisplayStateParts) -> Self {
+        let FrameDisplayStateParts {
+            scroll_input_policy,
+            scroll_coverage,
+            scroll_coverage_renewals,
+            input_checkpoint,
+            layout_scale,
+            presentation_id,
+            origin,
+            frame_placement,
+            presented_pointer_source,
+            presented_hit_index,
+            window_matrices,
+            frame_chrome,
+            frame_cols,
+            frame_rows,
+            frame_pixel_width,
+            frame_pixel_height,
+            char_width,
+            char_height,
+            font_pixel_size,
+            background,
+            faces,
+            font_catalog_generation,
+            desktop_font_render_options,
+            fonts,
+            char_fonts,
+            shaped_clusters,
+            undecorated,
+            border_width,
+            border_color,
+            outer_border_width,
+            outer_border_color,
+            background_alpha,
+            frame_alpha,
+            no_accept_focus,
+            window_infos,
+            transition_hints,
+            backgrounds,
+            face_fills,
+            borders,
+            cursors,
+            cursor_effects_by_window,
+            scroll_bars,
+            phys_cursor,
+            fringe_bitmaps,
+        } = parts;
+        Self {
+            prepared_scroll_admissions: Vec::new(),
+            scroll_input_policy,
+            scroll_coverage,
+            scroll_coverage_renewals,
+            input_checkpoint,
+            layout_scale,
+            presentation_id,
+            origin,
+            frame_placement,
+            presented_pointer_source,
+            presented_hit_index,
+            window_matrices,
+            frame_chrome,
+            frame_cols,
+            frame_rows,
+            frame_pixel_width,
+            frame_pixel_height,
+            char_width,
+            char_height,
+            font_pixel_size,
+            background,
+            faces,
+            font_catalog_generation,
+            desktop_font_render_options,
+            fonts,
+            char_fonts,
+            shaped_clusters,
+            undecorated,
+            border_width,
+            border_color,
+            outer_border_width,
+            outer_border_color,
+            background_alpha,
+            frame_alpha,
+            no_accept_focus,
+            window_infos,
+            transition_hints,
+            backgrounds,
+            face_fills,
+            borders,
+            cursors,
+            cursor_effects_by_window,
+            scroll_bars,
+            phys_cursor,
+            fringe_bitmaps,
+        }
+    }
+}
+
 /// A condition [`FrameDisplayState::materialize`] requires and the state
 /// violates. Each variant is one of the invariants a producer guarantees,
-/// reported in the order `materialize` checks them.
+/// listed in the order `materialize` checks them.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MaterializeError {
+    /// A glyph's materialized geometry is not representable.
+    Glyph(GlyphMaterializeError),
     /// The pointer map names primitives the frame does not materialize.
     PointerSource(crate::presented_pointer::PresentedPointerMapError),
     /// A non-empty hit index belongs to another presentation
@@ -2238,10 +2894,45 @@ pub enum MaterializeError {
     /// with the frame's window geometry.
     SpatialProjection(crate::PresentedHitError),
     /// The hit index cannot bind the frame's pointer regions, for example a
-    /// region whose semantic owner it does not know. (An empty index of
-    /// another presentation is replaced, not reported.)
+    /// region whose semantic owner it does not know. A hit index of another
+    /// presentation is reported as `SpatialProjection(StalePresentation)`
+    /// when it is non-empty, and replaced when it is empty.
     HitIndex(crate::PresentedHitError),
 }
+
+/// A glyph the walk cannot materialize: its geometry came out non-finite or
+/// otherwise invalid. Producers never build one; a decoded peer frame can.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlyphMaterializeError {
+    /// An xwidget's origin is not a finite point.
+    XwidgetOrigin { window: DisplayWindowId },
+    /// An xwidget's clip rectangle is not a valid rectangle.
+    XwidgetClip { window: DisplayWindowId },
+    /// An xwidget's layout advance is not finite and strictly positive.
+    XwidgetAdvance { window: DisplayWindowId },
+}
+
+impl std::fmt::Display for GlyphMaterializeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::XwidgetOrigin { window } => {
+                write!(f, "an xwidget origin in window {window} is not finite")
+            }
+            Self::XwidgetClip { window } => {
+                write!(
+                    f,
+                    "an xwidget clip in window {window} is not a valid rectangle"
+                )
+            }
+            Self::XwidgetAdvance { window } => write!(
+                f,
+                "an xwidget advance in window {window} is not finite and positive"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for GlyphMaterializeError {}
 
 impl std::fmt::Display for MaterializeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2258,6 +2949,7 @@ impl std::fmt::Display for MaterializeError {
                 f,
                 "FrameDisplayState hit index must match its presentation: {error:?}"
             ),
+            Self::Glyph(error) => write!(f, "FrameDisplayState glyph: {error}"),
         }
     }
 }
@@ -3034,13 +3726,10 @@ impl FrameDisplayState {
     }
 
     /// Check the conditions [`Self::materialize`] asserts as typed errors:
-    /// the pointer map, the spatial projections and the hit index.
-    ///
-    /// This is not yet a complete guard for a decoded frame: the glyph walk
-    /// it runs (`for_each_glyph`) still `expect`s a finite xwidget origin, a
-    /// valid xwidget clip and a positive finite xwidget width. A receiver must
-    /// check those before trusting a peer's frame (the FrameSync decoder,
-    /// MILESTONES M2).
+    /// the glyph walk's geometry, the pointer map, the spatial projections
+    /// and the hit index. A receiver runs this before trusting a peer's frame
+    /// (the FrameSync decoder), so a state it accepts materializes without
+    /// panicking.
     pub fn validate_for_materialize(&self) -> Result<(), MaterializeError> {
         self.try_materialize().map(drop)
     }
@@ -3109,7 +3798,8 @@ impl FrameDisplayState {
         buf.frame_chrome = self.frame_chrome.clone();
 
         // --- Materialize all glyphs in canonical row/overlay order ---
-        self.for_each_glyph(|g| buf.glyphs.push(g));
+        self.try_for_each_glyph(|g| buf.glyphs.push(g))
+            .map_err(MaterializeError::Glyph)?;
 
         // --- Materialize cursors ---
         // These are non-active cursor presentations. Their typed role remains
@@ -3171,7 +3861,18 @@ impl FrameDisplayState {
     /// rows, window-matrix grid rows, borders, and scroll bars. Images, videos,
     /// and xwidgets are emitted by their owning rows. It does NOT emit cursors
     /// or write any `FrameGlyphBuffer` metadata.
-    pub fn for_each_glyph(&self, mut push: impl FnMut(FrameGlyph)) {
+    pub fn for_each_glyph(&self, push: impl FnMut(FrameGlyph)) {
+        self.try_for_each_glyph(push)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// [`Self::for_each_glyph`] for a state that has not been validated: a
+    /// glyph whose geometry cannot be materialized is a typed error instead
+    /// of a panic. [`Self::validate_for_materialize`] runs this walk.
+    pub fn try_for_each_glyph(
+        &self,
+        mut push: impl FnMut(FrameGlyph),
+    ) -> Result<(), GlyphMaterializeError> {
         // --- Materialize backgrounds ---
         for bg in &self.backgrounds {
             push(FrameGlyph::Background {
@@ -3210,11 +3911,11 @@ impl FrameDisplayState {
                 self.char_width,
                 self.char_height,
                 &mut push,
-            );
+            )?;
         }
         for entry in &self.window_matrices {
             for (row_idx, glyph_row) in entry.matrix.rows.iter().enumerate() {
-                self.for_each_window_row_glyph(entry, row_idx, glyph_row, &mut push);
+                self.for_each_window_row_glyph(entry, row_idx, glyph_row, &mut push)?;
             }
         }
 
@@ -3384,6 +4085,7 @@ impl FrameDisplayState {
                 thumb_color: sb.thumb_color,
             });
         }
+        Ok(())
     }
 
     /// The glyphs [`Self::for_each_glyph`] materializes for the window-matrix
@@ -3397,7 +4099,8 @@ impl FrameDisplayState {
         for entry in &self.window_matrices {
             for (row_idx, glyph_row) in entry.matrix.rows.iter().enumerate() {
                 if accept(entry, row_idx, glyph_row) {
-                    self.for_each_window_row_glyph(entry, row_idx, glyph_row, &mut push);
+                    self.for_each_window_row_glyph(entry, row_idx, glyph_row, &mut push)
+                        .unwrap_or_else(|error| panic!("{error}"));
                 }
             }
         }
@@ -3422,7 +4125,7 @@ impl FrameDisplayState {
                 if accept(entry, row_idx, glyph_row) {
                     let (row_bounds, area_layout, char_w) =
                         self.window_row_materialization_inputs(entry, glyph_row);
-                    let _ = self.walk_grid_row_glyphs(
+                    self.walk_grid_row_glyphs(
                         entry.window_id,
                         row_idx as u32,
                         glyph_row,
@@ -3431,7 +4134,8 @@ impl FrameDisplayState {
                         char_w,
                         self.char_height,
                         &mut push,
-                    );
+                    )
+                    .unwrap_or_else(|error| panic!("{error}"));
                 }
             }
         }
@@ -3444,7 +4148,7 @@ impl FrameDisplayState {
         row_idx: usize,
         glyph_row: &GlyphRow,
         push: &mut impl FnMut(FrameGlyph),
-    ) {
+    ) -> Result<(), GlyphMaterializeError> {
         let (row_bounds, area_layout, char_w) =
             self.window_row_materialization_inputs(entry, glyph_row);
         self.for_each_grid_row_glyph(
@@ -3456,7 +4160,7 @@ impl FrameDisplayState {
             char_w,
             self.char_height,
             push,
-        );
+        )
     }
 
     /// Body (`Text`) rows clip to the text-area band so a vscroll's
@@ -3533,9 +4237,9 @@ impl FrameDisplayState {
         char_w: f32,
         char_h: f32,
         sink: &mut impl FnMut(FrameGlyph, &Glyph, &GlyphRow),
-    ) -> Option<GridRowWalkEnd> {
+    ) -> Result<Option<GridRowWalkEnd>, GlyphMaterializeError> {
         if !glyph_row.enabled {
-            return None;
+            return Ok(None);
         }
 
         let win_x = pixel_bounds.x;
@@ -3827,16 +4531,20 @@ impl FrameDisplayState {
                             x,
                             baseline - layout_ascent + glyph.vertical_offset_px,
                         )
-                        .expect("materialized xwidget origin is finite");
-                        let clip = clip_rect.map(|clip| {
-                            GeometryRect::<FrameSpace, LogicalPixels>::new(
-                                clip.x,
-                                clip.y,
-                                clip.width,
-                                clip.height,
-                            )
-                            .expect("materialized xwidget clip is valid")
-                        });
+                        .map_err(|_| GlyphMaterializeError::XwidgetOrigin { window: window_id })?;
+                        let clip = clip_rect
+                            .map(|clip| {
+                                GeometryRect::<FrameSpace, LogicalPixels>::new(
+                                    clip.x,
+                                    clip.y,
+                                    clip.width,
+                                    clip.height,
+                                )
+                            })
+                            .transpose()
+                            .map_err(|_| GlyphMaterializeError::XwidgetClip {
+                                window: window_id,
+                            })?;
                         // Unlike ordinary painted glyphs, an xwidget carries
                         // its visible text-area clip separately.  GNU keeps a
                         // narrow overflowing xwidget's whole glyph advance in
@@ -3844,7 +4552,7 @@ impl FrameDisplayState {
                         // clips only the native presentation
                         // (`x_draw_xwidget_glyph_string`, src/xwidget.c).
                         let layout_advance = XwidgetLayoutAdvance::new(Px(glyph_width))
-                            .expect("a materialized xwidget has positive finite width");
+                            .ok_or(GlyphMaterializeError::XwidgetAdvance { window: window_id })?;
                         sink(
                             FrameGlyph::Xwidget {
                                 window_id,
@@ -3965,7 +4673,7 @@ impl FrameDisplayState {
             }
         }
 
-        Some(GridRowWalkEnd {
+        Ok(Some(GridRowWalkEnd {
             x_cursor,
             win_x,
             win_w,
@@ -3974,7 +4682,7 @@ impl FrameDisplayState {
             chrome_clip_rect,
             y,
             row_height,
-        })
+        }))
     }
 
     /// Materialize one grid row and apply the legacy chrome row completion.
@@ -3994,7 +4702,7 @@ impl FrameDisplayState {
         char_w: f32,
         char_h: f32,
         emit: &mut impl FnMut(FrameGlyph),
-    ) {
+    ) -> Result<(), GlyphMaterializeError> {
         let mut materialized_row = Vec::new();
         let Some(end) = self.walk_grid_row_glyphs(
             window_id,
@@ -4005,8 +4713,9 @@ impl FrameDisplayState {
             char_w,
             char_h,
             &mut |glyph, _source, _row| materialized_row.push(glyph),
-        ) else {
-            return;
+        )?
+        else {
+            return Ok(());
         };
         let GridRowWalkEnd {
             x_cursor,
@@ -4083,6 +4792,7 @@ impl FrameDisplayState {
         for glyph in materialized_row {
             emit(glyph);
         }
+        Ok(())
     }
 }
 

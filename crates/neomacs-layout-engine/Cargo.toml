@@ -83,6 +83,9 @@ neovm-eval = { path = "../neovm-eval", default-features = false, features = ["te
 neovm-edit = { path = "../neovm-edit", default-features = false, features = ["test-support"] }
 serde_json.workspace = true
 tracing-test.workspace = true
+# The wire parity corpus (MILESTONES M2): evaluator-driven frames survive
+# encode → decode → seal → materialize through the NDP/1 codec.
+neomacs-display-wire = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

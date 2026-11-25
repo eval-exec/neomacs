@@ -30,7 +30,7 @@
 /// absent because it is the *absence* of a mapping
 /// ([`Option::None`]), mirroring `parse_solitary_modifier'
 /// returning 0 (`src/keyboard.c:7917`).
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum EmacsModifierKey {
     Alt,
     Ctrl,
@@ -54,7 +54,7 @@ pub enum ModifierEventKind {
 ///
 /// Construction is struct-literal only, so adding a kind is a compile error
 /// at every construction site rather than a silently-ignored slot.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModifierAssignment {
     pub ordinary: Option<EmacsModifierKey>,
     pub function: Option<EmacsModifierKey>,
@@ -186,7 +186,7 @@ impl From<ModifierPolicyParts> for ModifierPolicy {
 /// (`nsterm.m:382`), so the marker must survive into the policy rather than
 /// being resolved away: [`ModifierPolicy::assignment`] resolves it at read
 /// time against the live left value.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SideAssignment {
     /// GNU's `left' marker: use the family's left assignment.
     #[default]
@@ -292,7 +292,7 @@ impl ModifierBits {
 }
 
 /// The side assignment for one modifier family.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct ModifierFamily {
     left: ModifierAssignment,
     right: SideAssignment,
@@ -307,8 +307,9 @@ impl ModifierFamily {
     }
 }
 
-/// The compiled NS modifier policy.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// The compiled NS modifier policy. A display link carries it in the `Config`
+/// family (DESIGN §6.8), through this derive.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModifierPolicy {
     command: ModifierFamily,
     option: ModifierFamily,

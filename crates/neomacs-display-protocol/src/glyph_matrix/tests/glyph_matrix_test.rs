@@ -3409,3 +3409,255 @@ fn validate_for_materialize_rejects_a_hit_index_of_another_presentation() {
         ))
     );
 }
+
+// ---------------------------------------------------------------------------
+// M2: a peer's frame must not panic the frontend. Every `expect` of the glyph
+// walk is a typed `validate_for_materialize` error (M1 follow-up 1), and a
+// row crosses the wire through parts that name every field.
+// ---------------------------------------------------------------------------
+
+fn xwidget_window_state(glyph: Glyph, text_clip_bounds: Option<Rect>) -> FrameDisplayState {
+    let mut state = FrameDisplayState::new(10, 1, 8.0, 16.0);
+    state.presentation_id = PresentationId::new(23);
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    row.enabled = true;
+    row.height_px = 16.0;
+    row.ascent_px = 12.0;
+    row.glyphs[GlyphArea::Text.index()].push(glyph);
+    let mut matrix = GlyphMatrix::new(1, 10);
+    matrix.rows[0] = MatrixRow::new(row);
+    let bounds = Rect::new(0.0, 0.0, 80.0, 16.0);
+    state.window_matrices.push(WindowMatrixEntry {
+        window_id: DisplayWindowId::new(1),
+        matrix,
+        pixel_bounds: bounds,
+        text_pixel_bounds: bounds,
+        text_clip_bounds,
+        selected: true,
+    });
+    state
+}
+
+fn xwidget_glyph(pixel_width: f32, vertical_offset_px: f32) -> Glyph {
+    let mut glyph = Glyph::char('x', FaceId::new(0), 0);
+    glyph.glyph_type = GlyphType::Xwidget {
+        xwidget_id: XwidgetId::new(3),
+        webview_id: WebViewId::new(5),
+        width_cols: 1,
+        content: XwidgetContentExtent::new(8.0, 16.0).unwrap(),
+    };
+    glyph.pixel_width = pixel_width;
+    glyph.vertical_offset_px = vertical_offset_px;
+    glyph
+}
+
+#[test]
+fn validate_for_materialize_accepts_a_finite_xwidget() {
+    let state = xwidget_window_state(xwidget_glyph(8.0, 0.0), None);
+    assert_eq!(state.validate_for_materialize(), Ok(()));
+    assert_eq!(
+        state
+            .materialize()
+            .glyphs
+            .iter()
+            .filter(|glyph| matches!(glyph, FrameGlyph::Xwidget { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn validate_for_materialize_reports_a_non_finite_xwidget_origin() {
+    let state = xwidget_window_state(xwidget_glyph(8.0, f32::NAN), None);
+    assert_eq!(
+        state.validate_for_materialize(),
+        Err(MaterializeError::Glyph(
+            GlyphMaterializeError::XwidgetOrigin {
+                window: DisplayWindowId::new(1),
+            }
+        ))
+    );
+}
+
+#[test]
+fn validate_for_materialize_reports_an_invalid_xwidget_clip() {
+    let state = xwidget_window_state(
+        xwidget_glyph(8.0, 0.0),
+        Some(Rect::new(0.0, 0.0, f32::NAN, 16.0)),
+    );
+    assert_eq!(
+        state.validate_for_materialize(),
+        Err(MaterializeError::Glyph(
+            GlyphMaterializeError::XwidgetClip {
+                window: DisplayWindowId::new(1),
+            }
+        ))
+    );
+}
+
+#[test]
+fn validate_for_materialize_reports_a_non_finite_xwidget_advance() {
+    let state = xwidget_window_state(xwidget_glyph(f32::INFINITY, 0.0), None);
+    assert_eq!(
+        state.validate_for_materialize(),
+        Err(MaterializeError::Glyph(
+            GlyphMaterializeError::XwidgetAdvance {
+                window: DisplayWindowId::new(1),
+            }
+        ))
+    );
+}
+
+fn row_with_every_table() -> GlyphRow {
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    row.enabled = true;
+    row.pixel_y = 16.0;
+    row.height_px = 16.0;
+    row.ascent_px = 12.0;
+    row.start_charpos = 10;
+    row.end_charpos = 14;
+    row.displays_text = true;
+    row.cursor_col = Some(1);
+    let appearance = row
+        .intern_pointer_appearance(test_pointer_appearance())
+        .unwrap();
+    let source = row
+        .push_string_source(GlyphStringSource::new(GlyphStringId::new(3)))
+        .unwrap();
+    let margins = row
+        .intern_image_margins(ImageMargins::asymmetric(1.0, 2.0, 3.0, 4.0))
+        .unwrap();
+    let mut hovered = Glyph::char('a', FaceId::new(2), 10);
+    hovered.pointer_appearance = Some(appearance);
+    let from_string =
+        Glyph::char_with_provenance('b', FaceId::new(2), GlyphProvenance::string(source, 0));
+    let mut image = Glyph::char('c', FaceId::new(2), 12);
+    image.glyph_type = GlyphType::Image {
+        image_id: 7,
+        width_cols: 1,
+        source_rect: ImageSourceRect::FULL,
+        margins,
+        opaque_background: ImageOpaqueBackground::default(),
+    };
+    row.glyphs[GlyphArea::Text.index()].extend([hovered, from_string, image]);
+    row.rebuild_pointer_runs(8.0, 80.0);
+    row.hash = row.compute_hash();
+    row
+}
+
+fn owned_parts(view: GlyphRowView<'_>) -> GlyphRowParts {
+    let GlyphRowView {
+        glyphs,
+        pointer_appearances,
+        image_margins,
+        string_sources,
+        pointer_runs,
+        enabled,
+        role,
+        cursor_col,
+        cursor_type,
+        truncated_left,
+        continued,
+        reversed_p,
+        displays_text,
+        ends_at_zv,
+        mode_line,
+        pixel_x,
+        start_col,
+        pixel_y,
+        height_px,
+        line_spacing_px,
+        ascent_px,
+        start_charpos,
+        end_charpos,
+        left_fringe_bitmap,
+        right_fringe_bitmap,
+        overlay_arrow_bitmap,
+    } = view;
+    GlyphRowParts {
+        glyphs: glyphs.clone(),
+        pointer_appearances: pointer_appearances.to_vec(),
+        image_margins: image_margins.to_vec(),
+        string_sources: string_sources.to_vec(),
+        pointer_runs: pointer_runs.to_vec(),
+        enabled,
+        role,
+        cursor_col,
+        cursor_type,
+        truncated_left,
+        continued,
+        reversed_p,
+        displays_text,
+        ends_at_zv,
+        mode_line,
+        pixel_x,
+        start_col,
+        pixel_y,
+        height_px,
+        line_spacing_px,
+        ascent_px,
+        start_charpos,
+        end_charpos,
+        left_fringe_bitmap,
+        right_fringe_bitmap,
+        overlay_arrow_bitmap,
+    }
+}
+
+#[test]
+fn glyph_row_parts_roundtrip_is_exact_with_a_fresh_appearance() {
+    let row = row_with_every_table();
+    let rebuilt = GlyphRow::from_parts(owned_parts(row.view())).unwrap();
+    assert_eq!(rebuilt, row);
+    assert_eq!(rebuilt.hash, row.compute_hash());
+    assert_eq!(rebuilt.pointer_runs(), row.pointer_runs());
+    assert_ne!(rebuilt.appearance_id(), row.appearance_id());
+}
+
+#[test]
+fn glyph_row_from_parts_rejects_dangling_row_local_tables() {
+    let row = row_with_every_table();
+    let mut parts = owned_parts(row.view());
+    parts.pointer_appearances.clear();
+    assert_eq!(
+        GlyphRow::from_parts(parts),
+        Err(GlyphRowPartsError::DanglingPointerAppearance {
+            area: GlyphArea::Text,
+            index: 0,
+        })
+    );
+    let mut parts = owned_parts(row.view());
+    parts.string_sources.clear();
+    assert_eq!(
+        GlyphRow::from_parts(parts),
+        Err(GlyphRowPartsError::DanglingStringSource {
+            area: GlyphArea::Text,
+            index: 1,
+        })
+    );
+    let mut parts = owned_parts(row.view());
+    parts.image_margins.clear();
+    assert_eq!(
+        GlyphRow::from_parts(parts),
+        Err(GlyphRowPartsError::DanglingImageMargins {
+            area: GlyphArea::Text,
+            index: 2,
+        })
+    );
+    let mut parts = owned_parts(row.view());
+    parts.glyphs[GlyphArea::Text.index()][0].pointer_appearance = None;
+    parts.pointer_appearances.clear();
+    assert_eq!(
+        GlyphRow::from_parts(parts),
+        Err(GlyphRowPartsError::DanglingPointerRun { run: 0 })
+    );
+}
+
+#[test]
+fn frame_display_state_parts_rebuild_the_same_materialized_frame() {
+    let mut state = xwidget_window_state(xwidget_glyph(8.0, 0.0), None);
+    state.faces.insert(FaceId::new(0), Face::default());
+    let parts = FrameDisplayStateParts::from_view(state.view());
+    let rebuilt = FrameDisplayState::from_parts(parts);
+    assert_eq!(rebuilt.materialize(), state.materialize());
+}

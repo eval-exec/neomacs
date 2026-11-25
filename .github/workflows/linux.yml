@@ -149,14 +149,16 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
-      # 5b/5c: clippy hygiene gate for the five frontend crates, default
-      # features. `--no-deps` scopes linting to the selected packages so the
-      # gate does not depend on (or fail on) the neovm-* crates' own lint state,
-      # which is owned separately.
+      # 5b/5c: clippy hygiene gate for the frontend crates and the display
+      # protocol crates, default features. `--no-deps` scopes linting to the
+      # selected packages so the gate does not depend on (or fail on) the
+      # neovm-* crates' own lint state, which is owned separately.
       - name: Clippy (frontend crates, default features)
         run: |
           cargo clippy \
             -p neomacs-display-protocol \
+            -p neomacs-session \
+            -p neomacs-display-wire \
             -p neomacs-layout-engine \
             -p neomacs-renderer-wgpu \
             -p neomacs-display-runtime \

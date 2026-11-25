@@ -1,0 +1,37 @@
+[package]
+name = "neomacs-session"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Neomacs display session layer: preface, records, lanes, handshake, resume (sans-I/O)"
+
+[features]
+default = []
+# Fault adapters, a fake clock and a rate-limited link for tests of this
+# crate and of the crates that drive it.
+testing = []
+
+[dependencies]
+# No workspace crate: the session layer knows nothing about displays
+# (DESIGN §6.1, scripts/ci/check-crate-graph.py).
+serde.workspace = true
+# The frozen session records use the same codec as the display service
+# (DESIGN §6.9). Without `derive`, so no package is added to Cargo.lock.
+bincode = { version = "=2.0.1", default-features = false, features = ["std", "serde"] }
+getrandom.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The integration tests use the fault adapters and the fake clock.
+neomacs-session = { path = ".", features = ["testing"] }
+expect-test.workspace = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "session"
+path = "tests/session.rs"

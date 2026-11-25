@@ -1,7 +1,7 @@
 # Display-crate layout — where display code lives
 
 `docs/design/neovm-core-layout.md` governs placement inside `neovm-core`. This
-is the equivalent authority for the four display crates. It exists because its
+is the equivalent authority for the display crates. It exists because its
 absence had a measurable cost: `render_thread/` had grown to 22k lines in one
 flat directory with no stated seam, and a shared type's home had to be
 re-derived from the dependency graph every time one was added. The directories
@@ -11,14 +11,26 @@ since nothing in the compiler objects to a file being put in the wrong one.
 ## The dependency direction, which is the whole rule
 
 ```
-neomacs-display-protocol      (depends on nothing in the workspace)
-        ^            ^
-        |            |
-neomacs-layout-engine         neomacs-renderer-wgpu
-        ^                             ^
+neovm-display-identity        (serde-only leaf)
+        ^
+neomacs-display-protocol      (depends only on the identity leaf)
+        ^            ^                      ^
+        |            |                      |
+neomacs-layout-engine         neomacs-renderer-wgpu    neomacs-display-wire
+        ^                             ^                (protocol + leaf only)
         |                             |
         +------ neomacs-display-runtime ------+
+
+neomacs-session               (no workspace dependency at all)
 ```
+
+`scripts/ci/check-crate-graph.py` checks these edges on every change: the
+protocol's workspace dependencies are the identity leaf only, the session
+crate has none, the wire crate has the protocol and the leaf, and nothing on
+the frontend side (runtime, renderer, session, wire) reaches `neovm-core`,
+`neovm-eval` or the layout engine except through the three edges the crate cut
+removes (runtime → `neovm-core`, runtime → layout engine, renderer → layout
+engine), which it lists and requires to still exist.
 
 `neomacs-renderer-wgpu` and `neomacs-layout-engine` are **dependencies of**
 `neomacs-display-runtime`, not siblings of it. Two consequences that are easy
@@ -48,6 +60,10 @@ own copy?** If yes, it belongs here.
 This crate has zero `#[allow(dead_code)]`. Keep it that way — it is the one
 crate where an unused type means nobody agreed on it.
 
+**Stream I/O never enters this crate.** It holds the vocabulary a display
+link carries, not the link: no sockets, no framing, no codec, no threads.
+Those live in `neomacs-session` and `neomacs-display-wire`.
+
 ### `neomacs-layout-engine` — the producer
 
 Turns buffer text, faces, overlays and window structure into a sealed
@@ -67,6 +83,10 @@ It must not decide **whether** an effect happens or **how far along** it is.
 Both are the compositor's job; the renderer receives the answer. A trigger that
 mints its own `observe_platform_now()` instead of taking the frame's
 `EventTime` is the recurring version of this mistake.
+
+**The renderer never sees the link.** It draws sealed presentations and
+assets that have already been decoded and verified; whether they came from
+the evaluator in the same process or over a byte stream is invisible to it.
 
 ### `neomacs-display-runtime` — the render thread
 
@@ -105,6 +125,39 @@ Submodule charters — a new file needs one of these to belong:
 - `backend/tty/` — the terminal backend, which shares the protocol and nothing
   else.
 
+### `neomacs-session` — the session layer
+
+Framing, lanes, the priority scheduler, flow control, keepalive, the frozen
+handshake and relay records, resume and takeover, as a sans-I/O state machine
+(`receive`, `poll_transmit(now)`, `tick(now)`) plus a generic `Read + Write`
+pump. It knows nothing about displays: services are negotiated by name and
+revision and their bodies are opaque bytes. Time is injected through `Clock`.
+It depends on no workspace crate.
+
+### `neomacs-display-wire` — the display service codec
+
+The NDP/1 message families, the one codec (bincode 2 `standard()`, deflate,
+bounded decode), `RowRuns`, FrameSync (encoder, decoder and the sender's
+mirror of the receiver's row store), content-addressed assets and the wire
+schema id. Pure: no I/O, no threads, no evaluator. It depends on the protocol
+and the identity leaf only; the frame crosses as `RowRuns` and keyed tables,
+never through `FrameDisplayState`'s serde derive.
+
+### Planned crates (charters fixed now, created by later milestones)
+
+- `neomacs-display-host` — the evaluator side of a display link: terminals of
+  type `neo`, the outbox, request correlation. It may depend on `neovm-core`,
+  the layout engine, the protocol, the wire and session crates, and the two
+  pure renderers below (MILESTONES M6).
+- `neomacs-frontend` — the frontend process: a `FrontendSession` over the
+  session and wire crates, presenters, the in-process endpoint, the launcher
+  and reconnection. No `neovm-*` crate is in its dependency closure
+  (MILESTONES M6, M11).
+- `neomacs-tty-render` — the terminal rasterizer as a pure function of a
+  sealed presentation, so the evaluator can drive a TTY without the runtime.
+- `neomacs-media-cpu` — image decoding and other CPU-only media work the
+  evaluator does before pixels cross a link (MILESTONES M10).
+
 ## Rules that have already caught mistakes
 
 1. **Time is a parameter, never a field.** `EventTime` is a stored observation
@@ -142,6 +195,8 @@ Submodule charters — a new file needs one of these to belong:
 ## What this document does not govern
 
 Crate boundaries themselves. They are load-bearing and stable; changing one is
-a design decision, not a cleanup. `neovm-core` placement is governed by
+a design decision, not a cleanup. The session and wire crates, and the
+planned crates above, were added by such a decision (the remote-display
+design for issue #587); `check-crate-graph.py` holds the result. `neovm-core` placement is governed by
 `neovm-core-layout.md` and by GNU's own file structure — do not reorganize it
 on aesthetic grounds.

@@ -3958,6 +3958,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "neomacs-display-wire"
+version = "0.0.21"
+dependencies = [
+ "bincode",
+ "expect-test",
+ "flate2",
+ "neomacs-display-protocol",
+ "neomacs-display-wire",
+ "neomacs-session",
+ "neovm-display-identity",
+ "proptest",
+ "serde",
+ "sha2",
+ "strum",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
 name = "neomacs-font-materializer"
 version = "0.0.21"
 dependencies = [
@@ -4031,6 +4050,7 @@ dependencies = [
  "freetype-rs",
  "memchr",
  "neomacs-display-protocol",
+ "neomacs-display-wire",
  "neomacs-font-materializer",
  "neomacs-test-fonts",
  "neovm-core",
@@ -4159,6 +4179,19 @@ dependencies = [
  "wgpu",
  "wgpu-hal",
  "zune-jpeg",
+]
+
+[[package]]
+name = "neomacs-session"
+version = "0.0.21"
+dependencies = [
+ "bincode",
+ "expect-test",
+ "getrandom 0.4.3",
+ "neomacs-session",
+ "serde",
+ "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]

@@ -1,0 +1,3041 @@
+downlink enum Downlink
+  OpenChannel: struct
+    channel: newtype ChannelId
+      0: u64
+    terminal: newtype TerminalNumber
+      0: u32
+    name: newtype DisplayName
+      0: str
+  CloseChannel: struct
+    channel: newtype ChannelId (as above)
+    reason: enum ChannelCloseReason
+      Deleted: unit
+      Shutdown: unit
+  Window: struct
+    frame: newtype LiveDisplayFrameId
+      0: u64
+    op: enum WindowOp
+      Create: struct WindowInit
+        channel: newtype ChannelId (as above)
+        parent: option
+          some: newtype LiveDisplayFrameId (as above)
+        size: struct WindowSize
+          width: u32
+          height: u32
+        position: option
+          some: struct ScreenPosition
+            x: i32
+            y: i32
+        visibility: enum WindowVisibility
+          Visible: unit
+          Iconified: unit
+          Invisible: unit
+        decorations: enum Decorations
+          Decorated: unit
+          Undecorated: unit
+        title: str
+        hints: struct GuiFrameGeometryHints
+          base_width: u32
+          base_height: u32
+          min_width: u32
+          min_height: u32
+          width_inc: u32
+          height_inc: u32
+        adoption: enum WindowAdoption
+          NewWindow: unit
+          AdoptProvisional: unit
+      Destroy: unit
+      SetTitle: struct
+        title: str
+      SetGeometryHints: struct
+        hints: struct GuiFrameGeometryHints (as above)
+      Resize: struct
+        size: struct WindowSize (as above)
+        request: option
+          some: newtype GuiResizeRequestId
+            0: u64
+      SetPosition: struct
+        position: struct ScreenPosition (as above)
+      SetVisibility: struct
+        visibility: enum WindowVisibility (as above)
+      SetFullscreen: struct
+        mode: enum WindowFullscreenMode
+          None: unit
+          Fullboth: unit
+          Fullscreen: unit
+          Fullwidth: unit
+          Fullheight: unit
+          Maximized: unit
+      SetDecorations: struct
+        decorations: enum Decorations (as above)
+      Iconify: unit
+      Focus: struct
+        activation: enum FocusActivation
+          Activate: unit
+          NoActivate: unit
+      RequestAttention: struct
+        urgency: enum AttentionUrgency
+          Urgent: unit
+          Informational: unit
+      SetPointerShape: struct
+        shape: newtype PointerShape
+          0: i32
+      WarpPointer: struct
+        position: struct ScreenPosition (as above)
+      ShowChild: struct
+        placement: struct ChildPlacement
+          parent: newtype LiveDisplayFrameId (as above)
+          bounds: struct Rect
+            x: f32
+            y: f32
+            width: f32
+            height: f32
+          z_order: i32
+      RemoveChild: unit
+      Opacity: enum OpacityOp
+        Accept: unit
+        SetLowerLimit: struct
+          limit: f32
+        SetRedirects: struct
+          enabled: enum Toggle
+            Off: unit
+            On: unit
+        Retire: unit
+      ImeSpot: struct
+        rect: struct Rect (as above)
+  Present: enum PresentOp
+    Begin: struct Begin
+      frame: newtype LiveDisplayFrameId (as above)
+      presentation: u64
+      update: newtype UpdateSeq
+        0: u64
+      base: enum PresentBase
+        Keyframe: unit
+        Delta: unit
+      requires: seq
+        element: enum AssetId
+          Content: newtype ContentId
+            0: tuple
+              0: u8
+              1: u8
+              2: u8
+              3: u8
+              4: u8
+              5: u8
+              6: u8
+              7: u8
+              8: u8
+              9: u8
+              10: u8
+              11: u8
+              12: u8
+              13: u8
+              14: u8
+              15: u8
+              16: u8
+              17: u8
+              18: u8
+              19: u8
+              20: u8
+              21: u8
+              22: u8
+              23: u8
+              24: u8
+              25: u8
+              26: u8
+              27: u8
+              28: u8
+              29: u8
+              30: u8
+              31: u8
+          Session: u64
+    DefineRow: struct
+      slot: newtype RowSlot
+        0: u32
+      key: newtype RowKey
+        0: tuple
+          0: u8
+          1: u8
+          2: u8
+          3: u8
+          4: u8
+          5: u8
+          6: u8
+          7: u8
+          8: u8
+          9: u8
+          10: u8
+          11: u8
+          12: u8
+          13: u8
+          14: u8
+          15: u8
+      row: newtype Payload
+        0: struct RowRuns
+          role: enum GlyphRowRole
+            Text: unit
+            TabLine: unit
+            HeaderLine: unit
+            ModeLine: unit
+            Minibuffer: unit
+            TabBar: unit
+          flags: newtype RowFlags
+            0: u8
+          start_col: u16
+          pixel_x: f32
+          height_px: f32
+          line_spacing_px: f32
+          ascent_px: f32
+          left_fringe_bitmap: option
+            some: struct FringeBitmapInfo
+              bitmap_index: u16
+              face_id: newtype FaceId
+                0: u32
+          right_fringe_bitmap: option
+            some: struct FringeBitmapInfo (as above)
+          overlay_arrow_bitmap: option
+            some: struct FringeBitmapInfo (as above)
+          areas: tuple
+            0: struct AreaRuns
+              len: u32
+              text: str
+              kinds: seq
+                element: struct Run
+                  len: u32
+                  value: enum GlyphKind
+                    Char: unit
+                    Other: unit
+              others: seq
+                element: enum GlyphType
+                  Char: struct
+                    ch: char
+                  Composite: struct
+                    text: str
+                  AutomaticComposite: struct
+                    text: str
+                    terminal: struct TerminalComposition
+                      cells: seq
+                        element: struct TerminalCompositionCell
+                          base: char
+                          extenders: str
+                          width_cols: u8
+                          source_char_len: u16
+                      width_cols: u16
+                  Stretch: struct
+                    width_cols: u16
+                  Image: struct
+                    image_id: i32
+                    width_cols: u16
+                    source_rect: struct ImageSourceRect
+                      x_start: u16
+                      y_start: u16
+                      x_end: u16
+                      y_end: u16
+                    margins: u16
+                    opaque_background: newtype ImageOpaqueBackground
+                      0: u32
+                  Video: struct
+                    video_id: newtype VideoId
+                      0: u32
+                    width_cols: u16
+                    opacity: f32
+                  Xwidget: struct
+                    xwidget_id: newtype XwidgetId
+                      0: u32
+                    webview_id: newtype WebViewId
+                      0: u32
+                    width_cols: u16
+                    content: struct XwidgetContentExtentWire
+                      width_px: f32
+                      height_px: f32
+                  Surface: struct
+                    surface_id: i32
+                    width_cols: u16
+                  Glyphless: struct
+                    ch: char
+                    presentation: enum GlyphlessPresentation
+                      ThinSpace: unit
+                      EmptyBox: unit
+                      HexCode: unit
+              faces: seq
+                element: struct Run
+                  len: u32
+                  value: newtype FaceId (as above)
+              provenance: seq
+                element: struct Run
+                  len: u32
+                  value: enum ProvenanceStep
+                    NextBuffer: unit
+                    Repeat: unit
+                    NextInString: unit
+                    Buffer: struct
+                      offset: enum RelPos
+                        Delta: i64
+                        Absolute: u64
+                    Str: struct
+                      source: u32
+                      index: u64
+                    LineEnd: unit
+                    Mark: unit
+                    LeftTruncation: unit
+                    EmptyLineNewline: struct
+                      offset: enum RelPos (as above)
+              bidi: seq
+                element: struct Run
+                  len: u32
+                  value: u8
+              cells: seq
+                element: struct Run
+                  len: u32
+                  value: newtype CellFlags
+                    0: u8
+              advance_palette: seq
+                element: f32
+              advances: seq
+                element: struct Run
+                  len: u32
+                  value: u16
+              heights: seq
+                element: struct Run
+                  len: u32
+                  value: f32
+              ascents: seq
+                element: struct Run (as above)
+              voffsets: seq
+                element: struct Run (as above)
+              box_edges: seq
+                element: struct Run
+                  len: u32
+                  value: enum BoxVerticalEdges
+                    Unboxed: unit
+                    Neither: unit
+                    Left: unit
+                    Right: unit
+                    Both: unit
+              pointer: seq
+                element: struct Run
+                  len: u32
+                  value: option
+                    some: u32
+            1: struct AreaRuns (as above)
+            2: struct AreaRuns (as above)
+          pointer_appearances: seq
+            element: struct RowPointerAppearance
+              kind: enum GlyphPointerSourceKind
+                Buffer: unit
+                LispString: unit
+                Synthetic: unit
+              source_id: u64
+              range_start: enum RelPos (as above)
+              range_end: enum RelPos (as above)
+              property_owner: u64
+              occurrence: enum RowPointerOccurrence
+                Source: unit
+                OverlayString: struct
+                  overlay_id: u64
+                  after: bool
+                BufferDisplayReplacement: struct
+                  buffer_id: u64
+                  anchor: enum RelPos (as above)
+              face_id: newtype FaceId (as above)
+          image_margins: seq
+            element: struct ImageMargins
+              left: u16
+              right: u16
+              top: u16
+              bottom: u16
+          string_sources: seq
+            element: struct RowStringSource
+              string: u64
+              covered: option
+                some: tuple
+                  0: enum RelPos (as above)
+                  1: enum RelPos (as above)
+          pointer_runs: seq
+            element: struct GlyphPointerRun
+              appearance: u32
+              kind: enum PresentedPrimitiveKind
+                Glyph: unit
+                Image: unit
+              first_col: u32
+              col_len: u32
+              glyph_len: u32
+              x: f32
+              width: f32
+    Tables: struct TableDelta
+      faces: struct KeyedDelta
+        upsert: seq
+          element: tuple
+            0: newtype FaceId (as above)
+            1: struct Face
+              id: newtype FaceId (as above)
+              foreground: struct Color
+                r: f32
+                g: f32
+                b: f32
+                a: f32
+              background: struct Color (as above)
+              terminal_foreground: option
+                some: enum TerminalColor
+                  Indexed: u16
+                  Direct: struct
+                    r: u8
+                    g: u8
+                    b: u8
+              terminal_background: option
+                some: enum TerminalColor (as above)
+              use_default_foreground: bool
+              use_default_background: bool
+              underline_color: option
+                some: struct Color (as above)
+              terminal_underline_color: option
+                some: enum TerminalColor (as above)
+              overline_color: option
+                some: struct Color (as above)
+              strike_through_color: option
+                some: struct Color (as above)
+              box_color: option
+                some: struct Color (as above)
+              font_family: str
+              font_size: f32
+              font_weight: u16
+              attributes: u32
+              underline_style: enum UnderlineStyle
+                None: unit
+                Line: unit
+                Double: unit
+                Wave: unit
+                Dotted: unit
+                Dashed: unit
+              box_type: enum BoxType
+                None: unit
+                Line: unit
+                Raised3D: unit
+                Sunken3D: unit
+              box_line_width: i32
+              box_corner_radius: i32
+              box_border_style: enum BoxBorderStyle
+                Solid: unit
+                Rainbow: unit
+                AnimatedRainbow: unit
+                Gradient: unit
+                Glow: unit
+                Neon: unit
+                Dashed: unit
+                Comet: unit
+                Iridescent: unit
+                Fire: unit
+                Heartbeat: unit
+              box_border_speed: f32
+              box_color2: option
+                some: struct Color (as above)
+              font_file_path: option
+                some: str
+              font_ascent: i32
+              font_descent: i32
+              underline_position: i32
+              underline_thickness: i32
+              background_gradient: option
+                some: enum Gradient
+                  Linear: struct
+                    angle: f32
+                    stops: seq
+                      element: struct ColorStop
+                        position: f32
+                        color: struct Color (as above)
+                  Radial: struct
+                    center_x: f32
+                    center_y: f32
+                    radius: f32
+                    stops: seq
+                      element: struct ColorStop (as above)
+                  Conic: struct
+                    center_x: f32
+                    center_y: f32
+                    angle_offset: f32
+                    stops: seq
+                      element: struct ColorStop (as above)
+                  Noise: struct
+                    scale: f32
+                    octaves: u32
+                    color1: struct Color (as above)
+                    color2: struct Color (as above)
+              lisp_name: option
+                some: str
+              default_resolved_font_id: option
+                some: newtype ResolvedFontId
+                  0: u32
+              stipple: option
+                some: struct StipplePattern
+                  width: u32
+                  height: u32
+                  bits: seq
+                    element: u8
+              underline_placement: enum UnderlinePosition
+                FontMetric: struct
+                  offset_from_baseline: i32
+                DescentLine: struct
+                  pixels_above: u32
+              tty_space_identity: option
+                some: enum TtySpaceIdentity
+                  CanonicalDefault: unit
+                  OtherRealized: unit
+                  Unknown: unit
+        remove: seq
+          element: newtype FaceId (as above)
+      fonts: struct KeyedDelta
+        upsert: seq
+          element: tuple
+            0: newtype ResolvedFontId (as above)
+            1: struct ResolvedFont
+              id: newtype ResolvedFontId (as above)
+              identity: struct ResolvedFontIdentity
+                backend: enum FontBackendKind
+                  Fontconfig: unit
+                  CoreText: unit
+                  DirectWrite: unit
+                stable_key: str
+                file_path: option
+                  some: str
+                face_selector: newtype BackendFontSelector
+                  0: u32
+                postscript_name: option
+                  some: str
+                variation_coords: seq
+                  element: struct WireCoord
+                    tag: u32
+                    value_bits: u32
+              replay: enum FontReplay
+                Swash: struct
+                  asset: enum FontOutlineAsset
+                    File: struct WireAsset
+                      path: str
+                      face_index: u32
+                    Memory: struct WireAsset
+                      key: str
+                      bytes: seq
+                        element: u8
+                      face_index: u32
+                FreeTypeBitmap: struct
+                  asset: struct WireAsset (as above)
+                  strike: struct BitmapStrikeKey
+                    index: u32
+                    x_ppem_26_6: i64
+                    y_ppem_26_6: i64
+                  sampling: enum GlyphSampling
+                    Linear: unit
+                    Nearest: unit
+                  spacing: enum FixedFontSpacing
+                    ProportionalOrDual: unit
+                    MonospaceOrCharacterCell: unit
+              family: str
+              full_name: option
+                some: str
+              postscript_name: option
+                some: str
+              weight: u16
+              slant: enum FontSlantKind
+                Normal: unit
+                Italic: unit
+                Oblique: unit
+              width: u16
+              pixel_size: f32
+              ascent_px: f32
+              descent_px: f32
+              space_advance_px: f32
+              glyph_advance: enum ResolvedFontAdvance
+                PerGlyph: unit
+                FixedCell: f32
+                MonospaceCells: f32
+              spacing: option
+                some: i32
+        remove: seq
+          element: newtype ResolvedFontId (as above)
+      char_fonts: struct KeyedDelta
+        upsert: seq
+          element: tuple
+            0: newtype FaceId (as above)
+            1: seq
+              element: tuple
+                0: char
+                1: struct ResolvedCharGlyph
+                  resolved_font_id: newtype ResolvedFontId (as above)
+                  glyph_id: u32
+                  advance_px: f32
+        remove: seq
+          element: newtype FaceId (as above)
+      shaped_clusters: struct KeyedDelta
+        upsert: seq
+          element: tuple
+            0: newtype FaceId (as above)
+            1: seq
+              element: tuple
+                0: str
+                1: seq
+                  element: struct ResolvedGlyph
+                    resolved_font_id: newtype ResolvedFontId (as above)
+                    glyph_id: u32
+                    x: f32
+                    y: f32
+                    x_advance: f32
+                    cluster_start: u32
+                    cluster_end: u32
+        remove: seq
+          element: newtype FaceId (as above)
+      fringe_bitmaps: struct KeyedDelta
+        upsert: seq
+          element: tuple
+            0: u16
+            1: struct FringeBitmapData
+              bits: seq
+                element: u16
+              width: u8
+              height: u8
+              period: u8
+              align: u8
+        remove: seq
+          element: u16
+      cursor_effects: struct KeyedDelta
+        upsert: seq
+          element: tuple
+            0: newtype DisplayWindowId
+              0: i64
+            1: struct EffectsConfig
+              accent_strip: struct AccentStripConfig
+                enabled: bool
+                width: f32
+              argyle_pattern: struct ArgylePatternConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                diamond_size: f32
+                line_width: f32
+                opacity: f32
+              aurora: struct AuroraConfig
+                enabled: bool
+                color1: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                color2: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                height: f32
+                speed: f32
+                opacity: f32
+              basket_weave: struct BasketWeaveConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                strip_width: f32
+                strip_spacing: f32
+                opacity: f32
+              bg_gradient: struct BgGradientConfig
+                enabled: bool
+                top: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                bottom: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+              bg_pattern: struct BgPatternConfig
+                style: u32
+                spacing: f32
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+              border_transition: struct BorderTransitionConfig
+                enabled: bool
+                active_color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                duration_ms: u32
+              breadcrumb: struct BreadcrumbConfig
+                enabled: bool
+                opacity: f32
+              breathing_border: struct BreathingBorderConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                min_opacity: f32
+                max_opacity: f32
+                cycle_ms: u32
+              brick_wall: struct BrickWallConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                width: f32
+                height: f32
+                opacity: f32
+              celtic_knot: struct CelticKnotConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                scale: f32
+                weave_speed: f32
+                opacity: f32
+              chevron_pattern: struct ChevronPatternConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                spacing: f32
+                speed: f32
+                opacity: f32
+              circuit_trace: struct CircuitTraceConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                width: f32
+                speed: f32
+                opacity: f32
+              click_halo: struct ClickHaloConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                duration_ms: u32
+                max_radius: f32
+              concentric_rings: struct ConcentricRingsConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                spacing: f32
+                expansion_speed: f32
+                opacity: f32
+              constellation: struct ConstellationConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                star_count: u32
+                connect_dist: f32
+                twinkle_speed: f32
+                opacity: f32
+              corner_fold: struct CornerFoldConfig
+                enabled: bool
+                size: f32
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+              crosshatch_pattern: struct CrosshatchPatternConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                line_spacing: f32
+                angle: f32
+                speed: f32
+                opacity: f32
+              cursor_aurora_borealis: struct CursorAuroraBorealisConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                band_count: u32
+                shimmer_speed: f32
+                opacity: f32
+              cursor_bubble: struct CursorBubbleConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                count: u32
+                rise_speed: f32
+                opacity: f32
+              cursor_candle_flame: struct CursorCandleFlameConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                height: u32
+                flicker_speed: f32
+                opacity: f32
+              cursor_color_cycle: struct CursorColorCycleConfig
+                enabled: bool
+                fps: u32
+                speed: f32
+                saturation: f32
+                lightness: f32
+              cursor_comet: struct CursorCometConfig
+                enabled: bool
+                trail_length: u32
+                fade_ms: u32
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+              cursor_compass: struct CursorCompassConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                size: f32
+                speed: f32
+                opacity: f32
+              cursor_compass_needle: struct CursorCompassNeedleConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                length: f32
+                spin_speed: f32
+                opacity: f32
+              cursor_crosshair: struct CursorCrosshairConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+              cursor_crystal: struct CursorCrystalConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                facet_count: u32
+                radius: f32
+                opacity: f32
+              cursor_dna_helix: struct CursorDnaHelixConfig
+                enabled: bool
+                color1: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                color2: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                radius: f32
+                speed: f32
+                opacity: f32
+              cursor_elastic_snap: struct CursorElasticSnapConfig
+                enabled: bool
+                overshoot: f32
+                duration_ms: u32
+              cursor_error_pulse: struct CursorErrorPulseConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                duration_ms: u32
+              cursor_feather: struct CursorFeatherConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                count: u32
+                drift_speed: f32
+                opacity: f32
+              cursor_firework: struct CursorFireworkConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                particle_count: u32
+                burst_radius: f32
+                opacity: f32
+              cursor_flame: struct CursorFlameConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                particle_count: u32
+                height: f32
+                opacity: f32
+              cursor_galaxy: struct CursorGalaxyConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                star_count: u32
+                radius: f32
+                opacity: f32
+              cursor_ghost: struct CursorGhostConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                count: u32
+                fade_ms: u32
+                drift: f32
+                opacity: f32
+              cursor_glow: struct CursorGlowConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                radius: f32
+                opacity: f32
+              cursor_gravity_well: struct CursorGravityWellConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                field_radius: f32
+                line_count: u32
+                opacity: f32
+              cursor_heartbeat: struct CursorHeartbeatConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                bpm: f32
+                max_radius: f32
+                opacity: f32
+              cursor_lighthouse: struct CursorLighthouseConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                beam_width: f32
+                rotation_speed: f32
+                beam_length: f32
+                opacity: f32
+              cursor_lightning: struct CursorLightningConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                bolt_count: u32
+                max_length: f32
+                opacity: f32
+              cursor_magnetism: struct CursorMagnetismConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                ring_count: u32
+                duration_ms: u32
+                opacity: f32
+              cursor_metronome: struct CursorMetronomeConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                tick_height: f32
+                fade_ms: u32
+                opacity: f32
+              cursor_moth: struct CursorMothConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                count: u32
+                wing_size: f32
+                opacity: f32
+              cursor_moth_flame: struct CursorMothFlameConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                moth_count: u32
+                orbit_speed: f32
+                opacity: f32
+              cursor_orbit_particles: struct CursorOrbitParticlesConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                count: u32
+                radius: f32
+                speed: f32
+                opacity: f32
+              cursor_particles: struct CursorParticlesConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                count: u32
+                lifetime_ms: u32
+                gravity: f32
+              cursor_pendulum: struct CursorPendulumConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                arc_length: f32
+                damping: f32
+                opacity: f32
+              cursor_pixel_dust: struct CursorPixelDustConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                count: u32
+                scatter_speed: f32
+                opacity: f32
+              cursor_plasma_ball: struct CursorPlasmaBallConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                tendril_count: u32
+                arc_speed: f32
+                opacity: f32
+              cursor_portal: struct CursorPortalConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                radius: f32
+                speed: f32
+                opacity: f32
+              cursor_prism: struct CursorPrismConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                ray_count: u32
+                spread: f32
+                opacity: f32
+              cursor_pulse: struct CursorPulseConfig
+                enabled: bool
+                speed: f32
+                min_opacity: f32
+              cursor_quill_pen: struct CursorQuillPenConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                trail_length: u32
+                ink_speed: f32
+                opacity: f32
+              cursor_radar: struct CursorRadarConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                radius: f32
+                speed: f32
+                opacity: f32
+              cursor_ripple_ring: struct CursorRippleRingConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                max_radius: f32
+                count: u32
+                speed: f32
+                opacity: f32
+              cursor_ripple_wave: struct CursorRippleWaveConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                ring_count: u32
+                max_radius: f32
+                duration_ms: u32
+                opacity: f32
+              cursor_scope: struct CursorScopeConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                thickness: f32
+                gap: f32
+                opacity: f32
+              cursor_shadow: struct CursorShadowConfig
+                enabled: bool
+                offset_x: f32
+                offset_y: f32
+                opacity: f32
+              cursor_shockwave: struct CursorShockwaveConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                radius: f32
+                decay: f32
+                opacity: f32
+              cursor_snowflake: struct CursorSnowflakeConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                count: u32
+                fall_speed: f32
+                opacity: f32
+              cursor_sonar_ping: struct CursorSonarPingConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                ring_count: u32
+                max_radius: f32
+                duration_ms: u32
+                opacity: f32
+              cursor_sparkle_burst: struct CursorSparkleBurstConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                count: u32
+                radius: f32
+                opacity: f32
+              cursor_sparkler: struct CursorSparklerConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                spark_count: u32
+                burn_speed: f32
+                opacity: f32
+              cursor_spotlight: struct CursorSpotlightConfig
+                enabled: bool
+                radius: f32
+                intensity: f32
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+              cursor_stardust: struct CursorStardustConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                particle_count: u32
+                fall_speed: f32
+                opacity: f32
+              cursor_tornado: struct CursorTornadoConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                radius: f32
+                particle_count: u32
+                opacity: f32
+              cursor_trail_fade: struct CursorTrailFadeConfig
+                enabled: bool
+                length: u64
+                ms: u32
+              cursor_wake: struct CursorWakeConfig
+                enabled: bool
+                duration_ms: u32
+                scale: f32
+              cursor_water_drop: struct CursorWaterDropConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                ripple_count: u32
+                expand_speed: f32
+                opacity: f32
+              depth_shadow: struct DepthShadowConfig
+                enabled: bool
+                layers: u32
+                offset: f32
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+              diamond_lattice: struct DiamondLatticeConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                cell_size: f32
+                shimmer_speed: f32
+                opacity: f32
+              dot_matrix: struct DotMatrixConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                spacing: f32
+                pulse_speed: f32
+                opacity: f32
+              edge_glow: struct EdgeGlowConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                height: f32
+                opacity: f32
+                fade_ms: u32
+              edge_snap: struct EdgeSnapConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                duration_ms: u32
+              fish_scale: struct FishScaleConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                size: f32
+                row_offset: f32
+                opacity: f32
+              focus_gradient_border: struct FocusGradientBorderConfig
+                enabled: bool
+                top_color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                bot_color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                width: f32
+                opacity: f32
+              focus_mode: struct FocusModeConfig
+                enabled: bool
+                opacity: f32
+              focus_ring: struct FocusRingConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+                dash_length: f32
+                speed: f32
+              frost_border: struct FrostBorderConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                width: f32
+                opacity: f32
+              frosted_border: struct FrostedBorderConfig
+                enabled: bool
+                width: f32
+                opacity: f32
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+              frosted_glass: struct FrostedGlassConfig
+                enabled: bool
+                opacity: f32
+                blur: f32
+              guilloche: struct GuillocheConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                curve_count: u32
+                wave_freq: f32
+                opacity: f32
+              header_shadow: struct HeaderShadowConfig
+                enabled: bool
+                intensity: f32
+                size: f32
+              heat_distortion: struct HeatDistortionConfig
+                enabled: bool
+                intensity: f32
+                speed: f32
+                edge_width: f32
+                opacity: f32
+              herringbone_pattern: struct HerringbonePatternConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                tile_width: f32
+                tile_height: f32
+                opacity: f32
+              hex_grid: struct HexGridConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                cell_size: f32
+                pulse_speed: f32
+                opacity: f32
+              honeycomb_dissolve: struct HoneycombDissolveConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                cell_size: f32
+                speed: f32
+                opacity: f32
+              idle_dim: struct IdleDimConfig
+                enabled: bool
+                delay: struct Duration
+                  secs: u64
+                  nanos: u32
+                opacity: f32
+                fade_duration: struct Duration (as above)
+              inactive_dim: struct InactiveDimConfig
+                enabled: bool
+                opacity: f32
+              inactive_tint: struct InactiveTintConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+              indent_guides: struct IndentGuidesConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                  3: f32
+                rainbow_enabled: bool
+                rainbow_colors: seq
+                  element: tuple
+                    0: f32
+                    1: f32
+                    2: f32
+                    3: f32
+              kaleidoscope: struct KaleidoscopeConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                segments: u32
+                speed: f32
+                opacity: f32
+              lightning_bolt: struct LightningBoltConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                frequency: f32
+                intensity: f32
+                opacity: f32
+              line_animation: struct LineAnimationConfig
+                enabled: bool
+                duration_ms: u32
+              line_highlight: struct LineHighlightConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                  3: f32
+              line_number_pulse: struct LineNumberPulseConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                intensity: f32
+                cycle_ms: u32
+              matrix_rain: struct MatrixRainConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                column_count: u32
+                speed: f32
+                opacity: f32
+              minibuffer_highlight: struct MinibufferHighlightConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+              minimap: struct MinimapConfig
+                enabled: bool
+                width: f32
+              mode_line_gradient: struct ModeLineGradientConfig
+                enabled: bool
+                left_color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                right_color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+              mode_line_separator: struct ModeLineSeparatorConfig
+                style: u32
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                height: f32
+              mode_line_transition: struct ModeLineTransitionConfig
+                enabled: bool
+                duration_ms: u32
+              modified_indicator: struct ModifiedIndicatorConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                width: f32
+                opacity: f32
+              moire_pattern: struct MoirePatternConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                line_spacing: f32
+                angle_offset: f32
+                speed: f32
+                opacity: f32
+              neon_border: struct NeonBorderConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                intensity: f32
+                flicker: f32
+                thickness: f32
+                opacity: f32
+              noise_field: struct NoiseFieldConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                scale: f32
+                speed: f32
+                opacity: f32
+              noise_grain: struct NoiseGrainConfig
+                enabled: bool
+                intensity: f32
+                size: f32
+              padding_gradient: struct PaddingGradientConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+                width: f32
+              plaid_pattern: struct PlaidPatternConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                band_width: f32
+                band_spacing: f32
+                opacity: f32
+              plasma_border: struct PlasmaBorderConfig
+                enabled: bool
+                color1: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                color2: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                width: f32
+                speed: f32
+                opacity: f32
+              prism_edge: struct PrismEdgeConfig
+                enabled: bool
+                width: f32
+                speed: f32
+                saturation: f32
+                opacity: f32
+              rain_effect: struct RainEffectConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                drop_count: u32
+                speed: f32
+                opacity: f32
+              region_glow: struct RegionGlowConfig
+                enabled: bool
+                face_id: newtype FaceId (as above)
+                radius: f32
+                opacity: f32
+              resize_padding: struct ResizePaddingConfig
+                enabled: bool
+                duration_ms: u32
+                max: f32
+              rotating_gear: struct RotatingGearConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                size: f32
+                speed: f32
+                opacity: f32
+              scanlines: struct ScanlinesConfig
+                enabled: bool
+                spacing: u32
+                opacity: f32
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+              scroll_bar: struct ScrollBarConfig
+                width: i32
+                thumb_radius: f32
+                track_opacity: f32
+                hover_brightness: f32
+              scroll_line_spacing: struct ScrollLineSpacingConfig
+                enabled: bool
+                max: f32
+                duration_ms: u32
+              scroll_momentum: struct ScrollMomentumConfig
+                enabled: bool
+                fade_ms: u32
+                width: f32
+              scroll_progress: struct ScrollProgressConfig
+                enabled: bool
+                height: f32
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+              scroll_velocity_fade: struct ScrollVelocityFadeConfig
+                enabled: bool
+                max_opacity: f32
+                ms: u32
+              search_pulse: struct SearchPulseConfig
+                enabled: bool
+                face_id: newtype FaceId (as above)
+              show_whitespace: struct ShowWhitespaceConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                  3: f32
+              sine_wave: struct SineWaveConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                amplitude: f32
+                wavelength: f32
+                speed: f32
+                opacity: f32
+              spiral_vortex: struct SpiralVortexConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                arms: u32
+                speed: f32
+                opacity: f32
+              stained_glass: struct StainedGlassConfig
+                enabled: bool
+                opacity: f32
+                saturation: f32
+              sunburst_pattern: struct SunburstPatternConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                ray_count: u32
+                speed: f32
+                opacity: f32
+              target_reticle: struct TargetReticleConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                ring_count: u32
+                pulse_speed: f32
+                opacity: f32
+              tessellation: struct TessellationConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                tile_size: f32
+                rotation: f32
+                opacity: f32
+              text_fade_in: struct TextFadeInConfig
+                enabled: bool
+                duration_ms: u32
+              theme_transition: struct ThemeTransitionConfig
+                enabled: bool
+                duration: struct Duration (as above)
+                easing: enum TransitionEasing
+                  ease-out-quad: unit
+                  ease-out-cubic: unit
+                  spring: unit
+                  linear: unit
+                  ease-in-out-cubic: unit
+                  cubic-bezier: unit
+                  ease-out-expo: unit
+              title_fade: struct TitleFadeConfig
+                enabled: bool
+                duration_ms: u32
+              topo_contour: struct TopoContourConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                spacing: f32
+                speed: f32
+                opacity: f32
+              trefoil_knot: struct TrefoilKnotConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                size: f32
+                rotation_speed: f32
+                opacity: f32
+              typing_heatmap: struct TypingHeatmapConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                fade_ms: u32
+                opacity: f32
+              typing_ripple: struct TypingRippleConfig
+                enabled: bool
+                max_radius: f32
+                duration_ms: u32
+              typing_speed: struct TypingSpeedConfig
+                enabled: bool
+              vignette: struct VignetteConfig
+                enabled: bool
+                intensity: f32
+                radius: f32
+              warp_grid: struct WarpGridConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                density: u32
+                amplitude: f32
+                speed: f32
+                opacity: f32
+              wave_interference: struct WaveInterferenceConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                wavelength: f32
+                source_count: u32
+                speed: f32
+                opacity: f32
+              window_border_radius: struct WindowBorderRadiusConfig
+                enabled: bool
+                radius: f32
+                width: f32
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+              window_content_shadow: struct WindowContentShadowConfig
+                enabled: bool
+                size: f32
+                opacity: f32
+              window_glow: struct WindowGlowConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                radius: f32
+                intensity: f32
+              window_mode_tint: struct WindowModeTintConfig
+                enabled: bool
+                opacity: f32
+              window_switch_fade: struct WindowSwitchFadeConfig
+                enabled: bool
+                duration_ms: u32
+                intensity: f32
+              window_watermark: struct WindowWatermarkConfig
+                enabled: bool
+                opacity: f32
+                threshold: u32
+              wrap_indicator: struct WrapIndicatorConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                opacity: f32
+              zen_mode: struct ZenModeConfig
+                enabled: bool
+                content_width_pct: f32
+                margin_opacity: f32
+              zigzag_pattern: struct ZigzagPatternConfig
+                enabled: bool
+                color: tuple
+                  0: f32
+                  1: f32
+                  2: f32
+                amplitude: f32
+                frequency: f32
+                speed: f32
+                opacity: f32
+        remove: seq
+          element: newtype DisplayWindowId (as above)
+    Windows: struct WindowsUpdate
+      order: seq
+        element: newtype DisplayWindowId (as above)
+      changed: seq
+        element: struct WindowLayout
+          window: newtype DisplayWindowId (as above)
+          geometry: enum Changed
+            Same: unit
+            Set: struct WindowGeometry
+              pixel_bounds: struct Rect (as above)
+              text_pixel_bounds: struct Rect (as above)
+              text_clip_bounds: option
+                some: struct Rect (as above)
+              selected: bool
+              nrows: u64
+              ncols: u64
+              matrix_x: u64
+              matrix_y: u64
+              header_line: bool
+              tab_line: bool
+          rows: enum RowsUpdate
+            Same: unit
+            Script: seq
+              element: enum RowEdit
+                Copy: struct
+                  from: u32
+                  len: u32
+                Place: struct SlotRef
+                  slot: newtype RowSlot (as above)
+                  y: enum YRef
+                    Follows: unit
+                    At: newtype F32Bits
+                      0: u32
+                  start: enum StartRef
+                    Follows: unit
+                    At: u64
+                  span: i64
+                  cursor_col: option
+                    some: u16
+                  cursor_type: option
+                    some: enum CursorStyle
+                      FilledBox: unit
+                      Bar: f32
+                      Hbar: f32
+                      Hollow: unit
+    Facts: struct FrameFacts
+      scalars: enum Changed
+        Same: unit
+        Set: struct FrameScalars
+          scroll_input_policy: struct ScrollInputPolicy
+            x11_delta_factor: f64
+          layout_scale: f32
+          origin: enum PresentationOrigin
+            ordinary: unit
+            interactive-resize: struct
+              session: newtype InteractionSessionId
+                0: u64
+          placement: struct FramePlacement
+            frame: newtype DisplayFrameId
+              0: u64
+            parent: option
+              some: newtype DisplayFrameId (as above)
+            outer_in_parent: struct Rect (as above)
+            z_order: i32
+          frame_cols: u64
+          frame_rows: u64
+          frame_pixel_width: f32
+          frame_pixel_height: f32
+          char_width: f32
+          char_height: f32
+          font_pixel_size: f32
+          background: struct Color (as above)
+          font_catalog_generation: u64
+          desktop_font_render_options: option
+            some: struct DesktopFontRenderOptions
+              antialias: enum DesktopFontAntialias
+                Default: unit
+                None: unit
+                Grayscale: unit
+                Subpixel: unit
+              hinting: enum DesktopFontHinting
+                Default: unit
+                None: unit
+                Slight: unit
+                Medium: unit
+                Full: unit
+              subpixel_order: enum DesktopFontSubpixelOrder
+                Default: unit
+                Rgb: unit
+                Bgr: unit
+                VRgb: unit
+                VBgr: unit
+          undecorated: bool
+          border_width: f32
+          border_color: struct Color (as above)
+          outer_border_width: f32
+          outer_border_color: struct Color (as above)
+          background_alpha: f32
+          frame_alpha: tuple
+            0: f32
+            1: f32
+          no_accept_focus: bool
+      window_infos: enum Changed
+        Same: unit
+        Set: seq
+          element: struct WindowInfo
+            window_id: newtype DisplayWindowId (as above)
+            buffer_id: u64
+            window_start: i64
+            window_end: i64
+            buffer_size: i64
+            buffer_modiff: newtype BufferModiff
+              0: u64
+            bounds: struct Rect (as above)
+            geometry: enum PresentedWindowGeometry
+              Complete: struct
+                cell_origin: struct PresentedCellOrigin
+                  column: i64
+                  line: i64
+                regions: struct PresentedWindowRegions
+                  outer: struct Rect (as above)
+                  text_body: struct Rect (as above)
+                  left_margin_columns: i64
+                  right_margin_columns: i64
+                  left_margin: option
+                    some: struct Rect (as above)
+                  right_margin: option
+                    some: struct Rect (as above)
+                  left_fringe: option
+                    some: struct Rect (as above)
+                  right_fringe: option
+                    some: struct Rect (as above)
+                  left_scroll_bar: option
+                    some: struct Rect (as above)
+                  right_scroll_bar: option
+                    some: struct Rect (as above)
+                  horizontal_scroll_bar: option
+                    some: struct Rect (as above)
+                  tab_line: option
+                    some: struct Rect (as above)
+                  header_line: option
+                    some: struct Rect (as above)
+                  mode_line: option
+                    some: struct Rect (as above)
+                  right_divider: option
+                    some: struct Rect (as above)
+                  bottom_divider: option
+                    some: struct Rect (as above)
+              Skipped: struct
+                cell_origin: struct PresentedCellOrigin (as above)
+                outer: struct Rect (as above)
+            line_number_field: option
+              some: newtype LineNumberFieldWidth
+                0: f32
+            mode_line_height: f32
+            header_line_height: f32
+            tab_line_height: f32
+            selected: bool
+            is_minibuffer: bool
+            char_height: f32
+            buffer_name: str
+            buffer_file_name: str
+            modified: bool
+      transition_hints: enum Changed
+        Same: unit
+        Set: seq
+          element: enum ContentTransitionHint
+            BufferReplaced: struct
+              target: enum BufferTransitionTarget
+                Window: struct
+                  window_id: newtype DisplayWindowId (as above)
+                  region: newtype BufferViewportRegion
+                    0: struct Rect (as above)
+                Frame: struct
+                  regions: seq
+                    element: newtype BufferViewportRegion (as above)
+              intent: enum ContentTransitionIntent
+                Replace: unit
+                Navigate: enum TransitionDirection
+                  forward: unit
+                  backward: unit
+      backgrounds: enum Changed
+        Same: unit
+        Set: seq
+          element: struct BackgroundItem
+            bounds: struct Rect (as above)
+            color: struct Color (as above)
+      face_fills: enum Changed
+        Same: unit
+        Set: seq
+          element: struct FaceFillItem
+            window_id: newtype DisplayWindowId (as above)
+            row_role: enum GlyphRowRole (as above)
+            clip_rect: option
+              some: struct Rect (as above)
+            bounds: struct Rect (as above)
+            face_id: newtype FaceId (as above)
+      borders: enum Changed
+        Same: unit
+        Set: seq
+          element: struct BorderItem
+            window_id: newtype DisplayWindowId (as above)
+            x: f32
+            y: f32
+            width: f32
+            height: f32
+            color: struct Color (as above)
+      cursors: enum Changed
+        Same: unit
+        Set: seq
+          element: struct CursorItem
+            window_id: newtype DisplayWindowId (as above)
+            role: enum CursorItemRole
+              WindowCaret: struct
+                charpos: u64
+              Decorative: unit
+            slot_id: struct DisplaySlotId
+              window_id: newtype DisplayWindowId (as above)
+              row: u32
+              col: u16
+            x: f32
+            y: f32
+            width: f32
+            height: f32
+            style: enum CursorStyle (as above)
+            color: struct Color (as above)
+            cursor_fg: struct Color (as above)
+            ascent: f32
+      phys_cursor: enum Changed
+        Same: unit
+        Set: option
+          some: struct PhysCursor
+            window_id: newtype DisplayWindowId (as above)
+            charpos: u64
+            row: u64
+            col: u16
+            slot_id: struct DisplaySlotId (as above)
+            x: f32
+            y: f32
+            width: f32
+            height: f32
+            ascent: f32
+            style: enum CursorStyle (as above)
+            color: struct Color (as above)
+            cursor_fg: struct Color (as above)
+      scroll_bars: enum Changed
+        Same: unit
+        Set: seq
+          element: struct ScrollBarItem
+            window_id: newtype DisplayWindowId (as above)
+            row_role: enum GlyphRowRole (as above)
+            clip_rect: option
+              some: struct Rect (as above)
+            horizontal: bool
+            x: f32
+            y: f32
+            width: f32
+            height: f32
+            position: i64
+            portion: i64
+            whole: i64
+            thumb_start: f32
+            thumb_size: f32
+            track_color: struct Color (as above)
+            thumb_color: struct Color (as above)
+      chrome: enum Changed
+        Same: unit
+        Set: struct Chrome
+          width: f32
+          bands: seq
+            element: struct ChromeBand
+              kind: enum FrameChromeKind
+                MenuBar: unit
+                ToolBar: unit
+                CompactBar: unit
+                TabBar: unit
+              height: f32
+              content: enum ChromeContent
+                DisplayRow: struct RowRef
+                  slot: newtype RowSlot (as above)
+                  placement: struct RowPlacement
+                    pixel_y: f32
+                    start_charpos: u64
+                    end_charpos: u64
+                    cursor_col: option
+                      some: u16
+                    cursor_type: option
+                      some: enum CursorStyle (as above)
+                MenuBar: struct MenuBarContent
+                  items: seq
+                    element: struct PositionedMenuHeading
+                      positioned: struct PositionedChromeItem
+                        local_bounds: struct Rect (as above)
+                        item: struct MenuBarItem
+                          index: u32
+                          label: str
+                          key: str
+                        action: option
+                          some: enum ChromeAction
+                            OpenMenu: struct
+                              index: u32
+                              key: str
+                            InvokeToolBarItem: struct
+                              index: u32
+                            Presented: struct
+                              interaction: u32
+                      text: enum MenuHeadingText
+                        Pixels: struct ResolvedMenuLabel
+                          glyphs: seq
+                            element: struct ResolvedGlyph (as above)
+                          fonts: seq
+                            element: struct ResolvedFont (as above)
+                          font_size: f32
+                          width: f32
+                        Cells: struct
+                          width: f32
+                      padding: f32
+                  foreground: struct Color (as above)
+                  background: struct Color (as above)
+                  terminal_style: option
+                    some: struct TerminalMenuBarStyle
+                      fg: option
+                        some: enum TerminalColor (as above)
+                      bg: option
+                        some: enum TerminalColor (as above)
+                      bold: bool
+                      inverse: bool
+                ToolBar: struct ToolBarContent
+                  items: seq
+                    element: struct PositionedChromeItem
+                      local_bounds: struct Rect (as above)
+                      item: struct ToolBarItem
+                        index: u32
+                        key: str
+                        image: option
+                          some: enum ToolBarImageSource
+                            GnuRaster: struct
+                              path: str
+                            ThemedVector: struct
+                              path: str
+                        label: str
+                        help: str
+                        enabled: bool
+                        selected: bool
+                        item_type: enum ToolBarItemType
+                          Button: unit
+                          Separator: unit
+                          Radio: unit
+                          Toggle: unit
+                        wrap: bool
+                      action: option
+                        some: enum ChromeAction (as above)
+                  foreground: struct Color (as above)
+                  background: struct Color (as above)
+                  icon_size: u32
+                  padding: u32
+                CompactBar: struct CompactBarContent
+                  menu_items: seq
+                    element: struct PositionedMenuHeading (as above)
+                  tool_items: seq
+                    element: struct PositionedChromeItem (as above)
+                  menu_foreground: struct Color (as above)
+                  menu_background: struct Color (as above)
+                  tool_foreground: struct Color (as above)
+                  tool_background: struct Color (as above)
+                  icon_size: u32
+                  padding: u32
+              hit_regions: seq
+                element: struct ChromeHitRegion
+                  local_bounds: struct Rect (as above)
+                  action: enum ChromeAction (as above)
+      pointer_source: enum Changed
+        Same: unit
+        Set: struct PresentedPointerSourceMap
+          regions: seq
+            element: struct PresentedPointerRegion
+              owner: option
+                some: struct PresentedRegionId
+                  window: option
+                    some: newtype DisplayWindowId (as above)
+                  kind: enum PresentedRegionKind
+                    TextBody: unit
+                    LeftMargin: unit
+                    RightMargin: unit
+                    LeftFringe: unit
+                    RightFringe: unit
+                    LeftScrollBar: unit
+                    RightScrollBar: unit
+                    HorizontalScrollBar: unit
+                    TabLine: unit
+                    HeaderLine: unit
+                    ModeLine: unit
+                    RightDivider: unit
+                    BottomDivider: unit
+                    MenuBar: unit
+                    ToolBar: unit
+                    CompactBar: unit
+                    TabBar: unit
+              bounds: struct Rect (as above)
+              interaction: option
+                some: u32
+              appearance: option
+                some: u32
+          appearances: seq
+            element: struct PresentedPointerSourceAppearance
+              paint_spans: seq
+                element: struct PresentedSourcePaintSpan
+                  kind: enum PresentedPrimitiveKind (as above)
+                  row_role: enum GlyphRowRole (as above)
+                  slot: struct DisplaySlotId (as above)
+                  len: u32
+                  clip: struct Rect (as above)
+                  hover: option
+                    some: enum PointerDrawMode
+                      Face: newtype FaceId (as above)
+                      ImageRelief: struct PointerImageRelief
+                        top_left_color: struct Color (as above)
+                        bottom_right_color: struct Color (as above)
+                        thickness: f32
+                        margins: struct PointerReliefMargins
+                          left: f32
+                          top: f32
+                          right: f32
+                          bottom: f32
+                        edges: struct PointerReliefEdges
+                          top: bool
+                          left: bool
+                          bottom: bool
+                          right: bool
+                        corner_erase: struct PointerReliefCornerErase
+                          color: struct Color (as above)
+                          radius: f32
+                          margin: f32
+                  pressed: option
+                    some: enum PointerDrawMode (as above)
+              hover: enum PointerDrawMode (as above)
+              pressed: enum PointerDrawMode (as above)
+      regions: enum Changed
+        Same: unit
+        Set: struct NonTextHitIndex
+          regions: seq
+            element: struct PresentedHitRegion
+              window: option
+                some: newtype DisplayWindowId (as above)
+              kind: enum PresentedRegionKind (as above)
+              bounds: struct Rect (as above)
+              z_order: i32
+          resize_handles: seq
+            element: struct PresentedResizeHandle
+              window: newtype DisplayWindowId (as above)
+              axis: enum PresentedResizeAxis
+                Horizontal: unit
+                Vertical: unit
+              edge: enum PresentedResizeEdge
+                Leading: unit
+                Trailing: unit
+              bounds: struct Rect (as above)
+      coverage: enum Changed
+        Same: unit
+        Set: seq
+          element: struct Coverage
+            epoch: u64
+            publication: u64
+            predict_pixels: bool
+            compositor_enabled: bool
+            anchor_row: u64
+            viewport: struct Rect (as above)
+            origin: f32
+            window: newtype DisplayWindowId (as above)
+            geometry: struct WindowGeometry (as above)
+            rows: seq
+              element: struct RowRef (as above)
+            faces: seq
+              element: tuple
+                0: newtype FaceId (as above)
+                1: struct Face (as above)
+            fonts: seq
+              element: tuple
+                0: newtype ResolvedFontId (as above)
+                1: struct ResolvedFont (as above)
+            char_fonts: seq
+              element: tuple
+                0: newtype FaceId (as above)
+                1: seq
+                  element: tuple
+                    0: char
+                    1: struct ResolvedCharGlyph (as above)
+            shaped_clusters: seq
+              element: tuple
+                0: newtype FaceId (as above)
+                1: seq
+                  element: tuple
+                    0: str
+                    1: seq
+                      element: struct ResolvedGlyph (as above)
+            hit_presentation: u64
+            hit_index: struct NonTextHitIndex (as above)
+            pointer_source: struct PresentedPointerSourceMap (as above)
+      coverage_renewals: enum Changed
+        Same: unit
+        Set: seq
+          element: struct ScrollCoverageRenewal
+            window: newtype DisplayWindowId (as above)
+            epoch: u64
+            predict_pixels: bool
+            compositor_enabled: bool
+      frontier: seq
+        element: enum FrontierSnapshot
+          Exact: struct
+            stream: newtype InputStreamId
+              0: u64
+            consumed_through: u64
+            in_progress: seq
+              element: newtype InputSerial
+                0: u64
+          Indeterminate: struct
+            stream: newtype InputStreamId (as above)
+            reflected_through: u64
+    Commit: struct
+      presentation: u64
+    StoreReset: unit
+  Asset: enum AssetDown
+    Offer: struct
+      id: enum AssetId (as above)
+      kind: enum AssetKind
+        FontFile: struct
+          container: enum FontContainer
+            Sfnt: unit
+            Collection: unit
+            Pcf: unit
+            Bdf: unit
+            Woff: unit
+            Woff2: unit
+          faces: u32
+        ImagePixels: struct
+          format: enum PixelFormat
+            Rgba8: unit
+            Gray8: unit
+            Mask1: unit
+          width: u32
+          height: u32
+          stride: u32
+        SurfacePixels: struct
+          width: u32
+          height: u32
+      len: u64
+    Forget: struct
+      id: enum AssetId (as above)
+    ImageRealize: struct
+      image: newtype ImageId
+        0: u32
+      pixels: enum AssetId (as above)
+      width: u32
+      height: u32
+    ImageDrop: struct
+      image: newtype ImageId (as above)
+    Put: struct
+      id: enum AssetId (as above)
+      offset: u64
+      bytes: bytes
+      end: enum ChunkEnd
+        More: unit
+        Last: unit
+  Ui: enum UiOp
+    ShowPopupMenu: struct
+      token: struct MenuToken
+        session: u64
+        revision: u64
+      frame: newtype LiveDisplayFrameId (as above)
+      request: option
+        some: newtype MenuBarRequestId
+          0: u64
+      placement: struct PopupPlacement
+        anchor: struct Rect (as above)
+        preferred_side: enum PopupPreferredSide
+          AtAnchor: unit
+          Below: unit
+          Above: unit
+          Right: unit
+          Left: unit
+        offset: struct Point
+          x: f32
+          y: f32
+        constraint: enum PopupConstraintPolicy
+          None: unit
+          Shift: struct
+            padding: f32
+          FlipAndShift: struct
+            padding: f32
+      items: seq
+        element: struct PopupMenuItem
+          kind: enum MenuItemKind
+            Command: struct
+              availability: enum MenuAvailability
+                Enabled: unit
+                Disabled: unit
+              indicator: enum MenuIndicator
+                None: unit
+                Toggle: enum MenuCheckState
+                  Off: unit
+                  On: unit
+                Radio: enum MenuCheckState (as above)
+            Submenu: struct
+              availability: enum MenuAvailability (as above)
+            Label: unit
+            Separator: unit
+          help: option
+            some: str
+          label: str
+          shortcut: str
+          depth: u32
+      title: option
+        some: str
+      colors: option
+        some: struct MenuColors
+          foreground: tuple
+            0: f32
+            1: f32
+            2: f32
+          background: tuple
+            0: f32
+            1: f32
+            2: f32
+    HidePopupMenu: struct
+      token: struct MenuToken (as above)
+    PresentTooltip: struct
+      ticket: newtype TooltipTicket
+        0: u64
+      cause: option
+        some: newtype InputSerial (as above)
+      frame: newtype LiveDisplayFrameId (as above)
+      anchor: struct Rect (as above)
+      layout: newtype Payload
+        0: struct TooltipLayout
+          size: struct WindowSize (as above)
+          rows: seq
+            element: struct RowRuns (as above)
+          faces: seq
+            element: tuple
+              0: newtype FaceId (as above)
+              1: struct Face (as above)
+    DismissTooltip: struct
+      ticket: newtype TooltipTicket (as above)
+    VisualBell: struct
+      frame: newtype LiveDisplayFrameId (as above)
+  Config: enum ConfigOp
+    VisualConfig: newtype Payload
+      0: newtype VisualConfigDoc
+        0: str
+    ModifierPolicy: struct ModifierPolicy
+      command: struct ModifierFamily
+        left: struct ModifierAssignment
+          ordinary: option
+            some: enum EmacsModifierKey
+              Alt: unit
+              Ctrl: unit
+              Hyper: unit
+              Meta: unit
+              Super: unit
+          function: option
+            some: enum EmacsModifierKey (as above)
+          mouse: option
+            some: enum EmacsModifierKey (as above)
+        right: enum SideAssignment
+          InheritLeft: unit
+          Explicit: struct ModifierAssignment (as above)
+      option: struct ModifierFamily (as above)
+      ctrl: struct ModifierFamily (as above)
+      function: struct ModifierAssignment (as above)
+    FontRenderOptions: struct DesktopFontRenderOptions (as above)
+    ScrollIndicators: enum Toggle (as above)
+    TitlebarHeight: struct
+      height: f32
+    ShowFps: enum Toggle (as above)
+    CornerRadius: struct
+      radius: f32
+    ExtraSpacing: struct
+      line: f32
+      letter: f32
+    ChildFrameStyle: struct
+      corner_radius: f32
+      shadow: enum ChildFrameShadow
+        Off: unit
+        On: struct
+          layers: u32
+          offset: f32
+          opacity: f32
+    ConfirmQuit: enum Toggle (as above)
+    SelectedRoot: option
+      some: newtype LiveDisplayFrameId (as above)
+    CursorBlink: enum CursorBlink
+      Off: unit
+      On: struct
+        interval_ms: u32
+    QuitKeys: struct
+      quit_char: char
+      single_kboard_current: option
+        some: newtype ChannelId (as above)
+  Selection: struct
+    channel: newtype ChannelId (as above)
+    op: enum SelectionOp
+      Own: struct
+        selection: enum SelectionName
+          Primary: unit
+          Secondary: unit
+          Clipboard: unit
+        generation: newtype SelectionGeneration
+          0: u64
+        content: enum SelectionContent
+          Inline: bytes
+          Deferred: struct
+            len_hint: u64
+      Disown: struct
+        selection: enum SelectionName (as above)
+        generation: newtype SelectionGeneration (as above)
+  ConvertReply: struct
+    convert: newtype ConvertId
+      0: u64
+    outcome: enum ConvertOutcome
+      Converted: struct
+        target: newtype SelectionTarget
+          0: str
+        len: u64
+      NoConversion: unit
+      NotOwner: unit
+  SelectionData: struct
+    convert: newtype ConvertId (as above)
+    offset: u64
+    bytes: bytes
+    end: enum ChunkEnd (as above)
+  InputProgress: struct
+    stream: newtype InputStreamId (as above)
+    consumed_through: u64
+  Request: struct
+    id: newtype RequestId
+      0: u64
+    channel: newtype ChannelId (as above)
+    body: enum RequestBody
+      SelectionGet: struct
+        selection: enum SelectionName (as above)
+        target: newtype SelectionTarget (as above)
+      SelectionExists: struct
+        selection: enum SelectionName (as above)
+      OpenUri: struct
+        uri: str
+      TerminalText: struct
+        id: newtype TerminalId
+          0: u32
+  Cancel: struct
+    id: newtype RequestId (as above)
+  InputCancelled: struct
+    cancelled: seq
+      element: newtype InputCancelled
+        0: struct InputReceipt
+          stream: newtype InputStreamId (as above)
+          serial: newtype InputSerial (as above)
+  Hint: enum HintOp
+    ScrollPreview: struct
+      frame: newtype LiveDisplayFrameId (as above)
+      window: newtype DisplayWindowId (as above)
+      presentation: u64
+      epoch: u64
+      publication: u64
+      offset: f32
+      inputs: seq
+        element: newtype InputSerial (as above)
+    CoverageRefill: struct
+      frame: newtype LiveDisplayFrameId (as above)
+      window: newtype DisplayWindowId (as above)
+      epoch: u64
+  Media: enum MediaOp
+    SurfaceCreate: struct
+      id: newtype SurfaceId
+        0: u32
+      source: enum SurfaceSourceSpec
+        Shader: struct
+          language: enum SurfaceShaderLanguage
+            Wgsl: unit
+            Glsl: unit
+          source: str
+          uniforms: seq
+            element: struct SurfaceUniformInit
+              name: str
+              value: tuple
+                0: f32
+                1: f32
+                2: f32
+                3: f32
+              components: u8
+          channel0: option
+            some: enum SurfaceChannelSource
+              Surface: u32
+              Image: newtype ImageId (as above)
+              Video: newtype VideoId (as above)
+        Pixels: struct
+          data: bytes
+      size: struct WindowSize (as above)
+      animation: enum SurfaceAnimation
+        Static: unit
+        Animated: struct
+          fps: option
+            some: u32
+      eviction: enum SurfaceEviction
+        Recreatable: unit
+        Pinned: unit
+    SurfaceSetUniform: struct
+      id: newtype SurfaceId (as above)
+      name: str
+      value: tuple
+        0: f32
+        1: f32
+        2: f32
+        3: f32
+    SurfaceFree: struct
+      id: newtype SurfaceId (as above)
+    FrameShaderSet: struct
+      request: newtype FrameShaderRequestId
+        0: u64
+      shader: option
+        some: struct FrameShader
+          source: str
+          language: enum SurfaceShaderLanguage (as above)
+          uniforms: seq
+            element: struct SurfaceUniformInit (as above)
+    FrameShaderSetUniform: struct
+      request: newtype FrameShaderRequestId (as above)
+      name: str
+      value: tuple
+        0: f32
+        1: f32
+        2: f32
+        3: f32
+uplink enum Uplink
+  ChannelOpened: struct
+    channel: newtype ChannelId
+      0: u64
+    facts: struct DisplayFacts
+      monitors: seq
+        element: struct MonitorInfo
+          x: i32
+          y: i32
+          width: i32
+          height: i32
+          scale: f64
+          width_mm: i32
+          height_mm: i32
+          name: option
+            some: str
+      system_fonts: struct SystemFonts
+        monospace: option
+          some: str
+        application: option
+          some: str
+      text_dpi: f32
+      render_options: option
+        some: struct DesktopFontRenderOptions
+          antialias: enum DesktopFontAntialias
+            Default: unit
+            None: unit
+            Grayscale: unit
+            Subpixel: unit
+          hinting: enum DesktopFontHinting
+            Default: unit
+            None: unit
+            Slight: unit
+            Medium: unit
+            Full: unit
+          subpixel_order: enum DesktopFontSubpixelOrder
+            Default: unit
+            Rgb: unit
+            Bgr: unit
+            VRgb: unit
+            VBgr: unit
+      capabilities: newtype CapabilitySet
+        0: seq
+          element: struct Capability
+            name: str
+            version: u16
+            params: seq
+              element: tuple
+                0: str
+                1: str
+      resources: seq
+        element: struct Resource
+          name: str
+          value: str
+  ChannelRefused: struct
+    channel: newtype ChannelId (as above)
+    reason: enum ChannelRefusal
+      Policy: unit
+      DisplayUnavailable: unit
+  Input: struct
+    serial: newtype InputSerial
+      0: u64
+    time: newtype DisplayTime
+      0: u64
+    event: enum InputEdge
+      Key: struct
+        frame: newtype LiveDisplayFrameId
+          0: u64
+        key: enum FrontendKey
+          Character: char
+          Keysym: u32
+        mods: u32
+        text: option
+          some: str
+      ImeCommit: struct
+        frame: newtype LiveDisplayFrameId (as above)
+        text: str
+      Pointer: struct
+        frame: newtype LiveDisplayFrameId (as above)
+        target: enum PointerTarget
+          Presented: struct
+            presentation: u64
+            hit: option
+              some: struct PresentedHit
+                region: struct PresentedHitRegion
+                  window: option
+                    some: newtype DisplayWindowId
+                      0: i64
+                  kind: enum PresentedRegionKind
+                    TextBody: unit
+                    LeftMargin: unit
+                    RightMargin: unit
+                    LeftFringe: unit
+                    RightFringe: unit
+                    LeftScrollBar: unit
+                    RightScrollBar: unit
+                    HorizontalScrollBar: unit
+                    TabLine: unit
+                    HeaderLine: unit
+                    ModeLine: unit
+                    RightDivider: unit
+                    BottomDivider: unit
+                    MenuBar: unit
+                    ToolBar: unit
+                    CompactBar: unit
+                    TabBar: unit
+                  bounds: struct Rect
+                    x: f32
+                    y: f32
+                    width: f32
+                    height: f32
+                  z_order: i32
+                text_position: option
+                  some: struct PresentedTextPosition
+                    window: newtype DisplayWindowId (as above)
+                    bounds: struct Rect (as above)
+                    buffer_position: i64
+                    row: i64
+                    column: i64
+                    point_role: enum PosnPointRole
+                      Glyph: unit
+                      OverlaidMarker: unit
+                      InsertionBoundary: unit
+                      SyntheticBoundary: unit
+                string_position: option
+                  some: struct PresentedStringPosition
+                    window: newtype DisplayWindowId (as above)
+                    area: enum PresentedWindowChromeArea
+                      TabLine: unit
+                      HeaderLine: unit
+                      ModeLine: unit
+                    bounds: struct Rect (as above)
+                    string: u64
+                    char_index: u64
+          Unpresented: unit
+        at: struct LayoutPosition
+          x: f32
+          y: f32
+        action: enum PointerAction
+          Button: struct
+            button: u32
+            state: enum ButtonState
+              Pressed: unit
+              Released: unit
+          Move: unit
+          Scroll: struct
+            delta: enum ScrollDelta
+              Lines: struct
+                x: f32
+                y: f32
+              Pixels: struct
+                x: f32
+                y: f32
+        mods: u32
+      PresentedPointer: struct
+        frame: newtype LiveDisplayFrameId (as above)
+        presentation: u64
+        interaction: u32
+        state: enum ButtonState (as above)
+        button: u8
+        at: struct LayoutPosition (as above)
+      ToolBarClick: struct
+        frame: newtype LiveDisplayFrameId (as above)
+        presentation: u64
+        item: u32
+      MenuBarClick: struct
+        frame: newtype LiveDisplayFrameId (as above)
+        presentation: u64
+        request: option
+          some: newtype MenuBarRequestId
+            0: u64
+        index: u32
+        key: str
+        anchor: struct Rect (as above)
+      MenuSelection: struct
+        token: struct MenuToken
+          session: u64
+          revision: u64
+        choice: enum MenuChoice
+          Item: u32
+          Cancelled: unit
+      TooltipDismissed: struct
+        ticket: newtype TooltipTicket
+          0: u64
+        reason: enum TooltipDismissal
+          PointerLeft: unit
+          Replaced: unit
+          Timeout: unit
+      FileDrop: struct
+        frame: newtype LiveDisplayFrameId (as above)
+        target: enum PointerTarget (as above)
+        uris: seq
+          element: str
+      CloseRequested: struct
+        frame: newtype LiveDisplayFrameId (as above)
+      Focus: struct
+        frame: newtype LiveDisplayFrameId (as above)
+        state: enum FocusState
+          Focused: unit
+          Unfocused: unit
+        tooltip_stamp: option
+          some: u64
+      Moved: struct
+        frame: newtype LiveDisplayFrameId (as above)
+        position: struct ScreenPosition
+          x: i32
+          y: i32
+      Iconified: struct
+        frame: newtype LiveDisplayFrameId (as above)
+      Deiconified: struct
+        frame: newtype LiveDisplayFrameId (as above)
+      ResizeCompleted: struct
+        request: newtype GuiResizeRequestId
+          0: u64
+      ApplicationQuit: struct
+        channel: newtype ChannelId (as above)
+  PointerMotion: struct
+    frame: newtype LiveDisplayFrameId (as above)
+    target: enum PointerTarget (as above)
+    at: struct LayoutPosition (as above)
+    mods: u32
+  WindowGeometry: struct
+    frame: newtype LiveDisplayFrameId (as above)
+    size: struct WindowSize
+      width: u32
+      height: u32
+    scale: f64
+  Presentation: enum PresentationAck
+    Received: struct
+      frame: newtype LiveDisplayFrameId (as above)
+      presentation: u64
+    Activated: struct
+      frame: newtype LiveDisplayFrameId (as above)
+      presentation: u64
+      pending_assets: seq
+        element: enum AssetId
+          Content: newtype ContentId
+            0: tuple
+              0: u8
+              1: u8
+              2: u8
+              3: u8
+              4: u8
+              5: u8
+              6: u8
+              7: u8
+              8: u8
+              9: u8
+              10: u8
+              11: u8
+              12: u8
+              13: u8
+              14: u8
+              15: u8
+              16: u8
+              17: u8
+              18: u8
+              19: u8
+              20: u8
+              21: u8
+              22: u8
+              23: u8
+              24: u8
+              25: u8
+              26: u8
+              27: u8
+              28: u8
+              29: u8
+              30: u8
+              31: u8
+          Session: u64
+    Discarded: struct
+      frame: newtype LiveDisplayFrameId (as above)
+      presentation: u64
+    Retired: struct
+      presentation: u64
+    Rejected: struct
+      frame: newtype LiveDisplayFrameId (as above)
+      presentation: u64
+      reason: enum RejectReason
+        OutsideTransaction: unit
+        NestedBegin: unit
+        CommitMismatch: unit
+        UnknownFrame: unit
+        SlotOutOfRange: u32
+        UnknownSlot: u32
+        KeyMismatch: unit
+        StoreOverflow: unit
+        CopyOutOfRange: unit
+        UnknownWindow: unit
+        DuplicateWindow: unit
+        IncompleteKeyframe: enum FactGroup
+          Facts: unit
+          Scalars: unit
+          WindowInfos: unit
+          TransitionHints: unit
+          Backgrounds: unit
+          FaceFills: unit
+          Borders: unit
+          Cursors: unit
+          PhysCursor: unit
+          ScrollBars: unit
+          Chrome: unit
+          PointerSource: unit
+          Regions: unit
+          Coverage: unit
+          CoverageRenewals: unit
+        MissingFace: u32
+        Row: enum RowError
+          TooManyGlyphs: struct
+            len: u32
+          RunLengths: struct
+            column: enum RowColumn
+              Kinds: unit
+              Faces: unit
+              Provenance: unit
+              Bidi: unit
+              Cells: unit
+              Advances: unit
+              Heights: unit
+              Ascents: unit
+              VerticalOffsets: unit
+              BoxEdges: unit
+              Pointer: unit
+          Text: unit
+          Others: unit
+          Palette: unit
+          Position: unit
+          Flags: u8
+          Tables: str
+        Payload: str
+        Chrome: str
+        HitIndex: str
+        Seal: str
+        Materialize: str
+        FrontierRepeatsStream: u64
+    StoreAck: struct
+      through: newtype UpdateSeq
+        0: u64
+  SelectionState: struct
+    channel: newtype ChannelId (as above)
+    selection: enum SelectionName
+      Primary: unit
+      Secondary: unit
+      Clipboard: unit
+    owner: enum SelectionOwner
+      Ours: struct
+        generation: newtype SelectionGeneration
+          0: u64
+      Foreign: unit
+      Empty: unit
+      Unknown: unit
+    sequence: option
+      some: u64
+  Convert: struct
+    convert: newtype ConvertId
+      0: u64
+    channel: newtype ChannelId (as above)
+    selection: enum SelectionName (as above)
+    target: newtype SelectionTarget
+      0: str
+    generation: newtype SelectionGeneration (as above)
+  Fact: enum LevelFact
+    Monitors: struct
+      version: newtype FactVersion
+        0: u64
+      list: seq
+        element: struct MonitorInfo (as above)
+    Desktop: struct
+      version: newtype FactVersion (as above)
+      system_fonts: struct SystemFonts (as above)
+      text_dpi: f32
+      render_options: option
+        some: struct DesktopFontRenderOptions (as above)
+    Resources: struct
+      version: newtype FactVersion (as above)
+      db: seq
+        element: struct Resource (as above)
+    Capabilities: struct
+      version: newtype FactVersion (as above)
+      set: newtype CapabilitySet (as above)
+    DisplayReset: struct
+      reason: enum DisplayResetReason
+        DeviceLost: unit
+        Reconfigured: unit
+  Asset: enum AssetUp
+    Have: struct
+      ids: seq
+        element: enum AssetId (as above)
+    Want: struct
+      ids: seq
+        element: enum AssetId (as above)
+      priority: enum WantPriority
+        Visible: unit
+        Coverage: unit
+        Background: unit
+    Stored: struct
+      id: enum AssetId (as above)
+    Evicted: struct
+      id: enum AssetId (as above)
+    ResidencyLost: struct
+      image: newtype ImageId
+        0: u32
+  Reply: struct
+    id: newtype RequestId
+      0: u64
+    outcome: enum ReplyOutcome
+      Value: enum ReplyValue
+        SelectionData: struct
+          target: newtype SelectionTarget (as above)
+          bytes: option
+            some: seq
+              element: u8
+        SelectionExists: enum SelectionPresence
+          Present: unit
+          Absent: unit
+        UriOpened: unit
+        TerminalText: str
+      TimedOut: unit
+      Refused: enum PolicyRefusal
+        SchemeNotAllowed: struct
+          scheme: str
+        SelectionPrivate: unit
+        Unsupported: unit
+      Failed: struct
+        detail: str
+  Media: enum MediaEvent
+    SurfaceCreateFailed: struct
+      id: newtype SurfaceId
+        0: u32
+      error: str
+    FrameShaderAck: struct
+      request: newtype FrameShaderRequestId
+        0: u64
+      execution: enum FrameShaderExecution
+        Running: unit
+        SuppressedByQualityPolicy: unit
+        Removed: unit
+    FrameShaderFailed: struct
+      request: newtype FrameShaderRequestId (as above)
+      error: str
+  InputOverflow: struct
+    from: newtype InputSerial (as above)
+    to: newtype InputSerial (as above)

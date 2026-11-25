@@ -165,6 +165,8 @@ mod scroll_surface_test;
 mod single_pass_whole_run_engine_test;
 #[path = "text_snapshot_cow_test.rs"]
 mod text_snapshot_cow_test;
+#[path = "wire_parity_corpus.rs"]
+mod wire_parity_corpus;
 
 fn test_image_load(id: u32) -> neomacs_display_protocol::ImageLoadToken {
     neomacs_display_protocol::ImageLoadToken::new(

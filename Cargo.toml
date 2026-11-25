@@ -6,6 +6,7 @@ members = [
     "crates/neomacs-diagnostics",
     "crates/neomacs-display-protocol",
     "crates/neomacs-display-runtime",
+    "crates/neomacs-display-wire",
     "crates/neomacs-font-materializer",
     "crates/neomacs-gui-tests",
     "crates/neomacs-layout-engine",
@@ -14,6 +15,7 @@ members = [
     "crates/neomacs-parity-reference",
     "crates/neomacs-perf",
     "crates/neomacs-renderer-wgpu",
+    "crates/neomacs-session",
     "crates/neomacs-test-fonts",
     "crates/neomacs-test-env",
     "crates/neomacs-test-oracle",
@@ -107,6 +109,8 @@ neovm-oracle-tests = { path = "crates/neovm-oracle-tests", default-features = fa
 neovm-value = { path = "crates/neovm-value", default-features = false }
 neomacs-display-runtime = { path = "crates/neomacs-display-runtime", default-features = false }
 neomacs-display-protocol = { path = "crates/neomacs-display-protocol", default-features = false }
+neomacs-display-wire = { path = "crates/neomacs-display-wire" }
+neomacs-session = { path = "crates/neomacs-session" }
 neomacs-font-materializer = { path = "crates/neomacs-font-materializer" }
 neomacs-test-fonts = { path = "crates/neomacs-test-fonts" }
 neomacs-layout-engine = { path = "crates/neomacs-layout-engine", default-features = false }

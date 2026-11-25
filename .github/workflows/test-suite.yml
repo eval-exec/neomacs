@@ -25,6 +25,7 @@ on:
           - neomacs-melpa-direct-windows-tests
           - compile-contracts
           - neovm-eval-tests
+          - protocol-crates
           - compile-contracts-macos
           - gnu-emacs-oracle
           - gnu-emacs-oracle-macos
@@ -701,6 +702,38 @@ jobs:
       - name: Run the release-native-depth mint regressions
         run: cargo nextest run -p neovm-eval --lib --features release-native-depth -E 'test(n5_release_)'
 
+  # The pure display protocol crates: the session layer and the display wire
+  # codec. Their tests build no neovm-* crate, so all three operating systems
+  # run them in minutes; the crate graph check keeps them that way.
+  protocol-crates:
+    name: protocol crates (${{ matrix.os }})
+    if: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.job == 'all' || github.event.inputs.job == 'protocol-crates') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+    steps:
+      - *checkout
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-protocol-crates-${{ matrix.os }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
+
+      - name: Check the display crate graph
+        if: runner.os == 'Linux'
+        run: cargo metadata --no-deps --format-version 1 | python3 -I scripts/ci/check-crate-graph.py
+
+      - name: Run the session and display wire tests
+        run: cargo nextest run -p neomacs-session -p neomacs-display-wire --no-fail-fast
+
   # The same contracts on the arm64 macOS toolchain. rustc on aarch64-apple-darwin
   # orders and caps its E0277/E0599 notes differently, so the suite keeps
   # arm64_macos overlays of the context and generic goldens. Until 2026-10-31 no
@@ -1233,7 +1266,7 @@ jobs:
       NEOMACS_BINARY_PATH: ${{ github.workspace }}/target/release/neomacs
       NEOMACS_RUNTIME_ROOT: ${{ github.workspace }}
       NEOMACS_FONT_FIXTURE_CACHE: ${{ github.workspace }}/tmp/font-fixtures
-      NEXTEST_FILTER: "package(neomacs-display-protocol)|package(neomacs-display-runtime)|package(neomacs-layout-engine)|package(neomacs-renderer-wgpu)"
+      NEXTEST_FILTER: "package(neomacs-display-protocol)|package(neomacs-display-runtime)|package(neomacs-layout-engine)|package(neomacs-renderer-wgpu)|package(neomacs-session)|package(neomacs-display-wire)"
     steps:
       - *checkout
       - *prepare_workspace_tmp

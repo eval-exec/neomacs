@@ -22,6 +22,8 @@ on:
       - 'crates/neomacs/**'
       - 'crates/neomacs-display-runtime/**'
       - 'crates/neomacs-display-protocol/**'
+      - 'crates/neomacs-display-wire/**'
+      - 'crates/neomacs-session/**'
       - 'crates/neomacs-renderer-wgpu/**'
       - 'crates/neomacs-layout-engine/**'
       - 'crates/neomacs-display/**'

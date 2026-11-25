@@ -277,11 +277,15 @@ impl ScrollCoverage {
         );
         let mut glyphs = Vec::with_capacity(glyph_count);
         // Scroll bars supply fringe geometry but remain stationary frame chrome.
-        source.for_each_glyph(|glyph| {
-            if !matches!(glyph, FrameGlyph::ScrollBar { .. }) {
-                glyphs.push(glyph);
-            }
-        });
+        // The content has passed only the checks above, so a glyph the walk
+        // cannot place refuses the coverage instead of panicking.
+        source
+            .try_for_each_glyph(|glyph| {
+                if !matches!(glyph, FrameGlyph::ScrollBar { .. }) {
+                    glyphs.push(glyph);
+                }
+            })
+            .ok()?;
         if glyphs.iter().any(|glyph| {
             !matches!(
                 glyph,
@@ -994,5 +998,36 @@ mod prepared_surface_tests {
         ));
         assert_eq!(coverage_materialize_count() - before, 4);
         assert_eq!(state.prepared_scroll_admission_count(), 1);
+    }
+
+    /// Coverage content from a peer (the FrameSync decoder) passes every
+    /// admission check that runs before the glyph walk, since the peer
+    /// controls each value those checks read. A glyph the walk cannot place
+    /// refuses the coverage like any other malformed transport; it never
+    /// panics `validate_for_materialize` or `materialize` (M1 follow-up 1).
+    #[test]
+    fn coverage_glyph_the_walk_cannot_place_refuses_the_coverage() {
+        for (name, pixel_width, vertical_offset_px) in [
+            ("non-finite origin", 10.0, f32::NAN),
+            ("non-finite advance", f32::INFINITY, 0.0),
+        ] {
+            let mut state = frame();
+            let mut coverage = state.scroll_coverage[0].as_ref().clone();
+            let row = MatrixRow::make_mut(&mut coverage.content.matrix.rows[1]);
+            let glyph = &mut row.glyphs[crate::GlyphArea::Text.index()][0];
+            glyph.glyph_type = crate::GlyphType::Xwidget {
+                xwidget_id: crate::XwidgetId::new(3),
+                webview_id: crate::WebViewId::new(5),
+                width_cols: 1,
+                content: crate::xwidget_extent::XwidgetContentExtent::new(8.0, 10.0).unwrap(),
+            };
+            glyph.pixel_width = pixel_width;
+            glyph.vertical_offset_px = vertical_offset_px;
+            let coverage = Arc::new(coverage);
+            assert!(coverage.materialize(&state).is_none(), "{name}");
+            state.scroll_coverage[0] = coverage;
+            assert_eq!(state.validate_for_materialize(), Ok(()), "{name}");
+            assert!(state.materialize().scroll_surfaces.is_empty(), "{name}");
+        }
     }
 }
