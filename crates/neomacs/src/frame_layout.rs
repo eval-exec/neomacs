@@ -75,38 +75,19 @@ pub(super) fn resolved_scroll_preview(
 ///
 /// This is the sole owner of `Context::display_idle_maintenance_fn`: TTY and
 /// batch sessions leave it unset so periodic GUI service does not engage there.
+/// Render-command delivery stays inside the declared GUI effect owner
+/// (`main.rs::run_gui_evaluator_worker`), passed here as a delivery callback
+/// so `frame_layout.rs` remains purely a layout/font owner.
 pub(super) fn install_gui_display_idle_maintenance(
     evaluator: &mut Context,
-    cmd_tx: neomacs_display_runtime::thread_comm::RenderCommandSender,
-    slots: Arc<
-        std::sync::Mutex<
-            std::collections::HashMap<
-                neomacs_display_protocol::DisplayFrameId,
-                neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
-            >,
-        >,
-    >,
-    wake: impl Fn() + 'static,
+    deliver: impl Fn(
+        neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+    ) -> neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery
+    + 'static,
 ) {
     evaluator.display_idle_maintenance_fn = Some(Box::new(move |eval| {
-        REDISPLAY_RUNTIME.with(|runtime| {
-            runtime.maintain_scroll_coverage_with_delivery(eval, |update| {
-                match cmd_tx.publish_scroll_coverage(&slots, update) {
-                    Ok(woken) => {
-                        if woken {
-                            wake();
-                        }
-                        neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery::Delivered
-                    }
-                    Err(crossbeam_channel::TrySendError::Full(_)) => {
-                        neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery::QueueFull
-                    }
-                    Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
-                        neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery::Disconnected
-                    }
-                }
-            })
-        })
+        REDISPLAY_RUNTIME
+            .with(|runtime| runtime.maintain_scroll_coverage_with_delivery(eval, &deliver))
     }));
 }
 
