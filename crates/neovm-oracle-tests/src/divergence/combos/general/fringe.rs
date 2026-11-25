@@ -476,3 +476,169 @@ fn divergence_display_string_measurement_batch() {
         expect,
     );
 }
+
+#[test]
+fn divergence_margin_display_measurement_batch() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((4 . 1) (4 . 1) (4 . 1) (4 . 1) (6 . 1) (7 . 1) (6 . 1) (6 . 1) (6 . 1) (0 . 1) (6 . 1) (5 . 1) (6 . 1) (4 . 1) (0 . 0) (0 . 1) (0 . 1) (0 . 0))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((measure
+       (lambda (setup)
+         (with-temp-buffer
+           (funcall setup)
+           (switch-to-buffer (current-buffer))
+           (window-text-pixel-size)))))
+  (list
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((margin left-margin) "M"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(((margin left-margin) "M") "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(((margin right-margin) "M") "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(((margin left-margin) (space :width 5)) "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((margin nil) "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((margin nil) (space :width 3)))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(((margin nil) "XY") "ZZZZ"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(((margin bogus) "M") "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(((margin left-margin) (left-fringe left-arrow)) "XY"))))
+   (funcall measure (lambda () (insert "ab")
+                      (put-text-property 1 3 'display '((margin left-margin) "M"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(((margin left-margin) (image :type png :data "")) "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1)))
+                        (overlay-put ov 'before-string
+                                     (propertize "XX" 'display '(((margin left-margin) "M") "ZZ"))))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((margin) "XY"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((margin left-margin) (space :width 5)))))
+   (funcall measure (lambda () (insert "ab")
+                      (put-text-property 1 3 'display '((margin left-margin) ""))))
+   (funcall measure (lambda () (insert "ab")
+                      (put-text-property 1 3 'display '((margin left-margin) (space :width 5)))))
+   (funcall measure (lambda () (insert "ab")
+                      (put-text-property 1 3 'display '((margin left-margin) "A\nB"))))
+   (funcall measure (lambda () (insert "ab")
+                      (put-text-property 1 3 'display `((margin left-margin) ,(propertize "M" 'invisible t)))))))"#,
+        expect,
+    );
+}
+
+#[test]
+fn divergence_invisible_display_string_measurement_batch() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((4 . 1) (6 . 1) (4 . 1) (7 . 1) (7 . 1) (7 . 1) (0 . 0) (5 . 1) (5 . 1) 0)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((measure
+       (lambda (setup)
+         (with-temp-buffer
+           (funcall setup)
+           (switch-to-buffer (current-buffer))
+           (window-text-pixel-size)))))
+  (list
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display (propertize "XYZ" 'invisible t))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display
+                                         (concat "A" (propertize "BBB" 'invisible t) "C"))))
+   (funcall measure (lambda ()
+                      (setq-local buffer-invisibility-spec '(foo))
+                      (insert "hello")
+                      (put-text-property 1 2 'display (propertize "XYZ" 'invisible 'foo))))
+   (funcall measure (lambda ()
+                      (setq-local buffer-invisibility-spec '((foo . t)))
+                      (insert "hello")
+                      (put-text-property 1 2 'display (propertize "XYZ" 'invisible 'foo))))
+   (funcall measure (lambda ()
+                      (setq-local buffer-invisibility-spec '(bar))
+                      (insert "hello")
+                      (put-text-property 1 2 'display (propertize "XYZ" 'invisible 'foo))))
+   (funcall measure (lambda ()
+                      (setq-local buffer-invisibility-spec nil)
+                      (insert "hello")
+                      (put-text-property 1 2 'display (propertize "XYZ" 'invisible t))))
+   (funcall measure (lambda () (insert "ab")
+                      (put-text-property 1 3 'display (propertize "XYZ" 'invisible t))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1)))
+                        (overlay-put ov 'before-string (propertize "XYZ" 'invisible t)))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1)))
+                        (overlay-put ov 'before-string
+                                     (propertize "a" 'display (propertize "XYZ" 'invisible t))))))
+   (string-pixel-width (propertize "a" 'display (propertize "XYZ" 'invisible t)))))"#,
+        expect,
+    );
+}
+
+#[test]
+fn divergence_newline_display_string_at_from_measurement_batch() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((4 . 1) (4 . 1) (4 . 1) (4 . 1) (0 . 0) (0 . 1) (4 . 1) (4 . 1) (4 . 1) (6 . 2) (4 . 2) (4 . 1) (3 . 1) (0 . 1) (1 . 1) (3 . 1) (2 . 2) (4 . 1) 0 4)""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((measure
+       (lambda (setup &optional from to)
+         (with-temp-buffer
+           (funcall setup)
+           (switch-to-buffer (current-buffer))
+           (window-text-pixel-size nil from to)))))
+  (list
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display "\n")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display "AB\nCD")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display "AB\n")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display "\nCD")))
+   (funcall measure (lambda () (insert "h")
+                      (put-text-property 1 2 'display "AB\n")))
+   (funcall measure (lambda () (insert "h")
+                      (put-text-property 1 2 'display "AB\nCD")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display "A\nB\nC")))
+   (funcall measure (lambda () (insert "xhello")
+                      (put-text-property 2 3 'display "AB\nCD")) 2 nil)
+   (funcall measure (lambda () (insert "xhello")
+                      (put-text-property 2 3 'display "\n")) 2 nil)
+   (funcall measure (lambda () (insert "ab\nhello")
+                      (put-text-property 4 5 'display "AB\nCD")) 4 nil)
+   (funcall measure (lambda () (insert "ab\nhello")
+                      (put-text-property 4 5 'display "\n")) 4 nil)
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 2)))
+                        (overlay-put ov 'display "\n"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 3 'display "AB\nCD")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display "AB\nCD")) 1 2)
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display "AB\nCD")) 1 3)
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 3 'display "AB\nCD")) 2 nil)
+   (funcall measure (lambda () (insert "h\ncd")
+                      (put-text-property 1 2 'display "AB\nCD")))
+   (funcall measure (lambda () (insert "ab\nhello")
+                      (narrow-to-region 4 9)
+                      (put-text-property 4 5 'display "AB\nCD")) 4 nil)
+   (string-pixel-width (propertize "h" 'display "\n"))
+   (string-pixel-width (concat (propertize "h" 'display "AB\nCD") "ello"))))"#,
+        expect,
+    );
+}

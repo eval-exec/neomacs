@@ -627,10 +627,16 @@ enum DisplayElement {
     /// the same row state without re-entering replacing `display` properties
     /// (`string_from_display_prop_p`, `src/xdisp.c:6338`).
     Text(Value),
+    /// A marginal-area replacing spec (`((margin left-margin|right-margin) VALUE)`,
+    /// `src/xdisp.c:6477-6562`) whose content produces glyphs in the margin:
+    /// advances zero inline width in `TEXT_AREA`, folds one text-cell baseline
+    /// split into the row, and blocks later replacing specs.
+    MarginBaseline,
     /// A replacing spec that consumes its covered text without advancing
     /// inline width or contributing a baseline split (GNU
     /// `(left-fringe BITMAP [FACE])` / `(right-fringe BITMAP [FACE])`,
-    /// `src/xdisp.c:6380-6475` and `32397-32405`).
+    /// `src/xdisp.c:6380-6475` and `32397-32405`, or an empty/all-invisible
+    /// marginal-area spec).
     Consumed,
 }
 
@@ -1030,6 +1036,16 @@ pub(crate) fn region_text_metrics_with_display(
         // GNU's `FETCH_BYTE (start_bpos) == '\n'`: a newline at FROM takes no place
         // on display, so the walk pretends to start at the next line's origin.
         let origin_is_newline = buf.emacs_byte_at_pos(range.from) == Some(b'\n');
+        // GNU `window_text_pixel_size` (`src/xdisp.c:11867-11912`) rewinds via
+        // `move_it_vertically_backward (&it, 0)` + `move_it_by_lines (&it, nlines)`
+        // (`src/xdisp.c:11268-11347, 11511-11528`).  When `FROM` is at `BEGV` or
+        // mid-line (not immediately after a buffer `\n`), a newline-bearing
+        // display string at `FROM` is consumed as part of that rewound prefix
+        // before `start_x` is recorded; after a buffer `\n`, `move_it_by_lines`
+        // lands at `FROM` before entering the display string.
+        let accessible_start = buf.accessible_emacs_byte_region().start();
+        let origin_not_after_buffer_newline = range.from <= accessible_start
+            || buf.emacs_byte_at_pos(EmacsBytePos::new(range.from.get() - 1)) != Some(b'\n');
         let mut state = ScanState::new(
             cell,
             char_width,
@@ -1050,6 +1066,55 @@ pub(crate) fn region_text_metrics_with_display(
             }
 
             if state.before_origin() && scan >= range.from.get() {
+                let maybe_nl_origin_display = scan == range.from.get()
+                    && origin_not_after_buffer_newline
+                    && eval.edit.buffers.get(buffer_id).is_some_and(|buf| {
+                        invisible_measure_run(eval, buf, scan, &invisible_sym, end).is_none()
+                            && raw_display_property_at(eval, buf, scan, &display_sym)
+                                .is_some_and(|v| value_contains_newline_string(v, 0))
+                    });
+                if maybe_nl_origin_display
+                    && let Some((element, run_end)) = display_element_run(
+                        eval,
+                        frame,
+                        buffer_id,
+                        scan,
+                        state.line_columns(),
+                        &display_sym,
+                        &invisible_sym,
+                        end,
+                    )?
+                    && run_end > scan
+                {
+                    let is_nl_text = matches!(
+                        element,
+                        DisplayElement::Text(s)
+                            if display_string_contains_visible_newline(
+                                eval,
+                                buffer_id,
+                                s,
+                                &invisible_sym,
+                            )
+                    );
+                    if !is_nl_text {
+                        state.reach_origin();
+                    }
+                    process_overlay_strings_at(
+                        eval,
+                        frame,
+                        buffer_id,
+                        scan,
+                        &display_sym,
+                        &invisible_sym,
+                        &mut state,
+                    )?;
+                    if state.y_limit_reached() {
+                        break;
+                    }
+                    state.push_display_element(eval, buffer_id, element, &invisible_sym);
+                    scan = run_end.min(end);
+                    continue;
+                }
                 state.reach_origin();
                 // The origin's own character is still to be processed.
             }
@@ -1059,7 +1124,15 @@ pub(crate) fn region_text_metrics_with_display(
             // overlays starting here, plus after-strings of overlays ending here
             // (see `load_overlay_strings`/`get_overlay_strings` in xdisp.c).  Each
             // contributes its own laid-out columns to the running line width.
-            process_overlay_strings_at(eval, frame, buffer_id, scan, &display_sym, &mut state)?;
+            process_overlay_strings_at(
+                eval,
+                frame,
+                buffer_id,
+                scan,
+                &display_sym,
+                &invisible_sym,
+                &mut state,
+            )?;
             if state.y_limit_reached() {
                 break;
             }
@@ -1089,9 +1162,9 @@ pub(crate) fn region_text_metrics_with_display(
 
             // A `display` property (text property or overlay) whose value replaces
             // the text it covers -- a string, a `(space ...)` stretch, an image,
-            // or a `(left-fringe ...)` / `(right-fringe ...)` spec -- defines the
-            // whole run's extent.  Resolve it once and advance over the run
-            // atomically.
+            // a marginal-area spec, or a `(left-fringe ...)` / `(right-fringe ...)`
+            // spec -- defines the whole run's extent.  Resolve it once and advance
+            // over the run atomically.
             if let Some((element, run_end)) = display_element_run(
                 eval,
                 frame,
@@ -1099,10 +1172,11 @@ pub(crate) fn region_text_metrics_with_display(
                 scan,
                 state.line_columns(),
                 &display_sym,
+                &invisible_sym,
                 end,
             )? && run_end > scan
             {
-                state.push_display_element(element);
+                state.push_display_element(eval, buffer_id, element, &invisible_sym);
                 scan = run_end.min(end);
                 continue;
             }
@@ -1134,7 +1208,15 @@ pub(crate) fn region_text_metrics_with_display(
         // visits positions `scan < end`, so `end` itself is processed exactly once
         // here with the same full `before = true` collection used in the loop body.
         if !state.y_limit_reached() {
-            process_overlay_strings_at(eval, frame, buffer_id, end, &display_sym, &mut state)?;
+            process_overlay_strings_at(
+                eval,
+                frame,
+                buffer_id,
+                end,
+                &display_sym,
+                &invisible_sym,
+                &mut state,
+            )?;
         }
 
         // A range that ends where it starts never entered the loop, and one whose
@@ -1321,11 +1403,18 @@ impl ScanState {
 
     /// Place a `display` spec's element on the current line, each in its own
     /// unit: a stretch counts text cells (so a long line stays exact), an
-    /// image counts its own pixels, a display string emits its characters into
-    /// this row state without re-entering replacing `display` properties, and
-    /// a consumed spec (fringe bitmap) advances neither width nor baseline
-    /// height.
-    fn push_display_element(&mut self, element: DisplayElement) {
+    /// image counts its own pixels, a display string emits its visible
+    /// characters into this row state without re-entering replacing `display`
+    /// properties, a glyph-producing margin spec folds the text baseline with
+    /// zero inline advance, and a consumed spec (fringe bitmap or empty/hidden
+    /// margin spec) advances neither width nor baseline height.
+    fn push_display_element(
+        &mut self,
+        eval: &neovm_eval::emacs_core::eval::Context,
+        buffer_id: BufferId,
+        element: DisplayElement,
+        invisible_sym: &Value,
+    ) {
         match element {
             DisplayElement::Cells(columns) => {
                 self.advance_columns(columns);
@@ -1335,7 +1424,13 @@ impl ScanState {
                 self.push_element(extent);
                 self.last_code = None;
             }
-            DisplayElement::Text(string) => self.push_display_string(string),
+            DisplayElement::Text(string) => {
+                self.push_display_string(eval, buffer_id, string, invisible_sym);
+            }
+            DisplayElement::MarginBaseline => {
+                self.note_text_baseline();
+                self.last_code = None;
+            }
             DisplayElement::Consumed => {
                 self.last_code = None;
             }
@@ -1344,11 +1439,19 @@ impl ScanState {
 
     /// Emit characters of a replacing `display` string into this scan state.
     ///
-    /// Mirrors GNU `handle_single_display_spec` (`src/xdisp.c:6563-6603`) and
-    /// `string_from_display_prop_p` (`src/xdisp.c:6338`): nested replacing
+    /// Mirrors GNU `handle_single_display_spec` (`src/xdisp.c:6563-6603`),
+    /// `string_from_display_prop_p` (`src/xdisp.c:6338`), and
+    /// `handle_invisible_prop` (`src/xdisp.c:5215-5234`): nested replacing
     /// `display` properties inside the replacement string are ignored, while
-    /// newlines, tabs, wrapping/truncation edges, and `y_limit` apply normally.
-    fn push_display_string(&mut self, string: Value) {
+    /// `invisible` runs (including `(PROP . t)` ellipses), newlines, tabs,
+    /// wrapping/truncation edges, and `y_limit` apply normally.
+    fn push_display_string(
+        &mut self,
+        eval: &neovm_eval::emacs_core::eval::Context,
+        buffer_id: BufferId,
+        string: Value,
+        invisible_sym: &Value,
+    ) {
         let Some(s) = string.as_lisp_string() else {
             self.last_code = None;
             return;
@@ -1365,6 +1468,34 @@ impl ScanState {
         while char_index < schars && byte_off < bytes.len() {
             if self.y_limit_reached() {
                 return;
+            }
+            if let Some((invisibility, run_end_char)) = string_invisible_measure_run(
+                eval,
+                buffer_id,
+                string,
+                char_index,
+                invisible_sym,
+                schars,
+            ) && run_end_char > char_index
+            {
+                if invisibility.shows_ellipsis() {
+                    self.push_ellipsis();
+                }
+                let mut skip = run_end_char.min(schars) - char_index;
+                while skip > 0 && byte_off < bytes.len() {
+                    let len = if multibyte {
+                        neovm_value::emacs_char::string_char(&bytes[byte_off..])
+                            .1
+                            .max(1)
+                    } else {
+                        1
+                    };
+                    byte_off += len;
+                    char_index += 1;
+                    skip -= 1;
+                }
+                self.last_code = None;
+                continue;
             }
             let (code, len) = if multibyte {
                 let (code, len) = neovm_value::emacs_char::string_char(&bytes[byte_off..]);
@@ -1662,27 +1793,35 @@ impl ScanState {
 /// element modeled by this measurement in GNU spec order:
 ///   * a display string (`STRINGP (value)`, `src/xdisp.c:6512-6603`) ->
 ///     [`DisplayElement::Text`]
+///   * `((margin left-margin|right-margin|nil) VALUE)` (`src/xdisp.c:6477-6562`)
+///     when `VALUE` is a valid replacing spec (string, `(space ...)`, or GUI
+///     image): `nil` renders inline in `TEXT_AREA`, while `left-margin` /
+///     `right-margin` consume covered text with zero inline width
+///     ([`DisplayElement::MarginBaseline`] or [`DisplayElement::Consumed`])
 ///   * `(left-fringe BITMAP [FACE])` / `(right-fringe BITMAP [FACE])` with
 ///     `CONSP (XCDR (spec))` (`src/xdisp.c:6380-6475`) -> [`DisplayElement::Consumed`]
 ///   * `(space ...)` -> [`fallback_space_element`]
 ///   * `(image ...)` on a window-system frame -> [`DisplayElement::Pixels`]
 ///
 /// Deliberately unmodelled: `(slice ...)`, `(height ...)`, `(raise ...)`,
-/// `(space-width ...)`, `(min-width ...)`, `((margin ...) ...)`, `(xwidget ...)`,
-/// and the neomacs media heads (`video` / `webkit` / `surface`).
+/// `(space-width ...)`, `(min-width ...)`, `(xwidget ...)`, and the neomacs
+/// media heads (`video` / `webkit` / `surface`).
+#[allow(clippy::too_many_arguments)]
 fn resolve_display_element(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame: FrameId,
+    buffer_id: BufferId,
     display: Value,
     object: Value,
     position: i64,
     buffer_position: i64,
     cur_column: usize,
+    invisible_sym: &Value,
 ) -> Result<Option<DisplayElement>, Flow> {
     use crate::emacs_core::display_when::DisplayWhenContextExt;
     use neovm_eval::emacs_core::eval::data::display_spec::{
-        DisplayEval, DisplayPropertySpecs, DisplaySpecKind, display_spec_kind,
-        display_spec_when_parts,
+        DisplayEval, DisplayMarginLocation, DisplayPropertySpecs, DisplaySpecKind,
+        display_margin_spec, display_spec_kind, display_spec_when_parts,
     };
     use std::ops::ControlFlow;
 
@@ -1731,12 +1870,87 @@ fn resolve_display_element(
                 spec = inner;
             }
 
+            let frame_window_p = eval
+                .frame_manager()
+                .get(frame)
+                .is_some_and(|frame| frame.effective_window_system().is_some());
+
             match display_spec_kind(spec, property.eval) {
                 // GNU `xdisp.c:6512-6603`: a string replaces the covered text
                 // in-place (taking precedence over later replacing specs in
                 // the same list/vector).
                 DisplaySpecKind::Text => {
                     return Ok(Some(DisplayElement::Text(spec)));
+                }
+                // GNU `xdisp.c:6477-6562`: strip one `((margin AREA) CONTENT)`
+                // prefix.  `AREA == nil` (or omitted) displays `CONTENT` in
+                // `TEXT_AREA`; `left-margin` / `right-margin` display valid
+                // `CONTENT` in the margin (zero inline width, blocking later
+                // replacing specs).  An invalid area or non-valid content
+                // leaves `display_replaced == 0` so later specs still run.
+                DisplaySpecKind::Margin => {
+                    if let Some(margin) = display_margin_spec(spec) {
+                        let content = margin.content();
+                        match margin.location() {
+                            DisplayMarginLocation::Text => {
+                                match display_spec_kind(content, property.eval) {
+                                    DisplaySpecKind::Text => {
+                                        return Ok(Some(DisplayElement::Text(content)));
+                                    }
+                                    DisplaySpecKind::Space => {
+                                        if let Some(element) = fallback_space_element(
+                                            eval,
+                                            frame,
+                                            content.cons_cdr(),
+                                            cur_column,
+                                        ) {
+                                            return Ok(Some(element));
+                                        }
+                                    }
+                                    DisplaySpecKind::Image if frame_window_p => {
+                                        if let Some(extent) =
+                                            image_element_extent(eval, frame, content)
+                                        {
+                                            return Ok(Some(DisplayElement::Pixels(extent)));
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            DisplayMarginLocation::Left | DisplayMarginLocation::Right => {
+                                match display_spec_kind(content, property.eval) {
+                                    DisplaySpecKind::Text => {
+                                        if display_string_produces_glyphs(
+                                            eval,
+                                            buffer_id,
+                                            content,
+                                            invisible_sym,
+                                        ) {
+                                            return Ok(Some(DisplayElement::MarginBaseline));
+                                        }
+                                        return Ok(Some(DisplayElement::Consumed));
+                                    }
+                                    DisplaySpecKind::Space => {
+                                        return Ok(Some(DisplayElement::MarginBaseline));
+                                    }
+                                    DisplaySpecKind::Image if frame_window_p => {
+                                        if let Some(extent) =
+                                            image_element_extent(eval, frame, content)
+                                        {
+                                            return Ok(Some(DisplayElement::Pixels(
+                                                ElementExtent {
+                                                    advance: 0.0,
+                                                    ascent: extent.ascent,
+                                                    descent: extent.descent,
+                                                },
+                                            )));
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
                 }
                 // GNU `xdisp.c:6380-6475` requires `CONSP (XCDR (spec))`:
                 // `(left-fringe)` and `(left-fringe . sym)` leave the covered
@@ -1758,12 +1972,7 @@ fn resolve_display_element(
                 // An image replaces its text only on a frame that can display
                 // one: GNU's `valid_image_p` is false without a window system,
                 // and the covered characters are then displayed normally.
-                DisplaySpecKind::Image
-                    if eval
-                        .frame_manager()
-                        .get(frame)
-                        .is_some_and(|frame| frame.effective_window_system().is_some()) =>
-                {
+                DisplaySpecKind::Image if frame_window_p => {
                     if let Some(extent) = image_element_extent(eval, frame, spec) {
                         return Ok(Some(DisplayElement::Pixels(extent)));
                     }
@@ -1780,23 +1989,159 @@ fn resolve_display_element(
     outcome
 }
 
+/// Pure lookup of the raw `display` property (overlay or text property) at
+/// buffer byte `pos`, without evaluating any `when` forms.
+fn raw_display_property_at(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    buf: &Buffer,
+    pos: usize,
+    display_sym: &Value,
+) -> Option<Value> {
+    let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(pos));
+    let charpos1 = charpos0.get() as i64 + 1;
+    neovm_edit::emacs_core::textprop::buffer_overlay_property_at_byte_pos(
+        eval.variables(),
+        &eval.edit.buffers,
+        buf,
+        pos,
+        *display_sym,
+        None,
+    )
+    .map(|(v, _)| v)
+    .or_else(|| {
+        let v = neovm_edit::emacs_core::textprop::builtin_get_text_property_in_state(
+            eval.variables(),
+            &eval.edit.buffers,
+            &[Value::fixnum(charpos1), *display_sym],
+        )
+        .ok()?;
+        if v.is_nil() { None } else { Some(v) }
+    })
+}
+
+/// Fast structural check: whether `value` contains any Lisp string with a `\n`
+/// byte (bounded depth so circular lists never loop).
+fn value_contains_newline_string(value: Value, depth: usize) -> bool {
+    if depth >= 8 {
+        return false;
+    }
+    if let Some(s) = value.as_lisp_string() {
+        return s.as_bytes().contains(&b'\n');
+    }
+    if value.is_cons() {
+        return value_contains_newline_string(value.cons_car(), depth + 1)
+            || value_contains_newline_string(value.cons_cdr(), depth + 1);
+    }
+    if let Some(items) = value.as_vector_data() {
+        return items
+            .iter()
+            .any(|&item| value_contains_newline_string(item, depth + 1));
+    }
+    false
+}
+
+/// Whether `string` contains any visible glyph (a non-hidden character or an
+/// ellipsis-producing invisible run) under `buffer_id`'s
+/// `buffer-invisibility-spec`.
+fn display_string_produces_glyphs(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    buffer_id: BufferId,
+    string: Value,
+    invisible_sym: &Value,
+) -> bool {
+    let Some(s) = string.as_lisp_string() else {
+        return false;
+    };
+    let schars = s.schars();
+    let mut char_index = 0usize;
+    while char_index < schars {
+        if let Some((invisibility, run_end_char)) =
+            string_invisible_measure_run(eval, buffer_id, string, char_index, invisible_sym, schars)
+            && run_end_char > char_index
+        {
+            if invisibility.shows_ellipsis() {
+                return true;
+            }
+            char_index = run_end_char.min(schars);
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
+/// Whether `string` contains a visible (non-invisible) `\n` character under
+/// `buffer_id`'s `buffer-invisibility-spec`.
+fn display_string_contains_visible_newline(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    buffer_id: BufferId,
+    string: Value,
+    invisible_sym: &Value,
+) -> bool {
+    let Some(s) = string.as_lisp_string() else {
+        return false;
+    };
+    let bytes = s.as_bytes();
+    if !bytes.contains(&b'\n') {
+        return false;
+    }
+    let schars = s.schars();
+    let multibyte = s.is_multibyte();
+    let mut char_index = 0usize;
+    let mut byte_off = 0usize;
+    while char_index < schars && byte_off < bytes.len() {
+        if let Some((_, run_end_char)) =
+            string_invisible_measure_run(eval, buffer_id, string, char_index, invisible_sym, schars)
+            && run_end_char > char_index
+        {
+            let mut skip = run_end_char.min(schars) - char_index;
+            while skip > 0 && byte_off < bytes.len() {
+                let len = if multibyte {
+                    neovm_value::emacs_char::string_char(&bytes[byte_off..])
+                        .1
+                        .max(1)
+                } else {
+                    1
+                };
+                byte_off += len;
+                char_index += 1;
+                skip -= 1;
+            }
+            continue;
+        }
+        let (code, len) = if multibyte {
+            let (code, len) = neovm_value::emacs_char::string_char(&bytes[byte_off..]);
+            (code.code(), len.max(1))
+        } else {
+            (bytes[byte_off] as u32, 1)
+        };
+        if code == '\n' as u32 {
+            return true;
+        }
+        byte_off += len;
+        char_index += 1;
+    }
+    false
+}
+
 /// The extent of the `display` property at buffer byte `pos`, if its value
 /// replaces the covered text with an element that has its own size.
 ///
 /// Returns `(element, run_end_byte)`.  Mirrors the `display`-spec branch of
 /// GNU's display iterator: the covered run is laid out as ONE element -- a
 /// display string, a stretch glyph for `(space ...)`, an image glyph for
-/// `(image ...)`, or a consumed zero-width run for `(left-fringe ...)` /
-/// `(right-fringe ...)` -- and the iterator jumps to the end of the run.
-/// `cur_column` is the running row width in text columns, which
-/// `(space :align-to N)` needs (an absolute target column).
+/// `(image ...)`, a marginal-area spec, or a consumed zero-width run for
+/// `(left-fringe ...)` / `(right-fringe ...)` -- and the iterator jumps to the
+/// end of the run.  `cur_column` is the running row width in text columns,
+/// which `(space :align-to N)` needs (an absolute target column).
 ///
 /// Returns `None` when there is no `display` property, or its value is not a
 /// spec this measurement models.  Deliberately unmodelled: `(slice ...)`,
 /// `(height ...)`, `(raise ...)`, `(space-width ...)`, `(min-width ...)`,
-/// `((margin ...) ...)`, `(xwidget ...)`, and the neomacs media heads
-/// (`video` / `webkit` / `surface`), which either modify text geometry or
-/// replace text in areas/widgets this fallback does not track.
+/// `(xwidget ...)`, and the neomacs media heads (`video` / `webkit` /
+/// `surface`), which either modify text geometry or replace text in widgets
+/// this fallback does not track.
+#[allow(clippy::too_many_arguments)]
 fn display_element_run(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame: FrameId,
@@ -1804,6 +2149,7 @@ fn display_element_run(
     pos: usize,
     cur_column: usize,
     display_sym: &Value,
+    invisible_sym: &Value,
     region_end: usize,
 ) -> Result<Option<(DisplayElement, usize)>, Flow> {
     let Some((charpos1, display, overlay)) = eval.edit.buffers.get(buffer_id).and_then(|buf| {
@@ -1837,11 +2183,13 @@ fn display_element_run(
     let Some(element) = resolve_display_element(
         eval,
         frame,
+        buffer_id,
         display,
         Value::make_buffer(buffer_id),
         charpos1,
         charpos1,
         cur_column,
+        invisible_sym,
     )?
     else {
         return Ok(None);
@@ -1954,6 +2302,52 @@ fn invisible_measure_run(
             .get()
     };
     Some((invisibility, run_end.min(region_end)))
+}
+
+/// String-object analogue of [`invisible_measure_run`]: GNU's
+/// `handle_invisible_prop` (`src/xdisp.c:5215-5234`) checks the `invisible`
+/// text property of any string being iterated (display strings and overlay
+/// strings alike) against the measured buffer's `buffer-invisibility-spec`.
+fn string_invisible_measure_run(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    buffer_id: BufferId,
+    string: Value,
+    char_index: usize,
+    invisible_sym: &Value,
+    schars: usize,
+) -> Option<(Invisibility, usize)> {
+    let prop = neovm_edit::emacs_core::textprop::builtin_get_text_property_in_state(
+        eval.variables(),
+        &eval.edit.buffers,
+        &[Value::fixnum(char_index as i64), *invisible_sym, string],
+    )
+    .ok()?;
+    if prop.is_nil() {
+        return None;
+    }
+    let buf = eval.edit.buffers.get(buffer_id)?;
+    let spec = eval
+        .variables()
+        .value_in_buffer_by_name(Some(buf), "buffer-invisibility-spec")
+        .unwrap_or(Value::NIL);
+    let invisibility = text_prop_means_invisible(prop, spec);
+    if !invisibility.hides_source() {
+        return None;
+    }
+    let run_end_char =
+        neovm_edit::emacs_core::textprop::builtin_next_single_property_change_in_state(
+            eval.variables(),
+            &eval.edit.buffers,
+            &[Value::fixnum(char_index as i64), *invisible_sym, string],
+        )
+        .ok()
+        .and_then(|v| match v.kind() {
+            ValueKind::Fixnum(n) if n >= 0 => Some(n as usize),
+            _ => None,
+        })
+        .unwrap_or(schars)
+        .min(schars);
+    Some((invisibility, run_end_char))
 }
 
 /// The display extent of an image spec, in logical pixels.
@@ -2146,6 +2540,7 @@ fn process_overlay_strings_at(
     buffer_id: BufferId,
     pos: usize,
     display_sym: &Value,
+    invisible_sym: &Value,
     state: &mut ScanState,
 ) -> Result<(), Flow> {
     let Some((entries, buf_charpos1)) = eval.edit.buffers.get(buffer_id).and_then(|buf| {
@@ -2172,7 +2567,16 @@ fn process_overlay_strings_at(
     }
     let outcome = (|| -> Result<(), Flow> {
         for entry in entries {
-            walk_overlay_string(eval, frame, entry.string, buf_charpos1, display_sym, state)?;
+            walk_overlay_string(
+                eval,
+                frame,
+                buffer_id,
+                entry.string,
+                buf_charpos1,
+                display_sym,
+                invisible_sym,
+                state,
+            )?;
         }
         Ok(())
     })();
@@ -2182,20 +2586,25 @@ fn process_overlay_strings_at(
 
 /// Walk an overlay string character by character, folding it into `state`.
 ///
-/// The string carries its OWN `display` text properties: a `(space :align-to N)`
-/// / `(space :width N)` advances/jumps the running column exactly like the same
-/// spec in buffer text (resolved via the shared [`fallback_space_element`]),
-/// a fringe spec consumes the covered string chars with zero inline advance,
-/// and embedded newlines end the current line (updating the max width) and
-/// reset the column to 0 — critical for the multi-line vertico candidate
-/// after-string, whose widest line determines the posframe width.  Other chars
-/// count as their display width.
+/// The string carries its OWN `invisible` and `display` text properties: an
+/// invisible run is elided (or emits an ellipsis) under the buffer's
+/// `buffer-invisibility-spec`, a `(space :align-to N)` / `(space :width N)`
+/// advances/jumps the running column exactly like the same spec in buffer text
+/// (resolved via the shared [`fallback_space_element`]), a fringe or margin
+/// spec consumes the covered string chars with zero inline advance, a display
+/// string emits its visible characters, and embedded newlines end the current
+/// line (updating the max width) and reset the column to 0 — critical for the
+/// multi-line vertico candidate after-string, whose widest line determines the
+/// posframe width.  Other chars count as their display width.
+#[allow(clippy::too_many_arguments)]
 fn walk_overlay_string(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame: FrameId,
+    buffer_id: BufferId,
     string: Value,
     buf_charpos1: i64,
     display_sym: &Value,
+    invisible_sym: &Value,
     state: &mut ScanState,
 ) -> Result<(), Flow> {
     let Some((schars, byte_len, multibyte)) = string
@@ -2215,21 +2624,52 @@ fn walk_overlay_string(
             return Ok(());
         }
 
+        // GNU `handle_stop` checks `invisible` before `display` on strings too
+        // (`handle_invisible_prop`, `src/xdisp.c:5215-5234`).
+        if let Some((invisibility, run_end_char)) =
+            string_invisible_measure_run(eval, buffer_id, string, char_index, invisible_sym, schars)
+            && run_end_char > char_index
+        {
+            if invisibility.shows_ellipsis() {
+                state.push_ellipsis();
+            }
+            let Some(bytes) = string.as_lisp_string().map(|s| s.as_bytes()) else {
+                return Ok(());
+            };
+            let mut skip = run_end_char.min(schars) - char_index;
+            while skip > 0 && byte_off < bytes.len() {
+                let len = if multibyte {
+                    neovm_value::emacs_char::string_char(&bytes[byte_off..])
+                        .1
+                        .max(1)
+                } else {
+                    1
+                };
+                byte_off += len;
+                char_index += 1;
+                skip -= 1;
+            }
+            state.last_code = None;
+            continue;
+        }
+
         // Resolve this string's own `display` property at the char position.  A
-        // spec that replaces its text -- a string, `(space ...)`, an image, or
-        // a fringe spec -- covers the run up to the next `display` change and
-        // defines its extent.
+        // spec that replaces its text -- a string, `(space ...)`, an image, a
+        // margin spec, or a fringe spec -- covers the run up to the next
+        // `display` change and defines its extent.
         if let Some((element, run_end_char)) = string_display_element_run(
             eval,
             frame,
+            buffer_id,
             string,
             char_index,
             buf_charpos1,
             state.line_columns(),
             display_sym,
+            invisible_sym,
         )? && run_end_char > char_index
         {
-            state.push_display_element(element);
+            state.push_display_element(eval, buffer_id, element, invisible_sym);
             let Some(bytes) = string.as_lisp_string().map(|s| s.as_bytes()) else {
                 return Ok(());
             };
@@ -2276,14 +2716,17 @@ fn walk_overlay_string(
 /// `cur_col` is the running column at the spec, needed for `:align-to` (an
 /// absolute target).  `run_end_char` is the next `display`-property change in
 /// the string (the end of the covered run), defaulting to the string length.
+#[allow(clippy::too_many_arguments)]
 fn string_display_element_run(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame: FrameId,
+    buffer_id: BufferId,
     string: Value,
     char_index: usize,
     buf_charpos1: i64,
     cur_col: usize,
     display_sym: &Value,
+    invisible_sym: &Value,
 ) -> Result<Option<(DisplayElement, usize)>, Flow> {
     // `get-text-property` on a string takes a 0-based char position.
     let Ok(display) = neovm_edit::emacs_core::textprop::builtin_get_text_property_in_state(
@@ -2300,11 +2743,13 @@ fn string_display_element_run(
     let Some(element) = resolve_display_element(
         eval,
         frame,
+        buffer_id,
         display,
         string,
         char_index as i64,
         buf_charpos1,
         cur_col,
+        invisible_sym,
     )?
     else {
         return Ok(None);

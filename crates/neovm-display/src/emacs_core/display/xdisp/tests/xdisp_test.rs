@@ -8469,6 +8469,318 @@ fn test_window_text_pixel_size_models_display_strings() {
     }
 }
 
+/// GNU `handle_single_display_spec` (`src/xdisp.c:6477-6562`) treats
+/// `((margin left-margin|right-margin) VALUE)` with valid `VALUE` (string,
+/// `(space ...)`, or GUI image/xwidget) as a replacing spec in the marginal
+/// area: it consumes covered text in the text area with zero inline width
+/// (folding baseline height when the margin content produces glyphs) and
+/// blocks later replacing specs in the same list/vector.  `((margin nil) VALUE)`
+/// and `((margin) VALUE)` render `VALUE` inline in `TEXT_AREA`; an invalid
+/// area or invalid content does not replace and falls through to later specs.
+#[test]
+fn test_window_text_pixel_size_models_margin_display_specs() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let measure_text_prop = |text: &str, start: i64, end: i64, spec: Value| -> (i64, i64) {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert(text);
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                sym("display"),
+                spec,
+            ],
+        )
+        .expect("put-text-property");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    let lmargin = |v: Value| {
+        Value::list(vec![
+            Value::list(vec![sym("margin"), sym("left-margin")]),
+            v,
+        ])
+    };
+    let rmargin = |v: Value| {
+        Value::list(vec![
+            Value::list(vec![sym("margin"), sym("right-margin")]),
+            v,
+        ])
+    };
+    let margin_nil = |v: Value| Value::list(vec![Value::list(vec![sym("margin"), Value::NIL]), v]);
+    let margin_short = |v: Value| Value::list(vec![Value::list(vec![sym("margin")]), v]);
+    let margin_bogus =
+        |v: Value| Value::list(vec![Value::list(vec![sym("margin"), sym("bogus")]), v]);
+
+    let m_str = Value::string("M");
+    let xy = Value::string("XY");
+    let empty = Value::string("");
+    let space3 = Value::list(vec![sym("space"), sym(":width"), Value::fixnum(3)]);
+    let space5 = Value::list(vec![sym("space"), sym(":width"), Value::fixnum(5)]);
+    let left_arrow = Value::list(vec![sym("left-fringe"), sym("left-arrow")]);
+    let img_tty = Value::list(vec![
+        sym("image"),
+        sym(":type"),
+        sym("png"),
+        sym(":data"),
+        empty,
+    ]);
+    let invis_m = Value::string("M");
+    set_string_text_properties_for_value(
+        invis_m,
+        vec![StringTextPropertyRun {
+            start: 0,
+            end: 1,
+            plist: Value::list(vec![sym("invisible"), Value::T]),
+        }],
+    );
+
+    assert_eq!(measure_text_prop("hello", 1, 2, lmargin(m_str)), (4, 1));
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, Value::list(vec![lmargin(m_str), xy])),
+        (4, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, Value::list(vec![rmargin(m_str), xy])),
+        (4, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, Value::list(vec![lmargin(space5), xy])),
+        (4, 1)
+    );
+    assert_eq!(measure_text_prop("hello", 1, 2, margin_nil(xy)), (6, 1));
+    assert_eq!(measure_text_prop("hello", 1, 2, margin_nil(space3)), (7, 1));
+    assert_eq!(
+        measure_text_prop(
+            "hello",
+            1,
+            2,
+            Value::list(vec![margin_nil(xy), Value::string("ZZZZ")])
+        ),
+        (6, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, Value::list(vec![margin_bogus(m_str), xy])),
+        (6, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, Value::list(vec![lmargin(left_arrow), xy])),
+        (6, 1)
+    );
+    assert_eq!(
+        measure_text_prop("hello", 1, 2, Value::list(vec![lmargin(img_tty), xy])),
+        (6, 1)
+    );
+    assert_eq!(measure_text_prop("hello", 1, 2, margin_short(xy)), (6, 1));
+    assert_eq!(measure_text_prop("ab", 1, 3, lmargin(m_str)), (0, 1));
+    assert_eq!(measure_text_prop("ab", 1, 3, lmargin(empty)), (0, 0));
+    assert_eq!(measure_text_prop("ab", 1, 3, lmargin(space5)), (0, 1));
+    assert_eq!(measure_text_prop("ab", 1, 3, lmargin(invis_m)), (0, 0));
+}
+
+/// GNU `handle_invisible_prop` (`src/xdisp.c:5206-5234`) honors `invisible`
+/// text properties inside both display strings and overlay strings under the
+/// buffer's `buffer-invisibility-spec`, eliding hidden spans and rendering an
+/// ellipsis (`...`) for `(PROP . t)` entries.
+#[test]
+fn test_window_text_pixel_size_honors_invisible_inside_display_strings() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let measure = |invis_spec: Option<Value>, text: &str, start: i64, end: i64, spec: Value| {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert(text);
+        if let Some(invis_spec) = invis_spec {
+            let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
+            buf.set_buffer_local("buffer-invisibility-spec", invis_spec);
+        }
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                sym("display"),
+                spec,
+            ],
+        )
+        .expect("put-text-property");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    let invis_xyz = Value::string("XYZ");
+    set_string_text_properties_for_value(
+        invis_xyz,
+        vec![StringTextPropertyRun {
+            start: 0,
+            end: 3,
+            plist: Value::list(vec![sym("invisible"), Value::T]),
+        }],
+    );
+    let partial_invis = Value::string("ABBBC");
+    set_string_text_properties_for_value(
+        partial_invis,
+        vec![StringTextPropertyRun {
+            start: 1,
+            end: 4,
+            plist: Value::list(vec![sym("invisible"), Value::T]),
+        }],
+    );
+    let invis_foo = Value::string("XYZ");
+    set_string_text_properties_for_value(
+        invis_foo,
+        vec![StringTextPropertyRun {
+            start: 0,
+            end: 3,
+            plist: Value::list(vec![sym("invisible"), sym("foo")]),
+        }],
+    );
+
+    assert_eq!(measure(None, "hello", 1, 2, invis_xyz), (4, 1));
+    assert_eq!(measure(None, "hello", 1, 2, partial_invis), (6, 1));
+    assert_eq!(
+        measure(
+            Some(Value::list(vec![sym("foo")])),
+            "hello",
+            1,
+            2,
+            invis_foo
+        ),
+        (4, 1)
+    );
+    assert_eq!(
+        measure(
+            Some(Value::list(vec![Value::cons(sym("foo"), Value::T)])),
+            "hello",
+            1,
+            2,
+            invis_foo
+        ),
+        (7, 1)
+    );
+    assert_eq!(
+        measure(
+            Some(Value::list(vec![sym("bar")])),
+            "hello",
+            1,
+            2,
+            invis_foo
+        ),
+        (7, 1)
+    );
+    assert_eq!(measure(Some(Value::NIL), "hello", 1, 2, invis_xyz), (7, 1));
+    assert_eq!(measure(None, "ab", 1, 3, invis_xyz), (0, 0));
+}
+
+/// GNU `window_text_pixel_size` (`src/xdisp.c:11867-11912`) rewinds via
+/// `move_it_by_lines (&it, 0)` -> `move_it_vertically_backward (&it, 0)`
+/// (`src/xdisp.c:11268-11347, 11511-11528`).  When `FROM` is not immediately
+/// preceded by a visible buffer newline (`FROM == BEGV` or mid-line) and
+/// carries a display string containing a visible newline, that display string
+/// is consumed as part of the rewound display-line prefix before `start_x` is
+/// recorded, whereas a newline display string at the start of a subsequent
+/// buffer line (after a buffer `\n`) starts at `start_x = 0` and opens rows.
+#[test]
+fn test_window_text_pixel_size_newline_display_string_at_from() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let measure = |text: &str,
+                   prop_start: i64,
+                   prop_end: i64,
+                   disp: &str,
+                   from: Option<i64>,
+                   to: Option<i64>| {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert(text);
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            &mut eval,
+            vec![
+                Value::fixnum(prop_start),
+                Value::fixnum(prop_end),
+                sym("display"),
+                Value::string(disp),
+            ],
+        )
+        .expect("put-text-property");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                from.map(Value::fixnum).unwrap_or(Value::NIL),
+                to.map(Value::fixnum).unwrap_or(Value::NIL),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    assert_eq!(measure("hello", 1, 2, "\n", None, None), (4, 1));
+    assert_eq!(measure("hello", 1, 2, "AB\nCD", None, None), (4, 1));
+    assert_eq!(measure("hello", 1, 2, "AB\n", None, None), (4, 1));
+    assert_eq!(measure("hello", 1, 2, "\nCD", None, None), (4, 1));
+    assert_eq!(measure("h", 1, 2, "AB\n", None, None), (0, 0));
+    assert_eq!(measure("h", 1, 2, "AB\nCD", None, None), (0, 1));
+    assert_eq!(measure("hello", 1, 2, "A\nB\nC", None, None), (4, 1));
+    assert_eq!(measure("xhello", 2, 3, "AB\nCD", Some(2), None), (4, 1));
+    assert_eq!(measure("xhello", 2, 3, "\n", Some(2), None), (4, 1));
+    assert_eq!(measure("ab\nhello", 4, 5, "AB\nCD", Some(4), None), (6, 2));
+    assert_eq!(measure("ab\nhello", 4, 5, "\n", Some(4), None), (4, 2));
+    assert_eq!(measure("hello", 1, 3, "AB\nCD", None, None), (3, 1));
+    assert_eq!(measure("hello", 1, 2, "AB\nCD", Some(1), Some(2)), (0, 1));
+    assert_eq!(measure("hello", 1, 2, "AB\nCD", Some(1), Some(3)), (1, 1));
+    assert_eq!(measure("hello", 1, 3, "AB\nCD", Some(2), None), (3, 1));
+    assert_eq!(measure("h\ncd", 1, 2, "AB\nCD", None, None), (2, 2));
+}
+
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_test.rs"]
 mod mode_line_min_width_boundary_test;
