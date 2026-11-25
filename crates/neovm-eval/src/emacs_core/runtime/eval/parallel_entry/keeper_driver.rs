@@ -248,12 +248,12 @@ impl<'s, 'k, 'service, 'heap> Batch<&'k KeeperEra<'service, 'heap>> for Between<
         Ok(Between::Restored(restored))
     }
 
-    fn lend_world(self) -> Result<(WorldTurn, WorldLendHeld<'s, 'k>), CustodyRefused> {
-        let cut = match &self {
-            Between::Fresh(keeper) => keeper.world_identity(),
-            Between::Restored(keeper) => keeper.world_identity(),
+    fn lend_world(mut self) -> Result<(WorldTurn, WorldLendHeld<'s, 'k>), CustodyRefused> {
+        let (turn, cut) = match &mut self {
+            Between::Fresh(keeper) => (keeper.cut_world_turn(), keeper.world_identity()),
+            Between::Restored(keeper) => (keeper.cut_world_turn(), keeper.world_identity()),
         };
-        Ok((WorldTurn::cut(cut), WorldLendHeld { keeper: self, cut }))
+        Ok((turn, WorldLendHeld { keeper: self, cut }))
     }
 
     fn settle_world(

@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 use neovm_value::tagged::gc::HeapIdentity;
+use neovm_value::tagged::gc::heap_transfer::{StoppedInterval, UnenteredReservation};
 use std::cell::Cell;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
@@ -47,8 +48,27 @@ static_assertions::assert_impl_all!(WorldReturned: Send);
 static_assertions::assert_not_impl_any!(WorldReturned: Sync, Clone, Copy);
 
 impl WorldTurn {
-    /// Cut by the keeper's custody only: the driver binding lends it.
-    pub(super) fn cut(identity: WorldTurnIdentity) -> Self {
+    /// Cut under the keeper's own stop (lead #14075). The exclusive borrow
+    /// of the stopped interval is the proof: only the keeper's custody holds
+    /// one, and only while every member is stopped. The turn carries that
+    /// stop's heap and epoch.
+    pub(super) fn cut_in_stop(interval: &mut StoppedInterval<'_, '_>) -> Self {
+        Self::cut(WorldTurnIdentity {
+            heap: interval.heap_identity(),
+            epoch: interval.epoch(),
+        })
+    }
+
+    /// Cut under the reservation a returned serial ticket restored: the same
+    /// stop, after an owner's turn in it.
+    pub(super) fn cut_in_reservation(reservation: &mut UnenteredReservation<'_, '_>) -> Self {
+        Self::cut(WorldTurnIdentity {
+            heap: reservation.heap_identity(),
+            epoch: reservation.epoch(),
+        })
+    }
+
+    fn cut(identity: WorldTurnIdentity) -> Self {
         Self {
             identity,
             _not_sync: PhantomData,

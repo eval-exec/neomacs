@@ -7,7 +7,7 @@
 //! burden.
 #![forbid(unsafe_code)]
 
-use super::world_turn::WorldTurnIdentity;
+use super::world_turn::{WorldTurn, WorldTurnIdentity};
 use neovm_value::tagged::gc::heap_transfer::{
     PublishedOwner, StopScope, StoppedInterval, UnenteredReservation,
 };
@@ -194,6 +194,12 @@ impl<'s, 'era> StoppedKeeper<'s, 'era> {
         }
     }
 
+    /// L6.7b b3: cut the Baton group's World turn under this stop. The
+    /// keeper keeps the stop while the turn is out.
+    pub(crate) fn cut_world_turn(&mut self) -> WorldTurn {
+        WorldTurn::cut_in_stop(&mut self.interval)
+    }
+
     /// Finish the traced stop with nothing lent.
     pub(crate) fn complete_traced(self) -> Result<(), AllStoppedFailure<'era>> {
         self.interval.complete_traced()
@@ -312,6 +318,12 @@ impl<'s, 'era> RestoredKeeper<'s, 'era> {
             heap: self.export.reservation.heap_identity(),
             epoch: self.export.reservation.epoch(),
         }
+    }
+
+    /// L6.7b b3: cut the Baton group's World turn, as on
+    /// [`StoppedKeeper::cut_world_turn`]. The previous ticket is back.
+    pub(crate) fn cut_world_turn(&mut self) -> WorldTurn {
+        WorldTurn::cut_in_reservation(&mut self.export.reservation)
     }
 
     pub fn lend_next(
