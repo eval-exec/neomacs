@@ -16,7 +16,7 @@
 //! only reads and verifies the cache and never attempts a download.
 
 use std::ffi::OsString;
-use std::fs::{self, File};
+use std::fs::{self, OpenOptions};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -241,10 +241,16 @@ where
     })?;
     // One fetch per pinned digest across concurrently running test binaries and worktrees.
     let lock_path = root.join(format!(".{sha256}.lock"));
-    let lock = File::create(&lock_path).map_err(|source| PinnedError::Lock {
-        path: lock_path.clone(),
-        source,
-    })?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|source| PinnedError::Lock {
+            path: lock_path.clone(),
+            source,
+        })?;
     lock.lock().map_err(|source| PinnedError::Lock {
         path: lock_path,
         source,

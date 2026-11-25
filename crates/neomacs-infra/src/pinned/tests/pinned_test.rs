@@ -74,21 +74,22 @@ fn an_unreadable_cache_entry_is_a_read_error() {
 /// entry resolves offline for a caller that names its own cap (issue #556).
 #[test]
 fn a_verified_cache_entry_resolves_for_a_caller_named_limit() {
-    let root = cache_root();
-    let payload = format!("limit-probe-{}", std::process::id()).into_bytes();
-    let sha256 = crate::inventory::sha256_hex(&payload);
-    let name = format!("limit-probe-{}.bin", std::process::id());
-    let path = publish_verified_bytes(&root, &name, &sha256, &payload).expect("publish probe");
+    let temporary = tempfile::tempdir().expect("temporary fixture directory");
+    let payload = b"limit-probe-payload";
+    let sha256 = crate::inventory::sha256_hex(payload);
+    let path = publish_verified_bytes(temporary.path(), "limit-probe.bin", &sha256, payload)
+        .expect("publish probe");
 
-    let resolved = pinned_file_with_limit(
-        &name,
+    let resolved = pinned_file_in_with_fetch(
+        temporary.path(),
+        "limit-probe.bin",
         "https://127.0.0.1:1/never",
         &sha256,
         192 * 1024 * 1024,
+        || panic!("a verified cache entry must resolve without fetching"),
     )
     .expect("a verified cache entry resolves offline");
     assert_eq!(resolved, path);
-    std::fs::remove_dir_all(entry_dir(&root, &sha256)).ok();
 }
 
 /// A cached fixture is trusted without touching the network: the URL below
@@ -97,16 +98,22 @@ fn a_verified_cache_entry_resolves_for_a_caller_named_limit() {
 /// runnable offline.
 #[test]
 fn a_verified_cache_entry_needs_no_network() {
-    let root = cache_root();
-    let payload = format!("cache-probe-{}", std::process::id()).into_bytes();
-    let sha256 = crate::inventory::sha256_hex(&payload);
-    let name = format!("cache-probe-{}.bin", std::process::id());
-    let path = publish_verified_bytes(&root, &name, &sha256, &payload).expect("publish probe");
+    let temporary = tempfile::tempdir().expect("temporary fixture directory");
+    let payload = b"cache-probe-payload";
+    let sha256 = crate::inventory::sha256_hex(payload);
+    let path = publish_verified_bytes(temporary.path(), "cache-probe.bin", &sha256, payload)
+        .expect("publish probe");
 
-    let resolved = pinned_file(&name, "https://127.0.0.1:1/never", &sha256)
-        .expect("a verified cache entry resolves offline");
+    let resolved = pinned_file_in_with_fetch(
+        temporary.path(),
+        "cache-probe.bin",
+        "https://127.0.0.1:1/never",
+        &sha256,
+        MAX_PINNED_FIXTURE_BYTES,
+        || panic!("a verified cache entry must resolve without fetching"),
+    )
+    .expect("a verified cache entry resolves offline");
     assert_eq!(resolved, path);
-    std::fs::remove_dir_all(entry_dir(&root, &sha256)).ok();
 }
 
 /// A test-runtime miss stays offline and does not materialize the cache.

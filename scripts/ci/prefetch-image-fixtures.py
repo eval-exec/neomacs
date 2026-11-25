@@ -2,6 +2,7 @@
 """Prepare image pins for archive tests without building a Rust executable."""
 
 import argparse
+import contextlib
 from dataclasses import dataclass
 import errno
 import hashlib
@@ -18,6 +19,16 @@ import time
 from urllib.request import urlopen
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 PIN_SOURCE = Path("crates/neomacs-infra/src/image_fixtures.rs")
 MAX_BYTES = 32 * 1024 * 1024
@@ -235,51 +246,85 @@ def entry_path(root: Path, pin: Pin) -> Path:
     return root / pin.sha256 / pin.name
 
 
-def prefetch(workspace: Path, pin: Pin, fetch=fetch_bytes) -> Path:
-    root = cache_root(workspace)
-    destination = entry_path(root, pin)
+def entry_matches(destination: Path, sha256: str) -> bool:
     try:
         cached = destination.read_bytes()
     except FileNotFoundError:
-        cached = None
-    if cached is not None and hashlib.sha256(cached).hexdigest() == pin.sha256:
+        return False
+    return hashlib.sha256(cached).hexdigest() == sha256
+
+
+@contextlib.contextmanager
+def pin_lock(root: Path, sha256: str):
+    """Acquire the same per-digest lock file used by Rust neomacs_infra::pinned."""
+    root.mkdir(parents=True, exist_ok=True)
+    lock_path = root / f".{sha256}.lock"
+    # Open without truncating so concurrent lock holders on Windows do not hit a
+    # sharing violation.
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+    stream = os.fdopen(fd, "r+b")
+    try:
+        if fcntl is not None:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        elif msvcrt is not None:
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            elif msvcrt is not None:
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+    finally:
+        stream.close()
+
+
+def prefetch(workspace: Path, pin: Pin, fetch=fetch_bytes) -> Path:
+    root = cache_root(workspace)
+    destination = entry_path(root, pin)
+    if entry_matches(destination, pin.sha256):
         return destination
 
-    try:
-        data = fetch(pin.url)
-    except (OSError, ValueError) as error:
-        raise ValueError(f"url={pin.url} sha256={pin.sha256}: {error}") from error
-    if len(data) > MAX_BYTES:
-        raise ValueError(
-            f"url={pin.url} sha256={pin.sha256}: exceeds {MAX_BYTES}-byte limit"
-        )
-    actual = hashlib.sha256(data).hexdigest()
-    if actual != pin.sha256:
-        raise ValueError(f"url={pin.url} SHA-256 {actual}, expected {pin.sha256}")
+    with pin_lock(root, pin.sha256):
+        if entry_matches(destination, pin.sha256):
+            return destination
 
-    root.mkdir(parents=True, exist_ok=True)
-    stage_dir = None
-    try:
-        stage_dir = Path(
-            tempfile.mkdtemp(prefix=f".stage-{pin.sha256[:12]}-", dir=root)
-        )
-        staged_file = stage_dir / pin.name
-        staged_file.write_bytes(data)
-        target_dir = destination.parent
-        if not target_dir.exists():
-            try:
-                os.rename(stage_dir, target_dir)
-                stage_dir = None
-            except OSError as error:
-                if error.errno in (errno.EEXIST, errno.ENOTEMPTY) and target_dir.is_dir():
-                    os.replace(staged_file, destination)
-                else:
-                    raise
-        else:
-            os.replace(staged_file, destination)
-    finally:
-        if stage_dir is not None:
-            shutil.rmtree(stage_dir, ignore_errors=True)
+        try:
+            data = fetch(pin.url)
+        except (OSError, ValueError) as error:
+            raise ValueError(f"url={pin.url} sha256={pin.sha256}: {error}") from error
+        if len(data) > MAX_BYTES:
+            raise ValueError(
+                f"url={pin.url} sha256={pin.sha256}: exceeds {MAX_BYTES}-byte limit"
+            )
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != pin.sha256:
+            raise ValueError(f"url={pin.url} SHA-256 {actual}, expected {pin.sha256}")
+
+        stage_dir = None
+        try:
+            stage_dir = Path(
+                tempfile.mkdtemp(prefix=f".stage-{pin.sha256[:12]}-", dir=root)
+            )
+            staged_file = stage_dir / pin.name
+            staged_file.write_bytes(data)
+            target_dir = destination.parent
+            if not target_dir.exists():
+                try:
+                    os.rename(stage_dir, target_dir)
+                    stage_dir = None
+                except OSError:
+                    if target_dir.is_dir():
+                        os.replace(staged_file, destination)
+                    else:
+                        raise
+            else:
+                os.replace(staged_file, destination)
+        finally:
+            if stage_dir is not None:
+                shutil.rmtree(stage_dir, ignore_errors=True)
     return destination
 
 

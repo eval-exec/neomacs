@@ -69,6 +69,13 @@ class ImageFixtureTests(unittest.TestCase):
         self.destination.parent.mkdir(parents=True, exist_ok=True)
         self.destination.write_bytes(data)
 
+    def cache_entries(self):
+        if not self.cache.exists():
+            return []
+        return [
+            entry for entry in self.cache.iterdir() if not entry.name.endswith(".lock")
+        ]
+
     def test_parser_reads_actual_shared_rust_pin_without_python_or_yaml_copy(self):
         pin = provisioner.read_pin(WORKSPACE)
         self.assertEqual(len(pin.sha256), 64)
@@ -109,7 +116,7 @@ class ImageFixtureTests(unittest.TestCase):
             )
         fetch.assert_not_called()
         replace.assert_not_called()
-        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
         self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_missing_entry_is_fetched_verified_and_published_in_live_workspace(self):
@@ -119,7 +126,7 @@ class ImageFixtureTests(unittest.TestCase):
         )
         fetch.assert_called_once_with(self.pin.url)
         self.assertEqual(self.destination.read_bytes(), self.data)
-        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
         self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_corrupt_entry_is_replaced_only_after_verified_temporary_write(self):
@@ -141,7 +148,7 @@ class ImageFixtureTests(unittest.TestCase):
             )
         replace.assert_called_once()
         self.assertEqual(self.destination.read_bytes(), self.data)
-        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
         self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_hash_failure_never_publishes_or_damages_existing_cache(self):
@@ -149,14 +156,15 @@ class ImageFixtureTests(unittest.TestCase):
             provisioner.prefetch(
                 self.workspace, self.pin, mock.Mock(return_value=b"wrong response")
             )
-        self.assertFalse(self.cache.exists())
+        self.assertEqual(self.cache_entries(), [])
+        self.assertFalse(self.destination.parent.exists())
         self.seed(b"existing corrupt cache")
         with self.assertRaisesRegex(ValueError, "SHA-256"):
             provisioner.prefetch(
                 self.workspace, self.pin, mock.Mock(return_value=b"wrong response")
             )
         self.assertEqual(self.destination.read_bytes(), b"existing corrupt cache")
-        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
         self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_replace_failure_keeps_destination_and_cleans_temporary_file(self):
@@ -169,7 +177,7 @@ class ImageFixtureTests(unittest.TestCase):
                     self.workspace, self.pin, mock.Mock(return_value=self.data)
                 )
         self.assertEqual(self.destination.read_bytes(), b"existing corrupt cache")
-        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
         self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_fetch_failure_keeps_full_diagnostic_and_existing_bytes(self):
@@ -198,7 +206,8 @@ class ImageFixtureTests(unittest.TestCase):
                 provisioner.prefetch(
                     self.workspace, self.pin, mock.Mock(return_value=b"12345")
                 )
-        self.assertFalse(self.cache.exists())
+        self.assertEqual(self.cache_entries(), [])
+        self.assertFalse(self.destination.parent.exists())
 
     def test_download_reads_complete_verified_candidate_bytes(self):
         with mock.patch.object(
@@ -302,7 +311,7 @@ class ImageFixtureTests(unittest.TestCase):
             sleep.call_args_list, [mock.call(2), mock.call(5), mock.call(15)]
         )
         self.assertEqual(self.destination.read_bytes(), b"existing corrupt cache")
-        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
         self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_permanent_failure_after_transient_does_not_spend_remaining_attempts(self):
@@ -383,7 +392,8 @@ class ImageFixtureTests(unittest.TestCase):
                 provisioner.prefetch(self.workspace, self.pin)
             opened.assert_called_once()
             sleep.assert_not_called()
-            self.assertFalse(self.cache.exists())
+            self.assertEqual(self.cache_entries(), [])
+            self.assertFalse(self.destination.parent.exists())
         self.seed(self.data)
         with (
             mock.patch.object(provisioner, "urlopen") as opened,
@@ -514,7 +524,7 @@ class ImageFixtureTests(unittest.TestCase):
                 self.destination,
             )
         rename.assert_called_once()
-        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
 
         # A rename failure on a fresh entry cleans up the staging directory.
         second_data = b"second pinned image"
@@ -531,7 +541,53 @@ class ImageFixtureTests(unittest.TestCase):
                 provisioner.prefetch(
                     self.workspace, second_pin, mock.Mock(return_value=second_data)
                 )
-        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+
+    def test_rename_collision_falls_back_to_atomic_file_replace(self):
+        real_replace = provisioner.os.replace
+
+        def simulate_concurrent_dir_creation(source, target):
+            Path(target).mkdir(parents=True, exist_ok=True)
+            raise PermissionError(errno.EACCES, "directory already created")
+
+        with (
+            mock.patch.object(
+                provisioner.os, "rename", side_effect=simulate_concurrent_dir_creation
+            ) as rename,
+            mock.patch.object(
+                provisioner.os, "replace", side_effect=real_replace
+            ) as replace,
+        ):
+            result = provisioner.prefetch(
+                self.workspace, self.pin, mock.Mock(return_value=self.data)
+            )
+        self.assertEqual(result, self.destination)
+        self.assertEqual(self.destination.read_bytes(), self.data)
+        rename.assert_called_once()
+        replace.assert_called_once()
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
+
+    def test_lock_rechecks_entry_populated_while_waiting(self):
+        real_pin_lock = provisioner.pin_lock
+
+        @contextlib.contextmanager
+        def populate_while_waiting(root, sha256):
+            with real_pin_lock(root, sha256):
+                self.seed(self.data)
+                yield
+
+        fetch = mock.Mock(
+            side_effect=AssertionError("re-check under lock must skip fetch")
+        )
+        with mock.patch.object(
+            provisioner, "pin_lock", side_effect=populate_while_waiting
+        ):
+            self.assertEqual(
+                provisioner.prefetch(self.workspace, self.pin, fetch), self.destination
+            )
+        fetch.assert_not_called()
+        self.assertTrue((self.cache / f".{self.pin.sha256}.lock").is_file())
 
     def test_distinct_revisions_for_same_filename_coexist_in_shared_cache(self):
         rev_b_data = b"revision b image bytes"
