@@ -9,6 +9,7 @@ from http.client import IncompleteRead, RemoteDisconnected
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import ssl
 import sys
@@ -216,8 +217,27 @@ def fetch_bytes(url: str) -> bytes:
             time.sleep(delay)
 
 
+def cache_root(workspace: Path) -> Path:
+    """Same order as pinned_fixture_cache_root: env, XDG, HOME, workspace tmp."""
+    explicit = os.environ.get("NEOMACS_PINNED_FIXTURE_CACHE", "")
+    if explicit:
+        return Path(explicit)
+    xdg = os.environ.get("XDG_CACHE_HOME", "")
+    if xdg:
+        return Path(xdg) / "neomacs" / "pinned-fixtures"
+    home = os.environ.get("HOME", "")
+    if home:
+        return Path(home) / ".cache" / "neomacs" / "pinned-fixtures"
+    return workspace / "tmp" / "pinned-fixtures"
+
+
+def entry_path(root: Path, pin: Pin) -> Path:
+    return root / pin.sha256 / pin.name
+
+
 def prefetch(workspace: Path, pin: Pin, fetch=fetch_bytes) -> Path:
-    destination = workspace / "tmp/pinned-fixtures" / pin.name
+    root = cache_root(workspace)
+    destination = entry_path(root, pin)
     try:
         cached = destination.read_bytes()
     except FileNotFoundError:
@@ -237,21 +257,29 @@ def prefetch(workspace: Path, pin: Pin, fetch=fetch_bytes) -> Path:
     if actual != pin.sha256:
         raise ValueError(f"url={pin.url} SHA-256 {actual}, expected {pin.sha256}")
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
+    root.mkdir(parents=True, exist_ok=True)
+    stage_dir = None
     try:
-        with tempfile.NamedTemporaryFile(
-            dir=destination.parent,
-            prefix=f".{pin.name}.",
-            suffix=".partial",
-            delete=False,
-        ) as stream:
-            temporary = Path(stream.name)
-            stream.write(data)
-        os.replace(temporary, destination)
+        stage_dir = Path(
+            tempfile.mkdtemp(prefix=f".stage-{pin.sha256[:12]}-", dir=root)
+        )
+        staged_file = stage_dir / pin.name
+        staged_file.write_bytes(data)
+        target_dir = destination.parent
+        if not target_dir.exists():
+            try:
+                os.rename(stage_dir, target_dir)
+                stage_dir = None
+            except OSError as error:
+                if error.errno in (errno.EEXIST, errno.ENOTEMPTY) and target_dir.is_dir():
+                    os.replace(staged_file, destination)
+                else:
+                    raise
+        else:
+            os.replace(staged_file, destination)
     finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+        if stage_dir is not None:
+            shutil.rmtree(stage_dir, ignore_errors=True)
     return destination
 
 

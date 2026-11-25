@@ -6,6 +6,7 @@ import hashlib
 from http.client import HTTPResponse, IncompleteRead, RemoteDisconnected
 import importlib.util
 import io
+import os
 from pathlib import Path
 import socket
 import ssl
@@ -43,7 +44,12 @@ class ImageFixtureTests(unittest.TestCase):
             f'pub const NYAN_MODE_SHA256: &str =\n    "{self.pin.sha256}";\n'
         )
         self.cache = self.workspace / "tmp/pinned-fixtures"
-        self.destination = self.cache / self.pin.name
+        self.destination = self.cache / self.pin.sha256 / self.pin.name
+        env_guard = mock.patch.dict(os.environ, {}, clear=False)
+        env_guard.start()
+        for key in ("NEOMACS_PINNED_FIXTURE_CACHE", "XDG_CACHE_HOME", "HOME"):
+            os.environ.pop(key, None)
+        self.addCleanup(env_guard.stop)
         guard = mock.patch.object(
             provisioner,
             "urlopen",
@@ -60,7 +66,7 @@ class ImageFixtureTests(unittest.TestCase):
         self.addCleanup(sleep_guard.stop)
 
     def seed(self, data):
-        self.cache.mkdir(parents=True)
+        self.destination.parent.mkdir(parents=True, exist_ok=True)
         self.destination.write_bytes(data)
 
     def test_parser_reads_actual_shared_rust_pin_without_python_or_yaml_copy(self):
@@ -103,7 +109,8 @@ class ImageFixtureTests(unittest.TestCase):
             )
         fetch.assert_not_called()
         replace.assert_not_called()
-        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_missing_entry_is_fetched_verified_and_published_in_live_workspace(self):
         fetch = mock.Mock(return_value=self.data)
@@ -112,7 +119,8 @@ class ImageFixtureTests(unittest.TestCase):
         )
         fetch.assert_called_once_with(self.pin.url)
         self.assertEqual(self.destination.read_bytes(), self.data)
-        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_corrupt_entry_is_replaced_only_after_verified_temporary_write(self):
         self.seed(b"corrupt")
@@ -120,7 +128,8 @@ class ImageFixtureTests(unittest.TestCase):
 
         def observe(source, destination):
             self.assertEqual(self.destination.read_bytes(), b"corrupt")
-            self.assertEqual(Path(source).parent, self.cache)
+            self.assertEqual(Path(source).parent.parent, self.cache)
+            self.assertEqual(Path(source).name, self.pin.name)
             self.assertEqual(Path(source).read_bytes(), self.data)
             real_replace(source, destination)
 
@@ -132,7 +141,8 @@ class ImageFixtureTests(unittest.TestCase):
             )
         replace.assert_called_once()
         self.assertEqual(self.destination.read_bytes(), self.data)
-        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_hash_failure_never_publishes_or_damages_existing_cache(self):
         with self.assertRaisesRegex(ValueError, "SHA-256"):
@@ -146,7 +156,8 @@ class ImageFixtureTests(unittest.TestCase):
                 self.workspace, self.pin, mock.Mock(return_value=b"wrong response")
             )
         self.assertEqual(self.destination.read_bytes(), b"existing corrupt cache")
-        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_replace_failure_keeps_destination_and_cleans_temporary_file(self):
         self.seed(b"existing corrupt cache")
@@ -158,7 +169,8 @@ class ImageFixtureTests(unittest.TestCase):
                     self.workspace, self.pin, mock.Mock(return_value=self.data)
                 )
         self.assertEqual(self.destination.read_bytes(), b"existing corrupt cache")
-        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_fetch_failure_keeps_full_diagnostic_and_existing_bytes(self):
         self.seed(b"existing corrupt cache")
@@ -290,7 +302,8 @@ class ImageFixtureTests(unittest.TestCase):
             sleep.call_args_list, [mock.call(2), mock.call(5), mock.call(15)]
         )
         self.assertEqual(self.destination.read_bytes(), b"existing corrupt cache")
-        self.assertEqual(list(self.cache.iterdir()), [self.destination])
+        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+        self.assertEqual(list(self.destination.parent.iterdir()), [self.destination])
 
     def test_permanent_failure_after_transient_does_not_spend_remaining_attempts(self):
         permanent = HTTPError(self.pin.url, 404, "not found", None, None)
@@ -433,6 +446,142 @@ class ImageFixtureTests(unittest.TestCase):
             self.assertEqual(provisioner.main(["--workspace", str(self.workspace)]), 0)
         self.assertIn(str(self.destination), output.getvalue())
         self.assertIn(self.pin.sha256, output.getvalue())
+
+    def test_cache_root_prefers_explicit_then_xdg_then_home_then_workspace(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NEOMACS_PINNED_FIXTURE_CACHE": "/shared/pinned",
+                "XDG_CACHE_HOME": "/xdg",
+                "HOME": "/home/tester",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                provisioner.cache_root(self.workspace), Path("/shared/pinned")
+            )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NEOMACS_PINNED_FIXTURE_CACHE": "",
+                "XDG_CACHE_HOME": "/xdg",
+                "HOME": "/home/tester",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                provisioner.cache_root(self.workspace),
+                Path("/xdg/neomacs/pinned-fixtures"),
+            )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NEOMACS_PINNED_FIXTURE_CACHE": "",
+                "XDG_CACHE_HOME": "",
+                "HOME": "/home/tester",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                provisioner.cache_root(self.workspace),
+                Path("/home/tester/.cache/neomacs/pinned-fixtures"),
+            )
+        self.assertEqual(
+            provisioner.cache_root(self.workspace),
+            self.workspace / "tmp/pinned-fixtures",
+        )
+
+    def test_fresh_publish_renames_staging_directory_atomically_and_cleans_up_on_error(
+        self,
+    ):
+        real_rename = provisioner.os.rename
+
+        def observe(source, target):
+            self.assertEqual(Path(source).parent, self.cache)
+            self.assertTrue(Path(source).name.startswith(".stage-"))
+            self.assertEqual(Path(target), self.destination.parent)
+            self.assertFalse(Path(target).exists())
+            self.assertEqual((Path(source) / self.pin.name).read_bytes(), self.data)
+            real_rename(source, target)
+
+        with mock.patch.object(
+            provisioner.os, "rename", side_effect=observe
+        ) as rename:
+            self.assertEqual(
+                provisioner.prefetch(
+                    self.workspace, self.pin, mock.Mock(return_value=self.data)
+                ),
+                self.destination,
+            )
+        rename.assert_called_once()
+        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+
+        # A rename failure on a fresh entry cleans up the staging directory.
+        second_data = b"second pinned image"
+        second_pin = provisioner.Pin(
+            self.pin.name,
+            "2" * 40,
+            "https://fixtures.invalid/" + "2" * 40 + "/image.xpm",
+            hashlib.sha256(second_data).hexdigest(),
+        )
+        with mock.patch.object(
+            provisioner.os, "rename", side_effect=OSError("rename refused")
+        ):
+            with self.assertRaisesRegex(OSError, "rename refused"):
+                provisioner.prefetch(
+                    self.workspace, second_pin, mock.Mock(return_value=second_data)
+                )
+        self.assertEqual(list(self.cache.iterdir()), [self.destination.parent])
+
+    def test_distinct_revisions_for_same_filename_coexist_in_shared_cache(self):
+        rev_b_data = b"revision b image bytes"
+        pin_b = provisioner.Pin(
+            self.pin.name,
+            "2" * 40,
+            "https://fixtures.invalid/" + "2" * 40 + "/image.xpm",
+            hashlib.sha256(rev_b_data).hexdigest(),
+        )
+        dest_a = provisioner.prefetch(
+            self.workspace, self.pin, mock.Mock(return_value=self.data)
+        )
+        dest_b = provisioner.prefetch(
+            self.workspace, pin_b, mock.Mock(return_value=rev_b_data)
+        )
+        self.assertNotEqual(dest_a, dest_b)
+        self.assertEqual(dest_a.read_bytes(), self.data)
+        self.assertEqual(dest_b.read_bytes(), rev_b_data)
+
+    def test_two_worktrees_share_hash_keyed_entry_without_refetch(self):
+        wt_a = self.workspace / "wt-a"
+        wt_b = self.workspace / "wt-b"
+        shared_xdg = self.workspace / "shared-xdg"
+        for wt in (wt_a, wt_b):
+            pin_file = wt / provisioner.PIN_SOURCE
+            pin_file.parent.mkdir(parents=True)
+            pin_file.write_text(self.source)
+
+        expected_shared = (
+            shared_xdg / "neomacs/pinned-fixtures" / self.pin.sha256 / self.pin.name
+        )
+        with mock.patch.dict(
+            os.environ, {"XDG_CACHE_HOME": str(shared_xdg)}, clear=False
+        ):
+            with (
+                mock.patch.object(
+                    provisioner, "urlopen", return_value=io.BytesIO(self.data)
+                ) as opened,
+                contextlib.redirect_stdout(io.StringIO()) as out_a,
+            ):
+                self.assertEqual(provisioner.main(["--workspace", str(wt_a)]), 0)
+            opened.assert_called_once()
+            self.assertIn(str(expected_shared), out_a.getvalue())
+
+            # Second worktree hits the exact same entry with urlopen forbidden.
+            with contextlib.redirect_stdout(io.StringIO()) as out_b:
+                self.assertEqual(provisioner.main(["--workspace", str(wt_b)]), 0)
+            self.assertIn(str(expected_shared), out_b.getvalue())
+            self.assertFalse((wt_a / "tmp").exists())
+            self.assertFalse((wt_b / "tmp").exists())
 
     def test_display_archive_prepares_live_remap_before_nextest(self):
         workflow = (WORKSPACE / ".github/workflows/test-suite.yml").read_text()
