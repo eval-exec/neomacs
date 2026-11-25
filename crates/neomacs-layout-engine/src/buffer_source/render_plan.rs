@@ -1734,11 +1734,11 @@ impl BufferSourceOutputSetup {
                     walk_setup.byte_idx,
                 )
             });
-            if below_reused {
-                // The bounded walk's `byte_idx` stops at the edited line, so the
-                // from_output_rows window_end_byte points there, not at the last
-                // reused-below row. Re-derive it from the (correct) window_end
-                // char so the published byte companion matches a full rebuild.
+            // Re-derive window_end_byte from the published window_end char so
+            // the byte companion matches char_pos even when the bounded walk
+            // stops at an edited line (`below_reused`) or skips an invisible
+            // span at the bottom row edge.
+            {
                 let end_char0 = redisplay_positions
                     .window_end_lisp()
                     .to_one_based_usize()
@@ -2119,12 +2119,29 @@ impl BufferSourceOutputSetup {
             ),
         );
         let mut output_emitter = output_emitter;
-        let redisplay_positions = walk_setup.install_body(
+        let mut redisplay_positions = walk_setup.install_body(
             output.reborrow(),
             &mut output_emitter,
             render_services.reborrow(),
             &tail_context,
         );
+        // Keep the published byte companion anchored to `window_end_char` even
+        // when the walk's `byte_idx` skipped past an invisible span at the
+        // bottom visible row edge (matching cursor-only and scroll replay).
+        {
+            let end_char0 = redisplay_positions
+                .window_end_lisp()
+                .to_one_based_usize()
+                .saturating_sub(1) as i64;
+            redisplay_positions.replace_window_end_anchor(
+                neovm_core::buffer::TextPositionAnchor::new(
+                    neovm_core::buffer::CharPos0::new(end_char0 as usize),
+                    neovm_core::buffer::EmacsBytePos::new(
+                        buf_access.charpos_to_bytepos(end_char0) as usize
+                    ),
+                ),
+            );
+        }
         // Live window publication belongs to this evaluator-side orchestrator,
         // after body installation and before chrome reads window-end (%p, etc.).
         publish_request.publish_window_end(evaluator, redisplay_positions);

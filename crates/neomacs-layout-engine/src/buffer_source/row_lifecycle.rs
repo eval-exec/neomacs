@@ -1538,6 +1538,10 @@ fn place_invisible_ellipsis<FS: crate::neovm_bridge::FaceServices>(
     let checkpoint = source_render.capture_glyph_checkpoint();
     let had_other_glyphs = checkpoint.text_glyph_count() > 0;
     let position_before = row_progress.row_position();
+    let display_points_before = source_render.output_emitter_ref().display_point_len();
+    let (row_first_before, row_last_before) = source_render
+        .output_emitter_ref()
+        .current_row_display_positions();
     let rendered = render_context.render_request_to_text_row(source_render, row_geometry, request);
     if let Some(progress) = &rendered {
         row_progress.apply_position(progress.end());
@@ -1553,6 +1557,10 @@ fn place_invisible_ellipsis<FS: crate::neovm_bridge::FaceServices>(
     }
     if break_at_ellipsis_start && had_other_glyphs {
         source_render.restore_glyph_checkpoint(checkpoint);
+        let output_emitter = source_render.output_emitter();
+        output_emitter.truncate_display_points(display_points_before);
+        output_emitter.restore_current_row_display_positions(row_first_before, row_last_before);
+        output_emitter.restore_current_row_pen(position_before);
         row_progress.apply_position(position_before);
         if let Some(source_end) = skip_end {
             source_render.advance_current_row_source_end(source_end);

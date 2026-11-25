@@ -451,7 +451,7 @@ fn first_visit_with_setup(
     point_row: usize,
     setup: Option<&str>,
 ) {
-    first_visit_with_setup_and_gc(face, line, change, shift, point_row, setup, false);
+    let _ = first_visit_with_setup_and_gc(face, line, change, shift, point_row, setup, false);
 }
 
 fn first_visit_with_setup_and_gc(
@@ -462,7 +462,7 @@ fn first_visit_with_setup_and_gc(
     point_row: usize,
     setup: Option<&str>,
     collect: bool,
-) {
+) -> BackendLayoutTrace {
     let (mut eval, frame, buffer, window) = incr_editing_frame(&line.repeat(300), 800, 600);
     eval.frame_manager_mut()
         .get_mut(frame)
@@ -591,6 +591,7 @@ fn first_visit_with_setup_and_gc(
     let mut fresh = engine_with_pinned_catalog(&fonts);
     fresh.layout_frame_rust(&mut eval, frame);
     assert_eq!(actual, selected_window_layout_trace(&eval, &fresh, frame));
+    actual
 }
 
 #[test]
@@ -2866,23 +2867,85 @@ fn worker_invisible_spans_preserve_wrapping_faces_and_boundary_strings() {
 
 #[test]
 fn worker_word_wrapped_clipped_invisible_ellipsis_matches_fresh_layout() {
-    // Place the hidden span right near the wrap edge on an 800px GUI window
-    // (after a space + word, and also immediately after a space) so the
-    // worker's `RowProgram` exercises both word-wrap ellipsis rewind paths
-    // and matches fresh layout identically.
-    for (prefix, hidden, tail) in [
+    // Probe the 800px GUI window under the pinned catalog directly (works for
+    // both monospace macOS and proportional Linux NotoSans fonts) to find exact
+    // prefix lengths where `prefix` fits on row 0 and `prefix + "..."` clips.
+    let probe_fonts = pinned_unicode_catalog();
+    let fits_one_row = |sample: &str| -> bool {
+        let (mut eval, frame, _, _) = incr_editing_frame(sample, 800, 600);
+        eval.frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .window_system = Some(Value::symbol("neomacs"));
+        eval.eval_str("(setq truncate-lines nil word-wrap nil)")
+            .unwrap();
+        let mut engine = engine_with_pinned_catalog(&probe_fonts);
+        engine.layout_frame_rust(&mut eval, frame);
+        let trace = selected_window_layout_trace(&eval, &engine, frame);
+        let text_rows: Vec<_> = trace
+            .matrix_rows
+            .iter()
+            .filter(|row| {
+                row.enabled
+                    && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+            })
+            .collect();
+        text_rows.len() == 1 && !text_rows[0].continued
+    };
+    let find_clipping_lead = |suffix: &str| -> String {
+        let mut lo = 1usize;
+        let mut hi = 200usize;
+        while lo < hi {
+            let mid = lo + (hi - lo).div_ceil(2);
+            if fits_one_row(&format!("{}{suffix}", "a".repeat(mid))) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        let lead = "a".repeat(lo);
+        assert!(
+            fits_one_row(&format!("{lead}{suffix}")),
+            "prefix must fit on row 0 before ellipsis"
+        );
+        assert!(
+            !fits_one_row(&format!("{lead}{suffix}...")),
+            "prefix + ellipsis must clip row 0 (suffix={suffix:?}, lead_len={lo})"
+        );
+        lead
+    };
+
+    // Case 1: word before hidden span (`lead_word + " " + word` fits on row 0,
+    // `...` clips). Row 0 must break at the space with 0 dots and move
+    // `bbbbbbbb...TAIL` whole onto row 1.
+    // Case 2: space immediately before hidden span (`lead_space + " "` fits on
+    // row 0, `...` clips). Row 0 must have 0 dots, advance end_charpos past the
+    // hidden span, and start row 1 with `...TAIL`.
+    let word = "b".repeat(8);
+    let lead_word = find_clipping_lead(&format!(" {word}"));
+    let lead_space = find_clipping_lead(" ");
+    let hidden = "hidden";
+    let tail = "TAIL";
+    for (prefix, expected_row0, expected_row1, expected_end_offset) in [
         (
-            format!("{} {}", "a".repeat(80), "b".repeat(14)),
-            "hidden",
-            "TAIL",
+            format!("{lead_word} {word}"),
+            lead_word.clone(),
+            format!("{word}...{tail}"),
+            lead_word.len() + 1,
         ),
-        (format!("{} ", "a".repeat(94)), "hidden", "TAIL"),
+        (
+            format!("{lead_space} "),
+            lead_space.clone(),
+            format!("...{tail}"),
+            lead_space.len() + 1 + hidden.len(),
+        ),
     ] {
         let line = format!("{prefix}{hidden}{tail}\n");
-        let start = 120 * line.len() + 1;
+        let start_0 = 120 * line.len();
+        let start = start_0 + 1;
         let hs = prefix.len();
         let he = hs + hidden.len();
-        first_visit_with_setup(
+        let trace = first_visit_with_setup_and_gc(
             None,
             &line,
             None,
@@ -2896,7 +2959,41 @@ fn worker_word_wrapped_clipped_invisible_ellipsis_matches_fresh_layout() {
                 start + 40 * line.len(),
                 line.len(),
             )),
+            false,
         );
+        let rows = row_texts(&trace);
+        assert!(
+            rows.len() >= 2,
+            "expected wrapped rows on prepared GUI page, rows={rows:?}"
+        );
+        assert_eq!(
+            rows[0].trim_end(),
+            expected_row0,
+            "GUI worker/fresh row 0 must break at the word boundary with zero ellipsis dots, rows={rows:?}"
+        );
+        assert_eq!(
+            rows[1].trim_end(),
+            expected_row1,
+            "GUI worker/fresh row 1 must receive the whole moved word/ellipsis + tail, rows={rows:?}"
+        );
+        let text_rows: Vec<_> = trace
+            .matrix_rows
+            .iter()
+            .filter(|row| {
+                row.enabled
+                    && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+            })
+            .collect();
+        assert!(
+            text_rows[0].continued,
+            "GUI worker/fresh row 0 must be marked continued"
+        );
+        assert_eq!(
+            text_rows[0].end_charpos,
+            start_0 + expected_end_offset,
+            "GUI worker/fresh row 0 end_charpos must land at the GNU word-wrap boundary"
+        );
+        assert_eq!(text_rows[1].start_charpos, text_rows[0].end_charpos);
     }
 }
 
