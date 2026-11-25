@@ -56,41 +56,57 @@ impl Drop for TestEnv {
     }
 }
 
-/// `ModuleContextGuard` must restore the PREVIOUS context on drop —
+/// `with_module_context` must restore the PREVIOUS context on return —
 /// nested module→elisp→module calls depend on the outer pointer coming
-/// back — and must do the same when its scope unwinds.
+/// back rather than being cleared to null — and must do the same when its
+/// scope unwinds.
 #[test]
 fn module_context_guard_restores_previous_on_drop_and_panic() {
-    // Fake, never-dereferenced pointers: the guard only moves them in
-    // and out of the MODULE_CTX cell.
-    let outer = 0x1000 as *mut Context;
-    let inner = 0x2000 as *mut Context;
+    let mut ctx = crate::test_utils::new_context();
+    let ctx_ptr: *mut Context = std::ptr::from_mut(&mut ctx);
     let current = || MODULE_CTX.with(|c| c.get());
 
     assert!(current().is_null());
-    {
-        let _outer_guard = unsafe { ModuleContextGuard::install(outer) };
-        assert_eq!(current(), outer);
-        {
-            let _inner_guard = unsafe { ModuleContextGuard::install(inner) };
-            assert_eq!(current(), inner);
-        }
+    with_module_context(&mut ctx, || {
+        assert_eq!(current(), ctx_ptr);
+        // Simulate a nested module->elisp->module re-entry on the active
+        // Context: returning must restore `ctx_ptr`, not null.
+        // SAFETY: `ctx_ptr` is the live active `Context` installed by the outer
+        // `with_module_context`; no other reference to it is active here.
+        let inner_ctx = unsafe { &mut *current() };
+        with_module_context(inner_ctx, || {
+            assert_eq!(current(), ctx_ptr);
+        });
         assert_eq!(
             current(),
-            outer,
-            "inner drop must restore the outer context"
+            ctx_ptr,
+            "inner return must restore the outer context rather than null"
         );
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = unsafe { ModuleContextGuard::install(inner) };
-            panic!("boom under module context");
+            // SAFETY: same active `Context` re-entry as above; unwind restores `ctx_ptr`.
+            let inner_ctx = unsafe { &mut *current() };
+            with_module_context(inner_ctx, || {
+                assert_eq!(current(), ctx_ptr);
+                panic!("boom under module context");
+            });
         }));
         assert!(panicked.is_err());
         assert_eq!(
             current(),
-            outer,
+            ctx_ptr,
             "unwinding must restore the previous context"
         );
-    }
+    });
+    assert!(current().is_null());
+
+    // Top-level unwind must also restore null.
+    let outer_panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_module_context(&mut ctx, || {
+            assert_eq!(current(), ctx_ptr);
+            panic!("outer boom under module context");
+        });
+    }));
+    assert!(outer_panicked.is_err());
     assert!(current().is_null());
 }
 

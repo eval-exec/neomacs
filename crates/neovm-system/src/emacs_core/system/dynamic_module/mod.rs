@@ -2391,31 +2391,43 @@ thread_local! {
         const { std::cell::Cell::new(std::ptr::null_mut()) };
 }
 
-/// RAII installer for `MODULE_CTX`: saves the previous pointer on
-/// construction and restores it on `Drop` (precedent: [`ActiveModuleEnv`]).
+/// Private lifetime-branded RAII installer for `MODULE_CTX`: borrows
+/// `&'a mut Context` exclusively, saves the previous pointer on construction,
+/// and restores it on `Drop` (precedent: [`ActiveModuleEnv`]).
+///
 /// Restoring — rather than clearing to NULL — is what makes nested
 /// module→elisp→module calls work: when the inner `apply_module_function`
 /// returns, the outer call's context must come back, or the outer module
 /// function's next `env->funcall` finds no evaluator context. `Drop` also
 /// keeps the teardown coherent once panics become catchable.
+///
+/// Kept private behind [`with_module_context`] so callers can neither forge a
+/// raw `*mut Context`, alias `&mut Context` during the scope, nor leak the
+/// guard via `std::mem::forget` to leave a dangling `MODULE_CTX`.
 #[must_use = "the thread-local extent ends when this guard drops"]
 #[derive(Debug)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-struct ModuleContextGuard {
+struct ModuleContextGuard<'a> {
     _scope: neovm_value::tls_scope::TlsScope<*mut Context, std::cell::Cell<*mut Context>>,
+    _ctx: std::marker::PhantomData<&'a mut Context>,
 }
-static_assertions::assert_not_impl_any!(ModuleContextGuard: Send, Sync);
+static_assertions::assert_not_impl_any!(ModuleContextGuard<'_>: Send, Sync);
 
-impl ModuleContextGuard {
-    /// # Safety
-    /// `ctx` must remain valid for the lifetime of the returned guard whenever
-    /// module callbacks dereference `MODULE_CTX`.
-    #[doc(hidden)]
-    pub unsafe fn install(ctx: *mut Context) -> Self {
+impl<'a> ModuleContextGuard<'a> {
+    fn install(ctx: &'a mut Context) -> Self {
+        let ptr: *mut Context = std::ptr::from_mut(ctx);
         Self {
-            _scope: neovm_value::tls_scope::TlsScope::new(&MODULE_CTX, ctx),
+            _scope: neovm_value::tls_scope::TlsScope::new(&MODULE_CTX, ptr),
+            _ctx: std::marker::PhantomData,
         }
     }
+}
+
+/// Run `body` with `ctx` installed in `MODULE_CTX` for the dynamic extent of
+/// the closure, restoring the previous pointer on normal return or unwind.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+fn with_module_context<R>(ctx: &mut Context, body: impl FnOnce() -> R) -> R {
+    let _guard = ModuleContextGuard::install(ctx);
+    body()
 }
 
 // ============================================================================
@@ -2541,14 +2553,13 @@ pub fn load_module(ctx: &mut Context, path: std::path::PathBuf) -> EvalResult {
         get_environment: Some(module_get_environment),
     });
 
-    // SAFETY: `ctx` is the exclusive `&mut Context` for this call and `module_ctx` drops before return.
-    let module_ctx = unsafe { ModuleContextGuard::install(ctx as *mut Context) };
     // SAFETY: the private env box outlives `active_env`, which drops before `env_priv` is finalized.
     let active_env = unsafe { ActiveModuleEnv::push(env_priv_ptr) };
-    // SAFETY: the export has the Emacs initialization ABI, its library is
-    // retained, and rt plus its environment remain owned across the call.
-    let init_code = unsafe { init_fn_ptr(&mut *rt as *mut emacs_runtime) };
-    drop(module_ctx);
+    let init_code = with_module_context(ctx, || {
+        // SAFETY: the export has the Emacs initialization ABI, its library is
+        // retained, and rt plus its environment remain owned across the call.
+        unsafe { init_fn_ptr(&mut *rt as *mut emacs_runtime) }
+    });
 
     ctx.maybe_quit()?;
     if init_code != 0 {
@@ -2680,15 +2691,14 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
     ) -> emacs_value = unsafe { std::mem::transmute(subr_fn) };
 
     let snap = ctx.module_boundary_snapshot();
-    // SAFETY: `ctx` is the exclusive `&mut Context` for this call and `module_ctx` drops before return.
-    let module_ctx = unsafe { ModuleContextGuard::install(ctx as *mut Context) };
     // SAFETY: the private env box outlives `active_env`, which drops before `env_priv` is finalized.
     let active_env = unsafe { ActiveModuleEnv::push(priv_ptr) };
     let args_ptr = emacs_args.as_mut_ptr();
-    let call = catch_unwind(AssertUnwindSafe(|| unsafe {
-        subr_fn_unwind(env_ptr, nargs, args_ptr, data)
-    }));
-    drop(module_ctx);
+    let call = with_module_context(ctx, || {
+        catch_unwind(AssertUnwindSafe(|| unsafe {
+            subr_fn_unwind(env_ptr, nargs, args_ptr, data)
+        }))
+    });
 
     let (result, panic_flow) = match call {
         Ok(result) => (result, None),
