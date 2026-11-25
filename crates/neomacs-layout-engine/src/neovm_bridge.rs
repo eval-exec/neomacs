@@ -3739,6 +3739,19 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
         if charpos >= end {
             return false;
         }
+        // A window-bounded overlay snapshot excludes overlays past
+        // `layout_overlay_view_end_char()`. Never certify `SourceLineEstimate`
+        // across a range extending past that ceiling: an `invisible` or
+        // replacing-`display` overlay beyond the snapshot end would be absent
+        // from this subset view and could cause `scroll_down_from_available_rows`
+        // to over-scroll.
+        if self
+            .buffer
+            .layout_overlay_view_end_char()
+            .is_some_and(|view_end| end > view_end.get() as i64)
+        {
+            return true;
+        }
         let end_byte = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, end);
         let invisible = Value::symbol(&INVISIBLE_TEXT_PROPERTY);
         let display = Value::symbol(&DISPLAY_TEXT_PROPERTY);
@@ -3848,6 +3861,8 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
         // Turns this per-redisplay scan from O(buffer) into O(window).
         // Mirrors GNU's TEXT_PROP_DISTANCE_LIMIT cap in `compute_stop_pos`.
         let scan_limit = EmacsBytePos::new(bytepos.get().saturating_add(INVISIBLE_SCAN_BYTE_LIMIT));
+        let max_char = self.buffer.layout_point_max_char_pos().get();
+        let max_byte = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, max_char as i64);
         let invisible = Value::symbol(&INVISIBLE_TEXT_PROPERTY);
         let next_text_change = self
             .buffer
@@ -3855,17 +3870,13 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
                 bytepos, invisible, scan_limit,
             )
             .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next))
-            .unwrap_or_else(|| self.buffer.layout_point_max_char_pos().get());
+            .unwrap_or(max_char);
         let next_overlay_change = self
             .buffer
             .layout_overlays()
-            .next_property_boundary_after_until_emacs_byte_pos(
-                bytepos,
-                EmacsBytePos::new(usize::MAX),
-                &[invisible],
-            )
+            .next_property_boundary_after_until_emacs_byte_pos(bytepos, max_byte, &[invisible])
             .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next))
-            .unwrap_or_else(|| self.buffer.layout_point_max_char_pos().get());
+            .unwrap_or(max_char);
         next_text_change.min(next_overlay_change) as i64
     }
 

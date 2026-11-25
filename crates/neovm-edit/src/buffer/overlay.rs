@@ -853,14 +853,13 @@ impl OverlayList {
                         rear_advance: data.rear_advance,
                     });
                     push_scratch_gc_root(copy);
-                    // Several range views may share this one copy. Attaching
-                    // a view re-points the copy's Weak position handle at that
-                    // view's interval tree, but every observer answers range
-                    // queries from its OWN index, and the memo only reuses an
-                    // entry while its range, advance flags and buffer are
-                    // identical. Whichever tree the handle names therefore
-                    // reports the same range for this identity; a changed
-                    // live range makes a fresh copy instead.
+                    // Several range views may share this one read-only copy.
+                    // Each observer answers range queries from its OWN index
+                    // and the copy keeps its frozen `(start, end)` without
+                    // mutating `position_handle`, so reusing it across range
+                    // views never bumps `LispCollectionRevision` or invalidates
+                    // an earlier `CollectionReads` certificate. A changed live
+                    // range makes a fresh copy instead.
                     if memoize {
                         let stamp = self.snapshot_copy_stamp.get().wrapping_add(1);
                         self.snapshot_copy_stamp.set(stamp);
@@ -899,7 +898,13 @@ impl OverlayList {
             // remain identical to the live buffer.
             OverlayCloneIdentity::PreservePrecedence => OverlayBatchOrder::AscendingQueryOrder,
         };
-        let attached = cloned.index.attach_batch(&entries, batch_order);
+        let attached = if memoize {
+            cloned
+                .index
+                .attach_batch_frozen_observer(&entries, batch_order)
+        } else {
+            cloned.index.attach_batch(&entries, batch_order)
+        };
         debug_assert!(attached, "fresh overlay clone index rejected its batch");
         if attached && matches!(identity, OverlayCloneIdentity::PreservePrecedence) {
             note_overlay_layout_stat(&OVERLAY_VIEW_ENTRIES, entries.len());

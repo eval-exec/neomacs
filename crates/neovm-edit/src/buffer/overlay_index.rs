@@ -1560,6 +1560,32 @@ impl OverlayIndex {
         entries: &[(Value, EmacsByteRange)],
         order: OverlayBatchOrder,
     ) -> bool {
+        self.attach_batch_with_handle_policy(entries, order, true)
+    }
+
+    /// Attach frozen, read-only observer copies (e.g. memoized range-view
+    /// snapshots) without mutating their `position_handle`.
+    ///
+    /// Reused observer copies already carry their immutable `(start, end)` in
+    /// `OverlayData` and are never edited in place. Skipping
+    /// `set_overlay_position_handle` avoids `with_overlay_data_mut` ->
+    /// `LispCollectionRevision::changed`, which would otherwise invalidate
+    /// earlier `CollectionReads` certificates that observed the same memoized
+    /// copy.
+    pub(super) fn attach_batch_frozen_observer(
+        &mut self,
+        entries: &[(Value, EmacsByteRange)],
+        order: OverlayBatchOrder,
+    ) -> bool {
+        self.attach_batch_with_handle_policy(entries, order, false)
+    }
+
+    fn attach_batch_with_handle_policy(
+        &mut self,
+        entries: &[(Value, EmacsByteRange)],
+        order: OverlayBatchOrder,
+        install_position_handles: bool,
+    ) -> bool {
         if !self.is_empty() {
             return false;
         }
@@ -1607,7 +1633,9 @@ impl OverlayIndex {
         for (overlay, _) in entries {
             // Snapshot attachment can run inside a collection-read capture.
             // Finish owner initialization before observing its property keys.
-            set_overlay_position_handle(*overlay, &self.intervals);
+            if install_position_handles {
+                set_overlay_position_handle(*overlay, &self.intervals);
+            }
             let keys = overlay_direct_property_keys(*overlay);
             property_masks.insert(
                 OverlayIdentity::of(*overlay),

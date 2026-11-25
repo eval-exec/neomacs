@@ -1327,4 +1327,80 @@ fn next_property_boundary_skips_non_carriers_without_publishing_endpoints() {
         "warm OrderedFilterMask jump visited {} nodes (expected O(log N))",
         endpoint_search_node_visit_count()
     );
+
+    // P2: Range-view underflow must be recorded by
+    // `OverlayList::next_property_boundary_after_until_emacs_byte_pos` even on
+    // the absent-property fast path.
+    let underflow_view = list.snapshot_in_range(emacs_byte_range(4_000, 8_000));
+    assert!(!underflow_view.overlay_view_query_underflowed());
+    assert_eq!(
+        underflow_view.next_property_boundary_after_until_emacs_byte_pos(
+            emacs_byte_pos(100),
+            emacs_byte_pos(8_000),
+            &[invisible, display],
+        ),
+        None
+    );
+    assert!(
+        underflow_view.overlay_view_query_underflowed(),
+        "next_property_boundary_after_until_emacs_byte_pos must record underflow below capture floor"
+    );
+
+    // P2: `LiveOverlayView` fast paths must still latch `is_stale()` when the
+    // owner list mutates before an absent-property short-circuit.
+    let stale_prop = Value::symbol("never-present-prop-829");
+    let live_highest = list.live_view();
+    let live_boundary = list.live_view();
+    assert!(!live_highest.is_stale());
+    assert!(!live_boundary.is_stale());
+    list.insert_overlay(overlay_with_plist(
+        60_000,
+        60_010,
+        Value::list(vec![Value::symbol("face"), Value::symbol("bold")]),
+    ));
+    assert_eq!(
+        live_highest.highest_priority_overlay_property_value_at_emacs_byte_pos(
+            emacs_byte_pos(12),
+            stale_prop,
+            None,
+        ),
+        None
+    );
+    assert!(
+        live_highest.is_stale(),
+        "LiveOverlayView::highest_priority_overlay_property_value_at_emacs_byte_pos must latch stale on short-circuit"
+    );
+    assert_eq!(
+        live_boundary.next_property_boundary_after_until_emacs_byte_pos(
+            emacs_byte_pos(0),
+            emacs_byte_pos(100_000),
+            &[stale_prop],
+        ),
+        None
+    );
+    assert!(
+        live_boundary.is_stale(),
+        "LiveOverlayView::next_property_boundary_after_until_emacs_byte_pos must latch stale on short-circuit"
+    );
+
+    // Reusing memoized copies across a second `snapshot_in_range` must NOT bump
+    // `LispCollectionRevision` on the shared read-only copies and invalidate an
+    // earlier `CollectionReads` certificate that observed the first range view.
+    let first_view = list.snapshot_in_range(emacs_byte_range(0, 1_000));
+    let (observed_overlays, reads) = collection_reads::capture(|| {
+        first_view
+            .overlays_at_emacs_byte_pos(emacs_byte_pos(10))
+            .into_iter()
+            .filter_map(|ov| first_view.overlay_get_named(ov, Value::symbol("face")))
+            .collect::<Vec<_>>()
+    });
+    assert!(!observed_overlays.is_empty());
+    let reads = reads.expect("first range-view read must produce a coherent certificate");
+    assert!(reads.unchanged());
+    let second_view = list.snapshot_in_range(emacs_byte_range(0, 1_000));
+    let _ = second_view.overlays_at_emacs_byte_pos(emacs_byte_pos(10));
+    assert!(
+        reads.unchanged(),
+        "second snapshot_in_range reusing memoized copies must not invalidate prior CollectionReads"
+    );
 }

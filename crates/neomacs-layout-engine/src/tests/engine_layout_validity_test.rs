@@ -1666,3 +1666,120 @@ fn fresh_window_bounded_overlay_view_retries_full_on_large_invisible_fold() {
         "fresh window must retry whole-buffer overlay view when invisible fold exceeds bounded span; body={body:?}"
     );
 }
+
+/// Regression for P1-A review finding on #829: a fresh window with a bounded
+/// overlay view `(0, 16384)` must never let post-layout
+/// `forward_scroll_measurement` certify `SourceLineEstimate` past
+/// `layout_overlay_view_end_char()`. When an active `invisible` overlay sits
+/// beyond the bounded span and `point` lies past that fold under
+/// `scroll-conservatively = 101`, the window must match the full-buffer
+/// measured scroll (keeping lines before the fold visible) instead of
+/// over-scrolling into the fold via raw source-line counting.
+#[test]
+fn fresh_window_bounded_overlay_view_does_not_certify_source_line_estimate_past_ceiling() {
+    let mut text = String::new();
+    // 50 long truncated lines (~359 chars each -> ~17,950 chars), so 24 visible
+    // rows end well before the 16,384-char bounded overlay-view ceiling and the
+    // fold starts strictly past 16,384.
+    for i in 0..50 {
+        text.push_str(&format!("head {i:02} {}\n", "a".repeat(350)));
+    }
+    let fold_start_1 = text.len() + 1;
+    // 600 short lines (~12,000 chars) hidden by an invisible overlay beyond 16,384.
+    for i in 0..600 {
+        text.push_str(&format!("fold {i:04} hidden\n"));
+    }
+    let fold_end_1 = text.len() + 1;
+    // 10 visible trailing lines after the fold.
+    for i in 0..10 {
+        text.push_str(&format!("tail {i:02} visible\n"));
+    }
+    let point_1 = text.len(); // near EOB, past the fold
+
+    let setup = || {
+        let (mut eval, frame, buffer, window) =
+            crate::engine::tests::incr_editing_frame(&text, 640, 384);
+        eval.eval_str(&format!(
+            "(progn
+               (setq truncate-lines t)
+               (setq scroll-conservatively 101)
+               (let ((ov (make-overlay {fold_start_1} {fold_end_1})))
+                 (overlay-put ov 'invisible t))
+               (goto-char {point_1}))"
+        ))
+        .unwrap();
+        (eval, frame, buffer, window)
+    };
+
+    // (1) Direct unit check on a bounded LayoutBufferSnapshot whose overlay
+    // span excludes the invisible overlay at [fold_start_1, fold_end_1].
+    {
+        let (eval, frame, buffer, window) = setup();
+        let frame_ref = eval.frame_manager().get(frame).unwrap();
+        let win_ref = frame_ref.find_window(window).unwrap();
+        let buf_ref = eval.buffer_manager().get(buffer).unwrap();
+        let params = crate::neovm_bridge::window_params_from_neovm(
+            win_ref,
+            buf_ref,
+            frame_ref,
+            eval.variables(),
+            eval.face_table(),
+            None,
+            true,
+            false,
+            Value::T,
+            Value::NIL,
+            None,
+        )
+        .expect("leaf window params");
+        let fresh_engine = crate::font::metrics::test_catalog::layout_engine();
+        let span = fresh_engine
+            .overlay_view_char_span_for(&params, buf_ref)
+            .expect("fresh window produces bounded overlay span");
+        assert!(
+            span.1 < fold_start_1 - 1,
+            "fixture invariant: bounded span {span:?} must stop before fold start {}",
+            fold_start_1 - 1
+        );
+        let bounded_snapshot =
+            crate::neovm_bridge::LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_source(
+                buf_ref,
+                eval.variables(),
+                Some(span),
+                Some(span),
+                crate::display_property::DisplayPropertyTarget::Graphical,
+                eval.symbol_mode(),
+                &eval.owned_root_retainer(),
+                crate::neovm_bridge::OverlaySourceMode::Captured,
+            );
+        assert_eq!(
+            crate::neovm_bridge::RustBufferAccess::new(&bounded_snapshot)
+                .forward_scroll_measurement(2_000, (point_1 - 1) as i64),
+            crate::neovm_bridge::ForwardScrollMeasurement::DisplayRowsRequired,
+            "bounded overlay snapshot must never certify SourceLineEstimate past layout_overlay_view_end_char"
+        );
+    }
+
+    // (2) Full fresh-window layout must match a live-overlay (unbounded) layout
+    // and must NOT over-scroll window-start into the hidden fold.
+    let (mut eval_bounded, frame_bounded, _buf_b, win_b) = setup();
+    let mut engine_bounded = crate::font::metrics::test_catalog::layout_engine();
+    engine_bounded.layout_frame_rust(&mut eval_bounded, frame_bounded);
+    let bounded_start = neovm_core::buffer::CharPos0::from_lisp(
+        eval_bounded
+            .frame_manager()
+            .get(frame_bounded)
+            .unwrap()
+            .find_window(win_b)
+            .unwrap()
+            .window_start()
+            .expect("window-start committed after layout"),
+    )
+    .get()
+        + 1;
+
+    assert!(
+        bounded_start < fold_start_1,
+        "fresh bounded layout over-scrolled into hidden fold: window_start={bounded_start}, fold_start={fold_start_1}"
+    );
+}

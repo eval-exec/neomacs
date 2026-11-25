@@ -173,12 +173,19 @@ impl LayoutBufferSnapshot {
                 Some((first, end)) => {
                     let total = buffer.total_char_end_pos().get();
                     let end = end.min(total);
-                    let view = buffer.overlay_snapshot_in_char_span(first, end);
-                    // A span that reaches the buffer end has nothing beyond it:
-                    // do not arm the exhaustion retry for it.
-                    let span = (end < total)
-                        .then_some((CharPos0::new(first.min(end)), CharPos0::new(end)));
-                    (view, span)
+                    if first == 0 && end >= total {
+                        // A requested span covering the entire buffer needs no
+                        // range-view rebuild and can reuse the cached
+                        // whole-buffer snapshot directly.
+                        (buffer.overlays().snapshot(), None)
+                    } else {
+                        let view = buffer.overlay_snapshot_in_char_span(first, end);
+                        // A span that reaches the buffer end has nothing beyond
+                        // it: do not arm the exhaustion retry for it.
+                        let span = (end < total)
+                            .then_some((CharPos0::new(first.min(end)), CharPos0::new(end)));
+                        (view, span)
+                    }
                 }
                 None => (buffer.overlays().snapshot(), None),
             };
