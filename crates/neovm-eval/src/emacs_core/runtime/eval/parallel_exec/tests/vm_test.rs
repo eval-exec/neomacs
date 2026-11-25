@@ -6218,6 +6218,7 @@ struct VmEraPoll<'era> {
     refill_builds: usize,
     gate: Option<VmEraGate>,
     pre_refill_hook: Option<Box<dyn FnOnce()>>,
+    refill_publish_hook: Option<Box<dyn FnOnce()>>,
     post_refill_hook: Option<Box<dyn FnOnce()>>,
 }
 
@@ -6237,6 +6238,7 @@ impl<'era> VmEraPoll<'era> {
             refill_builds: 0,
             gate: None,
             pre_refill_hook: None,
+            refill_publish_hook: None,
             post_refill_hook: None,
         }
     }
@@ -6270,6 +6272,11 @@ impl<'era> VmEraPoll<'era> {
 
     fn with_pre_refill_hook(mut self, hook: impl FnOnce() + 'static) -> Self {
         self.pre_refill_hook = Some(Box::new(hook));
+        self
+    }
+
+    fn with_refill_publish_hook(mut self, hook: impl FnOnce() + 'static) -> Self {
+        self.refill_publish_hook = Some(Box::new(hook));
         self
     }
 
@@ -6383,10 +6390,14 @@ impl VmPoll for VmEraPoll<'_> {
         let published = &mut self.published_batches;
         let builds = &mut self.build_calls;
         let edge_builds = &mut self.refill_builds;
+        let mut publish_hook = self.refill_publish_hook.take();
         let outcome = {
             let mut guard = self.owner.borrow_mut();
             let owner = guard.as_mut().expect("owner resident");
             poll_region_refill(owner, rendezvous, || {
+                if let Some(hook) = publish_hook.take() {
+                    hook();
+                }
                 Self::publish_arena(arena, heap, published, builds, edge_builds)
             })
         };
@@ -7722,11 +7733,15 @@ fn vm_wired_refill_completes_while_peer_runs_with_ring_length_unchanged() {
                     let mut ctx = Context::new(unit_runtime());
                     let constants = era_constants(&words_a);
                     let ops = plain_program(vec![Op::Constant(0), Op::Constant(1), Op::Add]);
-                    let poll = VmEraPoll::new(owner, heap_addr, rendezvous).with_pre_refill_hook(
-                        move || {
-                            refill_tx.send(()).expect("A entered refill");
-                        },
-                    );
+                    let poll = VmEraPoll::new(owner, heap_addr, rendezvous)
+                        .with_refill_publish_hook(move || {
+                            // Runs inside `poll_region_refill`'s publish closure,
+                            // strictly AFTER `request_active` has transitioned the
+                            // era to `Stopping`, so releasing Owner B below always
+                            // catches Owner B on its next `poll_vm_back_edge`
+                            // rather than racing ahead into `retire()`.
+                            refill_tx.send(()).expect("A entered refill stop");
+                        });
                     let arith = EraArith::new(poll.owner_handle(), nil_a);
                     let mut engine = VmExec::new(
                         &(),
@@ -7775,9 +7790,9 @@ fn vm_wired_refill_completes_while_peer_runs_with_ring_length_unchanged() {
                 assert_eq!(edges_a, vec![PollEdge::VmRefill]);
                 assert_eq!(classes_a, vec![NumericClass::Float]);
                 assert_eq!(edges_b, vec![PollEdge::VmBackEdge; 7]);
-                assert!(
-                    back_edge_builds_b <= 1,
-                    "peer B stays owner-local across the refill stop"
+                assert_eq!(
+                    back_edge_builds_b, 1,
+                    "peer B parks once at poll_vm_back_edge for A's refill stop"
                 );
                 assert_eq!(
                     retry("serial ring head", || era.serial_ring_head_for_test()),
