@@ -478,12 +478,15 @@ impl<'era> Mutator<'era> {
                 return Err(error.into());
             }
         };
-        let image = match self
-            .local
-            .as_mut()
-            .ok_or(RendezvousError::Publication)?
-            .publish()
-        {
+        // SAFETY: owning mutator thread has published its root lease and closed
+        // all local allocation regions; all words in `self.local` belong to
+        // this live era's heap.
+        let image = match unsafe {
+            self.local
+                .as_mut()
+                .ok_or(RendezvousError::Publication)?
+                .publish()
+        } {
             Ok(image) => image,
             Err(error) => {
                 std::mem::forget(publication);

@@ -3172,7 +3172,8 @@ fn numeric_serial_window_case<K, W>(
             // bignum. Shared roots survive after this heap borrow ends.
             let big = unsafe { SharedRoot::new(heap, big) };
             heap.close_alloc_regions();
-            let legacy = PublishedGcImage::from_legacy(heap).unwrap();
+            // SAFETY: stopped-era test helper refreezing its own live `&mut TaggedHeap`.
+            let legacy = unsafe { PublishedGcImage::from_legacy(heap) }.unwrap();
             let mut state = entry_state(&legacy_entry).unwrap();
             assert!(state.image.replace(legacy).is_none());
             Some((float, big))

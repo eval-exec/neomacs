@@ -447,7 +447,11 @@ fn pending_root_retirement_failure_preserves_entry_and_allows_explicit_transfer<
         assert_eq!(failed.reason, RegistrationError::PendingRoots);
         let gate = failed.era.registry().lock().unwrap();
         let mut state = gate.entries[1].state.lock().unwrap();
-        let retained = state.image.as_mut().unwrap().take_root_scratch();
+        let retained = state
+            .image
+            .as_mut()
+            .unwrap()
+            .take_root_scratch_bits_for_test();
         assert_eq!(retained.len(), 1);
         // NIL is immediate; no heap referent is released by this transfer.
         drop(retained);

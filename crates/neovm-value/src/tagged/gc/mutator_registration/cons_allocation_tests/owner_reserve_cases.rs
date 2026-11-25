@@ -36,7 +36,8 @@ where
     unsafe { legacy.restore_legacy(heap) }.unwrap();
     let result = body(heap);
     heap.close_alloc_regions();
-    let legacy = PublishedGcImage::from_legacy(heap).unwrap();
+    // SAFETY: stopped-era test helper refreezing its own live `&mut TaggedHeap`.
+    let legacy = unsafe { PublishedGcImage::from_legacy(heap) }.unwrap();
     let mut state = entry_state(&legacy_entry).unwrap();
     assert!(state.image.replace(legacy).is_none());
     result

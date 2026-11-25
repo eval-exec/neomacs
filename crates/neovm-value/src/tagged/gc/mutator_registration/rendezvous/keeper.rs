@@ -687,7 +687,7 @@ impl<'era> AllStopped<'era> {
             let mut roots = Vec::new();
             let mut other = Vec::new();
             image.visit_work(|work| match work {
-                super::super::image::PublishedGcWork::Root(word) => roots.push(word.bits()),
+                super::super::image::PublishedGcWork::Root(bits) => roots.push(bits),
                 other_work => other.push(format!("{other_work:?}")),
             });
             (roots, other)

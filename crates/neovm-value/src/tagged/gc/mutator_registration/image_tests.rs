@@ -17,6 +17,18 @@ use crate::tagged::header::{ConsCell, GcHeader, HeapObjectKind};
 use crate::tagged::value::TaggedValue;
 
 #[allow(unsafe_code)]
+fn publish_owner_for_test(state: &mut OwnerGcState) -> Result<PublishedGcImage, ImageError> {
+    // SAFETY: single-threaded unit test publishing fixture words on this thread.
+    unsafe { state.publish() }
+}
+
+#[allow(unsafe_code)]
+fn from_legacy_for_test(heap: &mut TaggedHeap) -> Result<PublishedGcImage, ImageError> {
+    // SAFETY: single-threaded unit test freezing its own live `&mut TaggedHeap`.
+    unsafe { PublishedGcImage::from_legacy(heap) }
+}
+
+#[allow(unsafe_code)]
 fn restore_owner_for_test(
     state: &mut OwnerGcState,
     image: PublishedGcImage,
@@ -167,7 +179,7 @@ fn image_round_trip_preserves_facts_and_visits_every_work_family() {
         float_tail_closes: 11,
     };
 
-    let image = state.publish().unwrap();
+    let image = publish_owner_for_test(&mut state).unwrap();
     assert_eq!(image.young_id(), id);
     let summary = image.summary();
     assert_eq!(summary.allocated_count, 17);
@@ -236,7 +248,7 @@ fn image_round_trip_preserves_facts_and_visits_every_work_family() {
         work
     );
     let mut words = Vec::new();
-    image.visit_logs(|word| words.push(word.bits()));
+    image.visit_logs(|bits| words.push(bits));
     assert_eq!(
         words,
         [11, 12, 13, 14, 15]
@@ -287,7 +299,7 @@ fn wrong_heap_or_young_id_restore_retains_image_for_correct_owner() {
             heap
         });
         let destination_id = destination.cold.young.id();
-        let image = source.publish().unwrap();
+        let image = publish_owner_for_test(&mut source).unwrap();
         let summary = image.summary();
         let original_id = image.young_id();
         let failure = restore_owner_for_test(&mut destination, image).unwrap_err();
@@ -349,7 +361,10 @@ fn every_open_region_fact_refuses_publication_before_moving_owner_facts() {
             6 => state.hot.black_cons_region_start = Some(1),
             _ => state.hot.black_float_region_start = Some(1),
         }
-        assert!(matches!(state.publish(), Err(ImageError::RegionsOpen)));
+        assert!(matches!(
+            publish_owner_for_test(&mut state),
+            Err(ImageError::RegionsOpen)
+        ));
         assert_scalar_facts(&state);
         assert!(state.hot.remembered_cache.iter().all(|entry| *entry == 19));
         state.regions.cons = ConsRegionSource::Closed;
@@ -360,7 +375,7 @@ fn every_open_region_fact_refuses_publication_before_moving_owner_facts() {
         state.jit.float_lim.set(0);
         state.hot.black_cons_region_start = None;
         state.hot.black_float_region_start = None;
-        let image = state.publish().unwrap();
+        let image = publish_owner_for_test(&mut state).unwrap();
         restore_owner_for_test(&mut state, image).unwrap();
         assert_scalar_facts(&state);
     }
@@ -400,7 +415,10 @@ fn residual_satb_refuses_publication_without_moving_or_discarding_words() {
     let value = TaggedValue::fixnum(99);
     let word = MarkWord::from_immediate(value).unwrap();
     push_satb_for_test(&mut state.cold.satb, value, &handoff);
-    assert!(matches!(state.publish(), Err(ImageError::SatbResidual)));
+    assert!(matches!(
+        publish_owner_for_test(&mut state),
+        Err(ImageError::SatbResidual)
+    ));
     assert_scalar_facts(&state);
     assert_eq!(state.cold.satb.words_for_test(), &[word]);
     assert_eq!(state.cold.young.resident().unwrap().blocks(), &[base]);
@@ -413,7 +431,7 @@ fn residual_satb_refuses_publication_without_moving_or_discarding_words() {
             .collect::<Vec<_>>(),
         vec![word]
     );
-    let image = state.publish().unwrap();
+    let image = publish_owner_for_test(&mut state).unwrap();
     restore_owner_for_test(&mut state, image).unwrap();
     assert_scalar_facts(&state);
 }
@@ -422,7 +440,7 @@ fn residual_satb_refuses_publication_without_moving_or_discarding_words() {
 fn occupied_destination_refuses_restore_and_preserves_image_for_retry() {
     let mut state = owner(HeapIdentity::issue());
     seed_scalar_facts(&mut state);
-    let image = state.publish().unwrap();
+    let image = publish_owner_for_test(&mut state).unwrap();
     let summary = image.summary();
     state.hot.bytes_since_gc = 1;
     let failure = restore_owner_for_test(&mut state, image).unwrap_err();
@@ -528,7 +546,7 @@ fn restore_legacy_for_collection_merges_shell_young_blocks_into_empty_frozen_log
         "young-log merge tests require generational GC enabled (NEOVM_GC_GENERATIONAL!=0)"
     );
     heap.close_alloc_regions();
-    let legacy = PublishedGcImage::from_legacy(&mut heap).unwrap();
+    let legacy = from_legacy_for_test(&mut heap).unwrap();
     assert!(legacy.young().blocks().is_empty());
 
     // Simulate a WorldTurn / serial-turn cons allocation while entry 0 is frozen.
@@ -574,7 +592,7 @@ fn restore_legacy_for_collection_merges_nonempty_frozen_and_shell_young_blocks()
     // block and a pending entry.
     let _pre = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
     heap.close_alloc_regions();
-    let legacy = PublishedGcImage::from_legacy(&mut heap).unwrap();
+    let legacy = from_legacy_for_test(&mut heap).unwrap();
     let frozen_blocks = legacy.young().blocks().to_vec();
     assert!(
         !frozen_blocks.is_empty(),
@@ -623,7 +641,7 @@ fn restore_legacy_for_collection_repairs_swapped_peer_pending_index() {
     // 1. Pre-freeze cons -> legacy id_0 sits at pending_mutators[0].
     let _pre = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
     heap.close_alloc_regions();
-    let legacy = PublishedGcImage::from_legacy(&mut heap).unwrap();
+    let legacy = from_legacy_for_test(&mut heap).unwrap();
     let frozen_blocks = legacy.young().blocks().to_vec();
 
     // 2. Shell cons past CONS_BLOCK_SIZE -> duplicate id_0 sits at pending_mutators[1].
@@ -702,7 +720,7 @@ fn restore_legacy_for_collection_refuses_missing_swapped_peer_without_mutating()
     );
     let _pre = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
     heap.close_alloc_regions();
-    let legacy = PublishedGcImage::from_legacy(&mut heap).unwrap();
+    let legacy = from_legacy_for_test(&mut heap).unwrap();
     let frozen_blocks = legacy.young().blocks().to_vec();
     let frozen_pending = legacy.young().pending_index();
 

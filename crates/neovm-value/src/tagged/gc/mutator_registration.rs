@@ -80,7 +80,11 @@ pub use world_loan::retained::{
 #[doc(hidden)]
 pub use world_loan::{EraWorldLoan, SymbolRootDesignators, WorldIdentity, WorldLoan};
 mod gate;
+#[cfg(not(feature = "test-support"))]
 mod image;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod image;
 mod native_extent;
 mod root_slot;
 mod run_slice;
@@ -748,16 +752,19 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 });
             }
         };
-        let mut image = match PublishedGcImage::from_legacy(collector.registration_heap_mut()) {
-            Ok(image) => image,
-            Err(error) => {
-                return Err(EraAdmissionFailure {
-                    reason: error.into(),
-                    collector,
-                    keeper,
-                });
-            }
-        };
+        // SAFETY: era entry holds exclusive stopped-world `&mut TaggedHeap`
+        // authority over the serial collector heap being frozen into entry 0.
+        let mut image =
+            match unsafe { PublishedGcImage::from_legacy(collector.registration_heap_mut()) } {
+                Ok(image) => image,
+                Err(error) => {
+                    return Err(EraAdmissionFailure {
+                        reason: error.into(),
+                        collector,
+                        keeper,
+                    });
+                }
+            };
         image.charge_symbol_tables(table_bytes);
         let young = image.young_id();
         let key = MutatorKey {

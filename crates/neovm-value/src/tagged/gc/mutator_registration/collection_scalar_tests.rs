@@ -9,6 +9,23 @@ use super::*;
 use crate::tagged::value::TaggedValue;
 
 #[allow(unsafe_code)]
+fn publish_owner_for_test(
+    owner: &mut OwnerGcState,
+) -> Result<PublishedGcImage, super::image::ImageError> {
+    // SAFETY: single-threaded unit test publishing an owner populated with
+    // immediate/live fixture words on this thread.
+    unsafe { owner.publish() }
+}
+
+#[allow(unsafe_code)]
+fn from_legacy_for_test(
+    heap: &mut TaggedHeap,
+) -> Result<PublishedGcImage, super::image::ImageError> {
+    // SAFETY: single-threaded unit test freezing its own live `&mut TaggedHeap`.
+    unsafe { PublishedGcImage::from_legacy(heap) }
+}
+
+#[allow(unsafe_code)]
 fn restore_legacy_for_test(
     image: PublishedGcImage,
     heap: &mut TaggedHeap,
@@ -74,7 +91,7 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
     h.pacing = local_pacing;
     owner.hot.pacing = peer_pacing;
     owner.region_stats = std::mem::take(&mut heap.region_stats);
-    let mut peer = owner.publish().unwrap();
+    let mut peer = publish_owner_for_test(&mut owner).unwrap();
     let own_memory = heap.current_mutator_gc().memory_use_counts;
     let own_bytes = heap.total_allocated_bytes();
     let history = CollectionHistory::save(&heap);
@@ -121,7 +138,7 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
         }
     );
     // Use the actual era-finish fold to check a second accounting boundary.
-    let mut serial = PublishedGcImage::from_legacy(&mut heap).unwrap();
+    let mut serial = from_legacy_for_test(&mut heap).unwrap();
     serial.merge_non_young(peer).unwrap();
     restore_legacy_for_test(serial, &mut heap).unwrap();
     assert_eq!(heap.current_mutator_gc().allocated_count, after_count);

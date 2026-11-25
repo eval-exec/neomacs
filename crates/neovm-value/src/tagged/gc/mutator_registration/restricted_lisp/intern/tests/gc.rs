@@ -62,7 +62,7 @@ where
         stopped
             .with_owner_image(key, |image| {
                 image.visit_work(|work| match work {
-                    PublishedGcWork::Root(word) => result.owners.push(word.bits()),
+                    PublishedGcWork::Root(bits) => result.owners.push(bits),
                     other => result.other_work.push(format!("{other:?}")),
                 });
             })

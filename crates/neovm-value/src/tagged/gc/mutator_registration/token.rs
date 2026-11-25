@@ -450,11 +450,15 @@ impl<'era> Mutator<'era> {
         // Every fallible identity/loan/phase check precedes moving any log.
         // Held cons tails publish back to the catalog before the image does.
         self.publish_cons_tails()?;
-        let image = self
-            .local
-            .as_mut()
-            .expect("owner shells remain local")
-            .publish()?;
+        // SAFETY: `check_thread()` pinned this call to the owning mutator
+        // thread, `publish_cons_tails()` closed all held cons tails, and all
+        // words in `self.local` belong to this live era's heap.
+        let image = unsafe {
+            self.local
+                .as_mut()
+                .expect("owner shells remain local")
+                .publish()?
+        };
         state.image = Some(image);
         state.publication_generation = next.get();
         state.epoch = epoch.get();

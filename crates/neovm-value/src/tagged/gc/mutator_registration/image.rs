@@ -57,6 +57,7 @@ pub(in crate::tagged::gc) struct RestoreImageFailure {
 }
 
 /// Destination-thread storage. Its existing confined fields prohibit Send/Sync.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(in crate::tagged::gc) struct OwnerGcState {
     pub(in crate::tagged::gc) hot: MutatorGcState,
     pub(in crate::tagged::gc) cold: SatbMutatorState,
@@ -162,12 +163,13 @@ impl CollectionHistory {
 }
 
 /// A borrowed census item. Visiting preserves the underlying pending facts;
-/// interpreting an address or decoding a word still requires collector authority.
+/// word-bearing variants expose only raw `usize` bits (never `MarkWord`) so
+/// read-only observation cannot mint or transfer cross-thread `MarkWord`s.
 #[derive(Debug)]
 pub(in crate::tagged::gc) enum PublishedGcWork<'a> {
-    Remembered(MarkWord),
-    ConsWrite(MarkWord),
-    Root(MarkWord),
+    Remembered(usize),
+    ConsWrite(usize),
+    Root(usize),
     MappedOwner(usize),
     BlackHeader(usize),
     BlackRegion(&'a BlackBornRegion),
@@ -445,7 +447,19 @@ impl OwnerGcState {
         validate_closed(&self.hot, &self.cold, &self.jit, &self.regions, owner)
     }
 
-    pub(in crate::tagged::gc) fn publish(&mut self) -> Result<PublishedGcImage, ImageError> {
+    /// Freeze this owner's closed local GC state into a `Send + Sync`
+    /// [`PublishedGcImage`].
+    ///
+    /// # Safety
+    /// The caller must hold exclusive owning-thread authority for this owner on
+    /// the live heap identified by `self.cold.young.id().heap_identity()`, and
+    /// every `TaggedValue` / [`MarkWord`] currently stored in `self.hot.remset`,
+    /// `self.hot.major_cons_writes`, and `self.root_scratch` must belong to that
+    /// heap and stay live until the returned image is restored, collected, or
+    /// conservatively retained.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg_attr(feature = "test-support", allow(private_interfaces))]
+    pub(in crate::tagged::gc) unsafe fn publish(&mut self) -> Result<PublishedGcImage, ImageError> {
         self.validate_publication()?;
         let young = self.cold.young.take_owner_payload()?;
         let roots = std::mem::take(&mut self.root_scratch);
@@ -751,10 +765,11 @@ impl PublishedGcImage {
         self.facts.pacing
     }
 
-    /// Visit the encoded-word families without consuming or clearing a log.
+    /// Visit the encoded-word families as raw `usize` bits without consuming or
+    /// clearing a log and without exporting `MarkWord` values.
     /// Address/region/symbol families are separate `visit_work` variants and
     /// have separate summary counts; their raw addresses are not tagged words.
-    pub(in crate::tagged::gc) fn visit_logs(&self, mut visitor: impl FnMut(MarkWord)) {
+    pub(in crate::tagged::gc) fn visit_logs(&self, mut visitor: impl FnMut(usize)) {
         for &word in self
             .facts
             .remset
@@ -762,7 +777,7 @@ impl PublishedGcImage {
             .chain(&self.facts.cons_writes)
             .chain(&self.facts.roots)
         {
-            visitor(word);
+            visitor(word.bits());
         }
     }
 
@@ -780,22 +795,23 @@ impl PublishedGcImage {
     #[doc(hidden)]
     pub fn log_value_bits_for_test(&self) -> Vec<usize> {
         let mut out = Vec::new();
-        self.visit_logs(|word| out.push(word.bits()));
+        self.visit_logs(|bits| out.push(bits));
         out
     }
 
     /// Complete read-only work census, including families that cannot be
-    /// represented as MarkWord. This does not perform a collector fold.
+    /// represented as tagged words. Word-bearing variants yield raw `usize`
+    /// bits (never `MarkWord`). This does not perform a collector fold.
     pub(in crate::tagged::gc) fn visit_work(&self, mut visitor: impl FnMut(PublishedGcWork<'_>)) {
         let f = &self.facts;
         for &word in &f.remset {
-            visitor(PublishedGcWork::Remembered(word));
+            visitor(PublishedGcWork::Remembered(word.bits()));
         }
         for &word in &f.cons_writes {
-            visitor(PublishedGcWork::ConsWrite(word));
+            visitor(PublishedGcWork::ConsWrite(word.bits()));
         }
         for &word in &f.roots {
-            visitor(PublishedGcWork::Root(word));
+            visitor(PublishedGcWork::Root(word.bits()));
         }
         for &addr in &f.mapped_seen {
             visitor(PublishedGcWork::MappedOwner(addr));
@@ -820,7 +836,20 @@ impl PublishedGcImage {
         }
     }
 
-    pub(in crate::tagged::gc) fn from_legacy(heap: &mut TaggedHeap) -> Result<Self, ImageError> {
+    /// Freeze the serial collector heap's closed current-mutator state into a
+    /// `Send + Sync` [`PublishedGcImage`].
+    ///
+    /// # Safety
+    /// The caller must hold exclusive stopped-world / owning-thread authority
+    /// over `heap`, and every `TaggedValue` stored in
+    /// `heap.current_mutator_gc().{remset, major_cons_writes}` must belong to
+    /// `heap` and stay live until the returned image is restored or collected
+    /// on `heap`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg_attr(feature = "test-support", allow(private_interfaces))]
+    pub(in crate::tagged::gc) unsafe fn from_legacy(
+        heap: &mut TaggedHeap,
+    ) -> Result<Self, ImageError> {
         validate_closed(
             heap.current_mutator_gc(),
             heap.current_mutator_satb(),
@@ -997,8 +1026,14 @@ impl PublishedGcImage {
         }
     }
 
-    pub(in crate::tagged::gc) fn take_root_scratch(&mut self) -> Vec<MarkWord> {
+    /// Test-only: drain pending root scratch as raw `usize` bits (never
+    /// exporting `MarkWord`). Sole caller is `mutator_registration/tests.rs`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(in crate::tagged::gc) fn take_root_scratch_bits_for_test(&mut self) -> Vec<usize> {
         std::mem::take(&mut self.facts.roots)
+            .into_iter()
+            .map(MarkWord::bits)
+            .collect()
     }
 
     /// Pending reachability/log obligations, excluding historical counters.

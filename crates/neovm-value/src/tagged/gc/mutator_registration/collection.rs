@@ -527,7 +527,10 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             key.registration,
         );
         heap.close_alloc_regions();
-        let refrozen = PublishedGcImage::from_legacy(heap).map_err(RegistrationError::from)?;
+        // SAFETY: world-stopped keeper holds exclusive `&mut TaggedHeap`
+        // authority with closed allocation regions on this live era's heap.
+        let refrozen =
+            unsafe { PublishedGcImage::from_legacy(heap) }.map_err(RegistrationError::from)?;
         let mut state = entry_state(&legacy_entry)?;
         debug_assert!(state.image.is_none());
         state.image = Some(refrozen);
@@ -1015,8 +1018,10 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         } else {
             ResponsePacing::Preserve
         };
+        // SAFETY: world-stopped collection just finished on `heap` with
+        // exclusive `&mut TaggedHeap` authority and closed regions.
         images.images[0].1 =
-            Some(PublishedGcImage::from_legacy(heap).map_err(RegistrationError::from)?);
+            Some(unsafe { PublishedGcImage::from_legacy(heap) }.map_err(RegistrationError::from)?);
         for (_, image) in &mut images.images[1..] {
             image
                 .as_mut()

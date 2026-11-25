@@ -69,7 +69,7 @@ where
     for key in keys {
         stopped
             .with_owner_image(key, |image| {
-                image.visit_logs(|word| result.external.push(word.bits()));
+                image.visit_logs(|bits| result.external.push(bits));
                 let s = image.summary();
                 result.extra_work += s.mapped_owners
                     + s.black_headers
