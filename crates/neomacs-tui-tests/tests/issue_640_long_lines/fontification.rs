@@ -147,3 +147,139 @@ fn pre_command_hook_accessible_bounds_match_gnu() {
 // The flag is set only by redisplay, so these rows must run in a real TUI
 // session; batch GNU can never set long_line_optimizations_p.
 // ---------------------------------------------------------------------------
+
+/// P5b (`src/xdisp.c:20646-20663`): a short multibyte buffer stays `nil` across
+/// text-property writes, then flips `(long-line-optimizations-p)` to `t` once a
+/// real character insertion adds a line above `long-line-threshold`, matching
+/// GNU Emacs 31.1.
+#[test]
+fn long_line_optimizations_p_text_props_then_char_insert_matches_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (switch-to-buffer (get-buffer-create \"*p5b-ll*\")) \
+           (erase-buffer) \
+           (setq-local long-line-threshold 1000) \
+           (dotimes (_ 20) (insert \"caf\\u00e9 -- short commit\\n\")) \
+           (goto-char (point-min)) \
+           (redisplay t) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    let (g0, n0) = paired_message(&mut gnu, &mut neo, "P5BLL0", "(long-line-optimizations-p)");
+    assert_eq!(g0, "nil");
+    assert_eq!(n0, g0, "short multibyte buffer must match GNU (nil)");
+
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (dotimes (i 20) \
+             (put-text-property (1+ (* i 5)) (+ 4 (* i 5)) 'face 'bold)) \
+           (redisplay t) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    let (g1, n1) = paired_message(&mut gnu, &mut neo, "P5BLL1", "(long-line-optimizations-p)");
+    assert_eq!(g1, "nil");
+    assert_eq!(
+        n1, g1,
+        "text-property writes alone must keep (long-line-optimizations-p) nil like GNU"
+    );
+
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (goto-char (point-max)) \
+           (insert (make-string 1200 ?a) \"\\n\") \
+           (redisplay t) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    let (g2, n2) = paired_message(&mut gnu, &mut neo, "P5BLL2", "(long-line-optimizations-p)");
+    assert_eq!(
+        g2, "t",
+        "GNU must set long-line-optimizations-p after real char insert"
+    );
+    assert_eq!(
+        n2, g2,
+        "Neo must re-arm and set (long-line-optimizations-p) after real char insert like GNU"
+    );
+}
+
+/// P5b (`src/xdisp.c:18303,20646-20663`): GNU compares `CHARS_MODIFF - UNCHANGED_MODIFIED > 8`,
+/// snapping `UNCHANGED_MODIFIED = MODIFF` at each accurate redisplay. Interleaved 1-char edit +
+/// 1 text-property write per `(redisplay t)` therefore keeps `(long-line-optimizations-p)` `nil`
+/// even after the line grows past `long-line-threshold`, while a 10-property burst + 1-char edit
+/// before redisplay pushes `CHARS_MODIFF - UNCHANGED_MODIFIED` above 8 and flips it to `t`.
+#[test]
+fn long_line_optimizations_p_interleaved_unchanged_modified_matches_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    resize_both(&mut gnu, &mut neo, 40, 160);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (switch-to-buffer (get-buffer-create \"*p5b-unchanged*\")) \
+           (erase-buffer) \
+           (setq-local long-line-threshold 1000) \
+           (insert (make-string 995 ?a) \"\\n\") \
+           (goto-char (point-min)) \
+           (redisplay t) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    let (g0, n0) = paired_message(&mut gnu, &mut neo, "P5BU0", "(long-line-optimizations-p)");
+    assert_eq!(g0, "nil");
+    assert_eq!(n0, g0, "995-char line below threshold 1000 must be nil");
+
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (dotimes (_ 15) \
+             (goto-char (point-min)) \
+             (insert \"a\") \
+             (put-text-property 1 2 'face 'bold) \
+             (redisplay t)) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    let (g1, n1) = paired_message(&mut gnu, &mut neo, "P5BU1", "(long-line-optimizations-p)");
+    assert_eq!(
+        g1, "nil",
+        "GNU must keep long-line-optimizations-p nil across interleaved 1-char + 1-prop redisplays"
+    );
+    assert_eq!(
+        n1, g1,
+        "Neo must match GNU UNCHANGED_MODIFIED reset across interleaved redisplays"
+    );
+
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn \
+           (dotimes (i 10) \
+             (put-text-property (1+ i) (+ 2 i) 'face 'italic)) \
+           (goto-char (point-min)) \
+           (insert \"a\") \
+           (redisplay t) \
+           nil)",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_millis(700));
+    let (g2, n2) = paired_message(&mut gnu, &mut neo, "P5BU2", "(long-line-optimizations-p)");
+    assert_eq!(
+        g2, "t",
+        "GNU must flip long-line-optimizations-p to t after prop burst + 1-char edit"
+    );
+    assert_eq!(
+        n2, g2,
+        "Neo must match GNU after prop burst + 1-char edit before redisplay"
+    );
+}

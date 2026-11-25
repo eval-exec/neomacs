@@ -2578,9 +2578,10 @@ pub struct Buffer {
     /// the fontification narrowing are in effect while this is set. Only
     /// [`Self::refresh_long_line_optimizations`] writes it.
     pub(crate) long_line_optimizations_p: bool,
-    /// `modified_tick` when the long-line scan last ran. A buffer with no long
-    /// line is rescanned only after GNU's >8 modification-tick hysteresis
-    /// (`xdisp.c:20646-20663`).
+    /// `chars_modified_tick` when the long-line scan last ran. Prevents
+    /// redundant rescans within the same redisplay pass before
+    /// `reset_unchanged_region` snaps `unchanged_modified_tick` to `modified_tick`
+    /// (`src/xdisp.c:18303,20646-20663`).
     pub(crate) long_line_scan_tick: i64,
 }
 #[cfg(any(test, feature = "test-support"))]
@@ -2724,9 +2725,10 @@ pub struct Buffer {
     /// the fontification narrowing are in effect while this is set. Only
     /// [`Self::refresh_long_line_optimizations`] writes it.
     pub(crate) long_line_optimizations_p: bool,
-    /// `modified_tick` when the long-line scan last ran. A buffer with no long
-    /// line is rescanned only after GNU's >8 modification-tick hysteresis
-    /// (`xdisp.c:20646-20663`).
+    /// `chars_modified_tick` when the long-line scan last ran. Prevents
+    /// redundant rescans within the same redisplay pass before
+    /// `reset_unchanged_region` snaps `unchanged_modified_tick` to `modified_tick`
+    /// (`src/xdisp.c:18303,20646-20663`).
     pub(crate) long_line_scan_tick: i64,
 }
 
@@ -3516,12 +3518,20 @@ impl Buffer {
     /// Rescan the accessible region for a line longer than `threshold`
     /// characters, following GNU `redisplay_window` (`src/xdisp.c:20646-20663`):
     /// stop at the first line over the threshold, and rescan a buffer that has
-    /// no long line only after eight modification ticks.
+    /// no long line only when `CHARS_MODIFF - UNCHANGED_MODIFIED > 8` or the
+    /// restriction changed (`clip_changed`). As a Neomacs-only optimization,
+    /// also skips rescanning when `long_line_scan_tick == chars_tick` and
+    /// `!clip_changed`, avoiding redundant scans across multiple windows or
+    /// fontification checks within the same redisplay pass before
+    /// [`Self::reset_unchanged_region`] snaps `unchanged_modified_tick` to
+    /// `modified_tick`. Non-positive thresholds are treated as disabled,
+    /// matching GNU's "positive integer or nil" contract for
+    /// `long-line-threshold`.
     ///
-    /// Returns whether a long line is present. The line search is the buffer's
-    /// own newline search (GNU `find_newline`, `src/search.c`), so a line only
-    /// costs a character conversion when its byte length already exceeds the
-    /// threshold.
+    /// Returns whether a long line is present. Because every Emacs character
+    /// occupies at least one byte, a line whose byte length is at most
+    /// `threshold` cannot exceed `threshold` characters; only lines whose byte
+    /// span exceeds `threshold` convert endpoints to character positions.
     #[doc(hidden)]
     pub fn refresh_long_line_optimizations(&mut self, threshold: i64) -> bool {
         if self.long_line_optimizations_p {
@@ -3530,28 +3540,34 @@ impl Buffer {
         if threshold <= 0 {
             return false;
         }
-        let tick = self.modified_tick();
-        if self.long_line_scan_tick != 0 && tick.saturating_sub(self.long_line_scan_tick) <= 8 {
+        let chars_tick = self.chars_modified_tick();
+        let unchanged = self.unchanged_modified_tick();
+        if !self.mode_line_clip_changed()
+            && (chars_tick.saturating_sub(unchanged) <= 8 || self.long_line_scan_tick == chars_tick)
+        {
             return false;
         }
-        self.long_line_scan_tick = tick;
+        self.long_line_scan_tick = chars_tick;
+        #[cfg(test)]
+        LONG_LINE_FULL_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let limit = self.point_max_emacs_byte_pos();
         let mut byte = self.point_min_emacs_byte_pos();
-        let mut chars = self.emacs_byte_pos_to_lisp_char_pos(byte).as_i64();
         let mut found = false;
         while byte < limit {
             let (past, crossed) = self.nth_newline_emacs_byte(byte, limit, 1);
             let next = if crossed == 0 { limit } else { past };
-            let next_chars = self.emacs_byte_pos_to_lisp_char_pos(next).as_i64();
-            if next_chars.saturating_sub(chars) as i64 > threshold {
-                found = true;
-                break;
+            if (next.get() - byte.get()) as i64 > threshold {
+                let start_chars = self.emacs_byte_pos_to_lisp_char_pos(byte).as_i64();
+                let next_chars = self.emacs_byte_pos_to_lisp_char_pos(next).as_i64();
+                if next_chars.saturating_sub(start_chars) > threshold {
+                    found = true;
+                    break;
+                }
             }
             if crossed == 0 {
                 break;
             }
             byte = next;
-            chars = next_chars;
         }
         self.long_line_optimizations_p = found;
         found
@@ -5259,6 +5275,10 @@ impl Buffer {
 
     pub fn chars_modified_tick(&self) -> i64 {
         self.text.chars_modified_tick()
+    }
+
+    pub fn unchanged_modified_tick(&self) -> i64 {
+        self.text.unchanged_modified_tick()
     }
 
     /// The accumulated dirty char range `[beg, end)` since the last redisplay
@@ -9651,6 +9671,10 @@ impl ModeLineNumberAnchor {
         }
     }
 }
+
+#[cfg(test)]
+static LONG_LINE_FULL_SCANS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 #[path = "buffer/tests/buffer_test.rs"]

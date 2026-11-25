@@ -275,3 +275,175 @@ fn composition_delimiter_scan_offsets_chunks_across_the_gap() {
         "the newline at emacs byte 201 is in the chunk after the gap"
     );
 }
+
+#[test]
+fn long_line_refresh_ignores_text_property_only_writes() {
+    crate::test_utils::init_test_tracing();
+    let mut buf = buf_with_text(&"short commit line\n".repeat(100));
+    let before = super::LONG_LINE_FULL_SCANS.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(!buf.refresh_long_line_optimizations(1_000));
+    let after_initial = super::LONG_LINE_FULL_SCANS.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        after_initial - before,
+        1,
+        "initial refresh should scan once"
+    );
+    buf.reset_unchanged_region();
+    assert_eq!(buf.unchanged_modified_tick(), buf.modified_tick());
+
+    // 20 text-property writes advance MODIFF by 20 while CHARS_MODIFF stays flat.
+    let chars_tick = buf.chars_modified_tick();
+    for i in 0..20usize {
+        buf.text_props_put_property_in_emacs_byte_range(
+            EmacsByteRange::new(EmacsBytePos::new(i * 18), EmacsBytePos::new(i * 18 + 5)),
+            Value::symbol("face"),
+            Value::symbol("bold"),
+        );
+        buf.record_text_property_modification();
+    }
+    assert_eq!(buf.chars_modified_tick(), chars_tick);
+    assert!(buf.modified_tick() >= chars_tick + 20);
+
+    // GNU xdisp.c:20648 gates rescan on CHARS_MODIFF - UNCHANGED_MODIFIED > 8.
+    assert!(!buf.refresh_long_line_optimizations(1_000));
+    let after_props = super::LONG_LINE_FULL_SCANS.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        after_props, after_initial,
+        "text-property-only writes must not trigger a full-buffer long-line rescan"
+    );
+}
+
+#[test]
+fn long_line_refresh_skips_multibyte_byte_to_char_conversion_on_short_lines() {
+    crate::test_utils::init_test_tracing();
+    // Multibyte lines (~20 bytes each, well below threshold 1000).
+    let mut buf = buf_with_text(&"café — commit\n".repeat(500));
+    assert_ne!(
+        buf.total_char_len().get(),
+        buf.total_emacs_byte_len().get(),
+        "buffer must be genuinely multibyte"
+    );
+    let before = crate::buffer::buffer_text::BufferText::multibyte_byte_to_char_calls_for_test();
+    assert!(!buf.refresh_long_line_optimizations(1_000));
+    let after = crate::buffer::buffer_text::BufferText::multibyte_byte_to_char_calls_for_test();
+    assert_eq!(
+        after - before,
+        0,
+        "short lines (byte_len <= threshold) must never call emacs_byte_pos_to_char_pos_multibyte"
+    );
+    assert!(!buf.long_line_optimizations_p());
+
+    // A multibyte line whose byte length exceeds threshold (600 * 2 = 1200 bytes > 1000)
+    // but whose character count does not (600 chars <= 1000) must NOT set the flag.
+    let mut mb_below = buf_with_text(&format!("{}\n", "é".repeat(600)));
+    assert!(!mb_below.refresh_long_line_optimizations(1_000));
+    assert!(!mb_below.long_line_optimizations_p());
+
+    // A multibyte line whose character count exceeds threshold (1100 > 1000) MUST set the flag.
+    let mut mb_above = buf_with_text(&format!("{}\n", "é".repeat(1_100)));
+    assert!(mb_above.refresh_long_line_optimizations(1_000));
+    assert!(mb_above.long_line_optimizations_p());
+}
+
+#[test]
+fn long_line_refresh_rearms_on_real_character_insert_and_widen() {
+    crate::test_utils::init_test_tracing();
+    // Case A: after redisplay ack + text-property writes, a real character insertion
+    // rejoins CHARS_MODIFF to MODIFF (CHARS_MODIFF - UNCHANGED_MODIFIED > 8) and
+    // re-arms the scan immediately.
+    let mut buf = buf_with_text(&"short line\n".repeat(50));
+    assert!(!buf.refresh_long_line_optimizations(1_000));
+    buf.reset_unchanged_region();
+    for i in 0..20usize {
+        buf.text_props_put_property_in_emacs_byte_range(
+            EmacsByteRange::new(EmacsBytePos::new(i * 11), EmacsBytePos::new(i * 11 + 4)),
+            Value::symbol("face"),
+            Value::symbol("bold"),
+        );
+        buf.record_text_property_modification();
+    }
+    assert!(!buf.refresh_long_line_optimizations(1_000));
+    buf.goto_emacs_byte_pos(buf.point_max_emacs_byte_pos());
+    buf.insert(&"x".repeat(1_200));
+    assert!(
+        buf.refresh_long_line_optimizations(1_000),
+        "real character insertion after text-property writes must re-arm long-line check"
+    );
+    assert!(buf.long_line_optimizations_p());
+
+    // Case B: > 8 real character insertions with no text-property writes re-arm the check.
+    let mut buf2 = buf_with_text(&"short\n".repeat(100));
+    assert!(!buf2.refresh_long_line_optimizations(1_000));
+    buf2.reset_unchanged_region();
+    buf2.goto_emacs_byte_pos(buf2.point_max_emacs_byte_pos());
+    for _ in 0..9 {
+        buf2.insert(&"y".repeat(150));
+    }
+    assert!(
+        buf2.refresh_long_line_optimizations(1_000),
+        "> 8 character insertions must re-arm long-line check"
+    );
+    assert!(buf2.long_line_optimizations_p());
+
+    // Case C: widening a narrowed buffer (clip_changed, CHARS_MODIFF unchanged) re-arms.
+    let mut buf3 = buf_with_text(&format!("short\n{}\n", "z".repeat(1_200)));
+    buf3.narrow_to_emacs_byte_range(EmacsByteRange::new(
+        EmacsBytePos::new(0),
+        EmacsBytePos::new(6),
+    ));
+    assert!(!buf3.refresh_long_line_optimizations(1_000));
+    assert!(!buf3.long_line_optimizations_p());
+    buf3.reset_unchanged_region();
+    let chars_before_widen = buf3.chars_modified_tick();
+    buf3.widen();
+    assert_eq!(buf3.chars_modified_tick(), chars_before_widen);
+    assert!(
+        buf3.refresh_long_line_optimizations(1_000),
+        "widening into a long line (clip_changed) must re-arm long-line check"
+    );
+    assert!(buf3.long_line_optimizations_p());
+
+    // Case D (GNU UNCHANGED_MODIFIED contract): interleaved 1-char edit + 1 prop write
+    // per redisplay ack keeps CHARS_MODIFF - UNCHANGED_MODIFIED == 1 <= 8 every frame,
+    // so it never rescans even after the line grows past threshold.
+    let mut buf4 = buf_with_text(&format!("{}\n", "a".repeat(995)));
+    assert!(!buf4.refresh_long_line_optimizations(1_000));
+    buf4.reset_unchanged_region();
+    let scans_before_interleaved =
+        super::LONG_LINE_FULL_SCANS.load(std::sync::atomic::Ordering::Relaxed);
+    for _ in 0..15 {
+        buf4.goto_emacs_byte_pos(EmacsBytePos::new(0));
+        buf4.insert("a");
+        buf4.record_text_property_modification();
+        assert!(
+            !buf4.refresh_long_line_optimizations(1_000),
+            "interleaved 1-char edit + 1 prop write per redisplay ack must not rescan"
+        );
+        buf4.reset_unchanged_region();
+    }
+    let scans_after_interleaved =
+        super::LONG_LINE_FULL_SCANS.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        scans_after_interleaved, scans_before_interleaved,
+        "CHARS_MODIFF - UNCHANGED_MODIFIED stayed <= 8 on every frame"
+    );
+    assert!(!buf4.long_line_optimizations_p());
+
+    // Case E (GNU UNCHANGED_MODIFIED contract): 10 prop writes + 1-char insert before
+    // redisplay ack advances CHARS_MODIFF - UNCHANGED_MODIFIED to 11 > 8, so the next
+    // refresh scans and observes the 1011-char line.
+    for _ in 0..10 {
+        buf4.record_text_property_modification();
+    }
+    buf4.goto_emacs_byte_pos(EmacsBytePos::new(0));
+    buf4.insert("a");
+    assert!(
+        buf4.chars_modified_tick() - buf4.unchanged_modified_tick() > 8,
+        "10 prop writes + 1 char insert must advance CHARS_MODIFF - UNCHANGED_MODIFIED > 8"
+    );
+    assert!(
+        buf4.refresh_long_line_optimizations(1_000),
+        "prop burst + 1-char insert before redisplay ack must trigger scan matching GNU"
+    );
+    assert!(buf4.long_line_optimizations_p());
+}

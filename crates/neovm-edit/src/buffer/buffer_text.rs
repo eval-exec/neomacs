@@ -294,6 +294,10 @@ struct BufferTextStorage {
     virtual_gap: GapCompatState,
     modified_tick: i64,
     chars_modified_tick: i64,
+    /// GNU `BUF_UNCHANGED_MODIFIED` (`src/buffer.c:634`, `src/xdisp.c:18303`):
+    /// initialized to 1 and snapped to `modified_tick` at each accurate
+    /// redisplay ack in [`BufferText::reset_unchanged_region`].
+    unchanged_modified: i64,
     /// Tracks `modified_tick` at the last text-PROPERTY change (GNU has no
     /// direct analog; mirrors `chars_modified_tick` for char edits). Lets
     /// redisplay distinguish "appearance changed" (face/display/invisible
@@ -401,6 +405,10 @@ pub struct BufferTextStorage {
     virtual_gap: GapCompatState,
     modified_tick: i64,
     chars_modified_tick: i64,
+    /// GNU `BUF_UNCHANGED_MODIFIED` (`src/buffer.c:634`, `src/xdisp.c:18303`):
+    /// initialized to 1 and snapped to `modified_tick` at each accurate
+    /// redisplay ack in [`BufferText::reset_unchanged_region`].
+    unchanged_modified: i64,
     /// Tracks `modified_tick` at the last text-PROPERTY change (GNU has no
     /// direct analog; mirrors `chars_modified_tick` for char edits). Lets
     /// redisplay distinguish "appearance changed" (face/display/invisible
@@ -646,6 +654,7 @@ impl Clone for BufferTextStorage {
             virtual_gap: self.virtual_gap,
             modified_tick: self.modified_tick,
             chars_modified_tick: self.chars_modified_tick,
+            unchanged_modified: self.unchanged_modified,
             props_modified_tick: self.props_modified_tick,
             beg_unchanged: self.beg_unchanged,
             end_unchanged: self.end_unchanged,
@@ -808,6 +817,7 @@ impl BufferText {
                 virtual_gap,
                 modified_tick: 1,
                 chars_modified_tick: 1,
+                unchanged_modified: 1,
                 props_modified_tick: 1,
                 beg_unchanged: i64::MAX,
                 end_unchanged: i64::MAX,
@@ -1222,6 +1232,10 @@ impl BufferText {
 
     pub fn chars_modified_tick(&self) -> i64 {
         self.storage.borrow().chars_modified_tick
+    }
+
+    pub fn unchanged_modified_tick(&self) -> i64 {
+        self.storage.borrow().unchanged_modified
     }
 
     pub fn props_modified_tick(&self) -> i64 {
@@ -1741,8 +1755,11 @@ impl BufferText {
     /// Reset the unchanged-region accumulator to "fully unchanged" — the
     /// redisplay ack, performed at the committed (accepted) layout break, NOT on
     /// a retry/`continue` (which would under-invalidate, spec §6).
+    /// Also snaps `unchanged_modified` to `modified_tick`, matching GNU
+    /// `mark_window_display_accurate_1` (`src/xdisp.c:18303`).
     pub fn reset_unchanged_region(&self) {
         let mut storage = self.storage.borrow_mut();
+        storage.unchanged_modified = storage.modified_tick;
         storage.beg_unchanged = i64::MAX;
         storage.end_unchanged = i64::MAX;
         storage.prop_beg_unchanged = i64::MAX;
@@ -3785,6 +3802,8 @@ impl BufferText {
     }
 
     fn emacs_byte_pos_to_char_pos_multibyte(&self, target: EmacsBytePos) -> CharPos0 {
+        #[cfg(test)]
+        MULTIBYTE_BYTE_TO_CHAR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let storage = self.storage.borrow();
         let metrics = storage.metrics;
         let content_epoch = storage.content_epoch;
@@ -3910,6 +3929,11 @@ impl BufferText {
         if let Some(span) = SingleBytePositionSpan::from_bounds(storage.content_epoch, bounds) {
             storage.single_byte_span.set(span);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn multibyte_byte_to_char_calls_for_test() -> usize {
+        MULTIBYTE_BYTE_TO_CHAR_CALLS.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -4241,6 +4265,10 @@ fn scan_backward_bytes(
         .is_some_and(|b| (b & 0xC0) == 0x80);
     cp.saturating_sub_len(CharLen::new(starts + usize::from(inside_char)))
 }
+
+#[cfg(test)]
+static MULTIBYTE_BYTE_TO_CHAR_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 #[path = "buffer_text/tests/buffer_text_test.rs"]
