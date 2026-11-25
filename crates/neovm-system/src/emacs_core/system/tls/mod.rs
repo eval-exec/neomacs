@@ -42,6 +42,7 @@ pub(crate) enum GnutlsCredentialType {
 pub(crate) struct GnutlsBootParameters {
     pub(crate) credential_type: GnutlsCredentialType,
     pub(crate) client: TlsClientParameters,
+    pub(crate) complete_negotiation: bool,
 }
 
 /// Certificate roots a TLS client must use for peer verification.
@@ -182,6 +183,8 @@ pub(crate) fn parse_gnutls_boot_parameters(
     } else {
         TlsTrustRoots::DefaultPlusFiles(trust_files)
     };
+    let complete_negotiation =
+        plist_first(&items, ":complete-negotiation", mode).is_some_and(|v| !v.is_nil());
 
     Ok(GnutlsBootParameters {
         credential_type,
@@ -189,6 +192,7 @@ pub(crate) fn parse_gnutls_boot_parameters(
             hostname,
             trust_roots,
         },
+        complete_negotiation,
     })
 }
 
@@ -633,10 +637,10 @@ pub(crate) fn advance_rustls_handshake(
         let result = if read && connection.wants_read() {
             match connection.read_tls(transport) {
                 Ok(0) if connection.is_handshaking() => return Err(TlsBackendError::UnexpectedEof),
-                Ok(_) => connection
-                    .process_new_packets()
-                    .map(|_| ())
-                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+                Ok(_) => match connection.process_new_packets() {
+                    Ok(_) => Ok(()),
+                    Err(error) => return Err(TlsBackendError::Protocol(error.to_string())),
+                },
                 Err(error) => Err(error),
             }
         } else if !read && connection.wants_write() {
@@ -842,6 +846,7 @@ pub(crate) enum TlsBackendError {
     InvalidHostname(String),
     TrustFile { path: PathBuf, reason: String },
     Connect(String),
+    Protocol(String),
     UnexpectedEof,
     Io(std::io::Error),
 }
@@ -854,6 +859,7 @@ impl std::fmt::Display for TlsBackendError {
                 write!(f, "Invalid TLS trust file {}: {reason}", path.display())
             }
             Self::Connect(err) => write!(f, "TLS handshake failed: {err}"),
+            Self::Protocol(err) => write!(f, "TLS handshake: {err}"),
             Self::UnexpectedEof => f.write_str("TLS handshake: unexpected EOF"),
             Self::Io(err) => write!(f, "TLS handshake: {err}"),
         }

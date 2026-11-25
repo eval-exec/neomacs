@@ -6304,9 +6304,11 @@ impl SystemProcessExt for ProcessManager {
     }
 
     fn flush_process_write_queue(&mut self, id: ProcessId) -> Result<ProcessWriteFlush, Flow> {
-        if self
-            .get(id)
-            .is_some_and(|proc| proc.gnutls_initstage == GnutlsInitStage::HandshakeTried)
+        let Some(proc) = self.get(id) else {
+            return Ok(ProcessWriteFlush::NoSource);
+        };
+        if proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+            && proc.tls_handshake_owner() != TlsHandshakeOwner::None
         {
             return Ok(ProcessWriteFlush::Blocked);
         }
@@ -6465,6 +6467,7 @@ impl SystemProcessExt for ProcessManager {
     fn has_pending_tls_handshake(&self, id: ProcessId) -> bool {
         self.get(id).is_some_and(|process| {
             process.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                && process.tls_handshake_owner() == TlsHandshakeOwner::BlockingOnStack
                 && process.live_io().tls_stream().is_some()
         })
     }
@@ -6474,6 +6477,7 @@ impl SystemProcessExt for ProcessManager {
             .iter()
             .filter_map(|(&id, proc)| {
                 (proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                    && proc.tls_handshake_owner() == TlsHandshakeOwner::BlockingOnStack
                     && proc.live_io().tls_stream().is_some())
                 .then_some(id)
             })
@@ -6485,13 +6489,20 @@ impl SystemProcessExt for ProcessManager {
         let Some(process) = self.get(id) else {
             return false;
         };
-        if process.gnutls_initstage != GnutlsInitStage::HandshakeTried {
+        if process.gnutls_initstage != GnutlsInitStage::HandshakeTried
+            || process.tls_handshake_owner() == TlsHandshakeOwner::None
+        {
             return false;
         }
         let Some(tls) = process.live_io().tls_stream() else {
             return false;
         };
-        self.set_tls_handshake_interest(id, Some(tls.handshake_interest()));
+        let interest = if process.live_io().pending_network_connect().is_some() {
+            TlsHandshakeInterest::Writable
+        } else {
+            tls.handshake_interest()
+        };
+        self.set_tls_handshake_interest(id, Some(interest));
         true
     }
 
@@ -6513,9 +6524,14 @@ impl SystemProcessExt for ProcessManager {
         };
         process.set_tls_polling(TlsPolling::Enabled);
         if process.gnutls_initstage == GnutlsInitStage::HandshakeTried
+            && process.tls_handshake_owner() != TlsHandshakeOwner::None
             && let Some(tls) = process.live_io().tls_stream()
         {
-            let interest = tls.handshake_interest();
+            let interest = if process.live_io().pending_network_connect().is_some() {
+                TlsHandshakeInterest::Writable
+            } else {
+                tls.handshake_interest()
+            };
             self.set_tls_handshake_interest(id, Some(interest));
         }
     }
@@ -6716,13 +6732,16 @@ impl SystemProcessExt for ProcessManager {
         {
             return self.complete_pending_dns_network_connect(id);
         }
-        let connect_error = proc
-            .live_io()
-            .network_socket()
-            .and_then(|socket| socket.take_pending_connect_error())
-            .transpose()
-            .map_err(|err| signal_process_io("Checking network connection", None, err))?
-            .flatten();
+        let connect_error = if let Some(socket) = proc.live_io().network_socket() {
+            socket.take_pending_connect_error()
+        } else if let Some(tls) = proc.live_io().tls_stream() {
+            Some(socket2::SockRef::from(tls.tcp_stream()).take_error())
+        } else {
+            None
+        }
+        .transpose()
+        .map_err(|err| signal_process_io("Checking network connection", None, err))?
+        .flatten();
 
         if let Some(err) = connect_error {
             let pending = self
@@ -6731,10 +6750,13 @@ impl SystemProcessExt for ProcessManager {
             let Some(pending) = pending else {
                 return Ok(PendingNetworkConnectCompletion::None);
             };
-            if let Some(proc) = self.get(id)
-                && let Some(socket) = proc.live_io().network_socket()
-            {
-                socket.unregister();
+            if let Some(proc) = self.get(id) {
+                if let Some(socket) = proc.live_io().network_socket() {
+                    socket.unregister();
+                }
+                if let Some(tls) = proc.live_io().tls_stream() {
+                    tls.unregister();
+                }
             }
             let code = io_error_status_code(&err);
             match pending {
@@ -6753,7 +6775,13 @@ impl SystemProcessExt for ProcessManager {
                                 self.get(id).map(|proc| proc.sentinel).unwrap_or(Value::NIL);
                             if let Some(proc) = self.get_mut(id) {
                                 proc.status = process_status_failed_value(code);
+                                proc.live_io_mut().set_tls_stream(None);
                                 proc.live_io_mut().set_network_socket(None);
+                                if i64::from(proc.gnutls_initstage)
+                                    >= i64::from(GnutlsInitStage::Init)
+                                {
+                                    proc.gnutls_initstage = GnutlsInitStage::Callbacks;
+                                }
                                 proc.set_pending_network_connect(None);
                             }
                             // GNU src/process.c:6141.
@@ -6771,7 +6799,11 @@ impl SystemProcessExt for ProcessManager {
             let sentinel = self.get(id).map(|proc| proc.sentinel).unwrap_or(Value::NIL);
             if let Some(proc) = self.get_mut(id) {
                 proc.status = process_status_failed_value(code);
+                proc.live_io_mut().set_tls_stream(None);
                 proc.live_io_mut().set_network_socket(None);
+                if i64::from(proc.gnutls_initstage) >= i64::from(GnutlsInitStage::Init) {
+                    proc.gnutls_initstage = GnutlsInitStage::Callbacks;
+                }
                 proc.set_pending_network_connect(None);
             }
             // GNU src/process.c:6141, the arm with no addrinfos left.
@@ -6789,25 +6821,34 @@ impl SystemProcessExt for ProcessManager {
             proc.set_pending_network_connect(None);
             proc.status = process_status_run_value();
         }
-        let tls_parameters = self
+        let has_preinstalled_tls = self
             .get(id)
-            .map(|proc| proc.gnutls_boot_parameters)
-            .filter(|parameters| !parameters.is_nil())
-            .map(|parameters| parse_make_network_tls_parameters(parameters, mode))
-            .transpose()
-            .map_err(|flow| {
-                self.delete_process(id);
-                flow
-            })?
-            .flatten();
-        if let Some(parameters) = tls_parameters {
-            begin_process_tls::<RustlsBackend>(
-                self,
-                id,
-                &parameters.client,
-                "make-network-process",
-                signal_gnutls_boot_error,
-            )?;
+            .is_some_and(|proc| proc.live_io().tls_stream().is_some());
+        if !has_preinstalled_tls {
+            let tls_parameters = self
+                .get(id)
+                .map(|proc| proc.gnutls_boot_parameters)
+                .filter(|parameters| !parameters.is_nil())
+                .map(|parameters| parse_make_network_tls_parameters(parameters, mode))
+                .transpose()
+                .map_err(|flow| {
+                    self.delete_process(id);
+                    flow
+                })?
+                .flatten();
+            if let Some(parameters) = tls_parameters {
+                if let Some(proc) = self.get_mut(id) {
+                    proc.gnutls_boot_parameters = Value::NIL;
+                }
+                begin_process_tls::<RustlsBackend>(
+                    self,
+                    id,
+                    &parameters.client,
+                    TlsHandshakeOwner::BlockingOnStack,
+                    "make-network-process",
+                    signal_gnutls_boot_error,
+                )?;
+            }
         }
         self.register_socket_fd(id).ok();
         Ok(PendingNetworkConnectCompletion::Connected { sentinel })
@@ -7613,6 +7654,7 @@ impl AsyncCallbackKind {
 #[doc(hidden)]
 pub trait ProcessContextExt {
     fn wait_while_network_process_connecting(&mut self, id: ProcessId) -> Result<(), Flow>;
+    fn wait_for_nonblocking_tls_negotiation(&mut self, id: ProcessId) -> Result<(), Flow>;
     fn send_process_input_reentrant(
         &mut self,
         id: ProcessId,
@@ -7748,6 +7790,92 @@ pub trait ProcessContextExt {
     ) -> Result<ProcessOutputServiceOutcome, Flow>;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NonBlockingTlsAdvance {
+    Inactive,
+    StillPending,
+    BecameReady,
+    Failed,
+}
+
+fn fail_nonblocking_tls_handshake(eval: &mut neovm_eval::emacs_core::eval::Context, id: ProcessId) {
+    // GNU `wait_reading_process_output` (`src/process.c:5455-5457`):
+    // deactivate TLS + fds (lowering initstage to `Callbacks` = 3),
+    // keep the process in the process table, set status to
+    // `(failed "TLS negotiation failed")`, and run NO sentinel.
+    eval.processes_mut().deactivate_network_process_io(id);
+    if let Some(proc) = eval.processes_mut().get_mut(id) {
+        proc.write_queue = Value::NIL;
+        proc.status = process_status_failed_message_value("TLS negotiation failed".to_string());
+        proc.pending_status = Value::NIL;
+        proc.status_notify_pending = false;
+    }
+}
+
+fn advance_nonblocking_tls_handshake(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    id: ProcessId,
+) -> Result<NonBlockingTlsAdvance, Flow> {
+    let eligible = eval.processes().get(id).is_some_and(|proc| {
+        proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+            && proc.tls_handshake_owner() == TlsHandshakeOwner::NonBlockingAsync
+            && proc.live_io().pending_network_connect().is_none()
+            && proc.live_io().tls_stream().is_some()
+    });
+    if !eligible {
+        return Ok(NonBlockingTlsAdvance::Inactive);
+    }
+
+    let progress = {
+        let Some(proc) = eval.processes_mut().get_mut(id) else {
+            return Ok(NonBlockingTlsAdvance::Inactive);
+        };
+        let Some(stream) = proc.live_io_mut().tls_stream_mut() else {
+            return Ok(NonBlockingTlsAdvance::Inactive);
+        };
+        stream.advance_handshake()
+    };
+
+    match progress {
+        Ok(TlsHandshakeProgress::Ready) => {
+            let Some(accepts_output) = eval.processes_mut().get_mut(id).map(|proc| {
+                proc.gnutls_initstage = GnutlsInitStage::Ready;
+                proc.set_tls_handshake_owner(TlsHandshakeOwner::None);
+                // GNU `finish_after_tls_connection` (`src/process.c:3409`):
+                // mark status `run` (public `open` for network processes) and
+                // preserve `gnutls_boot_parameters`.
+                proc.status = process_status_run_value();
+                process_filter_accepts_output(proc)
+            }) else {
+                return Ok(NonBlockingTlsAdvance::Inactive);
+            };
+            eval.processes()
+                .set_process_output_read_interest(id, accepts_output);
+            eval.processes_mut().flush_process_write_queue(id)?;
+            let sentinel = eval
+                .processes()
+                .get(id)
+                .map(|proc| proc.sentinel)
+                .unwrap_or(Value::NIL);
+            let roots = eval.save_specpdl_roots();
+            eval.push_specpdl_root(sentinel);
+            let sentinel_result = eval.run_process_sentinel_callback(id, sentinel, "open\n");
+            eval.restore_specpdl_roots(roots);
+            sentinel_result?;
+            Ok(NonBlockingTlsAdvance::BecameReady)
+        }
+        Ok(TlsHandshakeProgress::Pending(interest)) => {
+            eval.processes()
+                .set_tls_handshake_interest(id, Some(interest));
+            Ok(NonBlockingTlsAdvance::StillPending)
+        }
+        Err(_) => {
+            fail_nonblocking_tls_handshake(eval, id);
+            Ok(NonBlockingTlsAdvance::Failed)
+        }
+    }
+}
+
 impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     fn wait_while_network_process_connecting(&mut self, id: ProcessId) -> Result<(), Flow> {
         while self.processes().get(id).is_some_and(|proc| {
@@ -7763,22 +7891,68 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         Ok(())
     }
 
+    fn wait_for_nonblocking_tls_negotiation(&mut self, id: ProcessId) -> Result<(), Flow> {
+        loop {
+            let Some((stage, owner)) = self
+                .processes()
+                .get(id)
+                .map(|proc| (proc.gnutls_initstage, proc.tls_handshake_owner()))
+            else {
+                return Ok(());
+            };
+            if stage != GnutlsInitStage::HandshakeTried {
+                return Ok(());
+            }
+            match owner {
+                TlsHandshakeOwner::BlockingOnStack => return Ok(()),
+                TlsHandshakeOwner::None => {
+                    // Initial non-blocking `gnutls-boot` already failed and
+                    // left stage 8 with no active handshake loop.  Mirror GNU
+                    // `send_process` -> `wait_for_tls_negotiation` by failing
+                    // and deactivating the session so `send_process` errors
+                    // promptly instead of spinning forever.
+                    fail_nonblocking_tls_handshake(self, id);
+                    return Ok(());
+                }
+                TlsHandshakeOwner::NonBlockingAsync => {
+                    let _ = self.wait_for_process_output(ProcessOutputWaitRequest::new(
+                        ProcessOutputWaitTiming::For(Duration::from_millis(20)),
+                        Some(id),
+                        false,
+                        true,
+                    ))?;
+                }
+            }
+        }
+    }
+
     fn send_process_input_reentrant(
         &mut self,
         id: ProcessId,
         input: &LispString,
     ) -> Result<(), Flow> {
+        // Wait for any pending async TLS negotiation before queuing bytes so a
+        // failing handshake signals cleanly instead of queuing and dropping data.
+        self.wait_for_nonblocking_tls_negotiation(id)?;
+        if self
+            .processes_mut()
+            .observe(UpdateStatusSite::SendProcess, id)
+            .is_some_and(|observed| !observed.allows_send())
+        {
+            return Err(signal_process_not_running_in_manager(&self.processes(), id));
+        }
+
         if !self.processes_mut().queue_input(id, input)? {
             return Err(signal("error", vec![Value::string("Process not found")]));
         }
 
-        // A reentrant timer/filter cannot drive the suspended TLS handshake.
-        // Retain application data until verification succeeds, then flush it.
-        if self
-            .processes()
-            .get(id)
-            .is_some_and(|process| process.gnutls_initstage == GnutlsInitStage::HandshakeTried)
-        {
+        // A reentrant timer/filter cannot drive a suspended on-stack blocking
+        // TLS handshake.  Retain application data until verification succeeds,
+        // then flush it.
+        if self.processes().get(id).is_some_and(|process| {
+            process.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                && process.tls_handshake_owner() == TlsHandshakeOwner::BlockingOnStack
+        }) {
             return Ok(());
         }
 
@@ -7786,6 +7960,13 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             match self.processes_mut().flush_process_write_queue(id)? {
                 ProcessWriteFlush::Drained => return Ok(()),
                 ProcessWriteFlush::NoSource => {
+                    if self
+                        .processes_mut()
+                        .observe(UpdateStatusSite::SendProcess, id)
+                        .is_some_and(|observed| !observed.allows_send())
+                    {
+                        return Err(signal_process_not_running_in_manager(&self.processes(), id));
+                    }
                     if self
                         .processes()
                         .get_any(id)
@@ -7812,6 +7993,13 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         false,
                         true,
                     ))?;
+                    if self
+                        .processes_mut()
+                        .observe(UpdateStatusSite::SendProcess, id)
+                        .is_some_and(|observed| !observed.allows_send())
+                    {
+                        return Err(signal_process_not_running_in_manager(&self.processes(), id));
+                    }
                 }
             }
         }
@@ -8648,12 +8836,22 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     ) -> Result<ProcessOutputServiceOutcome, Flow> {
         let target_process = request.target_process();
         let proc_ids = request.live_processes(self.processes().live_process_ids());
-        self.service_process_output_for_ids(
+        let mut outcome = ProcessOutputServiceOutcome::default();
+        for &pid in &proc_ids {
+            match advance_nonblocking_tls_handshake(self, pid)? {
+                NonBlockingTlsAdvance::Inactive | NonBlockingTlsAdvance::StillPending => {}
+                NonBlockingTlsAdvance::BecameReady | NonBlockingTlsAdvance::Failed => {
+                    outcome.record_serviced();
+                }
+            }
+        }
+        outcome.absorb(self.service_process_output_for_ids(
             proc_ids,
             target_process,
             true,
             ProcessOutputServicePass::Readiness,
-        )
+        )?);
+        Ok(outcome)
     }
 
     /// GNU `status_notify (NULL, WAIT_PROC)` (src/process.c:5554, :5854), with
@@ -8721,8 +8919,10 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 match stream.advance_handshake().map_err(map_error)? {
                     TlsHandshakeProgress::Ready => {
                         proc.gnutls_initstage = GnutlsInitStage::Ready;
-                        proc.gnutls_boot_parameters = Value::NIL;
-                        self.processes().register_socket_fd(id).ok();
+                        proc.set_tls_handshake_owner(TlsHandshakeOwner::None);
+                        let accepts_output = process_filter_accepts_output(proc);
+                        self.processes()
+                            .set_process_output_read_interest(id, accepts_output);
                         self.processes_mut().flush_process_write_queue(id)?;
                         return Ok(());
                     }
@@ -8747,11 +8947,10 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     ) -> Result<(), Flow> {
         let roots = self.save_specpdl_roots();
         self.push_specpdl_root(sentinel);
-        let result = if self
-            .processes()
-            .get(id)
-            .is_some_and(|proc| proc.gnutls_initstage == GnutlsInitStage::HandshakeTried)
-        {
+        let result = if self.processes().get(id).is_some_and(|proc| {
+            proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                && proc.tls_handshake_owner() == TlsHandshakeOwner::BlockingOnStack
+        }) {
             self.finish_process_tls_handshake(id, signal_gnutls_boot_error)
         } else {
             Ok(())
@@ -8767,6 +8966,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     ) -> Result<ProcessOutputServiceOutcome, Flow> {
         let target_process = request.target_process();
         let mut outcome = ProcessOutputServiceOutcome::default();
+        let mut newly_ready_tls_ids = Vec::new();
 
         let writable_processes = request.ready_processes(events.writable_processes_ref().to_vec());
         for pid in writable_processes {
@@ -8780,12 +8980,21 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     outcome.record_serviced();
                 }
                 PendingNetworkConnectCompletion::Connected { sentinel } => {
-                    self.finish_connected_tls_before_sentinel(pid, sentinel)?;
-                    self.setup_process_output_descriptor(pid)?;
-                    // GNU services :nowait completion inside the wait and
-                    // keeps waiting (only read bytes complete the wait).
-                    outcome.record_serviced();
-                    self.run_process_sentinel_callback(pid, sentinel, "open\n")?;
+                    let deferred_async_tls = self.processes().get(pid).is_some_and(|proc| {
+                        proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                            && proc.tls_handshake_owner() == TlsHandshakeOwner::NonBlockingAsync
+                    });
+                    if deferred_async_tls {
+                        self.setup_process_output_descriptor(pid)?;
+                        outcome.record_serviced();
+                    } else {
+                        self.finish_connected_tls_before_sentinel(pid, sentinel)?;
+                        self.setup_process_output_descriptor(pid)?;
+                        // GNU services :nowait completion inside the wait and
+                        // keeps waiting (only read bytes complete the wait).
+                        outcome.record_serviced();
+                        self.run_process_sentinel_callback(pid, sentinel, "open\n")?;
+                    }
                 }
                 PendingNetworkConnectCompletion::Failed { sentinel, code } => {
                     outcome.record_serviced();
@@ -8803,15 +9012,40 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     outcome.record_serviced();
                 }
             }
-            match self.processes_mut().flush_process_write_queue(pid)? {
-                ProcessWriteFlush::Drained | ProcessWriteFlush::Blocked => {
+            match advance_nonblocking_tls_handshake(self, pid)? {
+                NonBlockingTlsAdvance::Inactive => {
+                    match self.processes_mut().flush_process_write_queue(pid)? {
+                        ProcessWriteFlush::Drained | ProcessWriteFlush::Blocked => {
+                            outcome.record_serviced();
+                        }
+                        ProcessWriteFlush::NoSource => {}
+                    }
+                }
+                NonBlockingTlsAdvance::StillPending => {}
+                NonBlockingTlsAdvance::BecameReady => {
+                    outcome.record_serviced();
+                    newly_ready_tls_ids.push(pid);
+                }
+                NonBlockingTlsAdvance::Failed => {
                     outcome.record_serviced();
                 }
-                ProcessWriteFlush::NoSource => {}
             }
         }
 
-        let proc_ids = request.ready_processes(events.ready_processes_ref().to_vec());
+        let mut proc_ids = request.ready_processes(events.ready_processes_ref().to_vec());
+        for &pid in &proc_ids {
+            match advance_nonblocking_tls_handshake(self, pid)? {
+                NonBlockingTlsAdvance::Inactive | NonBlockingTlsAdvance::StillPending => {}
+                NonBlockingTlsAdvance::BecameReady => {
+                    outcome.record_serviced();
+                    newly_ready_tls_ids.push(pid);
+                }
+                NonBlockingTlsAdvance::Failed => {
+                    outcome.record_serviced();
+                }
+            }
+        }
+        proc_ids.extend(newly_ready_tls_ids);
         outcome.absorb(self.service_process_output_for_ids(
             proc_ids,
             target_process,
@@ -8934,10 +9168,19 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         outcome.record_serviced();
                     }
                     PendingNetworkConnectCompletion::Connected { sentinel } => {
-                        self.finish_connected_tls_before_sentinel(pid, sentinel)?;
-                        self.setup_process_output_descriptor(pid)?;
-                        outcome.record_serviced();
-                        self.run_process_sentinel_callback(pid, sentinel, "open\n")?;
+                        let deferred_async_tls = self.processes().get(pid).is_some_and(|proc| {
+                            proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                                && proc.tls_handshake_owner() == TlsHandshakeOwner::NonBlockingAsync
+                        });
+                        if deferred_async_tls {
+                            self.setup_process_output_descriptor(pid)?;
+                            outcome.record_serviced();
+                        } else {
+                            self.finish_connected_tls_before_sentinel(pid, sentinel)?;
+                            self.setup_process_output_descriptor(pid)?;
+                            outcome.record_serviced();
+                            self.run_process_sentinel_callback(pid, sentinel, "open\n")?;
+                        }
                     }
                     PendingNetworkConnectCompletion::Failed { sentinel, code } => {
                         outcome.record_serviced();

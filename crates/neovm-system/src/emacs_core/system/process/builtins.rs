@@ -376,15 +376,97 @@ pub(crate) fn builtin_gnutls_boot(
     let id = resolve_process_object_or_wrong_type_any_in_manager(&eval.processes(), &args[0])?;
     let parameters = parse_gnutls_boot_parameters(args[1], args[2], eval.symbol_mode())?;
     // GNU `Fgnutls_boot` (`src/gnutls.c:2083`) calls `emacs_gnutls_deinit`
-    // before allocating fresh credentials on a process that already has an
-    // established TLS session.  Do not retire a `HandshakeTried` session here
-    // so a recursive `gnutls-boot` from a timer/filter cannot tear down an
-    // outer blocking `finish_process_tls_handshake`.
+    // before allocating fresh credentials on any process that already has an
+    // active TLS session (both stage 9 `Ready` and stage 8 non-blocking
+    // `HandshakeTried`).  Never tear down a `BlockingOnStack` handshake so a
+    // recursive `gnutls-boot` from a timer/filter cannot corrupt an outer
+    // synchronous `finish_process_tls_handshake`.
     if eval.processes().get(id).is_some_and(|proc| {
-        proc.gnutls_initstage == GnutlsInitStage::Ready && proc.live_io().tls_stream().is_some()
+        proc.live_io().tls_stream().is_some()
+            && proc.tls_handshake_owner() != TlsHandshakeOwner::BlockingOnStack
     }) {
         deinit_process_tls(eval.processes_mut(), id)?;
     }
+
+    // GNU `emacs_gnutls_handshake` (`src/gnutls.c:634`) runs non-blocking when
+    // the network process was created with `:nowait t` and `gnutls-boot` was
+    // NOT passed a non-nil `:complete-negotiation`.
+    let is_non_blocking = !parameters.complete_negotiation
+        && eval.processes().get(id).is_some_and(|proc| {
+            process_contact_plist_get(proc.childp, ProcessKeyword::Nowait.value()).is_truthy()
+        });
+
+    if is_non_blocking {
+        let has_pending_connect = eval
+            .processes()
+            .get(id)
+            .is_some_and(|proc| proc.live_io().pending_network_connect().is_some());
+        begin_process_tls::<RustlsBackend>(
+            eval.processes_mut(),
+            id,
+            &parameters.client,
+            TlsHandshakeOwner::NonBlockingAsync,
+            "gnutls-boot",
+            signal_gnutls_boot_error,
+        )?;
+        // GNU `src/process.c:5438-5439`: while a `:nowait` TCP connect is still
+        // pending (`NON_BLOCKING_CONNECT_FD`), do not start TLS handshake I/O;
+        // keep writable interest armed and return `gnutls-e-again`.
+        if has_pending_connect {
+            eval.processes()
+                .set_tls_handshake_interest(id, Some(TlsHandshakeInterest::Writable));
+            return Ok(Value::symbol("gnutls-e-again"));
+        }
+        let progress = {
+            let proc = eval
+                .processes_mut()
+                .get_mut(id)
+                .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
+            let stream = proc.live_io_mut().tls_stream_mut().ok_or_else(|| {
+                signal(
+                    "error",
+                    vec![Value::string("TLS connection closed during negotiation")],
+                )
+            })?;
+            stream.advance_handshake()
+        };
+        return match progress {
+            Ok(TlsHandshakeProgress::Ready) => {
+                let accepts_output = {
+                    let proc = eval
+                        .processes_mut()
+                        .get_mut(id)
+                        .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
+                    proc.gnutls_initstage = GnutlsInitStage::Ready;
+                    proc.set_tls_handshake_owner(TlsHandshakeOwner::None);
+                    process_filter_accepts_output(proc)
+                };
+                eval.processes()
+                    .set_process_output_read_interest(id, accepts_output);
+                eval.processes_mut().flush_process_write_queue(id)?;
+                Ok(Value::T)
+            }
+            Ok(TlsHandshakeProgress::Pending(interest)) => {
+                eval.processes()
+                    .set_tls_handshake_interest(id, Some(interest));
+                Ok(Value::symbol("gnutls-e-again"))
+            }
+            Err(err) => {
+                // GNU `Fgnutls_boot` (`src/gnutls.c:2301-2303`) returns the
+                // negative GnuTLS error code directly without closing or
+                // deleting the process, leaving initstage at `HandshakeTried`
+                // (8) so a subsequent `gnutls-deinit` can still unwrap the
+                // underlying socket. Clear ownership and disarm handshake
+                // polling so wait loops do not spin on the failed session.
+                if let Some(proc) = eval.processes_mut().get_mut(id) {
+                    proc.set_tls_handshake_owner(TlsHandshakeOwner::None);
+                }
+                eval.processes().set_tls_handshake_interest(id, None);
+                Ok(Value::fixnum(nonblocking_gnutls_boot_error_code(&err)))
+            }
+        };
+    }
+
     upgrade_process_to_tls::<RustlsBackend>(
         eval,
         id,
@@ -559,7 +641,14 @@ pub(super) fn upgrade_process_to_tls<B: TlsClientBackend>(
     operation: &str,
     map_error: fn(TlsBackendError) -> Flow,
 ) -> Result<(), Flow> {
-    begin_process_tls::<B>(eval.processes_mut(), id, parameters, operation, map_error)?;
+    begin_process_tls::<B>(
+        eval.processes_mut(),
+        id,
+        parameters,
+        TlsHandshakeOwner::BlockingOnStack,
+        operation,
+        map_error,
+    )?;
     eval.finish_process_tls_handshake(id, map_error)
 }
 
@@ -567,6 +656,7 @@ pub(super) fn begin_process_tls<B: TlsClientBackend>(
     processes: &mut ProcessManager,
     id: ProcessId,
     parameters: &TlsClientParameters,
+    handshake_owner: TlsHandshakeOwner,
     operation: &str,
     map_error: fn(TlsBackendError) -> Flow,
 ) -> Result<(), Flow> {
@@ -626,10 +716,27 @@ pub(super) fn begin_process_tls<B: TlsClientBackend>(
         }
     };
 
+    let has_pending_connect = proc.live_io().pending_network_connect().is_some();
     proc.live_io_mut().set_tls_stream(Some(tls_stream));
-    let accepts_output = process_filter_accepts_output(proc);
-    processes.set_process_output_read_interest(id, accepts_output);
+    proc.set_tls_handshake_owner(handshake_owner);
+    if has_pending_connect {
+        processes.set_tls_handshake_interest(id, Some(TlsHandshakeInterest::Writable));
+    } else {
+        let accepts_output = process_filter_accepts_output(proc);
+        processes.set_process_output_read_interest(id, accepts_output);
+    }
     Ok(())
+}
+
+fn nonblocking_gnutls_boot_error_code(err: &TlsBackendError) -> i64 {
+    match err {
+        TlsBackendError::UnexpectedEof => -9, // GNUTLS_E_UNEXPECTED_PACKET_LENGTH
+        TlsBackendError::Protocol(_) => -15,  // GNUTLS_E_UNEXPECTED_PACKET
+        TlsBackendError::Io(_) => -54,        // GNUTLS_E_PULL_ERROR
+        TlsBackendError::InvalidHostname(_)
+        | TlsBackendError::TrustFile { .. }
+        | TlsBackendError::Connect(_) => -10, // GNUTLS_E_INVALID_SESSION
+    }
 }
 
 pub(super) fn signal_gnutls_boot_error(err: TlsBackendError) -> Flow {
@@ -637,6 +744,13 @@ pub(super) fn signal_gnutls_boot_error(err: TlsBackendError) -> Flow {
         TlsBackendError::InvalidHostname(_)
         | TlsBackendError::TrustFile { .. }
         | TlsBackendError::Connect(_) => signal("error", vec![Value::string(err.to_string())]),
+        TlsBackendError::Protocol(err) => signal(
+            "gnutls-error",
+            vec![
+                Value::fixnum(-15),
+                Value::string(format!("TLS handshake: {err}")),
+            ],
+        ),
         TlsBackendError::UnexpectedEof => signal(
             "gnutls-error",
             vec![
@@ -4930,6 +5044,11 @@ pub(crate) fn builtin_process_send_string(
     let id =
         resolve_get_process_designator_in_state(&eval.processes(), &eval.edit.buffers, &args[0])?;
     eval.wait_while_network_process_connecting(id)?;
+    // GNU `send_process` (`src/process.c:6722`) calls
+    // `wait_for_tls_negotiation (proc)` BEFORE `update_status (p)` and the
+    // `p->status != Qrun` check so a failing async handshake signals instead
+    // of queueing and dropping user data.
+    eval.wait_for_nonblocking_tls_negotiation(id)?;
     // GNU `send_process` runs `update_status` (:6725-6726) before it tests
     // `p->status`, and by then `handle_child_signal` has already recorded a
     // child that exited.  This port makes the recording here.
@@ -5052,7 +5171,12 @@ pub(crate) fn builtin_process_exit_status_impl(
     let proc = observed.process();
     match ProcessStatusSymbol::from_status_value(status) {
         Some(ProcessStatusSymbol::Exit) => Ok(Value::fixnum(process_status_code_value(status))),
-        Some(ProcessStatusSymbol::Failed) => Ok(Value::fixnum(process_status_code_value(status))),
+        // GNU `Fprocess_exit_status` (`src/process.c:1214-1216`) returns
+        // `XCAR (XCDR (p->status))` for any cons status, preserving string
+        // failure reasons such as `"TLS negotiation failed"`.
+        Some(ProcessStatusSymbol::Failed) => {
+            Ok(process_status_code_lisp_value(status).unwrap_or_else(|| Value::fixnum(0)))
+        }
         Some(ProcessStatusSymbol::Signal) => {
             if proc.kind == ProcessKind::Real {
                 Ok(Value::fixnum(process_status_code_value(status)))
@@ -5674,6 +5798,9 @@ pub(crate) fn builtin_process_send_region(
     let id =
         resolve_get_process_designator_in_state(&eval.processes(), &eval.edit.buffers, &args[0])?;
     eval.wait_while_network_process_connecting(id)?;
+    // GNU `send_process` (`src/process.c:6722`): wait for pending async TLS
+    // negotiation before testing `p->status` or sending.
+    eval.wait_for_nonblocking_tls_negotiation(id)?;
     // `process-send-region` reaches GNU's `send_process` too, and therefore
     // the same `update_status` at :6726.
     if eval

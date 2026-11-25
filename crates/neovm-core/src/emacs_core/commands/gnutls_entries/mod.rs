@@ -176,9 +176,14 @@ fn gnutls_symbol_error_code(
 fn gnutls_error_code_string(code: i64) -> &'static str {
     match code {
         0 => "Success.",
+        -9 => "Error decoding the received TLS packet.",
+        -10 => "The specified session has been invalidated for some reason.",
+        -15 => "An unexpected TLS packet was received.",
         -28 => "Resource temporarily unavailable, try again.",
         -52 => "Function was interrupted.",
-        -10 => "The specified session has been invalidated for some reason.",
+        -53 => "Error in the push function.",
+        -54 => "Error in the pull function.",
+        -110 => "The TLS connection was non-properly terminated.",
         _ => "(unknown error code)",
     }
 }

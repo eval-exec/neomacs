@@ -126,6 +126,24 @@ pub enum TlsPolling {
     Suspended,
 }
 
+/// Which runtime loop owns driving a `GnutlsInitStage::HandshakeTried` TLS
+/// handshake on a process.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TlsHandshakeOwner {
+    /// No active handshake loop owns the TLS stream (no TLS, TLS is ready, or
+    /// an initial non-blocking `gnutls-boot` returned an error without closing
+    /// the process).
+    #[default]
+    None,
+    /// Synchronous on-stack `finish_process_tls_handshake` loop (blocking
+    /// `gnutls-boot`, `neomacs-open-tls-stream`, or `:tls-parameters`).
+    BlockingOnStack,
+    /// Event-loop-driven handshake (`wait_reading_process_output` /
+    /// `accept-process-output` / `send_process`) installed by non-blocking
+    /// `gnutls-boot` (`:nowait t`, `:complete-negotiation nil`).
+    NonBlockingAsync,
+}
+
 /// Contract for an owned OS handle that can be registered with and removed
 /// from a `polling::Poller` via [`PollRegistration`].
 ///
@@ -950,6 +968,7 @@ pub struct LiveProcessIo {
     /// TLS-wrapped stream for encrypted network connections.
     tls_stream: Option<PollRegistration<TlsStream>>,
     tls_polling: TlsPolling,
+    tls_handshake_owner: TlsHandshakeOwner,
     /// The open device behind a serial process.  GNU keeps one descriptor for
     /// both directions (`p->infd = fd; p->outfd = fd`, src/process.c:3216-3217),
     /// so this single slot is the read source AND the write source.
@@ -2472,6 +2491,14 @@ impl Process {
     pub fn set_tls_polling(&mut self, polling: TlsPolling) {
         self.live_io.set_tls_polling(polling);
     }
+
+    pub fn tls_handshake_owner(&self) -> TlsHandshakeOwner {
+        self.live_io.tls_handshake_owner()
+    }
+
+    pub fn set_tls_handshake_owner(&mut self, owner: TlsHandshakeOwner) {
+        self.live_io.set_tls_handshake_owner(owner);
+    }
 }
 
 impl LiveProcessIo {
@@ -2528,6 +2555,10 @@ impl LiveProcessIo {
 
     pub fn tls_polling(&self) -> TlsPolling {
         self.tls_polling
+    }
+
+    pub fn tls_handshake_owner(&self) -> TlsHandshakeOwner {
+        self.tls_handshake_owner
     }
 
     pub fn serial_port(&self) -> Option<&PollRegistration<SerialPort>> {
@@ -2592,6 +2623,10 @@ impl LiveProcessIo {
 
     pub fn set_tls_polling(&mut self, polling: TlsPolling) {
         self.tls_polling = polling;
+    }
+
+    pub fn set_tls_handshake_owner(&mut self, owner: TlsHandshakeOwner) {
+        self.tls_handshake_owner = owner;
     }
 
     // --- Safe RAII mutators for poll-registrable descriptor fields ---
@@ -2662,14 +2697,20 @@ impl LiveProcessIo {
     }
 
     /// Replace `tls_stream`, automatically unregistering any previously
-    /// registered TLS socket on drop.
+    /// registered TLS socket on drop and resetting handshake ownership/polling
+    /// metadata so a new or cleared stream never inherits stale state.
     pub fn set_tls_stream(&mut self, stream: Option<TlsStream>) {
         self.tls_stream = stream.map(PollRegistration::new);
+        self.tls_handshake_owner = TlsHandshakeOwner::None;
+        self.tls_polling = TlsPolling::Enabled;
     }
 
     /// Take `tls_stream`, unregistering its underlying TCP socket from its
-    /// poller before returning the inner stream.
+    /// poller before returning the inner stream and resetting handshake
+    /// ownership/polling metadata.
     pub fn take_tls_stream(&mut self) -> Option<TlsStream> {
+        self.tls_handshake_owner = TlsHandshakeOwner::None;
+        self.tls_polling = TlsPolling::Enabled;
         self.tls_stream.take().map(PollRegistration::into_inner)
     }
 
@@ -3084,6 +3125,7 @@ pub fn process_has_readable_process_io(proc: &Process) -> bool {
 pub(crate) fn process_has_pending_tls_handshake_io(process: &Process) -> bool {
     process.gnutls_initstage == GnutlsInitStage::HandshakeTried
         && process.live_io.tls_stream.is_some()
+        && process.live_io.tls_handshake_owner != TlsHandshakeOwner::None
         && process.live_io.tls_polling == TlsPolling::Enabled
 }
 

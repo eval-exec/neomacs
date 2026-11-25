@@ -20986,3 +20986,540 @@ fn gnutls_deinit_does_not_flush_pending_tls_write_queue_in_plaintext() {
     server_handle.join().expect("server thread finished");
     assert_eq!(result, "OK aborted");
 }
+
+/// Regression (CASE C): `gnutls-deinit` during an incomplete non-blocking
+/// handshake (`stage == 8`, `TlsHandshakeOwner::NonBlockingAsync`) unwraps
+/// the TCP socket to plaintext, lowers stage 8 -> 3, and allows plaintext I/O.
+#[cfg(unix)]
+#[test]
+fn gnutls_deinit_during_incomplete_handshake_restores_plaintext_socket() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 512];
+        while !buf.windows(b"PLAIN\n".len()).any(|w| w == b"PLAIN\n") {
+            let n = stream.read(&mut chunk).expect("read from client");
+            assert!(n > 0, "client closed before sending plaintext");
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        stream
+            .write_all(b"PLAIN_OK\n")
+            .expect("write plaintext reply");
+        stream.flush().expect("flush plaintext reply");
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((buf (generate-new-buffer "*tls-case-c*"))
+       (p (make-network-process :name "case-c" :buffer buf :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore)))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p) 'connect)
+          (accept-process-output p 0.1))
+        (let* ((boot-ret (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+               (stage-before (gnutls-get-initstage p))
+               (deinit-1 (gnutls-deinit p))
+               (stage-after (gnutls-get-initstage p))
+               (deinit-2 (gnutls-deinit p))
+               (status-after (process-status p)))
+          (process-send-string p "PLAIN\n")
+          (let ((deadline (+ (float-time) 3.0)))
+            (while (and (< (float-time) deadline)
+                        (with-current-buffer buf
+                          (not (string-match-p "PLAIN_OK" (buffer-string)))))
+              (accept-process-output p 0.1)))
+          (list boot-ret stage-before deinit-1 stage-after deinit-2 status-after
+                (with-current-buffer buf (buffer-string)))))
+    (ignore-errors (delete-process p))
+    (ignore-errors (kill-buffer buf))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(result, "OK (gnutls-e-again 8 t 3 nil open \"PLAIN_OK\n\")");
+}
+
+/// Regression (CASE E + MEDIUM-1): non-blocking `gnutls-boot` advances to stage
+/// 9 inside `accept-process-output` and `process-send-string`, runs the GNU
+/// `"open\n"` sentinel, and delivers encrypted application data.
+#[cfg(unix)]
+#[test]
+fn gnutls_boot_nonblocking_advances_in_accept_process_output_and_delivers_data() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind delayed TLS peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server_cfg = build_loopback_rustls_server_config();
+    let server_handle = std::thread::spawn(move || {
+        let mut keep_alive = Vec::new();
+        for expected in [b"PING\n".as_slice(), b"EARLY\n".as_slice()] {
+            let (stream, _) = listener.accept().expect("accept client");
+            std::thread::sleep(Duration::from_millis(60));
+            let conn = rustls::ServerConnection::new(std::sync::Arc::clone(&server_cfg))
+                .expect("server conn");
+            let mut tls = rustls::StreamOwned::new(conn, stream);
+            let mut buf = [0u8; 64];
+            let n = tls.read(&mut buf).expect("read encrypted payload");
+            assert_eq!(&buf[..n], expected);
+            let reply = if expected == b"PING\n" {
+                b"PONG\n".as_slice()
+            } else {
+                b"EARLY_OK\n".as_slice()
+            };
+            tls.write_all(reply).expect("write encrypted reply");
+            tls.flush().expect("flush encrypted reply");
+            keep_alive.push(tls);
+        }
+        let _ = done_rx.recv_timeout(Duration::from_secs(5));
+        drop(keep_alive);
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((events1 nil)
+       (buf1 (generate-new-buffer "*tls-case-e1*"))
+       (p1 (make-network-process
+            :name "case-e1" :buffer buf1 :host "127.0.0.1" :service {port} :nowait t :noquery t
+            :sentinel (lambda (_proc ev) (push ev events1))))
+       (events2 nil)
+       (buf2 (generate-new-buffer "*tls-case-e2*"))
+       (p2 (make-network-process
+            :name "case-e2" :buffer buf2 :host "127.0.0.1" :service {port} :nowait t :noquery t
+            :sentinel (lambda (_proc ev) (push ev events2)))))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p1) 'connect)
+          (accept-process-output p1 0.1))
+        (setq events1 nil)
+        (let ((boot1 (gnutls-boot p1 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))))
+          (let ((deadline (+ (float-time) 3.0)))
+            (while (and (< (float-time) deadline) (< (gnutls-get-initstage p1) 9))
+              (accept-process-output p1 0.1)))
+          (process-send-string p1 "PING\n")
+          (let ((deadline (+ (float-time) 3.0)))
+            (while (and (< (float-time) deadline)
+                        (with-current-buffer buf1 (not (string-match-p "PONG" (buffer-string)))))
+              (accept-process-output p1 0.1)))
+          (while (eq (process-status p2) 'connect)
+            (accept-process-output p2 0.1))
+          (setq events2 nil)
+          (let ((boot2 (gnutls-boot p2 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))))
+            ;; Send directly while still at stage 8: `send_process` waits for
+            ;; async TLS negotiation, fires `"open\n"`, then transmits.
+            (process-send-string p2 "EARLY\n")
+            (let ((deadline (+ (float-time) 3.0)))
+              (while (and (< (float-time) deadline)
+                          (with-current-buffer buf2 (not (string-match-p "EARLY_OK" (buffer-string)))))
+                (accept-process-output p2 0.1)))
+            (list boot1 (gnutls-get-initstage p1) (nreverse events1)
+                  (with-current-buffer buf1 (buffer-string))
+                  boot2 (gnutls-get-initstage p2) (nreverse events2)
+                  (with-current-buffer buf2 (buffer-string))))))
+    (ignore-errors (delete-process p1))
+    (ignore-errors (delete-process p2))
+    (ignore-errors (kill-buffer buf1))
+    (ignore-errors (kill-buffer buf2))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    let _ = done_tx.send(());
+    server_handle.join().expect("server thread finished");
+    assert_eq!(
+        result,
+        "OK (gnutls-e-again 9 (\"open\n\") \"PONG\n\" gnutls-e-again 9 (\"open\n\") \"EARLY_OK\n\")"
+    );
+}
+
+/// Regression (CASE F): calling `gnutls-boot` directly on a process still in
+/// non-blocking stage 8 (`TlsHandshakeOwner::NonBlockingAsync`) implicitly
+/// deinits the previous session and completes a fresh handshake.
+#[cfg(unix)]
+#[test]
+fn gnutls_boot_direct_reboot_from_nonblocking_stage_8() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind reboot peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+        // Drain the first ClientHello bytes from the abandoned non-blocking boot.
+        let mut discard = [0u8; 2048];
+        let _ = stream
+            .read(&mut discard)
+            .expect("read abandoned ClientHello");
+        std::thread::sleep(Duration::from_millis(80));
+        let server_cfg = build_loopback_rustls_server_config();
+        let conn = rustls::ServerConnection::new(server_cfg).expect("server conn");
+        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let mut buf = [0u8; 64];
+        let n = tls.read(&mut buf).expect("read reboot payload");
+        assert_eq!(&buf[..n], b"REBOOT\n");
+        tls.write_all(b"REBOOT_OK\n").expect("write reboot reply");
+        tls.flush().expect("flush reboot reply");
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((buf (generate-new-buffer "*tls-case-f*"))
+       (p (make-network-process :name "case-f" :buffer buf :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore)))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p) 'connect)
+          (accept-process-output p 0.1))
+        (let* ((b1 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+               (s1 (gnutls-get-initstage p))
+               (_ (sleep-for 0.04))
+               (b2 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
+               (s2 (gnutls-get-initstage p)))
+          (process-send-string p "REBOOT\n")
+          (let ((deadline (+ (float-time) 3.0)))
+            (while (and (< (float-time) deadline)
+                        (with-current-buffer buf (not (string-match-p "REBOOT_OK" (buffer-string)))))
+              (accept-process-output p 0.1)))
+          (list b1 s1 b2 s2 (with-current-buffer buf (buffer-string)))))
+    (ignore-errors (delete-process p))
+    (ignore-errors (kill-buffer buf))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(result, "OK (gnutls-e-again 8 t 9 \"REBOOT_OK\n\")");
+}
+
+/// Regression (#14790 HIGH-1): `process-send-string` and `process-send-region`
+/// on a process whose non-blocking TLS handshake fails mid-wait MUST signal
+/// `"Process <name> not running: failed with code TLS negotiation failed\n"`,
+/// never return `nil` and silently drop user data.
+#[cfg(unix)]
+#[test]
+fn gnutls_nonblocking_send_during_failing_handshake_signals_not_drops() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind failing peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().expect("accept client");
+            std::thread::sleep(Duration::from_millis(60));
+            let _ = stream.write_all(b"NOT_TLS_GARBAGE\r\n");
+            let _ = stream.flush();
+            std::thread::sleep(Duration::from_millis(80));
+        }
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((p1 (make-network-process :name "fail-send" :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore))
+       (p2 (make-network-process :name "fail-region" :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore)))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p1) 'connect) (accept-process-output p1 0.1))
+        (let* ((b1 (gnutls-boot p1 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+               (e1 (condition-case err
+                       (progn (process-send-string p1 "hello\n") 'unexpected-nil)
+                     (error err))))
+          (while (eq (process-status p2) 'connect) (accept-process-output p2 0.1))
+          (let* ((b2 (gnutls-boot p2 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+                 (e2 (with-temp-buffer
+                       (insert "hello-region\n")
+                       (condition-case err
+                           (progn (process-send-region p2 (point-min) (point-max)) 'unexpected-nil)
+                         (error err)))))
+            (list b1 e1 (process-status p1) (process-exit-status p1)
+                  b2 e2 (process-status p2) (process-exit-status p2)))))
+    (ignore-errors (delete-process p1))
+    (ignore-errors (delete-process p2))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(
+        result,
+        "OK (gnutls-e-again (error \"Process fail-send not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\" gnutls-e-again (error \"Process fail-region not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\")"
+    );
+}
+
+/// Regression (#14790 HIGH-2): async TLS handshake failure in
+/// `wait_reading_process_output` deactivates the process without deleting it
+/// from `(process-list)` / `(get-process)`, lowers initstage 8 -> 3, sets
+/// status `(failed "TLS negotiation failed")` (`process-exit-status` returns
+/// `"TLS negotiation failed"`), fires NO sentinel, and leaves a subsequent
+/// `(delete-process p)` able to transition to `closed` and fire `"deleted\n"`.
+#[cfg(unix)]
+#[test]
+fn gnutls_nonblocking_handshake_failure_deactivates_without_deleting_and_preserves_state() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind failing peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        std::thread::sleep(Duration::from_millis(60));
+        let _ = stream.write_all(b"NOT_TLS_GARBAGE\r\n");
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(80));
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((events nil)
+       (p (make-network-process
+           :name "fail-state" :host "127.0.0.1" :service {port} :nowait t :noquery t
+           :sentinel (lambda (_proc ev) (push ev events)))))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p) 'connect) (accept-process-output p 0.1))
+        (setq events nil)
+        (let ((boot (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))))
+          (let ((deadline (+ (float-time) 3.0)))
+            (while (and (< (float-time) deadline) (eq (process-status p) 'open))
+              (accept-process-output p 0.1)))
+          (let ((in-list-after-fail (not (null (memq p (process-list)))))
+                (get-proc-after-fail (eq (get-process "fail-state") p))
+                (stage-after-fail (gnutls-get-initstage p))
+                (status-after-fail (process-status p))
+                (exit-after-fail (process-exit-status p))
+                (events-after-fail (nreverse events)))
+            (setq events nil)
+            (delete-process p)
+            (list boot
+                  in-list-after-fail
+                  get-proc-after-fail
+                  stage-after-fail
+                  status-after-fail
+                  exit-after-fail
+                  events-after-fail
+                  (process-status p)
+                  (nreverse events)
+                  (not (null (memq p (process-list))))))))
+    (ignore-errors (delete-process p))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(
+        result,
+        "OK (gnutls-e-again t t 3 failed \"TLS negotiation failed\" nil closed (\"deleted\n\") nil)"
+    );
+}
+
+/// Regression (#14790 HIGH-2 Flow propagation): a `throw` (non-local `Flow`)
+/// from the `"open\n"` sentinel run on async TLS `8 -> 9` completion must
+/// propagate out of `accept-process-output` instead of being swallowed.
+#[cfg(unix)]
+#[test]
+fn gnutls_nonblocking_open_sentinel_propagates_throw_and_quit() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind delayed TLS peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept client");
+        std::thread::sleep(Duration::from_millis(50));
+        let server_cfg = build_loopback_rustls_server_config();
+        let conn = rustls::ServerConnection::new(server_cfg).expect("server conn");
+        let mut tls = rustls::StreamOwned::new(conn, stream);
+        let _ = tls.conn.complete_io(&mut tls.sock);
+        std::thread::sleep(Duration::from_millis(60));
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((armed nil)
+       (p (make-network-process
+           :name "throw-sentinel" :host "127.0.0.1" :service {port} :nowait t :noquery t
+           :sentinel (lambda (proc ev)
+                       (when armed
+                         (throw 'tls-open-tag
+                                (list (process-status proc) ev (gnutls-get-initstage proc))))))))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p) 'connect) (accept-process-output p 0.1))
+        (let ((boot (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))))
+          (setq armed t)
+          (let ((caught
+                 (catch 'tls-open-tag
+                   (let ((deadline (+ (float-time) 3.0)))
+                     (while (< (float-time) deadline)
+                       (accept-process-output p 0.1)))
+                   'not-thrown)))
+            (list boot caught))))
+    (setq armed nil)
+    (ignore-errors (delete-process p))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(result, "OK (gnutls-e-again (open \"open\n\" 9))");
+}
+
+/// Regression (#14790 HIGH-3): a pending non-blocking TLS handshake
+/// (`StillPending`) must NEVER mark the wait pass as serviced, otherwise
+/// `wait_for_command_input` busy-spins at 100% CPU without ever sleeping in
+/// `epoll_wait`.
+#[cfg(unix)]
+#[test]
+fn gnutls_nonblocking_pending_handshake_does_not_busy_spin_command_input_wait() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server_handle = std::thread::spawn(move || {
+        let (_stream, _) = listener.accept().expect("accept client");
+        let _ = done_rx.recv_timeout(Duration::from_secs(5));
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let mut ev = crate::emacs_core::eval_hook_installers::new_context();
+    let boot = ev
+        .eval_str(&format!(
+            r#"
+(let ((p (make-network-process :name "idle-tls" :host "127.0.0.1" :service {port} :nowait t :noquery t)))
+  (while (eq (process-status p) 'connect)
+    (accept-process-output p 0.05))
+  (setq test-idle-tls-proc p)
+  (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+"#,
+            port = port,
+            ca = ca_pem.display()
+        ))
+        .expect("start non-blocking gnutls-boot");
+    assert_eq!(boot, Value::symbol("gnutls-e-again"));
+
+    let id = ev
+        .eval_str("test-idle-tls-proc")
+        .expect("read test-idle-tls-proc")
+        .as_process_id()
+        .expect("process id");
+    let request = ProcessOutputServiceRequest::target_only(id);
+    let service_outcome = ev
+        .poll_process_output_for_service_request(&request)
+        .expect("poll while handshake pending");
+    assert!(
+        !service_outcome.has_any_process_activity(),
+        "StillPending non-blocking TLS handshake must not mark service outcome active"
+    );
+
+    let started = Instant::now();
+    let wait_outcome = ev
+        .wait_for_command_input(Some(Instant::now() + Duration::from_millis(60)))
+        .expect("wait_for_command_input");
+    let elapsed = started.elapsed();
+    assert_eq!(
+        wait_outcome,
+        CommandInputWaitOutcome::DeadlineElapsed,
+        "command input wait must sleep until deadline instead of spinning on StillPending TLS"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(40),
+        "command input wait returned too quickly ({elapsed:?}), indicating a busy-spin"
+    );
+
+    let _ = ev.eval_str("(delete-process test-idle-tls-proc)");
+    let _ = done_tx.send(());
+    server_handle.join().expect("server thread finished");
+}
+
+/// Regression (#14790 MEDIUM-2): initial non-blocking `gnutls-boot` against a
+/// non-TLS peer returns GNU's protocol error code `-15`
+/// (`GNUTLS_E_UNEXPECTED_PACKET`), leaves the process open at stage 8, and a
+/// subsequent `(process-send-string p ...)` without `gnutls-deinit` fails
+/// promptly with GNU's `"TLS negotiation failed"` error instead of hanging.
+#[cfg(unix)]
+#[test]
+fn gnutls_boot_nonblocking_handshake_failure_returns_protocol_error_and_send_does_not_hang() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind non-TLS peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        let _ = stream.write_all(b"NOT_TLS_GARBAGE\r\n");
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(200));
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let ((p (make-network-process :name "fail-boot-send" :host "127.0.0.1" :service {port} :nowait t :noquery t :filter t :sentinel #'ignore)))
+  (unwind-protect
+      (progn
+        (while (eq (process-status p) 'connect) (accept-process-output p 0.1))
+        (sleep-for 0.05)
+        (let* ((ret (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+               (errp (gnutls-errorp ret))
+               (fatalp (gnutls-error-fatalp ret))
+               (errstr (gnutls-error-string ret))
+               (stage-after-boot (gnutls-get-initstage p))
+               (status-after-boot (process-status p))
+               (send-err (condition-case err
+                             (progn (process-send-string p "hello\n") 'unexpected-ok)
+                           (error err))))
+          (list ret errp fatalp errstr stage-after-boot status-after-boot
+                send-err (process-status p) (process-exit-status p) (gnutls-get-initstage p))))
+    (ignore-errors (delete-process p))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(
+        result,
+        "OK (-15 t t \"An unexpected TLS packet was received.\" 8 open (error \"Process fail-boot-send not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\" 3)"
+    );
+}
