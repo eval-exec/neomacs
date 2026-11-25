@@ -628,8 +628,7 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
             let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
             let (ready_tx, ready_rx) = mpsc::channel::<()>();
             let (retire_tx, retire_rx) = mpsc::channel::<()>();
-            let (words_tx, words_rx) =
-                mpsc::sync_channel::<neovm_value::tagged::gc::HeapWord>(1);
+            let (words_tx, words_rx) = mpsc::sync_channel::<neovm_value::tagged::gc::HeapWord>(1);
             let (report_tx, report_rx) = mpsc::sync_channel(1);
 
             std::thread::scope(|scope| {
@@ -803,8 +802,7 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
             let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
             let (ready_tx, ready_rx) = mpsc::channel::<()>();
             let (retire_tx, retire_rx) = mpsc::channel::<()>();
-            let (words_tx, words_rx) =
-                mpsc::sync_channel::<neovm_value::tagged::gc::HeapWord>(1);
+            let (words_tx, words_rx) = mpsc::sync_channel::<neovm_value::tagged::gc::HeapWord>(1);
             let (report_tx, report_rx) = mpsc::sync_channel(1);
 
             std::thread::scope(|scope| {

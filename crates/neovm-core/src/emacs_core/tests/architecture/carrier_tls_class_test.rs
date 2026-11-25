@@ -273,6 +273,17 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "ACTIVE_REGION",
         TlsClass::MustReset,
     ),
+    // CarrierIntrinsic: value-free `(ctx_addr, HeapIdentity)` active-turn
+    // marker (zero Lisp Values, zero TaggedHeap pointers). Paired 1:1 by
+    // `!Send` `SerialTurn` RAII (`SerialHost::enter_turn` .. `leave_turn` on
+    // `end`, `park`, or unwind `Drop`), so the slot is `None` between turns
+    // and intentionally survives `park_carrier_tls` / `reset_carrier_tls`
+    // across a mid-turn keeper collection (L6.7c (c) F3 / Q2).
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/parallel_entry/serial_detach.rs",
+        "ACTIVE_SERIAL_TURN",
+        TlsClass::CarrierIntrinsic,
+    ),
     (
         "neovm-eval/src/emacs_core/runtime/jit/compile/code_placement.rs",
         "ALLOCATION_HINT",
@@ -1098,6 +1109,17 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "neovm-eval/src/emacs_core/runtime/jit/compile/direct_call/self_only.rs",
         "SELF_SOURCE",
         TlsClass::MustReset,
+    ),
+    // CarrierIntrinsic: value-free lexical RAII collect-bridge hook
+    // (`{ ctx_addr, heap, inhibit_base, bridge }`, zero Lisp Values, zero
+    // TaggedHeap pointers). Installed by `SerialCollectScopeGuard::install`,
+    // taken out of TLS across `bridge(self)` / `park_carrier_tls`, restored
+    // only on `Ok(report)`, and cleared/restored on normal return or unwind
+    // by `SerialCollectScopeGuard::drop` (L6.7c (c) Q2 / F6.1).
+    (
+        "neovm-eval/src/emacs_core/runtime/eval/parallel_entry/serial_park.rs",
+        "SERIAL_TURN_COLLECT_SCOPE",
+        TlsClass::CarrierIntrinsic,
     ),
     (
         "neomacs/src/tty_output_windows.rs",

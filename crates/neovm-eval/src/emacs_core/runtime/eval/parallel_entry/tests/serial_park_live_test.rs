@@ -4517,6 +4517,425 @@ fn l67c_c_serial_turn_collect_unwind_during_head_hold_releases_head_via_exit() {
                     "Driver::exit (Loom L16) must still run O's requested collection before granting B"
                 );
             });
+            // F4: O unwound before reattach; World teardown retires O's
+            // serial_parked lease cleanly (mirroring GreenRuntime::finish_terminated_roots),
+            // so `uninstall_green_runtime_for_test` sees empty registry and
+            // `finish_returned_fixture` asserts `!facade_mark_is_excluded()`.
+            era.keeper_baton_for_test()
+                .finish_abandoned_serial_parked_roots_for_test();
+        },
+    );
+}
+
+/// F1 (HIGH): Inside a `SerialTurn::with_world_collectible` turn under default
+/// `feature = "jit"`, redefining an active bytecode function while a backtrace
+/// frame records its symbol pushes a pin into `REDEFINED_PINS`. Across
+/// `(garbage-collect)` park/resume, `ParkedJit::resume` MUST restore that pin
+/// using the explicit heap identity (even before `resume_owner` installs heap
+/// TLS), so the pin survives and keeps the old bytecode object alive across a
+/// second collection while the frame is still live.
+#[cfg(feature = "jit")]
+#[test]
+fn l67c_c_serial_turn_collect_preserves_jit_redefined_function_pin() {
+    with_l67c_c_green_era(
+        "l67c-c-f1-jit-pin",
+        |src| {
+            assert_eq!(
+                eval(
+                    src,
+                    r#"(progn
+                         (fset 'l67c-f1-inner
+                               (lambda ()
+                                 (fset 'l67c-f1-fn (make-byte-code 0 "\300\207" [99] 1))
+                                 (garbage-collect)
+                                 (garbage-collect)
+                                 'ok))
+                         (fset 'l67c-f1-fn
+                               (make-byte-code 0 "\300\040\207" [l67c-f1-inner] 1))
+                         nil)"#
+                ),
+                "nil"
+            );
+        },
+        |era| {
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let o_kit = enroll_driver(era, &mut driver, &inbox, O);
+            drop(inbox);
+
+            let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
+            let (retire_tx, retire_rx) = mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let owner = scope.spawn(move || {
+                    let ctx = world_handle.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(o_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("O detaches");
+                    let home = o_kit.home;
+                    let mut port = ChannelPort::new(
+                        home.owner,
+                        activate(o_kit.permit, home.heap, home.owner),
+                        o_kit.inbox,
+                        o_kit.grants,
+                    );
+                    let granted = port.request_turn().ok().expect("O granted");
+                    let mut turn = begin_turn(&mut state, home, granted, &mut port, standalone)
+                        .ok()
+                        .expect("O begins");
+                    turn.with_world_collectible(&mut port, standalone, |ev| {
+                        let orig = ev
+                            .eval_str("(symbol-function 'l67c-f1-fn)")
+                            .expect("read original bytecode function");
+                        assert!(orig.is_bytecode(), "positive control: orig is bytecode");
+                        let gc0 = ev.tagged_heap.gc_collections();
+                        assert_eq!(eval(ev, "(l67c-f1-fn)"), "ok");
+                        assert_eq!(
+                            ev.tagged_heap.gc_collections(),
+                            gc0 + 2,
+                            "both explicit (garbage-collect) calls inside l67c-f1-inner ran"
+                        );
+                        assert!(
+                            crate::emacs_core::jit::cache::has_redefined_pins(),
+                            "F1: ParkedJit::resume must restore redefined-function pin across collect reattach"
+                        );
+                        assert!(
+                            ev.tagged_heap.owns_heap_value_for_test(orig),
+                            "F1: pinned old bytecode function must stay alive across the second collect while frame was live"
+                        );
+                    });
+                    turn.end(&mut port).ok().expect("O ends");
+                    retire(port.exit());
+                    retire_rx.recv_timeout(BOUND).expect("teardown");
+                    drop(state);
+                });
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                retire_tx.send(()).expect("allow drop");
+                owner.join().expect("O joined");
+            });
+        },
+    );
+}
+
+/// F2 (MEDIUM): Every permanent non-`Poisoned` `RendezvousError` from
+/// `ChannelPort::publish()` (`WrongThread`, `Identity`, `Loan`, `Publication`,
+/// `Generation`, `Capacity`) must map to `PortRefusal::Failed` (never
+/// transient `PortRefusal::Retry`), keeping only `Busy` transient so
+/// `resume_ticket_for_collect` fails closed instead of spinning forever while
+/// `Driver::head_hold` stands.
+#[test]
+fn l67c_c_channel_port_permanent_publish_error_is_not_transient_retry() {
+    assert_eq!(
+        ChannelPort::map_publish_error(RendezvousError::Poisoned),
+        PortRefusal::Poisoned
+    );
+    assert_eq!(
+        ChannelPort::map_publish_error(RendezvousError::Busy),
+        PortRefusal::Retry
+    );
+    for permanent in [
+        RendezvousError::Identity,
+        RendezvousError::Loan,
+        RendezvousError::Publication,
+        RendezvousError::Generation,
+        RendezvousError::Readers,
+        RendezvousError::Capacity,
+        RendezvousError::Root,
+        RendezvousError::Registration(neovm_value::tagged::gc::RegistrationError::WrongThread),
+        RendezvousError::TelemetryStoppedGcUnavailable,
+    ] {
+        assert_eq!(
+            ChannelPort::map_publish_error(permanent),
+            PortRefusal::Failed,
+            "F2: permanent {permanent:?} must map to PortRefusal::Failed, not transient Retry"
+        );
+    }
+}
+
+/// Fault-injecting wrapper for F2 live test: returns `Err(PortRefusal::Failed)`
+/// on the follow-up `request_turn()` while `Driver::head_hold` stands.
+struct PermanentFailDuringHeadHoldPort<'p, 'era> {
+    port: &'p mut ChannelPort<'era>,
+    saw_collect_give_back: bool,
+    request_attempts_after_give_back: usize,
+    abandoned_head_hold: bool,
+}
+
+impl KeeperPort for PermanentFailDuringHeadHoldPort<'_, '_> {
+    type LendGuard = ChannelLend;
+    type CollectReply = CollectReply;
+
+    fn give_back(&mut self, returned: ReturnedSerialTicket) {
+        self.port.give_back(returned);
+    }
+
+    fn give_back_to_collect(&mut self, returned: ReturnedSerialTicket, reply: CollectReply) {
+        self.saw_collect_give_back = true;
+        self.port.give_back_to_collect(returned, reply);
+    }
+
+    fn request_turn(&mut self) -> Result<(Grant, ChannelLend), PortRefusal> {
+        if self.saw_collect_give_back {
+            self.request_attempts_after_give_back += 1;
+            return Err(PortRefusal::Failed);
+        }
+        self.port.request_turn()
+    }
+
+    fn refuse(&mut self, ticket: StoppedSerialTicket, reason: ReceiveReason) {
+        self.port.refuse(ticket, reason);
+    }
+
+    fn abandon_head_hold(&mut self) {
+        self.abandoned_head_hold = true;
+        self.port.abandon_head_hold();
+    }
+
+    fn collect_root_epoch(&self) -> Option<neovm_value::tagged::gc::FacadeEpochRetention> {
+        self.port.collect_root_epoch()
+    }
+}
+
+/// F2 + F4 live row: when the follow-up `request_turn()` returns permanent
+/// `PortRefusal::Failed` while `Driver::head_hold` stands and peer `B` is
+/// enrolled holding an inbox clone, `resume_ticket_for_collect` breaks out
+/// after 1 attempt (no infinite spin), `HeadHoldExitGuard` sends
+/// `KeeperMsg::Exit` via `abandon_head_hold()`, the requested collection still
+/// runs, `B` runs, `Driver::run()` drains cleanly, and World teardown retires
+/// the parked `RootBatchLease` with `!facade_mark_is_excluded()` (F4).
+#[test]
+fn l67c_c_serial_turn_collect_permanent_port_failure_releases_head_via_exit() {
+    with_l67c_c_green_era(
+        "l67c-c-f2-live-perm-fail",
+        |src| {
+            assert_eq!(eval(src, "(setq l67c-f2-b-ran nil)"), "nil");
+        },
+        |era| {
+            let before = {
+                let mut stopped = retry_native("baseline stop", || era.stop());
+                let report =
+                    retry_native("baseline collect", || era.collect_requested(&mut stopped));
+                complete_retrying("baseline stop", stopped.complete());
+                report.cycle
+            };
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let o_kit = enroll_driver(era, &mut driver, &inbox, O);
+            let b_kit = enroll_driver(era, &mut driver, &inbox, B);
+            drop(inbox);
+
+            let world_handle_o = era.keeper_baton_for_test().test_world_handle_for_test();
+            let world_handle_b = era.keeper_baton_for_test().test_world_handle_for_test();
+            let (b_idle_tx, b_idle_rx) = mpsc::channel::<()>();
+            let (o_holding_tx, o_holding_rx) = mpsc::channel::<()>();
+            let (b_sent_tx, b_sent_rx) = mpsc::channel::<()>();
+            let (retire_o_tx, retire_o_rx) = mpsc::channel::<()>();
+            let (retire_b_tx, retire_b_rx) = mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let owner_b = scope.spawn(move || {
+                    let ctx = world_handle_b.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(b_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("B detaches");
+                    let home = b_kit.home;
+                    let mut port = ChannelPort::new(
+                        home.owner,
+                        activate(b_kit.permit, home.heap, home.owner),
+                        b_kit.inbox,
+                        b_kit.grants,
+                    );
+                    let receipt = port
+                        .publish_idle_receipt_for_test()
+                        .ok()
+                        .expect("B publishes idle");
+                    b_idle_tx.send(()).expect("B idle");
+                    o_holding_rx.recv_timeout(BOUND).expect("O holds turn");
+                    b_sent_tx.send(()).expect("B requesting");
+                    let granted_b = port
+                        .request_turn_with_receipt_for_test(receipt)
+                        .ok()
+                        .expect("B granted after O releases head_hold");
+                    let mut tb = begin_turn(&mut state, home, granted_b, &mut port, standalone)
+                        .ok()
+                        .expect("B begins");
+                    let gc_seen_by_b = tb.with_world(|ev| {
+                        assert_eq!(eval(ev, "(setq l67c-f2-b-ran t)"), "t");
+                        ev.tagged_heap.gc_collections()
+                    });
+                    tb.end(&mut port).ok().expect("B ends");
+                    retire(port.exit());
+                    retire_b_rx.recv_timeout(BOUND).expect("B teardown");
+                    drop(state);
+                    gc_seen_by_b
+                });
+
+                let owner_o = scope.spawn(move || {
+                    b_idle_rx.recv_timeout(BOUND).expect("wait for B idle");
+                    let ctx = world_handle_o.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(o_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("O detaches");
+                    let home = o_kit.home;
+                    let mut raw_port = ChannelPort::new(
+                        home.owner,
+                        activate(o_kit.permit, home.heap, home.owner),
+                        o_kit.inbox,
+                        o_kit.grants,
+                    );
+                    let mut fault_port = PermanentFailDuringHeadHoldPort {
+                        port: &mut raw_port,
+                        saw_collect_give_back: false,
+                        request_attempts_after_give_back: 0,
+                        abandoned_head_hold: false,
+                    };
+                    let granted = fault_port.request_turn().ok().expect("O Turn 1 granted");
+                    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut turn =
+                            begin_turn(&mut state, home, granted, &mut fault_port, standalone)
+                                .ok()
+                                .expect("O begins Turn 1");
+                        turn.with_world_collectible(&mut fault_port, standalone, |ev| {
+                            o_holding_tx.send(()).expect("signal B");
+                            b_sent_rx.recv_timeout(BOUND).expect("B requesting");
+                            std::thread::sleep(Duration::from_millis(5));
+                            let _ = ev.eval_str("(garbage-collect)");
+                        });
+                        let _ = turn.end(&mut fault_port);
+                    }));
+                    let attempts = fault_port.request_attempts_after_give_back;
+                    let abandoned = fault_port.abandoned_head_hold;
+                    let tls_down = !neovm_value::tagged::gc::tagged_heap_is_installed();
+                    let dormant_detached = state.is_detached_for_test();
+                    retire(raw_port.exit());
+                    retire_o_rx.recv_timeout(BOUND).expect("O teardown");
+                    drop(state);
+                    (
+                        unwound.is_err(),
+                        attempts,
+                        abandoned,
+                        tls_down,
+                        dormant_detached,
+                    )
+                });
+
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                retire_o_tx.send(()).expect("allow O drop");
+                retire_b_tx.send(()).expect("allow B drop");
+                let (unwound_err, attempts, abandoned, tls_down, dormant_detached) =
+                    owner_o.join().expect("O joined");
+                let gc_seen_by_b = owner_b.join().expect("B joined");
+                assert!(unwound_err, "F2: permanent port failure must fail closed");
+                assert_eq!(
+                    attempts, 1,
+                    "F2: permanent PortRefusal::Failed must break immediately without spinning"
+                );
+                assert!(
+                    abandoned,
+                    "F2: HeadHoldExitGuard must invoke abandon_head_hold() on permanent failure"
+                );
+                assert!(tls_down);
+                assert!(dormant_detached);
+                assert_eq!(gc_seen_by_b, before + 1);
+            });
+            era.keeper_baton_for_test()
+                .finish_abandoned_serial_parked_roots_for_test();
+        },
+    );
+}
+
+/// F3 (MEDIUM): An unbridged `SerialTurn` entered via raw `LiveSerial::with_world`
+/// must unconditionally inhibit explicit `(garbage-collect)` (subr and bytecode),
+/// `(garbage-collect-maybe 1)`, and direct `Context::gc_collect_exact()` even
+/// when `NEOVM_HASH_TEST_PARITY=off`, never falling through to direct
+/// `TaggedHeap` STW collection inside an open parallel era.
+#[test]
+fn l67c_c_raw_with_world_inhibits_explicit_gc_and_direct_collect() {
+    with_l67c_c_green_era(
+        "l67c-c-f3-raw-with-world",
+        |_src| {},
+        |era| {
+            let before = {
+                let mut stopped = retry_native("baseline stop", || era.stop());
+                let report =
+                    retry_native("baseline collect", || era.collect_requested(&mut stopped));
+                complete_retrying("baseline stop", stopped.complete());
+                report.cycle
+            };
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let o_kit = enroll_driver(era, &mut driver, &inbox, O);
+            drop(inbox);
+
+            let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
+            let (retire_tx, retire_rx) = mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let owner = scope.spawn(move || {
+                    let ctx = world_handle.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(o_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("O detaches");
+                    let home = o_kit.home;
+                    let mut port = ChannelPort::new(
+                        home.owner,
+                        activate(o_kit.permit, home.heap, home.owner),
+                        o_kit.inbox,
+                        o_kit.grants,
+                    );
+                    let granted = port.request_turn().ok().expect("O granted");
+                    let mut turn = begin_turn(&mut state, home, granted, &mut port, standalone)
+                        .ok()
+                        .expect("O begins");
+                    // Raw `with_world` (no `with_world_collectible` bridge).
+                    turn.with_world(|ev| {
+                        assert_eq!(
+                            eval(ev, "(garbage-collect)"),
+                            "nil",
+                            "F3: subr (garbage-collect) in raw with_world must return nil"
+                        );
+                        assert_eq!(
+                            eval(
+                                ev,
+                                r#"(funcall (make-byte-code 0 "\300\040\207" [garbage-collect] 1))"#
+                            ),
+                            "nil",
+                            "F3: bytecode (garbage-collect) in raw with_world must return nil"
+                        );
+                        let threshold = ev.tagged_heap.gc_threshold();
+                        let n = (threshold / 16) + 4096;
+                        let form = format!("(progn (make-list {n} nil) nil)");
+                        assert_eq!(eval(ev, &form), "nil");
+                        let _ = eval(ev, "(garbage-collect-maybe 1)");
+                        assert_eq!(
+                            ev.tagged_heap.gc_collections(),
+                            before,
+                            "F3: explicit Lisp GC inside raw with_world must not run direct TaggedHeap GC"
+                        );
+                        // Direct Rust `gc_collect_exact()` inside raw `with_world` must also not run direct STW GC.
+                        ev.gc_collect_exact();
+                        assert_eq!(
+                            ev.tagged_heap.gc_collections(),
+                            before,
+                            "F3: direct gc_collect_exact() inside raw with_world must not run direct TaggedHeap GC"
+                        );
+                        assert_eq!(
+                            ev.tagged_heap.mark_phase(),
+                            neovm_value::tagged::gc::MarkPhase::Idle
+                        );
+                    });
+                    turn.end(&mut port).ok().expect("O ends");
+                    retire(port.exit());
+                    retire_rx.recv_timeout(BOUND).expect("teardown");
+                    drop(state);
+                });
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                retire_tx.send(()).expect("allow drop");
+                owner.join().expect("O joined");
+            });
         },
     );
 }

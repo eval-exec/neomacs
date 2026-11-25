@@ -446,14 +446,26 @@ impl<'era> ChannelPort<'era> {
         Err(PortRefusal::Retry)
     }
 
+    /// Map a `RendezvousError` from `leave_native` / `publish_native_owner`
+    /// into a `PortRefusal`: only `Busy` is transient (`Retry`), `Poisoned`
+    /// maps to `Poisoned`, and every permanent non-`Poisoned` error maps to
+    /// `Failed` so `resume_ticket_for_collect` fails closed instead of
+    /// spinning while `Driver::head_hold` stands (L6.7c (c) F2).
+    pub(crate) fn map_publish_error(error: RendezvousError) -> PortRefusal {
+        match error {
+            RendezvousError::Poisoned => PortRefusal::Poisoned,
+            RendezvousError::Busy => PortRefusal::Retry,
+            _ => PortRefusal::Failed,
+        }
+    }
+
     /// Publish again: leave native first if the last request entered it.
     fn publish(&mut self) -> Result<PublishedOwner, PortRefusal> {
         let mutator = &mut self.mutator;
         if self.native {
             match driver_core::retry_contended(busy, || mutator.leave_native().map(|_| ())) {
                 Ok(()) => {}
-                Err(RendezvousError::Poisoned) => return Err(PortRefusal::Poisoned),
-                Err(_) => return Err(PortRefusal::Retry),
+                Err(err) => return Err(Self::map_publish_error(err)),
             }
             self.native = false;
         }
@@ -462,8 +474,7 @@ impl<'era> ChannelPort<'era> {
                 self.native = true;
                 Ok(receipt)
             }
-            Err(RendezvousError::Poisoned) => Err(PortRefusal::Poisoned),
-            Err(_) => Err(PortRefusal::Retry),
+            Err(err) => Err(Self::map_publish_error(err)),
         }
     }
 }

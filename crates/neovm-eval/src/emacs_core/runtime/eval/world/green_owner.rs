@@ -252,6 +252,40 @@ impl Baton {
     }
 
     #[cfg(test)]
+    pub(crate) fn finish_abandoned_serial_parked_roots_for_test(&self) {
+        assert!(
+            self.held_here(),
+            "retire serial parked roots on keeper thread"
+        );
+        let slot = self.world.green.borrow();
+        if let Some(runtime) = slot.as_ref() {
+            let mut parked = runtime.parked.borrow_mut();
+            while let Some(id) = parked.first_serial_key() {
+                let mut lease = parked.remove_serial(id).expect("existing serial park key");
+                loop {
+                    match lease.try_finish() {
+                        Ok(_) => break,
+                        Err(failure)
+                            if matches!(
+                                failure.error(),
+                                neovm_value::tagged::transport::RootBatchError::Busy
+                            ) =>
+                        {
+                            (lease, _) = failure.into_parts();
+                            std::thread::yield_now();
+                        }
+                        Err(failure) => {
+                            let (lease, error) = failure.into_parts();
+                            parked.insert_serial(id, lease);
+                            panic!("abandoned serial-turn root batch cannot finish: {error}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn uninstall_green_runtime_for_test(&self) {
         assert!(self.held_here(), "uninstall GreenRuntime on keeper thread");
         let runtime = self.world.green.borrow_mut().take();

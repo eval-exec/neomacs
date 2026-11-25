@@ -1892,14 +1892,21 @@ pub(crate) struct RedefinedPin {
 /// pins (a `cl-letf` of a function in a loop alternates two values; an older
 /// duplicate only waits for the next collection).
 pub(crate) fn pin_redefined_function(sym: SymId, previous: Value) {
+    let Some(heap) = neovm_value::tagged::gc::current_tagged_heap_identity() else {
+        return;
+    };
+    pin_redefined_function_for_heap(heap, sym, previous);
+}
+
+/// Pin a redefined bytecode function explicitly under `heap` without relying
+/// on thread-local heap installation (used by `ParkedJit::resume_reusing`,
+/// which restores pins before `resume_owner` reinstalls carrier heap TLS).
+pub(crate) fn pin_redefined_function_for_heap(heap: usize, sym: SymId, previous: Value) {
     /// How many of the latest pins a new one is compared with.
     const RECENT: usize = 16;
     if !previous.is_bytecode() {
         return;
     }
-    let Some(heap) = neovm_value::tagged::gc::current_tagged_heap_identity() else {
-        return;
-    };
     REDEFINED_PINS.with(|pins| {
         let mut pins = pins.borrow_mut();
         if !pins
@@ -1930,11 +1937,23 @@ pub(crate) fn trace_redefined_pins(
     frame_calls: &dyn Fn(SymId) -> bool,
     visit: &mut dyn FnMut(Value),
 ) {
+    visit_redefined_pins_for_heap(heap, frame_calls, &mut |_, function| visit(function));
+}
+
+/// Like [`trace_redefined_pins`], also yielding each live pin's symbol so
+/// `ParkedJit::prepare_reusing` can preserve pre-park redefined pins in
+/// `ParkedJit::sources` across `reset_carrier_tls()` and restore them on resume
+/// with explicit heap identity (L6.7c (c) F1).
+pub(crate) fn visit_redefined_pins_for_heap(
+    heap: usize,
+    frame_calls: &dyn Fn(SymId) -> bool,
+    visit: &mut dyn FnMut(SymId, Value),
+) {
     REDEFINED_PINS.with(|pins| {
         pins.borrow_mut().retain(|pin| {
             let live = pin.heap == heap && frame_calls(pin.sym);
             if live {
-                visit(pin.function);
+                visit(pin.sym, pin.function);
             }
             live
         });

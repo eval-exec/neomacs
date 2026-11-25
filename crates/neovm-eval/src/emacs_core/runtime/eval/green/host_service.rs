@@ -428,6 +428,13 @@ impl DrainBlocked {
 #[derive(Debug)]
 pub(in crate::emacs_core::eval) struct WorldRootRegistry {
     owners: FxHashMap<ThreadKey, RootBatchLease>,
+    /// Active parked root leases for unseated parallel `SerialTurn` owners
+    /// parked across a mid-turn keeper collection (L6.7c (c) F4). Stored in
+    /// the World rather than solely on `DetachedOwner` so an abnormal owner
+    /// unwind never triggers `RootBatchLease::drop`'s `std::mem::forget`;
+    /// `GreenRuntime::finish_terminated_roots` retires any remaining lease at
+    /// World teardown.
+    serial_parked: FxHashMap<std::num::NonZeroU64, RootBatchLease>,
     /// Previously deferred owner leases that could not retire before a later
     /// park (e.g. due to a held reader or non-idle phase). Over-rooting is
     /// safe; drained at the next safe retirement point or World teardown.
@@ -441,6 +448,7 @@ impl WorldRootRegistry {
     pub fn new(heap: HeapIdentity) -> Self {
         Self {
             owners: FxHashMap::default(),
+            serial_parked: FxHashMap::default(),
             retained: Vec::new(),
             hosts: HostRegistry::new(heap),
             services: scheduling::ServiceRuntime::default(),
@@ -448,18 +456,37 @@ impl WorldRootRegistry {
     }
     #[doc(hidden)]
     pub fn is_empty(&self) -> bool {
-        self.owners.is_empty() && self.retained.is_empty() && self.hosts.records.is_empty()
+        self.owners.is_empty()
+            && self.serial_parked.is_empty()
+            && self.retained.is_empty()
+            && self.hosts.records.is_empty()
     }
     #[doc(hidden)]
     pub fn len(&self) -> usize {
-        self.owners.len() + self.retained.len()
+        self.owners.len() + self.serial_parked.len() + self.retained.len()
     }
     #[doc(hidden)]
     pub fn values(&self) -> impl Iterator<Item = &RootBatchLease> {
-        self.owners.values().chain(self.retained.iter())
+        self.owners
+            .values()
+            .chain(self.serial_parked.values())
+            .chain(self.retained.iter())
     }
     pub(crate) fn first_owner_key(&self) -> Option<ThreadKey> {
         self.owners.keys().next().copied()
+    }
+    pub(crate) fn first_serial_key(&self) -> Option<std::num::NonZeroU64> {
+        self.serial_parked.keys().next().copied()
+    }
+    pub(crate) fn insert_serial(
+        &mut self,
+        id: std::num::NonZeroU64,
+        roots: RootBatchLease,
+    ) -> Option<RootBatchLease> {
+        self.serial_parked.insert(id, roots)
+    }
+    pub(crate) fn remove_serial(&mut self, id: std::num::NonZeroU64) -> Option<RootBatchLease> {
+        self.serial_parked.remove(&id)
     }
     pub(crate) fn pop_retained(&mut self) -> Option<RootBatchLease> {
         self.retained.pop()

@@ -47,6 +47,14 @@ impl super::GreenRuntime {
                 panic!("terminated Green root batch cannot finish: {error}");
             }
         }
+        while let Some(id) = parked.first_serial_key() {
+            let publication = parked.remove_serial(id).expect("existing serial park key");
+            if let Err(failure) = finish(publication) {
+                let (publication, error) = failure.into_parts();
+                parked.insert_serial(id, publication);
+                panic!("terminated serial-turn Green root batch cannot finish: {error}");
+            }
+        }
         while let Some(publication) = parked.pop_retained() {
             if let Err(failure) = finish(publication) {
                 let (publication, error) = failure.into_parts();

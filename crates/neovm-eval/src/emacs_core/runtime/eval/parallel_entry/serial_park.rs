@@ -78,12 +78,17 @@ impl Grant {
 pub(crate) enum PortRefusal {
     /// The era was poisoned; no further grant will come.
     Poisoned,
-    /// An owner-side refusal (K8 r2): this owner could not publish within the
-    /// contention bound, or its request was sent back to publish more often
-    /// than the republish limit. Nothing was lent and nothing is poisoned:
-    /// request again. A slow keeper stop never answers this; the requester
-    /// just waits for its grant.
+    /// A transient owner-side refusal (K8 r2): this owner could not publish
+    /// within the `Busy` contention bound, or its request was sent back to
+    /// publish more often than the republish limit. Nothing was lent and
+    /// nothing is poisoned: request again. A slow keeper stop never answers
+    /// this; the requester just waits for its grant.
     Retry,
+    /// A permanent non-`Poisoned` owner-side publish or protocol error
+    /// (`WrongThread`, `Identity`, `Loan`, `Publication`, `Generation`,
+    /// `Capacity`). Retrying would spin forever; fail closed and release any
+    /// held ring HEAD (L6.7c (c) F2).
+    Failed,
 }
 
 /// The owner's hold on one lent ticket (L6.7 K7). It is armed while the
@@ -272,9 +277,13 @@ impl<P: KeeperPort> Drop for HeadHoldExitGuard<'_, P> {
 }
 
 /// Re-request and validate a turn while `Driver::head_hold` stands for this
-/// owner (L6.7c (c)): retries transient `PortRefusal::Retry` with `yield_now()`
-/// (D1 fix (a)) until `Ok` or `PortRefusal::Poisoned`, then validates the
-/// granted ticket and runs `activate`.
+/// owner (L6.7c (c)): wraps ONLY `port.request_turn()` in `HeadHoldExitGuard`
+/// (F5: once `request_turn()` returns `Ok`, `Driver::commit` has already
+/// cleared `head_hold` before granting), retries transient `PortRefusal::Retry`
+/// with `yield_now()` (D1 fix (a)), fails closed on permanent
+/// `PortRefusal::Failed` leaving `HeadHoldExitGuard` armed to release HEAD
+/// (F2), disarms on `PortRefusal::Poisoned`, and then validates the grant via
+/// `receive(...)`.
 #[allow(dead_code)]
 fn resume_ticket_for_collect<P: KeeperPort, A>(
     home: SerialHome,
@@ -284,12 +293,24 @@ fn resume_ticket_for_collect<P: KeeperPort, A>(
     (SerialDestination, LocalSerialOwner, P::LendGuard),
     TurnStartRefusal<std::convert::Infallible, A>,
 > {
-    let (grant, guard) = loop {
-        match port.request_turn() {
-            Ok(granted) => break granted,
-            Err(PortRefusal::Retry) => std::thread::yield_now(),
-            Err(PortRefusal::Poisoned) => {
-                return Err(TurnStartRefusal::Port(PortRefusal::Poisoned));
+    let (grant, guard) = {
+        let mut head_guard = HeadHoldExitGuard::new(port);
+        loop {
+            match head_guard.port_mut().request_turn() {
+                Ok(granted) => {
+                    head_guard.disarm();
+                    break granted;
+                }
+                Err(PortRefusal::Retry) => std::thread::yield_now(),
+                Err(PortRefusal::Poisoned) => {
+                    head_guard.disarm();
+                    return Err(TurnStartRefusal::Port(PortRefusal::Poisoned));
+                }
+                Err(PortRefusal::Failed) => {
+                    // `head_guard` drops armed -> `abandon_head_hold()` sends
+                    // `KeeperMsg::Exit` so `Driver::head_hold` is released (F2).
+                    return Err(TurnStartRefusal::Port(PortRefusal::Failed));
+                }
             }
         }
     };
@@ -472,6 +493,7 @@ enum SerialCollectError {
     MissingEpoch,
     Detach(super::serial_detach::HostRefusal),
     Poisoned,
+    Failed,
     Receive(ReceiveReason),
     Activate,
     ReportRefused(super::keeper_driver::CollectRefusal),
@@ -516,21 +538,6 @@ impl Drop for SerialCollectScopeGuard {
     fn drop(&mut self) {
         let previous = self.previous.take();
         SERIAL_TURN_COLLECT_SCOPE.with(|slot| slot.set(previous));
-    }
-}
-
-/// Temporarily removes `ActiveSerialCollectScope` from TLS while invoking the
-/// type-erased bridge (preventing re-entrant `&mut` aliasing and leaving the
-/// TLS slot empty while carrier TLS is parked), restoring it on return/unwind.
-struct TakenSerialCollectScope {
-    scope: Option<ActiveSerialCollectScope>,
-}
-
-impl Drop for TakenSerialCollectScope {
-    fn drop(&mut self) {
-        if let Some(scope) = self.scope.take() {
-            SERIAL_TURN_COLLECT_SCOPE.with(|slot| slot.set(Some(scope)));
-        }
     }
 }
 
@@ -579,16 +586,14 @@ impl<'t, G: LendGuard> LiveSerial<'t, super::super::Context, G> {
                     .expect("live serial turn holds its seat and guard before collect park");
                 let (report_tx, report_rx) = super::sync::mpsc::sync_channel(1);
                 park_ticket_to_collect(seat, local, guard, Some(report_tx), port);
-                let mut head_guard = HeadHoldExitGuard::new(port);
                 let (seat2, local2, guard2) =
-                    match resume_ticket_for_collect(home, head_guard.port_mut(), &mut activate) {
-                        Ok(resumed) => {
-                            head_guard.disarm();
-                            resumed
-                        }
+                    match resume_ticket_for_collect(home, port, &mut activate) {
+                        Ok(resumed) => resumed,
                         Err(TurnStartRefusal::Port(PortRefusal::Poisoned)) => {
-                            head_guard.disarm();
                             return Err(SerialCollectError::Poisoned);
+                        }
+                        Err(TurnStartRefusal::Port(PortRefusal::Failed)) => {
+                            return Err(SerialCollectError::Failed);
                         }
                         Err(TurnStartRefusal::Port(PortRefusal::Retry)) => {
                             unreachable!("resume_ticket_for_collect retries PortRefusal::Retry")
@@ -625,8 +630,9 @@ impl<'t, G: LendGuard> LiveSerial<'t, super::super::Context, G> {
             // SAFETY: `SerialCollectScopeGuard` removes this pointer from
             // `SERIAL_TURN_COLLECT_SCOPE` before `bridge_fn` leaves the stack
             // frame (both on normal return and panic unwind), and
-            // `TakenSerialCollectScope` ensures at most one `&mut` invocation
-            // is active at a time.
+            // `gc_collect_serial_turn` takes the scope out of TLS for the
+            // duration of the bridge call, ensuring at most one `&mut`
+            // invocation is active at a time.
             let bridge_ptr: *mut SerialCollectBridgeFn = unsafe { std::mem::transmute(bridge_ref) };
             let _scope_guard = SerialCollectScopeGuard::install(ActiveSerialCollectScope {
                 ctx_addr,
@@ -657,11 +663,17 @@ impl super::super::Context {
     }
 
     /// Whether explicit Lisp `(garbage-collect)` / `(garbage-collect-maybe)` is
-    /// currently inhibited on this `Context` (L6.7c (c) §3.2).
+    /// currently inhibited on this `Context` (L6.7c (c) §3.2 + F3).
     #[inline]
     pub(crate) fn is_explicit_gc_inhibited(&self) -> bool {
         if let Some(inhibit_base) = self.active_serial_collect_inhibit_base() {
             return self.gc_inhibit_depth > inhibit_base;
+        }
+        if self.in_active_serial_turn() {
+            // Unbridged SerialTurn (`LiveSerial::with_world` / raw
+            // `SerialTurn::with_world`): stay unconditionally inhibited
+            // regardless of `NEOVM_HASH_TEST_PARITY` (L6.7c (a) + F3).
+            return true;
         }
         self.gc_inhibit_depth > 0
             && (neovm_value::hashtab::hash_test_parity_enabled()
@@ -678,7 +690,7 @@ impl super::super::Context {
             !self.gc_driver_active,
             "L6.7c (c) Q2: gc_driver_active must remain false across serial-turn collection"
         );
-        // 1. Pre-stop World prep while heap TLS is installed (GNU alloc.c:5796-5800).
+        // 1. Pre-stop World prep while heap TLS is installed (GNU alloc.c:5793-5794).
         neovm_edit::emacs_core::undo::compact_buffers_for_gc(self);
         let start = std::time::Instant::now();
         self.lexenv_assq_cache.clear();
@@ -686,7 +698,9 @@ impl super::super::Context {
 
         // 2. Take the active scope out of TLS for the bridge call (leaving TLS
         //    empty while carrier TLS is parked and preventing re-entrant `&mut`
-        //    aliasing), then restore it before post-collection hooks run.
+        //    aliasing). Restore it ONLY on `Ok(report)` so an unwinding or
+        //    failing bridge never re-exposes a broken/detached scope to
+        //    intermediate destructors inside `body(ctx)` (F6.1).
         let my_addr = std::ptr::from_ref(self) as usize;
         let my_heap = self.tagged_heap.heap_identity();
         let taken = SERIAL_TURN_COLLECT_SCOPE.with(|slot| slot.take());
@@ -698,20 +712,22 @@ impl super::super::Context {
             panic!("gc_collect_serial_turn scope mismatch (foreign Context or heap)");
         }
         let bridge_ptr = scope.bridge;
-        let report = {
-            let _restore = TakenSerialCollectScope { scope: Some(scope) };
-            // SAFETY: `bridge_ptr` points to the live stack closure installed by
-            // our enclosing `LiveSerial::with_world_collectible`, and taking the
-            // scope out of TLS guarantees unique `&mut` access for this call.
-            let bridge = unsafe { &mut *bridge_ptr };
-            match bridge(self) {
-                Ok(report) => report,
-                Err(error) => {
-                    // Fail closed without returning to Lisp or running direct
-                    // `TaggedHeap` collection; `DormantContext::detached` is
-                    // already `Some(...)` (Catch 1) and carrier TLS is parked.
-                    panic!("serial-turn keeper collection failed closed: {error:?}");
-                }
+        // SAFETY: `bridge_ptr` points to the live stack closure installed by
+        // our enclosing `LiveSerial::with_world_collectible`, and taking the
+        // scope out of TLS guarantees unique `&mut` access for this call.
+        let bridge = unsafe { &mut *bridge_ptr };
+        let report = match bridge(self) {
+            Ok(report) => {
+                SERIAL_TURN_COLLECT_SCOPE.with(|slot| slot.set(Some(scope)));
+                report
+            }
+            Err(error) => {
+                // Fail closed without returning to Lisp or running direct
+                // `TaggedHeap` collection: pre-detach errors (`MissingEpoch` /
+                // `Detach`) leave `ChannelLend` armed to unwind K7 `Abandon`;
+                // post-detach errors leave `DormantContext::detached == Some(...)`
+                // (Catch 1) with carrier TLS parked (pentry NIT-1).
+                panic!("serial-turn keeper collection failed closed: {error:?}");
             }
         };
 

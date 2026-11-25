@@ -1633,6 +1633,13 @@ impl Context {
             }
             return self.gc_collect_serial_turn();
         }
+        if self.in_active_serial_turn() {
+            // Unbridged SerialTurn (`LiveSerial::with_world` / raw
+            // `SerialTurn::with_world`): unconditionally inhibit direct
+            // TaggedHeap STW collection even under `NEOVM_HASH_TEST_PARITY=off`
+            // or direct `gc_collect_exact` calls (L6.7c (a) + F3).
+            return Ok(());
+        }
         // Inline set/restore, NOT a Drop guard (see the `gc_driver_active`
         // field doc): the body is infallible, so the trailing restore runs on
         // every normal exit (including the body's early `return`s), while a

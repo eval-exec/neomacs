@@ -349,7 +349,7 @@ impl<C: SerialHost> TurnHostOps<'_, C> {
         &mut self,
         f: impl FnOnce(HostTransition) -> Result<C::Detached, E>,
     ) -> Result<(), E> {
-        debug_assert!(self.detached.is_none(), "{LIVE_HOST}");
+        assert!(self.detached.is_none(), "{LIVE_HOST}");
         let proof = f(HostTransition(()))?;
         *self.detached = Some(proof);
         Ok(())

@@ -246,6 +246,10 @@ pub(super) fn finish_returned_fixture(
     publication
         .try_finish()
         .expect("returned source is active before publication retirement");
+    assert!(
+        !source.tagged_heap.facade_mark_is_excluded(),
+        "F4: every RootBatchLease and FacadeEpochRetention must retire before World teardown so TaggedHeap::drop reclaims backing"
+    );
     drop(ManuallyDrop::into_inner(source));
 }
 

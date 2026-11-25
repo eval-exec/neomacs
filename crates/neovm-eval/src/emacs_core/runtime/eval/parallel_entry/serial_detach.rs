@@ -84,12 +84,44 @@ pub(crate) enum DetachedWorldCarriers {
     Stowed,
 }
 
+static NEXT_SERIAL_PARK_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_serial_park_id() -> std::num::NonZeroU64 {
+    let id = NEXT_SERIAL_PARK_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::num::NonZeroU64::new(id).expect("serial park id counter exhausted")
+}
+
+/// Ownership of a serial-turn parked `RootBatchLease` across a mid-turn keeper
+/// collection (L6.7c (c) F4):
+/// - On a Green World, the lease is stored inside `GreenRuntime::parked`
+///   under a unique key so an abnormal owner unwind never triggers
+///   `RootBatchLease::drop`'s `std::mem::forget`; `GreenRuntime::finish_terminated_roots`
+///   retires any remaining lease cleanly at World teardown.
+/// - On a non-Green Sim era without a `GreenRuntime`, the lease stays inline
+///   and dropping it unretired aborts fail-closed (matching Q3).
+#[derive(Debug)]
+enum SerialParkedLease {
+    Green(std::num::NonZeroU64),
+    Inline(Option<neovm_value::tagged::transport::RootBatchLease>),
+}
+
+impl Drop for SerialParkedLease {
+    fn drop(&mut self) {
+        if let Self::Inline(Some(_)) = self {
+            tracing::error!(
+                "non-Green serial-turn parked RootBatchLease dropped unretired without a GreenRuntime; aborting fail-closed (L6.7c (c) Q3/F4)"
+            );
+            std::process::abort();
+        }
+    }
+}
+
 /// Parked private roots published across a mid-turn keeper collection
 /// (L6.7c (c)), kept beside `DetachedOwner` so reattach restores JIT pins
 /// and retires the `RootBatchLease` under Q2 in exact reverse order.
 #[derive(Debug)]
 struct SerialParkedRoots {
-    lease: neovm_value::tagged::transport::RootBatchLease,
+    lease: SerialParkedLease,
     #[cfg(feature = "jit")]
     jit: crate::emacs_core::jit::green_owner::ParkedJit,
 }
@@ -249,7 +281,23 @@ impl Context {
             .publish_finalized_root_batch()
             .expect("serial turn parked root batch publication must succeed");
         drop(roots);
-        // 6. Stow World carriers (if Green runtime) and take down carrier TLS.
+        // 6. Hand lease ownership to `GreenRuntime::parked` when a Green
+        //    runtime exists (F4: prevents `RootBatchLease::drop` leak on
+        //    abnormal unwind), then stow World carriers and park carrier TLS.
+        let parked_lease = {
+            let runtime = self.green_runtime_ref();
+            if let Some(runtime) = runtime.as_ref() {
+                let id = next_serial_park_id();
+                let replaced = runtime.parked.borrow_mut().insert_serial(id, lease);
+                debug_assert!(
+                    replaced.is_none(),
+                    "monotonic serial park id must be unique"
+                );
+                SerialParkedLease::Green(id)
+            } else {
+                SerialParkedLease::Inline(Some(lease))
+            }
+        };
         let world = if self.stow_serial_world_state() {
             DetachedWorldCarriers::Stowed
         } else {
@@ -263,7 +311,7 @@ impl Context {
             },
             world,
             parked_roots: Some(SerialParkedRoots {
-                lease,
+                lease: parked_lease,
                 #[cfg(feature = "jit")]
                 jit: parked_jit,
             }),
@@ -272,9 +320,10 @@ impl Context {
 
     /// Q2 non-marking phase retirement for a serial-turn collect
     /// `RootBatchLease`: fast-path `try_finish()` without `drain_to_quiescent`,
-    /// falling back to `GreenRuntime::parked.retained` (fail-closed
-    /// over-rooting), and aborting fail-closed if deferral occurs on a
-    /// non-Green Sim era with no `GreenRuntime` (Q3).
+    /// also draining any previously deferred leases in `GreenRuntime::parked`
+    /// (pentry NIT-2), falling back to `GreenRuntime::parked.retained`
+    /// (fail-closed over-rooting), and aborting fail-closed if deferral occurs
+    /// on a non-Green Sim era with no `GreenRuntime` (Q3).
     #[cold]
     #[inline(never)]
     fn retire_serial_parked_root_lease(
@@ -288,23 +337,23 @@ impl Context {
                     | neovm_value::tagged::gc::MarkPhase::Sweeping
             )
             && !self.tagged_heap.gc_locks_poisoned();
-        let deferred = if phase_safe {
-            let mut lease = lease;
-            loop {
-                match lease.try_finish() {
-                    Ok(_) => break None,
-                    Err(failure)
-                        if matches!(
-                            failure.error(),
-                            neovm_value::tagged::transport::RootBatchError::Busy
-                        ) =>
-                    {
-                        (lease, _) = failure.into_parts();
-                        std::thread::yield_now();
-                    }
-                    Err(failure) => break Some(failure.into_parts().0),
+        let finish_retrying = |mut lease: neovm_value::tagged::transport::RootBatchLease| loop {
+            match lease.try_finish() {
+                Ok(_) => return Ok(()),
+                Err(failure)
+                    if matches!(
+                        failure.error(),
+                        neovm_value::tagged::transport::RootBatchError::Busy
+                    ) =>
+                {
+                    (lease, _) = failure.into_parts();
+                    std::thread::yield_now();
                 }
+                Err(failure) => return Err(failure.into_parts().0),
             }
+        };
+        let deferred = if phase_safe {
+            finish_retrying(lease).err()
         } else {
             Some(lease)
         };
@@ -317,6 +366,14 @@ impl Context {
                     "cannot defer serial-turn parked RootBatchLease retirement without a GreenRuntime; aborting fail-closed (L6.7c (c) Q3)"
                 );
                 std::process::abort();
+            }
+        } else if phase_safe {
+            let runtime = self.green_runtime_ref();
+            if let Some(runtime) = runtime.as_ref() {
+                runtime
+                    .parked
+                    .borrow_mut()
+                    .drain_retained_with(finish_retrying);
             }
         }
     }
@@ -356,20 +413,67 @@ impl Context {
         }
         reset_carrier_tls();
         self.unstow_serial_world_state();
-        if let Some(parked_roots) = parked_roots {
-            // Restore JIT pins while `lease` still roots them, before
-            // `resume_owner` swaps host bindings back in (Catch 2).
+        if let Some(mut parked_roots) = parked_roots {
+            // Restore JIT pins with explicit heap identity (`pin_redefined_function_for_heap`,
+            // F1) while `lease` still roots them, before `resume_owner` swaps host bindings
+            // back in (Catch 2).
             #[cfg(feature = "jit")]
             parked_roots
                 .jit
                 .resume(self)
                 .expect("the original serial owner resumes in its own heap");
             self.resume_owner(host.parked);
-            self.retire_serial_parked_root_lease(parked_roots.lease);
+            let lease = match &mut parked_roots.lease {
+                SerialParkedLease::Green(id) => {
+                    let id = *id;
+                    self.green_runtime_ref()
+                        .as_ref()
+                        .expect("GreenRuntime present across serial collect reattach")
+                        .parked
+                        .borrow_mut()
+                        .remove_serial(id)
+                        .expect("serial parked RootBatchLease present on reattach")
+                }
+                SerialParkedLease::Inline(slot) => slot
+                    .take()
+                    .expect("inline serial parked RootBatchLease present on reattach"),
+            };
+            self.retire_serial_parked_root_lease(lease);
         } else {
             self.resume_owner(host.parked);
         }
         Ok(())
+    }
+}
+
+/// Thread-local marker for the currently active `SerialTurn` on this OS thread
+/// (L6.7c (c) F3 / Q2): stores zero bytes on `#[repr(C)] Context`, zero heap
+/// `Value`s, and zero `TaggedHeap` pointers, so `Context` layout stays pinned
+/// and `park_carrier_tls()` never interacts with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ActiveSerialTurn {
+    ctx_addr: usize,
+    heap: neovm_value::tagged::gc::HeapIdentity,
+}
+
+std::thread_local! {
+    static ACTIVE_SERIAL_TURN: std::cell::Cell<Option<ActiveSerialTurn>> =
+        const { std::cell::Cell::new(None) };
+}
+
+impl Context {
+    /// True while this `Context` is inside a live `SerialTurn` on this OS
+    /// thread (`SerialHost::enter_turn` .. `leave_turn`). Ensures unbridged
+    /// `SerialTurn::with_world` turns never fall through to direct
+    /// `TaggedHeap` STW collection even under `NEOVM_HASH_TEST_PARITY=off` or
+    /// direct `gc_collect_exact` calls (L6.7c (c) F3 / Q2).
+    #[inline]
+    pub(crate) fn in_active_serial_turn(&self) -> bool {
+        let current = ActiveSerialTurn {
+            ctx_addr: std::ptr::from_ref(self) as usize,
+            heap: self.tagged_heap.heap_identity(),
+        };
+        ACTIVE_SERIAL_TURN.with(|slot| slot.get() == Some(current))
     }
 }
 
@@ -392,16 +496,37 @@ impl SerialHost for Context {
         self.reattach_serial_owner(detached)
     }
 
-    /// L6.7c (a): inhibit safe-point (threshold) GC for the whole `SerialTurn`
-    /// so Lisp allocation debt defers to the keeper's next stop instead of
-    /// firing an uncoordinated direct minor/STW collection inside the turn.
+    /// L6.7c (a) + F3: inhibit safe-point (threshold) GC and unbridged direct
+    /// STW GC for the whole `SerialTurn` so Lisp allocation debt defers to the
+    /// keeper's next stop instead of firing an uncoordinated direct minor/STW
+    /// collection inside the turn.
     fn enter_turn(&mut self, _: HostTransition) {
+        let current = ActiveSerialTurn {
+            ctx_addr: std::ptr::from_ref(self) as usize,
+            heap: self.tagged_heap.heap_identity(),
+        };
+        ACTIVE_SERIAL_TURN.with(|slot| {
+            let prev = slot.replace(Some(current));
+            debug_assert!(
+                prev.is_none(),
+                "at most one active SerialTurn per OS thread"
+            );
+        });
         self.gc_inhibit_depth += 1;
     }
 
-    /// L6.7c (a): paired 1:1 with `enter_turn` by `SerialTurn`'s RAII
+    /// L6.7c (a) + F3: paired 1:1 with `enter_turn` by `SerialTurn`'s RAII
     /// lifecycle (`end`, `park`, or unwind `Drop`), so depth cannot leak.
     fn leave_turn(&mut self, _: HostTransition) {
+        let expected = ActiveSerialTurn {
+            ctx_addr: std::ptr::from_ref(self) as usize,
+            heap: self.tagged_heap.heap_identity(),
+        };
+        ACTIVE_SERIAL_TURN.with(|slot| {
+            if slot.get() == Some(expected) {
+                slot.set(None);
+            }
+        });
         debug_assert!(
             self.gc_inhibit_depth > 0 || std::thread::panicking(),
             "SerialTurn::leave_turn called with gc_inhibit_depth == 0"
