@@ -91,9 +91,9 @@ with a Neomacs signal: `[\"ok\", W, H]' or `[\"error\", MSG]'."
             (oob-single-size (gif-disposal-raw-image-size oob-single-img))
             (oob-frame1-0-size (gif-disposal-raw-image-size oob-frame1-0-img))
             (oob-frame1-1-size (gif-disposal-raw-image-size oob-frame1-1-img))
-            (oob-single-meta (and (ignore-errors (image-metadata oob-single-img)) t))
-            (oob-frame1-0-meta (and (ignore-errors (image-metadata oob-frame1-0-img)) t))
-            (oob-frame1-1-meta (and (ignore-errors (image-metadata oob-frame1-1-img)) t)))
+            (oob-single-meta (and (image-metadata oob-single-img) t))
+            (oob-frame1-0-meta (and (image-metadata oob-frame1-0-img) t))
+            (oob-frame1-1-meta (and (image-metadata oob-frame1-1-img) t)))
         (with-temp-file (getenv "NEOMACS_GUI_STATE_JSON")
           (insert
            (json-encode
