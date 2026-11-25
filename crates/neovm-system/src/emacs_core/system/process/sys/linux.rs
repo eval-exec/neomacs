@@ -8,11 +8,8 @@
 
 use neovm_eval::emacs_core::eval::data::process_state::Source;
 
-use crate::emacs_core::process::SystemProcessExt;
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
-
-use crate::emacs_core::process::{ProcessId, ProcessManager};
 use std::ffi::CStr;
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 
 use crate::emacs_core::process::{
     HostInterfaceEntry, NetworkAddressFamily, derive_network_interface_info_broadcast,
@@ -29,27 +26,6 @@ pub fn open(pid: u32) -> Option<Source> {
     Some(Source {
         pidfd: unsafe { OwnedFd::from_raw_fd(fd as RawFd) },
     })
-}
-
-pub(crate) trait SourceIo {
-    fn register(&self, poller: &polling::Poller, id: ProcessId);
-    fn unregister(&self, poller: &polling::Poller);
-}
-
-impl SourceIo for Source {
-    fn register(&self, poller: &polling::Poller, id: ProcessId) {
-        // Reuse the ProcessManager registration policy (level-triggered
-        // readable, keyed by process id) so pidfd sources and process-output
-        // sources are registered identically.
-        // SAFETY: `self.pidfd` is owned by `proc.live_io.child_status_source`
-        // and `unregister_process_poll_sources` calls `unregister_from_poller`
-        // before dropping it.
-        let _ = unsafe { ProcessManager::register_readable_source(poller, &self.pidfd, id) };
-    }
-
-    fn unregister(&self, poller: &polling::Poller) {
-        let _ = poller.delete(&self.pidfd);
-    }
 }
 
 // ---------------------------------------------------------------------------

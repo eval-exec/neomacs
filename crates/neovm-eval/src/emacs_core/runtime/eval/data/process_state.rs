@@ -126,6 +126,652 @@ pub enum TlsPolling {
     Suspended,
 }
 
+/// Contract for an owned OS handle that can be registered with and removed
+/// from a `polling::Poller` via [`PollRegistration`].
+///
+/// # Safety
+/// Implementors must guarantee that:
+/// - [`Self::add_to_poller`] registers only descriptors exclusively owned by
+///   `self`.
+/// - The descriptor set addressed by [`Self::add_to_poller`],
+///   [`Self::modify_on_poller`], and [`Self::unregister_from_poller`] is
+///   **stable** for the lifetime of `self` (no descriptor identity changes,
+///   replacements, or `Some` -> `None` transitions between registration and
+///   unregistration).
+/// - [`Self::unregister_from_poller`] deletes every descriptor that
+///   [`Self::add_to_poller`] may have registered on `poller`, and is safe (a
+///   no-op) to call even when a prior `add_to_poller` failed or the descriptor
+///   was already deleted.
+pub unsafe trait PollableResource {
+    /// Register the owned descriptor(s) of `self` with `poller`.
+    ///
+    /// # Safety
+    /// The caller must invoke [`Self::unregister_from_poller`] on the same
+    /// `poller` before `self` is dropped or its descriptor is closed.
+    unsafe fn add_to_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()>;
+
+    /// `PollRegistration` internal plumbing: modify poll interest on `poller`
+    /// for a previously registered source. Callers should go through
+    /// [`PollRegistration::modify`] rather than calling this directly.
+    #[doc(hidden)]
+    fn modify_on_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()>;
+
+    /// `PollRegistration` internal plumbing: delete every descriptor of `self`
+    /// from `poller` (ignoring `NotFound`). Callers should go through
+    /// [`PollRegistration::unregister`] rather than calling this directly, to
+    /// avoid detaching a live registration out-of-band.
+    #[doc(hidden)]
+    fn unregister_from_poller(&self, poller: &polling::Poller);
+}
+
+/// RAII owner coupling a pollable OS resource `T` with the `Arc<Poller>` it is
+/// registered on (soundness B5).
+///
+/// `PollRegistration` enforces `polling::Poller`'s delete-before-drop contract
+/// by construction:
+/// - `register` stores `Arc::clone(poller)` in a `OnceLock` **before** calling
+///   `add_to_poller`, and rejects registration on any second distinct `Poller`.
+/// - `inner` is private and intentionally does **not** implement `DerefMut`, so
+///   safe code cannot `std::mem::replace` or swap out a registered descriptor
+///   without passing through [`Drop`] or [`Self::into_inner`].
+/// - Both [`Drop::drop`] and [`Self::into_inner`] call
+///   [`PollableResource::unregister_from_poller`] **before** `inner` is dropped
+///   or moved out.
+///
+/// ## Failed `add_to_poller` behavior
+///
+/// If [`PollableResource::add_to_poller`] returns `Err` (for example `EEXIST`
+/// on a re-registration, `EPERM`, `ENOMEM`, or a Windows read-ahead failure),
+/// the `Arc<Poller>` binding stored in `OnceLock` is intentionally **not**
+/// rolled back: a subsequent [`Drop`], [`Self::unregister`], or
+/// [`Self::into_inner`] will still invoke `unregister_from_poller` on that
+/// poller. This is safe because `self` exclusively owns the open descriptor
+/// until after unregistration (so no unrelated actor can hold a registration
+/// for that fd number), and all `polling` backends (epoll `ENOENT`, kqueue
+/// missing filter, IOCP unknown waitable) treat deleting an unregistered
+/// descriptor as a harmless no-op.
+pub struct PollRegistration<T: PollableResource> {
+    poller: std::sync::OnceLock<Arc<polling::Poller>>,
+    inner: std::mem::ManuallyDrop<T>,
+}
+
+impl<T: PollableResource> PollRegistration<T> {
+    /// Wrap an unregistered pollable OS resource.
+    pub fn new(inner: T) -> Self {
+        Self {
+            poller: std::sync::OnceLock::new(),
+            inner: std::mem::ManuallyDrop::new(inner),
+        }
+    }
+
+    /// Register `self` on `poller`, binding `Arc::clone(poller)` for automatic
+    /// cleanup on drop or [`Self::into_inner`].
+    pub fn register(
+        &self,
+        poller: &Arc<polling::Poller>,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        let recorded = self.poller.get_or_init(|| Arc::clone(poller));
+        if !Arc::ptr_eq(recorded, poller) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "poll resource is already bound to a different Poller",
+            ));
+        }
+        // SAFETY: `recorded` retains `Arc::clone(poller)` before registration
+        // runs, `inner` cannot be replaced via `&mut T` (no `DerefMut`), and
+        // both `Drop` and `into_inner` call `unregister_from_poller` before
+        // `inner` can be dropped or moved out.
+        unsafe { self.inner.add_to_poller(poller, event, mode) }
+    }
+
+    /// Modify poll interest on `poller` if `self` is bound to `poller`.
+    pub fn modify(
+        &self,
+        poller: &Arc<polling::Poller>,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        match self.poller.get() {
+            Some(recorded) if Arc::ptr_eq(recorded, poller) => {
+                self.inner.modify_on_poller(poller, event, mode)
+            }
+            Some(_) => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "poll resource is bound to a different Poller",
+            )),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "poll resource has not been registered",
+            )),
+        }
+    }
+
+    /// Delete `self` from its recorded `Poller` (if any), keeping the poller
+    /// binding so a later `register` on the same `Poller` can re-arm interest.
+    pub fn unregister(&self) {
+        if let Some(poller) = self.poller.get() {
+            self.inner.unregister_from_poller(poller);
+        }
+    }
+
+    /// Delete `self` from its recorded `Poller` (if any) and return the
+    /// unwrapped inner resource.
+    pub fn into_inner(mut self) -> T {
+        if let Some(poller) = self.poller.take() {
+            self.inner.unregister_from_poller(&poller);
+        }
+        // SAFETY: `self.poller` was already taken and dropped above, and
+        // `mem::forget(self)` suppresses `Drop::drop` so `inner` is moved once.
+        let inner = unsafe { std::mem::ManuallyDrop::take(&mut self.inner) };
+        std::mem::forget(self);
+        inner
+    }
+}
+
+impl<T: PollableResource> Drop for PollRegistration<T> {
+    fn drop(&mut self) {
+        if let Some(poller) = self.poller.get() {
+            self.inner.unregister_from_poller(poller);
+        }
+        // SAFETY: `Drop::drop` runs once and `inner` is never accessed again.
+        unsafe { std::mem::ManuallyDrop::drop(&mut self.inner) };
+    }
+}
+
+impl<T: PollableResource> std::ops::Deref for PollRegistration<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<T: PollableResource + Read> Read for PollRegistration<T> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl<T: PollableResource + io::Write> io::Write for PollRegistration<T> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+#[cfg(unix)]
+impl<T: PollableResource + AsRawFd> AsRawFd for PollRegistration<T> {
+    fn as_raw_fd(&self) -> std::os::fd::RawFd {
+        self.inner.as_raw_fd()
+    }
+}
+
+#[cfg(unix)]
+impl<T: PollableResource + std::os::fd::AsFd> std::os::fd::AsFd for PollRegistration<T> {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.inner.as_fd()
+    }
+}
+
+impl<T: PollableResource + std::fmt::Debug> std::fmt::Debug for PollRegistration<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PollRegistration")
+            .field("registered", &self.poller.get().is_some())
+            .field("inner", &*self.inner)
+            .finish()
+    }
+}
+
+impl PollRegistration<TlsStream> {
+    /// Mutably borrow the rustls `ClientConnection` and peer certificate list
+    /// alongside a shared `&TcpStream` reference, so callers can drive TLS
+    /// handshakes and I/O without being able to replace or drop the registered
+    /// socket.
+    pub fn with_rustls_mut<R>(
+        &mut self,
+        f: impl FnOnce(&mut rustls::ClientConnection, &TcpStream, &mut Vec<String>) -> R,
+    ) -> R {
+        match &mut *self.inner {
+            TlsStream::Rustls(stream) => f(
+                &mut stream.inner.conn,
+                &stream.inner.sock,
+                &mut stream.peer_certificates_pem,
+            ),
+        }
+    }
+}
+
+// SAFETY: `ChildStatusSource` registers and deletes its owned `pidfd` on Linux
+// and is uninhabited on non-Linux targets.
+unsafe impl PollableResource for ChildStatusSource {
+    unsafe fn add_to_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            // SAFETY: caller upholds `PollableResource::add_to_poller` contract.
+            unsafe { poller.add_with_mode(&self.0.pidfd, event, mode) }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (poller, event, mode);
+            match self.0 {}
+        }
+    }
+
+    fn modify_on_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            poller.modify_with_mode(&self.0.pidfd, event, mode)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (poller, event, mode);
+            match self.0 {}
+        }
+    }
+
+    fn unregister_from_poller(&self, poller: &polling::Poller) {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = poller.delete(&self.0.pidfd);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = poller;
+            match self.0 {}
+        }
+    }
+}
+
+// SAFETY: `ChildOutputReader` registers and deletes its own `AsFd` descriptor
+// on Unix; on non-Unix targets pipes are not registered on the socket poller.
+unsafe impl PollableResource for ChildOutputReader {
+    unsafe fn add_to_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use polling::AsSource;
+            use std::os::fd::AsFd;
+            // SAFETY: caller upholds `PollableResource::add_to_poller` contract.
+            unsafe { poller.add_with_mode(&self.as_fd().source(), event, mode) }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (poller, event, mode);
+            Ok(())
+        }
+    }
+
+    fn modify_on_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsFd;
+            poller.modify_with_mode(self.as_fd(), event, mode)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (poller, event, mode);
+            Ok(())
+        }
+    }
+
+    fn unregister_from_poller(&self, poller: &polling::Poller) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsFd;
+            let _ = poller.delete(self.as_fd());
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = poller;
+        }
+    }
+}
+
+// SAFETY: `std::fs::File` registers and deletes its own `AsFd` descriptor on
+// Unix; on non-Unix targets child stdin pipes are not registered on `Poller`.
+unsafe impl PollableResource for std::fs::File {
+    unsafe fn add_to_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use polling::AsSource;
+            use std::os::fd::AsFd;
+            // SAFETY: caller upholds `PollableResource::add_to_poller` contract.
+            unsafe { poller.add_with_mode(&self.as_fd().source(), event, mode) }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (poller, event, mode);
+            Ok(())
+        }
+    }
+
+    fn modify_on_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsFd;
+            poller.modify_with_mode(self.as_fd(), event, mode)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (poller, event, mode);
+            Ok(())
+        }
+    }
+
+    fn unregister_from_poller(&self, poller: &polling::Poller) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsFd;
+            let _ = poller.delete(self.as_fd());
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = poller;
+        }
+    }
+}
+
+// SAFETY: `portable_pty::MasterPty` owns its master fd on Unix
+// (`UnixMasterPty` holds one fixed `FileDescriptor` for its entire lifetime),
+// so `as_raw_fd()` returns a stable descriptor (or stably `None`) across
+// `add_to_poller`, `modify_on_poller`, and `unregister_from_poller`. Any custom
+// `MasterPty` wrapped in `PollRegistration` must preserve that fd-stability
+// invariant per `PollableResource`'s `# Safety` contract.
+unsafe impl PollableResource for Box<dyn portable_pty::MasterPty + Send> {
+    unsafe fn add_to_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            let Some(raw_fd) = self.as_raw_fd() else {
+                return Ok(());
+            };
+            // SAFETY: `self` owns this open PTY master descriptor for the call,
+            // and caller upholds `PollableResource::add_to_poller`.
+            unsafe {
+                use polling::AsSource;
+                let borrowed = std::os::fd::BorrowedFd::borrow_raw(raw_fd);
+                poller.add_with_mode(&borrowed.source(), event, mode)
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (poller, event, mode);
+            Ok(())
+        }
+    }
+
+    fn modify_on_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            let Some(raw_fd) = self.as_raw_fd() else {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "PTY master has no raw fd",
+                ));
+            };
+            // SAFETY: `self` owns this open PTY master descriptor for the call.
+            let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(raw_fd) };
+            poller.modify_with_mode(borrowed, event, mode)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (poller, event, mode);
+            Ok(())
+        }
+    }
+
+    fn unregister_from_poller(&self, poller: &polling::Poller) {
+        #[cfg(unix)]
+        {
+            if let Some(raw_fd) = self.as_raw_fd() {
+                // SAFETY: `self` owns this open PTY master descriptor for the call.
+                let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(raw_fd) };
+                let _ = poller.delete(borrowed);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = poller;
+        }
+    }
+}
+
+// SAFETY: every `NetworkSocket` variant registers and deletes its single owned
+// socket descriptor.
+unsafe impl PollableResource for NetworkSocket {
+    unsafe fn add_to_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        // SAFETY: caller upholds `PollableResource::add_to_poller` contract.
+        unsafe {
+            match self {
+                Self::TcpStream(stream) => poller.add_with_mode(stream, event, mode),
+                Self::TcpListener(listener) => poller.add_with_mode(listener, event, mode),
+                Self::UdpSocket(socket) => poller.add_with_mode(socket, event, mode),
+                #[cfg(unix)]
+                Self::SeqpacketStream(socket) | Self::SeqpacketListener(socket) => {
+                    poller.add_with_mode(socket, event, mode)
+                }
+                #[cfg(unix)]
+                Self::UnixStream(stream) => poller.add_with_mode(stream, event, mode),
+                #[cfg(unix)]
+                Self::UnixListener(listener) => poller.add_with_mode(listener, event, mode),
+                #[cfg(unix)]
+                Self::UnixDatagram(socket) => poller.add_with_mode(socket, event, mode),
+            }
+        }
+    }
+
+    fn modify_on_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        match self {
+            Self::TcpStream(stream) => poller.modify_with_mode(stream, event, mode),
+            Self::TcpListener(listener) => poller.modify_with_mode(listener, event, mode),
+            Self::UdpSocket(socket) => poller.modify_with_mode(socket, event, mode),
+            #[cfg(unix)]
+            Self::SeqpacketStream(socket) | Self::SeqpacketListener(socket) => {
+                poller.modify_with_mode(socket, event, mode)
+            }
+            #[cfg(unix)]
+            Self::UnixStream(stream) => poller.modify_with_mode(stream, event, mode),
+            #[cfg(unix)]
+            Self::UnixListener(listener) => poller.modify_with_mode(listener, event, mode),
+            #[cfg(unix)]
+            Self::UnixDatagram(socket) => poller.modify_with_mode(socket, event, mode),
+        }
+    }
+
+    fn unregister_from_poller(&self, poller: &polling::Poller) {
+        match self {
+            Self::TcpStream(stream) => {
+                let _ = poller.delete(stream);
+            }
+            Self::TcpListener(listener) => {
+                let _ = poller.delete(listener);
+            }
+            Self::UdpSocket(socket) => {
+                let _ = poller.delete(socket);
+            }
+            #[cfg(unix)]
+            Self::SeqpacketStream(socket) | Self::SeqpacketListener(socket) => {
+                let _ = poller.delete(socket);
+            }
+            #[cfg(unix)]
+            Self::UnixStream(stream) => {
+                let _ = poller.delete(stream);
+            }
+            #[cfg(unix)]
+            Self::UnixListener(listener) => {
+                let _ = poller.delete(listener);
+            }
+            #[cfg(unix)]
+            Self::UnixDatagram(socket) => {
+                let _ = poller.delete(socket);
+            }
+        }
+    }
+}
+
+// SAFETY: `TlsStream` registers and deletes its single owned `TcpStream`.
+unsafe impl PollableResource for TlsStream {
+    unsafe fn add_to_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        // SAFETY: caller upholds `PollableResource::add_to_poller` contract.
+        unsafe { poller.add_with_mode(self.tcp_stream(), event, mode) }
+    }
+
+    fn modify_on_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        poller.modify_with_mode(self.tcp_stream(), event, mode)
+    }
+
+    fn unregister_from_poller(&self, poller: &polling::Poller) {
+        let _ = poller.delete(self.tcp_stream());
+    }
+}
+
+// SAFETY: `SerialPort` registers and deletes its owned serial fd (Unix) or
+// read-ahead waitable event after cancelling overlapped I/O (Windows).
+unsafe impl PollableResource for SerialPort {
+    unsafe fn add_to_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            // SAFETY: caller upholds `PollableResource::add_to_poller` contract.
+            unsafe { poller.add_with_mode(&self.0.fd, event, mode) }
+        }
+        #[cfg(windows)]
+        {
+            if !self.0.post_serial_read_ahead() {
+                return Err(io::Error::other("Failed to arm serial read-ahead"));
+            }
+            let handle = self.0.serial_read_event_raw();
+            // SAFETY: `handle` is owned by `self.0` and caller upholds
+            // `PollableResource::add_to_poller` contract.
+            unsafe { poller.add_waitable(handle, event, mode) }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (poller, event, mode);
+            match self.0 {}
+        }
+    }
+
+    fn modify_on_poller(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            poller.modify_with_mode(&self.0.fd, event, mode)
+        }
+        #[cfg(windows)]
+        {
+            self.0.with_serial_read_event(|read_event| {
+                poller.modify_waitable(read_event, event, mode)
+            })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (poller, event, mode);
+            match self.0 {}
+        }
+    }
+
+    fn unregister_from_poller(&self, poller: &polling::Poller) {
+        #[cfg(unix)]
+        {
+            let _ = poller.delete(&self.0.fd);
+        }
+        #[cfg(windows)]
+        {
+            self.0.cancel_serial_read_ahead();
+            let _ = self
+                .0
+                .with_serial_read_event(|read_event| poller.remove_waitable(read_event));
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = poller;
+            match self.0 {}
+        }
+    }
+}
+
 /// Operating-system resources owned by a live process connection.
 ///
 /// GNU keeps Lisp process identity/status alive after `remove_process`, but
@@ -134,14 +780,13 @@ pub enum TlsPolling {
 /// `Process` is durable Lisp-visible state, while replacing this bundle with
 /// `Default::default()` drops every live handle as one operation.
 ///
-/// All fields are private so safe code cannot overwrite or drop a descriptor
-/// that is currently registered with a `polling::Poller` (soundness B5).
-/// Read-only inspection goes through safe getters; mutating or replacing
-/// poll-registered descriptors requires `unsafe`.
+/// Every poll-registrable descriptor is wrapped in [`PollRegistration`], which
+/// holds `Arc<Poller>` and unregisters the descriptor on `Drop` or
+/// `into_inner` before closing it (soundness B5).
 #[derive(Default)]
 pub struct LiveProcessIo {
     /// Pollable child-status wakeup source, where the platform exposes one.
-    child_status_source: Option<ChildStatusSource>,
+    child_status_source: Option<PollRegistration<ChildStatusSource>>,
     /// The OS child this process owns, and GNU's `p->alive` for it.
     ///
     /// One slot for both spawn shapes -- the `std::process::Child` a pipe (or
@@ -152,7 +797,7 @@ pub struct LiveProcessIo {
     /// OS-level output pipe for non-blocking reads (pipe mode).  With no
     /// explicit `:stderr`, this is one shared pipe carrying both stdout and
     /// stderr in the child's write order, as in GNU Emacs.
-    child_stdout: Option<ChildOutputReader>,
+    child_stdout: Option<PollRegistration<ChildOutputReader>>,
     /// Writable endpoint owned by a `make-pipe-process` connection.
     module_pipe_writer: Option<os_pipe::PipeWriter>,
     /// Real process that received this pipe's writer as its `:stderr`.
@@ -163,19 +808,19 @@ pub struct LiveProcessIo {
     /// the one writable endpoint has already been consumed.
     stderr_pipe_owner: Option<ProcessId>,
     /// PTY master handle for resize and I/O (PTY mode).
-    pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+    pty_master: Option<PollRegistration<Box<dyn portable_pty::MasterPty + Send>>>,
     /// PTY reader for non-blocking reads from the master side.
     pty_reader: Option<PtyOutputReader>,
     /// PTY writer for sending input to the master side.
     pty_writer: Option<Box<dyn std::io::Write + Send>>,
-    network_socket: Option<NetworkSocket>,
+    network_socket: Option<PollRegistration<NetworkSocket>>,
     /// Filesystem identity captured when binding a Unix listener. Exit cleanup
     /// must not unlink a different endpoint installed by an exit hook.
     #[cfg(unix)]
     unix_listener_path: Option<(PathBuf, u64, u64)>,
     pending_network_connect: Option<PendingNetworkConnect>,
     /// TLS-wrapped stream for encrypted network connections.
-    tls_stream: Option<TlsStream>,
+    tls_stream: Option<PollRegistration<TlsStream>>,
     tls_polling: TlsPolling,
     /// The open device behind a serial process.  GNU keeps one descriptor for
     /// both directions (`p->infd = fd; p->outfd = fd`, src/process.c:3216-3217),
@@ -184,7 +829,7 @@ pub struct LiveProcessIo {
     /// It is `Option` only because `LiveProcessIo` is one struct for every
     /// process kind and `deactivate_process_io` empties it; a serial process
     /// cannot be BORN without one -- see [`ProcessManager::create_serial_process`].
-    serial_port: Option<SerialPort>,
+    serial_port: Option<PollRegistration<SerialPort>>,
 }
 
 pub enum ChildOutputReader {
@@ -1625,20 +2270,18 @@ impl Process {
 
     /// Borrow the process's live OS resource bundle mutably.
     ///
-    /// # Safety
-    /// The caller must not replace, take, or drop `LiveProcessIo` (or any
-    /// poll-registered descriptor inside it) while that descriptor is still
-    /// registered in a `polling::Poller`.
-    pub unsafe fn live_io_mut(&mut self) -> &mut LiveProcessIo {
+    /// Every poll-registrable descriptor inside [`LiveProcessIo`] is wrapped in
+    /// [`PollRegistration`], which unregisters itself from its `Arc<Poller>`
+    /// before closing on drop or `into_inner`.
+    pub fn live_io_mut(&mut self) -> &mut LiveProcessIo {
         &mut self.live_io
     }
 
     /// Drop every live OS resource owned by this process.
     ///
-    /// # Safety
-    /// The caller must have unregistered every poll-registered source in
-    /// `self.live_io` from its `polling::Poller` before calling this method.
-    pub unsafe fn clear_live_io(&mut self) {
+    /// Every [`PollRegistration`] inside `self.live_io` unregisters from its
+    /// `Arc<Poller>` in `Drop` before closing its descriptor.
+    pub fn clear_live_io(&mut self) {
         drop(std::mem::take(&mut self.live_io));
     }
 
@@ -1704,9 +2347,9 @@ impl Process {
 }
 
 impl LiveProcessIo {
-    // --- Safe read-only getters ---
+    // --- Read-only getters ---
 
-    pub fn child_status_source(&self) -> Option<&ChildStatusSource> {
+    pub fn child_status_source(&self) -> Option<&PollRegistration<ChildStatusSource>> {
         self.child_status_source.as_ref()
     }
 
@@ -1714,7 +2357,7 @@ impl LiveProcessIo {
         &self.child
     }
 
-    pub fn child_stdout(&self) -> Option<&ChildOutputReader> {
+    pub fn child_stdout(&self) -> Option<&PollRegistration<ChildOutputReader>> {
         self.child_stdout.as_ref()
     }
 
@@ -1726,8 +2369,8 @@ impl LiveProcessIo {
         self.stderr_pipe_owner
     }
 
-    pub fn pty_master(&self) -> Option<&(dyn portable_pty::MasterPty + Send)> {
-        self.pty_master.as_deref()
+    pub fn pty_master(&self) -> Option<&PollRegistration<Box<dyn portable_pty::MasterPty + Send>>> {
+        self.pty_master.as_ref()
     }
 
     pub fn pty_reader(&self) -> Option<&PtyOutputReader> {
@@ -1738,7 +2381,7 @@ impl LiveProcessIo {
         self.pty_writer.as_deref()
     }
 
-    pub fn network_socket(&self) -> Option<&NetworkSocket> {
+    pub fn network_socket(&self) -> Option<&PollRegistration<NetworkSocket>> {
         self.network_socket.as_ref()
     }
 
@@ -1751,7 +2394,7 @@ impl LiveProcessIo {
         self.pending_network_connect.as_ref()
     }
 
-    pub fn tls_stream(&self) -> Option<&TlsStream> {
+    pub fn tls_stream(&self) -> Option<&PollRegistration<TlsStream>> {
         self.tls_stream.as_ref()
     }
 
@@ -1759,7 +2402,7 @@ impl LiveProcessIo {
         self.tls_polling
     }
 
-    pub fn serial_port(&self) -> Option<&SerialPort> {
+    pub fn serial_port(&self) -> Option<&PollRegistration<SerialPort>> {
         self.serial_port.as_ref()
     }
 
@@ -1823,144 +2466,94 @@ impl LiveProcessIo {
         self.tls_polling = polling;
     }
 
-    // --- Unsafe mutators for poll-registered descriptor fields ---
+    // --- Safe RAII mutators for poll-registrable descriptor fields ---
 
-    /// Replace `child_status_source`.
-    ///
-    /// # Safety
-    /// Any previously stored `ChildStatusSource` must already be deleted from
-    /// its `polling::Poller` before being replaced or dropped.
-    pub unsafe fn set_child_status_source(&mut self, source: Option<ChildStatusSource>) {
-        self.child_status_source = source;
+    /// Replace `child_status_source`, automatically unregistering any
+    /// previously registered source on drop.
+    pub fn set_child_status_source(&mut self, source: Option<ChildStatusSource>) {
+        self.child_status_source = source.map(PollRegistration::new);
     }
 
-    /// Take `child_status_source`.
-    ///
-    /// # Safety
-    /// The caller must delete the returned `ChildStatusSource` from its
-    /// `polling::Poller` before dropping it.
-    pub unsafe fn take_child_status_source(&mut self) -> Option<ChildStatusSource> {
-        self.child_status_source.take()
+    /// Take `child_status_source`, unregistering it from its poller before
+    /// returning the inner handle.
+    pub fn take_child_status_source(&mut self) -> Option<ChildStatusSource> {
+        self.child_status_source
+            .take()
+            .map(PollRegistration::into_inner)
     }
 
-    /// Borrow `child` mutably.
-    ///
-    /// # Safety
-    /// The caller must not close, replace, or drop a child `stdin` descriptor
-    /// while it is still registered in a `polling::Poller`.
-    pub unsafe fn child_mut(&mut self) -> &mut ChildOwnership {
+    /// Borrow `child` mutably (`SpawnedChild::stdin` is itself RAII-guarded).
+    pub fn child_mut(&mut self) -> &mut ChildOwnership {
         &mut self.child
     }
 
-    /// Replace `child`.
-    ///
-    /// # Safety
-    /// Any previously stored child `stdin` descriptor must already be deleted
-    /// from its `polling::Poller` before being replaced or dropped.
-    pub unsafe fn set_child(&mut self, child: ChildOwnership) {
+    /// Replace `child`, automatically unregistering any previously registered
+    /// child stdin on drop.
+    pub fn set_child(&mut self, child: ChildOwnership) {
         self.child = child;
     }
 
-    /// Borrow `child_stdout` mutably.
-    ///
-    /// # Safety
-    /// The caller must not replace or drop a registered `ChildOutputReader`
-    /// while its descriptor is still registered in a `polling::Poller`.
-    pub unsafe fn child_stdout_mut(&mut self) -> Option<&mut ChildOutputReader> {
+    /// Borrow `child_stdout` mutably for `Read` without exposing `&mut ChildOutputReader`.
+    pub fn child_stdout_mut(&mut self) -> Option<&mut PollRegistration<ChildOutputReader>> {
         self.child_stdout.as_mut()
     }
 
-    /// Replace `child_stdout`.
-    ///
-    /// # Safety
-    /// Any previously stored `ChildOutputReader` must already be deleted from
-    /// its `polling::Poller` before being replaced or dropped.
-    pub unsafe fn set_child_stdout(&mut self, stdout: Option<ChildOutputReader>) {
-        self.child_stdout = stdout;
+    /// Replace `child_stdout`, automatically unregistering any previously
+    /// registered reader on drop.
+    pub fn set_child_stdout(&mut self, stdout: Option<ChildOutputReader>) {
+        self.child_stdout = stdout.map(PollRegistration::new);
     }
 
-    /// Replace `pty_master`.
-    ///
-    /// # Safety
-    /// Any previously stored `MasterPty` must already be deleted from its
-    /// `polling::Poller` before being replaced or dropped.
-    pub unsafe fn set_pty_master(
-        &mut self,
-        master: Option<Box<dyn portable_pty::MasterPty + Send>>,
-    ) {
-        self.pty_master = master;
+    /// Take `child_stdout`, unregistering it from its poller before returning
+    /// the inner reader.
+    pub fn take_child_stdout(&mut self) -> Option<ChildOutputReader> {
+        self.child_stdout.take().map(PollRegistration::into_inner)
     }
 
-    /// Borrow `network_socket` mutably.
-    ///
-    /// # Safety
-    /// The caller must not replace or drop a registered `NetworkSocket` while
-    /// its descriptor is still registered in a `polling::Poller`.
-    pub unsafe fn network_socket_mut(&mut self) -> Option<&mut NetworkSocket> {
-        self.network_socket.as_mut()
+    /// Replace `pty_master`, automatically unregistering any previously
+    /// registered PTY master on drop.
+    pub fn set_pty_master(&mut self, master: Option<Box<dyn portable_pty::MasterPty + Send>>) {
+        self.pty_master = master.map(PollRegistration::new);
     }
 
-    /// Replace `network_socket`.
-    ///
-    /// # Safety
-    /// Any previously stored `NetworkSocket` must already be deleted from its
-    /// `polling::Poller` before being replaced or dropped.
-    pub unsafe fn set_network_socket(&mut self, socket: Option<NetworkSocket>) {
-        self.network_socket = socket;
+    /// Replace `network_socket`, automatically unregistering any previously
+    /// registered socket on drop.
+    pub fn set_network_socket(&mut self, socket: Option<NetworkSocket>) {
+        self.network_socket = socket.map(PollRegistration::new);
     }
 
-    /// Take `network_socket`.
-    ///
-    /// # Safety
-    /// The caller must delete the returned `NetworkSocket` from its
-    /// `polling::Poller` before dropping it (or re-store it before any drop).
-    pub unsafe fn take_network_socket(&mut self) -> Option<NetworkSocket> {
-        self.network_socket.take()
+    /// Take `network_socket`, unregistering it from its poller before returning
+    /// the inner socket.
+    pub fn take_network_socket(&mut self) -> Option<NetworkSocket> {
+        self.network_socket.take().map(PollRegistration::into_inner)
     }
 
-    /// Borrow `tls_stream` mutably.
-    ///
-    /// # Safety
-    /// The caller must not replace or drop a registered `TlsStream` while its
-    /// underlying socket is still registered in a `polling::Poller`.
-    pub unsafe fn tls_stream_mut(&mut self) -> Option<&mut TlsStream> {
+    /// Borrow `tls_stream` mutably for TLS I/O without exposing `&mut TcpStream`.
+    pub fn tls_stream_mut(&mut self) -> Option<&mut PollRegistration<TlsStream>> {
         self.tls_stream.as_mut()
     }
 
-    /// Replace `tls_stream`.
-    ///
-    /// # Safety
-    /// Any previously stored `TlsStream` must already be deleted from its
-    /// `polling::Poller` before being replaced or dropped.
-    pub unsafe fn set_tls_stream(&mut self, stream: Option<TlsStream>) {
-        self.tls_stream = stream;
+    /// Replace `tls_stream`, automatically unregistering any previously
+    /// registered TLS socket on drop.
+    pub fn set_tls_stream(&mut self, stream: Option<TlsStream>) {
+        self.tls_stream = stream.map(PollRegistration::new);
     }
 
-    /// Take `tls_stream`.
-    ///
-    /// # Safety
-    /// The caller must delete the returned `TlsStream` from its
-    /// `polling::Poller` before dropping it.
-    pub unsafe fn take_tls_stream(&mut self) -> Option<TlsStream> {
-        self.tls_stream.take()
+    /// Take `tls_stream`, unregistering its underlying TCP socket from its
+    /// poller before returning the inner stream.
+    pub fn take_tls_stream(&mut self) -> Option<TlsStream> {
+        self.tls_stream.take().map(PollRegistration::into_inner)
     }
 
-    /// Borrow `serial_port` mutably.
-    ///
-    /// # Safety
-    /// The caller must not replace or drop a registered `SerialPort` while its
-    /// descriptor is still registered in a `polling::Poller`.
-    pub unsafe fn serial_port_mut(&mut self) -> Option<&mut SerialPort> {
+    /// Borrow `serial_port` mutably for `Read`/`Write` without exposing `&mut SerialPort`.
+    pub fn serial_port_mut(&mut self) -> Option<&mut PollRegistration<SerialPort>> {
         self.serial_port.as_mut()
     }
 
-    /// Replace `serial_port`.
-    ///
-    /// # Safety
-    /// Any previously stored `SerialPort` must already be deleted from its
-    /// `polling::Poller` before being replaced or dropped.
-    pub unsafe fn set_serial_port(&mut self, port: Option<SerialPort>) {
-        self.serial_port = port;
+    /// Replace `serial_port`, automatically unregistering any previously
+    /// registered serial port on drop.
+    pub fn set_serial_port(&mut self, port: Option<SerialPort>) {
+        self.serial_port = port.map(PollRegistration::new);
     }
 
     /// GNU's `record_kill_process` (src/callproc.c:196-211), reached from
@@ -3117,7 +3710,7 @@ impl ProcessManager {
             .network_socket
             .as_ref()
             .ok_or(PendingConnectObservationError::MissingSocket)?;
-        match socket {
+        match &**socket {
             NetworkSocket::TcpStream(_) => {}
             NetworkSocket::TcpListener(_) | NetworkSocket::UdpSocket(_) => {
                 return Err(PendingConnectObservationError::NotTcpStream);
@@ -3150,19 +3743,14 @@ impl ProcessManager {
 
     /// Remove a process record from the live table.
     ///
-    /// # Safety
-    /// The caller must delete any poll-registered descriptors owned by the
-    /// removed `Process` from `self.wait_backend.poller()` before dropping it.
-    pub unsafe fn remove_live_process_record(&mut self, id: ProcessId) -> Option<Process> {
+    /// Every poll-registrable descriptor inside `Process::live_io` is wrapped
+    /// in [`PollRegistration`] and unregisters itself on drop.
+    pub fn remove_live_process_record(&mut self, id: ProcessId) -> Option<Process> {
         self.processes.remove(&id)
     }
 
     /// Insert a retired process record into the deleted table.
-    ///
-    /// # Safety
-    /// Neither `proc` nor any existing entry for `id` may hold descriptors
-    /// currently registered in a `polling::Poller`.
-    pub unsafe fn insert_deleted_process_record(&mut self, id: ProcessId, proc: Process) {
+    pub fn insert_deleted_process_record(&mut self, id: ProcessId, proc: Process) {
         self.deleted_processes.insert(id, proc);
     }
 
@@ -3835,7 +4423,7 @@ impl std::fmt::Debug for Process {
                     .live_io
                     .network_socket
                     .as_ref()
-                    .map(NetworkSocket::kind_name),
+                    .map(|socket| socket.kind_name()),
             )
             .finish_non_exhaustive()
     }

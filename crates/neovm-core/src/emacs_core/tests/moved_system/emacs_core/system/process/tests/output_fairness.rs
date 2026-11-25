@@ -158,12 +158,9 @@ fn accept_process_output_drains_a_ready_burst_in_one_call() {
             let process = eval.processes_mut().get_mut(id).unwrap();
             process.kind = ProcessKind::Pipe;
             process.childp = Value::NIL;
-            // SAFETY: fixture process has no poller-registered descriptors.
-            unsafe {
-                let io = process.live_io_mut();
-                io.set_pty_reader(None);
-                io.set_child_stdout(Some(ChildOutputReader::Shared(reader)));
-            }
+            let io = process.live_io_mut();
+            io.set_pty_reader(None);
+            io.set_child_stdout(Some(ChildOutputReader::Shared(reader)));
             writers.push(writer);
         }
         eval.set_variable("accept-burst-process", Value::make_process(hot));
@@ -239,12 +236,9 @@ fn completed_accept_yields_after_a_bounded_minimum_drain() {
         let process = eval.processes_mut().get_mut(hot).unwrap();
         process.kind = ProcessKind::Pipe;
         process.childp = Value::NIL;
-        // SAFETY: fixture process has no poller-registered descriptors.
-        unsafe {
-            let io = process.live_io_mut();
-            io.set_pty_reader(None);
-            io.set_child_stdout(Some(ChildOutputReader::Shared(reader)));
-        }
+        let io = process.live_io_mut();
+        io.set_pty_reader(None);
+        io.set_child_stdout(Some(ChildOutputReader::Shared(reader)));
     }
     eval.set_variable("bounded-drain-process", Value::make_process(hot));
     eval.eval_str("(set-process-sentinel bounded-drain-process (lambda (_p _event) nil))")

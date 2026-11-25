@@ -1,0 +1,46 @@
+error[E0200]: the trait `PollableResource` requires an `unsafe impl` declaration
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/poll_registration_forbids_deref_mut.rs
+  |
+  | impl PollableResource for FakeSource {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: the trait `PollableResource` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
+help: add `unsafe` to this trait implementation
+  |
+9 | unsafe impl PollableResource for FakeSource {
+  | ++++++
+
+error[E0616]: field `inner` of struct `PollRegistration` is private
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/poll_registration_forbids_deref_mut.rs
+  |
+  |     let _ = &reg.inner;
+  |                  ^^^^^ private field
+
+error[E0616]: field `poller` of struct `PollRegistration` is private
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/poll_registration_forbids_deref_mut.rs
+  |
+  |     let _ = &reg.poller;
+  |                  ^^^^^^ private field
+
+error[E0308]: mismatched types
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/poll_registration_forbids_deref_mut.rs
+  |
+  |     let _ = std::mem::replace(&mut *reg, replacement);
+  |             -----------------            ^^^^^^^^^^^ expected `PollRegistration<File>`, found `File`
+  |             |
+  |             arguments to this function are incorrect
+  |
+  = note: expected struct `PollRegistration<std::fs::File>`
+             found struct `std::fs::File`
+help: the return type of this call is `std::fs::File` due to the type of the argument passed
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/poll_registration_forbids_deref_mut.rs
+  |
+  |     let _ = std::mem::replace(&mut *reg, replacement);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-----------^
+  |                                          |
+  |                                          this argument influences the return type of `replace`
+note: function defined here
+ --> $RUST/core/src/mem/mod.rs
+  |
+  | pub const fn replace<T>(dest: &mut T, src: T) -> T {
+  |              ^^^^^^^

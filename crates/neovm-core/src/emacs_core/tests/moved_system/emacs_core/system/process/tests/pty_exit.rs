@@ -54,7 +54,7 @@ fn recorded_pty_status_before_read(interruptions: usize) -> (Context, ProcessId,
     // No actual pid is attached to this injected reap: teardown must never
     // signal or wait for an unrelated process on behalf of this fixture.
     // SAFETY: fixture process has no poller-registered descriptors.
-    unsafe { proc.live_io_mut().set_child(ChildOwnership::Reaped) };
+    proc.live_io_mut().set_child(ChildOwnership::Reaped);
     let calls = Arc::new(AtomicUsize::new(0));
     proc.set_pty_reader(Some(PtyOutputReader::new(Box::new(InterruptedPtyRead {
         inner: Box::new(Cursor::new(b"process-output\n".to_vec())),

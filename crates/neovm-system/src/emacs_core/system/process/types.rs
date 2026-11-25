@@ -596,13 +596,13 @@ pub(super) fn accepted_network_process_name(server_name: &str, addr: SocketAddr)
 
 pub(super) fn process_is_datagram_network(proc: &Process) -> bool {
     let is_datagram = matches!(
-        proc.live_io().network_socket(),
+        proc.live_io().network_socket().map(|s| &**s),
         Some(NetworkSocket::UdpSocket(_))
     );
     #[cfg(unix)]
     let is_datagram = is_datagram
         || matches!(
-            proc.live_io().network_socket(),
+            proc.live_io().network_socket().map(|s| &**s),
             Some(NetworkSocket::UnixDatagram(_))
         );
     is_datagram
@@ -3373,7 +3373,7 @@ pub(super) fn apply_network_socket_option_to_process(
     spec: NetworkSocketOptionSpec,
 ) -> EvalResult {
     if let Some(socket) = proc.live_io().network_socket() {
-        return match socket {
+        return match &**socket {
             NetworkSocket::TcpStream(stream) => {
                 apply_network_socket_option_to_socket(&SockRef::from(stream), spec)
             }
@@ -3978,95 +3978,75 @@ use super::child_status::{
 use neovm_eval::emacs_core::eval::data::process_state::StatusChangeSite;
 /// Crate-internal poller registration helpers for child pipe descriptors.
 ///
-/// Kept off `pub trait SystemProcessExt` and marked `unsafe fn` so neither
-/// external nor internal safe code can register an arbitrary descriptor without
-/// guaranteeing delete-before-drop (soundness B5).
+/// Kept off `pub trait SystemProcessExt` and routed through `PollRegistration`
+/// so every registered descriptor carries `Arc<Poller>` and unregisters itself
+/// on drop (soundness B5).
 pub(crate) trait ChildPipePollerExt {
-    /// Register a child stdout pipe reader for readable events on `poller`.
-    ///
-    /// # Safety
-    /// The caller must delete `stdout` from `poller` (via
-    /// `unregister_child_stdout_from_poller` or `unregister_process_poll_sources`)
-    /// before closing or dropping `stdout`.
     #[cfg(unix)]
-    unsafe fn register_child_stdout_with_poller(
-        poller: &polling::Poller,
-        stdout: &ChildOutputReader,
+    fn register_child_stdout_with_poller(
+        poller: &Arc<polling::Poller>,
+        stdout: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<
+            ChildOutputReader,
+        >,
         id: ProcessId,
     );
-    /// No-op on non-Unix targets where child pipes are not poller-backed.
-    ///
-    /// # Safety
-    /// Same delete-before-drop contract as the Unix variant for cross-platform
-    /// call-site uniformity.
     #[cfg(not(unix))]
-    unsafe fn register_child_stdout_with_poller(
-        _poller: &polling::Poller,
-        _stdout: &ChildOutputReader,
+    fn register_child_stdout_with_poller(
+        _poller: &Arc<polling::Poller>,
+        _stdout: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<
+            ChildOutputReader,
+        >,
         _id: ProcessId,
     );
+    fn unregister_child_stdout_from_poller(
+        stdout: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<
+            ChildOutputReader,
+        >,
+    );
     #[cfg(unix)]
-    fn unregister_child_stdout_from_poller(poller: &polling::Poller, stdout: &ChildOutputReader);
-    #[cfg(not(unix))]
-    fn unregister_child_stdout_from_poller(_poller: &polling::Poller, _stdout: &ChildOutputReader);
-    /// Register a child stdin pipe writer for writable events on `poller`.
-    ///
-    /// # Safety
-    /// The caller must delete `stdin` from `poller` (via
-    /// `unregister_child_stdin_writable_from_poller` or
-    /// `unregister_process_poll_sources`) before closing or dropping `stdin`.
-    #[cfg(unix)]
-    unsafe fn register_child_stdin_writable_with_poller(
-        poller: &polling::Poller,
-        stdin: &std::fs::File,
+    fn register_child_stdin_writable_with_poller(
+        poller: &Arc<polling::Poller>,
+        stdin: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
         id: ProcessId,
     );
-    /// No-op on non-Unix targets where child pipes are not poller-backed.
-    ///
-    /// # Safety
-    /// Same delete-before-drop contract as the Unix variant for cross-platform
-    /// call-site uniformity.
     #[cfg(not(unix))]
-    unsafe fn register_child_stdin_writable_with_poller(
-        _poller: &polling::Poller,
-        _stdin: &std::fs::File,
+    fn register_child_stdin_writable_with_poller(
+        _poller: &Arc<polling::Poller>,
+        _stdin: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
         _id: ProcessId,
     );
-    #[cfg(unix)]
-    fn unregister_child_stdin_writable_from_poller(poller: &polling::Poller, stdin: &std::fs::File);
-    #[cfg(not(unix))]
     fn unregister_child_stdin_writable_from_poller(
-        _poller: &polling::Poller,
-        _stdin: &std::fs::File,
+        stdin: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
     );
     /// GNU `deactivate_process` translated into the Rust ownership model:
-    /// unregister `proc`'s descriptors from `poller`, then drop its live I/O.
-    ///
-    /// # Safety
-    /// `poller` must be the poller where `proc`'s live descriptors were
-    /// registered (or `None` only when no poller is active / no sources were
-    /// registered on `proc`).
-    unsafe fn deactivate_process_io(poller: Option<&polling::Poller>, proc: &mut Process);
+    /// drop `proc`'s live I/O (every `PollRegistration` unregisters on drop).
+    fn deactivate_process_io(proc: &mut Process);
 }
 
 impl ChildPipePollerExt for ProcessManager {
     #[cfg(unix)]
-    unsafe fn register_child_stdout_with_poller(
-        poller: &polling::Poller,
-        stdout: &ChildOutputReader,
+    fn register_child_stdout_with_poller(
+        poller: &Arc<polling::Poller>,
+        stdout: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<
+            ChildOutputReader,
+        >,
         id: ProcessId,
     ) {
-        use std::os::unix::io::{AsFd, AsRawFd};
+        use std::os::unix::io::AsRawFd;
         let _ = sys::set_fd_nonblocking(stdout.as_raw_fd());
-        // SAFETY: forwarded from `register_child_stdout_with_poller`'s caller
-        // contract.
-        let _ = unsafe { Self::register_readable_raw_fd(poller, stdout.as_fd(), id) };
+        let _ = stdout.register(
+            poller,
+            polling::Event::readable(id as usize),
+            polling::PollMode::Level,
+        );
     }
 
     #[cfg(not(unix))]
-    unsafe fn register_child_stdout_with_poller(
-        _poller: &polling::Poller,
-        _stdout: &ChildOutputReader,
+    fn register_child_stdout_with_poller(
+        _poller: &Arc<polling::Poller>,
+        _stdout: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<
+            ChildOutputReader,
+        >,
         _id: ProcessId,
     ) {
         // GNU Emacs does not pass Windows subprocess pipe handles to Winsock
@@ -4075,61 +4055,46 @@ impl ChildPipePollerExt for ProcessManager {
         // regular non-blocking wait pass instead of the socket poller.
     }
 
-    #[cfg(unix)]
-    fn unregister_child_stdout_from_poller(poller: &polling::Poller, stdout: &ChildOutputReader) {
-        use std::os::unix::io::AsFd;
-        let _ = poller.delete(stdout.as_fd());
-    }
-
-    #[cfg(not(unix))]
-    fn unregister_child_stdout_from_poller(_poller: &polling::Poller, _stdout: &ChildOutputReader) {
-        // See `register_child_stdout_with_poller`.
+    fn unregister_child_stdout_from_poller(
+        stdout: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<
+            ChildOutputReader,
+        >,
+    ) {
+        stdout.unregister();
     }
 
     #[cfg(unix)]
-    unsafe fn register_child_stdin_writable_with_poller(
-        poller: &polling::Poller,
-        stdin: &std::fs::File,
+    fn register_child_stdin_writable_with_poller(
+        poller: &Arc<polling::Poller>,
+        stdin: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
         id: ProcessId,
     ) {
-        use std::os::unix::io::{AsFd, AsRawFd};
+        use std::os::unix::io::AsRawFd;
         let _ = sys::set_fd_nonblocking(stdin.as_raw_fd());
-        // SAFETY: forwarded from `register_child_stdin_writable_with_poller`'s
-        // caller contract.
-        let _ = unsafe { Self::register_writable_raw_fd(poller, stdin.as_fd(), id) };
+        let _ = stdin.register(
+            poller,
+            polling::Event::writable(id as usize),
+            polling::PollMode::Level,
+        );
     }
 
     #[cfg(not(unix))]
-    unsafe fn register_child_stdin_writable_with_poller(
-        _poller: &polling::Poller,
-        _stdin: &std::fs::File,
+    fn register_child_stdin_writable_with_poller(
+        _poller: &Arc<polling::Poller>,
+        _stdin: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
         _id: ProcessId,
     ) {
         // Windows subprocess stdin is not integrated into the poller yet.
     }
 
-    #[cfg(unix)]
     fn unregister_child_stdin_writable_from_poller(
-        poller: &polling::Poller,
-        stdin: &std::fs::File,
+        stdin: &neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
     ) {
-        use std::os::unix::io::AsFd;
-        let _ = poller.delete(stdin.as_fd());
+        stdin.unregister();
     }
 
-    #[cfg(not(unix))]
-    fn unregister_child_stdin_writable_from_poller(
-        _poller: &polling::Poller,
-        _stdin: &std::fs::File,
-    ) {
-        // See `register_child_stdin_writable_with_poller`.
-    }
-
-    unsafe fn deactivate_process_io(poller: Option<&polling::Poller>, proc: &mut Process) {
-        Self::unregister_process_poll_sources(poller, proc);
-        // SAFETY: `unregister_process_poll_sources` deleted every registered
-        // descriptor from `poller` above under this method's `# Safety` contract.
-        unsafe { proc.clear_live_io() };
+    fn deactivate_process_io(proc: &mut Process) {
+        proc.clear_live_io();
         proc.gnutls_initstage = GnutlsInitStage::Empty;
         proc.gnutls_boot_parameters = Value::NIL;
     }
@@ -4193,7 +4158,7 @@ pub trait SystemProcessExt {
         event: polling::Event,
     ) -> Result<(), String>;
     fn set_process_output_read_interest(&self, id: ProcessId, enabled: bool);
-    fn unregister_process_poll_sources(poller: Option<&polling::Poller>, proc: &Process);
+    fn unregister_process_poll_sources(proc: &Process);
     fn deactivate_terminal_process_io(&mut self, id: ProcessId);
     fn apply_process_io_teardown(&mut self, id: ProcessId, teardown: ProcessIoTeardown);
     #[cfg(any(test, feature = "test-support"))]
@@ -4622,7 +4587,7 @@ impl SystemProcessExt for ProcessManager {
     /// Resuming the filter restores read interest without consuming bytes that
     /// accumulated while suspended.
     fn set_process_output_read_interest(&self, id: ProcessId, enabled: bool) {
-        let Some(poller) = self.wait_backend.poller() else {
+        let Some(poller) = self.wait_backend.poller_arc() else {
             return;
         };
         let Some(proc) = self.get(id) else {
@@ -4647,12 +4612,9 @@ impl SystemProcessExt for ProcessManager {
 
         if let Some(stdout) = proc.live_io().child_stdout() {
             if enabled {
-                // SAFETY: `stdout` is owned by `proc`'s private `LiveProcessIo`
-                // and deleted via `unregister_child_stdout_from_poller` /
-                // `unregister_process_poll_sources` before drop.
-                unsafe { Self::register_child_stdout_with_poller(poller, stdout, id) };
+                Self::register_child_stdout_with_poller(&poller, stdout, id);
             } else {
-                Self::unregister_child_stdout_from_poller(poller, stdout);
+                Self::unregister_child_stdout_from_poller(stdout);
             }
             return;
         }
@@ -4668,115 +4630,98 @@ impl SystemProcessExt for ProcessManager {
         if let Some(tls) = proc.live_io().tls_stream() {
             match event {
                 Some(event) => {
-                    if Self::modify_poll_source(poller, tls.tcp_stream(), event).is_err() {
-                        // SAFETY: `tls` is owned by `proc.live_io` and
-                        // `unregister_process_poll_sources` deletes it before drop.
-                        let _ =
-                            unsafe { Self::register_readable_source(poller, tls.tcp_stream(), id) };
-                        let _ = Self::modify_poll_source(poller, tls.tcp_stream(), event);
+                    if tls
+                        .modify(&poller, event, polling::PollMode::Level)
+                        .is_err()
+                    {
+                        let _ = tls.register(&poller, event, polling::PollMode::Level);
                     }
                 }
-                None => {
-                    let _ = poller.delete(tls.tcp_stream());
-                }
+                None => tls.unregister(),
             }
             return;
         }
         if let Some(socket) = proc.live_io().network_socket() {
             match event {
                 Some(event) => {
-                    if socket.modify_interest(poller, id, event).is_err() {
-                        // SAFETY: `socket` is owned by `proc.live_io` and
-                        // `unregister_process_poll_sources` unregisters it before drop.
-                        let _ = unsafe { socket.register_readable(poller, id) };
-                        let _ = socket.modify_interest(poller, id, event);
+                    let event = if socket.is_listener() {
+                        polling::Event::readable(id as usize)
+                    } else {
+                        event
+                    };
+                    if socket
+                        .modify(&poller, event, polling::PollMode::Level)
+                        .is_err()
+                    {
+                        let _ = socket.register(&poller, event, polling::PollMode::Level);
                     }
                 }
-                None => socket.unregister_readable(poller),
+                None => socket.unregister(),
             }
             return;
         }
         if let Some(port) = proc.live_io().serial_port() {
             match event {
                 Some(event) => {
-                    if port.modify_interest(poller, event).is_err() {
-                        let _ = port.register_readable(poller, id);
-                        let _ = port.modify_interest(poller, event);
+                    if port
+                        .modify(&poller, event, polling::PollMode::Level)
+                        .is_err()
+                    {
+                        let _ = port.register(&poller, event, polling::PollMode::Level);
                     }
                 }
-                None => port.unregister(poller),
+                None => port.unregister(),
             }
             return;
         }
         #[cfg(unix)]
-        if let Some(master) = proc
-            .live_io()
-            .pty_master()
-            .and_then(|master| master.as_raw_fd())
-        {
-            // SAFETY: `proc.live_io.pty_master` owns this descriptor for the
-            // poller call. `MasterPty` exposes it only as a raw fd.
-            let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master) };
+        if let Some(master) = proc.live_io().pty_master() {
             match event {
                 Some(event) => {
-                    if Self::modify_raw_fd_interest(poller, borrowed, event).is_err() {
-                        // SAFETY: `pty_master` is owned by `proc.live_io` and
-                        // `unregister_process_poll_sources` deletes it before drop.
-                        let _ = unsafe { Self::register_readable_raw_fd(poller, borrowed, id) };
-                        let _ = Self::modify_raw_fd_interest(poller, borrowed, event);
+                    if master
+                        .modify(&poller, event, polling::PollMode::Level)
+                        .is_err()
+                    {
+                        let _ = master.register(&poller, event, polling::PollMode::Level);
                     }
                 }
-                None => {
-                    let _ = poller.delete(borrowed);
-                }
+                None => master.unregister(),
             }
         }
     }
 
-    fn unregister_process_poll_sources(poller: Option<&polling::Poller>, proc: &Process) {
-        let Some(poller) = poller else {
-            return;
-        };
-
+    fn unregister_process_poll_sources(proc: &Process) {
         if let Some(stdout) = proc.live_io().child_stdout() {
-            Self::unregister_child_stdout_from_poller(poller, stdout);
+            stdout.unregister();
         }
         if let Some(stdin) = proc.live_io().child().stdin() {
-            Self::unregister_child_stdin_writable_from_poller(poller, stdin);
+            stdin.unregister();
         }
         if let Some(status_source) = proc.live_io().child_status_source() {
-            status_source.unregister_from_poller(poller);
+            status_source.unregister();
         }
         if let Some(tls) = proc.live_io().tls_stream() {
-            let _ = poller.delete(tls.tcp_stream());
+            tls.unregister();
         }
         if let Some(socket) = proc.live_io().network_socket() {
-            socket.unregister_readable(poller);
+            socket.unregister();
         }
         if let Some(port) = proc.live_io().serial_port() {
-            port.unregister(poller);
+            port.unregister();
         }
-        #[cfg(unix)]
-        if let Some(master) = proc
-            .live_io()
-            .pty_master()
-            .and_then(|master| master.as_raw_fd())
-        {
-            let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master) };
-            let _ = poller.delete(borrowed);
+        if let Some(master) = proc.live_io().pty_master() {
+            master.unregister();
         }
     }
 
     /// GNU `deactivate_process` translated into the Rust ownership model.
     ///
-    /// Poll registrations borrow native descriptors, so unregister them
-    /// before dropping their single aggregate owner.  Durable Lisp identity,
+    /// Every poll-registered descriptor inside `LiveProcessIo` is wrapped in
+    /// `PollRegistration` and unregisters on drop. Durable Lisp identity,
     /// status, callbacks, and captured output remain on `Process`.
     fn deactivate_terminal_process_io(&mut self, id: ProcessId) {
-        let poller = self.wait_backend.poller_arc();
         if let Some(proc) = self.get_mut(id) {
-            // SAFETY: `poller` is this `ProcessManager`'s own wait backend poller.
-            unsafe { Self::deactivate_process_io(poller.as_deref(), proc) };
+            Self::deactivate_process_io(proc);
         }
     }
 
@@ -4923,8 +4868,7 @@ impl SystemProcessExt for ProcessManager {
             coding,
         );
         if let Some(proc) = self.get_mut(id) {
-            // SAFETY: fresh serial process has no previously registered serial port.
-            unsafe { proc.live_io_mut().set_serial_port(Some(port)) };
+            proc.live_io_mut().set_serial_port(Some(port));
             // GNU's `Fmake_serial_process` stores `open`, not `run`
             // (`process-status` on a live serial port is `open`, measured).
             proc.status = ProcessStatusSymbol::Open.value();
@@ -5092,43 +5036,38 @@ impl SystemProcessExt for ProcessManager {
             }),
         };
 
-        // Register stdout with the poller where the platform exposes child
-        // pipe descriptors as pollable sources.
-        if stderr_transfer
-            .processes
-            .get(id)
-            .is_none_or(process_filter_accepts_output)
-            && let (Some(poller), Some(stdout)) = (stderr_transfer.wait_backend.poller(), &stdout)
-        {
-            // SAFETY: `stdout` is moved into `proc`'s private `LiveProcessIo`
-            // immediately below and deleted via `unregister_process_poll_sources`
-            // before drop.
-            unsafe { Self::register_child_stdout_with_poller(poller, stdout, id) };
-        }
-        if let Some(status_source) = child_status_source.as_ref() {
-            status_source.register_with_poller(stderr_transfer.wait_backend.poller(), id);
-        }
-
         if let Some(proc) = stderr_transfer.processes.get_mut(id) {
-            // SAFETY: fresh subprocess record has no previously registered descriptor in this slot.
-            unsafe { proc.live_io_mut().set_child_stdout(stdout) };
+            proc.live_io_mut().set_child_stdout(stdout);
             proc.os_pid = os_pid;
-            // SAFETY: fresh subprocess record has no previously registered descriptor in this slot.
-            unsafe {
-                proc.live_io_mut()
-                    .set_child_status_source(child_status_source)
-            };
-            // SAFETY: fresh subprocess record has no previously registered descriptor in this slot.
-            unsafe {
-                proc.live_io_mut()
-                    .set_child(ChildOwnership::of_pipe_child(child))
-            };
+            proc.live_io_mut()
+                .set_child_status_source(child_status_source);
+            proc.live_io_mut()
+                .set_child(ChildOwnership::of_pipe_child(child));
             proc.status = process_status_run_value();
             // Pipe-mode processes don't have a real TTY.
             proc.tty_name = Value::NIL;
             proc.tty_stdin = false;
             proc.tty_stdout = false;
             proc.tty_stderr = false;
+        }
+
+        // Register stdout and pidfd with the poller via `PollRegistration` now
+        // that `proc.live_io` owns them.
+        if let Some(poller) = stderr_transfer.wait_backend.poller_arc()
+            && let Some(proc) = stderr_transfer.processes.get(id)
+        {
+            if process_filter_accepts_output(proc)
+                && let Some(stdout) = proc.live_io().child_stdout()
+            {
+                Self::register_child_stdout_with_poller(&poller, stdout, id);
+            }
+            if let Some(status_source) = proc.live_io().child_status_source() {
+                let _ = status_source.register(
+                    &poller,
+                    polling::Event::readable(id as usize),
+                    polling::PollMode::Level,
+                );
+            }
         }
 
         Ok(ChildSpawnOutcome::Spawned)
@@ -5302,21 +5241,24 @@ impl SystemProcessExt for ProcessManager {
             // GNU records the child's real OS pid (create_process sets p->pid).
             let os_pid = Some(child.id());
             let child_status_source = os_pid.and_then(ChildStatusSource::open);
-            if let Some(status_source) = child_status_source.as_ref() {
-                status_source.register_with_poller(stderr_transfer.wait_backend.poller(), id);
-            }
             if let Some(proc) = stderr_transfer.processes.get_mut(id) {
                 proc.os_pid = os_pid;
-                // SAFETY: fresh subprocess record has no previously registered descriptor in this slot.
-                unsafe {
-                    proc.live_io_mut()
-                        .set_child_status_source(child_status_source)
-                };
-                // SAFETY: fresh subprocess record has no previously registered descriptor in this slot.
-                unsafe {
-                    proc.live_io_mut()
-                        .set_child(ChildOwnership::of_pipe_child(child))
-                };
+                proc.live_io_mut()
+                    .set_child_status_source(child_status_source);
+                proc.live_io_mut()
+                    .set_child(ChildOwnership::of_pipe_child(child));
+            }
+            if let Some(poller) = stderr_transfer.wait_backend.poller_arc()
+                && let Some(status_source) = stderr_transfer
+                    .processes
+                    .get(id)
+                    .and_then(|proc| proc.live_io().child_status_source())
+            {
+                let _ = status_source.register(
+                    &poller,
+                    polling::Event::readable(id as usize),
+                    polling::PollMode::Level,
+                );
             }
         } else {
             let mut cmd = portable_pty::CommandBuilder::from_argv(argv_os);
@@ -5348,22 +5290,24 @@ impl SystemProcessExt for ProcessManager {
                     // it via `Child::process_id`.
                     let os_pid = pty_child.process_id();
                     let child_status_source = os_pid.and_then(ChildStatusSource::open);
-                    if let Some(status_source) = child_status_source.as_ref() {
-                        status_source
-                            .register_with_poller(stderr_transfer.wait_backend.poller(), id);
-                    }
                     if let Some(proc) = stderr_transfer.processes.get_mut(id) {
                         proc.os_pid = os_pid;
-                        // SAFETY: fresh subprocess record has no previously registered descriptor in this slot.
-                        unsafe {
-                            proc.live_io_mut()
-                                .set_child_status_source(child_status_source)
-                        };
-                        // SAFETY: fresh subprocess record has no previously registered descriptor in this slot.
-                        unsafe {
-                            proc.live_io_mut()
-                                .set_child(ChildOwnership::of_pty_child(pty_child))
-                        };
+                        proc.live_io_mut()
+                            .set_child_status_source(child_status_source);
+                        proc.live_io_mut()
+                            .set_child(ChildOwnership::of_pty_child(pty_child));
+                    }
+                    if let Some(poller) = stderr_transfer.wait_backend.poller_arc()
+                        && let Some(status_source) = stderr_transfer
+                            .processes
+                            .get(id)
+                            .and_then(|proc| proc.live_io().child_status_source())
+                    {
+                        let _ = status_source.register(
+                            &poller,
+                            polling::Event::readable(id as usize),
+                            polling::PollMode::Level,
+                        );
                     }
                 }
                 Err(error) => {
@@ -5401,28 +5345,14 @@ impl SystemProcessExt for ProcessManager {
             .take_writer()
             .map_err(|e| format!("Failed to take PTY writer: {}", e))?;
 
-        // Register the PTY master fd with the poller for non-blocking I/O.
         if let Some(master_fd) = pty_pair.master.as_raw_fd() {
             // Set non-blocking on the master fd.
             let _ = sys::set_fd_nonblocking(master_fd);
-            if stderr_transfer
-                .processes
-                .get(id)
-                .is_none_or(process_filter_accepts_output)
-                && let Some(poller) = stderr_transfer.wait_backend.poller()
-            {
-                // SAFETY: `pty_pair.master` owns this descriptor until it is
-                // stored on `proc.live_io.pty_master` below, and
-                // `unregister_process_poll_sources` deletes it before drop.
-                let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master_fd) };
-                let _ = unsafe { Self::register_readable_raw_fd(poller, borrowed, id) };
-            }
         }
 
         let stderr_is_pty = stderr_transfer.pipe_id().is_none();
         if let Some(proc) = stderr_transfer.processes.get_mut(id) {
-            // SAFETY: fresh subprocess record has no previously registered descriptor in this slot.
-            unsafe { proc.live_io_mut().set_pty_master(Some(pty_pair.master)) };
+            proc.live_io_mut().set_pty_master(Some(pty_pair.master));
             proc.set_pty_reader(Some(PtyOutputReader::new(pty_read)));
             proc.set_pty_writer(Some(Box::new(pty_write)));
             proc.status = process_status_run_value();
@@ -5433,6 +5363,19 @@ impl SystemProcessExt for ProcessManager {
             // stderr pipe-process it is not (GNU's `Fprocess_tty_name` returns
             // nil for the stderr stream when `p->stderrproc` is set).
             proc.tty_stderr = stderr_is_pty;
+        }
+        // Register the PTY master fd with the poller via `PollRegistration` now
+        // that `proc.live_io` owns it.
+        if let Some(poller) = stderr_transfer.wait_backend.poller_arc()
+            && let Some(proc) = stderr_transfer.processes.get(id)
+            && process_filter_accepts_output(proc)
+            && let Some(master) = proc.live_io().pty_master()
+        {
+            let _ = master.register(
+                &poller,
+                polling::Event::readable(id as usize),
+                polling::PollMode::Level,
+            );
         }
 
         Ok(outcome)
@@ -5476,17 +5419,13 @@ impl SystemProcessExt for ProcessManager {
     }
 
     fn deactivate_child_status_source(&mut self, id: ProcessId) {
-        if let Some(proc) = self.get_mut(id)
-            // SAFETY: caller unregisters `status_source` from `poller` on the next line before dropping it.
-            && let Some(status_source) = unsafe { proc.live_io_mut().take_child_status_source() }
-            && let Some(poller) = self.wait_backend.poller()
-        {
-            status_source.unregister_from_poller(poller);
+        if let Some(proc) = self.get_mut(id) {
+            // `PollRegistration<ChildStatusSource>` unregisters on drop.
+            proc.live_io_mut().set_child_status_source(None);
         }
     }
 
     fn poll_child_status_change(&mut self, id: ProcessId) -> Option<Value> {
-        let poller = self.wait_backend.poller_arc();
         let proc = self.get_mut(id)?;
 
         // GNU keeps waiting on a stopped child so WCONTINUED (or a terminal
@@ -5501,21 +5440,9 @@ impl SystemProcessExt for ProcessManager {
         }
 
         // GNU's `child_status_changed (p->pid, &status, WUNTRACED |
-        // WCONTINUED)` (src/process.c:7742).  The dispatch between the two
-        // handle shapes, and the raw `waitpid` itself, live in
-        // `process/reap.rs`, which is the only owner of either -- so a
-        // terminal answer here is also the moment `p->alive` becomes 0 and
-        // the pid stops being spellable.
-        // SAFETY: `poll_status_releasing_stdin` hands back any owned pipe
-        // `stdin` instead of dropping it inline; we delete it from `poller`
-        // below before dropping it.
-        let (change, reaped_stdin) =
-            unsafe { proc.live_io_mut().child_mut() }.poll_status_releasing_stdin();
-        if let (Some(poller), Some(stdin)) = (poller.as_deref(), reaped_stdin.as_ref()) {
-            Self::unregister_child_stdin_writable_from_poller(poller, stdin);
-        }
-        drop(reaped_stdin);
-        match change {
+        // WCONTINUED)` (src/process.c:7742).  `SpawnedChild.stdin` is wrapped
+        // in `PollRegistration<File>`, so reaping unregisters `stdin` on drop.
+        match proc.live_io_mut().child_mut().poll_status() {
             ChildStatusChange::NoChange | ChildStatusChange::Gone => None,
             ChildStatusChange::StillOurs(status) | ChildStatusChange::Reaped(status) => {
                 Some(status)
@@ -5538,8 +5465,7 @@ impl SystemProcessExt for ProcessManager {
         };
         let read_len = process_read_buffer_len(proc);
 
-        // SAFETY: reads from `child_stdout` without replacing or dropping it.
-        let Some(stdout) = (unsafe { proc.live_io_mut().child_stdout_mut() }) else {
+        let Some(stdout) = proc.live_io_mut().child_stdout_mut() else {
             return ProcessBytesRead::NoSource;
         };
 
@@ -5598,8 +5524,7 @@ impl SystemProcessExt for ProcessManager {
             return ProcessBytesRead::NoSource;
         };
         let read_len = process_read_buffer_len(proc);
-        // SAFETY: reads from `serial_port` without replacing or dropping it.
-        let Some(port) = (unsafe { proc.live_io_mut().serial_port_mut() }) else {
+        let Some(port) = proc.live_io_mut().serial_port_mut() else {
             return ProcessBytesRead::NoSource;
         };
 
@@ -5668,8 +5593,7 @@ impl SystemProcessExt for ProcessManager {
             return ProcessBytesRead::WouldBlock;
         }
         let read_len = process_read_buffer_len(proc);
-        // SAFETY: reads from live TLS stream without replacing or dropping it.
-        if let Some(tls) = unsafe { proc.live_io_mut().tls_stream_mut() } {
+        if let Some(tls) = proc.live_io_mut().tls_stream_mut() {
             let mut buf = vec![0u8; read_len];
             let full_read_len = buf.len();
             let result = tls.read_process_output(&mut buf);
@@ -5698,12 +5622,10 @@ impl SystemProcessExt for ProcessManager {
             let mut buf = vec![0u8; read_len];
             let full_read_len = buf.len();
             let raw_read = {
-                let socket =
-                    // SAFETY: reads from live socket without replacing or dropping it.
-                    unsafe { proc.live_io_mut().network_socket_mut() }.expect("checked above");
+                let socket = proc.live_io().network_socket().expect("checked above");
                 match socket.read_stream_output(&mut buf) {
                     Some(result) => RawNetworkRead::Stream(result),
-                    None => match socket {
+                    None => match &**socket {
                         NetworkSocket::UdpSocket(socket) => {
                             RawNetworkRead::Udp(socket.recv_from(&mut buf))
                         }
@@ -5846,7 +5768,7 @@ impl SystemProcessExt for ProcessManager {
             return;
         };
         if !matches!(
-            proc.live_io().network_socket(),
+            proc.live_io().network_socket().map(|s| &**s),
             Some(NetworkSocket::UnixListener(_))
         ) {
             return;
@@ -5862,13 +5784,9 @@ impl SystemProcessExt for ProcessManager {
     }
 
     fn deactivate_network_process_io(&mut self, id: ProcessId) {
-        let poller = self.wait_backend.poller_arc();
         if let Some(proc) = self.get_mut(id) {
-            Self::unregister_process_poll_sources(poller.as_deref(), proc);
-            // SAFETY: poll sources were already unregistered above before clearing/dropping.
-            unsafe { proc.live_io_mut().set_tls_stream(None) };
-            // SAFETY: poll sources were already unregistered above before clearing/dropping.
-            unsafe { proc.live_io_mut().set_network_socket(None) };
+            proc.live_io_mut().set_tls_stream(None);
+            proc.live_io_mut().set_network_socket(None);
             proc.gnutls_initstage = GnutlsInitStage::Empty;
         }
     }
@@ -5877,11 +5795,8 @@ impl SystemProcessExt for ProcessManager {
     /// Removes the stderr fd from the poller and drops it so the descriptor is
     /// closed and the process stops being polled.
     fn deactivate_stderr_pipe_process_io(&mut self, id: ProcessId) {
-        let poller = self.wait_backend.poller_arc();
         if let Some(proc) = self.get_mut(id) {
-            Self::unregister_process_poll_sources(poller.as_deref(), proc);
-            // SAFETY: poll sources were already unregistered above before clearing/dropping.
-            unsafe { proc.live_io_mut().set_child_stdout(None) };
+            proc.live_io_mut().set_child_stdout(None);
         }
     }
 
@@ -5932,26 +5847,17 @@ impl SystemProcessExt for ProcessManager {
     /// (src/process.c:6081-6090): close the failed read side and report exit
     /// status 256 when no already-observed child status supersedes it.
     fn retire_process_at_read_failure(&mut self, id: ProcessId) {
-        let poller = self.wait_backend.poller_arc();
         let source = self.get(id).and_then(process_output_source);
         match source {
             Some(ProcessOutputSource::ChildStdout) => {
                 if let Some(proc) = self.get_mut(id) {
-                    if let (Some(poller), Some(stdout)) =
-                        (poller.as_deref(), proc.live_io().child_stdout())
-                    {
-                        Self::unregister_child_stdout_from_poller(poller, stdout);
-                    }
-                    // SAFETY: poll sources were already unregistered above before clearing/dropping.
-                    unsafe { proc.live_io_mut().set_child_stdout(None) };
+                    proc.live_io_mut().set_child_stdout(None);
                 }
             }
             Some(ProcessOutputSource::Pty) => self.deactivate_pty_process_read_io(id),
             Some(ProcessOutputSource::Serial) => {
                 if let Some(proc) = self.get_mut(id) {
-                    Self::unregister_process_poll_sources(poller.as_deref(), proc);
-                    // SAFETY: poll sources were already unregistered above before clearing/dropping.
-                    unsafe { proc.live_io_mut().set_serial_port(None) };
+                    proc.live_io_mut().set_serial_port(None);
                 }
             }
             Some(ProcessOutputSource::Network) | None => {}
@@ -5982,7 +5888,6 @@ impl SystemProcessExt for ProcessManager {
     /// GNU `delete_read_fd` on PTY EOF/EIO (process.c:6038-6061) stops
     /// monitoring but retains infd for status_notify's final drain (:7896-7911).
     fn stop_pty_process_read_monitoring(&mut self, id: ProcessId) {
-        let poller = self.wait_backend.poller_arc();
         if let Some(proc) = self.get_mut(id) {
             if !proc
                 .live_io()
@@ -5992,16 +5897,8 @@ impl SystemProcessExt for ProcessManager {
                 return;
             }
             #[cfg(unix)]
-            if let (Some(poller), Some(master)) = (
-                poller.as_deref(),
-                proc.live_io()
-                    .pty_master()
-                    .and_then(|master| master.as_raw_fd()),
-            ) {
-                // SAFETY: the master owns this fd throughout the borrowed
-                // registration removal; neither reader nor master is dropped.
-                let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master) };
-                let _ = poller.delete(borrowed);
+            if let Some(master) = proc.live_io().pty_master() {
+                master.unregister();
             }
             if let Some(reader) = proc.pty_reader_mut() {
                 reader.stop_monitoring();
@@ -6020,19 +5917,15 @@ impl SystemProcessExt for ProcessManager {
 
     /// Kill (remove) a process by id.  Returns true if found.
     fn kill_process(&mut self, id: ProcessId) -> bool {
-        let poller = self.wait_backend.poller_arc();
         if let Some(proc) = self.get_mut(id) {
-            Self::unregister_process_poll_sources(poller.as_deref(), proc);
+            Self::unregister_process_poll_sources(proc);
             kill_real_process_child(proc, signal_kill_number());
-            // SAFETY: poll sources were already unregistered above before clearing/dropping.
-            unsafe { proc.live_io_mut().take_tls_stream() };
+            proc.live_io_mut().take_tls_stream();
             proc.gnutls_initstage = GnutlsInitStage::Empty;
             proc.gnutls_boot_parameters = Value::NIL;
-            // SAFETY: poll sources were already unregistered above before clearing/dropping.
-            unsafe { proc.live_io_mut().take_network_socket() };
+            proc.live_io_mut().take_network_socket();
             proc.status = process_status_signal_value(signal_kill_number());
-            // SAFETY: poll sources were already unregistered above before clearing/dropping.
-            unsafe { proc.live_io_mut().set_child_status_source(None) };
+            proc.live_io_mut().set_child_status_source(None);
             true
         } else {
             false
@@ -6049,7 +5942,6 @@ impl SystemProcessExt for ProcessManager {
     ///
     /// Returns whether the id named a live process.
     fn stamp_process_for_delete(&mut self, id: ProcessId) -> bool {
-        let poller = self.wait_backend.poller_arc();
         let Some(proc) = self.get_mut(id) else {
             return false;
         };
@@ -6088,18 +5980,13 @@ impl SystemProcessExt for ProcessManager {
         } else {
             StatusChangeSite::DeleteProcessChild
         };
-        // Unregister every poll source BEFORE deferring the child handle:
-        // `defer_real_process_child_reaping` moves pipe `stdin` out of
-        // `proc.live_io` into the deferred reaper where `unregister_process_poll_sources`
-        // would no longer see it.
-        Self::unregister_process_poll_sources(poller.as_deref(), proc);
-        // SAFETY: `unregister_process_poll_sources` ran on the line above.
-        unsafe { defer_real_process_child_reaping(proc) };
+        // Eagerly unregister poll sources before deferring/deactivating (and
+        // every `PollRegistration` also unregisters automatically on drop).
+        Self::unregister_process_poll_sources(proc);
+        defer_real_process_child_reaping(proc);
         proc.status_notify_pending = false;
         proc.pending_status = Value::NIL;
-        // SAFETY: `poller` is this `ProcessManager`'s own wait backend poller
-        // (and all poll sources were already unregistered above).
-        unsafe { Self::deactivate_process_io(poller.as_deref(), proc) };
+        Self::deactivate_process_io(proc);
         // GNU's two `p->tick = ++process_tick;` here (:1128 for the connection
         // arm, :1148 for the subprocess arm) are each followed IMMEDIATELY by
         // `status_notify (p, NULL)` (:1129, :1149), so the tick they move is
@@ -6164,15 +6051,9 @@ impl SystemProcessExt for ProcessManager {
     /// re-stamp the child — it has already exited and its recorded terminal
     /// status (exit/signal) must be preserved for `process-status' on the value.
     fn reap_exited_process(&mut self, id: ProcessId) {
-        let poller = self.wait_backend.poller_arc();
-        // SAFETY: `deactivate_process_io` immediately unregisters every poll
-        // source owned by `proc` using `poller` before storing `proc` in
-        // `deleted_processes` (or dropping it).
-        if let Some(mut proc) = unsafe { self.remove_live_process_record(id) } {
-            // SAFETY: `poller` is this `ProcessManager`'s own wait backend poller.
-            unsafe { Self::deactivate_process_io(poller.as_deref(), &mut proc) };
-            // SAFETY: `deactivate_process_io` cleared all live I/O on `proc`.
-            unsafe { self.insert_deleted_process_record(id, proc) };
+        if let Some(mut proc) = self.remove_live_process_record(id) {
+            Self::deactivate_process_io(&mut proc);
+            self.insert_deleted_process_record(id, proc);
             // #776: this record still owes its deciding major.
             self.note_retired_process(id);
         }
@@ -6549,7 +6430,7 @@ impl SystemProcessExt for ProcessManager {
                     proc.status_notify_pending = true;
                 }
                 let name = process_name_runtime(proc.name);
-                endpoint.disconnect(poller.as_deref(), proc);
+                endpoint.disconnect(proc);
                 let error = signal(
                     "error",
                     vec![Value::string(format!(
@@ -6626,14 +6507,14 @@ impl SystemProcessExt for ProcessManager {
         }
     }
     fn set_tls_handshake_interest(&self, id: ProcessId, interest: Option<TlsHandshakeInterest>) {
-        let Some(poller) = self.wait_backend.poller() else {
+        let Some(poller) = self.wait_backend.poller_arc() else {
             return;
         };
         let Some(tls) = self.get(id).and_then(|proc| proc.live_io().tls_stream()) else {
             return;
         };
         let Some(interest) = interest else {
-            let _ = poller.delete(tls.tcp_stream());
+            tls.unregister();
             return;
         };
         if self
@@ -6648,11 +6529,11 @@ impl SystemProcessExt for ProcessManager {
             TlsHandshakeInterest::ReadableAndWritable => (true, true),
         };
         let event = polling::Event::new(id as usize, readable, writable);
-        if Self::modify_poll_source(poller, tls.tcp_stream(), event).is_err() {
-            // SAFETY: `tls` is owned by `proc.live_io` and
-            // `unregister_process_poll_sources` deletes it before drop.
-            let _ = unsafe { Self::register_readable_source(poller, tls.tcp_stream(), id) };
-            let _ = Self::modify_poll_source(poller, tls.tcp_stream(), event);
+        if tls
+            .modify(&poller, event, polling::PollMode::Level)
+            .is_err()
+        {
+            let _ = tls.register(&poller, event, polling::PollMode::Level);
         }
     }
 
@@ -6669,18 +6550,25 @@ impl SystemProcessExt for ProcessManager {
         if process_stopped_for_io(proc) || !process_filter_accepts_output(proc) {
             return Ok(());
         }
-        if let Some(poller) = self.wait_backend.poller() {
+        if let Some(poller) = self.wait_backend.poller_arc() {
             if let Some(tls) = proc.live_io().tls_stream() {
-                // SAFETY: `tls` is owned by `proc.live_io` and
-                // `unregister_process_poll_sources` deletes it before drop.
-                unsafe { Self::register_readable_source(poller, tls.tcp_stream(), id)? };
+                tls.register(
+                    &poller,
+                    polling::Event::readable(id as usize),
+                    polling::PollMode::Level,
+                )
+                .map_err(|e| format!("Failed to register socket: {e}"))?;
                 return Ok(());
             }
 
             let socket = proc.live_io().network_socket().ok_or("No socket")?;
-            // SAFETY: `socket` is owned by `proc.live_io` and
-            // `unregister_process_poll_sources` unregisters it before drop.
-            unsafe { socket.register_readable(poller, id)? };
+            socket
+                .register(
+                    &poller,
+                    polling::Event::readable(id as usize),
+                    polling::PollMode::Level,
+                )
+                .map_err(|e| format!("Failed to register socket: {e}"))?;
         }
         Ok(())
     }
@@ -6690,7 +6578,7 @@ impl SystemProcessExt for ProcessManager {
     /// `if (!EQ (p->command, Qt) && !EQ (p->filter, Qt))` -- a `:stop t` port
     /// and a port whose filter is `t` are opened and configured but not polled.
     fn register_serial_read_fd(&self, id: ProcessId) {
-        let Some(poller) = self.wait_backend.poller() else {
+        let Some(poller) = self.wait_backend.poller_arc() else {
             return;
         };
         let Some(proc) = self.get(id) else {
@@ -6700,23 +6588,34 @@ impl SystemProcessExt for ProcessManager {
             return;
         }
         if let Some(port) = proc.live_io().serial_port() {
-            let _ = port.register_readable(poller, id);
+            let _ = port.register(
+                &poller,
+                polling::Event::readable(id as usize),
+                polling::PollMode::Level,
+            );
         }
     }
 
     fn register_socket_writable_fd(&self, id: ProcessId) -> Result<(), String> {
         let proc = self.get(id).ok_or("Process not found")?;
-        if let Some(poller) = self.wait_backend.poller() {
+        if let Some(poller) = self.wait_backend.poller_arc() {
             let socket = proc.live_io().network_socket().ok_or("No socket")?;
-            // SAFETY: `socket` is owned by `proc.live_io` and
-            // `unregister_process_poll_sources` unregisters it before drop.
-            unsafe { socket.register_writable(poller, id)? };
+            if socket.is_listener() {
+                return Err("Listener sockets are not writable process sources".into());
+            }
+            socket
+                .register(
+                    &poller,
+                    polling::Event::writable(id as usize),
+                    polling::PollMode::Level,
+                )
+                .map_err(|e| format!("Failed to register socket: {e}"))?;
         }
         Ok(())
     }
 
     fn update_process_write_interest(&self, id: ProcessId, interest: ProcessWriteInterest) {
-        let Some(poller) = self.wait_backend.poller() else {
+        let Some(poller) = self.wait_backend.poller_arc() else {
             return;
         };
         let Some(proc) = self.get(id) else {
@@ -6726,14 +6625,10 @@ impl SystemProcessExt for ProcessManager {
         if let Some(stdin) = proc.live_io().child().stdin() {
             match interest {
                 ProcessWriteInterest::Readable => {
-                    Self::unregister_child_stdin_writable_from_poller(poller, stdin);
+                    Self::unregister_child_stdin_writable_from_poller(stdin);
                 }
                 ProcessWriteInterest::ReadableAndWritable => {
-                    // SAFETY: `stdin` is owned by `proc`'s private
-                    // `LiveProcessIo::child` and deleted via
-                    // `unregister_child_stdin_writable_from_poller` /
-                    // `unregister_process_poll_sources` before closing.
-                    unsafe { Self::register_child_stdin_writable_with_poller(poller, stdin, id) };
+                    Self::register_child_stdin_writable_with_poller(&poller, stdin, id);
                 }
             }
             return;
@@ -6777,11 +6672,8 @@ impl SystemProcessExt for ProcessManager {
         };
         let local_addr = started.stream.local_addr().ok();
         if let Some(proc) = self.get_mut(id) {
-            // SAFETY: previous pending socket (if any) was unregistered before retrying connect.
-            unsafe {
-                proc.live_io_mut()
-                    .set_network_socket(Some(NetworkSocket::TcpStream(started.stream)))
-            };
+            proc.live_io_mut()
+                .set_network_socket(Some(NetworkSocket::TcpStream(started.stream)));
             proc.set_pending_network_connect(Some(PendingNetworkConnect::Tcp {
                 remaining_addrs: started.remaining_addrs,
                 socket_options: options.to_vec(),
@@ -6814,7 +6706,7 @@ impl SystemProcessExt for ProcessManager {
         let connect_error = proc
             .live_io()
             .network_socket()
-            .and_then(NetworkSocket::take_pending_connect_error)
+            .and_then(|socket| socket.take_pending_connect_error())
             .transpose()
             .map_err(|err| signal_process_io("Checking network connection", None, err))?
             .flatten();
@@ -6828,9 +6720,8 @@ impl SystemProcessExt for ProcessManager {
             };
             if let Some(proc) = self.get(id)
                 && let Some(socket) = proc.live_io().network_socket()
-                && let Some(poller) = self.wait_backend.poller()
             {
-                socket.unregister_readable(poller);
+                socket.unregister();
             }
             let code = io_error_status_code(&err);
             match pending {
@@ -6849,8 +6740,7 @@ impl SystemProcessExt for ProcessManager {
                                 self.get(id).map(|proc| proc.sentinel).unwrap_or(Value::NIL);
                             if let Some(proc) = self.get_mut(id) {
                                 proc.status = process_status_failed_value(code);
-                                // SAFETY: poll sources were already unregistered above before clearing/dropping.
-                                unsafe { proc.live_io_mut().set_network_socket(None) };
+                                proc.live_io_mut().set_network_socket(None);
                                 proc.set_pending_network_connect(None);
                             }
                             // GNU src/process.c:6141.
@@ -6868,8 +6758,7 @@ impl SystemProcessExt for ProcessManager {
             let sentinel = self.get(id).map(|proc| proc.sentinel).unwrap_or(Value::NIL);
             if let Some(proc) = self.get_mut(id) {
                 proc.status = process_status_failed_value(code);
-                // SAFETY: poll sources were already unregistered above before clearing/dropping.
-                unsafe { proc.live_io_mut().set_network_socket(None) };
+                proc.live_io_mut().set_network_socket(None);
                 proc.set_pending_network_connect(None);
             }
             // GNU src/process.c:6141, the arm with no addrinfos left.
@@ -6880,9 +6769,8 @@ impl SystemProcessExt for ProcessManager {
         let sentinel = self.get(id).map(|proc| proc.sentinel).unwrap_or(Value::NIL);
         if let Some(proc) = self.get(id)
             && let Some(socket) = proc.live_io().network_socket()
-            && let Some(poller) = self.wait_backend.poller()
         {
-            socket.unregister_readable(poller);
+            socket.unregister();
         }
         if let Some(proc) = self.get_mut(id) {
             proc.set_pending_network_connect(None);
@@ -6955,8 +6843,7 @@ impl SystemProcessExt for ProcessManager {
                         let sentinel = self.get(id).map(|proc| proc.sentinel).unwrap_or(Value::NIL);
                         if let Some(proc) = self.get_mut(id) {
                             proc.status = process_status_failed_value(code);
-                            // SAFETY: poll sources were already unregistered above before clearing/dropping.
-                            unsafe { proc.live_io_mut().set_network_socket(None) };
+                            proc.live_io_mut().set_network_socket(None);
                             proc.set_pending_network_connect(None);
                         }
                         // GNU src/process.c:6141.
@@ -6971,8 +6858,7 @@ impl SystemProcessExt for ProcessManager {
                     proc.status = process_status_failed_message_value(format!(
                         "Name lookup of {host} failed"
                     ));
-                    // SAFETY: poll sources were already unregistered above before clearing/dropping.
-                    unsafe { proc.live_io_mut().set_network_socket(None) };
+                    proc.live_io_mut().set_network_socket(None);
                     proc.set_pending_network_connect(None);
                 }
                 Ok(PendingNetworkConnectCompletion::DnsFailed)
@@ -7003,8 +6889,7 @@ impl SystemProcessExt for ProcessManager {
             inheritance.coding,
         );
         if let Some(client) = self.get_mut(client_id) {
-            // SAFETY: fresh accepted client process has no previously registered socket.
-            unsafe { client.live_io_mut().set_network_socket(Some(socket)) };
+            client.live_io_mut().set_network_socket(Some(socket));
             client.status = process_status_run_value();
             client.childp = contact;
             client.filter = inheritance.filter;
@@ -7063,7 +6948,7 @@ impl SystemProcessExt for ProcessManager {
                 let Some(server) = self.get(id) else {
                     return Ok(accepted);
                 };
-                match server.live_io().network_socket() {
+                match server.live_io().network_socket().map(|s| &**s) {
                     Some(NetworkSocket::TcpListener(listener)) => match listener.accept() {
                         Ok((stream, remote_addr)) => Ok(Some(AcceptedSocket::Tcp {
                             local_addr: stream.local_addr().ok(),
@@ -8814,8 +8699,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         vec![Value::string("Process closed during TLS negotiation")],
                     )
                 })?;
-                // SAFETY: drives TLS handshake/status without replacing or dropping the stream.
-                let stream = unsafe { proc.live_io_mut().tls_stream_mut() }.ok_or_else(|| {
+                let stream = proc.live_io_mut().tls_stream_mut().ok_or_else(|| {
                     signal(
                         "error",
                         vec![Value::string("TLS connection closed during negotiation")],
@@ -9621,12 +9505,10 @@ mod borrowed_fd_tests {
         poller.delete(&writer).expect("delete writer");
     }
 
-    /// Soundness B5 guard: `polling::Poller::add_with_mode` requires the caller
-    /// to remove the registered source before dropping/closing it. Every
-    /// `SystemProcessExt` and `NetworkSocketIo` registration wrapper around
-    /// `add_with_mode` must therefore be `unsafe fn`, and the generic source
-    /// wrappers must take `polling::AsSource` (not `AsRawSource`, which accepts
-    /// arbitrary raw `RawFd` integers such as `-1`).
+    /// Soundness B5 guard: raw `SystemProcessExt` wrappers around
+    /// `polling::Poller::add_with_mode` must stay `unsafe fn` and require
+    /// `polling::AsSource` (not `AsRawSource`), while production process
+    /// descriptors route through RAII `PollRegistration<T>`.
     #[test]
     fn b5_poller_registration_methods_require_unsafe_and_as_source() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -9637,8 +9519,6 @@ mod borrowed_fd_tests {
             .split("mod borrowed_fd_tests")
             .next()
             .expect("production section before borrowed_fd_tests");
-        let mod_src = std::fs::read_to_string(root.join("src/emacs_core/system/process/mod.rs"))
-            .expect("read process/mod.rs");
 
         let mut violations = Vec::new();
         for name in [
@@ -9646,9 +9526,6 @@ mod borrowed_fd_tests {
             "register_writable_source",
             "register_readable_raw_fd",
             "register_writable_raw_fd",
-            "register_child_stdout_with_poller",
-            "register_child_stdin_writable_with_poller",
-            "deactivate_process_io",
         ] {
             let safe_sig = format!("    fn {name}(");
             let unsafe_sig = format!("    unsafe fn {name}(");
@@ -9667,19 +9544,34 @@ mod borrowed_fd_tests {
                     .into(),
             );
         }
-        for name in ["register_readable", "register_writable"] {
-            let safe_sig = format!("    fn {name}(");
-            let unsafe_sig = format!("    unsafe fn {name}(");
-            if mod_src.contains(&safe_sig) {
-                violations.push(format!(
-                    "process/mod.rs: `NetworkSocketIo::{name}` is still a safe `fn`"
-                ));
-            }
-            if mod_src.matches(&unsafe_sig).count() < 2 {
-                violations.push(format!(
-                    "process/mod.rs: expected trait + impl `unsafe fn {name}(`"
-                ));
-            }
+
+        let eval_state_src = std::fs::read_to_string(
+            root.join("../neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs"),
+        )
+        .expect("read neovm-eval process_state.rs");
+        if eval_state_src.contains("DerefMut for PollRegistration")
+            || eval_state_src.contains("DerefMut> for PollRegistration")
+        {
+            violations
+                .push("process_state.rs: `PollRegistration` must not implement `DerefMut`".into());
+        }
+        if !eval_state_src.contains("pub unsafe trait PollableResource") {
+            violations
+                .push("process_state.rs: `PollableResource` must remain `pub unsafe trait`".into());
+        }
+        let poll_reg_body = eval_state_src
+            .split("pub struct PollRegistration<T: PollableResource> {")
+            .nth(1)
+            .and_then(|rest| rest.split('}').next())
+            .expect("struct PollRegistration definition in process_state.rs");
+        if poll_reg_body.contains("pub ") || poll_reg_body.contains("pub(") {
+            violations.push(
+                "process_state.rs: `PollRegistration` struct fields must all stay private".into(),
+            );
+        }
+        if eval_state_src.contains("fn inner_mut") {
+            violations
+                .push("process_state.rs: `PollRegistration` must not expose `fn inner_mut`".into());
         }
 
         assert!(

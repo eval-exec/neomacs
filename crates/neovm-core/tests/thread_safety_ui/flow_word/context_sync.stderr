@@ -475,8 +475,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: std::marker::Sync`
            `NonNull<()>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
-           `(dyn portable_pty::MasterPty + Send + 'static): std::marker::Sync`
-           which is required by `neovm_core::Context: std::marker::Sync`
            `(dyn std::io::Write + Send + 'static): std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`
            `std::sync::mpsc::Receiver<Result<Vec<std::net::SocketAddr>, std::string::String>>: std::marker::Sync`
@@ -498,4 +496,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `Rc<OverlayList>: Send`
            which is required by `neovm_core::Context: std::marker::Sync`
            `(dyn for<'a> Fn(&'a LispString) -> Vec<LispString> + 'static): Send`
+           which is required by `neovm_core::Context: std::marker::Sync`
+           `(dyn portable_pty::MasterPty + Send + 'static): std::marker::Sync`
            which is required by `neovm_core::Context: std::marker::Sync`

@@ -718,9 +718,7 @@ fn send_eof_after_epipe_installs_discard_sink_and_clears_queued_input() {
         false,
     );
 
-    let poller = pm.wait_backend.poller_arc();
-    // SAFETY: `poller` is `pm`'s own wait backend poller.
-    unsafe { send_eof_to_process(poller.as_deref(), pm.get_mut(id).expect("process")) }
+    send_eof_to_process(pm.get_mut(id).expect("process"))
         .expect("GNU installs /dev/null even when the old outfd is already -1");
 
     assert_eq!(
@@ -9838,12 +9836,9 @@ fn readable_network_process(
     );
     let (socket, mut peer) = std::os::unix::net::UnixStream::pair().expect("socket pair");
     let proc = pm.get_mut(id).expect("connection record");
-    // SAFETY: fresh fixture connection has no previously registered socket.
-    unsafe {
-        proc.live_io_mut().set_network_socket(Some(
-            neovm_eval::emacs_core::eval::data::process_state::NetworkSocket::UnixStream(socket),
-        ));
-    }
+    proc.live_io_mut().set_network_socket(Some(
+        neovm_eval::emacs_core::eval::data::process_state::NetworkSocket::UnixStream(socket),
+    ));
     if stopped {
         // What `make-network-process :stop t` stores before it registers.
         proc.command = Value::T;
@@ -12066,19 +12061,15 @@ fn wait_for_stderr_fixture_exit(eval: &mut Context, owner: Value) {
     // Hold the child at read(0) until every sentinel/global is installed. A
     // quick child can otherwise be reaped by a readiness wait during setup.
     // Write through the owned stdin without entering any Lisp readiness wait.
-    // SAFETY: writing to the fixture child's stdin without replacing or
-    // closing the descriptor.
-    unsafe {
-        eval.processes_mut()
-            .get_mut(id)
-            .expect("fixture process exists")
-            .live_io_mut()
-            .child_mut()
-    }
-    .stdin_mut()
-    .expect("fixture uses pipe stdin")
-    .write_all(b"ready\n")
-    .expect("release fixture child");
+    eval.processes_mut()
+        .get_mut(id)
+        .expect("fixture process exists")
+        .live_io_mut()
+        .child_mut()
+        .stdin_mut()
+        .expect("fixture uses pipe stdin")
+        .write_all(b"ready\n")
+        .expect("release fixture child");
     let child = eval
         .processes()
         .get(id)
@@ -12124,15 +12115,8 @@ fn with_stderr_fixture_child<T>(
 ) -> T {
     let id = owner.as_process_id().expect("fixture owner is a process");
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(eval)));
-    let poller = eval.processes().wait_backend.poller_arc();
     if let Some(process) = eval.processes_mut().get_mut(id) {
-        if let (Some(poller), Some(stdin)) = (poller.as_deref(), process.live_io().child().stdin())
-        {
-            let _ = poller.delete(stdin);
-        }
-        // SAFETY: any poller-backed `stdin` was deleted from `poller` above
-        // before polling/killing the fixture child.
-        let child = unsafe { process.live_io_mut().child_mut() };
+        let child = process.live_io_mut().child_mut();
         child.poll_status();
         if child.pid_if_unreaped().is_some() {
             child.kill_handle();
@@ -20437,7 +20421,6 @@ fn b5_process_send_eof_unregisters_stdin_from_poller_before_closing() {
     let id = proc_val.as_process_id().expect("process id");
     let poller = eval.processes().wait_backend.poller_arc().expect("poller");
     let keep_open = {
-        use std::os::fd::AsFd;
         let stdin = eval
             .processes()
             .get(id)
@@ -20446,11 +20429,13 @@ fn b5_process_send_eof_unregisters_stdin_from_poller_before_closing() {
             .child()
             .stdin()
             .expect("pipe stdin");
-        // SAFETY: `process-send-eof` below unregisters `stdin` before closing it.
-        unsafe {
-            ProcessManager::register_writable_raw_fd(&poller, stdin.as_fd(), id)
-                .expect("register pipe stdin writable");
-        }
+        stdin
+            .register(
+                &poller,
+                polling::Event::writable(id as usize),
+                polling::PollMode::Level,
+            )
+            .expect("register pipe stdin writable");
         stdin.try_clone().expect("dup stdin")
     };
 
@@ -20508,12 +20493,8 @@ fn b5_gnutls_deinit_and_boot_failure_unregister_socket_before_dropping() {
     let keep_open1 = client1.try_clone().expect("dup client1");
     {
         let proc = eval.processes_mut().get_mut(id1).expect("proc1");
-        // SAFETY: fresh network process has no previously registered socket;
-        // `gnutls-boot` -> `gnutls-deinit` below deletes it before drop.
-        unsafe {
-            proc.live_io_mut()
-                .set_network_socket(Some(NetworkSocket::TcpStream(client1)));
-        }
+        proc.live_io_mut()
+            .set_network_socket(Some(NetworkSocket::TcpStream(client1)));
     }
     eval.obarray_mut()
         .set_symbol_value("b5-tls-p1", Value::make_process(id1));
@@ -20531,10 +20512,10 @@ fn b5_gnutls_deinit_and_boot_failure_unregister_socket_before_dropping() {
             .live_io()
             .tls_stream()
             .expect("tls stream");
-        let _ = ProcessManager::modify_poll_source(
+        let _ = tls.modify(
             &poller,
-            tls.tcp_stream(),
             polling::Event::all(id1 as usize),
+            polling::PollMode::Level,
         );
     }
 
@@ -20578,12 +20559,8 @@ fn b5_gnutls_deinit_and_boot_failure_unregister_socket_before_dropping() {
     let keep_open2 = client2.try_clone().expect("dup client2");
     {
         let proc = eval.processes_mut().get_mut(id2).expect("proc2");
-        // SAFETY: fresh network process has no previously registered socket;
-        // failed `gnutls-boot` below deletes it before dropping it.
-        unsafe {
-            proc.live_io_mut()
-                .set_network_socket(Some(NetworkSocket::TcpStream(client2)));
-        }
+        proc.live_io_mut()
+            .set_network_socket(Some(NetworkSocket::TcpStream(client2)));
     }
     eval.processes()
         .register_socket_writable_fd(id2)

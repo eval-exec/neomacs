@@ -61,13 +61,6 @@ pub(crate) trait DeviceIo {
     fn read_attributes(&self) -> Result<Attributes, SerialDeviceFailure>;
     /// GNU `tcsetattr (p->outfd, TCSANOW, &attr)`, src/sysdep.c:3303.
     fn write_attributes(&self, attributes: &Attributes) -> Result<(), SerialDeviceFailure>;
-    fn register_readable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String>;
-    fn modify_interest(
-        &self,
-        poller: &polling::Poller,
-        event: polling::Event,
-    ) -> Result<(), String>;
-    fn unregister(&self, poller: &polling::Poller);
 }
 
 impl DeviceIo for Device {
@@ -106,25 +99,6 @@ impl DeviceIo for Device {
             });
         }
         Ok(())
-    }
-
-    fn register_readable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String> {
-        // SAFETY: `self.fd` is owned by the process's `SerialPort` and
-        // `unregister_process_poll_sources` calls `port.unregister(poller)`
-        // before dropping it.
-        unsafe { ProcessManager::register_readable_source(poller, &self.fd, id) }
-    }
-
-    fn modify_interest(
-        &self,
-        poller: &polling::Poller,
-        event: polling::Event,
-    ) -> Result<(), String> {
-        ProcessManager::modify_poll_source(poller, &self.fd, event)
-    }
-
-    fn unregister(&self, poller: &polling::Poller) {
-        let _ = poller.delete(&self.fd);
     }
 }
 

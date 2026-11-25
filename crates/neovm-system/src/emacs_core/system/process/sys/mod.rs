@@ -115,7 +115,6 @@ pub(crate) use child_wait::decode_wait_status;
 
 #[cfg(unix)]
 mod socket_options;
-use backend::SourceIo;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) use socket_options::set_socket_priority;
 #[cfg(unix)]
@@ -136,11 +135,6 @@ pub(crate) trait ChildStatusSourceIo {
     /// Open a status source for `pid`, or `None` when this platform has no
     /// native pollable source (the caller then keeps using the periodic poll).
     fn open(pid: u32) -> Option<ChildStatusSource>;
-    /// Register this source's readable edge with the wait `poller`. A no-op
-    /// when there is no poller or no native source.
-    fn register_with_poller(&self, poller: Option<&polling::Poller>, id: ProcessId);
-    /// Remove this source from the wait `poller`.
-    fn unregister_from_poller(&self, poller: &polling::Poller);
 }
 
 impl ChildStatusSourceIo for ChildStatusSource {
@@ -148,19 +142,6 @@ impl ChildStatusSourceIo for ChildStatusSource {
     /// native pollable source (the caller then keeps using the periodic poll).
     fn open(pid: u32) -> Option<Self> {
         backend::open(pid).map(Self)
-    }
-
-    /// Register this source's readable edge with the wait `poller`. A no-op
-    /// when there is no poller or no native source.
-    fn register_with_poller(&self, poller: Option<&polling::Poller>, id: ProcessId) {
-        if let Some(poller) = poller {
-            self.0.register(poller, id);
-        }
-    }
-
-    /// Remove this source from the wait `poller`.
-    fn unregister_from_poller(&self, poller: &polling::Poller) {
-        self.0.unregister(poller);
     }
 }
 

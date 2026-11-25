@@ -58,14 +58,12 @@ fn arm_unreferenced_records(ev: &mut Context) -> ArmedRecords {
             encode: Value::NIL,
         },
     );
-    // SAFETY: newly created test process has no poll-registered descriptors.
-    let record = unsafe { ev.processes_mut().remove_live_process_record(process) }
+    let record = ev
+        .processes_mut()
+        .remove_live_process_record(process)
         .expect("the new process is live");
-    // SAFETY: synthetic retired test record owns no poll-registered descriptors.
-    unsafe {
-        ev.processes_mut()
-            .insert_deleted_process_record(process, record);
-    }
+    ev.processes_mut()
+        .insert_deleted_process_record(process, record);
     let _ = Value::make_process(process);
 
     let frames = ev.frame_manager_mut();

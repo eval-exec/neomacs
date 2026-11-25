@@ -4,7 +4,6 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::reap::ChildOwnershipIo;
-use super::reap::ReapableChildIo;
 use super::*;
 
 pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
@@ -447,25 +446,18 @@ pub(super) fn kill_real_process_child(proc: &mut Process, signal_num: i32) {
     if record_unbacked_real_process_signal(proc, signal_num) {
         return;
     }
-    // SAFETY: `kill_handle` signals the child without closing or dropping its
-    // `stdin` descriptor.
-    unsafe { proc.live_io_mut().child_mut() }.kill_handle();
+    proc.live_io_mut().child_mut().kill_handle();
 }
 
 /// GNU asynchronous delete transfers the child to deleted_pid_list
 /// (callproc.c:202-207); handle_child_signal later reaps it with WNOHANG
 /// (process.c:7700-7715). Never block while the child can need its PTY drained.
 ///
-/// # Safety
-/// The caller must have unregistered any poll-registered child descriptors
-/// (notably pipe `stdin`) from the manager's `polling::Poller` before calling
-/// this function, because transferring the handle to the deferred reaper moves
-/// ownership of `stdin` out of `proc.live_io` where `unregister_process_poll_sources`
-/// can no longer see it.
-pub(super) unsafe fn defer_real_process_child_reaping(proc: &mut Process) {
-    // SAFETY: forwarded from `defer_real_process_child_reaping`'s caller
-    // contract (poll sources were already unregistered before deferral).
-    unsafe { proc.live_io_mut().child_mut() }.defer_reaping();
+/// Any poll-registered child `stdin` is wrapped in `PollRegistration<File>`, so
+/// transferring ownership to the deferred reaper still unregisters `stdin`
+/// before closing it.
+pub(super) fn defer_real_process_child_reaping(proc: &mut Process) {
+    proc.live_io_mut().child_mut().defer_reaping();
 }
 
 pub(super) fn signal_hup_number() -> i32 {

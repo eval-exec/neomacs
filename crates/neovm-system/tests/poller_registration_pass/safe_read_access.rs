@@ -9,7 +9,7 @@ fn inspect(proc: &Process, io: &LiveProcessIo) {
     let _ = proc.live_io().tls_stream();
     let _ = proc.live_io().serial_port();
     let _ = io.child();
-    let _ = ProcessManager::unregister_process_poll_sources(None, proc);
+    ProcessManager::unregister_process_poll_sources(proc);
 }
 
 fn main() {

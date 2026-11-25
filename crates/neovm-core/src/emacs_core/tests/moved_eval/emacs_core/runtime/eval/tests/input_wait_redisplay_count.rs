@@ -429,12 +429,9 @@ fn gated_wait_socket(
         .expect("nonblocking process input");
     let process = eval.processes_mut().get_mut(id).expect("socket process");
     process.filter = Value::symbol(filter);
-    // SAFETY: fresh socket process has no previously registered `network_socket`.
-    unsafe {
-        process
-            .live_io_mut()
-            .set_network_socket(Some(NetworkSocket::UnixStream(socket)));
-    }
+    process
+        .live_io_mut()
+        .set_network_socket(Some(NetworkSocket::UnixStream(socket)));
     eval.processes()
         .register_socket_fd(id)
         .expect("register process input");

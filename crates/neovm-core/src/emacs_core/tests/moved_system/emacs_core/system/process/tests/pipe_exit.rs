@@ -58,16 +58,13 @@ fn recorded_pipe_before_read(
     };
     let calls = Arc::new(AtomicUsize::new(0));
     let proc = eval.processes_mut().get_mut(id).expect("record");
-    // SAFETY: fixture process has no poller-registered descriptors yet.
-    unsafe {
-        let io = proc.live_io_mut();
-        io.set_child(ChildOwnership::Reaped);
-        io.set_child_stdout(Some(ChildOutputReader::Injected(PipeReader::new(
-            Box::new(reader),
-            steps,
-            Arc::clone(&calls),
-        ))));
-    }
+    let io = proc.live_io_mut();
+    io.set_child(ChildOwnership::Reaped);
+    io.set_child_stdout(Some(ChildOutputReader::Injected(PipeReader::new(
+        Box::new(reader),
+        steps,
+        Arc::clone(&calls),
+    ))));
     proc.coding_decode = Value::symbol("utf-8-dos");
     eval.obarray_mut()
         .set_symbol_value("pipe-exit-child", Value::make_process(id));

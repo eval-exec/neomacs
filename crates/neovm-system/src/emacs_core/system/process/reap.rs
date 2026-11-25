@@ -666,10 +666,16 @@ pub trait ChildOwnershipIo {
     fn is_pty_handle(&self) -> bool;
     /// The child's stdin while it exists.  Not a reap, and the only reason the
     /// handle is reachable at all.
-    fn stdin_mut(&mut self) -> Option<&mut std::fs::File>;
+    fn stdin_mut(
+        &mut self,
+    ) -> Option<
+        &mut neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
+    >;
     /// The child's stdin for the poller registrations, which need the
     /// descriptor and nothing else.
-    fn stdin(&self) -> Option<&std::fs::File>;
+    fn stdin(
+        &self,
+    ) -> Option<&neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>>;
     /// Whether this process has a pipe child at all -- the `else if let
     /// Some(child) = ...` this port's write path used to spell against the
     /// handle itself.
@@ -685,7 +691,6 @@ pub trait ChildOwnershipIo {
     /// longer, this port's to wait for -- which is GNU's `p->alive &&` at
     /// :7741 rather than an early `continue` inside the loop.
     fn poll_status(&mut self) -> ChildStatusChange;
-    fn poll_status_releasing_stdin(&mut self) -> (ChildStatusChange, Option<std::fs::File>);
     /// GNU's `record_kill_process` (src/callproc.c:196-211): signal, then leave
     /// the sole child handle for a later nonblocking deleted-pid sweep.
     ///
@@ -755,7 +760,11 @@ impl ChildOwnershipIo for ChildOwnership {
 
     /// The child's stdin while it exists.  Not a reap, and the only reason the
     /// handle is reachable at all.
-    fn stdin_mut(&mut self) -> Option<&mut std::fs::File> {
+    fn stdin_mut(
+        &mut self,
+    ) -> Option<
+        &mut neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>,
+    > {
         match self {
             Self::Unreaped(ReapableChild {
                 handle: ChildHandle::Pipe(child),
@@ -767,7 +776,10 @@ impl ChildOwnershipIo for ChildOwnership {
 
     /// The child's stdin for the poller registrations, which need the
     /// descriptor and nothing else.
-    fn stdin(&self) -> Option<&std::fs::File> {
+    fn stdin(
+        &self,
+    ) -> Option<&neovm_eval::emacs_core::eval::data::process_state::PollRegistration<std::fs::File>>
+    {
         match self {
             Self::Unreaped(ReapableChild {
                 handle: ChildHandle::Pipe(child),
@@ -798,6 +810,7 @@ impl ChildOwnershipIo for ChildOwnership {
                 handle: ChildHandle::Pipe(child),
                 ..
             }) => {
+                // `PollRegistration<File>` unregisters `stdin` on drop.
                 drop(child.stdin.take());
                 true
             }
@@ -813,29 +826,19 @@ impl ChildOwnershipIo for ChildOwnership {
     /// longer, this port's to wait for -- which is GNU's `p->alive &&` at
     /// :7741 rather than an early `continue` inside the loop.
     fn poll_status(&mut self) -> ChildStatusChange {
-        self.poll_status_releasing_stdin().0
-    }
-
-    /// Like [`Self::poll_status`], but when a pipe child is reaped or gone,
-    /// extracts and returns its `stdin` handle instead of dropping it inline so
-    /// callers can unregister `stdin` from a `polling::Poller` before closing.
-    fn poll_status_releasing_stdin(&mut self) -> (ChildStatusChange, Option<std::fs::File>) {
         let Self::Unreaped(child) = self else {
-            return (ChildStatusChange::NoChange, None);
+            return ChildStatusChange::NoChange;
         };
         let change = child.probe();
         if matches!(
             change,
             ChildStatusChange::Reaped(_) | ChildStatusChange::Gone
         ) {
-            let stdin = match &mut child.handle {
-                ChildHandle::Pipe(pipe_child) => pipe_child.stdin.take(),
-                ChildHandle::Pty(_) => None,
-            };
+            // `SpawnedChild.stdin` is a `PollRegistration<File>`, so dropping
+            // the child here automatically unregisters `stdin` before closing.
             *self = Self::Reaped;
-            return (change, stdin);
         }
-        (change, None)
+        change
     }
 
     /// GNU's `record_kill_process` (src/callproc.c:196-211): signal, then leave
