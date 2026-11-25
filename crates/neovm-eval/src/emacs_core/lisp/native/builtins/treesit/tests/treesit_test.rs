@@ -2152,12 +2152,18 @@ fn treesit_circular_boolean_predicate_signals_circular_list() {
                       (treesit-search-subtree root '(or))
                     (treesit-invalid-predicate (car err)))
                   (condition-case err
+                      (treesit-search-subtree root '(and))
+                    (treesit-invalid-predicate (car err)))
+                  (condition-case err
+                      (treesit-search-subtree root '(not))
+                    (treesit-invalid-predicate (car err)))
+                  (condition-case err
                       (treesit-search-subtree root '(not "number" "array"))
                     (treesit-invalid-predicate (car err)))))"#,
         )
         .expect("malformed predicates must signal treesit-invalid-predicate");
     let invalid_items = neovm_value::value::list_to_vec(&invalid_results).expect("invalid list");
-    assert_eq!(invalid_items.len(), 4);
+    assert_eq!(invalid_items.len(), 6);
     for (idx, item) in invalid_items.iter().enumerate() {
         assert_eq!(
             item.as_symbol_name(eval.symbol_mode()),

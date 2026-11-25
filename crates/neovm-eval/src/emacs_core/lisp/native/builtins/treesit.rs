@@ -1600,15 +1600,183 @@ impl PurePredicate {
     }
 }
 
-#[derive(Clone, Copy)]
-enum SparsePredicate<'a> {
-    /// Compiled pure-Rust predicate with nil `process_fn`: cannot invoke Lisp
-    /// or trigger GC (`PurePredicate::matches` takes `&Context`), so zero
-    /// `specpdl` root slots are needed.
-    Pure(&'a PurePredicate),
-    /// General predicate (or non-nil `process_fn`): caller roots inputs and
-    /// anchors matched subtrees via `SpecpdlRootSlot`.
-    Rooted { predicate: Value, process_fn: Value },
+/// Typed sparse-tree walk driver unifying predicate mode, `process_fn`,
+/// reversed child accumulator, and the active ancestor's `SpecpdlRootSlot` so
+/// `(Pure, Some(slot))` and `(Rooted, None)` are unrepresentable at compile time.
+enum SparseWalkDriver<'a> {
+    /// Compiled pure-Rust predicate with nil `process_fn`: `PurePredicate::matches`
+    /// takes `&Context` (cannot invoke Lisp or trigger GC), so zero `specpdl`
+    /// root slots exist in this variant.
+    Pure {
+        predicate: &'a PurePredicate,
+        out_rev: Value,
+    },
+    /// General predicate or non-nil `process_fn`: every active ancestor carries
+    /// its own `SpecpdlRootSlot` by type, updated in O(1) on every push.
+    Rooted {
+        predicate: Value,
+        process_fn: Value,
+        out_rev: Value,
+        out_slot: &'a super::eval::SpecpdlRootSlot,
+    },
+}
+
+impl SparseWalkDriver<'_> {
+    fn matches_node(
+        &self,
+        eval: &mut super::eval::Context,
+        parser_id: u64,
+        parser_value: Value,
+        node: tree_sitter::Node<'_>,
+        share: WalkShare,
+    ) -> Result<bool, Flow> {
+        match self {
+            Self::Pure { predicate, .. } => predicate.matches(eval, node, false),
+            Self::Rooted { predicate, .. } => predicate_matches_node(
+                eval,
+                parser_id,
+                parser_value,
+                node,
+                *predicate,
+                false,
+                true,
+                share,
+            ),
+        }
+    }
+
+    fn changed_by(&self) -> Value {
+        match self {
+            Self::Pure { .. } => Value::NIL,
+            Self::Rooted {
+                predicate,
+                process_fn,
+                ..
+            } => {
+                if process_fn.is_nil() {
+                    *predicate
+                } else {
+                    *process_fn
+                }
+            }
+        }
+    }
+
+    fn apply_process_fn(
+        &self,
+        eval: &mut super::eval::Context,
+        parser_id: u64,
+        node_value: Value,
+        epoch: Option<u64>,
+    ) -> Result<Value, Flow> {
+        match self {
+            Self::Pure { .. } => Ok(node_value),
+            Self::Rooted { process_fn, .. } if process_fn.is_nil() => Ok(node_value),
+            Self::Rooted { process_fn, .. } => {
+                // `funcall_general` roots `process_fn` and `node_value` via
+                // `SpecBinding::Backtrace1`; `node_value` is unused after the call.
+                let value = eval.funcall_general(*process_fn, vec![node_value])?;
+                let now = eval
+                    .treesit
+                    .parser(parser_id)
+                    .map(|parser| parser.reparse_epoch());
+                if now != epoch {
+                    return Err(treesit_buffer_changed(*process_fn));
+                }
+                Ok(value)
+            }
+        }
+    }
+
+    /// Walk matching node's children using a child driver of the same variant,
+    /// anchoring `payload` and the child accumulator in `specpdl` only for
+    /// `Rooted` walks, and return `Value::cons(payload, children)`.
+    fn walk_matching_children(
+        &self,
+        eval: &mut super::eval::Context,
+        parser_id: u64,
+        parser_value: Value,
+        node: tree_sitter::Node<'_>,
+        depth: i64,
+        share: WalkShare,
+        payload: Value,
+    ) -> Result<Value, Flow> {
+        let walk_children = |eval: &mut super::eval::Context,
+                             child_driver: &mut SparseWalkDriver<'_>|
+         -> Result<Value, Flow> {
+            for idx in 0..node.child_count() {
+                if let Some(child) = node.child(idx) {
+                    build_sparse_tree(
+                        eval,
+                        parser_id,
+                        parser_value,
+                        child,
+                        depth.saturating_sub(1),
+                        share,
+                        child_driver,
+                    )?;
+                }
+            }
+            Ok(Value::cons(payload, child_driver.take_reversed()))
+        };
+
+        match *self {
+            Self::Pure { predicate, .. } => {
+                #[cfg(test)]
+                record_sparse_tree_peak_specpdl(eval);
+                let mut child_driver = SparseWalkDriver::Pure {
+                    predicate,
+                    out_rev: Value::NIL,
+                };
+                walk_children(eval, &mut child_driver)
+            }
+            Self::Rooted {
+                predicate,
+                process_fn,
+                ..
+            } => {
+                let root_scope = eval.save_specpdl_roots();
+                if payload.is_heap_object() {
+                    eval.push_specpdl_root(payload);
+                }
+                let my_slot = eval.push_specpdl_root_slot(Value::NIL);
+                #[cfg(test)]
+                record_sparse_tree_peak_specpdl(eval);
+                let mut child_driver = SparseWalkDriver::Rooted {
+                    predicate,
+                    process_fn,
+                    out_rev: Value::NIL,
+                    out_slot: &my_slot,
+                };
+                let walk_res = walk_children(eval, &mut child_driver);
+                eval.restore_specpdl_roots(root_scope);
+                walk_res
+            }
+        }
+    }
+
+    fn push_entry(&mut self, eval: &mut super::eval::Context, entry: Value) {
+        match self {
+            Self::Pure { out_rev, .. } => {
+                *out_rev = Value::cons(entry, *out_rev);
+            }
+            Self::Rooted {
+                out_rev, out_slot, ..
+            } => {
+                *out_rev = Value::cons(entry, *out_rev);
+                eval.set_specpdl_root_slot(out_slot, *out_rev);
+            }
+        }
+    }
+
+    fn take_reversed(&mut self) -> Value {
+        let rev = match self {
+            Self::Pure { out_rev, .. } | Self::Rooted { out_rev, .. } => {
+                std::mem::replace(out_rev, Value::NIL)
+            }
+        };
+        reverse_cons_list(rev)
+    }
 }
 
 #[cfg(test)]
@@ -2196,48 +2364,31 @@ fn subtree_stats(node: tree_sitter::Node<'_>) -> (i64, i64, i64) {
     (max_depth, max_width, count)
 }
 
-#[allow(clippy::too_many_arguments)] // explicit tree-sitter sparse-tree walk state without intermediate Vecs
 fn build_sparse_tree(
     eval: &mut super::eval::Context,
     parser_id: u64,
     parser_value: Value,
     node: tree_sitter::Node<'_>,
-    mode: SparsePredicate<'_>,
     depth: i64,
     share: WalkShare,
-    out_rev: &mut Value,
-    out_slot: Option<&super::eval::SpecpdlRootSlot>,
+    driver: &mut SparseWalkDriver<'_>,
 ) -> Result<(), Flow> {
     // GNU `treesit_build_sparse_tree` (`src/treesit.c:4937-4975`) omits a
     // node that does not match and attaches its matches to the nearest
     // matching ancestor. `process_fn` runs before the children
     // (`src/treesit.c:4941-4950`).
     //
-    // Matches are prepended onto the nearest matching ancestor's reversed
-    // cons list (`out_rev`) and anchored in that ancestor's single
-    // `SpecpdlRootSlot` (`out_slot`) in `SparsePredicate::Rooted` mode:
-    // - `SparsePredicate::Pure`: evaluates via `PurePredicate::matches(&Context)`
-    //   with no `process_fn`, touching zero `specpdl` slots.
-    // - `SparsePredicate::Rooted`: uses at most 2 `specpdl` slots per matching
+    // Matches are prepended onto the active ancestor's `SparseWalkDriver`:
+    // - `SparseWalkDriver::Pure`: evaluates via `PurePredicate::matches(&Context)`
+    //   with no `process_fn` and no `SpecpdlRootSlot`, touching zero `specpdl` slots.
+    // - `SparseWalkDriver::Rooted`: uses at most 2 `specpdl` slots per matching
     //   internal ancestor on the active recursion spine (`<= 2 * D_m` in
     //   `build_sparse_tree`, `<= 5 + 2 * D_m` including entry roots, where
-    //   `D_m <= min(max(depth, 0), tree_height - 1)`), updating `out_slot` in
-    //   O(1) per match via `set_specpdl_root_slot`.
+    //   `D_m <= min(max(depth, 0), tree_height - 1)`), updating its typed
+    //   `out_slot` in O(1) on every `push_entry`.
     #[cfg(test)]
     record_sparse_tree_peak_specpdl(eval);
-    let matched = match mode {
-        SparsePredicate::Pure(pure) => pure.matches(eval, node, false)?,
-        SparsePredicate::Rooted { predicate, .. } => predicate_matches_node(
-            eval,
-            parser_id,
-            parser_value,
-            node,
-            predicate,
-            false,
-            true,
-            share,
-        )?,
-    };
+    let matched = driver.matches_node(eval, parser_id, parser_value, node, share)?;
 
     if !matched {
         // GNU visits children only when `limit > 0` (`src/treesit.c:4957`).
@@ -2250,11 +2401,9 @@ fn build_sparse_tree(
                         parser_id,
                         parser_value,
                         child,
-                        mode,
                         depth.saturating_sub(1),
                         share,
-                        out_rev,
-                        out_slot,
+                        driver,
                     )?;
                 }
             }
@@ -2262,89 +2411,23 @@ fn build_sparse_tree(
         return Ok(());
     }
 
-    let changed_by = match mode {
-        SparsePredicate::Pure(_) => Value::NIL,
-        SparsePredicate::Rooted {
-            predicate,
-            process_fn,
-        } => {
-            if process_fn.is_nil() {
-                predicate
-            } else {
-                process_fn
-            }
-        }
-    };
     let raw = project_node_to_parser(eval, parser_id, node, share)
-        .ok_or_else(|| treesit_buffer_changed(changed_by))?;
+        .ok_or_else(|| treesit_buffer_changed(driver.changed_by()))?;
     let epoch = eval
         .treesit
         .parser(parser_id)
         .map(|parser| parser.reparse_epoch());
     // SAFETY: `project_node_to_parser` returned a `TSNode` from `parser_id`'s live tree.
     let node_value = unsafe { make_node_value_from_raw(eval, parser_id, raw) };
-    let payload = match mode {
-        SparsePredicate::Pure(_) => node_value,
-        SparsePredicate::Rooted { process_fn, .. } if process_fn.is_nil() => node_value,
-        SparsePredicate::Rooted { process_fn, .. } => {
-            // `funcall_general` roots `process_fn` and `node_value` via
-            // `SpecBinding::Backtrace1`; `node_value` is unused after the call.
-            let value = eval.funcall_general(process_fn, vec![node_value])?;
-            let now = eval
-                .treesit
-                .parser(parser_id)
-                .map(|parser| parser.reparse_epoch());
-            if now != epoch {
-                return Err(treesit_buffer_changed(process_fn));
-            }
-            value
-        }
-    };
+    let payload = driver.apply_process_fn(eval, parser_id, node_value, epoch)?;
 
     let entry = if depth > 0 && node.child_count() > 0 {
-        let is_rooted = matches!(mode, SparsePredicate::Rooted { .. });
-        let root_scope = is_rooted.then(|| eval.save_specpdl_roots());
-        let my_slot = if is_rooted {
-            if payload.is_heap_object() {
-                eval.push_specpdl_root(payload);
-            }
-            Some(eval.push_specpdl_root_slot(Value::NIL))
-        } else {
-            None
-        };
-        #[cfg(test)]
-        record_sparse_tree_peak_specpdl(eval);
-        let mut my_children_rev = Value::NIL;
-        let walk_res = (|| -> Result<Value, Flow> {
-            for idx in 0..node.child_count() {
-                if let Some(child) = node.child(idx) {
-                    build_sparse_tree(
-                        eval,
-                        parser_id,
-                        parser_value,
-                        child,
-                        mode,
-                        depth.saturating_sub(1),
-                        share,
-                        &mut my_children_rev,
-                        my_slot.as_ref(),
-                    )?;
-                }
-            }
-            Ok(Value::cons(payload, reverse_cons_list(my_children_rev)))
-        })();
-        if let Some(scope) = root_scope {
-            eval.restore_specpdl_roots(scope);
-        }
-        walk_res?
+        driver.walk_matching_children(eval, parser_id, parser_value, node, depth, share, payload)?
     } else {
         Value::cons(payload, Value::NIL)
     };
 
-    *out_rev = Value::cons(entry, *out_rev);
-    if let Some(slot) = out_slot {
-        eval.set_specpdl_root_slot(slot, *out_rev);
-    }
+    driver.push_entry(eval, entry);
     Ok(())
 }
 
@@ -2398,8 +2481,46 @@ pub fn builtin_treesit_induce_sparse_tree(
     // (`insert_node` enforces it and `apply_parser_edits` retargets it), and
     // `walk` was just cloned from that live tree.
     let root = unsafe { node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share) };
-    let (mode, root_scope, top_slot) = match pure_pred.as_ref() {
-        Some(pure) => (SparsePredicate::Pure(pure), None, None),
+    let finalize_walk = |eval: &mut super::eval::Context,
+                         driver: &mut SparseWalkDriver<'_>|
+     -> EvalResult {
+        match build_sparse_tree(
+            eval,
+            handle.parser_id,
+            parser_value,
+            root,
+            depth,
+            share,
+            driver,
+        )
+        .kinded()
+        {
+            Ok(()) => {
+                let matches = driver.take_reversed();
+                if matches.is_nil() {
+                    Ok(Value::NIL)
+                } else {
+                    // GNU returns the dummy parent `(nil . matches)` (`treesit.c:5051-5069`).
+                    // Its car is nil when the start node does not match. When the start
+                    // node matches, it is the single element of that list.
+                    Ok(Value::cons(Value::NIL, matches))
+                }
+            }
+            Err(FlowKind::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
+                Ok(Value::NIL)
+            }
+            Err(err) => Err(Flow::from_kind(err)),
+        }
+    };
+
+    match pure_pred.as_ref() {
+        Some(pure) => {
+            let mut driver = SparseWalkDriver::Pure {
+                predicate: pure,
+                out_rev: Value::NIL,
+            };
+            finalize_walk(eval, &mut driver)
+        }
         None => {
             let scope = eval.save_specpdl_roots();
             for value in [args[0], args[1], process_fn, parser_value] {
@@ -2407,45 +2528,18 @@ pub fn builtin_treesit_induce_sparse_tree(
                     eval.push_specpdl_root(value);
                 }
             }
-            let slot = eval.push_specpdl_root_slot(Value::NIL);
-            (
-                SparsePredicate::Rooted {
-                    predicate: args[1],
-                    process_fn,
-                },
-                Some(scope),
-                Some(slot),
-            )
+            let top_slot = eval.push_specpdl_root_slot(Value::NIL);
+            let mut driver = SparseWalkDriver::Rooted {
+                predicate: args[1],
+                process_fn,
+                out_rev: Value::NIL,
+                out_slot: &top_slot,
+            };
+            let outcome = finalize_walk(eval, &mut driver);
+            eval.restore_specpdl_roots(scope);
+            outcome
         }
-    };
-    let mut top_rev = Value::NIL;
-    let outcome = match build_sparse_tree(
-        eval,
-        handle.parser_id,
-        parser_value,
-        root,
-        mode,
-        depth,
-        share,
-        &mut top_rev,
-        top_slot.as_ref(),
-    )
-    .kinded()
-    {
-        Ok(()) if top_rev.is_nil() => Ok(Value::NIL),
-        // GNU returns the dummy parent `(nil . matches)` (`treesit.c:5051-5069`).
-        // Its car is nil when the start node does not match. When the start
-        // node matches, it is the single element of that list.
-        Ok(()) => Ok(Value::cons(Value::NIL, reverse_cons_list(top_rev))),
-        Err(FlowKind::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
-            Ok(Value::NIL)
-        }
-        Err(err) => Err(Flow::from_kind(err)),
-    };
-    if let Some(scope) = root_scope {
-        eval.restore_specpdl_roots(scope);
     }
-    outcome
 }
 
 #[doc(hidden)]
