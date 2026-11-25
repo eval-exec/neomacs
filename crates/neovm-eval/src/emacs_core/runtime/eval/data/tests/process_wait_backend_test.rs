@@ -159,9 +159,14 @@ fn poll_registration_failed_add_drop_is_safe_and_leaves_no_event() {
     // over `self`'s lifetime; `unregister_from_poller` deletes the same
     // descriptor and tolerates `NotFound` when `add_to_poller` failed.
     unsafe impl PollableResource for FailingAddSource {
+        type RegistrationToken = ();
+
+        fn capture_registration_token(&self) {}
+
         unsafe fn add_to_poller(
             &self,
             _poller: &polling::Poller,
+            _token: (),
             _event: polling::Event,
             _mode: polling::PollMode,
         ) -> std::io::Result<()> {
@@ -171,16 +176,17 @@ fn poll_registration_failed_add_drop_is_safe_and_leaves_no_event() {
             ))
         }
 
-        fn modify_on_poller(
+        unsafe fn modify_on_poller(
             &self,
             _poller: &polling::Poller,
+            _token: (),
             _event: polling::Event,
             _mode: polling::PollMode,
         ) -> std::io::Result<()> {
             Ok(())
         }
 
-        fn unregister_from_poller(&self, poller: &polling::Poller) {
+        unsafe fn unregister_from_poller(&self, poller: &polling::Poller, _token: ()) {
             self.unregisters.fetch_add(1, Ordering::SeqCst);
             let _ = poller.delete(&self.file);
         }
@@ -228,4 +234,154 @@ fn poll_registration_failed_add_drop_is_safe_and_leaves_no_event() {
         .wait(&mut events, Some(Duration::ZERO))
         .expect("poll after failed add + drop");
     assert!(events.iter().next().is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn poll_registration_captures_token_once_even_if_accessor_drifts() {
+    use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
+    use std::sync::atomic::AtomicUsize;
+
+    struct DriftingFdSource {
+        file: std::fs::File,
+        captures: Arc<AtomicUsize>,
+        unregisters: Arc<AtomicUsize>,
+    }
+
+    // SAFETY: `file` stays open for `self`'s entire lifetime; even though
+    // `capture_registration_token` would drift if called a second time,
+    // `PollRegistration` calls it once and passes the captured `Option<RawFd>`
+    // back to `add_to_poller`, `modify_on_poller`, and `unregister_from_poller`.
+    unsafe impl PollableResource for DriftingFdSource {
+        type RegistrationToken = Option<RawFd>;
+
+        fn capture_registration_token(&self) -> Self::RegistrationToken {
+            if self.captures.fetch_add(1, Ordering::SeqCst) == 0 {
+                Some(self.file.as_raw_fd())
+            } else {
+                None
+            }
+        }
+
+        unsafe fn add_to_poller(
+            &self,
+            poller: &polling::Poller,
+            token: Option<RawFd>,
+            event: polling::Event,
+            mode: polling::PollMode,
+        ) -> std::io::Result<()> {
+            let raw_fd = token.expect("first capture must return raw fd");
+            // SAFETY: `self.file` owns `raw_fd` until after unregistration.
+            unsafe {
+                use polling::AsSource;
+                let borrowed = BorrowedFd::borrow_raw(raw_fd);
+                poller.add_with_mode(&borrowed.source(), event, mode)
+            }
+        }
+
+        unsafe fn modify_on_poller(
+            &self,
+            poller: &polling::Poller,
+            token: Option<RawFd>,
+            event: polling::Event,
+            mode: polling::PollMode,
+        ) -> std::io::Result<()> {
+            let raw_fd = token.expect("captured raw fd must persist on modify");
+            // SAFETY: `self.file` owns `raw_fd` until after unregistration.
+            let borrowed = unsafe { BorrowedFd::borrow_raw(raw_fd) };
+            poller.modify_with_mode(borrowed, event, mode)
+        }
+
+        unsafe fn unregister_from_poller(&self, poller: &polling::Poller, token: Option<RawFd>) {
+            self.unregisters.fetch_add(1, Ordering::SeqCst);
+            let raw_fd = token.expect("captured raw fd must persist on drop");
+            // SAFETY: `self.file` owns `raw_fd` until after unregistration.
+            let borrowed = unsafe { BorrowedFd::borrow_raw(raw_fd) };
+            let _ = poller.delete(borrowed);
+        }
+    }
+
+    let (_reader, writer) = std::io::pipe().expect("pipe");
+    let writer_file = std::fs::File::from(std::os::fd::OwnedFd::from(writer));
+    let keep_open = writer_file.try_clone().expect("dup writer");
+    let poller = Arc::new(polling::Poller::new().expect("poller"));
+    let captures = Arc::new(AtomicUsize::new(0));
+    let unregisters = Arc::new(AtomicUsize::new(0));
+    let reg = PollRegistration::new(DriftingFdSource {
+        file: writer_file,
+        captures: Arc::clone(&captures),
+        unregisters: Arc::clone(&unregisters),
+    });
+
+    reg.register(
+        &poller,
+        polling::Event::writable(95),
+        polling::PollMode::Level,
+    )
+    .expect("register writable");
+    reg.modify(&poller, polling::Event::all(95), polling::PollMode::Level)
+        .expect("modify uses captured token");
+    assert_eq!(captures.load(Ordering::SeqCst), 1);
+
+    let mut events = polling::Events::new();
+    poller
+        .wait(&mut events, Some(Duration::from_millis(200)))
+        .expect("poll before drop");
+    assert!(events.iter().any(|ev| ev.key == 95));
+
+    drop(reg);
+
+    assert_eq!(captures.load(Ordering::SeqCst), 1);
+    assert_eq!(unregisters.load(Ordering::SeqCst), 1);
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll after drop");
+    assert!(
+        events.iter().all(|ev| ev.key != 95),
+        "captured token must unregister original fd before closing"
+    );
+    drop(keep_open);
+}
+
+#[cfg(unix)]
+#[test]
+fn poll_registration_real_master_pty_unregisters_before_drop() {
+    let pair = portable_pty::native_pty_system()
+        .openpty(portable_pty::PtySize::default())
+        .expect("openpty");
+    // `try_clone_reader` dups the master fd, keeping the open file description
+    // alive across `drop(reg)` so epoll would retain key 97 unless `Drop`
+    // deleted the captured `MasterPtyRegistrationToken` fd before closing.
+    let keep_open = pair.master.try_clone_reader().expect("dup master reader");
+    let poller = Arc::new(polling::Poller::new().expect("poller"));
+    let reg = PollRegistration::new(pair.master);
+
+    reg.register(
+        &poller,
+        polling::Event::writable(97),
+        polling::PollMode::Level,
+    )
+    .expect("register master pty");
+    reg.modify(&poller, polling::Event::all(97), polling::PollMode::Level)
+        .expect("modify master pty");
+
+    let mut events = polling::Events::new();
+    poller
+        .wait(&mut events, Some(Duration::from_millis(200)))
+        .expect("poll master pty before drop");
+    assert!(events.iter().any(|ev| ev.key == 97));
+
+    drop(reg);
+
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll master pty after drop");
+    assert!(
+        events.iter().all(|ev| ev.key != 97),
+        "stale event remained after PollRegistration<Box<dyn MasterPty + Send>> drop"
+    );
+    drop(keep_open);
+    drop(pair.slave);
 }

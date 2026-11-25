@@ -9545,8 +9545,9 @@ mod borrowed_fd_tests {
             );
         }
 
+        let crates_dir = root.parent().expect("workspace crates directory");
         let eval_state_src = std::fs::read_to_string(
-            root.join("../neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs"),
+            crates_dir.join("neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs"),
         )
         .expect("read neovm-eval process_state.rs");
         if eval_state_src.contains("DerefMut for PollRegistration")
@@ -9562,8 +9563,14 @@ mod borrowed_fd_tests {
         let poll_reg_body = eval_state_src
             .split("pub struct PollRegistration<T: PollableResource> {")
             .nth(1)
-            .and_then(|rest| rest.split('}').next())
+            .and_then(|rest| rest.split("\n}").next())
             .expect("struct PollRegistration definition in process_state.rs");
+        assert!(
+            poll_reg_body.contains("poller:")
+                && poll_reg_body.contains("inner:")
+                && poll_reg_body.contains("T::RegistrationToken"),
+            "process_state.rs: unexpected PollRegistration struct body slice: {poll_reg_body}"
+        );
         if poll_reg_body.contains("pub ") || poll_reg_body.contains("pub(") {
             violations.push(
                 "process_state.rs: `PollRegistration` struct fields must all stay private".into(),
@@ -9572,6 +9579,31 @@ mod borrowed_fd_tests {
         if eval_state_src.contains("fn inner_mut") {
             violations
                 .push("process_state.rs: `PollRegistration` must not expose `fn inner_mut`".into());
+        }
+        if !eval_state_src.contains("fn capture_registration_token(") {
+            violations.push(
+                "process_state.rs: `PollableResource` must keep `capture_registration_token`"
+                    .into(),
+            );
+        }
+        if !eval_state_src.contains("pub struct MasterPtyRegistrationToken(") {
+            violations.push(
+                "process_state.rs: `MasterPty` must use unforgeable `MasterPtyRegistrationToken`"
+                    .into(),
+            );
+        }
+        if eval_state_src.contains("Default)]\npub struct MasterPtyRegistrationToken(") {
+            violations.push(
+                "process_state.rs: `MasterPtyRegistrationToken` must not derive `Default`".into(),
+            );
+        }
+        if !eval_state_src.contains("unsafe fn modify_on_poller(")
+            || !eval_state_src.contains("unsafe fn unregister_from_poller(")
+        {
+            violations.push(
+                "process_state.rs: `modify_on_poller` and `unregister_from_poller` must remain `unsafe fn`"
+                    .into(),
+            );
         }
 
         assert!(

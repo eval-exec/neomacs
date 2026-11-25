@@ -1,14 +1,14 @@
 error[E0200]: the trait `PollableResource` requires an `unsafe impl` declaration
- --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/poll_registration_forbids_deref_mut.rs
-  |
-  | impl PollableResource for FakeSource {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: the trait `PollableResource` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
+  --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/poll_registration_forbids_deref_mut.rs
+   |
+   | impl PollableResource for FakeSource {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: the trait `PollableResource` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
 help: add `unsafe` to this trait implementation
-  |
-9 | unsafe impl PollableResource for FakeSource {
-  | ++++++
+   |
+12 | unsafe impl PollableResource for FakeSource {
+   | ++++++
 
 error[E0616]: field `inner` of struct `PollRegistration` is private
  --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/poll_registration_forbids_deref_mut.rs
@@ -21,6 +21,24 @@ error[E0616]: field `poller` of struct `PollRegistration` is private
   |
   |     let _ = &reg.poller;
   |                  ^^^^^^ private field
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/poll_registration_forbids_deref_mut.rs
+  |
+  |     let _ = MasterPtyRegistrationToken(Some(9_999_999));
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs
+  |
+  |     #[cfg(unix)] Option<std::os::fd::RawFd>,
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0277]: the trait bound `neovm_core::emacs_core::process::MasterPtyRegistrationToken: std::default::Default` is not satisfied
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/poll_registration_forbids_deref_mut.rs
+  |
+  |     let _ = <MasterPtyRegistrationToken as Default>::default();
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::default::Default` is not implemented for `neovm_core::emacs_core::process::MasterPtyRegistrationToken`
 
 error[E0308]: mismatched types
  --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/poll_registration_forbids_deref_mut.rs

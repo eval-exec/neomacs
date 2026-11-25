@@ -131,26 +131,47 @@ pub enum TlsPolling {
 ///
 /// # Safety
 /// Implementors must guarantee that:
-/// - [`Self::add_to_poller`] registers only descriptors exclusively owned by
-///   `self`.
-/// - The descriptor set addressed by [`Self::add_to_poller`],
-///   [`Self::modify_on_poller`], and [`Self::unregister_from_poller`] is
-///   **stable** for the lifetime of `self` (no descriptor identity changes,
-///   replacements, or `Some` -> `None` transitions between registration and
-///   unregistration).
+/// - [`Self::capture_registration_token`] returns a token identifying only
+///   descriptor(s) exclusively owned by `self` that remain open (never closed
+///   or transferred out) until after [`Self::unregister_from_poller`] runs or
+///   `self` is dropped.
+/// - [`Self::add_to_poller`], [`Self::modify_on_poller`], and
+///   [`Self::unregister_from_poller`] address only the descriptor(s) fixed by
+///   `self` and the `token` captured once by [`Self::capture_registration_token`]
+///   (so any subsequent drift in a dynamic accessor cannot change which
+///   descriptor is modified or unregistered).
 /// - [`Self::unregister_from_poller`] deletes every descriptor that
-///   [`Self::add_to_poller`] may have registered on `poller`, and is safe (a
-///   no-op) to call even when a prior `add_to_poller` failed or the descriptor
-///   was already deleted.
+///   [`Self::add_to_poller`] may have registered on `poller` for that `token`,
+///   and is safe (a no-op) to call even when a prior `add_to_poller` failed or
+///   the descriptor was already deleted.
 pub unsafe trait PollableResource {
+    /// Opaque handle snapshotted once when [`PollRegistration::register`]
+    /// binds a resource and passed back to `add_to_poller`, `modify_on_poller`,
+    /// and `unregister_from_poller`. Types whose descriptor is structurally
+    /// fixed use `()`; dynamic trait objects such as `MasterPty` capture their
+    /// `RawFd` in an opaque private-field newtype with no `Default` or public
+    /// constructor so later operations never observe a drifting accessor and
+    /// safe code can never forge a token.
+    #[doc(hidden)]
+    type RegistrationToken: Copy + Send + Sync + 'static;
+
+    /// `PollRegistration` internal plumbing: snapshot the registration token
+    /// once when binding `self` to a `Poller`.
+    #[doc(hidden)]
+    fn capture_registration_token(&self) -> Self::RegistrationToken;
+
     /// Register the owned descriptor(s) of `self` with `poller`.
     ///
     /// # Safety
-    /// The caller must invoke [`Self::unregister_from_poller`] on the same
-    /// `poller` before `self` is dropped or its descriptor is closed.
+    /// - `token` must have been returned by [`Self::capture_registration_token`]
+    ///   on this exact `self` instance while `self` is still live.
+    /// - The caller must invoke [`Self::unregister_from_poller`] on the same
+    ///   `poller` with the same `token` before `self` is dropped or its
+    ///   descriptor is closed.
     unsafe fn add_to_poller(
         &self,
         poller: &polling::Poller,
+        token: Self::RegistrationToken,
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()>;
@@ -158,10 +179,16 @@ pub unsafe trait PollableResource {
     /// `PollRegistration` internal plumbing: modify poll interest on `poller`
     /// for a previously registered source. Callers should go through
     /// [`PollRegistration::modify`] rather than calling this directly.
+    ///
+    /// # Safety
+    /// `token` must have been returned by [`Self::capture_registration_token`]
+    /// on this exact `self` instance while `self` is still live and owns its
+    /// descriptor(s).
     #[doc(hidden)]
-    fn modify_on_poller(
+    unsafe fn modify_on_poller(
         &self,
         poller: &polling::Poller,
+        token: Self::RegistrationToken,
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()>;
@@ -170,17 +197,42 @@ pub unsafe trait PollableResource {
     /// from `poller` (ignoring `NotFound`). Callers should go through
     /// [`PollRegistration::unregister`] rather than calling this directly, to
     /// avoid detaching a live registration out-of-band.
+    ///
+    /// # Safety
+    /// `token` must have been returned by [`Self::capture_registration_token`]
+    /// on this exact `self` instance while `self` is still live and owns its
+    /// descriptor(s).
     #[doc(hidden)]
-    fn unregister_from_poller(&self, poller: &polling::Poller);
+    unsafe fn unregister_from_poller(
+        &self,
+        poller: &polling::Poller,
+        token: Self::RegistrationToken,
+    );
 }
+
+/// Opaque, unforgeable registration token for
+/// `Box<dyn portable_pty::MasterPty + Send>`.
+///
+/// Its inner field is private to this module and it intentionally implements
+/// neither `Default` nor any public constructor; the only constructor is
+/// [`PollableResource::capture_registration_token`].
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct MasterPtyRegistrationToken(
+    #[cfg(unix)] Option<std::os::fd::RawFd>,
+    #[cfg(not(unix))] (),
+);
 
 /// RAII owner coupling a pollable OS resource `T` with the `Arc<Poller>` it is
 /// registered on (soundness B5).
 ///
 /// `PollRegistration` enforces `polling::Poller`'s delete-before-drop contract
 /// by construction:
-/// - `register` stores `Arc::clone(poller)` in a `OnceLock` **before** calling
-///   `add_to_poller`, and rejects registration on any second distinct `Poller`.
+/// - `register` stores `(Arc::clone(poller), token)` in a `OnceLock` **before**
+///   calling `add_to_poller`, and rejects registration on any second distinct
+///   `Poller`. Capturing `token` once ensures `add_to_poller`,
+///   `modify_on_poller`, and `unregister_from_poller` always target the same
+///   descriptor even if an unsealed trait object's accessor could drift.
 /// - `inner` is private and intentionally does **not** implement `DerefMut`, so
 ///   safe code cannot `std::mem::replace` or swap out a registered descriptor
 ///   without passing through [`Drop`] or [`Self::into_inner`].
@@ -192,8 +244,8 @@ pub unsafe trait PollableResource {
 ///
 /// If [`PollableResource::add_to_poller`] returns `Err` (for example `EEXIST`
 /// on a re-registration, `EPERM`, `ENOMEM`, or a Windows read-ahead failure),
-/// the `Arc<Poller>` binding stored in `OnceLock` is intentionally **not**
-/// rolled back: a subsequent [`Drop`], [`Self::unregister`], or
+/// the `(Arc<Poller>, token)` binding stored in `OnceLock` is intentionally
+/// **not** rolled back: a subsequent [`Drop`], [`Self::unregister`], or
 /// [`Self::into_inner`] will still invoke `unregister_from_poller` on that
 /// poller. This is safe because `self` exclusively owns the open descriptor
 /// until after unregistration (so no unrelated actor can hold a registration
@@ -201,12 +253,13 @@ pub unsafe trait PollableResource {
 /// missing filter, IOCP unknown waitable) treat deleting an unregistered
 /// descriptor as a harmless no-op.
 pub struct PollRegistration<T: PollableResource> {
-    poller: std::sync::OnceLock<Arc<polling::Poller>>,
+    poller: std::sync::OnceLock<(Arc<polling::Poller>, T::RegistrationToken)>,
     inner: std::mem::ManuallyDrop<T>,
 }
 
 impl<T: PollableResource> PollRegistration<T> {
-    /// Wrap an unregistered pollable OS resource.
+    /// Wrap an unregistered pollable OS resource. See [`PollableResource`] for
+    /// the descriptor ownership and lifetime invariants upheld by `T`.
     pub fn new(inner: T) -> Self {
         Self {
             poller: std::sync::OnceLock::new(),
@@ -214,26 +267,31 @@ impl<T: PollableResource> PollRegistration<T> {
         }
     }
 
-    /// Register `self` on `poller`, binding `Arc::clone(poller)` for automatic
-    /// cleanup on drop or [`Self::into_inner`].
+    /// Register `self` on `poller`, binding `Arc::clone(poller)` (and a
+    /// one-time descriptor token snapshot) for automatic cleanup on drop or
+    /// [`Self::into_inner`].
     pub fn register(
         &self,
         poller: &Arc<polling::Poller>,
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
-        let recorded = self.poller.get_or_init(|| Arc::clone(poller));
+        let (recorded, token) = self
+            .poller
+            .get_or_init(|| (Arc::clone(poller), self.inner.capture_registration_token()));
         if !Arc::ptr_eq(recorded, poller) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "poll resource is already bound to a different Poller",
             ));
         }
-        // SAFETY: `recorded` retains `Arc::clone(poller)` before registration
-        // runs, `inner` cannot be replaced via `&mut T` (no `DerefMut`), and
-        // both `Drop` and `into_inner` call `unregister_from_poller` before
-        // `inner` can be dropped or moved out.
-        unsafe { self.inner.add_to_poller(poller, event, mode) }
+        // SAFETY: `recorded` retains `Arc::clone(poller)` and `*token` was
+        // returned by `self.inner.capture_registration_token()` on this exact
+        // live `self.inner`; `inner` cannot be replaced via `&mut T` (no
+        // `DerefMut`), and both `Drop` and `into_inner` call
+        // `unregister_from_poller` with the same `*token` before `inner` can be
+        // dropped or moved out.
+        unsafe { self.inner.add_to_poller(poller, *token, event, mode) }
     }
 
     /// Modify poll interest on `poller` if `self` is bound to `poller`.
@@ -244,8 +302,11 @@ impl<T: PollableResource> PollRegistration<T> {
         mode: polling::PollMode,
     ) -> io::Result<()> {
         match self.poller.get() {
-            Some(recorded) if Arc::ptr_eq(recorded, poller) => {
-                self.inner.modify_on_poller(poller, event, mode)
+            Some((recorded, token)) if Arc::ptr_eq(recorded, poller) => {
+                // SAFETY: `*token` was captured from this exact live
+                // `self.inner` in `register`, and `self.inner` cannot be
+                // replaced or dropped while borrowed here.
+                unsafe { self.inner.modify_on_poller(poller, *token, event, mode) }
             }
             Some(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -261,16 +322,20 @@ impl<T: PollableResource> PollRegistration<T> {
     /// Delete `self` from its recorded `Poller` (if any), keeping the poller
     /// binding so a later `register` on the same `Poller` can re-arm interest.
     pub fn unregister(&self) {
-        if let Some(poller) = self.poller.get() {
-            self.inner.unregister_from_poller(poller);
+        if let Some((poller, token)) = self.poller.get() {
+            // SAFETY: `*token` was captured from this exact live `self.inner`
+            // in `register`, and `self.inner` has not been dropped or moved.
+            unsafe { self.inner.unregister_from_poller(poller, *token) };
         }
     }
 
     /// Delete `self` from its recorded `Poller` (if any) and return the
     /// unwrapped inner resource.
     pub fn into_inner(mut self) -> T {
-        if let Some(poller) = self.poller.take() {
-            self.inner.unregister_from_poller(&poller);
+        if let Some((poller, token)) = self.poller.take() {
+            // SAFETY: `token` was captured from this exact live `self.inner`
+            // in `register`, and `self.inner` is moved only after this call.
+            unsafe { self.inner.unregister_from_poller(&poller, token) };
         }
         // SAFETY: `self.poller` was already taken and dropped above, and
         // `mem::forget(self)` suppresses `Drop::drop` so `inner` is moved once.
@@ -282,8 +347,10 @@ impl<T: PollableResource> PollRegistration<T> {
 
 impl<T: PollableResource> Drop for PollRegistration<T> {
     fn drop(&mut self) {
-        if let Some(poller) = self.poller.get() {
-            self.inner.unregister_from_poller(poller);
+        if let Some((poller, token)) = self.poller.get() {
+            // SAFETY: `*token` was captured from this exact live `self.inner`
+            // in `register`, and `self.inner` is dropped only after this call.
+            unsafe { self.inner.unregister_from_poller(poller, *token) };
         }
         // SAFETY: `Drop::drop` runs once and `inner` is never accessed again.
         unsafe { std::mem::ManuallyDrop::drop(&mut self.inner) };
@@ -359,9 +426,14 @@ impl PollRegistration<TlsStream> {
 // SAFETY: `ChildStatusSource` registers and deletes its owned `pidfd` on Linux
 // and is uninhabited on non-Linux targets.
 unsafe impl PollableResource for ChildStatusSource {
+    type RegistrationToken = ();
+
+    fn capture_registration_token(&self) {}
+
     unsafe fn add_to_poller(
         &self,
         poller: &polling::Poller,
+        _token: (),
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
@@ -377,9 +449,10 @@ unsafe impl PollableResource for ChildStatusSource {
         }
     }
 
-    fn modify_on_poller(
+    unsafe fn modify_on_poller(
         &self,
         poller: &polling::Poller,
+        _token: (),
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
@@ -394,7 +467,7 @@ unsafe impl PollableResource for ChildStatusSource {
         }
     }
 
-    fn unregister_from_poller(&self, poller: &polling::Poller) {
+    unsafe fn unregister_from_poller(&self, poller: &polling::Poller, _token: ()) {
         #[cfg(target_os = "linux")]
         {
             let _ = poller.delete(&self.0.pidfd);
@@ -410,9 +483,14 @@ unsafe impl PollableResource for ChildStatusSource {
 // SAFETY: `ChildOutputReader` registers and deletes its own `AsFd` descriptor
 // on Unix; on non-Unix targets pipes are not registered on the socket poller.
 unsafe impl PollableResource for ChildOutputReader {
+    type RegistrationToken = ();
+
+    fn capture_registration_token(&self) {}
+
     unsafe fn add_to_poller(
         &self,
         poller: &polling::Poller,
+        _token: (),
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
@@ -430,9 +508,10 @@ unsafe impl PollableResource for ChildOutputReader {
         }
     }
 
-    fn modify_on_poller(
+    unsafe fn modify_on_poller(
         &self,
         poller: &polling::Poller,
+        _token: (),
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
@@ -448,7 +527,7 @@ unsafe impl PollableResource for ChildOutputReader {
         }
     }
 
-    fn unregister_from_poller(&self, poller: &polling::Poller) {
+    unsafe fn unregister_from_poller(&self, poller: &polling::Poller, _token: ()) {
         #[cfg(unix)]
         {
             use std::os::fd::AsFd;
@@ -464,9 +543,14 @@ unsafe impl PollableResource for ChildOutputReader {
 // SAFETY: `std::fs::File` registers and deletes its own `AsFd` descriptor on
 // Unix; on non-Unix targets child stdin pipes are not registered on `Poller`.
 unsafe impl PollableResource for std::fs::File {
+    type RegistrationToken = ();
+
+    fn capture_registration_token(&self) {}
+
     unsafe fn add_to_poller(
         &self,
         poller: &polling::Poller,
+        _token: (),
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
@@ -484,9 +568,10 @@ unsafe impl PollableResource for std::fs::File {
         }
     }
 
-    fn modify_on_poller(
+    unsafe fn modify_on_poller(
         &self,
         poller: &polling::Poller,
+        _token: (),
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
@@ -502,7 +587,7 @@ unsafe impl PollableResource for std::fs::File {
         }
     }
 
-    fn unregister_from_poller(&self, poller: &polling::Poller) {
+    unsafe fn unregister_from_poller(&self, poller: &polling::Poller, _token: ()) {
         #[cfg(unix)]
         {
             use std::os::fd::AsFd;
@@ -516,25 +601,42 @@ unsafe impl PollableResource for std::fs::File {
 }
 
 // SAFETY: `portable_pty::MasterPty` owns its master fd on Unix
-// (`UnixMasterPty` holds one fixed `FileDescriptor` for its entire lifetime),
-// so `as_raw_fd()` returns a stable descriptor (or stably `None`) across
-// `add_to_poller`, `modify_on_poller`, and `unregister_from_poller`. Any custom
-// `MasterPty` wrapped in `PollRegistration` must preserve that fd-stability
-// invariant per `PollableResource`'s `# Safety` contract.
+// (`UnixMasterPty` holds one fixed `FileDescriptor` for its entire lifetime).
+// `capture_registration_token` snapshots `as_raw_fd()` once into the
+// unforgeable private-field `MasterPtyRegistrationToken`, and `add_to_poller`,
+// `modify_on_poller`, and `unregister_from_poller` are all `unsafe fn`s that
+// require `token` to come from this exact live `self`, so safe code can neither
+// forge a descriptor nor replay a token across objects or after drop.
 unsafe impl PollableResource for Box<dyn portable_pty::MasterPty + Send> {
+    type RegistrationToken = MasterPtyRegistrationToken;
+
+    fn capture_registration_token(&self) -> Self::RegistrationToken {
+        #[cfg(unix)]
+        {
+            MasterPtyRegistrationToken(self.as_raw_fd())
+        }
+        #[cfg(not(unix))]
+        {
+            MasterPtyRegistrationToken(())
+        }
+    }
+
     unsafe fn add_to_poller(
         &self,
         poller: &polling::Poller,
+        token: Self::RegistrationToken,
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
         #[cfg(unix)]
         {
-            let Some(raw_fd) = self.as_raw_fd() else {
+            let Some(raw_fd) = token.0 else {
                 return Ok(());
             };
-            // SAFETY: `self` owns this open PTY master descriptor for the call,
-            // and caller upholds `PollableResource::add_to_poller`.
+            // SAFETY: caller guarantees `token` came from this exact live
+            // `self`'s `capture_registration_token`, `self` owns this open PTY
+            // master descriptor until unregistration, and caller upholds
+            // `PollableResource::add_to_poller`.
             unsafe {
                 use polling::AsSource;
                 let borrowed = std::os::fd::BorrowedFd::borrow_raw(raw_fd);
@@ -543,48 +645,56 @@ unsafe impl PollableResource for Box<dyn portable_pty::MasterPty + Send> {
         }
         #[cfg(not(unix))]
         {
-            let _ = (poller, event, mode);
+            let _ = (poller, token, event, mode);
             Ok(())
         }
     }
 
-    fn modify_on_poller(
+    unsafe fn modify_on_poller(
         &self,
         poller: &polling::Poller,
+        token: Self::RegistrationToken,
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
         #[cfg(unix)]
         {
-            let Some(raw_fd) = self.as_raw_fd() else {
+            let Some(raw_fd) = token.0 else {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     "PTY master has no raw fd",
                 ));
             };
-            // SAFETY: `self` owns this open PTY master descriptor for the call.
+            // SAFETY: caller guarantees `token` came from this exact live
+            // `self`'s `capture_registration_token` while `self` owns `raw_fd`.
             let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(raw_fd) };
             poller.modify_with_mode(borrowed, event, mode)
         }
         #[cfg(not(unix))]
         {
-            let _ = (poller, event, mode);
+            let _ = (poller, token, event, mode);
             Ok(())
         }
     }
 
-    fn unregister_from_poller(&self, poller: &polling::Poller) {
+    unsafe fn unregister_from_poller(
+        &self,
+        poller: &polling::Poller,
+        token: Self::RegistrationToken,
+    ) {
         #[cfg(unix)]
         {
-            if let Some(raw_fd) = self.as_raw_fd() {
-                // SAFETY: `self` owns this open PTY master descriptor for the call.
+            if let Some(raw_fd) = token.0 {
+                // SAFETY: caller guarantees `token` came from this exact live
+                // `self`'s `capture_registration_token` while `self` owns
+                // `raw_fd`.
                 let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(raw_fd) };
                 let _ = poller.delete(borrowed);
             }
         }
         #[cfg(not(unix))]
         {
-            let _ = poller;
+            let _ = (poller, token);
         }
     }
 }
@@ -592,9 +702,14 @@ unsafe impl PollableResource for Box<dyn portable_pty::MasterPty + Send> {
 // SAFETY: every `NetworkSocket` variant registers and deletes its single owned
 // socket descriptor.
 unsafe impl PollableResource for NetworkSocket {
+    type RegistrationToken = ();
+
+    fn capture_registration_token(&self) {}
+
     unsafe fn add_to_poller(
         &self,
         poller: &polling::Poller,
+        _token: (),
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
@@ -618,9 +733,10 @@ unsafe impl PollableResource for NetworkSocket {
         }
     }
 
-    fn modify_on_poller(
+    unsafe fn modify_on_poller(
         &self,
         poller: &polling::Poller,
+        _token: (),
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
@@ -641,7 +757,7 @@ unsafe impl PollableResource for NetworkSocket {
         }
     }
 
-    fn unregister_from_poller(&self, poller: &polling::Poller) {
+    unsafe fn unregister_from_poller(&self, poller: &polling::Poller, _token: ()) {
         match self {
             Self::TcpStream(stream) => {
                 let _ = poller.delete(stream);
@@ -674,9 +790,14 @@ unsafe impl PollableResource for NetworkSocket {
 
 // SAFETY: `TlsStream` registers and deletes its single owned `TcpStream`.
 unsafe impl PollableResource for TlsStream {
+    type RegistrationToken = ();
+
+    fn capture_registration_token(&self) {}
+
     unsafe fn add_to_poller(
         &self,
         poller: &polling::Poller,
+        _token: (),
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
@@ -684,16 +805,17 @@ unsafe impl PollableResource for TlsStream {
         unsafe { poller.add_with_mode(self.tcp_stream(), event, mode) }
     }
 
-    fn modify_on_poller(
+    unsafe fn modify_on_poller(
         &self,
         poller: &polling::Poller,
+        _token: (),
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
         poller.modify_with_mode(self.tcp_stream(), event, mode)
     }
 
-    fn unregister_from_poller(&self, poller: &polling::Poller) {
+    unsafe fn unregister_from_poller(&self, poller: &polling::Poller, _token: ()) {
         let _ = poller.delete(self.tcp_stream());
     }
 }
@@ -701,9 +823,14 @@ unsafe impl PollableResource for TlsStream {
 // SAFETY: `SerialPort` registers and deletes its owned serial fd (Unix) or
 // read-ahead waitable event after cancelling overlapped I/O (Windows).
 unsafe impl PollableResource for SerialPort {
+    type RegistrationToken = ();
+
+    fn capture_registration_token(&self) {}
+
     unsafe fn add_to_poller(
         &self,
         poller: &polling::Poller,
+        _token: (),
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
@@ -729,9 +856,10 @@ unsafe impl PollableResource for SerialPort {
         }
     }
 
-    fn modify_on_poller(
+    unsafe fn modify_on_poller(
         &self,
         poller: &polling::Poller,
+        _token: (),
         event: polling::Event,
         mode: polling::PollMode,
     ) -> io::Result<()> {
@@ -752,7 +880,7 @@ unsafe impl PollableResource for SerialPort {
         }
     }
 
-    fn unregister_from_poller(&self, poller: &polling::Poller) {
+    unsafe fn unregister_from_poller(&self, poller: &polling::Poller, _token: ()) {
         #[cfg(unix)]
         {
             let _ = poller.delete(&self.0.fd);
