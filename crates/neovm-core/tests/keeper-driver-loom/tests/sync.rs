@@ -28,12 +28,15 @@ pub fn yield_now() {
     loom::thread::yield_now();
 }
 
-/// Virtual nanoseconds: advanced only by the model's backoff sleeps, so the
-/// contention bound is measured on the model's own time, never the host's.
-/// Only differences are read, so the count carried over from an earlier
-/// execution changes nothing; one OS thread runs every model thread, so
-/// the order of the advances is the schedule's.
-static VIRTUAL_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+loom::lazy_static! {
+    /// Virtual nanoseconds, advanced only by the model's backoff sleeps, so
+    /// the contention bound is measured on the model's own time, never the
+    /// host's. A Loom lazy static lives for one execution, so every
+    /// execution's clock starts at zero and no count crosses executions or
+    /// tests (lead #14111). One OS thread runs every model thread, so the
+    /// order of the advances is the schedule's.
+    static ref VIRTUAL_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+}
 
 /// The backoff's clock on the model's virtual time.
 #[derive(Clone, Copy, Debug)]
