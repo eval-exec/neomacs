@@ -1150,19 +1150,24 @@ fn cold_live_view_endpoint_publication_performs_zero_observed_reads() {
     assert!(!live.is_stale());
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "test-support"))]
 #[test]
 fn assert_no_observed_reads_rejects_plist_walk_in_debug() {
     crate::test_utils::init_test_tracing();
     let plist = Value::list(vec![Value::symbol("face"), Value::symbol("bold")]);
-    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         collection_reads::assert_no_observed_reads(|| {
             let _ = plist.cons_car();
         });
     }))
-    .is_err();
+    .expect_err("assert_no_observed_reads must panic on an observed Lisp read");
+    let msg = err
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| err.downcast_ref::<&str>().copied())
+        .unwrap_or("");
     assert!(
-        panicked,
-        "assert_no_observed_reads must panic on an observed Lisp read in debug builds"
+        msg.contains("assert_no_observed_reads"),
+        "unexpected panic payload: {msg:?}"
     );
 }

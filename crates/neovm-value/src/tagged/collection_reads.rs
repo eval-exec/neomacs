@@ -167,7 +167,7 @@ pub fn hoist_reads() -> bool {
 #[inline]
 #[doc(hidden)]
 pub fn reads_need_observation() -> bool {
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "test-support"))]
     if FORBID_OBSERVED_READS.with(Cell::get) != 0 {
         return true;
     }
@@ -195,7 +195,7 @@ const MAX_DEPTH: usize = 8;
 
 thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "test-support"))]
     static FORBID_OBSERVED_READS: Cell<usize> = const { Cell::new(0) };
     static RECENT_READS: RecentReads = const { RecentReads::new() };
     static STATE: store_state::StateSlot = store_state::StateSlot::default();
@@ -666,8 +666,8 @@ impl Drop for CollectionReadScope {
 
 #[inline]
 pub(crate) fn observe(value: TaggedValue) {
-    #[cfg(debug_assertions)]
-    debug_assert_eq!(
+    #[cfg(any(debug_assertions, feature = "test-support"))]
+    assert_eq!(
         FORBID_OBSERVED_READS.with(Cell::get),
         0,
         "observed Lisp collection read inside assert_no_observed_reads scope"
@@ -1271,8 +1271,12 @@ enum NativeWindowCollectionOwner {
     Slots,
 }
 
-/// Execute `body` while asserting (in debug/test builds) that no observed
-/// Lisp collection read occurs. Compiles to a direct call in release builds.
+/// Execute `body` while asserting (in debug and `test-support` builds) that
+/// no observed Lisp collection read occurs. Compiles to a direct call with
+/// zero overhead in release production builds.
+///
+/// Precondition: `body` must be synchronous and non-yielding (it must not park
+/// a carrier or switch worlds while the scope is active).
 ///
 /// Lazy derived-index publishers (such as `publish_endpoints_for`) wrap their
 /// publication work in this scope so reintroducing a Lisp plist/heap walk
@@ -1280,19 +1284,23 @@ enum NativeWindowCollectionOwner {
 /// caller's `collection_reads::capture`.
 #[inline]
 pub fn assert_no_observed_reads<R>(body: impl FnOnce() -> R) -> R {
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "test-support"))]
     {
         struct Guard;
         impl Drop for Guard {
             fn drop(&mut self) {
-                FORBID_OBSERVED_READS.with(|depth| depth.set(depth.get() - 1));
+                FORBID_OBSERVED_READS.with(|depth| {
+                    let prev = depth.get();
+                    debug_assert!(prev > 0, "FORBID_OBSERVED_READS depth underflow");
+                    depth.set(prev.saturating_sub(1));
+                });
             }
         }
         FORBID_OBSERVED_READS.with(|depth| depth.set(depth.get() + 1));
         let _guard = Guard;
         body()
     }
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(debug_assertions, feature = "test-support")))]
     {
         body()
     }
@@ -1393,7 +1401,7 @@ mod observed_sweep_amortization_tests;
 #[doc(hidden)]
 pub fn reset_carrier_tls() {
     ACTIVE.with(|slot| slot.set(false));
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "test-support"))]
     FORBID_OBSERVED_READS.with(|slot| slot.set(0));
     // Epoch 0 is the fresh-thread value (`RecentReads::new`), so the snapshot
     // probe can compare a parked carrier with a fresh one; any later lookup
