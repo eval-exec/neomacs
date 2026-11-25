@@ -1294,6 +1294,58 @@ fn l67a_a_grant_to_a_gone_owner_poisons_without_waiting() {
     assert_eq!(end, DriverEnd::Poisoned(Breach::Unreachable { owner: O }));
 }
 
+/// L9 (lead #14072 nit). The keeper thread panics while O's request is
+/// outstanding. The unwind drops the driver and with it O's grant sender, so
+/// `request_turn` reads the disconnect as Poisoned instead of waiting on a
+/// keeper that is gone. O asks through a relay the keeper reads, so the
+/// panic comes only once O has asked. The Loom row L9 drops the driver as
+/// this unwind does: a panic cannot unwind inside a Loom model, whose
+/// threads are coroutines on one OS thread, because the unwind would switch
+/// coroutines with that OS thread's panic count set.
+#[test]
+fn l67a_a_keeper_panic_answers_the_waiting_owner_poisoned() {
+    const PANIC: &str = "the keeper panics with O's request outstanding";
+    let (unwound, answer) = with_poisoned_era("l67a-keeper-panic", |era| {
+        let (_inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let (relay, relayed) = mpsc::channel();
+        let o = enroll_driver(era, &mut driver, &relay, O);
+        drop(relay);
+        std::thread::scope(|scope| {
+            let waiting = scope.spawn(move || {
+                let (_state, _home, mut port) = o.start();
+                let answer = port.request_turn().map(|_granted| ());
+                // The era is poisoned; the mutator is dropped, not retired.
+                drop(port.exit());
+                answer
+            });
+            let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let _driver = driver;
+                // Dropped before the driver, so the era is poisoned before
+                // O wakes.
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let asked = relayed.recv_timeout(BOUND);
+                assert!(
+                    matches!(asked, Ok(KeeperMsg::Request { owner: O, .. })),
+                    "O asks before the keeper panics"
+                );
+                panic!("{PANIC}");
+            }));
+            let unwound = unwound
+                .expect_err("the keeper unwound")
+                .downcast_ref::<String>()
+                .cloned();
+            (unwound, waiting.join().expect("O"))
+        })
+    });
+    assert_eq!(unwound.as_deref(), Some(PANIC), "the keeper's own panic");
+    assert_eq!(
+        answer,
+        Err(PortRefusal::Poisoned),
+        "O learns the keeper is gone"
+    );
+}
+
 /// Lead #14009 nit. The keeper owns a running mutator, so its stop refuses
 /// `Busy` with the gate free: it waits on itself, and no retry can help. The
 /// driver ends that as `SelfWait` after one contention bound, instead of
@@ -1479,12 +1531,15 @@ fn l67b_no_parallel_owner_runs_while_the_group_holds_the_world() {
                 group.exit();
                 (before, during)
             });
-            assert_eq!(driver.run(), DriverEnd::Drained);
+            let end = driver.run();
             let (before, during) = runner.join().expect("the group");
+            // The exclusion first: a stop taken without the owner's ack (the
+            // red mutation) also ends refused, and that end must not mask it.
             assert_eq!(
                 before, during,
                 "no parallel owner ran while the group held the World"
             );
+            assert_eq!(end, DriverEnd::Drained);
         });
     });
 }
