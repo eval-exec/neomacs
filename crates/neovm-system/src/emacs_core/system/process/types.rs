@@ -5428,25 +5428,32 @@ impl SystemProcessExt for ProcessManager {
         mode: SymbolMode,
         global_null_inhibition: bool,
     ) -> ProcessBytesRead {
-        let Some(proc) = self.get_mut(id) else {
+        let Some((proc, scratch)) = self.process_and_read_scratch_mut(id) else {
             return ProcessBytesRead::NoSource;
         };
         let read_len = process_read_buffer_len(proc);
+
+        // Use non-blocking read via set_nonblocking on Unix (once per fd).
+        #[cfg(unix)]
+        if !proc.live_io().is_child_stdout_nonblocking() {
+            use std::os::unix::io::AsRawFd;
+            let Some(stdout) = proc.live_io().child_stdout() else {
+                return ProcessBytesRead::NoSource;
+            };
+            let fd = stdout.as_raw_fd();
+            if sys::set_fd_nonblocking(fd).is_ok() {
+                proc.live_io_mut().mark_child_stdout_nonblocking();
+            }
+        }
 
         let Some(stdout) = proc.live_io_mut().child_stdout_mut() else {
             return ProcessBytesRead::NoSource;
         };
 
-        // Use non-blocking read via set_nonblocking on Unix
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            let fd = stdout.as_raw_fd();
-            // Set non-blocking
-            let _ = sys::set_fd_nonblocking(fd);
+        if scratch.len() < read_len {
+            scratch.resize(read_len, 0);
         }
-
-        let mut buf = vec![0u8; read_len];
+        let buf = &mut scratch[..read_len];
         let full_read_len = buf.len();
         #[cfg(windows)]
         let result = {
@@ -5461,13 +5468,13 @@ impl SystemProcessExt for ProcessManager {
             }
         };
         #[cfg(not(windows))]
-        let result = stdout.read(&mut buf);
+        let result = stdout.read(buf);
         process_output_read_from_io_result(
             proc,
             coding_systems,
             destination,
             ProcessReadOutcome::from_stream_read(&result),
-            &buf,
+            buf,
             full_read_len,
             mode,
             global_null_inhibition,
@@ -5488,7 +5495,7 @@ impl SystemProcessExt for ProcessManager {
         mode: SymbolMode,
         global_null_inhibition: bool,
     ) -> ProcessBytesRead {
-        let Some(proc) = self.get_mut(id) else {
+        let Some((proc, scratch)) = self.process_and_read_scratch_mut(id) else {
             return ProcessBytesRead::NoSource;
         };
         let read_len = process_read_buffer_len(proc);
@@ -5496,15 +5503,18 @@ impl SystemProcessExt for ProcessManager {
             return ProcessBytesRead::NoSource;
         };
 
-        let mut buf = vec![0u8; read_len];
+        if scratch.len() < read_len {
+            scratch.resize(read_len, 0);
+        }
+        let buf = &mut scratch[..read_len];
         let full_read_len = buf.len();
-        let result = port.read(&mut buf);
+        let result = port.read(buf);
         process_output_read_from_io_result(
             proc,
             coding_systems,
             destination,
             ProcessReadOutcome::from_stream_read(&result),
-            &buf,
+            buf,
             full_read_len,
             mode,
             global_null_inhibition,
@@ -5522,7 +5532,7 @@ impl SystemProcessExt for ProcessManager {
         mode: SymbolMode,
         global_null_inhibition: bool,
     ) -> ProcessBytesRead {
-        let Some(proc) = self.get_mut(id) else {
+        let Some((proc, scratch)) = self.process_and_read_scratch_mut(id) else {
             return ProcessBytesRead::NoSource;
         };
         let read_len = process_read_buffer_len(proc);
@@ -5530,15 +5540,18 @@ impl SystemProcessExt for ProcessManager {
             return ProcessBytesRead::NoSource;
         };
 
-        let mut buf = vec![0u8; read_len];
+        if scratch.len() < read_len {
+            scratch.resize(read_len, 0);
+        }
+        let buf = &mut scratch[..read_len];
         let full_read_len = buf.len();
-        let result = reader.read(&mut buf);
+        let result = reader.read(buf);
         process_output_read_from_io_result(
             proc,
             coding_systems,
             destination,
             ProcessReadOutcome::from_pty_read(&result),
-            &buf,
+            buf,
             full_read_len,
             mode,
             global_null_inhibition,
@@ -5553,7 +5566,7 @@ impl SystemProcessExt for ProcessManager {
         mode: SymbolMode,
         global_null_inhibition: bool,
     ) -> ProcessBytesRead {
-        let Some(proc) = self.get_mut(id) else {
+        let Some((proc, scratch)) = self.process_and_read_scratch_mut(id) else {
             return ProcessBytesRead::NoSource;
         };
 
@@ -5562,15 +5575,18 @@ impl SystemProcessExt for ProcessManager {
         }
         let read_len = process_read_buffer_len(proc);
         if let Some(tls) = proc.live_io_mut().tls_stream_mut() {
-            let mut buf = vec![0u8; read_len];
+            if scratch.len() < read_len {
+                scratch.resize(read_len, 0);
+            }
+            let buf = &mut scratch[..read_len];
             let full_read_len = buf.len();
-            let result = tls.read_process_output(&mut buf);
+            let result = tls.read_process_output(buf);
             let read = process_output_read_from_io_result(
                 proc,
                 coding_systems,
                 destination,
                 ProcessReadOutcome::from_stream_read(&result),
-                &buf,
+                buf,
                 full_read_len,
                 mode,
                 global_null_inhibition,
@@ -5587,19 +5603,22 @@ impl SystemProcessExt for ProcessManager {
                 Unsupported,
             }
 
-            let mut buf = vec![0u8; read_len];
+            if scratch.len() < read_len {
+                scratch.resize(read_len, 0);
+            }
+            let buf = &mut scratch[..read_len];
             let full_read_len = buf.len();
             let raw_read = {
                 let socket = proc.live_io().network_socket().expect("checked above");
-                match socket.read_stream_output(&mut buf) {
+                match socket.read_stream_output(buf) {
                     Some(result) => RawNetworkRead::Stream(result),
                     None => match &**socket {
                         NetworkSocket::UdpSocket(socket) => {
-                            RawNetworkRead::Udp(socket.recv_from(&mut buf))
+                            RawNetworkRead::Udp(socket.recv_from(buf))
                         }
                         #[cfg(unix)]
                         NetworkSocket::UnixDatagram(socket) => {
-                            RawNetworkRead::UnixDatagram(socket.recv_from(&mut buf))
+                            RawNetworkRead::UnixDatagram(socket.recv_from(buf))
                         }
                         _ => RawNetworkRead::Unsupported,
                     },
@@ -5611,7 +5630,7 @@ impl SystemProcessExt for ProcessManager {
                     coding_systems,
                     destination,
                     ProcessReadOutcome::from_stream_read(&result),
-                    &buf,
+                    buf,
                     full_read_len,
                     mode,
                     global_null_inhibition,
@@ -7638,7 +7657,7 @@ pub trait ProcessContextExt {
         &mut self,
         pid: ProcessId,
         filter: Value,
-        data: &LispString,
+        data: LispString,
     ) -> Result<(), Flow>;
     fn notify_stderr_pipe_owner_first(
         &mut self,
@@ -8178,10 +8197,10 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         &mut self,
         pid: ProcessId,
         filter: Value,
-        data: &LispString,
+        data: LispString,
     ) -> Result<(), Flow> {
         let proc_val = Value::make_process(pid);
-        let output_val = Value::heap_string(data.clone());
+        let output_val = Value::heap_string(data);
         match ProcessFilterDispatch::from_lisp(filter) {
             ProcessFilterDispatch::Default => {
                 let callback = Value::symbol(DEFAULT_PROCESS_FILTER_SYMBOL);
@@ -8442,7 +8461,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     .get(id)
                     .map(|p| p.filter)
                     .unwrap_or(Value::NIL);
-                self.run_process_filter_callback(id, filter, &decoded.run.text)?;
+                self.run_process_filter_callback(id, filter, decoded.run.text)?;
             }
             return Ok(ProcessOutputRead::Eof);
         }
@@ -8569,7 +8588,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                             .get(stderr_id)
                             .map(|p| p.filter)
                             .unwrap_or(Value::NIL);
-                        self.run_process_filter_callback(stderr_id, filter, &data)?;
+                        self.run_process_filter_callback(stderr_id, filter, data)?;
                     }
                     if policy == ProcessOutputReadPolicy::Live {
                         return Ok(outcome);
@@ -8611,7 +8630,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         .get(pid)
                         .map(|p| p.filter)
                         .unwrap_or(Value::NIL);
-                    self.run_process_filter_callback(pid, filter, &data)?;
+                    self.run_process_filter_callback(pid, filter, data)?;
                 }
                 if bytes_read > 0 {
                     ProcessOutputDrainDisposition::Output
@@ -9377,7 +9396,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                             .get(pid)
                             .map(|p| p.filter)
                             .unwrap_or(Value::NIL);
-                        self.run_process_filter_callback(pid, filter, &data)?;
+                        self.run_process_filter_callback(pid, filter, data)?;
                     }
                 }
                 ProcessOutputRead::Eof if is_stderr_pipe => {
@@ -9644,7 +9663,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     .get(pid)
                     .map(|p| p.filter)
                     .unwrap_or(Value::NIL);
-                self.run_process_filter_callback(pid, filter, &data)?;
+                self.run_process_filter_callback(pid, filter, data)?;
             }
         }
         if let Some(proc) = self.processes_mut().get_mut(pid)

@@ -2683,6 +2683,31 @@ fn abandoned_charset_plist_slot_is_not_a_gc_root() {
     assert!(roots.iter().any(|value| value.as_int() == Some(KEPT)));
 }
 
+#[test]
+fn decode_eol_bytes_in_place_matches_allocating_converter() {
+    use crate::emacs_core::coding::ResolvedEol;
+    let cases: &[&[u8]] = &[
+        b"",
+        b"plain ascii without cr",
+        b"\r",
+        b"\n",
+        b"\r\n",
+        b"\r\r\n",
+        b"\r\n\r\n",
+        b"a\r\nb\rc\r\n\r",
+        b"\ra\r\nb\r\r\nc\r",
+        b"caf\xc3\xa9\r\n\xe3\x81\x82\r\n",
+    ];
+    for eol in [ResolvedEol::Unix, ResolvedEol::Dos, ResolvedEol::Mac] {
+        for &input in cases {
+            let expected = decode_eol_bytes(input, eol);
+            let mut in_place = input.to_vec();
+            decode_eol_bytes_in_place(&mut in_place, eol);
+            assert_eq!(in_place, expected, "eol={eol:?} input={input:?}");
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "gdh_utf8_unibyte.rs"]
 mod gdh_utf8_unibyte;

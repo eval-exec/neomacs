@@ -944,6 +944,9 @@ pub struct LiveProcessIo {
     /// explicit `:stderr`, this is one shared pipe carrying both stdout and
     /// stderr in the child's write order, as in GNU Emacs.
     child_stdout: Option<PollRegistration<ChildOutputReader>>,
+    /// True once `child_stdout`'s fd has been placed in `O_NONBLOCK` mode, so
+    /// subsequent reads skip redundant `fcntl(F_GETFL/F_SETFL)` syscalls.
+    child_stdout_nonblocking: bool,
     /// Writable endpoint owned by a `make-pipe-process` connection.
     module_pipe_writer: Option<os_pipe::PipeWriter>,
     /// Real process that received this pipe's writer as its `:stderr`.
@@ -1233,6 +1236,12 @@ pub struct ProcessIdState {
     /// Finish compares it: a cycle that completed settles the taken records,
     /// while an abandoned cycle puts their forced-major debt back.
     pub armed_retired_generation: Option<usize>,
+    /// Reusable read buffer for `read_*_output_result` so each async read
+    /// avoids allocating and zero-filling a fresh `read-process-output-max`
+    /// buffer (64 KiB by default, up to 1 MiB+). Kept inside boxed
+    /// `ProcessIdState` so `ProcessManager`'s pinned size in `Context` is
+    /// unchanged.
+    pub read_scratch: Vec<u8>,
 }
 
 /// Opaque, thread-safe handle a cross-thread producer uses to wake the blocked
@@ -2661,15 +2670,25 @@ impl LiveProcessIo {
         self.child_stdout.as_mut()
     }
 
+    pub fn is_child_stdout_nonblocking(&self) -> bool {
+        self.child_stdout_nonblocking
+    }
+
+    pub fn mark_child_stdout_nonblocking(&mut self) {
+        self.child_stdout_nonblocking = true;
+    }
+
     /// Replace `child_stdout`, automatically unregistering any previously
     /// registered reader on drop.
     pub fn set_child_stdout(&mut self, stdout: Option<ChildOutputReader>) {
         self.child_stdout = stdout.map(PollRegistration::new);
+        self.child_stdout_nonblocking = false;
     }
 
     /// Take `child_stdout`, unregistering it from its poller before returning
     /// the inner reader.
     pub fn take_child_stdout(&mut self) -> Option<ChildOutputReader> {
+        self.child_stdout_nonblocking = false;
         self.child_stdout.take().map(PollRegistration::into_inner)
     }
 
@@ -3496,6 +3515,7 @@ impl ProcessManager {
                 armed_retired_processes: std::collections::HashSet::new(),
                 must_force_major: std::collections::HashSet::new(),
                 armed_retired_generation: None,
+                read_scratch: Vec::new(),
             }),
             process_tick: 0,
             default_read_config: ProcessReadConfig::default(),
@@ -3938,6 +3958,15 @@ impl ProcessManager {
     /// Get a mutable process by id.
     pub fn get_mut(&mut self, id: ProcessId) -> Option<&mut Process> {
         self.processes.get_mut(&id)
+    }
+
+    /// Disjointly borrow a process record and the manager's reusable read
+    /// scratch buffer so async reads avoid per-read `readmax` allocations.
+    pub fn process_and_read_scratch_mut(
+        &mut self,
+        id: ProcessId,
+    ) -> Option<(&mut Process, &mut Vec<u8>)> {
+        Some((self.processes.get_mut(&id)?, &mut self.ids.read_scratch))
     }
 
     /// Read the Lisp-visible status at one of the enumerated holes, without
