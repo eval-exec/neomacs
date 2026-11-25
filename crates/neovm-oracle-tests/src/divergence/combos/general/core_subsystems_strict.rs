@@ -2204,6 +2204,9 @@ fn div_core_divergence_surface_quit_process_sentinel_message() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect =
         expect_test::expect![[r#""OK (signal 3 ((\"quit (core dumped)\\n\" signal 3)))""#]];
+    // Use a direct long-running child so SIGQUIT cannot race a shell installing
+    // SIG_IGN for SIGQUIT during startup (GNU bash sets SIGQUIT to SIG_IGN and
+    // never execs an external command for the `read` builtin).
     // Divergence surfaced 2026-06-24:
     // GNU Emacs: OK (signal 3 (("quit (core dumped)\n" signal 3)))
     // Neomacs:   OK (signal 3 (("quit\n" signal 3)))
@@ -2212,7 +2215,7 @@ fn div_core_divergence_surface_quit_process_sentinel_message() {
 (let ((log nil))
   (let ((proc (make-process
                :name "probe-quit-sent"
-               :command '("/bin/sh" "-c" "read line")
+               :command '("sleep" "30")
                :connection-type 'pipe
                :sentinel (lambda (p e)
                            (push (list e
@@ -2221,12 +2224,6 @@ fn div_core_divergence_surface_quit_process_sentinel_message() {
                                  log)))))
     (set-process-query-on-exit-flag proc nil)
     (quit-process proc)
-    ;; The subject is the settled sentinel record.  The old 20 x 0.05s
-    ;; ceiling was itself the flake: measured at load 46, BOTH editors
-    ;; returned (run 0 nil) at the same rate when the child had not been
-    ;; harvested inside one second, so this is a wall-clock bound, not a
-    ;; status-publication divergence.  GNU's own observation then runs the
-    ;; sentinel, exactly as the settle helper does.
     (neovm--oracle-settle-process proc 600)
     (let ((j 0))
       (while (and (null log) (< j 20))

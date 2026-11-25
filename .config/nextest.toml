@@ -179,17 +179,15 @@ slow-timeout = { period = "240s", terminate-after = 1 }
 
 # A handful of subprocess probes are timing sensitive rather than divergent:
 # `process_attributes_running_child` reads `process-running-child-p' while a
-# 0.2s child is alive, `quit_process_sentinel_message' waits (a bounded
-# `accept-process-output' budget) for a SIGQUIT sentinel to fire, and the
-# process-filter/coding probes below read output a child writes immediately
-# after start (`accept-process-output` returns as soon as any bytes arrive, so
-# a starved run can observe a partial or empty buffer). A fully parallel run
-# can steal enough scheduling latency to miss the window. Run them isolated
-# (adequate latency), like the heavy families, rather than reshaping the
-# probes (a longer-lived child would hold the process pipe open and block the
-# eval).
+# 0.2s child is alive, and the process-filter/coding probes below read output a
+# child writes immediately after start (`accept-process-output` returns as soon
+# as any bytes arrive, so a starved run can observe a partial or empty buffer).
+# A fully parallel run can steal enough scheduling latency to miss the window.
+# Run them isolated (adequate latency), like the heavy families, rather than
+# reshaping the probes (a longer-lived child would hold the process pipe open
+# and block the eval).
 [[profile.default.overrides]]
-filter = 'package(neovm-oracle-tests) and (test(process_attributes_running_child) or test(quit_process_sentinel_message) or test(div_cx45_process_env_coding_narrow_output_filter_hash_mega) or test(div_cx428_process_filter_insert) or test(proc_decode_search_replace) or test(div_cx33_process_kill_query_off_then_kill_buffer) or test(div_core_divergence_surface_process_attributes_running_child_combo) or test(divergence_process_output_to_buffer))'
+filter = 'package(neovm-oracle-tests) and (test(process_attributes_running_child) or test(div_cx45_process_env_coding_narrow_output_filter_hash_mega) or test(div_cx428_process_filter_insert) or test(proc_decode_search_replace) or test(div_cx33_process_kill_query_off_then_kill_buffer) or test(div_core_divergence_surface_process_attributes_running_child_combo) or test(divergence_process_output_to_buffer))'
 threads-required = "num-test-threads"
 
 # The generative window-tree property replays whole operation SEQUENCES in both
