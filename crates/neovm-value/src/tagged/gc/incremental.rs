@@ -118,7 +118,7 @@ impl TaggedHeap {
     ) {
         self.assert_no_owner_cons_reserves();
         assert!(
-            !self.concurrent_mark_running,
+            !self.has_unfinished_concurrent_mark(),
             "sweep publication requires an explicit successful marker finish"
         );
         // Before anything else: the free list is reset below, and a
@@ -322,7 +322,7 @@ impl TaggedHeap {
     pub unsafe fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
         self.assert_no_owner_cons_reserves();
         assert!(
-            !self.concurrent_mark_running,
+            !self.has_unfinished_concurrent_mark(),
             "sweeping requires an explicit successful marker finish"
         );
         // Collector code never sees an open allocation region
@@ -536,6 +536,10 @@ impl TaggedHeap {
     /// deltas; GEN0 retains its bitmap recount. Both account for allocate-black
     /// births, fix allocation counters, and emit the completed cycle trace.
     pub(super) fn finish_incremental_sweep(&mut self) {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "finish_incremental_sweep cannot run while a concurrent mark is unfinished"
+        );
         // I1 (`sweep_in_progress` clears below) and I2 (the recount).
         self.close_alloc_regions();
         if self.generational.enabled {
@@ -649,7 +653,7 @@ impl TaggedHeap {
         // the symbol is interned is a sweep-time question (`is_value_marked`),
         // not a mark-time one: asking `is_canonical_id` here cost an
         // epoch-checked thread-local lookup per symbol reference visited.
-        if self.concurrent_mark_running && self.generational.major_in_progress {
+        if self.concurrent_mark_running() && self.generational.major_in_progress {
             self.current_mutator_gc_mut()
                 .major_symbol_preimages
                 .push(id);
@@ -1249,6 +1253,10 @@ impl TaggedHeap {
 
     /// Sweep unmarked cons cells back to free lists.
     pub(super) fn sweep_cons(&mut self) -> usize {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "sweep_cons cannot reclaim while a concurrent mark is unfinished"
+        );
         if self.generational.enabled && self.is_minor_collection() {
             return self.sweep_minor_cons();
         }
@@ -1477,6 +1485,10 @@ impl TaggedHeap {
     /// Actual releases retain the memo's conditional O(all blocks) vector/index/
     /// card rebuild. All work cursors must be consumed before compaction.
     fn release_empty_cons_candidates(&mut self, candidates: Vec<ConsBlockBase>) -> usize {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "release_empty_cons_candidates cannot free blocks while a concurrent mark is unfinished"
+        );
         debug_assert!(
             !self.alloc_regions_open(),
             "releasing blocks under a region"
@@ -1554,6 +1566,10 @@ impl TaggedHeap {
     /// Call only after a complete eager or deferred sweep, when mark bits are
     /// the authoritative live-cell set and no sweep cursor remains active.
     pub(super) fn release_empty_cons_blocks(&mut self) -> usize {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "release_empty_cons_blocks cannot free blocks while a concurrent mark is unfinished"
+        );
         debug_assert!(
             !self.alloc_regions_open(),
             "releasing blocks under a region"
@@ -1641,6 +1657,10 @@ impl TaggedHeap {
     /// Release every completely empty young arena page after a full sweep.
     /// Per-class indices and partial chains are rebuilt inside each arena.
     pub(super) fn release_empty_object_pages(&mut self) -> usize {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "release_empty_object_pages cannot free pages while a concurrent mark is unfinished"
+        );
         debug_assert!(!self.alloc_regions_open(), "releasing pages under a region");
         self.float_arena.release_empty_pages()
             + self.string_arena.release_empty_pages()
@@ -1656,6 +1676,10 @@ impl TaggedHeap {
 
     /// Sweep non-cons objects: walk intrusive list, free unmarked, rebuild list.
     pub(super) fn sweep_objects(&mut self) -> usize {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "sweep_objects cannot reclaim while a concurrent mark is unfinished"
+        );
         // Collector code never sees an open allocation region
         // (`alloc_region.rs`, invariant I2).
         self.close_alloc_regions();
@@ -1733,6 +1757,10 @@ impl TaggedHeap {
     ///
     /// Returns `(survivor bytes, slots freed)` summed over the classes.
     pub(super) fn sweep_arena_pages_ranges(&mut self, ranges: ArenaSweepRanges) -> (usize, usize) {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "sweep_arena_pages_ranges cannot sweep while a concurrent mark is unfinished"
+        );
         if self.generational.enabled {
             self.sweep_arena_pages_in_generation::<true>(ranges)
         } else {

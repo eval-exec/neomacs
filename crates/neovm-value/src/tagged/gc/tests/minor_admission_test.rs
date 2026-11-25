@@ -68,7 +68,7 @@ impl CollectionSnapshot {
             cycle: heap.generational.cycle,
             major: heap.generational.major_in_progress,
             marking: heap.mark_in_progress,
-            concurrent: heap.concurrent_mark_running,
+            concurrent: heap.concurrent_mark_running(),
             sweeping: heap.sweep_in_progress,
             parity: heap.mark_parity,
             promo: heap
@@ -311,7 +311,7 @@ fn minor_rejects_joined_major_without_changing_collection_state() {
             heap.generational.cycle,
             heap.generational.major_in_progress,
             heap.mark_in_progress,
-            heap.concurrent_mark_running,
+            heap.concurrent_mark_running(),
             heap.mark_parity,
         );
         assert!(heap.concurrent_mark_running());
@@ -330,7 +330,7 @@ fn minor_rejects_joined_major_without_changing_collection_state() {
                 heap.generational.cycle,
                 heap.generational.major_in_progress,
                 heap.mark_in_progress,
-                heap.concurrent_mark_running,
+                heap.concurrent_mark_running(),
                 heap.mark_parity,
             ),
             phase
@@ -471,7 +471,7 @@ fn minor_and_major_admissions_reject_satb_residuals_before_collection_mutations(
             let orphan = heap.alloc_float(317.5);
             inject_satb_preimage(&mut heap, source, orphan);
             assert!(!heap.mark_in_progress && !heap.generational.major_in_progress);
-            assert!(!heap.concurrent_mark_running && !heap.sweep_in_progress);
+            assert!(!heap.concurrent_mark_running() && !heap.sweep_in_progress);
             assert!(heap.gray_queue.is_empty());
             let before = CollectionSnapshot::capture(&heap, &[orphan]);
             let words = before.satb_published.as_ref().unwrap().len()

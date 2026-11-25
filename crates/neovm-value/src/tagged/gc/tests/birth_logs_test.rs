@@ -49,13 +49,15 @@ impl<'a> BirthPhase<'a> {
     fn new(heap: &'a mut TaggedHeap, concurrent: bool) -> Self {
         heap.concurrent_begin();
         heap.generational.major_in_progress = heap.generational.enabled;
-        heap.concurrent_mark_running = concurrent;
+        // SAFETY: synthetic serial fixture, no live worker.
+        unsafe { heap.concurrent_mark_running.set(concurrent) };
         Self(heap)
     }
 
     fn stop(&mut self) {
         self.0.close_alloc_regions();
-        self.0.concurrent_mark_running = false;
+        // SAFETY: synthetic serial fixture cleanup.
+        unsafe { self.0.concurrent_mark_running.set(false) };
     }
 }
 

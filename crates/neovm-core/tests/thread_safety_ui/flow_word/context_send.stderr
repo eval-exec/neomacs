@@ -304,8 +304,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `NonNull<[Op]>: Send`
            which is required by `neovm_core::Context: Send`
-           `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: std::marker::Sync`
-           which is required by `neovm_core::Context: Send`
            `Cell<usize>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `*mut u8: Send`
@@ -319,6 +317,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*mut StringObj: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<MarkerObj>: Send`
+           which is required by `neovm_core::Context: Send`
+           `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: std::marker::Sync`
            which is required by `neovm_core::Context: Send`
            `Rc<Cell<Vec<TaggedValue>>>: Send`
            which is required by `neovm_core::Context: Send`

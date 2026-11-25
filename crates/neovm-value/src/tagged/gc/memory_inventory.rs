@@ -157,7 +157,7 @@ fn add(dst: &mut usize, bytes: usize) {
 /// finished, and MUST be false after promotion or sweep reset final marks.
 pub(super) fn snapshot(heap: &TaggedHeap, marks_final: bool) -> MemoryInventory {
     debug_assert!(!heap.alloc_regions_open());
-    debug_assert!(!heap.concurrent_mark_running);
+    debug_assert!(!heap.concurrent_mark_running());
     let full_marks = marks_final && !heap.is_minor_collection();
     let mut out = MemoryInventory::default();
     if marks_final {

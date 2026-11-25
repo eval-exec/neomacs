@@ -34,7 +34,7 @@ impl CollectorQuiescence {
         // Do not mint stopped SATB access while a worker can still read this
         // epoch, or mutate any collector/young state before admission succeeds.
         if heap.has_owner_cons_reserves()
-            || heap.concurrent_mark_running
+            || heap.has_unfinished_concurrent_mark()
             || heap.mark_in_progress
             || heap.generational.major_in_progress
             || heap.sweep_in_progress
@@ -476,7 +476,8 @@ impl TaggedHeap {
         if self.facade_mark_is_excluded() {
             return Err(ConcurrentMarkAdmissionError::Excluded(self.heap_identity()));
         }
-        if !self.mark_in_progress || self.concurrent_mark_running || self.sweep_in_progress {
+        if !self.mark_in_progress || self.has_unfinished_concurrent_mark() || self.sweep_in_progress
+        {
             return Err(ConcurrentMarkAdmissionError::NotStarted);
         }
         Ok(())
@@ -518,8 +519,9 @@ impl TaggedHeap {
         if self.gc_locks_poisoned() {
             return Err(CollectorQuiescenceError::PoisonedCollectorState);
         }
-        let had_cycle =
-            self.concurrent_mark_running || self.mark_in_progress || self.sweep_in_progress;
+        let had_cycle = self.has_unfinished_concurrent_mark()
+            || self.mark_in_progress
+            || self.sweep_in_progress;
         if self.first_cycle_concurrent && !had_cycle {
             // Dropping an armed but unbegun permit has traced nothing; it
             // cannot turn the mapped image permanent by minting quiescence.
@@ -574,7 +576,7 @@ impl TaggedHeap {
         }
         self.finish_first_partition_cycle();
         self.close_alloc_regions();
-        if self.concurrent_mark_running
+        if self.has_unfinished_concurrent_mark()
             || self.mark_in_progress
             || self.sweep_in_progress
             || self.generational.major_in_progress
@@ -604,7 +606,6 @@ impl TaggedHeap {
             || self.staged_mapped_cons_scan.is_some()
             || self.staged_mapped_veclikes.is_some()
             || self.concurrent_hash_snapshot().is_some()
-            || self.gc_exited.is_some()
             || !self.retired_vector_buffers.is_empty()
         {
             return Err(CollectorQuiescenceError::PendingSnapshot);
@@ -732,7 +733,7 @@ mod tests {
         ));
         assert_eq!(heap.mark_parity, parity);
         assert_eq!(heap.handshake.start_count, starts);
-        assert!(!heap.mark_in_progress && !heap.concurrent_mark_running);
+        assert!(!heap.mark_in_progress && !heap.concurrent_mark_running());
         assert!(!heap.first_cycle_concurrent && !heap.dump_blackened);
         assert!(heap.pending_obarray_scan.is_none());
         assert!(heap.staged_mapped_cons_scan.is_none());
@@ -767,7 +768,7 @@ mod tests {
         assert!(
             matches!(capture.launch(), Err(ConcurrentMarkAdmissionError::ForeignHeap { expected, .. }) if expected == admitted_identity)
         );
-        assert!(!heap.concurrent_mark_running);
+        assert!(!heap.concurrent_mark_running());
         assert_eq!(heap.handshake.start_count, 0);
         assert_eq!(foreign.heap_identity(), admitted_identity);
         // SAFETY: the swapped-out admitted heap is still exclusively owned;
@@ -814,7 +815,7 @@ mod tests {
             capture.heap_mut().seed_root(root);
             drop(capture);
             assert!(heap.mark_in_progress);
-            assert!(!heap.concurrent_mark_running);
+            assert!(!heap.concurrent_mark_running());
             assert!(!heap.gray_queue.is_empty());
             let mut reseeded = false;
             // SAFETY: root is this heap's complete external root set. The
@@ -829,7 +830,7 @@ mod tests {
             assert!(reseeded);
             let exclusion = idle.exclude_concurrent_mark().unwrap();
             assert!(!heap.mark_in_progress && !heap.sweep_in_progress);
-            assert!(!heap.concurrent_mark_running);
+            assert!(!heap.concurrent_mark_running());
             assert!(heap.gray_queue.is_empty());
             assert!(!heap.owns_non_cons_object(garbage_address));
             assert!(heap.owns_non_cons_object(child.as_float_ptr().unwrap().cast::<u8>()));
@@ -847,7 +848,7 @@ mod tests {
         capture.heap_mut().seed_root(root);
         capture.launch().unwrap();
         heap.finish_concurrent_mark().unwrap();
-        assert!(!heap.concurrent_mark_running);
+        assert!(!heap.concurrent_mark_running());
         assert!(heap.mark_in_progress);
         assert!(matches!(
             admit(&mut heap),

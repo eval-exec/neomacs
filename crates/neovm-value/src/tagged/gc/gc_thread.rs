@@ -189,16 +189,33 @@ impl ConcurrentClaimJob {
     }
 }
 
-/// Owned worker result, sent only after the last heap/snapshot read.
-/// Headers remain live and non-moving until the coordinator joins the worker;
-/// addresses are never dereferenced after the old/young sweep starts.
-#[derive(Debug, Default)]
-pub(super) struct ConcurrentMarkResult {
-    /// Marker-owned work that the stopped mutators trace after receiving this result.
-    /// Only this worker appends; the completion channel transfers ownership.
-    pub(super) deferred: Vec<MarkWord>,
-    pub(super) promo: Vec<usize>,
-    pub(super) symbols: Vec<SymId>,
+include!("concurrent_mark_result.rs");
+
+#[cfg(any(test, feature = "test-support"))]
+impl ConcurrentMarkResult {
+    /// Safe empty result bound to `heap` (contains no deferred words or promo
+    /// pointers) for serial test fixtures that exercise completion channels.
+    pub(super) fn empty_for_heap(heap: HeapIdentity) -> Self {
+        Self {
+            heap,
+            deferred: Vec::new(),
+            promo: Vec::new(),
+            symbols: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn deferred_for_test(&self) -> &[MarkWord] {
+        &self.deferred
+    }
+
+    pub(super) fn promo_for_test(&self) -> &[usize] {
+        &self.promo
+    }
+
+    pub(super) fn symbols_for_test(&self) -> &[SymId] {
+        &self.symbols
+    }
 }
 
 /// Enabled-only claim state, boxed together with the original job at launch.
@@ -254,7 +271,9 @@ impl WorkerSymbolMarks for SymbolMarkBits {
 /// Job-local logs. No worker writes to collector or mutator symbol state.
 #[derive(Default)]
 struct WorkerMarkLogs<S: WorkerSymbolMarks = FxHashSet<SymId>> {
-    result: ConcurrentMarkResult,
+    deferred: Vec<MarkWord>,
+    promo: Vec<usize>,
+    symbols: Vec<SymId>,
     seen_symbols: S,
 }
 
@@ -263,7 +282,7 @@ type EnabledWorkerMarkLogs = WorkerMarkLogs<SymbolMarkBits>;
 impl<S: WorkerSymbolMarks> WorkerMarkLogs<S> {
     #[inline]
     fn note_symbol(&mut self, value: TaggedValue) -> bool {
-        self.seen_symbols.note(value, &mut self.result.symbols)
+        self.seen_symbols.note(value, &mut self.symbols)
     }
 
     /// Generation bytes do not change until this worker has exited.
@@ -272,7 +291,7 @@ impl<S: WorkerSymbolMarks> WorkerMarkLogs<S> {
     /// `header` must point to a live, initialized GC object header.
     unsafe fn note_promotion<const MAJOR: bool>(&mut self, header: *const GcHeader) {
         if MAJOR && !unsafe { (*header).tenured } {
-            self.result.promo.push(header as usize);
+            self.promo.push(header as usize);
         }
     }
 
@@ -395,7 +414,7 @@ impl Collector {
         let (requests, rx) = std::sync::mpsc::channel::<GcRequest>();
         let thread = match std::thread::Builder::new()
             .name(COLLECTOR_THREAD_NAME.to_owned())
-            .spawn(move || serve_gc_requests(rx))
+            .spawn(move || serve_gc_requests(heap, rx))
         {
             Ok(thread) => thread,
             Err(error) => return CollectorStart::Unavailable(error),
@@ -454,14 +473,14 @@ impl CollectorHandle {
 
 /// The collector's loop: drain requests until the heap retires (its sender
 /// is dropped).
-fn serve_gc_requests(rx: std::sync::mpsc::Receiver<GcRequest>) {
+fn serve_gc_requests(heap: HeapIdentity, rx: std::sync::mpsc::Receiver<GcRequest>) {
     while let Ok(req) = rx.recv() {
-        run_gc_request(req);
+        run_gc_request(heap, req);
     }
 }
 
 /// One implementation of the request protocol for both possible executors.
-fn run_gc_request(req: GcRequest) {
+fn run_gc_request(heap: HeapIdentity, req: GcRequest) {
     match req {
         GcRequest::MarkAll(HeapPtr(p), done) => {
             // SAFETY: the requester either executes this directly with
@@ -472,13 +491,13 @@ fn run_gc_request(req: GcRequest) {
         }
         GcRequest::ConcurrentMark(job) => {
             // SAFETY: `send_to_collector`'s caller contract guarantees `job`
-            // came from a world-stopped start handshake on a live heap whose
+            // came from a world-stopped start handshake on `heap`, whose
             // storage remains retained until join.
-            unsafe { run_concurrent_mark(job) };
+            unsafe { run_concurrent_mark(heap, job) };
         }
         GcRequest::ConcurrentMarkEnabled(job) => {
             // SAFETY: same `send_to_collector` caller contract as above.
-            unsafe { run_concurrent_mark_enabled(*job) };
+            unsafe { run_concurrent_mark_enabled(heap, *job) };
         }
     }
 }
@@ -490,13 +509,13 @@ fn run_gc_request(req: GcRequest) {
 /// or dedicated-thread identity. Keep the active SATB window until normal join.
 #[cold]
 #[inline(never)]
-fn run_gc_request_inline(request: GcRequest) {
+fn run_gc_request_inline(heap: HeapIdentity, request: GcRequest) {
     let done = match &request {
         GcRequest::MarkAll(_, _) => None,
         GcRequest::ConcurrentMark(job) => Some(prepare_inline_mark(job)),
         GcRequest::ConcurrentMarkEnabled(job) => Some(prepare_inline_mark(&job.job)),
     };
-    run_gc_request(request);
+    run_gc_request(heap, request);
     if let Some(done) = done {
         // A quantum-stop bypasses the worker's drained store. Its owned result
         // is now queued, so safe-point polling must allow termination to join
@@ -559,7 +578,7 @@ pub(super) unsafe fn send_to_collector(heap: HeapIdentity, request: GcRequest) {
         }
     }
     // No registry lock spans heap marking, callbacks, or completion sends.
-    run_gc_request_inline(request);
+    run_gc_request_inline(heap, request);
 }
 
 /// Remove `heap`'s collector at heap teardown and close its request channel:
@@ -1289,7 +1308,7 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
                 logs.note_symbol(child);
             } else if seen_symbols.insert(child.bits()) {
                 // SAFETY: `child` is a bare symbol scanned in this active cycle.
-                logs.result.deferred.push(unsafe { MarkWord::of(child) });
+                logs.deferred.push(unsafe { MarkWord::of(child) });
             }
         } else if child.is_heap_object()
             && !concurrent_try_mark_owned_with_symbols::<MAJOR, SYMBOLS, E>(
@@ -1301,7 +1320,7 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
             )
         {
             // SAFETY: `child` stays live through this cycle until termination.
-            logs.result.deferred.push(unsafe { MarkWord::of(child) });
+            logs.deferred.push(unsafe { MarkWord::of(child) });
         }
     };
     // SAFETY: stopped-start capture admitted these same-heap initialized
@@ -1315,7 +1334,7 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
             MappedVeclikeScanItem::Deferred(owner) => {
                 // Direct push bypasses the dispatcher, so its first-cycle
                 // dump-child shortcut cannot discard termination-only owners.
-                logs.result.deferred.push(owner);
+                logs.deferred.push(owner);
             }
         })
     };
@@ -1328,13 +1347,13 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
 /// heap whose blocks, pages, and snapshots remain retained until join, and all
 /// words in `job.gray` and `job.satb` must belong to that heap and stay live
 /// through start-of-cycle roots, marks, and barriers.
-pub(super) unsafe fn run_concurrent_mark(job: ConcurrentMarkJob) {
+pub(super) unsafe fn run_concurrent_mark(heap: HeapIdentity, job: ConcurrentMarkJob) {
     if job.claims.major {
         // SAFETY: upheld by caller contract.
-        unsafe { run_concurrent_mark_impl::<true, true, LegacyClaims>(job, LegacyClaims) };
+        unsafe { run_concurrent_mark_impl::<true, true, LegacyClaims>(heap, job, LegacyClaims) };
     } else {
         // SAFETY: upheld by caller contract.
-        unsafe { run_concurrent_mark_impl::<false, false, LegacyClaims>(job, LegacyClaims) };
+        unsafe { run_concurrent_mark_impl::<false, false, LegacyClaims>(heap, job, LegacyClaims) };
     }
 }
 
@@ -1344,15 +1363,20 @@ pub(super) unsafe fn run_concurrent_mark(job: ConcurrentMarkJob) {
 /// Same world-stopped start-handshake liveness and retention contract as
 /// [`run_concurrent_mark`], including the enabled leaf/hash snapshots in
 /// `job.claims`.
-pub(super) unsafe fn run_concurrent_mark_enabled(job: EnabledConcurrentMarkJob) {
+pub(super) unsafe fn run_concurrent_mark_enabled(
+    heap: HeapIdentity,
+    job: EnabledConcurrentMarkJob,
+) {
     // ON requires transitive bare-symbol handoff even in GEN0. This election
     // happens once, outside every classification and child-routing loop.
     if job.job.claims.major {
         // SAFETY: upheld by caller contract.
-        unsafe { run_concurrent_mark_impl::<true, true, EnabledClaims>(job.job, job.claims) };
+        unsafe { run_concurrent_mark_impl::<true, true, EnabledClaims>(heap, job.job, job.claims) };
     } else {
         // SAFETY: upheld by caller contract.
-        unsafe { run_concurrent_mark_impl::<false, true, EnabledClaims>(job.job, job.claims) };
+        unsafe {
+            run_concurrent_mark_impl::<false, true, EnabledClaims>(heap, job.job, job.claims)
+        };
     }
 }
 
@@ -1376,7 +1400,7 @@ fn route_snapshot_child<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtensio
                 logs,
             ) {
                 // SAFETY: `child` stays live through this cycle until termination.
-                logs.result.deferred.push(unsafe { MarkWord::of(child) });
+                logs.deferred.push(unsafe { MarkWord::of(child) });
             }
         } else if SYMBOLS {
             logs.note_symbol(child);
@@ -1397,12 +1421,13 @@ fn route_snapshot_child<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtensio
             logs,
         ) {
             // SAFETY: `child` stays live through this cycle until termination.
-            logs.result.deferred.push(unsafe { MarkWord::of(child) });
+            logs.deferred.push(unsafe { MarkWord::of(child) });
         }
     }
 }
 
 unsafe fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtension>(
+    heap: HeapIdentity,
     mut job: ConcurrentMarkJob,
     extension: E,
 ) {
@@ -1527,7 +1552,7 @@ unsafe fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: Cl
                             logs.note_symbol(child);
                         } else if seen_symbols.insert(child.bits()) {
                             // SAFETY: `child` is a bare symbol scanned in this active cycle.
-                            logs.result.deferred.push(unsafe { MarkWord::of(child) });
+                            logs.deferred.push(unsafe { MarkWord::of(child) });
                         }
                     } else if child.is_heap_object() {
                         // Same filter as `mark_or_push_child`: immediates
@@ -1542,7 +1567,7 @@ unsafe fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: Cl
                             &mut logs,
                         ) {
                             // SAFETY: `child` stays live through this cycle until termination.
-                            logs.result.deferred.push(unsafe { MarkWord::of(child) });
+                            logs.deferred.push(unsafe { MarkWord::of(child) });
                         }
                     }
                 }
@@ -1589,7 +1614,7 @@ unsafe fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: Cl
                     // Mapped (non-dump) or new-block cons — let the mutator's
                     // termination mark it through the full `mark_value` path.
                     // SAFETY: `val` stays live through this cycle until termination.
-                    logs.result.deferred.push(unsafe { MarkWord::of(val) });
+                    logs.deferred.push(unsafe { MarkWord::of(val) });
                     continue;
                 }
                 if unsafe { atomic_mark_owned_cons_ptr(ptr) } {
@@ -1620,7 +1645,7 @@ unsafe fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: Cl
                         }
                         if !job.claims.pages.contains(ChunkClass::Cons, caddr) {
                             // SAFETY: `cdr` stays live through this cycle until termination.
-                            logs.result.deferred.push(unsafe { MarkWord::of(cdr) });
+                            logs.deferred.push(unsafe { MarkWord::of(cdr) });
                             break;
                         }
                         if !unsafe { atomic_mark_owned_cons_ptr(cptr) } {
@@ -1648,7 +1673,7 @@ unsafe fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: Cl
                     continue;
                 }
                 // SAFETY: `val` stays live through this cycle until termination.
-                logs.result.deferred.push(unsafe { MarkWord::of(val) });
+                logs.deferred.push(unsafe { MarkWord::of(val) });
             } else if <E::Symbols as WorkerSymbolMarks>::ENABLED && SYMBOLS {
                 logs.note_symbol(val);
             }
@@ -1693,11 +1718,16 @@ unsafe fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: Cl
     // handoff; the termination fold routes both through the STW `mark_value`
     // drain. Empty on the normal (idle-stop) path.
     if !job.gray.is_empty() {
-        logs.result.deferred.extend(job.gray.drain_words());
+        logs.deferred.extend(job.gray.drain_words());
     }
     // Every exit, including either stop quantum, retains the owned logs.
     // No heap/snapshot access follows this handoff.
-    let _ = job.exited.send(logs.result);
+    // SAFETY: `logs.{deferred, promo, symbols}` were accumulated solely by
+    // this worker from live start-handshake state of `heap` and stay retained
+    // until `heap`'s coordinator joins on `job.exited`.
+    let result =
+        unsafe { ConcurrentMarkResult::from_parts(heap, logs.deferred, logs.promo, logs.symbols) };
+    let _ = job.exited.send(result);
 }
 
 /// Set the thread-local tagged heap pointer from the heap's provenance root.
@@ -1777,10 +1807,10 @@ unsafe fn sync_heap_tls_mirrors(root: *mut TaggedHeap) {
         TAGGED_HEAP_ID.with(|identity| identity.set(Some(heap.tagged_heap_identity())));
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.set(heap.write_tracking_mode()));
         TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.set(heap.partition_dump));
-        TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(heap.concurrent_mark_running));
+        TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(heap.concurrent_mark_running()));
         TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| {
             active.set(
-                heap.concurrent_mark_running
+                heap.concurrent_mark_running()
                     && heap.concurrent_claims()
                     && heap.concurrent_hash_snapshot().is_some(),
             );
@@ -2998,7 +3028,7 @@ mod worker_symbol_classification_tests {
         for value in ignored {
             assert!(!logs.note_symbol(value), "unexpected side mark: {value:?}");
         }
-        assert!(logs.result.symbols.is_empty());
+        assert!(logs.symbols.is_empty());
 
         let ids = [
             intern("u35-worker-symbol-classification"),
@@ -3018,7 +3048,7 @@ mod worker_symbol_classification_tests {
                 assert!(logs.note_symbol(value));
             }
         }
-        assert_eq!(logs.result.symbols, ids);
+        assert_eq!(logs.symbols, ids);
         assert_eq!(logs.seen_symbols.count(), ids.len());
 
         let mut gray = MarkStack::default();
@@ -3031,7 +3061,7 @@ mod worker_symbol_classification_tests {
             heap_values,
             "only real heap objects join gray"
         );
-        assert_eq!(logs.result.symbols, ids);
+        assert_eq!(logs.symbols, ids);
 
         let mut legacy: WorkerMarkLogs = WorkerMarkLogs::default();
         let mut legacy_gray = MarkStack::default();
@@ -3043,7 +3073,7 @@ mod worker_symbol_classification_tests {
         }
         // SAFETY: unit test owns these values on this thread.
         assert_eq!(unsafe { legacy_gray.into_values() }, heap_values);
-        assert!(legacy.result.symbols.is_empty());
+        assert!(legacy.symbols.is_empty());
         assert_eq!(legacy.seen_symbols.len(), 0);
 
         // A fresh worker/cycle has its own bits. Snapshot routing preserves
@@ -3061,7 +3091,7 @@ mod worker_symbol_classification_tests {
         // SAFETY: unit test owns these values on this thread.
         assert_eq!(unsafe { snapshot_gray.into_values() }, heap_values);
         assert_eq!(
-            next_cycle.result.symbols,
+            next_cycle.symbols,
             ids.into_iter().rev().collect::<Vec<_>>()
         );
         assert_eq!(next_cycle.seen_symbols.count(), ids.len());

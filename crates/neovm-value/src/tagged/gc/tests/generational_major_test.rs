@@ -672,11 +672,12 @@ impl Drop for FirstPartitionCancelCleanup {
     fn drop(&mut self) {
         // SAFETY: the stack heap was declared before this local guard.
         let heap = unsafe { &mut *self.0 };
-        if heap.concurrent_mark_running {
+        if heap.concurrent_mark_running() {
             heap.join_concurrent_mark();
         }
         heap.close_alloc_regions();
-        heap.concurrent_mark_running = false;
+        // SAFETY: worker (if any) was joined above; fixture cleanup.
+        unsafe { heap.concurrent_mark_running.set(false) };
         heap.mark_in_progress = false;
         heap.generational.major_in_progress = false;
         unsafe {

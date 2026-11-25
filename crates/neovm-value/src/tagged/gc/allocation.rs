@@ -35,7 +35,7 @@ impl TaggedHeap {
     /// snapshot). A property of the allocation region, decided at its grant.
     #[inline(always)]
     pub(super) fn allocates_black(&self) -> bool {
-        self.sweep_in_progress || self.concurrent_mark_running
+        self.sweep_in_progress || self.concurrent_mark_running()
     }
 
     /// GNU `Flist` (`src/alloc.c:2699`): `val = Qnil; while (nargs > 0) val =

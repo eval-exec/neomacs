@@ -62,12 +62,13 @@ struct MarkPhase {
 }
 impl MarkPhase {
     fn synthetic(heap: &mut TaggedHeap) -> Self {
-        assert!(!heap.concurrent_mark_running);
+        assert!(!heap.concurrent_mark_running());
         heap.concurrent_begin();
         // No worker owns gray in this fixture; make the owner's SATB scratch
         // satisfy its actual concurrent contract without fabricating a job.
         heap.gray_queue.clear();
-        heap.concurrent_mark_running = true;
+        // SAFETY: synthetic serial fixture, no live worker; mirrors set below.
+        unsafe { heap.concurrent_mark_running.set(true) };
         set_tagged_heap(heap);
         Self {
             heap,
@@ -85,7 +86,7 @@ impl MarkPhase {
         first_partition: bool,
         obarray: Option<&Obarray>,
     ) -> Self {
-        assert!(!heap.concurrent_mark_running);
+        assert!(!heap.concurrent_mark_running());
         // SAFETY: this fixture is the heap and matching obarray's sole writer.
         // No callback, safepoint or ownership handoff occurs through publication.
         let mut permit = unsafe { heap.permit_concurrent_mark() }.unwrap();
@@ -118,7 +119,8 @@ impl MarkPhase {
         assert!(self.kind == PhaseKind::Synthetic);
         assert_eq!(self.heap, heap as *mut TaggedHeap);
         heap.close_alloc_regions();
-        heap.concurrent_mark_running = false;
+        // SAFETY: synthetic serial fixture cleanup; mirrors updated below.
+        unsafe { heap.concurrent_mark_running.set(false) };
         set_tagged_heap(heap);
     }
 }
@@ -127,11 +129,12 @@ impl Drop for MarkPhase {
         // SAFETY: the heap is declared before this guard and remains at its
         // stable stack address until the guard is dropped on either path.
         let heap = unsafe { &mut *self.heap };
-        if self.kind == PhaseKind::Worker && heap.concurrent_mark_running {
+        if self.kind == PhaseKind::Worker && heap.concurrent_mark_running() {
             heap.join_concurrent_mark();
         }
         heap.close_alloc_regions();
-        heap.concurrent_mark_running = false;
+        // SAFETY: worker (if any) was joined above; fixture teardown.
+        unsafe { heap.concurrent_mark_running.set(false) };
         heap.mark_in_progress = false;
         heap.generational.major_in_progress = false;
         set_tagged_heap(heap);
@@ -445,7 +448,7 @@ fn major_symbol_join_merges_worker_and_mutator_results_after_publication_stops()
             assert!(heap.marked_symbols.contains(id(owner)));
         }
         heap.join_concurrent_mark();
-        assert!(!heap.concurrent_mark_running);
+        assert!(!heap.concurrent_mark_running());
         assert!(!concurrent_mark_active());
         assert!(
             heap.current_mutator_gc().major_symbol_preimages.is_empty(),

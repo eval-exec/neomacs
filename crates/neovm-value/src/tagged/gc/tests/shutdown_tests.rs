@@ -3,8 +3,12 @@ use std::sync::Arc;
 
 fn stalled_mark(heap: &mut TaggedHeap) -> std::sync::mpsc::Sender<ConcurrentMarkResult> {
     let (tx, rx) = std::sync::mpsc::channel();
-    heap.concurrent_mark_running = true;
-    heap.gc_exited = Some(rx);
+    let heap_id = heap.heap_identity();
+    // SAFETY: synthetic serial fixture, no live worker.
+    unsafe {
+        heap.concurrent_mark_running.set(true);
+        heap.gc_exited.install_for_heap(heap_id, rx);
+    }
     tx
 }
 
@@ -185,6 +189,7 @@ fn explicit_shutdown_reclaims_all_intrusive_owner_lists_once() {
 fn heap_drop_retains_stalled_marker_storage_without_waiting() {
     let before = LIVE_FLOAT_PAGES.load(Ordering::Relaxed);
     let mut heap = TaggedHeap::new();
+    let heap_id = heap.heap_identity();
     let float = heap.alloc_float(7.5);
     let vector = heap.alloc_vector(vec![float]);
     let cons = heap.alloc_cons(vector, TaggedValue::NIL);
@@ -205,7 +210,10 @@ fn heap_drop_retains_stalled_marker_storage_without_waiting() {
         let object = &*(vector.as_veclike_ptr().unwrap() as *const VectorObj);
         assert_eq!(object.data.as_slice(), &[float]);
     }
-    assert!(tx.send(ConcurrentMarkResult::default()).is_err());
+    assert!(
+        tx.send(ConcurrentMarkResult::empty_for_heap(heap_id))
+            .is_err()
+    );
 }
 
 #[test]
@@ -238,7 +246,8 @@ fn failed_marker_finish_preserves_active_state_and_storage() {
         let tx = stalled_mark(&mut heap);
         drop(tx);
         if matches!(failure, Failure::Missing) {
-            heap.gc_exited = None;
+            // SAFETY: synthetic serial fixture testing MissingCompletion.
+            unsafe { heap.gc_exited.clear_for_test() };
         }
         let error = heap.finish_concurrent_mark().unwrap_err();
         assert!(matches!(
@@ -266,7 +275,8 @@ fn poisoned_collector_queues_fail_finish_before_reclamation() {
     let mut heap = TaggedHeap::new();
     heap.alloc_float(11.5);
     let tx = stalled_mark(&mut heap);
-    tx.send(ConcurrentMarkResult::default()).unwrap();
+    tx.send(ConcurrentMarkResult::empty_for_heap(heap.heap_identity()))
+        .unwrap();
     heap.satb_handoff.poison_for_test();
     assert!(heap.satb_handoff.is_poisoned());
     assert!(matches!(
@@ -285,6 +295,7 @@ fn poisoned_collector_queues_fail_finish_before_reclamation() {
 #[test]
 fn abandoned_marker_retains_retired_vector_original() {
     let mut heap = TaggedHeap::new();
+    let heap_id = heap.heap_identity();
     let original = vec![TaggedValue::fixnum(21), TaggedValue::fixnum(22)];
     let vector = heap.alloc_vector(original.clone());
     let tx = stalled_mark(&mut heap);
@@ -299,7 +310,10 @@ fn abandoned_marker_retains_retired_vector_original() {
     // well as the current vector; this reader runs after owner destruction.
     let retained = unsafe { std::slice::from_raw_parts(before, original.len()) };
     assert_eq!(retained, original);
-    assert!(tx.send(ConcurrentMarkResult::default()).is_err());
+    assert!(
+        tx.send(ConcurrentMarkResult::empty_for_heap(heap_id))
+            .is_err()
+    );
 }
 
 #[test]
@@ -350,7 +364,8 @@ fn heap_drop_requests_real_marker_stop_and_retains_reachable_storage() {
     capture.heap_mut().set_pending_obarray_scan(snapshot);
     capture.heap_mut().seed_root(root);
     capture.launch().unwrap();
-    let completion = heap.gc_exited.take().unwrap();
+    // SAFETY: abandonment test waits on completion after dropping `heap`.
+    let completion = unsafe { heap.gc_exited.take_receiver_for_test() }.unwrap();
     drop(heap);
     drop(obarray);
     // The explicit test wait is outside Drop. Completion proves the real
@@ -621,4 +636,22 @@ fn shutdown_after_returned_young_loan_reclaims_normally() {
             assert_eq!(young_retention_live_pages(), baseline);
         }
     }
+}
+
+#[test]
+fn finish_stopped_mark_adapters_fails_closed_after_mark_flag_and_slot_overwrite() {
+    let mut heap = TaggedHeap::new();
+    let _tx = stalled_mark(&mut heap);
+    heap.concurrent_mark_running = mark_channel::ConcurrentMarkFlag::new();
+    heap.gc_exited = mark_channel::MarkExitSlot::empty();
+    assert!(!heap.concurrent_mark_running());
+    assert!(!heap.gc_exited.is_some());
+    assert!(heap.has_unfinished_concurrent_mark());
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            heap.finish_stopped_mark_adapters()
+        }))
+        .is_err(),
+        "finish_stopped_mark_adapters must fail closed while ACTIVE_MARK_HEAPS records an unfinished mark"
+    );
 }

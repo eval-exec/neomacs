@@ -12,7 +12,7 @@ pub struct RowsOwnedDomain {
 impl TaggedHeap {
     #[doc(hidden)]
     pub fn rows_observation_idle(&self) -> bool {
-        if self.concurrent_mark_running
+        if self.has_unfinished_concurrent_mark()
             || self.mark_in_progress
             || self.sweep_in_progress
             || self.generational.major_in_progress
@@ -25,7 +25,6 @@ impl TaggedHeap {
             || self.staged_mapped_cons_scan.is_some()
             || self.staged_mapped_veclikes.is_some()
             || self.concurrent_hash_snapshot().is_some()
-            || self.gc_exited.is_some()
             || !self.retired_vector_buffers.is_empty()
             || self.gc_locks_poisoned()
             || self.facade_mark_is_excluded()

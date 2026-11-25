@@ -38,17 +38,18 @@ fn finish_cycle(heap: &mut TestHeap, roots: &[TaggedValue]) {
 /// result through the normal finish seam so promotion and symbol logs survive.
 #[cfg(test)]
 fn inspect_completed_deferred(heap: &mut TestHeap, inspect: impl FnOnce(&[MarkWord])) {
-    let result = heap
-        .gc_exited
-        .take()
+    // SAFETY: inspecting completed worker result before relaying it back intact.
+    let result = unsafe { heap.gc_exited.take_receiver_for_test() }
         .expect("stopped worker completion receiver missing")
         .recv()
         .expect("stopped worker result missing");
-    inspect(&result.deferred);
+    inspect(result.deferred_for_test());
     let (send, receive) = std::sync::mpsc::channel();
     send.send(result)
         .expect("retain the complete worker result");
-    heap.gc_exited = Some(receive);
+    let heap_id = heap.heap_identity();
+    // SAFETY: relaying unmodified worker completion for `heap`.
+    unsafe { heap.gc_exited.install_for_heap(heap_id, receive) };
 }
 
 fn ordinary_cycle(heap: &mut TestHeap, roots: &[TaggedValue]) {
@@ -165,7 +166,7 @@ fn transitive_bare_symbol_cycle(claims: bool, generational: bool, ancestor: Symb
         // Tier-B captures even an unrooted owned vector's backing. Remove this
         // edge while GC is inactive so the next blanket scan cannot retain the
         // symbol independently of the now-unrooted strong hash.
-        assert!(!heap.concurrent_mark_running);
+        assert!(!heap.concurrent_mark_running());
         assert!(crate::tagged::mutate::set_vector_slot(
             child,
             0,
@@ -317,8 +318,12 @@ fn paused_worker_with_policy(
             hash_claimed: heap.concurrent_hash_claimed().cloned(),
         },
     };
-    heap.concurrent_mark_running = true;
-    heap.gc_exited = Some(result);
+    let heap_id = heap.heap_identity();
+    // SAFETY: manual paused-worker fixture paired with `job` for `heap_id`.
+    unsafe {
+        heap.concurrent_mark_running.set(true);
+        heap.gc_exited.install_for_heap(heap_id, result);
+    }
     heap.install();
     let (reached, receiver) = std::sync::mpsc::channel();
     let (resume, continue_scan) = std::sync::mpsc::channel();
@@ -344,7 +349,7 @@ fn paused_worker_with_policy(
             }
         }
         // SAFETY: `job` was assembled from this live fixture heap until join.
-        unsafe { run_concurrent_mark_enabled(job) };
+        unsafe { run_concurrent_mark_enabled(heap_id, job) };
         CONCURRENT_HASH_BEFORE_CLAIM_HOOK.with(|slot| assert!(slot.borrow().is_none()));
         CONCURRENT_HASH_SCAN_HOOK.with(|slot| assert!(slot.borrow().is_none()));
     });

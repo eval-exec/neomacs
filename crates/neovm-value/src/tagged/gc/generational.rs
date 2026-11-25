@@ -257,10 +257,12 @@ impl TaggedHeap {
         // Admission precedes EVERY mutation, even for a GEN0 heap. Joining a
         // worker alone does not finish its major's residual mark or sweep.
         self.check_minor_admission()?;
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "minor stop-all excludes unfinished concurrent marking"
+        );
         debug_assert!(
-            !self.concurrent_mark_running
-                && !self.mark_in_progress
-                && !self.generational.major_in_progress,
+            !self.mark_in_progress && !self.generational.major_in_progress,
             "minor stop-all excludes concurrent and unfinished major marking"
         );
         self.close_alloc_regions();

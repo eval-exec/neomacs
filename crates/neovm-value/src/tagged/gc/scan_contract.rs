@@ -214,7 +214,7 @@ impl SingleMutatorWorld<'_> {
 
     fn fold_satb_counts(&mut self) -> Result<SatbFoldCounts, super::satb::SatbPoisoned> {
         assert!(
-            !self.heap.concurrent_mark_running(),
+            !self.heap.has_unfinished_concurrent_mark(),
             "SATB fold requires an explicit successful marker join"
         );
         let proof = StoppedMutatorsProof {
@@ -270,7 +270,7 @@ impl SingleMutatorWorld<'_> {
     /// Begin/launch calls validate before resetting only owner dedup sets.
     pub(super) fn begin_satb_cycle(&mut self) -> Result<(), SatbDrainError> {
         assert!(
-            !self.heap.concurrent_mark_running(),
+            !self.heap.has_unfinished_concurrent_mark(),
             "SATB begin requires a stopped collector"
         );
         self.ensure_satb_empty()?;
@@ -287,7 +287,7 @@ impl SingleMutatorWorld<'_> {
     /// stay present and contribute exactly like active registrations.
     pub(super) fn take_satb_written_owners(&mut self) -> rustc_hash::FxHashSet<usize> {
         assert!(
-            !self.heap.concurrent_mark_running(),
+            !self.heap.has_unfinished_concurrent_mark(),
             "SATB insertion repair requires an explicit marker join"
         );
         let proof = StoppedMutatorsProof {
@@ -323,7 +323,7 @@ impl SingleMutatorWorld<'_> {
         body: impl FnOnce(&mut TaggedHeap, &StoppedMutatorsProof) -> R,
     ) -> Result<R, super::young_registry::YoungRegistryError> {
         assert!(
-            !self.heap.concurrent_mark_running(),
+            !self.heap.has_unfinished_concurrent_mark(),
             "stopped heap access requires an explicit successful marker join"
         );
         let proof = StoppedMutatorsProof {

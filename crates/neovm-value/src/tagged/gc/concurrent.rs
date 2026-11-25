@@ -53,13 +53,13 @@ impl TaggedHeap {
     #[doc(hidden)]
     pub fn mark_phase(&self) -> MarkPhase {
         debug_assert!(
-            !self.concurrent_mark_running || (self.mark_in_progress && !self.sweep_in_progress),
+            !self.concurrent_mark_running() || (self.mark_in_progress && !self.sweep_in_progress),
             "a concurrent worker requires marking and excludes sweep"
         );
         match (self.sweep_in_progress, self.mark_in_progress) {
             (false, false) => MarkPhase::Idle,
             (false, true) => {
-                if self.concurrent_mark_running {
+                if self.concurrent_mark_running() {
                     MarkPhase::ConcurrentRunning
                 } else {
                     MarkPhase::StoppedMarking
@@ -175,7 +175,7 @@ impl TaggedHeap {
     pub unsafe fn begin_stw_collection(&mut self) {
         self.assert_no_owner_cons_reserves();
         assert!(
-            !self.concurrent_mark_running,
+            !self.has_unfinished_concurrent_mark(),
             "collection requires an explicit successful marker finish"
         );
         // Collector code never sees an open allocation region
@@ -183,7 +183,7 @@ impl TaggedHeap {
         self.close_alloc_regions();
         if self.first_cycle_concurrent {
             debug_assert!(
-                !self.concurrent_mark_running && !self.sweep_in_progress,
+                !self.has_unfinished_concurrent_mark() && !self.sweep_in_progress,
                 "a stop-the-world cycle may only follow a finished concurrent cycle"
             );
             // The drained first cycle kept its births for the permanent
@@ -201,8 +201,21 @@ impl TaggedHeap {
 
     /// True while the background GC thread is marking (between the start and
     /// termination handshakes) — the mutator is running concurrently.
+    #[inline(always)]
     pub fn concurrent_mark_running(&self) -> bool {
-        self.concurrent_mark_running
+        self.concurrent_mark_running.get()
+    }
+
+    /// True if a concurrent mark is active OR if `gc_exited` / the sealed
+    /// `mark_channel` side-table still records an unfinished mark for this
+    /// heap. Cold consumer-side gate protecting finish, sweep, collection
+    /// start, and drop against whole-field overwrites or swaps of
+    /// `concurrent_mark_running` / `gc_exited`.
+    #[inline]
+    pub(super) fn has_unfinished_concurrent_mark(&self) -> bool {
+        self.concurrent_mark_running()
+            || self.gc_exited.is_some()
+            || mark_channel::is_active_for_heap(self.identity)
     }
 
     /// The marker has tentatively drained gray + SATB, or the inline fallback
@@ -309,7 +322,7 @@ impl TaggedHeap {
         self.assert_no_owner_cons_reserves();
         debug_assert!(proof.matches(self));
         assert!(
-            !self.concurrent_mark_running,
+            !self.has_unfinished_concurrent_mark(),
             "an unfinished or failed marker cannot be replaced"
         );
         // SAFETY: the admitted start excludes all mutators and TLS writers;
@@ -511,11 +524,18 @@ impl TaggedHeap {
         }
         self.gc_stop
             .store(false, std::sync::atomic::Ordering::Release);
-        self.gc_exited = Some(exited_rx);
+        // SAFETY: `exited_rx` is paired with the concurrent mark job assembled
+        // immediately below for `self.heap_identity()`, and `self.close_alloc_regions()`
+        // + TLS mirrors + `publish_barrier_window()` transition in lockstep.
+        unsafe {
+            self.gc_exited
+                .install_for_heap(self.heap_identity(), exited_rx)
+        };
         // A region granted white must not stay open into the black window
         // (I1).
         self.close_alloc_regions();
-        self.concurrent_mark_running = true;
+        // SAFETY: see above; lockstep start handshake before sending the job.
+        unsafe { self.concurrent_mark_running.set(true) };
         // Keep the write-barrier fast path reaching `record_heap_write` so the
         // SATB log fires even with owner-tracking Disabled / no partition:
         // the window becomes ALL.
@@ -696,7 +716,10 @@ impl TaggedHeap {
     /// was proved, so subsequent collection cannot sweep it, and Drop retains
     /// the allocations instead of reclaiming marker-readable storage.
     pub fn finish_concurrent_mark(&mut self) -> Result<(), MarkFinishError> {
-        if !self.concurrent_mark_running {
+        if !self.concurrent_mark_running() {
+            if self.gc_exited.is_some() || mark_channel::is_active_for_heap(self.identity) {
+                return Err(MarkFinishError::PoisonedCollectorState);
+            }
             return Ok(());
         }
         let join_t0 = std::time::Instant::now();
@@ -713,17 +736,12 @@ impl TaggedHeap {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             cvar.notify_all();
         }
-        let rx = self
-            .gc_exited
-            .take()
-            .ok_or(MarkFinishError::MissingCompletion)?;
-        let result = rx.recv().map_err(MarkFinishError::Disconnected)?;
+        let (deferred, promo, symbols) = self.gc_exited.take_for_finish(self.heap_identity())?;
         // Poison in the SATB queue invalidates collector invariants. The
         // deferred log is owned by the worker until the completion handoff.
         self.satb_handoff
             .check_poisoned()
             .map_err(|_| MarkFinishError::PoisonedCollectorState)?;
-        let deferred = result.deferred;
         // Tier-H's mutation protocol and dirty-owner logs are correctness
         // state too: prove them before changing active state. Poison means a
         // mutation escaped mid-protocol; do not terminate or sweep it.
@@ -735,7 +753,13 @@ impl TaggedHeap {
         // The GC thread has exited, so nothing reads the bitmaps while the
         // black regions granted during the mark give their tails back (I1).
         self.close_alloc_regions();
-        self.concurrent_mark_running = false;
+        // SAFETY: the worker has exited and proved its completion handoff for
+        // `self.heap_identity()` (and SATB + Tier-H logs are unpoisoned);
+        // lockstep clear with TLS mirrors, side-table, and barrier window.
+        unsafe {
+            self.concurrent_mark_running.set(false);
+            mark_channel::complete_for_heap(self.identity);
+        }
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
         if tagged_heap_is_current(self) {
             TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.set(false));
@@ -746,7 +770,7 @@ impl TaggedHeap {
         // New snapshot kinds hand bare symbols back in legacy full cycles
         // too: weak-symbol liveness still consults mutator-side mark_symbol.
         // Existing knob-off legacy scans produce no symbol result.
-        for id in result.symbols {
+        for id in symbols {
             self.mark_symbol(id);
         }
         if self.generational.enabled {
@@ -773,7 +797,7 @@ impl TaggedHeap {
             if !self.is_partition_first_cycle() {
                 self.generational
                     .promo
-                    .extend(result.promo.into_iter().map(|addr| addr as *mut GcHeader));
+                    .extend(promo.into_iter().map(|addr| addr as *mut GcHeader));
             }
             self.publish_persistent_remembered_world_stopped();
         }
@@ -1091,7 +1115,7 @@ impl TaggedHeap {
     /// bounded buffer. The caller already admitted the concurrent TLS gate.
     pub(super) fn note_root_overwrite_value(&mut self, pre_image: TaggedValue) {
         if let crate::tagged::value::ValueKind::Symbol(id) = pre_image.gc_kind() {
-            if self.generational.major_in_progress && self.concurrent_mark_running {
+            if self.generational.major_in_progress && self.concurrent_mark_running() {
                 self.current_mutator_gc_mut()
                     .major_symbol_preimages
                     .push(id);
@@ -1157,9 +1181,9 @@ impl TaggedHeap {
 
     /// Called only after reader join, at the end of termination or teardown.
     pub(super) fn release_concurrent_hash_storage(&mut self) {
-        debug_assert!(
-            !self.concurrent_mark_running,
-            "Tier-H storage released before reader join"
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "Tier-H storage cannot be released while a concurrent mark is unfinished"
         );
         self.set_concurrent_hash_snapshot(None);
         for entry in self.concurrent_hash_mutators() {
@@ -1188,7 +1212,7 @@ pub fn concurrent_hash_snapshot(
     // HeapRef/HeapMut, or mutate any Lisp payload.
     unsafe {
         with_tagged_heap(|heap| {
-            debug_assert!(heap.concurrent_mark_running && heap.concurrent_claims());
+            debug_assert!(heap.concurrent_mark_running() && heap.concurrent_claims());
             let snapshot = heap.concurrent_hash_snapshot()?;
             // Most P5 writes initialize post-start tables. A map miss needs no
             // shared lifetime guard, avoiding two Arc RMWs on that common path.
@@ -1226,7 +1250,7 @@ pub(crate) fn prepare_concurrent_hash_write(
         return;
     }
     let prepare = |heap: &mut TaggedHeap| {
-        debug_assert!(heap.concurrent_mark_running);
+        debug_assert!(heap.concurrent_mark_running());
         let entry = heap.current_concurrent_hash_mutator();
         let mut state = entry.lock().unwrap();
         // The entry guard covers this payload access, barrier enumeration and

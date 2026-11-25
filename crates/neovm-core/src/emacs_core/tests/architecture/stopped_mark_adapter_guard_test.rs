@@ -181,6 +181,9 @@ fn stopped_mark_adapters_have_one_production_order() {
             "neovm-value/src/tagged/gc/tests/ephemeron_cross_kind_test.rs",
             // observes post-fixpoint, pre-sweep marks (inventory snapshot)
             "neovm-value/src/tagged/gc/tests/memory_inventory_test.rs",
+            // post-overwrite negative test: proves finish_stopped_mark_adapters
+            // fails closed while ACTIVE_MARK_HEAPS records an unfinished mark
+            "neovm-value/src/tagged/gc/tests/shutdown_tests.rs",
         ],
         "{adapter:?}"
     );

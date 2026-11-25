@@ -286,8 +286,8 @@ fn claim(
         };
         // SAFETY: synchronous test helper on the owning thread before sweep.
         gray.extend(unsafe { stack.into_values() });
-        logs.result.promo.extend(legacy.result.promo);
-        logs.result.symbols.extend(legacy.result.symbols);
+        logs.promo.extend(legacy.promo);
+        logs.symbols.extend(legacy.symbols);
         handled
     }
 }
@@ -350,11 +350,11 @@ fn concurrent_leaf_claims_obey_generation_parity_and_once_only_promotion() {
                             expected
                         );
                         assert!(gray.is_empty());
-                        assert!(logs.result.symbols.is_empty());
+                        assert!(logs.symbols.is_empty());
                         if major && age == 0 {
-                            assert_eq!(logs.result.promo, [header(value) as usize]);
+                            assert_eq!(logs.promo, [header(value) as usize]);
                         } else {
-                            assert!(logs.result.promo.is_empty());
+                            assert!(logs.promo.is_empty());
                         }
                         if expected == 1 {
                             assert!(unsafe { (*header(value)).is_marked_at(parity) });
@@ -387,7 +387,7 @@ fn concurrent_leaf_claims_refuse_post_start_pages_without_touching_the_header() 
             let mut logs = EnabledWorkerMarkLogs::default();
             assert!(!claim(fresh, &job, &mut Vec::new(), &mut logs));
             assert_eq!(unsafe { (*header(fresh)).raw_mark() }, before);
-            assert!(logs.result.promo.is_empty());
+            assert!(logs.promo.is_empty());
             assert_eq!(
                 job.enabled
                     .as_ref()
@@ -425,7 +425,7 @@ fn concurrent_leaf_claims_keep_mapped_and_residual_box_symbol_positions_deferred
         let mut logs = EnabledWorkerMarkLogs::default();
         assert!(!claim(value, &job, &mut Vec::new(), &mut logs));
         assert_eq!(unsafe { (*header(value)).raw_mark() }, before);
-        assert!(logs.result.symbols.is_empty());
+        assert!(logs.symbols.is_empty());
         assert_eq!(
             job.enabled
                 .as_ref()
@@ -453,7 +453,7 @@ fn concurrent_leaf_symbol_positions_route_both_fields_and_skip_born_black_payloa
         unsafe { (*header(value)).set_marked(job.parity) };
         assert!(claim(value, &job, &mut gray, &mut logs));
         assert!(gray.is_empty());
-        assert!(logs.result.symbols.is_empty());
+        assert!(logs.symbols.is_empty());
         assert_eq!(
             job.enabled
                 .as_ref()
@@ -471,7 +471,7 @@ fn concurrent_leaf_symbol_positions_route_both_fields_and_skip_born_black_payloa
         let crate::tagged::value::ValueKind::Symbol(id) = symbol.kind() else {
             unreachable!()
         };
-        assert_eq!(logs.result.symbols, [id]);
+        assert_eq!(logs.symbols, [id]);
     }
 }
 
@@ -590,7 +590,7 @@ fn concurrent_leaf_claim_rmw_has_one_winner_across_threads() {
                         &mut Vec::new(),
                         &mut logs
                     ));
-                    logs.result.promo.len()
+                    logs.promo.len()
                 })
             })
             .collect();
@@ -618,12 +618,20 @@ fn concurrent_leaf_claims_lost_worker_result_fails_closed_with_generations_off()
     drop(sender);
     // Model an exited worker that lost its child/symbol result. No real
     // worker is using this heap, and no marking or sweep may follow the loss.
-    heap.concurrent_mark_running = true;
-    heap.gc_exited = Some(receiver);
+    let heap_id = heap.heap_identity();
+    // SAFETY: synthetic serial fixture modeling a disconnected worker.
+    unsafe {
+        heap.concurrent_mark_running.set(true);
+        heap.gc_exited.install_for_heap(heap_id, receiver);
+    }
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         heap.join_concurrent_mark();
     }));
-    heap.concurrent_mark_running = false;
+    // SAFETY: serial fixture teardown; no real worker exists.
+    unsafe {
+        heap.concurrent_mark_running.set(false);
+        heap.gc_exited.clear_sentinel_for_test(heap_id);
+    }
     heap.install();
     assert!(result.is_err());
     assert!(!heap.sweep_in_progress);

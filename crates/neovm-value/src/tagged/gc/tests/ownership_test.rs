@@ -2271,7 +2271,8 @@ fn dropping_heap_mid_concurrent_mark_retains_gc_storage() {
     heap.seed_root(list);
     heap.launch_concurrent_mark();
     assert!(heap.concurrent_mark_running());
-    let completion = heap.gc_exited.take().unwrap();
+    // SAFETY: abandonment test waits on completion after dropping `heap`.
+    let completion = unsafe { heap.gc_exited.take_receiver_for_test() }.unwrap();
     drop(heap);
     completion
         .recv_timeout(std::time::Duration::from_secs(10))

@@ -495,7 +495,7 @@ pub struct TaggedHeap {
     canonical_empty_strings: CanonicalEmptyStrings,
     /// Receives when the GC thread has exited its mark loop (so the mutator's
     /// termination can safely take over the gray queue). Set at start.
-    gc_exited: Option<std::sync::mpsc::Receiver<ConcurrentMarkResult>>,
+    gc_exited: MarkExitSlot,
     /// Collector-owned generation state; mutator logs live in MutatorGcState.
     generational: generational::GenState,
     /// Cons cell block allocator.
@@ -1006,7 +1006,7 @@ pub struct TaggedHeap {
     mark_in_progress: bool,
     /// True between a concurrent mark's start and termination handshakes — the
     /// mutator runs while the GC thread marks.
-    concurrent_mark_running: bool,
+    concurrent_mark_running: ConcurrentMarkFlag,
 
     // --- Incremental sweep state (step 8). After a mark terminates, the sweep
     // is deferred and drained in bounded slices at later safe points, so the
@@ -1253,7 +1253,7 @@ impl TaggedHeap {
             mark_parity: MarkParity::Two,
             mark_in_progress: false,
             incremental_mark_us: 0,
-            concurrent_mark_running: false,
+            concurrent_mark_running: ConcurrentMarkFlag::new(),
             satb_handoff: std::sync::Arc::new(SatbHandoff::new()),
             _satb_owner_layout_reserve: FxHashSet::default(),
             _satb_layout_reserve: mutator_gc::MutatorSatbSlot::new(identity),
@@ -1271,7 +1271,7 @@ impl TaggedHeap {
             _satb_string_layout_reserve: FxHashSet::default(),
             gc_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             gc_wake: std::sync::Arc::new((std::sync::Mutex::new(()), std::sync::Condvar::new())),
-            gc_exited: None,
+            gc_exited: MarkExitSlot::empty(),
             pending_obarray_scan: None,
             concurrent_obarray_start_slots: None,
             retired_vector_buffers: Vec::new(),
@@ -1631,7 +1631,7 @@ impl TaggedHeap {
         #[cfg(debug_assertions)]
         self.debug_assert_remembered_membership(record.owner);
         if self.generational.enabled {
-            if self.concurrent_mark_running && self.generational.major_in_progress {
+            if self.concurrent_mark_running() && self.generational.major_in_progress {
                 if record.owner.is_cons() {
                     // A claimed cons can gain an existing white old object;
                     // SATB preimages and allocate-black births do not cover it.
@@ -1653,7 +1653,8 @@ impl TaggedHeap {
             }
             // Concurrent majors use SATB plus P-all. Persistent image-owner
             // additions still log locally; ordinary R resumes after termination.
-            if self.concurrent_mark_running || record.value.is_none_or(|value| !value.is_fixnum()) {
+            if self.concurrent_mark_running() || record.value.is_none_or(|value| !value.is_fixnum())
+            {
                 self.remember_owner(record.owner);
             }
         } else if self.partition_dump
@@ -1667,7 +1668,7 @@ impl TaggedHeap {
         // owner's current children are its PRE-overwrite values; logging them
         // keeps the start-of-cycle snapshot live. Nothing is re-read later, so
         // the concurrent GC thread never touches a reallocated owner.
-        if self.concurrent_mark_running {
+        if self.concurrent_mark_running() {
             // The background GC thread is marking — log overwritten children to
             // the shared buffer it drains (not the local gray queue, which
             // belongs to the GC thread for the duration). This SATB barrier keeps
@@ -2490,6 +2491,8 @@ pub use concurrent::MarkFinishError;
 pub use concurrent::MarkPhase;
 mod heap_identity;
 pub use heap_identity::HeapIdentity;
+mod mark_channel;
+use mark_channel::{ConcurrentMarkFlag, MarkExitSlot};
 mod mark_word;
 use mark_word::{MarkStack, MarkWord};
 mod satb;

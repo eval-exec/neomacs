@@ -62,22 +62,23 @@ fn concurrent_start_refusal(policy: ClaimPolicy) {
                 heap.concurrent_mark_done(),
                 "the inline result is already ready for termination"
             );
-            let result = heap
-                .gc_exited
-                .take()
+            // SAFETY: inspecting the already-completed inline worker result before relaying it back.
+            let result = unsafe { heap.gc_exited.take_receiver_for_test() }
                 .unwrap()
                 .try_recv()
                 .expect("inline dispatch must return with its result queued");
             if cycle == 0 {
                 assert!(
-                    !result.deferred.is_empty(),
+                    !result.deferred_for_test().is_empty(),
                     "the quantum stop must retain residual work"
                 );
             }
             // Inspect without consuming the actual termination protocol.
             let (send, receive) = std::sync::mpsc::channel();
             send.send(result).unwrap();
-            heap.gc_exited = Some(receive);
+            let heap_id = heap.heap_identity();
+            // SAFETY: relaying the unmodified completion result for `heap`.
+            unsafe { heap.gc_exited.install_for_heap(heap_id, receive) };
         } else {
             assert!(collector_is_registered(heap.heap_identity()));
         }

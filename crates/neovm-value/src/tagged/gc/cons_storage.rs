@@ -527,7 +527,7 @@ impl ConsCatalog {
         if heap.alloc_regions_open() {
             return Err(RegistrationError::OpenRegion);
         }
-        if heap.concurrent_mark_running
+        if heap.has_unfinished_concurrent_mark()
             || heap.mark_in_progress
             || heap.sweep_in_progress
             || heap.generational.major_in_progress

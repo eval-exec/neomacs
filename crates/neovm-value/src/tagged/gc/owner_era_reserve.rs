@@ -297,7 +297,7 @@ impl OwnerEraReserve {
         }
         // Never add a lease while an existing collector could already read or
         // reclaim it. Other owners' stopped reserves may remain outstanding.
-        if heap.concurrent_mark_running
+        if heap.has_unfinished_concurrent_mark()
             || heap.mark_in_progress
             || heap.sweep_in_progress
             || heap.generational.major_in_progress

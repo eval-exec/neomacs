@@ -137,6 +137,10 @@ impl TaggedHeap {
         // Refuse before changing the cycle. The delegated entry also serves
         // direct STW and minor callers, so it needs its own guard below.
         self.assert_no_owner_cons_reserves();
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "begin_collection requires an explicit successful marker finish"
+        );
         self.generational.cycle = generational::GenerationCycle::Major;
         self.begin_collection_with(false);
     }
@@ -147,7 +151,7 @@ impl TaggedHeap {
     pub(super) fn begin_collection_with(&mut self, stw_entry: bool) {
         self.assert_no_owner_cons_reserves();
         assert!(
-            !self.concurrent_mark_running,
+            !self.has_unfinished_concurrent_mark(),
             "collection requires an explicit successful marker finish"
         );
         #[cfg(any(test, debug_assertions, feature = "test-support"))]
@@ -1862,7 +1866,7 @@ impl TaggedHeap {
     pub unsafe fn complete_collection(&mut self) {
         self.assert_no_owner_cons_reserves();
         assert!(
-            !self.concurrent_mark_running,
+            !self.has_unfinished_concurrent_mark(),
             "sweeping requires an explicit successful marker finish"
         );
         // Collector code never sees an open allocation region
@@ -1914,6 +1918,10 @@ impl TaggedHeap {
     /// sweep, so incremental termination can keep its handshake split. The
     /// ephemeron fixpoints and the reclaims sit outside those two timers.
     pub(super) fn finish_stopped_mark_adapters(&mut self) -> (u64, u64) {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "finish_stopped_mark_adapters cannot run while a concurrent mark is unfinished"
+        );
         self.mark_reached_ephemeron_records_to_fixpoint();
         // Queue doomed finalizers before the weak sweep (GNU
         // `queue_doomed_finalizers` runs before
@@ -2294,6 +2302,10 @@ impl TaggedHeap {
         t0: std::time::Instant,
     ) {
         self.assert_no_owner_cons_reserves();
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "finalize_collection cannot sweep while a concurrent mark is unfinished"
+        );
         // The generation census reads the final marks before the sweep (no-op
         // unless `NEOVM_GC_CENSUS`).
         if self.census.is_some() {

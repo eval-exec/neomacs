@@ -267,7 +267,7 @@ impl TaggedHeap {
 
     /// The window this heap's current state implies (see the module doc).
     pub(crate) fn barrier_window(&self) -> BarrierWindow {
-        if self.concurrent_mark_running
+        if self.concurrent_mark_running()
             || self.write_tracking_mode != WriteTrackingMode::Disabled
             || self.census.as_deref().is_some_and(GenCensus::remset_probe)
         {
@@ -522,7 +522,8 @@ impl TaggedHeap {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) unsafe fn set_concurrent_active_for_test(&mut self, on: bool) {
         self.close_alloc_regions();
-        self.concurrent_mark_running = on;
+        // SAFETY: caller's contract excludes any live concurrent marker.
+        unsafe { self.concurrent_mark_running.set(on) };
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(on));
         if tagged_heap_is_current(self) {
             TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| {

@@ -127,6 +127,7 @@ fn claim_job(heap: &TestHeap, major: bool) -> ConcurrentClaimJob {
 }
 
 struct WorkerHarness {
+    heap: HeapIdentity,
     job: ConcurrentMarkJob,
     result: std::sync::mpsc::Receiver<ConcurrentMarkResult>,
     satb: Arc<SatbHandoff>,
@@ -136,6 +137,7 @@ impl WorkerHarness {
         let (exited, result) = std::sync::mpsc::channel();
         let satb = Arc::new(SatbHandoff::new());
         Self {
+            heap: heap.heap_identity(),
             job: ConcurrentMarkJob {
                 gray: MarkStack::default(),
                 claims: claim_job(heap, major),
@@ -158,14 +160,14 @@ impl WorkerHarness {
     fn run(self) -> (ConcurrentMarkResult, Vec<TaggedValue>) {
         // SAFETY: `self.job` was assembled from this live fixture heap, which
         // stays alive for this synchronous test run.
-        unsafe { run_concurrent_mark(self.job) };
+        unsafe { run_concurrent_mark(self.heap, self.job) };
         let result = self.result.recv().expect("worker result missing");
         assert!(
             self.result.try_recv().is_err(),
             "worker must send only once"
         );
         let deferred = result
-            .deferred
+            .deferred_for_test()
             .iter()
             .copied()
             // SAFETY: worker exited and handed deferred words back to the test
@@ -192,11 +194,15 @@ fn symbol(label: &str) -> TaggedValue {
     TaggedValue::from_sym_id(make_uninterned_symbol(label))
 }
 
-fn assert_symbol_once(result: &ConcurrentMarkResult, symbol: TaggedValue) {
+fn assert_symbol_slice_once(symbols: &[SymId], symbol: TaggedValue) {
     let crate::tagged::value::ValueKind::Symbol(id) = symbol.kind() else {
         panic!("expected a bare symbol");
     };
-    assert_eq!(result.symbols.iter().filter(|&&seen| seen == id).count(), 1);
+    assert_eq!(symbols.iter().filter(|&&seen| seen == id).count(), 1);
+}
+
+fn assert_symbol_once(result: &ConcurrentMarkResult, symbol: TaggedValue) {
+    assert_symbol_slice_once(result.symbols_for_test(), symbol);
 }
 
 #[test]
@@ -229,22 +235,19 @@ fn generational_worker_major_claims_promote_only_young_headers() {
             } else {
                 vec![]
             };
-            assert_eq!(logs.result.promo, expected, "{kind:?} {age:?}");
+            assert_eq!(logs.promo, expected, "{kind:?} {age:?}");
             if age == Age::Permanent {
                 assert_eq!(unsafe { (*header(value)).raw_mark() }, before);
             } else {
                 assert!(unsafe { (*header(value)).is_marked_at(job.parity) });
             }
-            logs.result.symbols.clear();
+            logs.symbols.clear();
             gray = MarkStack::default();
             assert!(concurrent_try_mark_owned_logged::<true>(
                 value, &job, &mut gray, &mut logs
             ));
             assert_eq!(kind.counter(&job), usize::from(age != Age::Permanent));
-            assert_eq!(
-                logs.result.promo, expected,
-                "rediscovery must not promote twice"
-            );
+            assert_eq!(logs.promo, expected, "rediscovery must not promote twice");
             assert!(gray.is_empty());
         }
     }
@@ -277,8 +280,8 @@ fn generational_worker_legacy_claim_parity_and_tenured_rules_are_unchanged() {
             } else {
                 assert!(unsafe { (*header(value)).is_marked_at(job.parity) });
             }
-            assert!(logs.result.promo.is_empty());
-            assert!(logs.result.symbols.is_empty());
+            assert!(logs.promo.is_empty());
+            assert!(logs.symbols.is_empty());
         }
     }
 }
@@ -299,8 +302,8 @@ fn generational_worker_born_black_claims_have_no_promo_or_child_handoff() {
             value, &job, &mut gray, &mut logs
         ));
         assert_eq!(kind.counter(&job), 0);
-        assert!(logs.result.promo.is_empty());
-        assert!(logs.result.symbols.is_empty());
+        assert!(logs.promo.is_empty());
+        assert!(logs.symbols.is_empty());
         assert!(gray.is_empty());
     }
 }
@@ -326,8 +329,8 @@ fn generational_worker_born_black_bytecode_does_not_read_its_value_children() {
     ));
     assert_eq!(job.bc_claimed.load(Ordering::Relaxed), 0);
     assert!(gray.is_empty());
-    assert!(logs.result.promo.is_empty());
-    assert!(logs.result.symbols.is_empty());
+    assert!(logs.promo.is_empty());
+    assert!(logs.symbols.is_empty());
 }
 
 #[test]
@@ -354,8 +357,8 @@ fn generational_worker_refuses_interval_strings_and_snapshot_misses_before_claim
         assert_eq!(unsafe { (*header(value)).raw_mark() }, before);
     }
     assert!(gray.is_empty());
-    assert!(logs.result.promo.is_empty());
-    assert!(logs.result.symbols.is_empty());
+    assert!(logs.promo.is_empty());
+    assert!(logs.symbols.is_empty());
     assert_eq!(job.str_claimed.load(Ordering::Relaxed), 0);
     assert_eq!(job.vec_claimed.load(Ordering::Relaxed), 0);
 }
@@ -388,8 +391,8 @@ fn generational_worker_snapshot_misses_never_claim_or_promote_any_header_class()
         assert_eq!(unsafe { (*header(value)).raw_mark() }, before);
     }
     assert!(gray.is_empty());
-    assert!(logs.result.promo.is_empty());
-    assert!(logs.result.symbols.is_empty());
+    assert!(logs.promo.is_empty());
+    assert!(logs.symbols.is_empty());
     for kind in ClaimKind::ALL {
         assert_eq!(kind.counter(&job), 0);
     }
@@ -426,13 +429,13 @@ fn generational_worker_bytecode_routes_each_symbol_field_and_keeps_legacy_heap_f
         // SAFETY: synchronous test helper on the owning thread before sweep.
         assert_eq!(unsafe { gray.into_values() }, [child]);
         if major {
-            assert_eq!(logs.result.promo, [header(value) as usize]);
+            assert_eq!(logs.promo, [header(value) as usize]);
             for symbol in &symbols {
-                assert_symbol_once(&logs.result, *symbol);
+                assert_symbol_slice_once(&logs.symbols, *symbol);
             }
         } else {
-            assert!(logs.result.promo.is_empty());
-            assert!(logs.result.symbols.is_empty());
+            assert!(logs.promo.is_empty());
+            assert!(logs.symbols.is_empty());
         }
     }
 }

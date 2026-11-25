@@ -119,7 +119,9 @@ fn finish_fixture_epoch(heap: &mut TestHeap, table: TaggedValue, completed: Conc
     let (send, receive) = std::sync::mpsc::channel();
     send.send(completed)
         .expect("retain the joined reader handoff");
-    heap.gc_exited = Some(receive);
+    let heap_id = heap.heap_identity();
+    // SAFETY: relaying the joined worker's completed result for `heap`.
+    unsafe { heap.gc_exited.install_for_heap(heap_id, receive) };
     // SAFETY: both fixtures have explicitly joined their only reader. This
     // thread owns the heap and its TLS installation, with no callback, native
     // finalizer, obarray, or other writer. The table is their complete external
@@ -154,7 +156,8 @@ fn concurrent_mapped_chartable_scan_and_builtin_range_writes_are_atomic() {
     // never gets the heap itself. The explicit phase mirror makes each builtin
     // use the real SATB preimage barrier while the job reads its slots.
     heap.concurrent_begin();
-    heap.concurrent_mark_running = true;
+    // SAFETY: manual concurrent-mark fixture; `install()` mirrors TLS right below.
+    unsafe { heap.concurrent_mark_running.set(true) };
     heap.install();
     let mapped_scan = {
         // SAFETY: the fixture's only heap writer is stopped. Every header was
@@ -228,6 +231,7 @@ fn concurrent_mapped_chartable_scan_and_builtin_range_writes_are_atomic() {
         mapped_cons_ranges: None,
         mapped_veclikes: Some(mapped_scan),
     };
+    let heap_id = heap.heap_identity();
     let start = Arc::new(Barrier::new(2));
     std::thread::scope(|scope| {
         let worker_start = start.clone();
@@ -235,7 +239,7 @@ fn concurrent_mapped_chartable_scan_and_builtin_range_writes_are_atomic() {
             worker_start.wait();
             // SAFETY: `job` was assembled from `heap`'s live start state and
             // `heap` remains alive until this scoped worker joins.
-            unsafe { run_concurrent_mark(job) };
+            unsafe { run_concurrent_mark(heap_id, job) };
         });
         start.wait();
         for ordinal in 0..REPEATS {
@@ -249,9 +253,9 @@ fn concurrent_mapped_chartable_scan_and_builtin_range_writes_are_atomic() {
         worker.join().expect("the confined marker must finish");
     });
     let result = result.recv().expect("the marker must return its handoff");
-    assert!(result.symbols.contains(&purpose_id));
-    assert!(result.symbols.contains(&sentinel_id));
-    assert!(result.promo.is_empty());
+    assert!(result.symbols_for_test().contains(&purpose_id));
+    assert!(result.symbols_for_test().contains(&sentinel_id));
+    assert!(result.promo_for_test().is_empty());
     assert!(
         heap.current_mutator_satb()
             .satb_snapshotted_owners
@@ -299,7 +303,8 @@ fn concurrent_subchartable_snapshot_retains_mapped_span_after_builtin_cow() {
         (*leaf).contents = LispValueVec::mapped(original.as_ptr(), original.len());
     }
     heap.concurrent_begin();
-    heap.concurrent_mark_running = true;
+    // SAFETY: manual concurrent-mark fixture; `install()` mirrors TLS right below.
+    unsafe { heap.concurrent_mark_running.set(true) };
     heap.install();
     let snapshot = {
         // SAFETY: the sole fixture writer is stopped; there is no callback or
@@ -309,6 +314,7 @@ fn concurrent_subchartable_snapshot_retains_mapped_span_after_builtin_cow() {
         // to owned storage. The worker must decode only this captured span.
         unsafe { MappedVeclikeScanSnapshot::capture(&world, [leaf.cast()]) }
     };
+    let heap_id = heap.heap_identity();
     let start = Arc::new(Barrier::new(2));
     let (completed, handoff) = std::sync::mpsc::channel();
     let observed = std::thread::scope(|scope| {
@@ -332,7 +338,7 @@ fn concurrent_subchartable_snapshot_retains_mapped_span_after_builtin_cow() {
             // claims, queued no child, and owes no symbol/promotion record.
             // Publish completion only after its last captured-span load.
             completed
-                .send(ConcurrentMarkResult::default())
+                .send(ConcurrentMarkResult::empty_for_heap(heap_id))
                 .expect("publish the retained-span reader handoff");
             bits
         });

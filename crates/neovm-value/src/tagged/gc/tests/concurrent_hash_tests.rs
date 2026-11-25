@@ -1102,7 +1102,7 @@ fn tier_h_wrapper_unwind_poison_is_observed_and_join_refuses_to_sweep() {
         }));
         assert!(join.is_err());
         // The failed finish retains the active state, so nothing can sweep.
-        assert!(heap.concurrent_mark_running);
+        assert!(heap.concurrent_mark_running());
         assert!(!heap.sweep_in_progress);
         // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
         unsafe { clear_tagged_heap_if_installed(&heap) };
@@ -1115,8 +1115,12 @@ fn stalled_claims_mark(
     heap: &mut TaggedHeap,
 ) -> std::sync::mpsc::Sender<super::super::ConcurrentMarkResult> {
     let (tx, rx) = std::sync::mpsc::channel();
-    heap.concurrent_mark_running = true;
-    heap.gc_exited = Some(rx);
+    let heap_id = heap.heap_identity();
+    // SAFETY: synthetic serial fixture, no live worker.
+    unsafe {
+        heap.concurrent_mark_running.set(true);
+        heap.gc_exited.install_for_heap(heap_id, rx);
+    }
     tx
 }
 
@@ -1162,7 +1166,10 @@ fn poisoned_tier_h_protocol_fails_finish_before_state_changes() {
     assert!(snapshot.is_poisoned());
     heap.set_concurrent_hash_snapshot(Some(snapshot));
     let tx = stalled_claims_mark(&mut heap);
-    tx.send(Default::default()).unwrap();
+    tx.send(super::super::ConcurrentMarkResult::empty_for_heap(
+        heap.heap_identity(),
+    ))
+    .unwrap();
     assert!(matches!(
         heap.finish_concurrent_mark(),
         Err(super::super::MarkFinishError::PoisonedCollectorState)
@@ -1184,7 +1191,10 @@ fn poisoned_tier_h_dirty_log_fails_finish_before_state_changes() {
     });
     assert!(poison.is_err());
     let tx = stalled_claims_mark(&mut heap);
-    tx.send(Default::default()).unwrap();
+    tx.send(super::super::ConcurrentMarkResult::empty_for_heap(
+        heap.heap_identity(),
+    ))
+    .unwrap();
     assert!(matches!(
         heap.finish_concurrent_mark(),
         Err(super::super::MarkFinishError::PoisonedCollectorState)
@@ -1198,6 +1208,7 @@ fn poisoned_tier_h_dirty_log_fails_finish_before_state_changes() {
 #[test]
 fn abandoned_marker_retains_retired_tier_h_original() {
     let mut heap = TaggedHeap::new_for_concurrent_hash_test(false);
+    let heap_id = heap.heap_identity();
     let tx = stalled_claims_mark(&mut heap);
     let original = vec![Some(HashTableEntry {
         key: TaggedValue::fixnum(41),
@@ -1218,5 +1229,8 @@ fn abandoned_marker_retains_retired_tier_h_original() {
         retained[0].map(|e| (e.key, e.value)),
         original[0].map(|e| (e.key, e.value))
     );
-    assert!(tx.send(Default::default()).is_err());
+    assert!(
+        tx.send(super::super::ConcurrentMarkResult::empty_for_heap(heap_id))
+            .is_err()
+    );
 }

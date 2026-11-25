@@ -763,10 +763,10 @@ impl TestMutatorSwitch {
             TAGGED_HEAP_WRITE_TRACKING_MODE.try_with(|slot| slot.set(heap.write_tracking_mode()));
         let _ = TAGGED_HEAP_PARTITION_ACTIVE.try_with(|slot| slot.set(heap.partition_dump));
         let _ =
-            TAGGED_HEAP_CONCURRENT_ACTIVE.try_with(|slot| slot.set(heap.concurrent_mark_running));
+            TAGGED_HEAP_CONCURRENT_ACTIVE.try_with(|slot| slot.set(heap.concurrent_mark_running()));
         let _ = TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.try_with(|slot| {
             slot.set(
-                heap.concurrent_mark_running
+                heap.concurrent_mark_running()
                     && heap.concurrent_claims()
                     && heap.concurrent_hash_snapshot().is_some(),
             )

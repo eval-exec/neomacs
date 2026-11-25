@@ -270,16 +270,22 @@ fn rows_owned_domain_failed_concurrent_completion_retains_busy_obligation() {
         // worker exists. Exercise the real finish error paths without racing
         // a live worker or claiming that a worker actually disconnected.
         let (send, receive) = std::sync::mpsc::channel();
-        heap.concurrent_mark_running = true;
-        heap.gc_exited = Some(receive);
+        let heap_id = heap.heap_identity();
+        // SAFETY: inert synthetic fixture, no live worker.
+        unsafe {
+            heap.concurrent_mark_running.set(true);
+            heap.gc_exited.install_for_heap(heap_id, receive);
+        }
         match failure {
             Failure::Missing => {
-                heap.gc_exited = None;
+                // SAFETY: inert synthetic fixture testing MissingCompletion.
+                unsafe { heap.gc_exited.clear_for_test() };
                 drop(send);
             }
             Failure::Disconnected => drop(send),
             Failure::Poisoned => {
-                send.send(ConcurrentMarkResult::default()).unwrap();
+                send.send(ConcurrentMarkResult::empty_for_heap(heap.heap_identity()))
+                    .unwrap();
                 heap.satb_handoff.poison_for_test();
             }
         }
