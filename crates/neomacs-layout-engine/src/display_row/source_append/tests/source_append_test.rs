@@ -8260,8 +8260,6 @@ fn buffer_text_window_body_install_request_records_positions_and_edge_markers() 
         41,
         3,
         i64::MAX,
-        100,
-        4,
         true,
         false,
         0,
@@ -8271,16 +8269,19 @@ fn buffer_text_window_body_install_request_records_positions_and_edge_markers() 
         face_resolver.default_face(),
         8.0,
     ))
-    .install_and_apply(TextWindowBodyInstallState::new(
-        TextWindowOutputTarget::from_builder(&mut builder),
-        &mut output_emitter,
-        crate::display_status_line::ChromeRowRenderServices::new(
-            &mut font_metrics,
-            &face_resolver,
-            &mut face_ids,
-            StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+    .install_and_apply(
+        TextWindowBodyInstallState::new(
+            TextWindowOutputTarget::from_builder(&mut builder),
+            &mut output_emitter,
+            crate::display_status_line::ChromeRowRenderServices::new(
+                &mut font_metrics,
+                &face_resolver,
+                &mut face_ids,
+                StringSourceRootScope::Rooted(eval.owned_root_retainer()),
+            ),
         ),
-    ));
+        |pos| EmacsBytePos::new(97 + pos.get()),
+    );
 
     assert_eq!(positions.window_start(), LispCharPos1::new(4));
     assert_eq!(positions.window_end_lisp(), LispCharPos1::new(8));

@@ -310,8 +310,6 @@ pub(crate) struct TextWindowBodyInstallRenderContext<'a> {
     window_start: i64,
     /// The walk's ZV (layout 0-based), for the truncated-last-row window end.
     accessible_end: i64,
-    text_start_byte: usize,
-    byte_idx: usize,
     reserve_right_special_col: bool,
     reserve_right_border_col: bool,
     display_text_row_base: usize,
@@ -849,8 +847,6 @@ impl<'a> TextWindowBodyInstallRenderContext<'a> {
         window_id: u64,
         window_start: i64,
         accessible_end: i64,
-        text_start_byte: usize,
-        byte_idx: usize,
         reserve_right_special_col: bool,
         reserve_right_border_col: bool,
         display_text_row_base: usize,
@@ -864,8 +860,6 @@ impl<'a> TextWindowBodyInstallRenderContext<'a> {
             window_id,
             window_start,
             accessible_end,
-            text_start_byte,
-            byte_idx,
             reserve_right_special_col,
             reserve_right_border_col,
             display_text_row_base,
@@ -886,6 +880,7 @@ impl<'a> TextWindowBodyInstallRequest<'a> {
     pub(crate) fn install_and_apply(
         self,
         state: TextWindowBodyInstallState<'_, '_, '_>,
+        char_to_byte: impl FnOnce(neovm_core::buffer::CharPos0) -> neovm_core::buffer::EmacsBytePos,
     ) -> TextWindowRedisplayPositions {
         let context = self.context;
         let right_edge_markers = TextWindowRightEdgeMarkers::for_reserved_special_column(
@@ -906,11 +901,10 @@ impl<'a> TextWindowBodyInstallRequest<'a> {
                 window_id: context.window_id,
                 window_start: context.window_start,
                 accessible_end: context.accessible_end,
-                text_start_byte: context.text_start_byte,
-                byte_idx: context.byte_idx,
                 right_edge_markers,
             },
             Some(state.render_services),
+            char_to_byte,
         )
     }
 }

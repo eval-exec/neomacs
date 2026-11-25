@@ -1006,7 +1006,6 @@ impl BufferSourceOutputSetup {
             source.window_start(),
             source.accessible_start(),
             source.accessible_end(),
-            source.text_start_byte(),
             self.body_install_context.display_text_row_base(),
             walk_setup.text_area_left,
             walk_setup.window_top,
@@ -1165,31 +1164,17 @@ impl BufferSourceOutputSetup {
                 replay.points,
                 replay.point_rows,
             );
-            let mut redisplay_positions = TextWindowRedisplayPositions::from_output_rows(
+            let char_to_byte = |pos: neovm_core::buffer::CharPos0| {
+                neovm_core::buffer::EmacsBytePos::new(
+                    buf_access.charpos_to_bytepos(pos.get() as i64) as usize,
+                )
+            };
+            let redisplay_positions = TextWindowRedisplayPositions::from_output_rows(
                 &output_emitter,
                 tail_context.window_start,
                 source.accessible_end(),
-                source.text_start_byte(),
-                0,
+                char_to_byte,
             );
-            // Cursor-only does not walk (byte_idx = 0 above), so from_output_rows
-            // leaves window_end_byte at text_start_byte. Re-derive it from the
-            // (correct) window_end char so the published byte companion matches a
-            // full rebuild instead of defaulting to the buffer top.
-            {
-                let end_char0 = redisplay_positions
-                    .window_end_lisp()
-                    .to_one_based_usize()
-                    .saturating_sub(1) as i64;
-                redisplay_positions.replace_window_end_anchor(
-                    neovm_core::buffer::TextPositionAnchor::new(
-                        neovm_core::buffer::CharPos0::new(end_char0 as usize),
-                        neovm_core::buffer::EmacsBytePos::new(
-                            buf_access.charpos_to_bytepos(end_char0) as usize,
-                        ),
-                    ),
-                );
-            }
             record_text_window_display_range(
                 output.reborrow(),
                 redisplay_positions.display_range(output_window_id),
@@ -1575,13 +1560,17 @@ impl BufferSourceOutputSetup {
             //  - BELOW-REUSE (bound_walk): reused rows sit BELOW the exposed
             //    (edited) line, so the last visible row is the last reused-below
             //    row — compute AFTER they are spliced into the emitter.
+            let char_to_byte = |pos: neovm_core::buffer::CharPos0| {
+                neovm_core::buffer::EmacsBytePos::new(
+                    buf_access.charpos_to_bytepos(pos.get() as i64) as usize,
+                )
+            };
             let scroll_positions = (!below_reused).then(|| {
                 TextWindowRedisplayPositions::from_output_rows(
                     &output_emitter,
                     scroll.new_window_start,
                     source.accessible_end(),
-                    source.text_start_byte(),
-                    walk_setup.byte_idx,
+                    char_to_byte,
                 )
             });
 
@@ -1725,33 +1714,14 @@ impl BufferSourceOutputSetup {
             );
             output_emitter.normalize_body_start_cols();
 
-            let mut redisplay_positions = scroll_positions.unwrap_or_else(|| {
+            let redisplay_positions = scroll_positions.unwrap_or_else(|| {
                 TextWindowRedisplayPositions::from_output_rows(
                     &output_emitter,
                     scroll.new_window_start,
                     source.accessible_end(),
-                    source.text_start_byte(),
-                    walk_setup.byte_idx,
+                    char_to_byte,
                 )
             });
-            // Re-derive window_end_byte from the published window_end char so
-            // the byte companion matches char_pos even when the bounded walk
-            // stops at an edited line (`below_reused`) or skips an invisible
-            // span at the bottom row edge.
-            {
-                let end_char0 = redisplay_positions
-                    .window_end_lisp()
-                    .to_one_based_usize()
-                    .saturating_sub(1) as i64;
-                redisplay_positions.replace_window_end_anchor(
-                    neovm_core::buffer::TextPositionAnchor::new(
-                        neovm_core::buffer::CharPos0::new(end_char0 as usize),
-                        neovm_core::buffer::EmacsBytePos::new(
-                            buf_access.charpos_to_bytepos(end_char0) as usize,
-                        ),
-                    ),
-                );
-            }
 
             // Finalize the exposed rows (reused rows are already finalized), then
             // publish the corrected positions for the mode-line chrome.
@@ -1760,6 +1730,7 @@ impl BufferSourceOutputSetup {
                 &mut output_emitter,
                 render_services.reborrow(),
                 &tail_context,
+                char_to_byte,
             );
             // The exposed walk can wrap even when its reused prefix contains
             // only natural rows. Finalize its fringe indicators through the
@@ -2119,29 +2090,17 @@ impl BufferSourceOutputSetup {
             ),
         );
         let mut output_emitter = output_emitter;
-        let mut redisplay_positions = walk_setup.install_body(
+        let redisplay_positions = walk_setup.install_body(
             output.reborrow(),
             &mut output_emitter,
             render_services.reborrow(),
             &tail_context,
+            |pos| {
+                neovm_core::buffer::EmacsBytePos::new(
+                    buf_access.charpos_to_bytepos(pos.get() as i64) as usize,
+                )
+            },
         );
-        // Keep the published byte companion anchored to `window_end_char` even
-        // when the walk's `byte_idx` skipped past an invisible span at the
-        // bottom visible row edge (matching cursor-only and scroll replay).
-        {
-            let end_char0 = redisplay_positions
-                .window_end_lisp()
-                .to_one_based_usize()
-                .saturating_sub(1) as i64;
-            redisplay_positions.replace_window_end_anchor(
-                neovm_core::buffer::TextPositionAnchor::new(
-                    neovm_core::buffer::CharPos0::new(end_char0 as usize),
-                    neovm_core::buffer::EmacsBytePos::new(
-                        buf_access.charpos_to_bytepos(end_char0) as usize
-                    ),
-                ),
-            );
-        }
         // Live window publication belongs to this evaluator-side orchestrator,
         // after body installation and before chrome reads window-end (%p, etc.).
         publish_request.publish_window_end(evaluator, redisplay_positions);

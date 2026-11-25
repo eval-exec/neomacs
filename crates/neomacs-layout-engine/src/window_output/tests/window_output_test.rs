@@ -733,7 +733,9 @@ fn text_window_redisplay_positions_use_last_row_with_buffer_position() {
         },
     );
 
-    let positions = TextWindowRedisplayPositions::from_output_rows(&emitter, 3, i64::MAX, 100, 4);
+    let positions = TextWindowRedisplayPositions::from_output_rows(&emitter, 3, i64::MAX, |pos| {
+        EmacsBytePos::new(97 + pos.get())
+    });
 
     assert_eq!(positions.window_start(), LispCharPos1::new(4));
     assert_eq!(positions.window_end_lisp(), LispCharPos1::new(8));
@@ -1449,11 +1451,10 @@ fn install_text_window_body_output_records_redisplay_and_installs_rows() {
             window_id: 41,
             window_start: 3,
             accessible_end: i64::MAX,
-            text_start_byte: 100,
-            byte_idx: 4,
             right_edge_markers: None,
         },
         None,
+        |pos| EmacsBytePos::new(97 + pos.get()),
     );
 
     assert_eq!(positions.window_start(), LispCharPos1::new(4));
@@ -1703,7 +1704,9 @@ fn text_window_redisplay_positions_end_a_truncated_last_row_at_the_next_line() {
     );
     builder.end_row();
 
-    let positions = TextWindowRedisplayPositions::from_output_rows(&emitter, 3, 200, 100, 31);
+    let positions = TextWindowRedisplayPositions::from_output_rows(&emitter, 3, 200, |pos| {
+        EmacsBytePos::new(101 + pos.get())
+    });
     assert_eq!(
         positions.window_end_lisp(),
         LispCharPos1::new(31),
@@ -1716,7 +1719,9 @@ fn text_window_redisplay_positions_end_a_truncated_last_row_at_the_next_line() {
 
     // A truncated line that ends the buffer: the tail's last position is ZV
     // itself, and the end cannot pass it.
-    let positions = TextWindowRedisplayPositions::from_output_rows(&emitter, 3, 29, 100, 29);
+    let positions = TextWindowRedisplayPositions::from_output_rows(&emitter, 3, 29, |pos| {
+        EmacsBytePos::new(101 + pos.get())
+    });
     assert_eq!(
         positions.window_end_lisp(),
         LispCharPos1::new(30),

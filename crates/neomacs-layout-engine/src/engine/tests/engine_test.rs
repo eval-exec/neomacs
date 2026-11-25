@@ -7613,6 +7613,81 @@ fn clipped_invisible_ellipsis_under_word_wrap_rewinds_to_word_boundary() {
     assert_eq!(text_rows[1].start_charpos, hidden_end);
 }
 
+/// Deterministic, font-metric-independent regression for `window_end_bytepos`:
+/// when the bottom visible text row ends right before a skipped invisible span
+/// (so the walk's `byte_idx` has moved past the hidden span while `row->end`
+/// stays anchored at the last drawn buffer glyph), `window_end_bytepos` must
+/// still match the byte offset of `window_end_pos` (GNU `adjust_window_ends`,
+/// `src/xdisp.c:3066-3067`) on both ASCII and multibyte buffers.
+#[test]
+fn bottom_row_skipped_invisible_span_keeps_window_end_bytepos_anchored_to_end_char() {
+    // 88px wide (10 cells) x 48px tall (3 TTY rows: 1 body text row + 1
+    // mode-line + 1 echo area) guarantees row 0 is the bottom visible text row
+    // on every platform.
+    let ascii = "aaaaaaaa hiddenTAIL\nNEXT\n";
+    let hidden_start = 9usize;
+    let hidden_end = hidden_start + "hidden".len();
+    let trace = layout_trace_with_buffer_setup(ascii, 88, 48, |buffer, _, _| {
+        buffer.set_buffer_local("truncate-lines", Value::NIL);
+        buffer.set_buffer_local("word-wrap", Value::T);
+        buffer.set_buffer_local(
+            "buffer-invisibility-spec",
+            Value::list(vec![Value::cons(Value::symbol("outline"), Value::T)]),
+        );
+        assert!(buffer.put_text_property(
+            hidden_start,
+            hidden_end,
+            Value::symbol("invisible"),
+            Value::symbol("outline"),
+        ));
+    });
+    let text_rows: Vec<_> = trace
+        .matrix_rows
+        .iter()
+        .filter(|row| {
+            row.enabled && row.role == neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text
+        })
+        .collect();
+    assert_eq!(
+        text_rows.len(),
+        1,
+        "fixture must place the skipped invisible span on the sole/bottom visible text row"
+    );
+    assert_eq!(
+        trace.window_end_bytepos, trace.window_end_pos,
+        "ASCII window_end_bytepos must equal window_end_pos (not drift by len(\"hidden\"))"
+    );
+
+    // Multibyte control: 8 two-byte chars (`é`) + space + hidden + TAIL.
+    let mb_prefix = "éééééééé ";
+    let mb = format!("{mb_prefix}hiddenTAIL\nNEXT\n");
+    let mb_hidden_start_chars = mb_prefix.chars().count();
+    let mb_hidden_end_chars = mb_hidden_start_chars + "hidden".len();
+    let mb_trace = layout_trace_with_buffer_setup(&mb, 88, 48, |buffer, _, _| {
+        buffer.set_buffer_local("truncate-lines", Value::NIL);
+        buffer.set_buffer_local("word-wrap", Value::T);
+        buffer.set_buffer_local(
+            "buffer-invisibility-spec",
+            Value::list(vec![Value::cons(Value::symbol("outline"), Value::T)]),
+        );
+        assert!(buffer.put_text_property(
+            mb_hidden_start_chars,
+            mb_hidden_end_chars,
+            Value::symbol("invisible"),
+            Value::symbol("outline"),
+        ));
+    });
+    let total_chars = mb.chars().count();
+    let total_bytes = mb.len();
+    let end_char0 = total_chars - mb_trace.window_end_pos;
+    let expected_end_byte0: usize = mb.chars().take(end_char0).map(char::len_utf8).sum();
+    assert_eq!(
+        mb_trace.window_end_bytepos,
+        total_bytes - expected_end_byte0,
+        "multibyte window_end_bytepos must match Z_BYTE - bytepos(window_end_char)"
+    );
+}
+
 #[test]
 fn layout_frame_rust_display_table_maps_char_to_glyph_vector() {
     // `buffer-display-table` maps a buffer char (`x`) to a glyph VECTOR
