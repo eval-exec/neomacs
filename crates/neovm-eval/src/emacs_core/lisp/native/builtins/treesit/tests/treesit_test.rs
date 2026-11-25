@@ -2015,7 +2015,6 @@ fn treesit_reparse_parser_clears_stale_nodes_before_walk_clone_edit() {
     assert_eq!(fresh_entry.raw().tree, live_tree_ptr);
 }
 
-
 #[test]
 fn treesit_circular_boolean_predicate_signals_circular_list() {
     // Regression test for F1 + N1 + F2:
