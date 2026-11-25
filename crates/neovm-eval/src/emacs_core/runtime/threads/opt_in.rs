@@ -38,6 +38,9 @@ fn admit_parallel(eval: &Context) -> Result<ParallelAdmission, NMutatorEntryErro
     // The subr runs with this heap installed. A caller that has not installed
     // it yet must not observe a different thread-local heap.
     let eligible = if neovm_value::tagged::gc::tagged_heap_is_current(&eval.tagged_heap) {
+        // SAFETY: reads the generational-GC configuration flag only; never
+        // collects, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates any Lisp payload.
         unsafe {
             neovm_value::tagged::gc::with_tagged_heap(|heap| {
                 heap.tagged_heap_generational_enabled()

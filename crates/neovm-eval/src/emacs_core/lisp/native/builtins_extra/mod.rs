@@ -763,6 +763,8 @@ fn gc_count(value: usize) -> i64 {
 /// and `vector-slots` their cells. The cache excludes mapped/image residents
 /// and was captured before hooks and this return-list allocation.
 pub(crate) fn builtin_garbage_collect_stats() -> EvalResult {
+    // SAFETY: reads cached sweep object counts only; never collects, re-enters
+    // `with_tagged_heap`, mints capability tokens, or mutates Lisp payloads.
     let gc = unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.gc_object_counts()) };
 
     Ok(Value::list(vec![
@@ -845,6 +847,9 @@ fn arena_layout_value(stats: &neovm_value::tagged::gc::ArenaLayoutStats) -> Valu
 #[doc(hidden)]
 pub fn builtin_neomacs_heap_layout_stats(args: Vec<Value>) -> EvalResult {
     expect_args("neomacs--heap-layout-stats", &args, 0)?;
+    // SAFETY: closes open allocation regions and computes read-only arena
+    // layout stats; never collects, sweeps, re-enters `with_tagged_heap`,
+    // mints capability tokens, or mutates Lisp object payloads.
     let stats = unsafe {
         neovm_value::tagged::gc::with_tagged_heap(|heap| {
             // An open allocation region's cells are neither on the free list nor

@@ -318,6 +318,9 @@ fn with_remembered_defcell(mut site: VarSite) -> VarSite {
         // SAFETY: a live BLV record (see `classify`).
         let defcell =
             unsafe { (*(blv as *const neovm_value::symbol::LispBufferLocalValue)).defcell() };
+        // SAFETY: records a mapped cons in the remembered-set table ahead of
+        // compiled stores; never collects, re-enters `with_tagged_heap`, mints
+        // capability tokens, or mutates Lisp object payloads.
         let remembered = unsafe {
             neovm_value::tagged::gc::with_tagged_heap(|heap| {
                 heap.remember_mapped_cons_ahead_of_writes(defcell)

@@ -694,6 +694,8 @@ fn module_panic_recovery_blocked_via_ctx() -> bool {
             // without a Context, but GC lock poison is still observable via
             // the thread heap — probe that half, exactly like the JIT's
             // ctx-less shim arm (`contain_jit_shim_panic`).
+            // SAFETY: read-only GC lock-poison probe; never collects, re-enters
+            // `with_tagged_heap`, mints capability tokens, or mutates payloads.
             return unsafe { neovm_value::tagged::gc::with_tagged_heap(|h| h.gc_locks_poisoned()) };
         }
         // SAFETY: same shared-read-through-MODULE_CTX discipline as
@@ -1412,7 +1414,9 @@ unsafe extern "C" fn module_make_unibyte_string(
             Err(()) => return std::ptr::null_mut(),
         };
         // SAFETY: the module ABI runs this FFI entry on the evaluator thread that
-        // owns the installed heap; no other heap borrow is live across the call.
+        // owns the installed heap; pure arena allocation (`alloc_string`) never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability tokens,
+        // or mutates existing payloads.
         let val = unsafe {
             neovm_value::tagged::gc::with_tagged_heap(|h| {
                 h.alloc_string(neovm_value::heap_types::LispString::from_unibyte(
@@ -1440,10 +1444,17 @@ unsafe extern "C" fn module_make_user_ptr(
         if !unsafe { module_function_begin(env) } {
             return std::ptr::null_mut();
         }
-        // SAFETY: the emacs-module ABI gives `fin` ownership of `ptr`.
-        // This `unsafe extern "C"` entry is that contract.
-        let val =
-            neovm_value::tagged::gc::with_tagged_heap(|h| unsafe { h.alloc_user_ptr(ptr, fin) });
+        let alloc = |h: &mut neovm_value::tagged::gc::TaggedHeap| {
+            // SAFETY: the emacs-module ABI gives `fin` ownership of `ptr`.
+            // This `unsafe extern "C"` entry is that contract.
+            unsafe { h.alloc_user_ptr(ptr, fin) }
+        };
+        // SAFETY: the module ABI runs this FFI entry on the evaluator thread that
+        // owns the installed heap; pure allocation (`alloc_user_ptr`) never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability tokens,
+        // or mutates existing payloads.
+        let val = unsafe { neovm_value::tagged::gc::with_tagged_heap(alloc) };
+        // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
         unsafe { lisp_to_value(env, val) }
     };
     // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
@@ -2241,12 +2252,10 @@ unsafe extern "C" fn module_make_function(
                 }
             }
         };
-        // SAFETY: the emacs-module ABI passes `subr` as a live `emacs_function`
-        // and `data` that outlives every later invocation.
-        // SAFETY: the module ABI runs this FFI entry on the evaluator thread that
-        // owns the installed heap; no other heap borrow is live across the call.
-        let val = unsafe {
-            neovm_value::tagged::gc::with_tagged_heap(|h| unsafe {
+        let alloc = |h: &mut neovm_value::tagged::gc::TaggedHeap| {
+            // SAFETY: the emacs-module ABI passes `subr` as a live `emacs_function`
+            // and `data` that outlives every later invocation.
+            unsafe {
                 h.alloc_module_function(
                     min_arity,
                     max_arity,
@@ -2255,8 +2264,13 @@ unsafe extern "C" fn module_make_function(
                     doc_val,
                     Value::NIL,
                 )
-            })
+            }
         };
+        // SAFETY: the module ABI runs this FFI entry on the evaluator thread that
+        // owns the installed heap; pure allocation (`alloc_module_function`) never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability tokens,
+        // or mutates existing payloads.
+        let val = unsafe { neovm_value::tagged::gc::with_tagged_heap(alloc) };
         // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
         unsafe { lisp_to_value(env, val) }
     };

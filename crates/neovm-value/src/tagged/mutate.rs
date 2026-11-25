@@ -341,6 +341,10 @@ pub fn with_vector_data_mut<R>(
     // (see the heap-side hook) — a single thread-local load, so the idle path pays
     // essentially nothing.
     if super::gc::concurrent_mark_active() {
+        // SAFETY: invoked at the exclusive vector bulk-mutation entry point
+        // (no live HeapRef borrow of this vector); clones and retires the old
+        // backing for the concurrent marker without collecting, re-entering
+        // `with_tagged_heap`, or minting capability tokens.
         unsafe { super::gc::with_tagged_heap(|heap| heap.concurrent_clone_on_write_vector(value)) };
     }
     let ptr = value.as_veclike_ptr().unwrap() as *mut VectorObj;

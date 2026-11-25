@@ -547,6 +547,9 @@ impl Obarray {
         let blv_ptr = blv.blv().as_ptr();
         match buffer {
             Some(buffer) => {
+                // SAFETY: read-only buffer-handle registry lookup; never
+                // collects, re-enters `with_tagged_heap`, mints capability
+                // tokens, or mutates any Lisp payload.
                 let target_buf = unsafe {
                     crate::tagged::gc::with_tagged_heap(|heap| {
                         heap.buffer_value(buffer.buffer_id())

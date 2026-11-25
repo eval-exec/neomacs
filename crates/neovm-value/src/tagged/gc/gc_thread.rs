@@ -2494,6 +2494,9 @@ fn note_cons_write_slow(
         // encoding and create no edge; a symbol's liveness rides on the card
         // like any heap value.
         if !value.is_some_and(TaggedValue::is_fixnum) {
+            // SAFETY: generational card-marking barrier; checks cons trailer
+            // age and marks a card byte only — never collects, re-enters
+            // `with_tagged_heap`, mints HeapRef/HeapMut, or mutates payloads.
             unsafe {
                 with_tagged_heap(|heap| {
                     if heap
@@ -2528,12 +2531,18 @@ fn note_heap_write_slow(
         value,
     };
     if census_remset_probe_on() {
+        // SAFETY: updates barrier census telemetry only; never collects,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // Lisp object payloads.
         unsafe { with_tagged_heap(|heap| heap.census_note_write(record)) };
     }
     let disabled =
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.get()) == WriteTrackingMode::Disabled;
     let concurrent = TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get());
     if barrier_needs_heap(record, disabled, concurrent) {
+        // SAFETY: records write-barrier / SATB metadata only; never collects,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // Lisp object payloads.
         unsafe { with_tagged_heap(|heap| heap.record_heap_write(record)) };
     }
 }
@@ -2552,32 +2561,37 @@ pub(super) fn barrier_needs_heap(
         // Reject irrelevant generation-only writes before claiming the owner.
         // Tracking and concurrent marking use the legacy barrier below and
         // must not pay for a generational heap lookup.
-        let gen_decision = unsafe {
-            with_tagged_heap(|heap| {
-                if !heap.tagged_heap_generational_enabled() {
-                    return None;
-                }
-                // Characters have fixnum encoding. Symbols (including nil/t) and
-                // all pointer/handle tags remain conservative: symbols have GC
-                // side-table liveness, and SymbolWithPos is a traced heap object.
-                if record.value.is_some_and(TaggedValue::is_fixnum) {
-                    return Some(false);
-                }
-                let needs_log = if heap.owner_is_mapped(record.owner) {
-                    !heap
-                        .current_mutator_gc()
-                        .r_mapped_seen
-                        .contains(&record.owner.bits())
-                } else if record.owner.is_cons() {
-                    heap.old_cons_trailer(record.owner)
-                        .is_some_and(|(trailer, index)| trailer.age_is_old(index))
-                } else {
-                    TaggedHeap::value_heap_addr(record.owner)
-                        .is_some_and(|addr| GcHeader::needs_remembering(addr as *const GcHeader))
-                };
-                Some(needs_log)
-            })
+        let check_gen = |heap: &mut TaggedHeap| {
+            if !heap.tagged_heap_generational_enabled() {
+                return None;
+            }
+            // Characters have fixnum encoding. Symbols (including nil/t) and
+            // all pointer/handle tags remain conservative: symbols have GC
+            // side-table liveness, and SymbolWithPos is a traced heap object.
+            if record.value.is_some_and(TaggedValue::is_fixnum) {
+                return Some(false);
+            }
+            let needs_log = if heap.owner_is_mapped(record.owner) {
+                !heap
+                    .current_mutator_gc()
+                    .r_mapped_seen
+                    .contains(&record.owner.bits())
+            } else if record.owner.is_cons() {
+                heap.old_cons_trailer(record.owner)
+                    .is_some_and(|(trailer, index)| trailer.age_is_old(index))
+            } else {
+                TaggedHeap::value_heap_addr(record.owner).is_some_and(|addr| {
+                    // SAFETY: `record.owner` is a live non-cons heap object
+                    // whose address begins with its initialized `GcHeader`.
+                    unsafe { GcHeader::needs_remembering(addr as *const GcHeader) }
+                })
+            };
+            Some(needs_log)
         };
+        // SAFETY: read-only generational barrier filter; never collects,
+        // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+        // Lisp object payloads.
+        let gen_decision = unsafe { with_tagged_heap(check_gen) };
         if let Some(needs_log) = gen_decision {
             return needs_log;
         }
@@ -2642,6 +2656,9 @@ pub fn feed_concurrent_roots(values: &[TaggedValue]) {
     if values.is_empty() || !TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get()) {
         return;
     }
+    // SAFETY: pushes root words into the SATB buffer only; never collects,
+    // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+    // Lisp object payloads.
     unsafe { with_tagged_heap(|heap| heap.feed_satb_roots(values)) };
 }
 
@@ -2659,6 +2676,9 @@ pub fn note_root_overwrite(pre_image: TaggedValue) {
     if !TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get()) {
         return;
     }
+    // SAFETY: logs a single SATB pre-image word only; never collects,
+    // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+    // Lisp object payloads.
     unsafe { with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image)) };
 }
 
@@ -2675,6 +2695,9 @@ pub(crate) fn note_root_overwrite_while_marking(pre_image: TaggedValue) {
     {
         return;
     }
+    // SAFETY: logs a single SATB pre-image word only; never collects,
+    // re-enters `with_tagged_heap`, mints capability tokens, or mutates
+    // Lisp object payloads.
     unsafe { with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image)) };
 }
 
@@ -2711,6 +2734,9 @@ pub(crate) fn note_string_interval_preimage(
     string_addr: usize,
     table: &crate::value::text_props::TextPropertyTable,
 ) {
+    // SAFETY: records string interval pre-image roots in the SATB buffer only;
+    // never collects, re-enters `with_tagged_heap`, mints capability tokens,
+    // or mutates any Lisp object payload.
     unsafe {
         with_tagged_heap(|heap| {
             if !heap

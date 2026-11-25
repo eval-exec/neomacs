@@ -1151,8 +1151,6 @@ fn is_boilerplate_method_name(name: &str) -> bool {
             | "first"
             | "last"
             | "collect"
-            | "words"
-            | "run"
     )
 }
 
@@ -1534,6 +1532,37 @@ fn allocation_guard_flags_two_hop_cross_file_collection() {
     assert!(
         bad.contains("TaggedHeap::alloc_vector") && bad.contains("TaggedHeap::grow_arena_slow"),
         "violation must include the full transitive call chain: {bad}"
+    );
+}
+
+#[test]
+fn allocation_guard_flags_run_sweep_entry() {
+    let bad = allocator_graph_problems(&[
+        (
+            "neovm-value/src/tagged/gc/allocation.rs",
+            r#"
+            impl TaggedHeap {
+                pub fn alloc_vector(&mut self, job: StoppedCollectorJob) {
+                    job.run(self);
+                }
+            }
+            "#,
+        ),
+        (
+            "neovm-value/src/tagged/gc/mutator_registration/collection.rs",
+            r#"
+            impl StoppedCollectorJob {
+                pub(crate) fn run(self, heap: &mut TaggedHeap) {
+                    unsafe { heap.begin_stw_collection(); }
+                }
+            }
+            "#,
+        ),
+    ])
+    .join("\n");
+    assert!(
+        bad.contains("`run` reaches `begin_stw_collection`"),
+        "allocator reaching a `run` sweep entry must fail: {bad}"
     );
 }
 

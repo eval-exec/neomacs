@@ -816,6 +816,9 @@ pub fn builtin_copy_hash_table(args: Vec<Value>) -> EvalResult {
             // logical immutability belongs only to its original table. The
             // nesting count lives on the object, and `alloc_hash_table`
             // starts the copy at zero even when the source is mid-test.
+            // SAFETY: pure allocation (`alloc_hash_table`); never collects,
+            // sweeps, re-enters `with_tagged_heap`, mints capability tokens,
+            // or mutates existing payloads.
             Ok(unsafe { with_tagged_heap(|h| h.alloc_hash_table(new_table)) })
         }
         _ => Err(signal(

@@ -35,8 +35,11 @@ pub use lisp_state_detach::detach_terminal_registry;
 
 fn ensure_current_terminal_registry() {
     let heap_identity =
-        neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or_else(|| unsafe {
-            neovm_value::tagged::gc::with_tagged_heap(|heap| heap.tagged_heap_identity())
+        neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or_else(|| {
+            // SAFETY: reads the installed heap's identity word only; never
+            // collects, re-enters `with_tagged_heap`, mints capability tokens,
+            // or mutates any Lisp payload.
+            unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.tagged_heap_identity()) }
         });
     TERMINAL_LISP_STATE.with(|slot| {
         if slot.current().heap_identity() != heap_identity {

@@ -8,8 +8,14 @@ use neovm_value::tagged::transport::SharedRootError;
 
 impl ThreadManager {
     pub fn new() -> Self {
+        // SAFETY: reads the installed heap's identity word only; never
+        // collects, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates any Lisp payload.
         let ids = ThreadIds::new(unsafe { with_tagged_heap(|heap| heap.heap_identity()) });
         let main = ids.main_thread();
+        // SAFETY: pure arena allocation (`alloc_thread`) of the main thread
+        // object; never collects, sweeps, re-enters `with_tagged_heap`, mints
+        // capability tokens, or mutates existing payloads.
         let value = unsafe {
             with_tagged_heap(|heap| {
                 heap.alloc_thread(ThreadPayload::new(
@@ -50,6 +56,9 @@ impl ThreadManager {
         name: ThreadName,
     ) -> Result<ThreadId, Flow> {
         let id = self.ids.issue_thread().map_err(identity_exhausted)?;
+        // SAFETY: pure arena allocation (`alloc_thread`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
         let value = unsafe {
             with_tagged_heap(|heap| {
                 heap.alloc_thread(ThreadPayload::new(
@@ -134,14 +143,16 @@ impl ThreadManager {
         update: impl FnOnce(&mut ThreadChildren) -> R,
     ) -> Option<R> {
         self.thread_payload(value)?;
-        unsafe {
-            with_tagged_heap(|heap| {
-                // SAFETY: value is a validated rooted Lisp argument or live-map
-                // edge; the manager is exclusively borrowed under serial World
-                // authority. Updates below never allocate Lisp, collect or yield.
-                heap.with_thread_payload_mut(value, update)
-            })
-        }
+        let op = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+            // SAFETY: value is a validated rooted Lisp argument or live-map
+            // edge; the manager is exclusively borrowed under serial World
+            // authority. Updates below never allocate Lisp, collect or yield.
+            unsafe { heap.with_thread_payload_mut(value, update) }
+        };
+        // SAFETY: `&mut self` grants exclusive serial authority over thread
+        // payloads (no live HeapRef borrow of this thread); `op` never
+        // collects, re-enters `with_tagged_heap`, or mints capability tokens.
+        unsafe { with_tagged_heap(op) }
     }
 
     #[doc(hidden)]
@@ -160,14 +171,16 @@ impl ThreadManager {
         update: impl FnOnce(&mut ThreadNativeState) -> R,
     ) -> Option<R> {
         self.thread_payload(value)?;
-        unsafe {
-            with_tagged_heap(|heap| {
-                // SAFETY: the validated live-map edge or Lisp argument roots this
-                // same-World object. The exclusive, non-yielding native view cannot
-                // access its identity or any Lisp child and never reaches a safe point.
-                heap.with_thread_native_mut(value, update)
-            })
-        }
+        let op = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+            // SAFETY: the validated live-map edge or Lisp argument roots this
+            // same-World object. The exclusive, non-yielding native view cannot
+            // access its identity or any Lisp child and never reaches a safe point.
+            unsafe { heap.with_thread_native_mut(value, update) }
+        };
+        // SAFETY: `&mut self` grants exclusive serial authority over thread
+        // native state (no live HeapRef borrow of this thread); `op` never
+        // collects, re-enters `with_tagged_heap`, or mints capability tokens.
+        unsafe { with_tagged_heap(op) }
     }
 
     pub(crate) fn start_thread(&mut self, native: u64) {
@@ -773,6 +786,9 @@ impl ThreadManager {
     #[doc(hidden)]
     pub(crate) fn create_mutex(&mut self, name: Option<LispString>) -> Result<MutexHandle, Flow> {
         let id = self.ids.issue_mutex().map_err(identity_exhausted)?;
+        // SAFETY: pure arena allocation (`alloc_mutex`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
         let value =
             unsafe { with_tagged_heap(|heap| heap.alloc_mutex(MutexPayload::new(id, name))) };
         Ok(MutexHandle { value, id })
@@ -793,14 +809,16 @@ impl ThreadManager {
         mutex: MutexHandle,
         update: impl FnOnce(&mut MutexPayload) -> R,
     ) -> Option<R> {
-        unsafe {
-            with_tagged_heap(|heap| {
-                // SAFETY: typed handle is rooted by its Lisp argument/continuation,
-                // World serial authority excludes mutation and workers defer the
-                // payload; callers below do not allocate Lisp, collect or yield.
-                heap.with_mutex_payload_mut(mutex.value, update)
-            })
-        }
+        let op = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+            // SAFETY: typed handle is rooted by its Lisp argument/continuation,
+            // World serial authority excludes mutation and workers defer the
+            // payload; callers below do not allocate Lisp, collect or yield.
+            unsafe { heap.with_mutex_payload_mut(mutex.value, update) }
+        };
+        // SAFETY: `&mut self` grants exclusive serial authority over mutex
+        // payloads (no live HeapRef borrow of this mutex); `op` never collects,
+        // re-enters `with_tagged_heap`, or mints capability tokens.
+        unsafe { with_tagged_heap(op) }
     }
 
     #[doc(hidden)]
@@ -946,6 +964,9 @@ impl ThreadManager {
         let association =
             MutexReference::from_mutex(mutex.value, unsafe { &*ptr }).ok_or_else(invalid_mutex)?;
         let payload = CondVarPayload::new(id, name, association).map_err(|_| invalid_mutex())?;
+        // SAFETY: pure arena allocation (`alloc_condvar`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
         let value = unsafe { with_tagged_heap(|heap| heap.alloc_condvar(payload)) };
         Ok(CondVarHandle { value, id, mutex })
     }
@@ -1039,32 +1060,36 @@ impl ThreadManager {
             .get(&target)
             .copied()
             .ok_or(MailboxError::MissingTarget)?;
-        unsafe {
-            with_tagged_heap(|heap| {
-                if target.heap_identity() != heap.heap_identity() {
-                    return Err(SharedRootError::ForeignHeap {
-                        owner: target.heap_identity(),
-                        mutator: heap.heap_identity(),
-                    }
-                    .into());
+        let enqueue = |heap: &mut neovm_value::tagged::gc::TaggedHeap| -> Result<(), MailboxError> {
+            if target.heap_identity() != heap.heap_identity() {
+                return Err(SharedRootError::ForeignHeap {
+                    owner: target.heap_identity(),
+                    mutator: heap.heap_identity(),
                 }
-                let stored = StoredThreadEvent::try_from_roots(
-                    heap,
-                    &[
-                        event.sender.clone(),
-                        event.error_symbol.clone(),
-                        event.data.clone(),
-                    ],
-                )?;
-                // SAFETY: the target is rooted by the same-heap live registration;
-                // the validated temporary leases keep every input live until the
-                // canonical child wrapper publishes and accounts the new edge.
+                .into());
+            }
+            let stored = StoredThreadEvent::try_from_roots(
+                heap,
+                &[
+                    event.sender.clone(),
+                    event.error_symbol.clone(),
+                    event.data.clone(),
+                ],
+            )?;
+            // SAFETY: the target is rooted by the same-heap live registration;
+            // the validated temporary leases keep every input live until the
+            // canonical child wrapper publishes and accounts the new edge.
+            unsafe {
                 heap.with_thread_payload_mut(value, |children| {
                     children.stored_events_mut().push(stored)
                 })
-                .ok_or(MailboxError::MissingTarget)
-            })
-        }?;
+            }
+            .ok_or(MailboxError::MissingTarget)
+        };
+        // SAFETY: `&mut self` grants exclusive serial authority over thread
+        // mailboxes (no live HeapRef borrow of this thread); `enqueue` never
+        // collects, re-enters `with_tagged_heap`, or mints capability tokens.
+        unsafe { with_tagged_heap(enqueue) }?;
         if target == self.ids.main_thread() {
             self.mailbox_reservation.main = layout::MainMailboxState::Pending;
         }
@@ -1095,35 +1120,38 @@ impl ThreadManager {
         if payload.children().stored_events().is_empty() {
             return Ok(Vec::new());
         }
-        let receiving = unsafe {
-            with_tagged_heap(|heap| {
-                if target.heap_identity() != heap.heap_identity() {
-                    return Err(SharedRootError::ForeignHeap {
-                        owner: target.heap_identity(),
-                        mutator: heap.heap_identity(),
-                    });
-                }
-                payload
-                    .children()
-                    .stored_events()
-                    .iter()
-                    .map(|event| {
-                        let [sender, error_symbol, data] = event.values();
-                        // SAFETY: these words are the validated target's ordinary
-                        // traced children. The live registration roots it, and its
-                        // immutable borrow prevents removal until all receiving roots
-                        // are registered. No raw caller-supplied Value is admitted.
-                        let [sender, error_symbol, data] =
-                            [sender, error_symbol, data].map(|value| SharedRoot::new(heap, value));
-                        Ok(InFlightThreadEvent {
-                            sender,
-                            error_symbol,
-                            data,
-                        })
+        let take_roots = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+            if target.heap_identity() != heap.heap_identity() {
+                return Err(SharedRootError::ForeignHeap {
+                    owner: target.heap_identity(),
+                    mutator: heap.heap_identity(),
+                });
+            }
+            payload
+                .children()
+                .stored_events()
+                .iter()
+                .map(|event| {
+                    let [sender, error_symbol, data] = event.values();
+                    // SAFETY: these words are the validated target's ordinary
+                    // traced children. The live registration roots it, and its
+                    // immutable borrow prevents removal until all receiving roots
+                    // are registered. No raw caller-supplied Value is admitted.
+                    let [sender, error_symbol, data] = unsafe {
+                        [sender, error_symbol, data].map(|value| SharedRoot::new(heap, value))
+                    };
+                    Ok(InFlightThreadEvent {
+                        sender,
+                        error_symbol,
+                        data,
                     })
-                    .collect::<Result<Vec<_>, SharedRootError>>()
-            })
-        }?;
+                })
+                .collect::<Result<Vec<_>, SharedRootError>>()
+        };
+        // SAFETY: `&mut self` holds exclusive serial authority while registering
+        // receiving `SharedRoot` leases; `take_roots` never collects, re-enters
+        // `with_tagged_heap`, mints capability tokens, or mutates payloads.
+        let receiving = unsafe { with_tagged_heap(take_roots) }?;
         // The receiving leases now own all three words of every event. The
         // canonical wrapper records old edges before clearing the collection.
         self.update_thread_value(value, |children| children.stored_events_mut().clear())

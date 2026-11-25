@@ -67,6 +67,9 @@ impl TaggedValueBytecodeExt for TaggedValue {
             bc.seal_hand_assembled_ops();
             bc
         };
+        // SAFETY: pure arena allocation (`alloc_bytecode`); never collects,
+        // sweeps, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing payloads.
         unsafe { with_tagged_heap(|h| h.alloc_bytecode(bc)) }
     }
 
@@ -78,6 +81,9 @@ impl TaggedValueBytecodeExt for TaggedValue {
         constants: neovm_value::tagged::header::LispValueVec,
         code: Value,
     ) -> Self {
+        // SAFETY: pure arena allocation (`alloc_bytecode_instance`); never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability
+        // tokens, or mutates existing payloads.
         unsafe { with_tagged_heap(|h| h.alloc_bytecode_instance(proto, constants, code)) }
     }
 

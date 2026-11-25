@@ -157,6 +157,9 @@ impl SerialHashTableStorageCharge {
             .materialized_bytes()
             .saturating_sub(self.before.materialized_bytes());
         if grown != 0 {
+            // SAFETY: updates allocation-byte pacing counter only; never
+            // collects, re-enters `with_tagged_heap`, mints capability tokens,
+            // or mutates Lisp object payloads.
             unsafe { with_tagged_heap(|heap| heap.note_allocation_bytes(grown)) };
         }
     }

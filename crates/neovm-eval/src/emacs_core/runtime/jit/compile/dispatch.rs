@@ -3881,6 +3881,9 @@ unsafe fn cbsym_read_contained(
                 CBSYM_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
                 return STATUS_NEED_GENERIC;
             };
+            // SAFETY: read-only buffer-handle registry lookup (never allocates
+            // or collects); never re-enters `with_tagged_heap`, mints
+            // capability tokens, or mutates Lisp payloads.
             return match unsafe {
                 neovm_value::tagged::gc::with_tagged_heap(|h| h.buffer_value(buf_id))
             } {

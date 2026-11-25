@@ -1160,6 +1160,9 @@ impl TaggedHeap {
 pub fn concurrent_hash_snapshot(
     owner: TaggedValue,
 ) -> Option<std::sync::Arc<concurrent_hash::HashTableScanSnapshot>> {
+    // SAFETY: reads the installed heap's active concurrent-mark snapshot Arc
+    // and clones it; does not collect, re-enter TLS heap access, mint
+    // HeapRef/HeapMut, or mutate any Lisp payload.
     unsafe {
         with_tagged_heap(|heap| {
             debug_assert!(heap.concurrent_mark_running && heap.concurrent_claims());
@@ -1185,19 +1188,27 @@ pub(crate) fn prepare_concurrent_hash_write(
     if !guard.claim_dirty() {
         return;
     }
-    unsafe {
-        with_tagged_heap(|heap| {
-            debug_assert!(heap.concurrent_mark_running);
-            let entry = heap.current_concurrent_hash_mutator();
-            let mut state = entry.lock().unwrap();
-            // The entry guard covers this payload access, barrier enumeration and
-            // the caller's subsequent &mut. It either preserves unread storage,
-            // defers admission, or waits until the admitted reader has completed.
-            let object = owner.gc_veclike_ptr().unwrap() as *mut HashTableObj;
-            guard.clone_on_first_write(&mut (*object).table.data, &mut state.retired_hash_buffers);
-            state.written_hash_owners.push(owner);
-        })
+    let prepare = |heap: &mut TaggedHeap| {
+        debug_assert!(heap.concurrent_mark_running);
+        let entry = heap.current_concurrent_hash_mutator();
+        let mut state = entry.lock().unwrap();
+        // The entry guard covers this payload access, barrier enumeration and
+        // the caller's subsequent &mut. It either preserves unread storage,
+        // defers admission, or waits until the admitted reader has completed.
+        let object = owner.gc_veclike_ptr().unwrap() as *mut HashTableObj;
+        // SAFETY: `owner` is a live HashTableObj and `guard` serializes this
+        // first-write COW against any admitted concurrent reader before the
+        // caller takes exclusive access to the table payload.
+        guard.clone_on_first_write(
+            unsafe { &mut (*object).table.data },
+            &mut state.retired_hash_buffers,
+        );
+        state.written_hash_owners.push(owner);
     };
+    // SAFETY: invoked only by a mutator entering exclusive hash-table mutation
+    // (no live HeapRef borrow of this table); records COW retirement without
+    // collecting, re-entering `with_tagged_heap`, or minting capability tokens.
+    unsafe { with_tagged_heap(prepare) };
 }
 
 impl TaggedHeap {

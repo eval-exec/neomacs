@@ -649,6 +649,10 @@ impl<'a> LoadDecoder<'a> {
         // permanent. Mapped rows are already permanent through the mapped
         // side tables, and the heap ignores conses, mapped objects and static
         // values.
+        // SAFETY: pdump loader runs serially before exposing loaded values;
+        // `note_image_object` only stamps image-resident metadata and never
+        // collects, re-enters `with_tagged_heap`, mints capability tokens, or
+        // mutates existing Lisp payloads.
         unsafe {
             with_tagged_heap(|heap| {
                 for index in 0..self.state.values.len() {
@@ -894,6 +898,9 @@ impl<'a> LoadDecoder<'a> {
         // table is far cheaper than growing a 12K-entry FxHashMap by
         // rehashing during registration.
         let (veclikes, strings) = self.state.spans.count_vectorlikes_and_strings();
+        // SAFETY: pdump loader pre-reserves mapped-registry capacity only;
+        // never collects, re-enters `with_tagged_heap`, mints capability
+        // tokens, or mutates Lisp payloads.
         unsafe { with_tagged_heap(|heap| heap.reserve_mapped_object_capacity(veclikes, strings)) };
 
         for (_index, record) in self.state.spans.iter() {
@@ -911,11 +918,15 @@ impl<'a> LoadDecoder<'a> {
                             )
                         })?;
                         let ptr = mapped_heap.cons_cell_mut(DumpConsSpan { offset: run_start })?;
-                        unsafe {
-                            with_tagged_heap(|heap| {
-                                heap.register_mapped_cons_range(ptr, run_len);
-                            })
+                        let register = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+                            // SAFETY: `ptr..ptr+run_len` is a validated cons
+                            // span in the loaded mapped image.
+                            unsafe { heap.register_mapped_cons_range(ptr, run_len) };
                         };
+                        // SAFETY: registers mapped cons metadata during serial
+                        // pdump load; never collects, re-enters
+                        // `with_tagged_heap`, or mints capability tokens.
+                        unsafe { with_tagged_heap(register) };
                         Ok(())
                     })?;
                 }
@@ -928,11 +939,15 @@ impl<'a> LoadDecoder<'a> {
                             )
                         })?;
                         let ptr = mapped_heap.float_obj_mut(DumpFloatSpan { offset: run_start })?;
-                        unsafe {
-                            with_tagged_heap(|heap| {
-                                heap.register_mapped_float_range(ptr, run_len);
-                            })
+                        let register = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+                            // SAFETY: `ptr..ptr+run_len` is a validated float
+                            // span in the loaded mapped image.
+                            unsafe { heap.register_mapped_float_range(ptr, run_len) };
                         };
+                        // SAFETY: registers mapped float metadata during serial
+                        // pdump load; never collects, re-enters
+                        // `with_tagged_heap`, or mints capability tokens.
+                        unsafe { with_tagged_heap(register) };
                         Ok(())
                     })?;
                 }
@@ -944,14 +959,20 @@ impl<'a> LoadDecoder<'a> {
                         )
                     })?;
                     let ptr = mapped_heap.string_obj_mut(span)?;
-                    unsafe {
-                        with_tagged_heap(|heap| {
+                    let register = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+                        // SAFETY: `ptr` is a validated mapped `StringObj` span
+                        // in the loaded image.
+                        unsafe {
                             heap.register_mapped_string_object(
                                 ptr,
                                 std::mem::size_of::<StringObj>(),
                             )
-                        })
+                        }
                     };
+                    // SAFETY: registers mapped string metadata during serial
+                    // pdump load; never collects, re-enters `with_tagged_heap`,
+                    // or mints capability tokens.
+                    unsafe { with_tagged_heap(register) };
                 }
                 LoadedObjectSpan::Vectorlike { object: span, .. } => {
                     let mapped_heap = mapped_heap.ok_or_else(|| {
@@ -966,9 +987,15 @@ impl<'a> LoadDecoder<'a> {
                             "mapped vectorlike span length overflows usize".into(),
                         )
                     })?;
-                    unsafe {
-                        with_tagged_heap(|heap| heap.register_mapped_veclike_object(ptr, byte_len))
+                    let register = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+                        // SAFETY: `ptr` addresses `byte_len` validated bytes
+                        // of a mapped veclike object in the loaded image.
+                        unsafe { heap.register_mapped_veclike_object(ptr, byte_len) }
                     };
+                    // SAFETY: registers mapped veclike metadata during serial
+                    // pdump load; never collects, re-enters `with_tagged_heap`,
+                    // or mints capability tokens.
+                    unsafe { with_tagged_heap(register) };
                 }
                 LoadedObjectSpan::None | LoadedObjectSpan::Unmapped => {}
             }
@@ -981,11 +1008,15 @@ impl<'a> LoadDecoder<'a> {
                 )
             })?;
             let ptr = mapped_heap.cons_cell_mut(DumpConsSpan { offset: run_start })?;
-            unsafe {
-                with_tagged_heap(|heap| {
-                    heap.register_mapped_cons_range(ptr, run_len);
-                })
+            let register = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+                // SAFETY: `ptr..ptr+run_len` is a validated trailing cons span
+                // in the loaded mapped image.
+                unsafe { heap.register_mapped_cons_range(ptr, run_len) };
             };
+            // SAFETY: registers mapped cons metadata during serial pdump load;
+            // never collects, re-enters `with_tagged_heap`, or mints capability
+            // tokens.
+            unsafe { with_tagged_heap(register) };
             Ok(())
         })?;
         float_run.finish(|run_start, run_len| {
@@ -995,11 +1026,15 @@ impl<'a> LoadDecoder<'a> {
                 )
             })?;
             let ptr = mapped_heap.float_obj_mut(DumpFloatSpan { offset: run_start })?;
-            unsafe {
-                with_tagged_heap(|heap| {
-                    heap.register_mapped_float_range(ptr, run_len);
-                })
+            let register = |heap: &mut neovm_value::tagged::gc::TaggedHeap| {
+                // SAFETY: `ptr..ptr+run_len` is a validated trailing float span
+                // in the loaded mapped image.
+                unsafe { heap.register_mapped_float_range(ptr, run_len) };
             };
+            // SAFETY: registers mapped float metadata during serial pdump load;
+            // never collects, re-enters `with_tagged_heap`, or mints capability
+            // tokens.
+            unsafe { with_tagged_heap(register) };
             Ok(())
         })?;
         Ok(())
@@ -1797,6 +1832,9 @@ impl<'a> LoadDecoder<'a> {
                 })?;
                 Value::make_sub_char_table(depth, min_char, vec![Value::NIL; contents.len()])
             }
+            // SAFETY: pure allocation (`alloc_hash_table`) during pdump load;
+            // never collects, sweeps, re-enters `with_tagged_heap`, mints
+            // capability tokens, or mutates existing payloads.
             DumpHeapObject::HashTable(ht) => unsafe {
                 with_tagged_heap(|heap| {
                     // GNU pdumper restores the hash table header first and wires
@@ -1861,6 +1899,9 @@ impl<'a> LoadDecoder<'a> {
                         Value::from_veclike_ptr(ptr.cast::<VecLikeHeader>())
                     }
                 } else {
+                    // SAFETY: pure arena allocation (`alloc_lambda`) during
+                    // pdump load; never collects, sweeps, re-enters
+                    // `with_tagged_heap`, or mints capability tokens.
                     unsafe { with_tagged_heap(|heap| heap.alloc_lambda(vec![Value::NIL; len])) }
                 }
             }
@@ -1883,6 +1924,9 @@ impl<'a> LoadDecoder<'a> {
                         Value::from_veclike_ptr(ptr.cast::<VecLikeHeader>())
                     }
                 } else {
+                    // SAFETY: pure arena allocation (`alloc_macro`) during
+                    // pdump load; never collects, sweeps, re-enters
+                    // `with_tagged_heap`, or mints capability tokens.
                     unsafe { with_tagged_heap(|heap| heap.alloc_macro(vec![Value::NIL; len])) }
                 }
             }
@@ -1999,6 +2043,9 @@ impl<'a> LoadDecoder<'a> {
                     })?;
                 // A mapped object is written in place instead of allocated by
                 // `alloc_overlay`, so resume the World counter explicitly.
+                // SAFETY: updates the heap's overlay serial high-water mark
+                // only; never collects, re-enters `with_tagged_heap`, mints
+                // capability tokens, or mutates Lisp payloads.
                 unsafe { with_tagged_heap(|heap| heap.observe_overlay_serial(serial)) };
                 let data = neovm_value::heap_types::OverlayData::new(
                     serial,

@@ -116,6 +116,9 @@ pub(crate) unsafe extern "C" fn neovm_jit_cons(car: i64, cdr: i64) -> i64 {
 /// while the caller's other values sit in native slots.
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn neovm_jit_make_float(value: f64) -> i64 {
+    // SAFETY: pure arena slot allocation (`alloc_float_inline`); never
+    // collects, sweeps, re-enters `with_tagged_heap`, mints capability tokens,
+    // or mutates existing payloads.
     unsafe { neovm_value::tagged::gc::with_tagged_heap(|heap| heap.alloc_float_inline(value)) }
         .bits() as i64
 }
@@ -580,6 +583,8 @@ pub(crate) unsafe fn contain_jit_shim_panic(
     payload: Box<dyn std::any::Any + Send>,
 ) -> Result<(), Box<dyn std::any::Any + Send>> {
     let blocked = if ctx.is_null() {
+        // SAFETY: read-only GC lock-poison probe; never collects, re-enters
+        // `with_tagged_heap`, mints capability tokens, or mutates payloads.
         unsafe { neovm_value::tagged::gc::with_tagged_heap(|h| h.gc_locks_poisoned()) }
     } else {
         // SAFETY: seam-provided dormant Context (the shim's own vmctx
