@@ -10,11 +10,11 @@ from http.client import IncompleteRead, RemoteDisconnected
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import socket
 import ssl
 import sys
-import tempfile
 import time
 from urllib.request import urlopen
 from urllib.error import HTTPError, URLError
@@ -234,7 +234,7 @@ def cache_root(workspace: Path) -> Path:
     if explicit:
         return Path(explicit)
     xdg = os.environ.get("XDG_CACHE_HOME", "")
-    if xdg:
+    if xdg and Path(xdg).is_absolute():
         return Path(xdg) / "neomacs" / "pinned-fixtures"
     home = os.environ.get("HOME", "")
     if home:
@@ -249,9 +249,32 @@ def entry_path(root: Path, pin: Pin) -> Path:
 def entry_matches(destination: Path, sha256: str) -> bool:
     try:
         cached = destination.read_bytes()
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):
         return False
     return hashlib.sha256(cached).hexdigest() == sha256
+
+
+def create_stage_dir(root: Path, sha256: str) -> Path:
+    """Create a unique staging directory respecting the process umask."""
+    prefix = f".stage-{sha256[:12]}-"
+    for _ in range(64):
+        candidate = root / f"{prefix}{secrets.token_hex(8)}"
+        try:
+            os.mkdir(candidate, 0o777)
+            return candidate
+        except FileExistsError:
+            continue
+    raise OSError(
+        errno.EEXIST, "could not allocate unique staging directory", str(root)
+    )
+
+
+def remove_stray_non_dir(path: Path) -> bool:
+    """Remove a stray file or symlink occupying `<cache_root>/<sha256>`."""
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        path.unlink()
+        return True
+    return False
 
 
 @contextlib.contextmanager
@@ -305,12 +328,11 @@ def prefetch(workspace: Path, pin: Pin, fetch=fetch_bytes) -> Path:
 
         stage_dir = None
         try:
-            stage_dir = Path(
-                tempfile.mkdtemp(prefix=f".stage-{pin.sha256[:12]}-", dir=root)
-            )
+            stage_dir = create_stage_dir(root, pin.sha256)
             staged_file = stage_dir / pin.name
             staged_file.write_bytes(data)
             target_dir = destination.parent
+            remove_stray_non_dir(target_dir)
             if not target_dir.exists():
                 try:
                     os.rename(stage_dir, target_dir)
@@ -318,6 +340,9 @@ def prefetch(workspace: Path, pin: Pin, fetch=fetch_bytes) -> Path:
                 except OSError:
                     if target_dir.is_dir():
                         os.replace(staged_file, destination)
+                    elif remove_stray_non_dir(target_dir):
+                        os.rename(stage_dir, target_dir)
+                        stage_dir = None
                     else:
                         raise
             else:

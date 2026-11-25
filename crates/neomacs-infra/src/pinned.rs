@@ -56,7 +56,7 @@ pub(crate) fn resolve_pinned_fixture_cache_root(
     if let Some(path) = nonempty(explicit) {
         return path;
     }
-    if let Some(xdg) = nonempty(xdg_cache_home) {
+    if let Some(xdg) = nonempty(xdg_cache_home).filter(|path| path.is_absolute()) {
         return xdg.join("neomacs").join("pinned-fixtures");
     }
     if let Some(home) = nonempty(home) {
@@ -311,9 +311,10 @@ where
         });
     }
 
-    // Verify before touching the cache, so a bad response cannot replace a
-    // good copy or leave an entry directory behind.
-    let actual = crate::inventory::sha256_hex(&bytes);
+    // Verify once before touching the cache, so a bad response cannot replace a
+    // good copy or leave an entry directory behind, and cold fetches do not
+    // re-hash large archives multiple times.
+    let actual = hash_bytes(&bytes);
     if actual != sha256 {
         return Err(PinnedError::DownloadedHash {
             url: url.to_owned(),
@@ -321,42 +322,104 @@ where
             actual,
         });
     }
-    publish_verified_bytes(root, name, sha256, &bytes)
+    publish_verified(root, name, sha256, VerifiedBytes(&bytes))
 }
 
-/// Stage verified bytes in a sibling temporary directory inside `root` and
-/// publish them atomically via rename.
-fn publish_verified_bytes(
+/// Proof token that `bytes` have already been verified against the pin's SHA-256.
+struct VerifiedBytes<'a>(&'a [u8]);
+
+/// RAII staging directory created via `fs::create_dir` so it inherits the
+/// process umask (supporting multi-user/group shared caches) instead of
+/// `mkdtemp`'s hardcoded `0700`.
+struct StageDir(Option<PathBuf>);
+
+impl StageDir {
+    fn create_in(root: &Path, sha256: &str) -> Result<Self, PinnedError> {
+        let prefix = format!(".stage-{}-", &sha256[..12]);
+        for _ in 0..64 {
+            let mut nonce = [0u8; 8];
+            getrandom::fill(&mut nonce).map_err(|error| PinnedError::Write {
+                path: root.to_path_buf(),
+                source: std::io::Error::other(error),
+            })?;
+            let candidate = root.join(format!("{prefix}{:016x}", u64::from_ne_bytes(nonce)));
+            match fs::create_dir(&candidate) {
+                Ok(()) => return Ok(Self(Some(candidate))),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(source) => {
+                    return Err(PinnedError::Write {
+                        path: candidate,
+                        source,
+                    });
+                }
+            }
+        }
+        Err(PinnedError::Write {
+            path: root.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "could not allocate unique staging directory",
+            ),
+        })
+    }
+
+    fn path(&self) -> &Path {
+        self.0
+            .as_deref()
+            .expect("StageDir path accessed after disarm")
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for StageDir {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+
+/// Remove a stray non-directory entry (such as a regular file or symlink) at
+/// `<cache_root>/<sha256>` so the hash directory can be published cleanly.
+fn remove_stray_non_dir(path: &Path) -> Result<bool, std::io::Error> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if !meta.file_type().is_dir() => {
+            fs::remove_file(path)?;
+            Ok(true)
+        }
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Stage already-verified bytes in a sibling temporary directory inside `root`
+/// and publish them atomically via rename.
+fn publish_verified(
     root: &Path,
     name: &str,
     sha256: &str,
-    bytes: &[u8],
+    verified: VerifiedBytes<'_>,
 ) -> Result<PathBuf, PinnedError> {
     validate_pin(name, sha256)?;
     let target_dir = entry_dir(root, sha256);
     let destination = target_dir.join(name);
-    let actual = crate::inventory::sha256_hex(bytes);
-    if actual != sha256 {
-        return Err(PinnedError::CachedHash {
-            path: destination,
-            expected: sha256.to_owned(),
-            actual,
-        });
-    }
     fs::create_dir_all(root).map_err(|source| PinnedError::CacheRoot {
         path: root.to_path_buf(),
         source,
     })?;
-    let stage = tempfile::Builder::new()
-        .prefix(&format!(".stage-{}-", &sha256[..12]))
-        .tempdir_in(root)
-        .map_err(|source| PinnedError::Write {
-            path: root.to_path_buf(),
-            source,
-        })?;
+    let mut stage = StageDir::create_in(root, sha256)?;
     let staged_file = stage.path().join(name);
-    fs::write(&staged_file, bytes).map_err(|source| PinnedError::Write {
+    fs::write(&staged_file, verified.0).map_err(|source| PinnedError::Write {
         path: staged_file.clone(),
+        source,
+    })?;
+
+    remove_stray_non_dir(&target_dir).map_err(|source| PinnedError::Rename {
+        path: destination.clone(),
         source,
     })?;
 
@@ -364,7 +427,7 @@ fn publish_verified_bytes(
         match fs::rename(stage.path(), &target_dir) {
             Ok(()) => {
                 // The staging directory is now the live entry directory.
-                let _ = stage.keep();
+                stage.disarm();
             }
             Err(_) if target_dir.is_dir() => {
                 // Another writer created the hash directory concurrently;
@@ -374,12 +437,23 @@ fn publish_verified_bytes(
                     source,
                 })?;
             }
-            Err(source) => {
-                return Err(PinnedError::Rename {
-                    path: destination,
-                    source,
-                });
-            }
+            Err(source) => match remove_stray_non_dir(&target_dir) {
+                Ok(true) => {
+                    fs::rename(stage.path(), &target_dir).map_err(|retry_source| {
+                        PinnedError::Rename {
+                            path: destination.clone(),
+                            source: retry_source,
+                        }
+                    })?;
+                    stage.disarm();
+                }
+                _ => {
+                    return Err(PinnedError::Rename {
+                        path: destination,
+                        source,
+                    });
+                }
+            },
         }
     } else {
         fs::rename(&staged_file, &destination).map_err(|source| PinnedError::Rename {
@@ -387,7 +461,38 @@ fn publish_verified_bytes(
             source,
         })?;
     }
-    verify(&destination, sha256).map(|()| destination)
+    Ok(destination)
+}
+
+#[cfg(test)]
+fn publish_verified_bytes(
+    root: &Path,
+    name: &str,
+    sha256: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, PinnedError> {
+    validate_pin(name, sha256)?;
+    let destination = entry_path(root, name, sha256);
+    let actual = hash_bytes(bytes);
+    if actual != sha256 {
+        return Err(PinnedError::CachedHash {
+            path: destination,
+            expected: sha256.to_owned(),
+            actual,
+        });
+    }
+    publish_verified(root, name, sha256, VerifiedBytes(bytes))
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_HASH_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    #[cfg(test)]
+    TEST_HASH_CALLS.with(|count| count.set(count.get() + 1));
+    crate::inventory::sha256_hex(bytes)
 }
 
 /// The cached bytes are what the pin describes.
@@ -396,7 +501,7 @@ fn verify(path: &Path, expected: &str) -> Result<(), PinnedError> {
         path: path.to_path_buf(),
         source,
     })?;
-    let actual = crate::inventory::sha256_hex(&bytes);
+    let actual = hash_bytes(&bytes);
     if actual == expected {
         Ok(())
     } else {

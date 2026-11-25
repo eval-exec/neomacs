@@ -39,6 +39,26 @@ fn pinned_fixture_cache_root_prefers_explicit_then_xdg_then_home_then_workspace(
     );
 }
 
+/// Relative `XDG_CACHE_HOME` values are invalid per the XDG Base Directory
+/// Specification and fall through to `HOME` and then the workspace fallback.
+#[test]
+fn relative_xdg_cache_home_is_ignored_in_favor_of_home_and_workspace() {
+    let workspace = PathBuf::from("/worktree-a");
+    assert_eq!(
+        resolve_pinned_fixture_cache_root(
+            None,
+            Some("relative/xdg".into()),
+            Some("/home/tester".into()),
+            workspace.clone(),
+        ),
+        PathBuf::from("/home/tester/.cache/neomacs/pinned-fixtures")
+    );
+    assert_eq!(
+        resolve_pinned_fixture_cache_root(None, Some("relative/xdg".into()), None, workspace),
+        PathBuf::from("/worktree-a/tmp/pinned-fixtures")
+    );
+}
+
 /// The bytes the cache holds are what the hash describes: a cached fixture
 /// with the pinned hash is accepted, and one with any other hash is refused
 /// with the typed mismatch a caller can match on.
@@ -393,4 +413,100 @@ fn two_worktrees_share_one_hash_keyed_entry_without_refetch() {
         ),
         "worktree B must not accept a different pinned revision"
     );
+}
+
+/// A cold Rust fetch hashes downloaded bytes once (no redundant in-memory or
+/// immediate post-write re-hash), while every subsequent read verifies on disk.
+#[test]
+fn cold_fetch_hashes_downloaded_bytes_once() {
+    let shared = tempfile::tempdir().expect("shared cache");
+    let payload = b"large-archive-standin";
+    let sha = crate::inventory::sha256_hex(payload);
+
+    TEST_HASH_CALLS.with(|count| count.set(0));
+    let published = pinned_file_in_with_fetch(
+        shared.path(),
+        "archive.tar.gz",
+        "https://fixtures.invalid/archive.tar.gz",
+        &sha,
+        1024,
+        || Ok(payload.to_vec()),
+    )
+    .expect("cold fetch publishes");
+    assert_eq!(
+        TEST_HASH_CALLS.with(|count| count.get()),
+        1,
+        "cold fetch must hash the payload exactly once"
+    );
+    assert_eq!(std::fs::read(&published).unwrap(), payload);
+
+    TEST_HASH_CALLS.with(|count| count.set(0));
+    let hit = cached_pinned_file_in(shared.path(), "archive.tar.gz", &sha).expect("cache hit");
+    assert_eq!(hit, published);
+    assert_eq!(
+        TEST_HASH_CALLS.with(|count| count.get()),
+        1,
+        "each cache read still verifies SHA-256 on disk"
+    );
+}
+
+/// A stray regular file occupying `<cache_root>/<sha256>` is removed under the
+/// lock so the hash directory can be published cleanly instead of failing with
+/// ENOTDIR.
+#[test]
+fn stray_regular_file_at_hash_path_is_replaced_cleanly() {
+    let shared = tempfile::tempdir().expect("shared cache");
+    let payload = b"valid fixture after stray file";
+    let sha = crate::inventory::sha256_hex(payload);
+    let stray = entry_dir(shared.path(), &sha);
+    std::fs::write(&stray, b"stray regular file").unwrap();
+    assert!(stray.is_file());
+
+    let published = pinned_file_in_with_fetch(
+        shared.path(),
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha,
+        1024,
+        || Ok(payload.to_vec()),
+    )
+    .expect("writer replaces stray file at hash path");
+    assert!(stray.is_dir());
+    assert_eq!(published, entry_path(shared.path(), "fixture.xpm", &sha));
+    assert_eq!(std::fs::read(&published).unwrap(), payload);
+    assert_eq!(
+        cached_pinned_file_in(shared.path(), "fixture.xpm", &sha).unwrap(),
+        published
+    );
+}
+
+/// Published hash directories inherit the process umask (matching ordinary
+/// `fs::create_dir`) rather than `mkdtemp`'s hardcoded `0700`.
+#[cfg(unix)]
+#[test]
+fn published_hash_directory_inherits_umask_instead_of_0700() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let shared = tempfile::tempdir().expect("shared cache");
+    let reference = shared.path().join("umask-reference");
+    std::fs::create_dir(&reference).expect("create reference dir");
+    let expected_mode = std::fs::metadata(&reference).unwrap().permissions().mode() & 0o777;
+
+    let payload = b"umask permission check";
+    let sha = crate::inventory::sha256_hex(payload);
+    let published = pinned_file_in_with_fetch(
+        shared.path(),
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha,
+        1024,
+        || Ok(payload.to_vec()),
+    )
+    .expect("publish fixture");
+    let actual_mode = std::fs::metadata(published.parent().unwrap())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(actual_mode, expected_mode);
 }

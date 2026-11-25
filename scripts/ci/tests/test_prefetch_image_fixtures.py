@@ -496,6 +496,32 @@ class ImageFixtureTests(unittest.TestCase):
                 provisioner.cache_root(self.workspace),
                 Path("/home/tester/.cache/neomacs/pinned-fixtures"),
             )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NEOMACS_PINNED_FIXTURE_CACHE": "",
+                "XDG_CACHE_HOME": "relative/xdg",
+                "HOME": "/home/tester",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                provisioner.cache_root(self.workspace),
+                Path("/home/tester/.cache/neomacs/pinned-fixtures"),
+            )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "NEOMACS_PINNED_FIXTURE_CACHE": "",
+                "XDG_CACHE_HOME": "relative/xdg",
+                "HOME": "",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                provisioner.cache_root(self.workspace),
+                self.workspace / "tmp/pinned-fixtures",
+            )
         self.assertEqual(
             provisioner.cache_root(self.workspace),
             self.workspace / "tmp/pinned-fixtures",
@@ -588,6 +614,33 @@ class ImageFixtureTests(unittest.TestCase):
             )
         fetch.assert_not_called()
         self.assertTrue((self.cache / f".{self.pin.sha256}.lock").is_file())
+
+    def test_stray_regular_file_at_hash_path_is_replaced_cleanly(self):
+        self.cache.mkdir(parents=True, exist_ok=True)
+        self.destination.parent.write_bytes(b"stray regular file")
+        self.assertTrue(self.destination.parent.is_file())
+        result = provisioner.prefetch(
+            self.workspace, self.pin, mock.Mock(return_value=self.data)
+        )
+        self.assertEqual(result, self.destination)
+        self.assertTrue(self.destination.parent.is_dir())
+        self.assertEqual(self.destination.read_bytes(), self.data)
+        self.assertEqual(self.cache_entries(), [self.destination.parent])
+
+    def test_published_hash_directory_inherits_umask_instead_of_0700(self):
+        if os.name != "posix":
+            return
+        self.cache.mkdir(parents=True, exist_ok=True)
+        reference = self.cache / "umask-reference"
+        os.mkdir(reference, 0o777)
+        expected_mode = reference.stat().st_mode & 0o777
+        reference.rmdir()
+
+        provisioner.prefetch(
+            self.workspace, self.pin, mock.Mock(return_value=self.data)
+        )
+        actual_mode = self.destination.parent.stat().st_mode & 0o777
+        self.assertEqual(actual_mode, expected_mode)
 
     def test_distinct_revisions_for_same_filename_coexist_in_shared_cache(self):
         rev_b_data = b"revision b image bytes"
