@@ -20533,13 +20533,38 @@ fn b5_gnutls_deinit_and_boot_failure_unregister_socket_before_dropping() {
         .expect("gnutls-deinit");
     assert!(deinit_ret.is_truthy());
 
+    // `gnutls-deinit` unregisters the old TLS `Event::all` registration via
+    // `PollRegistration::into_inner`, unwraps the TCP socket into
+    // `PollRegistration<NetworkSocket>`, and re-registers read-only interest
+    // (`Event::readable`).  The old writable interest must be gone immediately
+    // (though `readable` may fire because `TlsPeer` sends data/EOF), and
+    // `delete-process` must unregister the restored socket before drop even
+    // while `keep_open1` holds the underlying file description open.
+    {
+        let proc = eval.processes().get(id1).expect("proc1 still open");
+        assert!(proc.live_io().tls_stream().is_none());
+        assert!(proc.live_io().network_socket().is_some());
+    }
     events.clear();
     poller
         .wait(&mut events, Some(Duration::ZERO))
         .expect("poll after gnutls-deinit");
     assert!(
+        events
+            .iter()
+            .all(|ev| ev.key != id1 as usize || !ev.writable),
+        "stale writable epoll event remained after gnutls-deinit: old TLS PollRegistration was not unregistered"
+    );
+
+    eval.eval_str("(delete-process b5-tls-p1)")
+        .expect("delete-process after gnutls-deinit");
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll after delete-process");
+    assert!(
         events.iter().all(|ev| ev.key != id1 as usize),
-        "stale epoll event remained after gnutls-deinit: socket was not unregistered before drop"
+        "stale epoll event remained after delete-process on unwrapped socket: socket was not unregistered before drop"
     );
     drop(keep_open1);
 
@@ -20594,4 +20619,370 @@ fn b5_gnutls_deinit_and_boot_failure_unregister_socket_before_dropping() {
         "stale epoll event remained after failed gnutls-boot: socket was not unregistered before drop"
     );
     drop(keep_open2);
+}
+
+#[cfg(unix)]
+fn drive_rustls_server_handshake(
+    server: &mut rustls::ServerConnection,
+    stream: &mut std::net::TcpStream,
+) {
+    use std::io::Write;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .expect("set read timeout");
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .expect("set write timeout");
+    while server.is_handshaking() {
+        while server.wants_write() {
+            server.write_tls(stream).expect("write server tls");
+        }
+        stream.flush().expect("flush server tls");
+        if server.wants_read() {
+            let n = server.read_tls(stream).expect("read client tls");
+            assert!(n > 0, "unexpected EOF during server handshake");
+            server.process_new_packets().expect("process tls packets");
+        }
+    }
+    while server.wants_write() {
+        server.write_tls(stream).expect("flush final server tls");
+    }
+    stream.flush().expect("flush server stream");
+}
+
+#[cfg(unix)]
+fn build_loopback_rustls_server_config() -> std::sync::Arc<rustls::ServerConfig> {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+    let resources = loopback::resources();
+    let cert = CertificateDer::from_pem_file(resources.join("server.pem")).expect("server.pem");
+    let key =
+        PrivateKeyDer::from_pem_file(resources.join("server-key.pem")).expect("server-key.pem");
+    let mut cfg = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .expect("server config");
+    cfg.send_tls13_tickets = 0;
+    std::sync::Arc::new(cfg)
+}
+
+/// Regression (#14597 / #14600): `gnutls-deinit` must unwrap the underlying
+/// `TcpStream` back into a live, poller-registered `PollRegistration<NetworkSocket>`
+/// so plaintext `process-send-string` and `accept-process-output` both work,
+/// a second `gnutls-deinit` returns `nil` without disturbing the socket, and
+/// `delete-process` unregisters the unwrapped socket from epoll before closing
+/// while `(gnutls-get-initstage p)` still returns `3`.
+#[cfg(unix)]
+#[test]
+fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deinit() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let server_cfg = build_loopback_rustls_server_config();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        let mut server = rustls::ServerConnection::new(server_cfg).expect("server conn");
+        drive_rustls_server_handshake(&mut server, &mut stream);
+
+        let mut ping = Vec::new();
+        while !ping.ends_with(b"\n") {
+            let n = server.read_tls(&mut stream).expect("read tls ping");
+            assert!(n > 0, "eof waiting for encrypted PING1");
+            server.process_new_packets().expect("process tls ping");
+            let mut tmp = [0u8; 256];
+            loop {
+                match server.reader().read(&mut tmp) {
+                    Ok(0) => break,
+                    Ok(k) => ping.extend_from_slice(&tmp[..k]),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) => panic!("tls reader error: {e}"),
+                }
+            }
+        }
+        assert_eq!(ping, b"PING1\n");
+        server.writer().write_all(b"PONG1\n").expect("write PONG1");
+        while server.wants_write() {
+            server.write_tls(&mut stream).expect("flush PONG1");
+        }
+        stream.flush().expect("flush tcp PONG1");
+        drop(server);
+
+        let mut plain1 = Vec::new();
+        let mut tmp = [0u8; 64];
+        while !plain1.ends_with(b"\n") {
+            let n = stream.read(&mut tmp).expect("read plaintext 1");
+            assert!(n > 0, "EOF after gnutls-deinit: client closed TCP socket");
+            plain1.extend_from_slice(&tmp[..n]);
+        }
+        assert_eq!(plain1, b"PLAIN1\n");
+        stream.write_all(b"ECHO1\n").expect("write ECHO1");
+        stream.flush().expect("flush ECHO1");
+
+        let mut plain2 = Vec::new();
+        while !plain2.ends_with(b"\n") {
+            let n = stream.read(&mut tmp).expect("read plaintext 2");
+            assert!(n > 0, "EOF after second gnutls-deinit");
+            plain2.extend_from_slice(&tmp[..n]);
+        }
+        assert_eq!(plain2, b"PLAIN2\n");
+        stream.write_all(b"ECHO2\n").expect("write ECHO2");
+        stream.flush().expect("flush ECHO2");
+        let _ = done_rx.recv_timeout(Duration::from_secs(3));
+    });
+
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let poller = eval.processes().wait_backend.poller_arc().expect("poller");
+    let ca_pem = loopback::resources().join("ca.pem");
+
+    let proc_val = eval
+        .eval_str(&format!(
+            r#"(progn
+                 (setq test-tls-b (get-buffer-create " *gnutls-deinit-ab*"))
+                 (setq test-tls-p
+                       (make-network-process :name "gnutls-deinit-ab"
+                                             :host "127.0.0.1"
+                                             :service {port}
+                                             :buffer test-tls-b
+                                             :noquery t)))"#
+        ))
+        .expect("make-network-process");
+    let id = proc_val.as_process_id().expect("process id");
+    let keep_open = {
+        let proc = eval.processes().get(id).expect("proc");
+        let sock = proc.live_io().network_socket().expect("tcp socket");
+        match &**sock {
+            NetworkSocket::TcpStream(tcp) => tcp.try_clone().expect("dup client socket"),
+            _ => panic!("expected TcpStream"),
+        }
+    };
+
+    let boot_res = eval
+        .eval_str(&format!(
+            r#"(let ((b (gnutls-boot test-tls-p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{}") :complete-negotiation t))))
+                 (process-send-string test-tls-p "PING1\n")
+                 (accept-process-output test-tls-p 1)
+                 (set-buffer test-tls-b)
+                 (let ((pong (prog1 (buffer-string) (erase-buffer))))
+                   (list b (gnutls-get-initstage test-tls-p) pong)))"#,
+            ca_pem.display()
+        ))
+        .expect("boot + ping1");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&boot_res),
+        "(t 9 \"PONG1\n\")"
+    );
+
+    let d1 = eval
+        .eval_str(r#"(list (gnutls-deinit test-tls-p) (gnutls-get-initstage test-tls-p) (process-status test-tls-p))"#)
+        .expect("first gnutls-deinit");
+    assert_eq!(crate::emacs_core::print::print_value(&d1), "(t 3 open)");
+
+    {
+        let proc = eval.processes().get(id).expect("proc after deinit");
+        assert!(proc.live_io().tls_stream().is_none());
+        assert!(proc.live_io().network_socket().is_some());
+    }
+
+    eval.eval_str(r#"(process-send-string test-tls-p "PLAIN1\n")"#)
+        .expect("send PLAIN1");
+    let mut events = polling::Events::new();
+    poller
+        .wait(&mut events, Some(Duration::from_secs(2)))
+        .expect("poll unwrapped plaintext socket for ECHO1");
+    assert!(
+        events.iter().any(|ev| ev.key == id as usize && ev.readable),
+        "unwrapped plaintext socket must be registered on poller after gnutls-deinit"
+    );
+
+    let r1 = eval
+        .eval_str(r#"(progn (accept-process-output test-tls-p 1) (set-buffer test-tls-b) (prog1 (buffer-string) (erase-buffer)))"#)
+        .expect("read ECHO1");
+    assert_eq!(crate::emacs_core::print::print_value(&r1), "\"ECHO1\n\"");
+
+    let d2 = eval
+        .eval_str(
+            r#"(let ((res (gnutls-deinit test-tls-p)))
+                 (process-send-string test-tls-p "PLAIN2\n")
+                 (accept-process-output test-tls-p 1)
+                 (set-buffer test-tls-b)
+                 (list res (gnutls-get-initstage test-tls-p) (process-status test-tls-p)
+                       (buffer-string)))"#,
+        )
+        .expect("second gnutls-deinit + PLAIN2");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&d2),
+        "(nil 3 open \"ECHO2\n\")"
+    );
+
+    eval.eval_str("(delete-process test-tls-p)")
+        .expect("delete-process");
+    let st_after_delete = eval
+        .eval_str("(gnutls-get-initstage test-tls-p)")
+        .expect("gnutls-get-initstage after delete-process");
+    assert_eq!(crate::emacs_core::print::print_value(&st_after_delete), "3");
+    events.clear();
+    poller
+        .wait(&mut events, Some(Duration::ZERO))
+        .expect("poll after delete-process");
+    assert!(
+        events.iter().all(|ev| ev.key != id as usize),
+        "stale poller event remained after delete-process on unwrapped socket"
+    );
+    drop(keep_open);
+    let _ = done_tx.send(());
+    server_handle
+        .join()
+        .expect("server thread finished cleanly");
+}
+
+/// Regression (#14600 condition 3, GNU `src/gnutls.c:2083`): after
+/// `gnutls-deinit` (or directly on an already-`Ready` TLS process), calling
+/// `gnutls-boot` again allocates fresh TLS credentials on the same TCP socket
+/// and completes a new encrypted session.
+#[cfg(unix)]
+#[test]
+fn gnutls_deinit_clears_boot_state_and_allows_fresh_reboot() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let server_cfg = build_loopback_rustls_server_config();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        for (expected, reply) in [
+            (b"PING1\n", b"PONG1\n"),
+            (b"PING2\n", b"PONG2\n"),
+            (b"PING3\n", b"PONG3\n"),
+        ] {
+            let mut server =
+                rustls::ServerConnection::new(std::sync::Arc::clone(&server_cfg)).expect("server");
+            drive_rustls_server_handshake(&mut server, &mut stream);
+            let mut got = Vec::new();
+            while !got.ends_with(b"\n") {
+                let n = server.read_tls(&mut stream).expect("read tls");
+                assert!(n > 0, "eof during tls session");
+                server.process_new_packets().expect("process packets");
+                let mut tmp = [0u8; 256];
+                loop {
+                    match server.reader().read(&mut tmp) {
+                        Ok(0) => break,
+                        Ok(k) => got.extend_from_slice(&tmp[..k]),
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(e) => panic!("tls read err: {e}"),
+                    }
+                }
+            }
+            assert_eq!(got, expected);
+            server.writer().write_all(reply).expect("write reply");
+            while server.wants_write() {
+                server.write_tls(&mut stream).expect("flush reply");
+            }
+            stream.flush().expect("flush tcp");
+        }
+        let _ = done_rx.recv_timeout(Duration::from_secs(3));
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(let* ((buf (generate-new-buffer " *gnutls-reboot*"))
+       (p (make-network-process :name "reb" :host "127.0.0.1" :service {port} :buffer buf :noquery t :sentinel #'ignore)))
+  (unwind-protect
+      (let* ((b1 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
+             (_ (process-send-string p "PING1\n"))
+             (_ (accept-process-output p 1))
+             (r1 (with-current-buffer buf (prog1 (buffer-string) (erase-buffer))))
+             (d1 (gnutls-deinit p))
+             ;; Re-boot after explicit gnutls-deinit
+             (b2 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
+             (_ (process-send-string p "PING2\n"))
+             (_ (accept-process-output p 1))
+             (r2 (with-current-buffer buf (prog1 (buffer-string) (erase-buffer))))
+             ;; Direct re-boot on an already-Ready TLS process (GNU gnutls.c:2083)
+             (b3 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
+             (_ (process-send-string p "PING3\n"))
+             (_ (accept-process-output p 1))
+             (r3 (with-current-buffer buf (buffer-string))))
+        (list b1 r1 d1 b2 r2 b3 (gnutls-get-initstage p) r3))
+    (ignore-errors (delete-process p))
+    (kill-buffer buf)))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    let _ = done_tx.send(());
+    server_handle.join().expect("server thread finished");
+    assert_eq!(result, "OK (t \"PONG1\n\" t t \"PONG2\n\" t 9 \"PONG3\n\")");
+}
+
+/// Regression (#14696 MEDIUM-1): `gnutls-deinit` must NEVER flush queued
+/// TLS-pending writes in plaintext over the unwrapped TCP socket.
+#[cfg(unix)]
+#[test]
+fn gnutls_deinit_does_not_flush_pending_tls_write_queue_in_plaintext() {
+    use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
+    use std::io::Read;
+    use std::net::TcpListener;
+
+    crate::test_utils::init_test_tracing();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent peer");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let server_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept client");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .expect("read timeout");
+        let mut received = Vec::new();
+        let mut tmp = [0u8; 512];
+        loop {
+            match stream.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(n) => received.extend_from_slice(&tmp[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("read from client: {e}"),
+            }
+        }
+        assert!(
+            !received
+                .windows(b"SECRET-NEVER-PLAINTEXT".len())
+                .any(|w| w == b"SECRET-NEVER-PLAINTEXT"),
+            "gnutls-deinit leaked queued TLS-pending data in plaintext!"
+        );
+    });
+
+    let ca_pem = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(require 'timer)
+(let* ((p (make-network-process :name "secret-p" :host "127.0.0.1" :service {port} :noquery t :sentinel #'ignore))
+       (timer (run-with-timer 0.03 nil
+                (lambda ()
+                  (process-send-string p "SECRET-NEVER-PLAINTEXT\n")
+                  (gnutls-deinit p)))))
+  (unwind-protect
+      (condition-case nil
+          (progn
+            (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t))
+            'unexpected-ok)
+        (error 'aborted))
+    (cancel-timer timer)
+    (ignore-errors (delete-process p))))
+"#,
+        port = port,
+        ca = ca_pem.display()
+    ));
+    server_handle.join().expect("server thread finished");
+    assert_eq!(result, "OK aborted");
 }

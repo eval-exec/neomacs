@@ -46,6 +46,17 @@ impl TlsStream {
         }
     }
 
+    /// Strip the TLS layer and return ownership of the underlying TCP stream.
+    ///
+    /// Used by `gnutls-deinit` to mirror GNU `emacs_gnutls_deinit`
+    /// (`src/gnutls.c:939-977`), which tears down only TLS credentials and
+    /// session state while keeping the process's network descriptor open.
+    pub fn into_tcp_stream(self) -> TcpStream {
+        match self {
+            Self::Rustls(stream) => stream.inner.sock,
+        }
+    }
+
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub fn peer_certificates_pem(&self) -> &[String] {
         match self {

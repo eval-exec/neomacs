@@ -4100,7 +4100,13 @@ impl ChildPipePollerExt for ProcessManager {
 
     fn deactivate_process_io(proc: &mut Process) {
         proc.clear_live_io();
-        proc.gnutls_initstage = GnutlsInitStage::Empty;
+        // GNU `deactivate_process` (`src/process.c:4820`) calls
+        // `emacs_gnutls_deinit`, which lowers `GNUTLS_INITSTAGE` to
+        // `GNUTLS_STAGE_CALLBACKS` (3) when `>= GNUTLS_STAGE_INIT` (4) and
+        // leaves stage 0 unchanged.
+        if i64::from(proc.gnutls_initstage) >= i64::from(GnutlsInitStage::Init) {
+            proc.gnutls_initstage = GnutlsInitStage::Callbacks;
+        }
         proc.gnutls_boot_parameters = Value::NIL;
     }
 }
@@ -5792,7 +5798,9 @@ impl SystemProcessExt for ProcessManager {
         if let Some(proc) = self.get_mut(id) {
             proc.live_io_mut().set_tls_stream(None);
             proc.live_io_mut().set_network_socket(None);
-            proc.gnutls_initstage = GnutlsInitStage::Empty;
+            if i64::from(proc.gnutls_initstage) >= i64::from(GnutlsInitStage::Init) {
+                proc.gnutls_initstage = GnutlsInitStage::Callbacks;
+            }
         }
     }
 

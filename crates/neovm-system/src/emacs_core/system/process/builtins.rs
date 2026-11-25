@@ -375,6 +375,16 @@ pub(crate) fn builtin_gnutls_boot(
     expect_args("gnutls-boot", &args, 3)?;
     let id = resolve_process_object_or_wrong_type_any_in_manager(&eval.processes(), &args[0])?;
     let parameters = parse_gnutls_boot_parameters(args[1], args[2], eval.symbol_mode())?;
+    // GNU `Fgnutls_boot` (`src/gnutls.c:2083`) calls `emacs_gnutls_deinit`
+    // before allocating fresh credentials on a process that already has an
+    // established TLS session.  Do not retire a `HandshakeTried` session here
+    // so a recursive `gnutls-boot` from a timer/filter cannot tear down an
+    // outer blocking `finish_process_tls_handshake`.
+    if eval.processes().get(id).is_some_and(|proc| {
+        proc.gnutls_initstage == GnutlsInitStage::Ready && proc.live_io().tls_stream().is_some()
+    }) {
+        deinit_process_tls(eval.processes_mut(), id)?;
+    }
     upgrade_process_to_tls::<RustlsBackend>(
         eval,
         id,
@@ -426,15 +436,37 @@ pub(super) fn deinit_process_tls(processes: &mut ProcessManager, id: ProcessId) 
     let proc = processes
         .get_mut(id)
         .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
-    // `take_tls_stream` unregisters the underlying TCP socket via
-    // `PollRegistration::into_inner` before returning and dropping it.
-    if proc.live_io_mut().take_tls_stream().is_some() {
-        proc.gnutls_initstage = GnutlsInitStage::Callbacks;
-        proc.gnutls_boot_parameters = Value::NIL;
-        Ok(Value::T)
-    } else {
-        Ok(Value::NIL)
+    // GNU `emacs_gnutls_deinit` (`src/gnutls.c:939-977`) strips only the TLS
+    // session/credentials and lowers the initstage to `GNUTLS_STAGE_CALLBACKS`
+    // when `>= GNUTLS_STAGE_INIT`, leaving the underlying TCP socket open and
+    // monitored without flushing pending writes or clearing
+    // `gnutls_boot_parameters`.
+    //
+    // `take_tls_stream` runs `PollRegistration::into_inner` to unregister the
+    // TLS handle from the poller before unwrapping the `TcpStream`; restoring
+    // `NetworkSocket::TcpStream` and calling `set_process_output_read_interest`
+    // re-registers the plaintext socket through the same `PollRegistration`
+    // discipline.
+    let was_pending_handshake = proc.gnutls_initstage == GnutlsInitStage::HandshakeTried;
+    let Some(tls_stream) = proc.live_io_mut().take_tls_stream() else {
+        return Ok(Value::NIL);
+    };
+    let tcp_stream = tls_stream.into_tcp_stream();
+    proc.live_io_mut()
+        .set_network_socket(Some(NetworkSocket::TcpStream(tcp_stream)));
+    proc.set_tls_polling(TlsPolling::Enabled);
+    // Data queued while an unverified TLS handshake was pending was intended
+    // for encrypted delivery and must never be transmitted in plaintext after
+    // stripping TLS.
+    if was_pending_handshake {
+        proc.write_queue = Value::NIL;
     }
+    if i64::from(proc.gnutls_initstage) >= i64::from(GnutlsInitStage::Init) {
+        proc.gnutls_initstage = GnutlsInitStage::Callbacks;
+    }
+    let accepts_output = process_filter_accepts_output(proc);
+    processes.set_process_output_read_interest(id, accepts_output);
+    Ok(Value::T)
 }
 
 #[doc(hidden)]
@@ -456,7 +488,7 @@ pub(crate) fn builtin_gnutls_get_initstage(
     let id = resolve_process_object_or_wrong_type_any_in_manager(&eval.processes(), &args[0])?;
     let proc = eval
         .processes()
-        .get(id)
+        .get_any(id)
         .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
     Ok(Value::fixnum(i64::from(proc.gnutls_initstage)))
 }
