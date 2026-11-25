@@ -451,8 +451,12 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         self.with_stopped_heap_for_test(stopped, |heap| heap.gc_collections())
     }
 
+    /// # Safety
+    ///
+    /// `word` must be a `TaggedValue` bit pattern produced by an allocation on
+    /// this heap. `TaggedValue::from_bits` over any other word is caller UB.
     #[cfg(any(test, feature = "test-support"))]
-    pub(super) fn owns_heap_word_for_test(
+    pub(super) unsafe fn owns_heap_word_for_test(
         &self,
         stopped: &AllStopped<'_>,
         word: usize,

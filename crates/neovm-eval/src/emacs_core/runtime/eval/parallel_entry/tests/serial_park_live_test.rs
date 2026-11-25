@@ -1953,8 +1953,9 @@ fn l67a_collection_request_rides_batch_stop_once() {
     with_live_era_with_garbage("l67a-k5-d8", |era, survivor, garbage| {
         let before = {
             let stopped = stop_retrying(era);
-            assert!(era.owns_heap_word_for_test(&stopped, survivor).unwrap());
-            assert!(era.owns_heap_word_for_test(&stopped, garbage).unwrap());
+            // SAFETY: `survivor` and `garbage` are allocations on this era's heap.
+            assert!(unsafe { era.owns_heap_word_for_test(&stopped, survivor).unwrap() });
+            assert!(unsafe { era.owns_heap_word_for_test(&stopped, garbage).unwrap() });
             let cycles = era.gc_collections_for_test(&stopped).unwrap();
             complete_retrying("baseline stop", stopped.complete());
             cycles

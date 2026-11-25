@@ -544,12 +544,17 @@ macro_rules! era_operations {
 
             #[cfg(any(test, feature = "test-support"))]
             #[doc(hidden)]
-            pub fn owns_heap_word_for_test(
+            /// # Safety
+            ///
+            /// `word` must be a `TaggedValue` bit pattern produced by an
+            /// allocation on this heap.
+            pub unsafe fn owns_heap_word_for_test(
                 &self,
                 stopped: &AllStopped<'_>,
                 word: usize,
             ) -> Result<bool, CollectionError> {
-                self.core.owns_heap_word_for_test(stopped, word)
+                // SAFETY: forwarded from this function's caller contract.
+                unsafe { self.core.owns_heap_word_for_test(stopped, word) }
             }
 
             #[cfg(any(test, feature = "test-support"))]

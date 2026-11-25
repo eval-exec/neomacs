@@ -1058,8 +1058,9 @@ fn prepare_finish_folds_serial_facts_and_young_shell_without_collection<K>(
     empty_outer_era(902, &mut |era| {
         let mut stopped = era.stop().unwrap();
         let cons_word = era.alloc_serial_cons_for_test(&stopped).unwrap();
+        // SAFETY: `cons_word` came from `alloc_serial_cons_for_test` on this era.
         assert!(
-            era.owns_heap_word_for_test(&stopped, cons_word).unwrap(),
+            unsafe { era.owns_heap_word_for_test(&stopped, cons_word).unwrap() },
             "positive control: allocated cons is owned by keeper heap"
         );
         stopped.trace(|_, _| Ok(())).unwrap();

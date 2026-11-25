@@ -1565,6 +1565,10 @@ fn suspended_or_non_tty_terminal_falls_back_to_force_quit_count() {
 
     // Inactive/batch (non-termcap) initial terminal also falls back.
     reset_terminal_thread_locals();
+    // rt A3: a Context heap cannot be installed while another is installed on
+    // this thread. Suspend the interactive Context (consuming park) before
+    // constructing the batch one; the parked value is not evaluated again.
+    let _parked_eval = eval.park_for_test();
     let mut batch_eval = Context::new(crate::test_utils::unit_runtime());
     set_terminal_host(Box::new(EmergencyEscapeProbeHost {
         calls: std::sync::Arc::clone(&calls),

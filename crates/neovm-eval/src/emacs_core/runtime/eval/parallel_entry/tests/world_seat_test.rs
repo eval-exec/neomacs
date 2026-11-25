@@ -683,12 +683,13 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
                         Err(other) => panic!("verify stop: {other:?}"),
                     }
                 };
-                let era_owns_survivor = era
-                    .owns_heap_word_for_test(&stopped, survivor_word)
-                    .expect("check survivor word");
-                let era_owns_garbage = era
-                    .owns_heap_word_for_test(&stopped, garbage_word)
-                    .expect("check garbage word");
+                // SAFETY: both words are allocations made on this era's heap.
+                let era_owns_survivor =
+                    unsafe { era.owns_heap_word_for_test(&stopped, survivor_word) }
+                        .expect("check survivor word");
+                let era_owns_garbage =
+                    unsafe { era.owns_heap_word_for_test(&stopped, garbage_word) }
+                        .expect("check garbage word");
                 stopped.trace_serial().expect("trace verify stop");
                 stopped.complete().expect("complete verify stop");
 
@@ -828,12 +829,13 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                         Err(other) => panic!("verify stop: {other:?}"),
                     }
                 };
-                let era_owns_survivor = era
-                    .owns_heap_word_for_test(&stopped, survivor_word)
-                    .expect("check survivor word");
-                let era_owns_garbage = era
-                    .owns_heap_word_for_test(&stopped, garbage_word)
-                    .expect("check garbage word");
+                // SAFETY: both words are allocations made on this era's heap.
+                let era_owns_survivor =
+                    unsafe { era.owns_heap_word_for_test(&stopped, survivor_word) }
+                        .expect("check survivor word");
+                let era_owns_garbage =
+                    unsafe { era.owns_heap_word_for_test(&stopped, garbage_word) }
+                        .expect("check garbage word");
                 stopped.trace_serial().expect("trace verify stop");
                 stopped.complete().expect("complete verify stop");
 
