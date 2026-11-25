@@ -32,7 +32,7 @@ use neovm_core::emacs_core::image_catalog::{
     FailedImage, ImageAnimationInvalidation, ImageCatalog, ImageFileName, ImageId,
     ImageInvalidation, ImageInvalidationResult, ImageLayoutExtent, ImageLoadAttempt,
     ImageLoadToken, ImageLookup, ImagePlacement, ImageResolveRequest, ImageResolveSource,
-    ImageSizeLimit, ImageStateEvent, PendingImage, ReadyImage,
+    ImageSizeLimit, ImageStateEvent, ImageSyncResolution, PendingImage, ReadyImage,
 };
 use neovm_core::emacs_core::image_path::ImageFileRequest;
 use neovm_core::emacs_core::load::image_data_directory;
@@ -354,16 +354,16 @@ impl AsyncImageCatalog {
         &self,
         request: ImageResolveRequest,
         limit: ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
+    ) -> Result<ImageSyncResolution, String> {
         let pending = match self.lookup_inner(request, limit) {
-            ImageLookup::Ready(image) => return Ok(Some(image)),
+            ImageLookup::Ready(image) => return Ok(ImageSyncResolution::Ready(image)),
             ImageLookup::Pending(image) => image,
             ImageLookup::Failed(failed) => {
-                // `image-size` asks about one image and GNU logs every time it
-                // is asked, so this path reports even a failure the display
-                // side has already reported.
+                // Synchronous queries (`image-size`, `image-mask-p`,
+                // `image-metadata`) invoke `lookup_image` in GNU, which logs
+                // on every query even if the display path already reported it.
                 self.record_failure_always(&failed);
-                return Err(failed.error.message());
+                return Ok(ImageSyncResolution::LoadFailed(failed.error));
             }
         };
         let placement = pending.placement();
@@ -383,7 +383,7 @@ impl AsyncImageCatalog {
         // upload. Leave the catalog's residency pending until the renderer's
         // normal completion event reconciles it.
         match terminal {
-            Ok(metadata) => Ok(Some(ReadyImage {
+            Ok(metadata) => Ok(ImageSyncResolution::Ready(ReadyImage {
                 load: pending.load(),
                 metadata: neovm_core::emacs_core::image_catalog::ResolvedImageMetadata {
                     layout: metadata.layout,
@@ -394,7 +394,11 @@ impl AsyncImageCatalog {
                     embedded: metadata.embedded,
                 },
             })),
-            Err(error) => Err(error.message()),
+            Err(error) => {
+                let failed = pending.failed(error.clone());
+                self.record_failure_always(&failed);
+                Ok(ImageSyncResolution::LoadFailed(error))
+            }
         }
     }
 }

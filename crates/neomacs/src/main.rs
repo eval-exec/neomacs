@@ -3036,7 +3036,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         &self,
         request: ImageResolveRequest,
         limit: ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
+    ) -> Result<neovm_core::emacs_core::image_catalog::ImageSyncResolution, String> {
         self.image_catalog.resolve_sync(request, limit)
     }
 

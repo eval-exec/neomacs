@@ -480,7 +480,7 @@ impl DisplayHost for RecordingAppendImageHost {
         &self,
         _request: ImageResolveRequest,
         _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
+    ) -> Result<neovm_core::emacs_core::image_catalog::ImageSyncResolution, String> {
         panic!("append display source rendering must not use synchronous image resolution");
     }
 

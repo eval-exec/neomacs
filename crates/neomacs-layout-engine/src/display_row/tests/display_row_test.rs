@@ -521,7 +521,7 @@ impl DisplayHost for RecordingDisplayRowMediaHost {
         &self,
         _request: ImageResolveRequest,
         _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
+    ) -> Result<neovm_core::emacs_core::image_catalog::ImageSyncResolution, String> {
         panic!("display row rendering must not use synchronous image resolution");
     }
 

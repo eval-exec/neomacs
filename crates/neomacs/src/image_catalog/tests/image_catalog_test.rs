@@ -783,10 +783,12 @@ fn public_catalog_invalidation_retires_cpu_metadata_before_gpu_admission() {
     let mut request = file_request(path.to_str().expect("UTF-8 image fixture"));
     request.size = ImageSizeSpec::default();
 
-    let queried = catalog
+    let ImageSyncResolution::Ready(queried) = catalog
         .resolve_sync(request.clone(), ImageSizeLimit::UNLIMITED)
         .expect("CPU metadata query must finish without a GPU")
-        .expect("valid PNG has metadata");
+    else {
+        panic!("valid PNG must resolve as Ready");
+    };
     assert_eq!(
         queried.metadata.layout,
         neomacs_display_protocol::ImageLayoutExtent::new(100, 200)
@@ -906,4 +908,35 @@ fn animation_bookkeeping_mutations_hit_existing_catalog_entry_for_file_and_data(
         queued_loads, 1,
         "mutating :animate-tardiness must not schedule a second load command"
     );
+}
+
+#[test]
+fn resolve_sync_records_diagnostics_and_returns_load_failed_on_repeated_queries() {
+    let decoder = neomacs_display_runtime::render_thread::ImageDecoder::new();
+    let client = decoder.client();
+    let (cmd_tx, _cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
+    let catalog = AsyncImageCatalog::new(
+        cmd_tx,
+        None,
+        Arc::new(ImageRenderState::default()),
+        None,
+        client,
+    );
+    let request = file_request("/nonexistent/neomacs-resolve-sync-837.png");
+    let expected = ImageDiagnostic::FileNotFound {
+        file: "/nonexistent/neomacs-resolve-sync-837.png".to_owned(),
+    };
+
+    for attempt in 1..=2 {
+        assert_eq!(
+            catalog.resolve_sync(request.clone(), ImageSizeLimit::UNLIMITED),
+            Ok(ImageSyncResolution::LoadFailed(expected.clone())),
+            "attempt {attempt} must return LoadFailed without signalling an error"
+        );
+        assert_eq!(
+            catalog.take_pending_diagnostics(),
+            vec![expected.message()],
+            "attempt {attempt} must record the GNU diagnostic for *Messages*"
+        );
+    }
 }

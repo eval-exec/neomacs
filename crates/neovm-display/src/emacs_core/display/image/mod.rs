@@ -17,7 +17,7 @@ use crate::emacs_core::image_catalog::{
     ImageColorContext, ImageDataSource, ImageFileName, ImageFrameIndex, ImageHeuristicMask,
     ImageInvalidation, ImageLoadIdentity, ImageMaskKind, ImageMaskPolicy, ImageResolveRequest,
     ImageResolveSource, ImageRotation, ImageScaleEnvironment, ImageScalePolicy, ImageSizeSpec,
-    ImageSpecIdentity, image_scale_environment, numeric_image_scale,
+    ImageSpecIdentity, ImageSyncResolution, image_scale_environment, numeric_image_scale,
 };
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
@@ -901,12 +901,52 @@ pub(crate) fn builtin_image_size(args: Vec<Value>) -> EvalResult {
     ))
 }
 
+/// GNU `DEFAULT_IMAGE_WIDTH` / `DEFAULT_IMAGE_HEIGHT` (`src/dispextern.h:3295-3296`).
+const DEFAULT_IMAGE_WIDTH: i64 = 30;
+const DEFAULT_IMAGE_HEIGHT: i64 = 30;
+
+/// GNU `lookup_image` fallback geometry when `img->load_failed_p` is true
+/// (`src/image.c:3573-3583`): uses the first fixnum `:width` / `:height` in
+/// `spec` if present (matching `image_spec_value`, `src/image.c:1629-1652`),
+/// otherwise `DEFAULT_IMAGE_WIDTH` / `DEFAULT_IMAGE_HEIGHT` (30×30). Margins,
+/// relief, `:scale`, and `:max-width`/`:max-height` are not applied because
+/// GNU skips the post-load attribute block when `load_failed_p` is set
+/// (`src/image.c:3584-3614`).
+fn failed_image_placeholder_size(spec: &Value) -> (i64, i64) {
+    let mut width_val: Option<Value> = None;
+    let mut height_val: Option<Value> = None;
+    if let Some(items) = list_to_vec(spec) {
+        let mut index = 1;
+        while index + 1 < items.len() {
+            match ImageSpecKey::from_lisp_value(items[index]) {
+                Some(ImageSpecKey::Width) if width_val.is_none() => {
+                    width_val = Some(items[index + 1]);
+                }
+                Some(ImageSpecKey::Height) if height_val.is_none() => {
+                    height_val = Some(items[index + 1]);
+                }
+                _ => {}
+            }
+            index += 2;
+        }
+    }
+    let width = width_val
+        .and_then(|value| value.as_fixnum())
+        .map_or(DEFAULT_IMAGE_WIDTH, |n| i64::from(n as i32));
+    let height = height_val
+        .and_then(|value| value.as_fixnum())
+        .map_or(DEFAULT_IMAGE_HEIGHT, |n| i64::from(n as i32));
+    (width, height)
+}
+
 /// `(image-size SPEC &optional PIXELS FRAME)` → `(WIDTH . HEIGHT)`.
 ///
-/// Mirrors GNU `Fimage_size` (`src/image.c`): after resolving the image on
-/// FRAME, return pixel size as fixnums when PIXELS is non-nil; otherwise
-/// return size in canonical character units as floats
-/// (`width / FRAME_COLUMN_WIDTH`, `height / FRAME_LINE_HEIGHT`).
+/// Mirrors GNU `Fimage_size` (`src/image.c:1655-1689`): after resolving the
+/// image on FRAME, return pixel size as fixnums when PIXELS is non-nil;
+/// otherwise return size in canonical character units as floats
+/// (`width / FRAME_COLUMN_WIDTH`, `height / FRAME_LINE_HEIGHT`). When loading
+/// fails (`img->load_failed_p`, `src/image.c:3573-3583`), logs the diagnostic
+/// and returns the placeholder size without signalling.
 #[doc(hidden)]
 pub fn builtin_image_size_in_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("image-size", &args, 1)?;
@@ -947,55 +987,73 @@ pub fn builtin_image_size_in_context(eval: &mut Context, args: Vec<Value>) -> Ev
     let resolved = display_host
         .resolve_image_sync(request, environment.size_limit())
         .map_err(|message| {
-            // `image-size` on a failing image logs in GNU (`lookup_image` runs
-            // inside `Fimage_size`) even though it also returns the
-            // placeholder size rather than signalling. The message is reported
-            // here, on the way out, so the diagnostic does not have to wait for
-            // a redisplay that may never come.
             eval.log_pending_image_diagnostics();
             signal("error", vec![Value::string(message)])
         })?;
     eval.log_pending_image_diagnostics();
-    let Some(image) = resolved else {
-        return Err(signal(
+
+    let pixels = args.get(1).copied().unwrap_or(Value::NIL);
+    match resolved {
+        ImageSyncResolution::Ready(image) => {
+            // Dual-extent metadata: `width`/`height` are logical layout pixels
+            // (char units and redisplay); `pixel_width`/`pixel_height` are GNU
+            // Fimage_size PIXELS space, filled at decode from
+            // `ImageRealization::report_scale`. Margins/relief are added in each
+            // space separately so HiDPI `:scale default` does not re-scale
+            // absolute margin integers.
+            let margins = ImageSpecMargins::from_image_spec(&args[0]);
+            if !pixels.is_nil() {
+                let (width_px, height_px) = margins.add_to_pixel_size(
+                    i64::from(image.metadata.reported.width()),
+                    i64::from(image.metadata.reported.height()),
+                );
+                return Ok(Value::cons(
+                    Value::fixnum(width_px.max(1)),
+                    Value::fixnum(height_px.max(1)),
+                ));
+            }
+
+            let (layout_w, layout_h) = margins.add_to_pixel_size(
+                i64::from(image.metadata.layout.width()),
+                i64::from(image.metadata.layout.height()),
+            );
+            let (column_width, line_height) = image_frame_char_cell_pixels(eval, args.get(2))
+                .ok_or_else(|| {
+                    signal(
+                        "error",
+                        vec![Value::string("Window system frame should be used")],
+                    )
+                })?;
+            Ok(Value::cons(
+                Value::make_float(layout_w as f64 / column_width),
+                Value::make_float(layout_h as f64 / line_height),
+            ))
+        }
+        ImageSyncResolution::LoadFailed(_) => {
+            let (width_px, height_px) = failed_image_placeholder_size(&args[0]);
+            if !pixels.is_nil() {
+                return Ok(Value::cons(
+                    Value::fixnum(width_px),
+                    Value::fixnum(height_px),
+                ));
+            }
+            let (column_width, line_height) = image_frame_char_cell_pixels(eval, args.get(2))
+                .ok_or_else(|| {
+                    signal(
+                        "error",
+                        vec![Value::string("Window system frame should be used")],
+                    )
+                })?;
+            Ok(Value::cons(
+                Value::make_float(width_px as f64 / column_width),
+                Value::make_float(height_px as f64 / line_height),
+            ))
+        }
+        ImageSyncResolution::Unsupported => Err(signal(
             "error",
             vec![Value::string("Invalid image specification")],
-        ));
-    };
-
-    // Dual-extent metadata: `width`/`height` are logical layout pixels (char
-    // units and redisplay); `pixel_width`/`pixel_height` are GNU Fimage_size
-    // PIXELS space, filled at decode from `ImageRealization::report_scale`.
-    // Margins/relief are added in each space separately so HiDPI `:scale
-    // default` does not re-scale absolute margin integers.
-    let margins = ImageSpecMargins::from_image_spec(&args[0]);
-    let pixels = args.get(1).copied().unwrap_or(Value::NIL);
-    if !pixels.is_nil() {
-        let (width_px, height_px) = margins.add_to_pixel_size(
-            i64::from(image.metadata.reported.width()),
-            i64::from(image.metadata.reported.height()),
-        );
-        return Ok(Value::cons(
-            Value::fixnum(width_px.max(1)),
-            Value::fixnum(height_px.max(1)),
-        ));
+        )),
     }
-
-    let (layout_w, layout_h) = margins.add_to_pixel_size(
-        i64::from(image.metadata.layout.width()),
-        i64::from(image.metadata.layout.height()),
-    );
-    let (column_width, line_height) =
-        image_frame_char_cell_pixels(eval, args.get(2)).ok_or_else(|| {
-            signal(
-                "error",
-                vec![Value::string("Window system frame should be used")],
-            )
-        })?;
-    Ok(Value::cons(
-        Value::make_float(layout_w as f64 / column_width),
-        Value::make_float(layout_h as f64 / line_height),
-    ))
 }
 
 /// (image-mask-p SPEC &optional FRAME) -> nil
@@ -1104,14 +1162,22 @@ pub fn builtin_image_mask_p_in_context(eval: &mut Context, args: Vec<Value>) -> 
     };
 
     // Prefer a sync resolve so mask/transparency reflects decoded state, not a
-    // pending catalog probe. GNU inspects `img->mask` after `lookup_image`.
+    // pending catalog probe. GNU inspects `img->mask` after `lookup_image`
+    // (`src/image.c:1704-1708`), returning nil on failed loads without
+    // signalling.
     let resolved = display_host
         .resolve_image_sync(request, environment.size_limit())
-        .map_err(|message| signal("error", vec![Value::string(message)]))?;
-    let Some(image) = resolved else {
-        return Ok(Value::NIL);
-    };
-    Ok(Value::bool_val(image.metadata.mask.has_clipping_mask()))
+        .map_err(|message| {
+            eval.log_pending_image_diagnostics();
+            signal("error", vec![Value::string(message)])
+        })?;
+    eval.log_pending_image_diagnostics();
+    match resolved {
+        ImageSyncResolution::Ready(image) => {
+            Ok(Value::bool_val(image.metadata.mask.has_clipping_mask()))
+        }
+        ImageSyncResolution::LoadFailed(_) | ImageSyncResolution::Unsupported => Ok(Value::NIL),
+    }
 }
 
 /// (put-image IMAGE POINT &optional STRING AREA) -> nil
@@ -1586,10 +1652,17 @@ pub fn builtin_image_metadata_in_context(eval: &mut Context, args: Vec<Value>) -
     })?;
     let resolved = display_host
         .resolve_image_sync(request, environment.size_limit())
-        .map_err(|message| signal("error", vec![Value::string(message)]))?;
-    Ok(resolved
-        .map(|image| image_embedded_metadata_to_lisp(&image.metadata.embedded))
-        .unwrap_or(Value::NIL))
+        .map_err(|message| {
+            eval.log_pending_image_diagnostics();
+            signal("error", vec![Value::string(message)])
+        })?;
+    eval.log_pending_image_diagnostics();
+    match resolved {
+        ImageSyncResolution::Ready(image) => {
+            Ok(image_embedded_metadata_to_lisp(&image.metadata.embedded))
+        }
+        ImageSyncResolution::LoadFailed(_) | ImageSyncResolution::Unsupported => Ok(Value::NIL),
+    }
 }
 
 /// (neomacs-image-extent SPEC &optional FRAME) -> plist or nil
@@ -1626,8 +1699,12 @@ pub fn builtin_neomacs_image_extent_in_context(eval: &mut Context, args: Vec<Val
     let display_host = eval.display_host.as_ref().expect("checked host");
     let resolved = display_host
         .resolve_image_sync(request, environment.size_limit())
-        .map_err(|message| signal("error", vec![Value::string(message)]))?;
-    let Some(image) = resolved else {
+        .map_err(|message| {
+            eval.log_pending_image_diagnostics();
+            signal("error", vec![Value::string(message)])
+        })?;
+    eval.log_pending_image_diagnostics();
+    let ImageSyncResolution::Ready(image) = resolved else {
         return Ok(Value::NIL);
     };
 

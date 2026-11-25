@@ -4,7 +4,7 @@ use crate::emacs_core::image_catalog::{
     ImageFrameIndex, ImageHeuristicMask, ImageId, ImageInvalidation, ImageInvalidationResult,
     ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageLookup, ImageMaskKind,
     ImageMaskPolicy, ImageResolveRequest, ImageResolveSource, ImageSizeLimit, ImageSizeSpec,
-    PendingImage, ReadyImage, ResolvedImageMetadata,
+    ImageSyncResolution, PendingImage, ReadyImage, ResolvedImageMetadata,
 };
 use crate::face::{Color, FaceTable};
 use neomacs_display_protocol::image_diagnostic::{
@@ -130,7 +130,7 @@ impl DisplayHost for RecordingImageDisplayHost {
         &self,
         request: ImageResolveRequest,
         _limit: ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
+    ) -> Result<ImageSyncResolution, String> {
         let (width, height) = self.fixed_size.unwrap_or((40, 30));
         let metadata = ResolvedImageMetadata::from_layout(
             ImageLayoutExtent::new(width, height),
@@ -144,7 +144,7 @@ impl DisplayHost for RecordingImageDisplayHost {
             .lock()
             .expect("image requests lock")
             .push(request);
-        Ok(Some(ReadyImage {
+        Ok(ImageSyncResolution::Ready(ReadyImage {
             load: test_image_load(9),
             metadata,
         }))
@@ -2380,6 +2380,234 @@ fn gif_metadata_keeps_reverse_block_order_and_unibyte_payloads() {
         assert!(!string.is_multibyte());
         assert_eq!(string.as_bytes(), bytes);
     }
+}
+
+struct SyncOutcomeImageDisplayHost {
+    outcome: Result<ImageSyncResolution, String>,
+    pending: Mutex<Vec<ImageDiagnostic>>,
+}
+
+impl SyncOutcomeImageDisplayHost {
+    fn load_failed(diagnostic: ImageDiagnostic) -> Self {
+        Self {
+            outcome: Ok(ImageSyncResolution::LoadFailed(diagnostic)),
+            pending: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            outcome: Err(message.into()),
+            pending: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl DisplayHost for SyncOutcomeImageDisplayHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resolve_image_sync(
+        &self,
+        _request: ImageResolveRequest,
+        _limit: ImageSizeLimit,
+    ) -> Result<ImageSyncResolution, String> {
+        if let Ok(ImageSyncResolution::LoadFailed(diagnostic)) = &self.outcome {
+            self.pending
+                .lock()
+                .expect("pending diagnostics")
+                .push(diagnostic.clone());
+        }
+        self.outcome.clone()
+    }
+
+    fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
+        Some(self)
+    }
+}
+
+impl ImageCatalog for SyncOutcomeImageDisplayHost {
+    fn lookup(&self, _request: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
+        ImageLookup::Failed(
+            PendingImage::new(test_image_load(9), ImageLayoutExtent::new(30, 30))
+                .failed(ImageDiagnostic::NotDrawable),
+        )
+    }
+
+    fn take_pending_diagnostics(&self) -> Vec<String> {
+        self.pending
+            .lock()
+            .expect("pending diagnostics")
+            .drain(..)
+            .map(|diagnostic| diagnostic.message())
+            .collect()
+    }
+}
+
+/// GNU `lookup_image` (`src/image.c:3568-3583`) + `Fimage_size` / `Fimage_mask_p`
+/// / `Fimage_metadata` (`src/image.c:1655-1733`): a failed decode does not
+/// signal; `image-size` returns `(30 . 30)` or explicit fixnum `:width`/`:height`
+/// without margins/relief/scale, `image-mask-p` / `image-metadata` /
+/// `neomacs-image-extent` return nil, and each query logs its diagnostic.
+#[test]
+fn failed_image_queries_return_gnu_placeholder_and_log_diagnostics() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = neovm_eval::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    eval.obarray_mut()
+        .set_symbol_value("text-quoting-style", Value::symbol("curve"));
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    {
+        let frame = eval
+            .frame_manager_mut()
+            .get_mut(frame_id)
+            .expect("selected frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.char_width = 8.0;
+        frame.char_height = 16.0;
+    }
+    eval.set_display_host(Box::new(SyncOutcomeImageDisplayHost::load_failed(
+        ImageDiagnostic::FileNotFound {
+            file: "/nonexistent/missing-837.png".to_owned(),
+        },
+    )));
+
+    let make_spec = |extra: Vec<Value>| {
+        let mut items = vec![
+            Value::symbol("image"),
+            Value::keyword("type"),
+            Value::symbol("png"),
+            Value::keyword("file"),
+            Value::string("/nonexistent/missing-837.png"),
+        ];
+        items.extend(extra);
+        Value::list(items)
+    };
+
+    let base = make_spec(vec![]);
+    let px = builtin_image_size_in_context(&mut eval, vec![base, Value::T]).unwrap();
+    assert_eq!(px.cons_car(), Value::fixnum(30));
+    assert_eq!(px.cons_cdr(), Value::fixnum(30));
+    assert_eq!(
+        messages_text(&eval),
+        "Cannot find image file ‘/nonexistent/missing-837.png’\n"
+    );
+
+    let ch = builtin_image_size_in_context(&mut eval, vec![base]).unwrap();
+    assert_eq!(ch.cons_car(), Value::make_float(30.0 / 8.0));
+    assert_eq!(ch.cons_cdr(), Value::make_float(30.0 / 16.0));
+    assert_eq!(
+        messages_text(&eval),
+        "Cannot find image file ‘/nonexistent/missing-837.png’ [2 times]\n"
+    );
+
+    assert_eq!(
+        builtin_image_mask_p_in_context(&mut eval, vec![base]).unwrap(),
+        Value::NIL
+    );
+    assert_eq!(
+        builtin_image_metadata_in_context(&mut eval, vec![base]).unwrap(),
+        Value::NIL
+    );
+    assert_eq!(
+        builtin_neomacs_image_extent_in_context(&mut eval, vec![base]).unwrap(),
+        Value::NIL
+    );
+    assert_eq!(
+        messages_text(&eval),
+        "Cannot find image file ‘/nonexistent/missing-837.png’ [5 times]\n"
+    );
+
+    // Explicit fixnum :width/:height override DEFAULT_IMAGE_WIDTH/HEIGHT (including 0 and negative).
+    let w50 = make_spec(vec![Value::keyword("width"), Value::fixnum(50)]);
+    let sz = builtin_image_size_in_context(&mut eval, vec![w50, Value::T]).unwrap();
+    assert_eq!(
+        (sz.cons_car(), sz.cons_cdr()),
+        (Value::fixnum(50), Value::fixnum(30))
+    );
+
+    let h70 = make_spec(vec![Value::keyword("height"), Value::fixnum(70)]);
+    let sz = builtin_image_size_in_context(&mut eval, vec![h70, Value::T]).unwrap();
+    assert_eq!(
+        (sz.cons_car(), sz.cons_cdr()),
+        (Value::fixnum(30), Value::fixnum(70))
+    );
+
+    let zero = make_spec(vec![
+        Value::keyword("width"),
+        Value::fixnum(0),
+        Value::keyword("height"),
+        Value::fixnum(0),
+    ]);
+    let sz = builtin_image_size_in_context(&mut eval, vec![zero, Value::T]).unwrap();
+    assert_eq!(
+        (sz.cons_car(), sz.cons_cdr()),
+        (Value::fixnum(0), Value::fixnum(0))
+    );
+    let sz_ch = builtin_image_size_in_context(&mut eval, vec![zero]).unwrap();
+    assert_eq!(
+        (sz_ch.cons_car(), sz_ch.cons_cdr()),
+        (Value::make_float(0.0), Value::make_float(0.0))
+    );
+
+    let neg = make_spec(vec![
+        Value::keyword("width"),
+        Value::fixnum(-5),
+        Value::keyword("height"),
+        Value::fixnum(-7),
+    ]);
+    let sz = builtin_image_size_in_context(&mut eval, vec![neg, Value::T]).unwrap();
+    assert_eq!(
+        (sz.cons_car(), sz.cons_cdr()),
+        (Value::fixnum(-5), Value::fixnum(-7))
+    );
+
+    // Non-fixnum :width (float, string) and duplicate :width after a non-fixnum
+    // fall back to 30, matching GNU `image_spec_value` + `FIXNUMP`.
+    let non_fixnum = make_spec(vec![
+        Value::keyword("width"),
+        Value::make_float(40.5),
+        Value::keyword("width"),
+        Value::fixnum(99),
+        Value::keyword("height"),
+        Value::string("70"),
+    ]);
+    let sz = builtin_image_size_in_context(&mut eval, vec![non_fixnum, Value::T]).unwrap();
+    assert_eq!(
+        (sz.cons_car(), sz.cons_cdr()),
+        (Value::fixnum(30), Value::fixnum(30))
+    );
+
+    // Margins, relief, scale, and max-width/max-height are skipped when load_failed_p.
+    let attrs = make_spec(vec![
+        Value::keyword("margin"),
+        Value::fixnum(10),
+        Value::keyword("relief"),
+        Value::fixnum(4),
+        Value::keyword("scale"),
+        Value::make_float(2.0),
+        Value::keyword("max-width"),
+        Value::fixnum(10),
+        Value::keyword("max-height"),
+        Value::fixnum(10),
+    ]);
+    let sz = builtin_image_size_in_context(&mut eval, vec![attrs, Value::T]).unwrap();
+    assert_eq!(
+        (sz.cons_car(), sz.cons_cdr()),
+        (Value::fixnum(30), Value::fixnum(30))
+    );
+
+    // A host timeout / transport Err still signals rather than pretending 30x30.
+    eval.set_display_host(Box::new(SyncOutcomeImageDisplayHost::error(
+        "Timed out waiting for image decode (id 1)",
+    )));
+    assert!(builtin_image_size_in_context(&mut eval, vec![base, Value::T]).is_err());
+    assert!(builtin_image_mask_p_in_context(&mut eval, vec![base]).is_err());
+    assert!(builtin_image_metadata_in_context(&mut eval, vec![base]).is_err());
 }
 
 #[test]

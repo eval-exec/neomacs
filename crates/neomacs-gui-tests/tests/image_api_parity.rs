@@ -53,6 +53,11 @@ fn image_decode_cancel_on_free_leaves_no_stale_cache_like_gnu() {
     compare("cancel");
 }
 
+#[test]
+fn failed_image_queries_match_gnu() {
+    compare("failed");
+}
+
 fn compare(case: &str) {
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join(format!("tmp/image-api-{case}-{}", std::process::id()));

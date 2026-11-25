@@ -446,6 +446,24 @@ pub enum ImageLookup {
     Failed(FailedImage),
 }
 
+/// Result of a synchronous image query (`image-size`, `image-mask-p`,
+/// `image-metadata`, `neomacs-image-extent`).
+///
+/// Matches GNU `lookup_image` (`src/image.c:3568-3583`): a valid specification
+/// whose load or decode fails (`LoadFailed`) is distinct from an unsupported
+/// host (`Unsupported`) or a wait timeout (`Err(String)`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImageSyncResolution {
+    /// Decoded metadata is ready.
+    Ready(ReadyImage),
+    /// The specification is valid, but loading or decoding failed
+    /// (`img->load_failed_p`). Callers return GNU's failed-image fallback and
+    /// drain pending diagnostics to `*Messages*` without signalling.
+    LoadFailed(ImageDiagnostic),
+    /// This display host has no synchronous image decoder.
+    Unsupported,
+}
+
 impl ImageLookup {
     /// Return the stable renderer identity and dimensions represented by this
     /// state. Ready images use decoded dimensions; pending and failed images

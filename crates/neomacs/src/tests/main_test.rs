@@ -4231,7 +4231,19 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
                 request.clone(),
                 ImageSizeLimit::UNLIMITED,
             ),
-            Err("PNG error: Read error".to_owned()) // GNU's own words for the same bytes, not a generic failure string.
+            Ok(
+                neovm_core::emacs_core::image_catalog::ImageSyncResolution::LoadFailed(
+                    ImageDiagnostic::FormatError {
+                        format: ImageFormatName::Png,
+                        detail: "Read error".to_owned(),
+                    },
+                )
+            )
+        );
+        assert_eq!(
+            host.image_catalog.take_pending_diagnostics(),
+            vec!["PNG error: Read error".to_owned()],
+            "every synchronous query on a failed image logs its diagnostic like GNU lookup_image"
         );
         assert!(
             started.elapsed() < Duration::from_millis(250),
