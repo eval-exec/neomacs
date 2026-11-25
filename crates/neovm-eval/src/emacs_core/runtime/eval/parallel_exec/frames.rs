@@ -710,13 +710,27 @@ impl HandlerStack {
     /// it will touch before it pops on any of them.
     #[doc(hidden)]
     pub fn serial_run_matches(&self, tokens: &[SerialHandlerToken]) -> bool {
+        self.serial_run_matches_above(HandlerMark::EMPTY, tokens)
+    }
+
+    /// Whether `tokens` (innermost first) is the top run strictly above
+    /// `mark` (V7 F6: a child frame's escape cannot pop a caller's handler
+    /// marker below its own `handler_base`).
+    #[doc(hidden)]
+    pub fn serial_run_matches_above(
+        &self,
+        mark: HandlerMark,
+        tokens: &[SerialHandlerToken],
+    ) -> bool {
+        let floor = mark.depth().min(self.records.len());
         self.records
             .len()
             .checked_sub(tokens.len())
             .is_some_and(|keep| {
-                self.records[keep..].iter().rev().zip(tokens).all(
-                    |(entry, token)| matches!(entry, OwnerHandler::Serial(seen) if *seen == *token),
-                )
+                keep >= floor
+                    && self.records[keep..].iter().rev().zip(tokens).all(
+                        |(entry, token)| matches!(entry, OwnerHandler::Serial(seen) if *seen == *token),
+                    )
             })
     }
 
@@ -813,13 +827,27 @@ impl BindStack {
     /// [`HandlerStack::serial_run_matches`].
     #[doc(hidden)]
     pub fn serial_run_matches(&self, tokens: &[SerialRecordToken]) -> bool {
+        self.serial_run_matches_above(OwnerRecordMark::EMPTY, tokens)
+    }
+
+    /// Whether `tokens` (innermost first) is the top run strictly above
+    /// `mark` (V7 F6: a child frame's escape cannot pop a caller's binding
+    /// marker below its own `bind_base`).
+    #[doc(hidden)]
+    pub fn serial_run_matches_above(
+        &self,
+        mark: OwnerRecordMark,
+        tokens: &[SerialRecordToken],
+    ) -> bool {
+        let floor = mark.depth().min(self.records.len());
         self.records
             .len()
             .checked_sub(tokens.len())
             .is_some_and(|keep| {
-                self.records[keep..].iter().rev().zip(tokens).all(
-                    |(entry, token)| matches!(entry, OwnerRecord::Serial(seen) if *seen == *token),
-                )
+                keep >= floor
+                    && self.records[keep..].iter().rev().zip(tokens).all(
+                        |(entry, token)| matches!(entry, OwnerRecord::Serial(seen) if *seen == *token),
+                    )
             })
     }
 
@@ -1274,6 +1302,11 @@ impl FrameArena {
     #[doc(hidden)]
     pub fn len(&self) -> usize {
         self.frames.len()
+    }
+
+    /// Total length of the shared operand stack across all live frames.
+    pub(crate) fn operand_len(&self) -> usize {
+        self.operands.len()
     }
 
     #[doc(hidden)]

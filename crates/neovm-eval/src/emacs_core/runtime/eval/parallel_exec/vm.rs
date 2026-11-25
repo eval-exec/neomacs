@@ -44,8 +44,10 @@ use super::frames::{
     PollBudget, RootGroup, RootHandle, RootRevokeError, SerialHandlerToken, SerialRecordToken,
     VmFrame,
 };
-use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::bytecode::arith_kind::ArithGenericKind;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::poll::PollOutcome;
 use crate::emacs_core::subr::effect_schema::{
@@ -491,6 +493,37 @@ enum Step {
     Stop(VmOutcome),
 }
 
+/// Which instruction and constant tables an active VM frame fetches from (V7).
+#[derive(Clone, Copy)]
+enum FrameCode {
+    /// The entry [`VmProgram`] passed to [`VmExec::run`].
+    Entry,
+    /// An admitted, materialized [`ByteCodeFunction`] value rooted in the
+    /// corresponding `VmFrame.code` (immovable while live in `FrameArena`).
+    Bytecode(Value),
+}
+
+/// One live frame in `VmExec`'s iterative call stack (V7).
+#[derive(Clone, Copy)]
+struct ActiveVmFrame {
+    id: FrameId,
+    code: FrameCode,
+    /// For a child frame: the caller's operand segment length after removing
+    /// `callee + n` arguments (the slot where the callee's return value lands).
+    /// `None` for the bottom (entry) frame.
+    caller_return_len: Option<usize>,
+}
+
+/// Read-only instruction slice for an admitted [`ByteCodeFunction`] (V7).
+/// Never initializes a cold lazy GNU decode cell; returns `None` when an
+/// undecoded lazy cell is present so the call escapes instead.
+fn ready_bytecode_ops(func: &ByteCodeFunction) -> Option<&[Op]> {
+    match func.lazy_gnu_code() {
+        Some(lazy) => lazy.decoded_ready().map(|decoded| decoded.ops().as_slice()),
+        None => Some(func.ops().as_slice()),
+    }
+}
+
 /// The harness VM stepper. `E` is the escape handler, `S` the sealed-ops
 /// port, `A` the arithmetic port, `V` the Plain variable port and `P` the
 /// poll capability; tests supply the doubles.
@@ -501,7 +534,8 @@ pub(crate) struct VmExec<'era, E, S, A, V, P> {
     arith: A,
     plain: V,
     poll: P,
-    frame: Option<FrameId>,
+    /// Iterative call stack of live VM frames, outermost first (V7).
+    frames: Vec<ActiveVmFrame>,
     state: RunState,
     /// Whether this executor is actively stepping bytecode (`Running`) or
     /// stopped (`Stopped`: idle, parked at any [`VmPoll`] edge, or parked in
@@ -571,7 +605,7 @@ where
             arith,
             plain,
             poll,
-            frame: None,
+            frames: Vec::new(),
             state: RunState::Idle,
             stop_state: OwnerStopState::Stopped,
             entry_exit_flags: ExitFlags::EMPTY,
@@ -618,9 +652,9 @@ where
         self.arena.root_len()
     }
 
-    /// The frame the current run pushed, while it is pushed.
+    /// The active top frame, while one is pushed.
     pub(crate) fn frame_id(&self) -> Option<FrameId> {
-        self.frame
+        self.frames.last().map(|active| active.id)
     }
 
     pub(crate) fn is_idle(&self) -> bool {
@@ -692,7 +726,11 @@ where
             Ok(id) => id,
             Err(error) => return VmOutcome::Fault(EngineFault::Frame(error)),
         };
-        self.frame = Some(id);
+        self.frames.push(ActiveVmFrame {
+            id,
+            code: FrameCode::Entry,
+            caller_return_len: None,
+        });
         self.stop_state = OwnerStopState::Running;
         loop {
             match self.step(ctx, program) {
@@ -766,9 +804,9 @@ where
     /// what interleaving with the serial cleanups, GNU's innermost-first
     /// (`unbind_to`, eval.c:3940-3954) - is V8's to name and reconcile.
     fn unwind_to_idle(&mut self) -> Result<(), EngineFault> {
-        if let Some(id) = self.frame.take() {
-            let _ = self.arena.vm_truncate_operands(id, 0);
-            if self.arena.pop(id).is_none() {
+        while let Some(active) = self.frames.pop() {
+            let _ = self.arena.vm_truncate_operands(active.id, 0);
+            if self.arena.pop(active.id).is_none() {
                 self.state = RunState::Poisoned;
                 return Err(EngineFault::StaleFrame);
             }
@@ -806,9 +844,27 @@ where
         Ok(())
     }
 
-    fn step(&mut self, ctx: &mut Context, program: VmProgram<'_>) -> Step {
-        let Some(frame) = self.frame else {
+    fn step(&mut self, ctx: &mut Context, entry: VmProgram<'_>) -> Step {
+        let Some(active) = self.frames.last().copied() else {
             return Step::Stop(VmOutcome::Fault(EngineFault::NoFrame));
+        };
+        let frame = active.id;
+        let program = match active.code {
+            FrameCode::Entry => entry,
+            FrameCode::Bytecode(callee) => {
+                let Some(bc) = callee.bytecode_data_if_materialized() else {
+                    return invalid();
+                };
+                let Some(ops) = ready_bytecode_ops(bc) else {
+                    return invalid();
+                };
+                VmProgram {
+                    ops,
+                    constants: bc.constants().as_slice(),
+                    function: callee,
+                    code: callee,
+                }
+            }
         };
         let Some(vm) = self.arena.vm(frame) else {
             return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
@@ -836,6 +892,9 @@ where
             }
             ParallelArm::World(WorldSplit::Return(_)) => {
                 self.step_return(op, frame, operands, branch_pc, program)
+            }
+            ParallelArm::World(WorldSplit::Escape) if matches!(op, Op::Call(_)) => {
+                self.step_call(op, frame, operands, branch_pc, program)
             }
             ParallelArm::World(split) => self.escape(
                 op,
@@ -1525,6 +1584,101 @@ where
         Self::stop(self.next_pc(frame, branch_pc))
     }
 
+    /// Owner-local bytecode->bytecode `Call(n)` (V7; VM-EXECUTOR-DESIGN r1
+    /// §4.4 / §9 V7): polls `vm_call` once (GNU `Bcall` `maybe_quit`,
+    /// `bytecode.c:781`), then classifies the callee without writing shared
+    /// function state (`bytecode_data_if_materialized` +
+    /// `Vm::iterative_admission_if_known`). An admitted bytecode callee pushes
+    /// a child `VmFrame` with copied arguments plus `nil`-padded optionals and
+    /// continues iteratively; any unadmitted target falls back to the ONE
+    /// escape stub without repeating `vm_call`.
+    fn step_call(
+        &mut self,
+        op: Op,
+        frame: FrameId,
+        operands: OperandCursor,
+        branch_pc: usize,
+        program: VmProgram<'_>,
+    ) -> Step {
+        let Op::Call(n) = op else {
+            return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op)));
+        };
+        let nargs = usize::from(n);
+        let consumed = nargs + 1;
+        if operands.len() < consumed {
+            return invalid();
+        }
+        self.stop_state = OwnerStopState::Stopped;
+        let call_poll = self.poll.vm_call(&self.arena);
+        if let Err(error) = call_poll {
+            return Step::Stop(VmOutcome::Fault(EngineFault::Poll(error)));
+        }
+        self.stop_state = OwnerStopState::Running;
+
+        let segment = self.arena.operand_segment(operands);
+        let func_slot = segment.len() - consumed;
+        let callee = segment[func_slot];
+        let admitted_nonrest = callee
+            .bytecode_data_if_materialized()
+            .filter(|bc| Vm::iterative_admission_if_known(bc, nargs) == Some(true))
+            .and_then(|bc| {
+                let _ = ready_bytecode_ops(bc)?;
+                let nonrest = bc.params().stack_shape()?.nonrest();
+                Some(nonrest)
+            });
+        let Some(nonrest) = admitted_nonrest else {
+            return self.escape_inner(
+                op,
+                EscapeWhy::World(WorldSplit::Escape),
+                frame,
+                operands,
+                branch_pc,
+                program,
+                true,
+            );
+        };
+
+        let incoming: Vec<Value> = segment[func_slot + 1..].to_vec();
+        let child_base = self.arena.operand_len();
+        let child_frame = VmFrame::new(
+            callee,
+            callee,
+            Pc::new(0),
+            OperandCursor::new(child_base, 0),
+            self.arena.bindings().mark(),
+            self.arena.handlers().mark(),
+            PollBudget::new(NonZeroU32::MIN),
+        );
+        // Advance the caller's saved pc to the instruction after `Call(n)`
+        // before pushing the child frame (`with_vm` requires `frame` on top).
+        if let Err(fault) = self.next_pc(frame, branch_pc) {
+            return Step::Stop(VmOutcome::Fault(fault));
+        }
+        let child_id = match self.arena.push_vm(child_frame) {
+            Ok(id) => id,
+            Err(error) => {
+                let _ = self.set_pc(frame, branch_pc);
+                return Step::Stop(VmOutcome::Fault(EngineFault::Frame(error)));
+            }
+        };
+        for arg in incoming {
+            if self.arena.vm_push(child_id, arg).is_none() {
+                return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
+            }
+        }
+        for _ in nargs..nonrest {
+            if self.arena.vm_push(child_id, Value::NIL).is_none() {
+                return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
+            }
+        }
+        self.frames.push(ActiveVmFrame {
+            id: child_id,
+            code: FrameCode::Bytecode(callee),
+            caller_return_len: Some(func_slot),
+        });
+        Step::Continue
+    }
+
     /// The ONE escape stub (r1 §4.2), in order: the call poll, the
     /// serial-request poll, the request, the completion, R2 (a `Flow` ends
     /// the run), R3 (the typed effect, the jump with it), the available
@@ -1538,6 +1692,20 @@ where
         branch_pc: usize,
         program: VmProgram<'_>,
     ) -> Step {
+        self.escape_inner(op, why, frame, operands, branch_pc, program, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn escape_inner(
+        &mut self,
+        op: Op,
+        why: EscapeWhy,
+        frame: FrameId,
+        operands: OperandCursor,
+        branch_pc: usize,
+        program: VmProgram<'_>,
+        call_already_polled: bool,
+    ) -> Step {
         let effect = static_stack_effect(&op);
         // Malformed code: an opcode reached without the operands its static
         // effect consumes is the Scalar and Sealed arms' `Invalid byte-code`,
@@ -1549,10 +1717,12 @@ where
         // The owner is now stopped across the call/serial-request polls and
         // the escape park until checked deltas/debug-on-exit updates apply.
         self.stop_state = OwnerStopState::Stopped;
-        if matches!(
-            op,
-            Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) | Op::CallBuiltinSym(..)
-        ) && let Err(error) = self.poll.vm_call(&self.arena)
+        if !call_already_polled
+            && matches!(
+                op,
+                Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) | Op::CallBuiltinSym(..)
+            )
+            && let Err(error) = self.poll.vm_call(&self.arena)
         {
             return Step::Stop(VmOutcome::Fault(EngineFault::Poll(error)));
         }
@@ -1615,12 +1785,13 @@ where
             }
             jump => jump,
         };
-        let Some(available) = self
-            .arena
-            .vm(frame)
-            .map(|vm| u16::try_from(vm.operands.len()).ok())
-            .flatten()
-        else {
+        let Some((available, bind_base, handler_base)) = self.arena.vm(frame).and_then(|vm| {
+            Some((
+                u16::try_from(vm.operands.len()).ok()?,
+                vm.bind_base,
+                vm.handler_base,
+            ))
+        }) else {
             return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
         };
         if consumed > available {
@@ -1658,26 +1829,22 @@ where
             // closes when `why` names the pair (V8's `SerialUnwind` is that
             // naming). Named, not fixed here: N-world-escape-popped-as-named.
             //
-            // V7 (F6): the `Return` cleanup's pops land here too, checked as
-            // the top run only. The bottom frame's bind_base is EMPTY, so
-            // nothing below the frame can be popped today; a V7 child
-            // frame's cleanup could pop the caller's markers below its base.
-            // When V7 lands, a completion's pops must lie above the frame's
-            // bind_base and handler_base, and the harness double's take-all
-            // loop must stop at the base.
+            // V7 (F6): completion pops are bounded above `bind_base` and
+            // `handler_base` below, so a child frame's cleanup cannot pop a
+            // caller's serial markers.
             _ => true,
         };
         let contract = if !self
             .arena
             .bindings()
-            .serial_run_matches(&completion.records.popped)
+            .serial_run_matches_above(bind_base, &completion.records.popped)
             || !popped_as_named
         {
             Some(RecordStack::Bindings)
         } else if !self
             .arena
             .handlers()
-            .serial_run_matches(&completion.handlers.popped)
+            .serial_run_matches_above(handler_base, &completion.handlers.popped)
         {
             Some(RecordStack::Handlers)
         } else {
@@ -1918,14 +2085,33 @@ where
         self.exit_frame_with(frame, value)
     }
 
-    /// The frame leaves with `value` for the owner entry: the segment
-    /// dropped, the frame popped, the run's `Done` root pushed.
+    /// The frame leaves with `value`: drop its operand segment, pop the frame,
+    /// and either deliver `value` into the caller's consumed function slot
+    /// (resuming iteratively, V7) or push the bottom frame's `Done` root.
     fn exit_frame_with(&mut self, frame: FrameId, value: Value) -> Step {
         let _ = self.arena.vm_truncate_operands(frame, 0);
         if self.arena.pop(frame).is_none() {
             return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
         }
-        self.frame = None;
+        let Some(active) = self.frames.pop() else {
+            return Step::Stop(VmOutcome::Fault(EngineFault::NoFrame));
+        };
+        if let Some(caller_return_len) = active.caller_return_len {
+            let Some(caller) = self.frames.last().copied() else {
+                return Step::Stop(VmOutcome::Fault(EngineFault::NoFrame));
+            };
+            if self
+                .arena
+                .vm_truncate_operands(caller.id, caller_return_len)
+                .is_none()
+            {
+                return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
+            }
+            if self.arena.vm_push(caller.id, value).is_none() {
+                return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
+            }
+            return Step::Continue;
+        }
         match self.arena.roots_mut().push(RootGroup::VmFrames, value) {
             Ok(pending) => Step::Stop(VmOutcome::Done { pending }),
             Err(error) => Step::Stop(VmOutcome::Fault(EngineFault::Root(error))),
