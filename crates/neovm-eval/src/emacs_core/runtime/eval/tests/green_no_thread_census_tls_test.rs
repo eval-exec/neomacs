@@ -8,19 +8,22 @@
 //! 1. The mutator census (`stopped_mutators_world_stopped` and
 //!    `seed_registered_mutator_roots_world_stopped`) sees only the single
 //!    serial owner, with zero parked/transport roots and the same root group
-//!    structure as `Sim`.
-//! 2. The tagged-heap identity and installed heap root TLS belong strictly to
-//!    the serial owner, with identical GC TLS mirror state to `Sim`.
+//!    names and counts as `Sim`.
+//! 2. The tagged-heap identity and installed heap root TLS (`TAGGED_HEAP` /
+//!    `TAGGED_HEAP_ID`) belong strictly to the serial owner at startup and
+//!    after GC, matching `Sim`'s no-thread TLS lifecycle.
 //! 3. Startup, ordinary Lisp, read-only thread queries (`current-thread`,
 //!    `all-threads`, `thread-live-p`, `thread-name`), uncontended
-//!    mutex/condvar operations, `thread-yield`, and `(garbage-collect)` leak
-//!    no parallel-era or carrier TLS, allocate no `GreenRuntime`/`OwnerSlab`/
-//!    `ThreadProjectionTable`/root table, and spawn no carrier OS threads.
+//!    mutex/condvar operations, `thread-yield`, and `(garbage-collect)`
+//!    allocate no `GreenRuntime`/`OwnerSlab`/`ThreadProjectionTable`/root
+//!    table (so no carrier pool is constructed), leave symbols unprojected,
+//!    and on drop restore the GC + collection-reads carrier TLS fingerprints
+//!    to the untouched fresh-thread state.
 //! 4. Teardown (`Drop for Context`) leaves nothing registered — both when no
-//!    thread ever started and when Green workers ran (joined or parked at
-//!    exit): the `World` drops, the tagged-heap TLS slot and identity clear,
-//!    the collector and root table are unregistered, and GC TLS returns to its
-//!    untouched fresh-thread state.
+//!    thread ever started and when Green workers ran (joined or parked live in
+//!    `condition-wait` at exit): the `World` drops, the tagged-heap TLS slot
+//!    and identity clear, the collector and root table are unregistered, and
+//!    GC + collection-reads TLS returns to its untouched fresh-thread state.
 
 use super::*;
 use crate::emacs_core::print::print_value;
@@ -79,8 +82,9 @@ fn eval_printed(ctx: &mut Context, src: &str) -> String {
 
 #[cfg(debug_assertions)]
 fn gc_tls_fingerprint() -> u64 {
-    let mut h = 0u64;
+    let mut h = neovm_value::tls_fingerprint::SEED;
     neovm_value::tagged::gc::carrier_tls_fingerprint(&mut h);
+    neovm_value::tagged::collection_reads::carrier_tls_fingerprint(&mut h);
     h
 }
 
@@ -317,6 +321,12 @@ fn green_no_thread_startup_and_queries_leak_no_parallel_era_or_carrier_tls() {
 
         let heap_id = ctx.tagged_heap.heap_identity();
         let world_alive = ctx.world_lifetime_probe_for_test();
+        #[cfg(debug_assertions)]
+        assert_ne!(
+            gc_tls_fingerprint(),
+            fresh_gc_tls,
+            "live Context with installed TaggedHeap must change GC TLS fingerprint (guards against a constant probe)"
+        );
         drop(ctx);
 
         assert!(!world_alive(), "no-thread Green World must drop cleanly");
@@ -388,27 +398,41 @@ fn green_no_thread_and_threaded_teardown_leave_nothing_registered() {
                                          s3-td-ready-c (make-condition-variable s3-td-m)
                                          s3-td-park-c (make-condition-variable s3-td-m)
                                          s3-td-ready nil)
-                                   (make-thread
-                                     (lambda ()
-                                       (mutex-lock s3-td-m)
-                                       (setq s3-td-ready t)
-                                       (condition-notify s3-td-ready-c)
-                                       (condition-wait s3-td-park-c)
-                                       (mutex-unlock s3-td-m))
-                                     \"s3-td-parked\")
+                                   (setq s3-td-worker
+                                     (make-thread
+                                       (lambda ()
+                                         (mutex-lock s3-td-m)
+                                         (setq s3-td-ready t)
+                                         (condition-notify s3-td-ready-c)
+                                         (condition-wait s3-td-park-c)
+                                         (mutex-unlock s3-td-m))
+                                       \"s3-td-parked\"))
                                    (mutex-lock s3-td-m)
                                    (while (null s3-td-ready) (condition-wait s3-td-ready-c))
                                    (mutex-unlock s3-td-m)
-                                   t)"
+                                   (list (thread-live-p s3-td-worker)
+                                         (thread-last-error s3-td-worker)))"
                             ),
-                            "t"
+                            "(t nil)"
                         );
                         assert!(
                             root_table_is_alive_for_test(ctx.tagged_heap.heap_identity()),
                             "parked worker must have published roots before teardown"
                         );
+                        let mut parked_roots = Vec::new();
+                        collect_shared_root_gc_roots(&ctx.tagged_heap, &mut parked_roots);
+                        assert!(
+                            !parked_roots.is_empty(),
+                            "parked worker must hold non-empty published roots at drop"
+                        );
                     }
                 }
+                #[cfg(debug_assertions)]
+                assert_ne!(
+                    gc_tls_fingerprint(),
+                    fresh_gc_tls,
+                    "live Context must differ from untouched fresh-thread GC TLS fingerprint before drop"
+                );
                 let heap_id = ctx.tagged_heap.heap_identity();
                 let world_alive = ctx.world_lifetime_probe_for_test();
                 (heap_id, world_alive)
