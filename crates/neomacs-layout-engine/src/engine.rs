@@ -35,6 +35,10 @@ mod rows_fontification;
 mod rows_lifetime;
 mod rows_query_policy;
 pub use rows_query_policy::{RowsQueryAdmission, RowsQueryPolicy};
+mod auxiliary_coverage;
+pub use auxiliary_coverage::{
+    AuxiliaryPreparation, AuxiliaryPublicationRefusal, PreparedAuxiliaryScrollCoverage,
+};
 mod scroll_coverage;
 pub use scroll_coverage::ScrollCoverageProgress;
 mod scroll_preview;
@@ -873,6 +877,9 @@ pub struct LayoutEngine {
     /// Certified semantic rows survive full-frame transfer and renewal-only
     /// publications, independently of the renderer's retained paint surface.
     scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage,
+    /// Compact base presentation template retained for auxiliary coverage
+    /// eligibility and evaluator-side surface materialization (R3/R7).
+    auxiliary_base: Option<auxiliary_coverage::AuxiliaryCoverageBase>,
     /// Last sealed face namespace for each logical frame.
     ///
     /// A speculative layout gets a fresh [`FrameFaceAttempt`] from this arena;
@@ -1477,6 +1484,7 @@ struct RetainedFrameState {
     matrices: rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix>,
     chrome_metrics: rustc_hash::FxHashMap<DisplayWindowId, WindowChromeMetrics>,
     scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage,
+    auxiliary_base: Option<auxiliary_coverage::AuxiliaryCoverageBase>,
     composition_advances: rustc_hash::FxHashMap<DisplayWindowId, RetainedCompositionAdvances>,
 }
 
@@ -1746,8 +1754,10 @@ impl LayoutEngine {
         self.retained_window_chrome_metrics.clear();
         self.last_frame_display_state = None;
         self.scroll_preview_coverage.clear();
+        self.auxiliary_base = None;
         for retained in self.retained_by_frame.values_mut() {
             retained.scroll_preview_coverage.clear();
+            retained.auxiliary_base = None;
         }
         self.reset_frame_attempt_state();
     }
@@ -1983,6 +1993,7 @@ impl LayoutEngine {
             pending_tab_bar_pointer: None,
             last_frame_display_state: None,
             scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage::default(),
+            auxiliary_base: None,
             frame_face_arenas: rustc_hash::FxHashMap::default(),
             face_composed_sources: None,
             face_tty_realization: None,
@@ -2031,6 +2042,7 @@ impl LayoutEngine {
             pending_tab_bar_pointer: None,
             last_frame_display_state: None,
             scroll_preview_coverage: scroll_preview::ScrollPreviewCoverage::default(),
+            auxiliary_base: None,
             frame_face_arenas: rustc_hash::FxHashMap::default(),
             face_composed_sources: None,
             face_tty_realization: None,
@@ -5378,7 +5390,18 @@ impl LayoutEngine {
         neomacs_display_protocol::input_latency::sealed(frame_id.0, sealed.presentation(), || {
             evaluator.input_latency_viewport(frame_id.0)
         });
+        self.auxiliary_base = Some(auxiliary_coverage::AuxiliaryCoverageBase::from_sealed(
+            frame_id,
+            &sealed,
+            evaluator.redisplay_generation(),
+            window_system.is_some()
+                && attempt_mode != FrameAttemptMode::ExhaustionSnapshot
+                && layout_walk_purpose != WindowLayoutWalkPurpose::Snapshot,
+        ));
         self.scroll_preview_coverage.refresh(&sealed);
+        if self.scroll_coverage.frame == Some(frame_id) {
+            self.scroll_coverage.clear_publication_pending();
+        }
         self.last_frame_display_state = Some(sealed);
         // Acknowledge the chrome dirty flag for exactly the windows whose
         // chrome this layout GENERATED — GNU's `mark_window_display_accurate_1`.
@@ -6059,6 +6082,7 @@ impl LayoutEngine {
                     matrices: std::mem::take(&mut self.retained_window_matrices),
                     chrome_metrics: std::mem::take(&mut self.retained_window_chrome_metrics),
                     scroll_preview_coverage: std::mem::take(&mut self.scroll_preview_coverage),
+                    auxiliary_base: self.auxiliary_base.take(),
                     composition_advances: std::mem::take(&mut self.retained_composition_advances),
                 },
             );
@@ -6067,6 +6091,7 @@ impl LayoutEngine {
         self.retained_window_matrices = loaded.matrices;
         self.retained_window_chrome_metrics = loaded.chrome_metrics;
         self.scroll_preview_coverage = loaded.scroll_preview_coverage;
+        self.auxiliary_base = loaded.auxiliary_base;
         self.retained_composition_advances = loaded.composition_advances;
         self.retained_frame = Some(frame_id);
     }

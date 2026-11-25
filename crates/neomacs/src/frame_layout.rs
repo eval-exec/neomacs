@@ -71,6 +71,19 @@ pub(super) fn resolved_scroll_preview(
         .with(|runtime| runtime.resolved_scroll_preview(evaluator, frame, window, inputs))
 }
 
+/// Run one bounded native scroll-coverage maintenance step and deliver any
+/// ready auxiliary snapshot through the caller's GUI transport sink.
+#[inline(always)]
+pub(super) fn maintain_gui_scroll_coverage(
+    evaluator: &Context,
+    deliver: impl FnMut(
+        neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+    ) -> neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery,
+) -> neovm_core::emacs_core::eval::DisplayMaintenanceOutcome {
+    REDISPLAY_RUNTIME
+        .with(|runtime| runtime.maintain_scroll_coverage_with_delivery(evaluator, deliver))
+}
+
 #[cfg(test)]
 pub(super) fn enable_cosmic_metrics_for_test() {
     REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());

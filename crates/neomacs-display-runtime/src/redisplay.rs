@@ -135,6 +135,15 @@ pub struct RedisplayRuntime {
     display_identity: RefCell<Option<GraphicalDisplayIdentity>>,
 }
 
+/// Transport outcome when delivering a native auxiliary scroll-coverage
+/// snapshot from the evaluator thread to the render thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuxiliaryCoverageDelivery {
+    Delivered,
+    QueueFull,
+    Disconnected,
+}
+
 impl RedisplayRuntime {
     pub fn resolved_scroll_preview(
         &self,
@@ -152,19 +161,85 @@ impl RedisplayRuntime {
     pub fn maintain_scroll_coverage(
         &self,
         evaluator: &Context,
-    ) -> (Option<std::time::Duration>, bool) {
+    ) -> neovm_core::emacs_core::eval::DisplayMaintenanceOutcome {
+        self.maintain_scroll_coverage_with_delivery(evaluator, |_| {
+            AuxiliaryCoverageDelivery::Disconnected
+        })
+    }
+
+    pub fn maintain_scroll_coverage_with_delivery(
+        &self,
+        evaluator: &Context,
+        mut deliver: impl FnMut(
+            neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+        ) -> AuxiliaryCoverageDelivery,
+    ) -> neovm_core::emacs_core::eval::DisplayMaintenanceOutcome {
+        use neomacs_layout_engine::engine::AuxiliaryPreparation;
+        use neovm_core::emacs_core::eval::{
+            DisplayMaintenanceOutcome, DisplayMaintenancePublication,
+        };
         let Ok(mut engine) = self.engine.try_borrow_mut() else {
-            return (None, false);
+            return DisplayMaintenanceOutcome::default();
         };
         let started = std::time::Instant::now();
-        let (progress, publish) = maintenance::run_budgeted(
+        let (progress, actionable) = maintenance::run_budgeted(
             || {
                 let progress = engine.maintain_scroll_coverage(evaluator);
-                (progress, engine.take_scroll_coverage_publication())
+                let actionable = engine.has_actionable_scroll_coverage_publication(evaluator);
+                (progress, actionable)
             },
             || started.elapsed(),
         );
-        (progress.map(|progress| progress.next_wake()), publish)
+        let mut next_wake = progress.map(|progress| progress.next_wake());
+        if !actionable {
+            return DisplayMaintenanceOutcome {
+                next_wake,
+                publication: DisplayMaintenancePublication::Idle,
+            };
+        }
+        match engine.prepare_auxiliary_scroll_coverage(evaluator) {
+            AuxiliaryPreparation::Ready(prepared) => {
+                let update = prepared.clone_update();
+                match deliver(update) {
+                    AuxiliaryCoverageDelivery::Delivered => {
+                        let withdrawal_after_refusal = prepared.refusal_reason().is_some();
+                        engine.commit_auxiliary_scroll_coverage(prepared);
+                        DisplayMaintenanceOutcome {
+                            next_wake,
+                            publication: if withdrawal_after_refusal {
+                                DisplayMaintenancePublication::Deferred
+                            } else {
+                                DisplayMaintenancePublication::PublishedNatively
+                            },
+                        }
+                    }
+                    AuxiliaryCoverageDelivery::QueueFull => {
+                        engine.defer_auxiliary_scroll_coverage(evaluator, prepared, false);
+                        let retry = std::time::Duration::from_millis(4);
+                        next_wake = Some(next_wake.map_or(retry, |delay| delay.min(retry)));
+                        DisplayMaintenanceOutcome {
+                            next_wake,
+                            publication: DisplayMaintenancePublication::Deferred,
+                        }
+                    }
+                    AuxiliaryCoverageDelivery::Disconnected => {
+                        engine.defer_auxiliary_scroll_coverage(evaluator, prepared, true);
+                        DisplayMaintenanceOutcome {
+                            next_wake,
+                            publication: DisplayMaintenancePublication::Deferred,
+                        }
+                    }
+                }
+            }
+            AuxiliaryPreparation::NoChange => DisplayMaintenanceOutcome {
+                next_wake,
+                publication: DisplayMaintenancePublication::Idle,
+            },
+            AuxiliaryPreparation::Refused(_) => DisplayMaintenanceOutcome {
+                next_wake,
+                publication: DisplayMaintenancePublication::Deferred,
+            },
+        }
     }
 
     /// Construct a runtime without the expensive scalable-font database.

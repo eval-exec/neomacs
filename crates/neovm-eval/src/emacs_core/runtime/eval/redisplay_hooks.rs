@@ -89,6 +89,55 @@ static WINDOW_RESIZE_MINI_FRAME: WellKnown = WellKnown::WindowResizeMiniFrame;
 use neomacs_display_protocol::types::Px;
 use std::collections::{HashMap, HashSet};
 
+/// The frontend's native publication result. No variant authorizes a logical
+/// redisplay: background row acquisition cannot create evaluator display debt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DisplayMaintenancePublication {
+    #[default]
+    Idle,
+    PublishedNatively,
+    Deferred,
+}
+
+/// One bounded native maintenance opportunity and its next idle deadline.
+#[must_use]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DisplayMaintenanceOutcome {
+    pub next_wake: Option<std::time::Duration>,
+    pub publication: DisplayMaintenancePublication,
+}
+
+/// Real callback work serviced before a GUI command-boundary display check.
+/// GNU redraws after timer/process callbacks even if display facts stayed equal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuiBoundaryServiceActivity {
+    Idle,
+    CallbacksRan,
+}
+
+/// Ordinary redisplay work that a native auxiliary publication cannot settle.
+/// These checks observe original pending marks before hook preparation turns
+/// text/frame-change marks into the final ordinary skip predicate's targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuxiliaryRedisplayRefusal {
+    RedisplayInProgress,
+    CommittedScrollInProgress,
+    DeferredLayoutFlow,
+    DeferredModeLineFlow,
+    GenerationChanged { expected: u64, observed: u64 },
+    ExactEchoResizePending,
+    UnacknowledgedBufferChanges,
+    PendingWindowScope,
+    PendingModeLineScope,
+    PendingWindowTargets,
+    PendingFrameTargets,
+    PendingModeLineTargets,
+    PendingTextTargets,
+    PendingPhysicalRedraw,
+    MissingSignature,
+    ChangedSignature,
+}
+
 /// A renderer-inert GNU resize_mini_window request. The source buffer is
 /// explicit because inactive echo uses a temporary buffer, while the selected
 /// minibuffer uses its live buffer even before a reader is active. No body/chrome presentation is accepted.
@@ -324,6 +373,85 @@ pub enum RedisplayMiniPreparationFailure {
 }
 
 impl Context {
+    /// Whether an accepted base can receive native coverage without entering
+    /// ordinary redisplay. Unlike RedisplayTransaction's final skip check,
+    /// this runs no Lisp, distributes no text marks, and consumes no debt.
+    pub fn auxiliary_redisplay_readiness(
+        &self,
+        base_generation: u64,
+    ) -> Result<(), AuxiliaryRedisplayRefusal> {
+        use AuxiliaryRedisplayRefusal as Refusal;
+        match self.gnu_redisplay_hooks.active {
+            RedisplayActiveOwner::Idle => {}
+            RedisplayActiveOwner::RedisplayTransaction => {
+                return Err(Refusal::RedisplayInProgress);
+            }
+            RedisplayActiveOwner::CommittedScroll => {
+                return Err(Refusal::CommittedScrollInProgress);
+            }
+        }
+        if self.redisplay_hook_flow_pending() {
+            return Err(Refusal::DeferredLayoutFlow);
+        }
+        if self.has_mode_line_display_flow() {
+            return Err(Refusal::DeferredModeLineFlow);
+        }
+        let observed = self.redisplay_generation();
+        if observed != base_generation {
+            return Err(Refusal::GenerationChanged {
+                expected: base_generation,
+                observed,
+            });
+        }
+        if self.echo_area_resize_exact_pending {
+            return Err(Refusal::ExactEchoResizePending);
+        }
+        if self.displayed_buffer_changes_unacknowledged() {
+            return Err(Refusal::UnacknowledgedBufferChanges);
+        }
+        let pending = &self.gnu_redisplay_hooks;
+        // Legacy display does not consume the unused initial GNU scopes.
+        // Only the GNU policy interprets these marks as pending work.
+        if gnu_redisplay_hooks_enabled() {
+            if pending.windows != PendingScope::None {
+                return Err(Refusal::PendingWindowScope);
+            }
+            if pending.mode_lines != PendingScope::None {
+                return Err(Refusal::PendingModeLineScope);
+            }
+            if !pending.redisplay_windows.is_empty() {
+                return Err(Refusal::PendingWindowTargets);
+            }
+            if !pending.redisplay_frames.is_empty() {
+                return Err(Refusal::PendingFrameTargets);
+            }
+            if !pending.mode_line_windows.is_empty() {
+                return Err(Refusal::PendingModeLineTargets);
+            }
+            if !pending.redisplay_text.is_empty() {
+                return Err(Refusal::PendingTextTargets);
+            }
+            // Note: `frame_window_change` is intentionally NOT checked here,
+            // matching `RedisplayTransaction::run`'s skip predicate. Accepting
+            // a frame whose materialized body height changed sets
+            // `frame_window_change` for the NEXT redisplay's window-change
+            // hooks without leaving display debt on the accepted frame; any
+            // real topology/geometry/buffer change before redisplay is already
+            // caught by `redisplay_frames`, `redisplay_windows`, and
+            // `last_redisplay_signature`.
+        }
+        if !pending.physical_redraw_frames.is_empty() {
+            return Err(Refusal::PendingPhysicalRedraw);
+        }
+        let Some(previous) = self.last_redisplay_signature.as_ref() else {
+            return Err(Refusal::MissingSignature);
+        };
+        if *previous != self.redisplay_signature() {
+            return Err(Refusal::ChangedSignature);
+        }
+        Ok(())
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn gnu_redisplay_hooks_active(&self) -> bool {

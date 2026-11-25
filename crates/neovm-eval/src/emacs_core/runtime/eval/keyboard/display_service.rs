@@ -1,5 +1,8 @@
 //! Bounded GUI service opportunities between completed commands.
 use super::*;
+use crate::emacs_core::eval::GuiBoundaryServiceActivity;
+#[cfg(feature = "test-support")]
+use crate::emacs_core::eval::{DisplayMaintenanceOutcome, DisplayMaintenancePublication};
 #[cfg(feature = "test-support")]
 use std::{cell::Cell, rc::Rc};
 
@@ -36,15 +39,22 @@ impl crate::emacs_core::Context {
         *deadline = now + period;
         let service_started = Instant::now();
         self.timer_stop_idle();
-        crate::emacs_core::eval::hooks_proof::wait::service_input_pending_with_timers(self)?;
+        let activity =
+            crate::emacs_core::eval::hooks_proof::wait::service_input_pending_with_timers(self)?;
         if let Some(mut maintenance) = self.display_idle_maintenance_fn.take() {
-            let (_, publish) = maintenance(self);
+            let _outcome = maintenance(self);
             self.display_idle_maintenance_fn = Some(maintenance);
-            if publish {
-                self.invalidate_redisplay();
-            }
         }
-        self.redisplay_for_input_wait()?;
+        // Background coverage can only publish natively. Real callbacks keep
+        // GNU's display opportunity even if they changed no visible facts;
+        // otherwise enter ordinary redisplay only for genuine existing debt.
+        if activity == GuiBoundaryServiceActivity::CallbacksRan
+            || self
+                .auxiliary_redisplay_readiness(self.redisplay_generation())
+                .is_err()
+        {
+            self.redisplay_for_input_wait()?;
+        }
         // Expensive layout must not make the next deadline overdue before
         // this service call even returns. Reserve at least an equal amount
         // of evaluator time for queued commands; cheap frames retain the
@@ -58,17 +68,44 @@ impl crate::emacs_core::Context {
     pub(crate) fn run_gui_service_keeps_deadline_and_pending_input_order_fixture(
         make_context: fn() -> Self,
     ) {
+        // This Context-owned fixture uses the legacy producer/signature
+        // acceptance contract; the layout-engine fixture covers actual GNU
+        // presentation acceptance. Neither may invent debt for native coverage.
+        let _policy = super::super::RedisplayHookPolicyGuard::legacy();
         let mut eval = make_context();
-        eval.eval_str("(setq inhibit-redisplay nil)").unwrap();
+        eval.eval_str(
+            "(setq inhibit-redisplay nil
+                   timer-list nil timer-idle-list nil
+                   gui-service-pre-count 0 gui-service-timer-count 0
+                   pre-redisplay-function
+                   (lambda (_windows)
+                     (setq gui-service-pre-count (1+ gui-service-pre-count))))
+             (fset 'timer-event-handler
+                   (lambda (_timer)
+                     (setq timer-list nil
+                           gui-service-timer-count (1+ gui-service-timer-count))))",
+        )
+        .unwrap();
         let captures = Rc::new(Cell::new(0));
         let observed = captures.clone();
         eval.display_idle_maintenance_fn = Some(Box::new(move |_| {
             observed.set(observed.get() + 1);
-            (None, true)
+            DisplayMaintenanceOutcome {
+                next_wake: None,
+                publication: DisplayMaintenancePublication::PublishedNatively,
+            }
         }));
         let paints = Rc::new(Cell::new(0));
         let observed = paints.clone();
         eval.redisplay_fn = Some(Box::new(move |_| observed.set(observed.get() + 1)));
+        eval.redisplay().expect("accept an ordinary baseline first");
+        assert_eq!(paints.get(), 1);
+        paints.set(0);
+        eval.eval_str("(setq gui-service-pre-count 0)").unwrap();
+        assert_eq!(
+            eval.auxiliary_redisplay_readiness(eval.redisplay_generation()),
+            Ok(())
+        );
         for ch in ['a', 'b'] {
             eval.command_loop.unread_key(KeyEvent::char(ch));
         }
@@ -80,10 +117,53 @@ impl crate::emacs_core::Context {
         eval.service_gui_command_boundary_at(now + Duration::from_millis(20))
             .unwrap();
         assert_eq!(captures.get(), 1);
-        assert_eq!(paints.get(), 1);
+        // The previous paints==1 expectation encoded a logical redraw forced
+        // by the publication boolean. Native publication owes no Lisp/producer.
+        assert_eq!(paints.get(), 0);
+        assert_eq!(
+            eval.eval_symbol("gui-service-pre-count").unwrap(),
+            Value::fixnum(0)
+        );
         eval.service_gui_command_boundary_at(now + Duration::from_millis(21))
             .unwrap();
         assert_eq!(captures.get(), 1);
+        // A callback with no display mutation still owns GNU's post-timer
+        // pre-hook opportunity. The signature proof by itself cannot see it.
+        eval.set_variable(
+            "timer-list",
+            Value::list(vec![Value::from(super::super::GnuTimerTimestamp::now())]),
+        );
+        assert_eq!(
+            eval.auxiliary_redisplay_readiness(eval.redisplay_generation()),
+            Ok(())
+        );
+        eval.service_gui_command_boundary_at(now + Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(captures.get(), 2);
+        assert_eq!(
+            paints.get(),
+            0,
+            "an unchanged timer does not force a producer"
+        );
+        assert_eq!(
+            eval.eval_symbol("gui-service-pre-count").unwrap(),
+            Value::fixnum(1)
+        );
+        assert_eq!(
+            eval.eval_symbol("gui-service-timer-count").unwrap(),
+            Value::fixnum(1)
+        );
+        // Genuine debt keeps its ordinary producer even when native coverage
+        // was also published during this same command-boundary opportunity.
+        eval.invalidate_redisplay();
+        eval.service_gui_command_boundary_at(now + Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(captures.get(), 3);
+        assert_eq!(paints.get(), 1);
+        assert_eq!(
+            eval.eval_symbol("gui-service-pre-count").unwrap(),
+            Value::fixnum(2)
+        );
         assert_eq!(
             eval.command_loop.read_key_event(),
             Some(Value::fixnum('a' as i64))
@@ -92,9 +172,9 @@ impl crate::emacs_core::Context {
             eval.command_loop.read_key_event(),
             Some(Value::fixnum('b' as i64))
         );
-        eval.service_gui_command_boundary_at(now + Duration::from_millis(50))
+        eval.service_gui_command_boundary_at(now + Duration::from_secs(3))
             .unwrap();
-        assert_eq!(captures.get(), 1, "idle wait owns idle maintenance");
+        assert_eq!(captures.get(), 3, "idle wait owns idle maintenance");
         assert!(eval.command_loop.gui_display_deadline.is_none());
     }
 }

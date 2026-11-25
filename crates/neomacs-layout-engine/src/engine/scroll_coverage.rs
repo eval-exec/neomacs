@@ -103,9 +103,9 @@ struct Capture {
     fringe: Option<crate::buffer_source::fringe_arrows::TruncationContinuationFringeRequest>,
 }
 
-struct WindowCoverage {
+pub(super) struct WindowCoverage {
     key: RetainedWindowKey,
-    targets: Vec<CharPos0>,
+    pub(super) targets: Vec<CharPos0>,
     // Remember pixel motion between source-row transitions and worker wakes.
     moving_backward: bool,
     // Source edge used to plan this queue, including after its bridge is popped.
@@ -123,15 +123,26 @@ pub(super) struct ScrollCoverage {
     // One paused acquisition, with the same per-page limits and root leases.
     // Urgent bridges share the existing worker; no unbounded producer queue.
     deferred: Option<Capture>,
-    frame: Option<FrameId>,
+    pub(super) frame: Option<FrameId>,
     // At most three targets per retained live window. Glyph storage remains
     // subject to PreparedViewports' global byte/row limits.
-    windows: rustc_hash::FxHashMap<DisplayWindowId, WindowCoverage>,
+    pub(super) windows: rustc_hash::FxHashMap<DisplayWindowId, WindowCoverage>,
     last_window: Option<DisplayWindowId>,
-    publication_pending: bool,
+    pub(super) publication_pending: bool,
+    pub(super) publication_serial: u64,
+    pub(super) refused_publication: Option<super::auxiliary_coverage::RefusedAuxiliaryKey>,
 }
 
 impl ScrollCoverage {
+    pub(super) fn note_publication_pending(&mut self) {
+        self.publication_pending = true;
+        self.publication_serial = self.publication_serial.wrapping_add(1);
+    }
+
+    pub(super) fn clear_publication_pending(&mut self) {
+        self.publication_pending = false;
+        self.refused_publication = None;
+    }
     #[cfg(test)]
     pub(super) fn fairness_owner_for_test(&self) -> Option<DisplayWindowId> {
         self.last_window
@@ -195,9 +206,10 @@ impl ScrollCoverage {
         self.frame = None;
         self.windows.clear();
         self.last_window = None;
+        self.clear_publication_pending();
     }
 
-    fn cancel_active(&mut self) {
+    pub(super) fn cancel_active(&mut self) {
         self.worker.cancel();
         self.admission = None;
         self.capture = None;
@@ -392,7 +404,9 @@ impl ScrollCoverage {
             complete_viewport,
             query_freshness,
         );
-        self.publication_pending |= changed;
+        if changed {
+            self.note_publication_pending();
+        }
         tracing::debug!(target: "neomacs_layout_engine::scroll_coverage",
             window = admission.window.get(), changed,
             "worker coverage retention decision");
@@ -452,12 +466,17 @@ impl LayoutEngine {
             .is_some_and(|frame| evaluator.frame_manager().get(frame).is_none())
         {
             self.scroll_preview_coverage.clear();
+            self.auxiliary_base = None;
         }
     }
 
     /// A completed idle page needs one fresh immutable transport publication.
     pub fn take_scroll_coverage_publication(&mut self) -> bool {
-        std::mem::take(&mut self.scroll_coverage.publication_pending)
+        let pending = std::mem::take(&mut self.scroll_coverage.publication_pending);
+        if pending {
+            self.scroll_coverage.refused_publication = None;
+        }
+        pending
     }
 
     /// Perform one bounded off-screen acquisition step during a command-loop
@@ -471,7 +490,7 @@ impl LayoutEngine {
         if !self.prepared_viewports.invalidated.is_empty() {
             // Retire the old render-thread certificate even before a new
             // worker page is ready. Cache eviction alone cannot revoke it.
-            self.scroll_coverage.publication_pending = true;
+            self.scroll_coverage.note_publication_pending();
         }
         for (_, window) in self.prepared_viewports.invalidated.drain(..) {
             self.scroll_coverage.windows.remove(&window);
@@ -601,43 +620,40 @@ impl LayoutEngine {
                 .get(&window_id)
                 .is_some_and(|observed| backward_start < observed.backward_edge);
         let urgent_backward = moving_backward
-            && self.last_frame_display_state.as_ref().is_none_or(|state| {
-                state
-                    .scroll_coverage
-                    .iter()
-                    .find(|coverage| coverage.content.window_id == window_id)
-                    .and_then(|coverage| {
-                        coverage.content.text_clip_bounds.map(|bounds| {
-                            // The same lower offset as ScrollSurface::clamp_offset;
-                            // no glyph materialization is needed to schedule work.
-                            let headroom = coverage.viewport.y + coverage.origin - bounds.y;
-                            // Two physical lines of one short face are fewer
-                            // pixels than `2 * char_height`. The tallest body
-                            // row is that face when the page is uniform, and
-                            // stays the frame font when any row is at least
-                            // that tall. A clipped fragment must not shrink it.
-                            let line = coverage
-                                .content
-                                .matrix
-                                .rows
-                                .iter()
-                                .filter(|row| {
-                                    row.enabled
-                                        && row.height_px > 0.0
-                                        && !RetainedWindowMatrix::is_chrome_role(row.role)
-                                })
-                                .map(|row| row.height_px)
-                                .fold(0.0_f32, f32::max);
-                            let unit = if line > 0.0 && line + 1.0 < retained.key.char_height {
-                                line
-                            } else {
-                                retained.key.char_height
-                            };
-                            headroom <= unit * 2.0
-                        })
+            && self
+                .scroll_preview_coverage
+                .coverage(frame.id, window_id)
+                .and_then(|coverage| {
+                    coverage.content.text_clip_bounds.map(|bounds| {
+                        // The same lower offset as ScrollSurface::clamp_offset;
+                        // no glyph materialization is needed to schedule work.
+                        let headroom = coverage.viewport.y + coverage.origin - bounds.y;
+                        // Two physical lines of one short face are fewer
+                        // pixels than `2 * char_height`. The tallest body
+                        // row is that face when the page is uniform, and
+                        // stays the frame font when any row is at least
+                        // that tall. A clipped fragment must not shrink it.
+                        let line = coverage
+                            .content
+                            .matrix
+                            .rows
+                            .iter()
+                            .filter(|row| {
+                                row.enabled
+                                    && row.height_px > 0.0
+                                    && !RetainedWindowMatrix::is_chrome_role(row.role)
+                            })
+                            .map(|row| row.height_px)
+                            .fold(0.0_f32, f32::max);
+                        let unit = if line > 0.0 && line + 1.0 < retained.key.char_height {
+                            line
+                        } else {
+                            retained.key.char_height
+                        };
+                        headroom <= unit * 2.0
                     })
-                    .unwrap_or(true)
-            });
+                })
+                .unwrap_or(true);
         if !compatible {
             self.scroll_coverage.cancel_active();
         }

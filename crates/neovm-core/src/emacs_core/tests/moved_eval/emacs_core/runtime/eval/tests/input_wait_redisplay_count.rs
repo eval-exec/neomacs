@@ -8,6 +8,7 @@ use super::*;
 #[cfg(unix)]
 use crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
 use crate::emacs_core::eval::keyboard::{InputEvent, KeyEvent};
+use crate::emacs_core::eval::{DisplayMaintenanceOutcome, DisplayMaintenancePublication};
 use crate::test_utils::input_wait::{
     InputGateOwner, Readiness, WaitWitness, install_after_redisplay, select_visible_fixture,
 };
@@ -36,12 +37,23 @@ fn counted_context() -> Context {
 /// resume as positive idle maintenance waits, without sleeping or depending
 /// on the scheduler. The final None reaches an observed positive native wait.
 fn install_no_progress_deadlines(eval: &mut Context, deadlines: usize) -> Rc<Cell<usize>> {
+    install_native_deadlines(eval, deadlines, DisplayMaintenancePublication::Idle)
+}
+
+fn install_native_deadlines(
+    eval: &mut Context,
+    deadlines: usize,
+    publication: DisplayMaintenancePublication,
+) -> Rc<Cell<usize>> {
     let calls = Rc::new(Cell::new(0));
     let observed = Rc::clone(&calls);
     eval.display_idle_maintenance_fn = Some(Box::new(move |_| {
         let call = observed.get();
         observed.set(call + 1);
-        ((call < deadlines).then_some(Duration::ZERO), false)
+        DisplayMaintenanceOutcome {
+            next_wake: (call < deadlines).then_some(Duration::ZERO),
+            publication,
+        }
     }));
     calls
 }
@@ -74,6 +86,29 @@ fn command_input_idle_maintenance_deadlines_do_not_replay_pre_redisplay() {
         let (keys, _) = read.expect("read the key published after maintenance");
         assert_eq!(keys, vec![Value::fixnum('x' as i64)]);
         assert_eq!(calls.get(), deadlines + 1, "all maintenance turns ran");
+        assert_pre_count(&mut eval, 1);
+    }
+}
+
+#[test]
+fn native_publication_and_deferral_deadlines_do_not_replay_pre_redisplay() {
+    let _policy = RedisplayHookPolicyGuard::gnu();
+    for publication in [
+        DisplayMaintenancePublication::PublishedNatively,
+        DisplayMaintenancePublication::Deferred,
+    ] {
+        let mut eval = counted_context();
+        let calls = install_native_deadlines(&mut eval, 8, publication);
+        let owner = InputGateOwner::install(&mut eval);
+        let (gate, publication) = owner.gate(vec![InputEvent::key_press(KeyEvent::char('x'))]);
+        gate.arm(&mut eval, WaitWitness::InputWaitEntered);
+
+        let read = eval.read_key_sequence();
+        let observed = publication.finish().expect("required positive input wait");
+        assert!(observed.entry.requested_timeout() > Duration::ZERO);
+        let (keys, _) = read.expect("command key after native maintenance");
+        assert_eq!(keys, vec![Value::fixnum('x' as i64)]);
+        assert_eq!(calls.get(), 9, "all native maintenance turns ran");
         assert_pre_count(&mut eval, 1);
     }
 }
@@ -150,7 +185,10 @@ fn command_input_idle_maintenance_preserves_monitor_hook_redisplay() {
         } else {
             Duration::from_millis(50)
         };
-        (Some(delay), false)
+        DisplayMaintenanceOutcome {
+            next_wake: Some(delay),
+            publication: DisplayMaintenancePublication::Idle,
+        }
     }));
     eval.eval_str(
         "(setq idle-wake-monitor-seen nil
@@ -263,7 +301,10 @@ fn command_input_idle_maintenance_preserves_bound_window_close_redisplay() {
         } else {
             Duration::from_millis(50)
         };
-        (Some(delay), false)
+        DisplayMaintenanceOutcome {
+            next_wake: Some(delay),
+            publication: DisplayMaintenancePublication::Idle,
+        }
     }));
     let owner = InputGateOwner::install(&mut eval);
     let (close_gate, close_publication) =

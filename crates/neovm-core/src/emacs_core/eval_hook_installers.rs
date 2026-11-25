@@ -93,7 +93,7 @@ use crate::window::display::WindowDisplayContextExt;
 
 fn wait_service_input_pending_with_timers(
     ctx: &mut crate::emacs_core::eval::Context,
-) -> Result<(), neovm_value::error::Flow> {
+) -> Result<crate::emacs_core::eval::GuiBoundaryServiceActivity, neovm_value::error::Flow> {
     ctx.service_input_pending_with_timers()
 }
 

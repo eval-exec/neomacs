@@ -4893,6 +4893,27 @@ fn run_gui_evaluator_worker(
     frame_layout::install_frame_snapshot_fn(&mut evaluator);
     frame_layout::install_window_layout_query_fn(&mut evaluator);
     frame_layout::install_font_driver(&mut evaluator);
+    let aux_tx = emacs_comms.cmd_tx.clone();
+    let aux_slots = Arc::clone(&emacs_comms.auxiliary_scroll_coverage);
+    let aux_waker = render_waker.clone();
+    evaluator.display_idle_maintenance_fn = Some(Box::new(move |eval| {
+        frame_layout::maintain_gui_scroll_coverage(eval, |update| {
+            match aux_tx.publish_scroll_coverage(&aux_slots, update) {
+                Ok(woken) => {
+                    if woken {
+                        aux_waker.wake();
+                    }
+                    neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery::Delivered
+                }
+                Err(crossbeam_channel::TrySendError::Full(_)) => {
+                    neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery::QueueFull
+                }
+                Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                    neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery::Disconnected
+                }
+            }
+        })
+    }));
     // Lisp's frame-initialize will create the first GUI frame. Publishing the
     // startup terminal as a GUI scene would expose the same premature frame.
 

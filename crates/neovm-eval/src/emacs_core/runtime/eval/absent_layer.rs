@@ -829,7 +829,7 @@ macro_rules! eval_absent_layer_slots {
                 neovm_value::tls_fingerprint::mix(acc, 0);
             }
 
-            pub(crate) fn wait_service_input_pending_with_timers(ctx: &mut Context) -> Result<(), Flow> {
+            pub(crate) fn wait_service_input_pending_with_timers(ctx: &mut Context) -> Result<$crate::emacs_core::eval::GuiBoundaryServiceActivity, Flow> {
                 absent_layer_panic("ABSENT-LAYER core::wait.service_input_pending_with_timers");
             }
 

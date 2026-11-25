@@ -74,7 +74,8 @@ pub struct EvalHookSet {
 #[doc(hidden)]
 pub struct WaitServiceHooks {
     #[doc(hidden)]
-    pub service_input_pending_with_timers: fn(&mut Context) -> Result<(), Flow>,
+    pub service_input_pending_with_timers:
+        fn(&mut Context) -> Result<GuiBoundaryServiceActivity, Flow>,
     #[doc(hidden)]
     pub service_read_char_preliminary_redisplay: fn(
         &mut Context,
@@ -320,7 +321,9 @@ pub(crate) fn file_notify_host_queries() -> Option<&'static FileNotifyHostQuerie
 pub(crate) mod wait {
     use super::*;
 
-    pub(crate) fn service_input_pending_with_timers(ctx: &mut Context) -> Result<(), Flow> {
+    pub(crate) fn service_input_pending_with_timers(
+        ctx: &mut Context,
+    ) -> Result<GuiBoundaryServiceActivity, Flow> {
         (installed().wait.service_input_pending_with_timers)(ctx)
     }
 

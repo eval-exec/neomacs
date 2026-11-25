@@ -1105,7 +1105,9 @@ pub trait WaitContextExt {
 
     fn service_input_pending_without_timers(&mut self) -> Result<(), Flow>;
 
-    fn service_input_pending_with_timers(&mut self) -> Result<(), Flow>;
+    fn service_input_pending_with_timers(
+        &mut self,
+    ) -> Result<neovm_eval::emacs_core::eval::GuiBoundaryServiceActivity, Flow>;
 
     fn service_read_char_preliminary_redisplay(
         &mut self,
@@ -1255,8 +1257,25 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         self.service_wait_request_once(&WaitRequest::input_pending_without_timers())
     }
 
-    fn service_input_pending_with_timers(&mut self) -> Result<(), Flow> {
-        self.service_wait_request_once(&WaitRequest::input_pending_with_timers())
+    fn service_input_pending_with_timers(
+        &mut self,
+    ) -> Result<neovm_eval::emacs_core::eval::GuiBoundaryServiceActivity, Flow> {
+        use neovm_eval::emacs_core::eval::GuiBoundaryServiceActivity;
+        // timer_check also drains safe callbacks. Preserve their display
+        // opportunity without branding them as fired timers for wait completion.
+        let safe_callbacks_pending = self.has_pending_safe_funcalls();
+        let outcome =
+            self.service_wait_request_once_outcome(&WaitRequest::input_pending_with_timers())?;
+        Ok(
+            if safe_callbacks_pending
+                || outcome.has_timer_activity()
+                || outcome.ran_process_callbacks()
+            {
+                GuiBoundaryServiceActivity::CallbacksRan
+            } else {
+                GuiBoundaryServiceActivity::Idle
+            },
+        )
     }
 
     /// GNU read_char checks for pending input with timer service before its

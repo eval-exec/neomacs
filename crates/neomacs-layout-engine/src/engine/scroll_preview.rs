@@ -66,6 +66,38 @@ impl ScrollPreviewCoverage {
             .retain(|_, entry| entry.certified_at == presentation);
     }
 
+    pub(super) fn apply_auxiliary(
+        &mut self,
+        update: &neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+    ) {
+        self.clear();
+        self.frame = Some(update.frame);
+        for surface in &update.surfaces {
+            let coverage = surface.coverage_arc();
+            self.entries.insert(
+                coverage.content.window_id,
+                CertifiedPreviewCoverage {
+                    coverage: std::sync::Arc::clone(coverage),
+                    certified_at: update.base,
+                    compositor_enabled: coverage.compositor_enabled,
+                },
+            );
+        }
+    }
+
+    pub(super) fn coverage(
+        &self,
+        frame: FrameId,
+        window: DisplayWindowId,
+    ) -> Option<&std::sync::Arc<neomacs_display_protocol::scroll_coverage::ScrollCoverage>> {
+        self.get(frame, window).map(|entry| &entry.coverage)
+    }
+
+    pub(super) fn has_any_for(&self, frame: FrameId) -> bool {
+        self.frame == Some(neomacs_display_protocol::DisplayFrameId::new(frame.0))
+            && !self.entries.is_empty()
+    }
+
     fn get(&self, frame: FrameId, window: DisplayWindowId) -> Option<&CertifiedPreviewCoverage> {
         if self.frame != Some(neomacs_display_protocol::DisplayFrameId::new(frame.0)) {
             return None;

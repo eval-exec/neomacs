@@ -5721,15 +5721,13 @@ impl crate::emacs_core::eval::Context {
         let Some(mut maintenance) = self.display_idle_maintenance_fn.take() else {
             return Ok(None);
         };
-        let (next, publish) = maintenance(self);
+        let outcome = maintenance(self);
         self.display_idle_maintenance_fn = Some(maintenance);
-        if publish {
-            // Drop the engine borrow before redisplay re-enters layout. This
-            // publishes newly available coverage without changing the buffer.
-            self.invalidate_redisplay();
-            self.redisplay()?;
-        }
-        Ok(next.and_then(|delay| std::time::Instant::now().checked_add(delay)))
+        // Native publication is complete (or deferred) in the frontend. It
+        // cannot invalidate the accepted base or enter Lisp-bearing redisplay.
+        Ok(outcome
+            .next_wake
+            .and_then(|delay| std::time::Instant::now().checked_add(delay)))
     }
 
     /// GNU's buffer-size-scaled delay for `auto-save-timeout`.

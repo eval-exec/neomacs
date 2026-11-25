@@ -151,6 +151,140 @@ impl CoverageExportInputs {
 }
 
 impl PreparedViewports {
+    pub(in crate::engine) fn export_auxiliary(
+        &mut self,
+        frame: neovm_core::window::FrameId,
+        retained: &rustc_hash::FxHashMap<DisplayWindowId, RetainedWindowMatrix>,
+        template: &FrameDisplayState,
+        arena: &FrameFaceArena,
+        metrics: &mut Option<crate::font::metrics::FontMetricsService>,
+        window_policy: impl Fn(DisplayWindowId) -> (bool, bool),
+    ) -> Result<
+        (
+            Vec<Arc<neomacs_display_protocol::scroll_coverage::ScrollSurface>>,
+            Vec<super::super::auxiliary_coverage::StagedAuxiliaryExport>,
+        ),
+        super::super::auxiliary_coverage::AuxiliaryPublicationRefusal,
+    > {
+        use super::super::auxiliary_coverage::{
+            AuxiliaryPublicationRefusal as Refusal, StagedAuxiliaryExport,
+        };
+        let reuse_enabled = coverage_export_reuse_enabled();
+        let mut windows: Vec<_> = retained.keys().copied().collect();
+        windows.sort_unstable_by_key(|owner| owner.get());
+        let mut surfaces = Vec::new();
+        let mut staged = Vec::with_capacity(windows.len());
+        for window in windows {
+            let current = &retained[&window];
+            let epoch = match self
+                .exports
+                .iter_mut()
+                .find(|export| export.frame == frame && export.window == window)
+            {
+                Some(export) => {
+                    if !RetainedWindowKey::row_content_eligible(&export.key, &current.key) {
+                        export.key = current.key.clone();
+                        export.epoch = next_epoch();
+                        export.certified = false;
+                        export.last_export = None;
+                    }
+                    export.visible_source = text_source_range(current);
+                    export.epoch
+                }
+                None => {
+                    let epoch = next_epoch();
+                    self.exports.push(ExportedCoverage {
+                        frame,
+                        window,
+                        key: current.key.clone(),
+                        epoch,
+                        certified: false,
+                        last_export: None,
+                        backward_start: None,
+                        visible_source: text_source_range(current),
+                    });
+                    epoch
+                }
+            };
+            if !reuse_enabled {
+                staged.push(StagedAuxiliaryExport {
+                    window,
+                    backward_start: None,
+                    published: false,
+                });
+                continue;
+            }
+            let Some(mut coverage) =
+                self.export_window(frame, window, current, template, arena, metrics, epoch)
+            else {
+                staged.push(StagedAuxiliaryExport {
+                    window,
+                    backward_start: None,
+                    published: false,
+                });
+                continue;
+            };
+            let (compositor_enabled, predict_pixels) = window_policy(window);
+            coverage.compositor_enabled = compositor_enabled;
+            coverage.predict_pixels = predict_pixels;
+            if !coverage.resource_subset_of_frame_state(template) {
+                return Err(Refusal::ResourceExtensionRequired(window));
+            }
+            let backward_start = coverage
+                .content
+                .matrix
+                .rows
+                .first()
+                .map(|row| CharPos0::new(row.start_charpos));
+            let coverage = Arc::new(coverage);
+            let Some(surface) = coverage.materialize(template) else {
+                return Err(Refusal::SurfaceMaterializationRejected(window));
+            };
+            surfaces.push(surface);
+            staged.push(StagedAuxiliaryExport {
+                window,
+                backward_start,
+                published: true,
+            });
+        }
+        Ok((surfaces, staged))
+    }
+
+    pub(in crate::engine) fn commit_auxiliary_exports(
+        &mut self,
+        frame: neovm_core::window::FrameId,
+        staged: &[super::super::auxiliary_coverage::StagedAuxiliaryExport],
+    ) {
+        self.exports.retain(|export| {
+            export.frame != frame || staged.iter().any(|entry| entry.window == export.window)
+        });
+        for entry in staged {
+            if let Some(export) = self
+                .exports
+                .iter_mut()
+                .find(|export| export.frame == frame && export.window == entry.window)
+            {
+                export.certified = entry.published;
+                // Conservative receipt (no ACK in v1): the next ordinary frame
+                // re-exports cleanly instead of assuming renderer ingestion.
+                export.last_export = None;
+                export.backward_start = entry.backward_start;
+            }
+        }
+    }
+
+    pub(in crate::engine) fn clear_certified_exports_for_frame(
+        &mut self,
+        frame: neovm_core::window::FrameId,
+    ) {
+        for export in &mut self.exports {
+            if export.frame == frame {
+                export.certified = false;
+                export.last_export = None;
+            }
+        }
+    }
+
     pub(in crate::engine) fn export(
         &mut self,
         frame: neovm_core::window::FrameId,
