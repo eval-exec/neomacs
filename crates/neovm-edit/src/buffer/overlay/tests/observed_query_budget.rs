@@ -1171,3 +1171,160 @@ fn assert_no_observed_reads_rejects_plist_walk_in_debug() {
         "unexpected panic payload: {msg:?}"
     );
 }
+
+#[test]
+fn highest_priority_overlay_property_absent_fast_path_respects_budget_and_underflow() {
+    crate::test_utils::init_test_tracing();
+    let invisible = Value::symbol("invisible");
+    let list = unique_plist_overlays(16_000);
+    // Query a position covered by an overlay whose plist carries `face` and
+    // `priority`, but NOT `invisible`.
+    let covered_pos = emacs_byte_pos(10 + 8_000 * 4);
+    reset_overlays_at_node_visit_count();
+    reset_endpoint_publication_interval_read_count();
+    let (answer, reads) = collection_reads::capture(|| {
+        list.highest_priority_overlay_property_value_at_emacs_byte_pos(covered_pos, invisible, None)
+    });
+    assert_eq!(answer, None);
+    let reads = reads.expect("absent direct-key query must have a coherent certificate");
+    assert_eq!(
+        owner_count(&reads),
+        0,
+        "absent direct-key fast path must observe zero plist owners"
+    );
+    assert_eq!(
+        overlays_at_node_visit_count(),
+        0,
+        "absent direct-key fast path must not descend the interval tree"
+    );
+    assert_eq!(
+        endpoint_publication_interval_read_count(),
+        0,
+        "absent direct-key fast path must keep endpoint index cold"
+    );
+
+    // Range-view underflow must STILL be recorded on the absent-key fast path.
+    let view = list.snapshot_in_range(emacs_byte_range(4_000, 8_000));
+    assert!(!view.overlay_view_query_underflowed());
+    assert_eq!(
+        view.highest_priority_overlay_property_value_at_emacs_byte_pos(
+            emacs_byte_pos(100),
+            invisible,
+            None,
+        ),
+        None
+    );
+    assert!(
+        view.overlay_view_query_underflowed(),
+        "absent direct-key fast path must still call note_overlay_view_query(pos)"
+    );
+}
+
+#[test]
+fn highest_priority_overlay_property_bloom_false_negative_mutation_is_caught() {
+    crate::test_utils::init_test_tracing();
+    let invisible = Value::symbol("invisible");
+    let mut list = OverlayList::new();
+    list.insert_overlay(overlay_with_plist(
+        10,
+        20,
+        Value::list(vec![invisible, Value::T]),
+    ));
+    let pos = emacs_byte_pos(12);
+    // Normal path: bloom bit is set, fast path falls through and finds `t`.
+    assert_eq!(
+        list.highest_priority_overlay_property_value_at_emacs_byte_pos(pos, invisible, None),
+        Some(Value::T)
+    );
+    list.assert_index_invariants_for_test();
+
+    // Mutation proof: clearing the bloom bit for a present property forces a
+    // false negative on the fast path, diverging immediately from the
+    // authoritative unfiltered scan and failing the index invariant check.
+    list.index
+        .clear_direct_property_key_bloom_bit_for_test(invisible);
+    let fast_path_after_mutation =
+        list.highest_priority_overlay_property_value_at_emacs_byte_pos(pos, invisible, None);
+    let authoritative = match list.resolve_overlay_property_at_emacs_byte_pos(pos, None, |ov| {
+        overlay_property_named(ov, invisible)
+    }) {
+        OverlayPropertyAtPoint::Present(res) => Some(res.value()),
+        OverlayPropertyAtPoint::Vacant(_) => None,
+    };
+    assert_eq!(authoritative, Some(Value::T));
+    assert_ne!(
+        fast_path_after_mutation, authoritative,
+        "clearing the bloom bit must expose a false negative, proving the guard is active"
+    );
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            list.assert_index_invariants_for_test();
+        }))
+        .is_err(),
+        "index invariant check must catch a missing bloom bit"
+    );
+}
+
+#[test]
+fn next_property_boundary_skips_non_carriers_without_publishing_endpoints() {
+    crate::test_utils::init_test_tracing();
+    let invisible = Value::symbol("invisible");
+    let display = Value::symbol("display");
+    let mut list = unique_plist_overlays(16_000);
+
+    // Absent properties: O(1) None, 0 observed owners, 0 endpoint publications.
+    reset_endpoint_publication_interval_read_count();
+    let (next, reads) = collection_reads::capture(|| {
+        list.next_property_boundary_after_until_emacs_byte_pos(
+            emacs_byte_pos(0),
+            emacs_byte_pos(100_000),
+            &[invisible, display],
+        )
+    });
+    assert_eq!(next, None);
+    assert_eq!(owner_count(&reads.expect("coherent certificate")), 0);
+    assert_eq!(endpoint_publication_interval_read_count(), 0);
+
+    // Insert one `invisible` overlay deep in the buffer. Cold index must STILL
+    // avoid endpoint publication; once published, OrderedFilterMask skips all
+    // 16,000 non-carrier overlays directly to the carrier's start.
+    list.insert_overlay(overlay_with_plist(
+        50_000,
+        50_020,
+        Value::list(vec![invisible, Value::T]),
+    ));
+    reset_endpoint_publication_interval_read_count();
+    let cold_next = list.next_property_boundary_after_until_emacs_byte_pos(
+        emacs_byte_pos(0),
+        emacs_byte_pos(100_000),
+        &[invisible, display],
+    );
+    assert!(cold_next.is_some());
+    assert_eq!(
+        endpoint_publication_interval_read_count(),
+        0,
+        "cold filtered boundary query must not trigger O(N) endpoint publication"
+    );
+
+    // Explicitly publish endpoints, then verify OrderedFilterMask jumps straight
+    // past all non-carrier subtrees to byte 50,000.
+    let _ = list
+        .index
+        .endpoint_records_strictly_within(
+            emacs_byte_range(0, 100_000),
+            OverlayPropertyFilter::unfiltered(),
+        )
+        .next();
+    reset_endpoint_search_node_visit_count();
+    let warm_next = list.next_property_boundary_after_until_emacs_byte_pos(
+        emacs_byte_pos(0),
+        emacs_byte_pos(100_000),
+        &[invisible, display],
+    );
+    assert_eq!(warm_next, Some(emacs_byte_pos(50_000)));
+    assert!(
+        endpoint_search_node_visit_count() < 64,
+        "warm OrderedFilterMask jump visited {} nodes (expected O(log N))",
+        endpoint_search_node_visit_count()
+    );
+}

@@ -968,6 +968,12 @@ pub trait OverlayRead {
     fn overlays_in_emacs_byte_range(&self, range: EmacsByteRange) -> Vec<Value>;
     fn overlays_in_gnu_lists_order(&self) -> Vec<Value>;
     fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos>;
+    fn next_property_boundary_after_until_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        properties: &[Value],
+    ) -> Option<EmacsBytePos>;
     fn highest_priority_overlay_property_value_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
@@ -1097,12 +1103,39 @@ impl LiveOverlayView {
             .next_boundary_after(pos, EmacsBytePos::new(usize::MAX), &self.stale)
     }
 
+    pub fn next_property_boundary_after_until_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        properties: &[Value],
+    ) -> Option<EmacsBytePos> {
+        if pos >= limit
+            || !properties
+                .iter()
+                .any(|&property| self.may_contain_property(property))
+        {
+            return None;
+        }
+        self.index.next_boundary_after_matching_no_publish(
+            pos,
+            limit,
+            OverlayPropertyFilter::for_properties(properties.iter().copied()),
+            &self.stale,
+        )
+    }
+
     pub fn highest_priority_overlay_property_value_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
         property: Value,
         window_id: Option<u64>,
     ) -> Option<Value> {
+        // `overlay_property_named` checks direct plist keys only, so an absent
+        // direct key proves no live overlay carries `property` without reading
+        // any plist cons cell or publishing the lazy endpoint tree.
+        if !self.may_contain_property(property) {
+            return None;
+        }
         match self.resolve_overlay_property_at_emacs_byte_pos(pos, window_id, |overlay| {
             overlay_property_named(overlay, property)
         }) {
@@ -1208,6 +1241,14 @@ impl OverlayRead for OverlayList {
     fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos> {
         OverlayList::next_boundary_after_emacs_byte_pos(self, pos)
     }
+    fn next_property_boundary_after_until_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        properties: &[Value],
+    ) -> Option<EmacsBytePos> {
+        OverlayList::next_property_boundary_after_until_emacs_byte_pos(self, pos, limit, properties)
+    }
     fn highest_priority_overlay_property_value_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
@@ -1292,6 +1333,16 @@ impl OverlayRead for LiveOverlayView {
     }
     fn next_boundary_after_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<EmacsBytePos> {
         LiveOverlayView::next_boundary_after_emacs_byte_pos(self, pos)
+    }
+    fn next_property_boundary_after_until_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        properties: &[Value],
+    ) -> Option<EmacsBytePos> {
+        LiveOverlayView::next_property_boundary_after_until_emacs_byte_pos(
+            self, pos, limit, properties,
+        )
     }
     fn highest_priority_overlay_property_value_at_emacs_byte_pos(
         &self,
@@ -2656,6 +2707,18 @@ impl OverlayList {
         property: Value,
         window_id: Option<u64>,
     ) -> Option<Value> {
+        // Record range-view underflow BEFORE any absent-property fast path so a
+        // window-range snapshot queried below its capture floor still escalates
+        // to the whole-buffer retry.
+        self.note_overlay_view_query(pos);
+        // `overlay_property_named` inspects direct plist keys only (no category
+        // or alias indirection). When `may_contain_property(property)` is false,
+        // the owner-maintained bloom/inline/refcount summary proves no live
+        // overlay carries `property` without touching any plist cons cell or
+        // publishing the lazy endpoint tree (0 observed collection_reads owners).
+        if !self.may_contain_property(property) {
+            return None;
+        }
         match self.resolve_overlay_property_at_emacs_byte_pos(pos, window_id, |overlay| {
             overlay_property_named(overlay, property)
         }) {
@@ -2917,6 +2980,37 @@ impl OverlayList {
     ) -> Option<EmacsBytePos> {
         self.note_overlay_view_query(pos);
         self.index.next_boundary_after(pos, limit)
+    }
+
+    /// Next overlay boundary in `(pos, limit]` that may affect any direct key
+    /// in `properties`, without publishing the lazy endpoint index.
+    ///
+    /// Always records `note_overlay_view_query(pos)` first so window-range
+    /// underflow stays exact. When none of `properties` exist on any overlay,
+    /// returns `None` in O(1) with zero observed owners and without touching
+    /// the endpoint index or interval tree. When some property exists and the
+    /// endpoint tree is already published, uses `OrderedFilterMask` to skip
+    /// non-carrier subtrees in O(log N); when cold, falls back to the
+    /// non-publishing interval boundary walk.
+    pub fn next_property_boundary_after_until_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        properties: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.note_overlay_view_query(pos);
+        if pos >= limit
+            || !properties
+                .iter()
+                .any(|&property| self.may_contain_property(property))
+        {
+            return None;
+        }
+        self.index.next_boundary_after_matching_no_publish(
+            pos,
+            limit,
+            OverlayPropertyFilter::for_properties(properties.iter().copied()),
+        )
     }
 
     /// Return the next endpoint without allocating or publishing a lazy index.

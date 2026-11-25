@@ -1447,3 +1447,222 @@ fn layout_converges_after_jumping_to_top_of_large_overlay_buffer() {
         "synchronous layout query after G -> gg must converge: {queried:?}"
     );
 }
+
+/// Regression for issue #829: on a large buffer with tens of thousands of
+/// non-invisible overlays (e.g. `magit-log` commit `before-string`/`evaporate`
+/// overlays), neither a fresh window's overlay-view span nor a forward jump's
+/// `forward_scroll_measurement` may walk or snapshot the entire buffer.
+#[test]
+fn fresh_window_overlay_view_is_bounded_and_forward_jump_skips_non_collapse_overlays() {
+    let (mut eval, frame, window, buffer) = setup_large_overlay_buffer_for_jump_test();
+    eval.eval_str("(goto-char (point-max))").unwrap();
+
+    let engine = LayoutEngine::new_without_font_metrics();
+    let frame_ref = eval.frame_manager().get(frame).unwrap();
+    let win_ref = frame_ref.find_window(window).unwrap();
+    let buf_ref = eval.buffer_manager().get(buffer).unwrap();
+    let params = crate::neovm_bridge::window_params_from_neovm(
+        win_ref,
+        buf_ref,
+        frame_ref,
+        eval.variables(),
+        eval.face_table(),
+        None,
+        true,
+        false,
+        Value::T,
+        Value::NIL,
+        None,
+    )
+    .expect("leaf window params");
+
+    let total_chars = buf_ref.total_char_end_pos().get();
+
+    // (1) Fresh window (no prior retained_window_matrices entry) must still use
+    // a bounded window-sized overlay view rather than a whole-buffer snapshot.
+    let fresh_span = engine
+        .overlay_view_char_span_for(&params, buf_ref)
+        .expect("fresh window must return a bounded overlay view span, not None");
+    assert!(
+        fresh_span.1.saturating_sub(fresh_span.0) < total_chars / 2,
+        "fresh window overlay view must stay bounded, got {fresh_span:?} of {total_chars}"
+    );
+
+    // (2) Forward jump from top to EOB across >8192 non-collapse overlays must
+    // skip all non-invisible/non-display overlays in O(1) with zero observed
+    // plist owners.
+    let (measurement, reads) = neovm_value::tagged::collection_reads::capture(|| {
+        crate::neovm_bridge::RustBufferAccess::new(buf_ref)
+            .forward_scroll_measurement(0, total_chars as i64)
+    });
+    assert_eq!(
+        measurement,
+        crate::neovm_bridge::ForwardScrollMeasurement::SourceLineEstimate,
+        "buffer with zero invisible/display overlays must allow source-line estimate"
+    );
+    let reads = reads.expect("O(1) forward_scroll_measurement must not overflow collection_reads");
+    let mut owners = 0usize;
+    assert!(reads.all_dependency_bits(|_| {
+        owners += 1;
+        true
+    }));
+    assert_eq!(
+        owners, 0,
+        "forward_scroll_measurement with no invisible/display overlays must observe 0 plist owners, saw {owners}"
+    );
+
+    // (3) Adding an active `invisible` or replacing `display` overlay into the
+    // >8192-overlay buffer must still trigger `DisplayRowsRequired`, while
+    // staying bounded on a cold endpoint index (no O(N) endpoint publication).
+    eval.eval_str(
+        "(progn
+           (setq buffer-invisibility-spec '((magit-hide . t)))
+           (let ((ov (make-overlay 1000 1020)))
+             (overlay-put ov 'invisible 'magit-hide)
+             (setq test-829-inv ov)))",
+    )
+    .unwrap();
+    {
+        let buf_ref = eval.buffer_manager().get(buffer).unwrap();
+        assert_eq!(
+            crate::neovm_bridge::RustBufferAccess::new(buf_ref)
+                .forward_scroll_measurement(0, total_chars as i64),
+            crate::neovm_bridge::ForwardScrollMeasurement::DisplayRowsRequired,
+            "active invisible overlay must trigger DisplayRowsRequired"
+        );
+    }
+    eval.eval_str("(delete-overlay test-829-inv)").unwrap();
+
+    eval.eval_str(
+        "(let ((ov (make-overlay 1200 1220)))
+           (overlay-put ov 'display \"REPL\")
+           (setq test-829-disp ov))",
+    )
+    .unwrap();
+    {
+        let buf_ref = eval.buffer_manager().get(buffer).unwrap();
+        assert_eq!(
+            crate::neovm_bridge::RustBufferAccess::new(buf_ref)
+                .forward_scroll_measurement(0, total_chars as i64),
+            crate::neovm_bridge::ForwardScrollMeasurement::DisplayRowsRequired,
+            "replacing display overlay must trigger DisplayRowsRequired"
+        );
+    }
+    eval.eval_str("(delete-overlay test-829-disp)").unwrap();
+
+    // After deleting all invisible/display overlays, direct-key refcounts drop
+    // back to 0 and the O(1) zero-owner fast path resumes immediately.
+    {
+        let buf_ref = eval.buffer_manager().get(buffer).unwrap();
+        let (measurement, reads) = neovm_value::tagged::collection_reads::capture(|| {
+            crate::neovm_bridge::RustBufferAccess::new(buf_ref)
+                .forward_scroll_measurement(0, total_chars as i64)
+        });
+        assert_eq!(
+            measurement,
+            crate::neovm_bridge::ForwardScrollMeasurement::SourceLineEstimate,
+        );
+        let reads = reads.expect("fast path resumes with coherent certificate");
+        let mut owners = 0usize;
+        assert!(reads.all_dependency_bits(|_| {
+            owners += 1;
+            true
+        }));
+        assert_eq!(owners, 0);
+    }
+}
+
+/// Exact classification of overlay collapse properties and GNU SCROLL_LIMIT-side
+/// conservative fallback in `forward_scroll_measurement`.
+#[test]
+fn forward_scroll_measurement_classifies_collapse_properties_and_bounds_probes() {
+    let text: String = (0..1_200)
+        .map(|i| format!("line {i:04} abcdefghij\n"))
+        .collect();
+    let (mut eval, _frame, buffer, _window) =
+        crate::engine::tests::incr_editing_frame(&text, 800, 600);
+    let total_chars = eval
+        .buffer_manager()
+        .get(buffer)
+        .unwrap()
+        .total_char_end_pos()
+        .get() as i64;
+
+    // Non-replacing display, disabled invisible, and a higher-priority visible
+    // overlay shadowing a lower-priority invisible overlay must all keep
+    // SourceLineEstimate.
+    eval.eval_str(
+        "(progn
+           (setq buffer-invisibility-spec '((magit-hide . t)))
+           (let ((ov-nr (make-overlay 50 70)))
+             (overlay-put ov-nr 'display '(raise 0.1)))
+           (let ((ov-dis (make-overlay 100 120)))
+             (overlay-put ov-dis 'invisible 'unrelated-tag))
+           (let ((ov-lo (make-overlay 200 220))
+                 (ov-hi (make-overlay 200 220)))
+             (overlay-put ov-lo 'priority 1)
+             (overlay-put ov-lo 'invisible 'magit-hide)
+             (overlay-put ov-hi 'priority 10)
+             (overlay-put ov-hi 'invisible 'unrelated-tag)))",
+    )
+    .unwrap();
+    {
+        let buf_ref = eval.buffer_manager().get(buffer).unwrap();
+        assert_eq!(
+            crate::neovm_bridge::RustBufferAccess::new(buf_ref)
+                .forward_scroll_measurement(0, total_chars),
+            crate::neovm_bridge::ForwardScrollMeasurement::SourceLineEstimate,
+            "non-replacing display, disabled invisible, and shadowed invisible must stay SourceLineEstimate"
+        );
+    }
+
+    // Pathological >4*SCROLL_LIMIT non-replacing display overlays must hit the
+    // SCROLL_LIMIT-side probe cap and fall back conservatively to DisplayRowsRequired
+    // (never truncating or scanning unboundedly).
+    eval.eval_str(
+        "(let ((pos 500) (i 0))
+           (while (< i 500)
+             (let ((ov (make-overlay pos (+ pos 5))))
+               (overlay-put ov 'display '(raise 0.1)))
+             (setq pos (+ pos 10) i (1+ i))))",
+    )
+    .unwrap();
+    {
+        let buf_ref = eval.buffer_manager().get(buffer).unwrap();
+        assert_eq!(
+            crate::neovm_bridge::RustBufferAccess::new(buf_ref)
+                .forward_scroll_measurement(0, total_chars),
+            crate::neovm_bridge::ForwardScrollMeasurement::DisplayRowsRequired,
+            "exceeding SCROLL_LIMIT-side probe bound must fall back conservatively to DisplayRowsRequired"
+        );
+    }
+}
+
+/// Fresh window with a huge invisible overlay past the initial bounded span
+/// must retry with `overlay_view_full = true` and still render trailing overlays.
+#[test]
+fn fresh_window_bounded_overlay_view_retries_full_on_large_invisible_fold() {
+    let text: String = (0..4_000)
+        .map(|line| format!("line {line:04} abcdefghij\n"))
+        .collect();
+    let (mut eval, frame, _buf_id, _window) =
+        crate::engine::tests::incr_editing_frame(&text, 800, 600);
+    eval.eval_str(
+        "(progn
+           (let ((hidden (make-overlay 10 60000)))
+             (overlay-put hidden 'invisible t))
+           (let ((trailing (make-overlay 60400 60401)))
+             (overlay-put trailing 'face 'bold)
+             (overlay-put trailing 'before-string \"FRESH-TRAILING\")))",
+    )
+    .unwrap();
+    // Brand-new LayoutEngine (no prior retained_window_matrices entry).
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame);
+    let trace = crate::engine::tests::selected_window_layout_trace(&eval, &engine, frame);
+    let body = crate::engine::tests::backend_trace_text_area_text(&trace);
+    assert!(
+        body.contains("FRESH-TRAILING"),
+        "fresh window must retry whole-buffer overlay view when invisible fold exceeds bounded span; body={body:?}"
+    );
+}

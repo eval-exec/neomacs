@@ -6741,11 +6741,12 @@ impl LayoutEngine {
     ///
     /// The view must cover what the walk consumes. The accepted previous
     /// window end is the measured consumed span; a full visible budget of
-    /// margin covers ordinary growth. `None` (whole-buffer view) on the first
-    /// frame or when no previous span is recorded. Invisible overlays can make
-    /// the walk consume far past this span; that attempt is rejected and
-    /// retried with the whole-buffer view, so a range view never commits a
-    /// subset answer.
+    /// margin covers ordinary growth. Even on the first frame (when no
+    /// previous span is recorded), `minimum_end + budget` keeps the initial
+    /// overlay snapshot window-sized instead of copying the entire buffer.
+    /// Invisible overlays can make the walk consume far past this span; that
+    /// attempt is rejected (`OverlayViewUnusable::Exhausted`) and retried with
+    /// the whole-buffer view, so a range view never commits a subset answer.
     fn overlay_view_char_span_for(
         &self,
         params: &WindowParams,
@@ -6763,23 +6764,29 @@ impl LayoutEngine {
         let budget = screenful.saturating_mul(4).max(8192);
         let first = (params.window_start.max(0) as usize).saturating_sub(screenful);
         let minimum_end = first.saturating_add(budget);
-        let previous_span = self
+        let end_anchor = match self
             .retained_window_matrices
             .get(&DisplayWindowId::new(params.window_id))
-            .and_then(|matrix| matrix.display_snapshot.visible_buffer_span())?;
-        let previous_start = neovm_core::buffer::CharPos0::from_lisp(previous_span.start()).get();
-        let previous_end = neovm_core::buffer::CharPos0::from_lisp(previous_span.end())
-            .get()
-            .saturating_add(1);
-        // Carry forward `previous_end` only when the new viewport overlaps or
-        // adjoins the previous one (e.g. scrolling/editing across an invisible
-        // span). A large jump backward (such as `G` -> `gg` in a long log
-        // buffer) must not stretch the range view from the new top all the way
-        // to the old bottom and snapshot the entire buffer's overlays.
-        let end_anchor = if previous_start <= minimum_end && first <= previous_end {
-            previous_end.max(minimum_end)
-        } else {
-            minimum_end
+            .and_then(|matrix| matrix.display_snapshot.visible_buffer_span())
+        {
+            Some(previous_span) => {
+                let previous_start =
+                    neovm_core::buffer::CharPos0::from_lisp(previous_span.start()).get();
+                let previous_end = neovm_core::buffer::CharPos0::from_lisp(previous_span.end())
+                    .get()
+                    .saturating_add(1);
+                // Carry forward `previous_end` only when the new viewport overlaps or
+                // adjoins the previous one (e.g. scrolling/editing across an invisible
+                // span). A large jump backward (such as `G` -> `gg` in a long log
+                // buffer) must not stretch the range view from the new top all the way
+                // to the old bottom and snapshot the entire buffer's overlays.
+                if previous_start <= minimum_end && first <= previous_end {
+                    previous_end.max(minimum_end)
+                } else {
+                    minimum_end
+                }
+            }
+            None => minimum_end,
         };
         let end = end_anchor
             .saturating_add(budget)

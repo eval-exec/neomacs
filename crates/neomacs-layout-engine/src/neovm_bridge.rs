@@ -269,6 +269,21 @@ impl<'a> LayoutOverlays<'a> {
             Self::Live(live) => OverlayRead::next_boundary_after_emacs_byte_pos(live, pos),
         }
     }
+    pub(crate) fn next_property_boundary_after_until_emacs_byte_pos(
+        self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        properties: &[Value],
+    ) -> Option<EmacsBytePos> {
+        match self {
+            Self::Snapshot(list) => OverlayRead::next_property_boundary_after_until_emacs_byte_pos(
+                list, pos, limit, properties,
+            ),
+            Self::Live(live) => OverlayRead::next_property_boundary_after_until_emacs_byte_pos(
+                live, pos, limit, properties,
+            ),
+        }
+    }
     pub(crate) fn highest_priority_overlay_property_value_at_emacs_byte_pos(
         self,
         pos: EmacsBytePos,
@@ -3707,18 +3722,47 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
     /// counting over-estimate display rows and therefore must not force
     /// screen-at-a-time visibility retries.
     fn has_display_row_collapse_between(&self, char_from: i64, char_to: i64) -> bool {
+        // Bound candidate-boundary probes using GNU's SCROLL_LIMIT-side budget
+        // (`try_scrolling`, src/xdisp.c:19393, 19408-19466). Non-carrier
+        // overlays are skipped in O(1)/O(log N) via `may_contain_property` and
+        // `OrderedFilterMask` without consuming steps; if a pathological buffer
+        // still exceeds the probe bound (e.g. hundreds of non-replacing
+        // `display` or disabled `invisible` transitions), fall back
+        // conservatively to `true` (`DisplayRowsRequired`, i.e. GNU's measured
+        // `try_scrolling` -> `recenter:` walk), never truncating the answer.
+        const MAX_COLLAPSE_PROBE_STEPS: usize =
+            (crate::scroll_policy::SCROLL_SEARCH_LIMIT_LINES as usize) * 4;
+
         let max = self.buffer.layout_point_max_char_pos().get() as i64;
         let mut charpos = char_from.clamp(0, max);
         let end = char_to.clamp(charpos, max);
+        if charpos >= end {
+            return false;
+        }
         let end_byte = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, end);
+        let invisible = Value::symbol(&INVISIBLE_TEXT_PROPERTY);
         let display = Value::symbol(&DISPLAY_TEXT_PROPERTY);
+        let collapse_props = [invisible, display];
+        let mut steps = 0usize;
 
         while charpos < end {
+            if steps >= MAX_COLLAPSE_PROBE_STEPS {
+                return true;
+            }
+            steps += 1;
+
             if self.invisible_status_at(charpos).hidden() || self.replacing_display_at(charpos) {
                 return true;
             }
 
             let bytepos = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, charpos);
+            let next_invisible_text = self
+                .buffer
+                .layout_next_single_text_prop_change_after_emacs_byte_pos_bounded(
+                    bytepos, invisible, end_byte,
+                )
+                .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next) as i64)
+                .unwrap_or(end);
             let next_display_text = self
                 .buffer
                 .layout_next_single_text_prop_change_after_emacs_byte_pos_bounded(
@@ -3726,12 +3770,19 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
                 )
                 .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next) as i64)
                 .unwrap_or(end);
-            // `next_invisible_boundary` includes every overlay endpoint, so it
-            // is also the boundary at which an overlay `display` winner may
-            // change. It separately tracks invisible text-property changes.
-            let next = self
-                .next_invisible_boundary(charpos)
+            let next_overlay = self
+                .buffer
+                .layout_overlays()
+                .next_property_boundary_after_until_emacs_byte_pos(
+                    bytepos,
+                    end_byte,
+                    &collapse_props,
+                )
+                .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next) as i64)
+                .unwrap_or(end);
+            let next = next_invisible_text
                 .min(next_display_text)
+                .min(next_overlay)
                 .min(end);
             charpos = next.max(charpos.saturating_add(1));
         }
@@ -3797,19 +3848,22 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
         // Turns this per-redisplay scan from O(buffer) into O(window).
         // Mirrors GNU's TEXT_PROP_DISTANCE_LIMIT cap in `compute_stop_pos`.
         let scan_limit = EmacsBytePos::new(bytepos.get().saturating_add(INVISIBLE_SCAN_BYTE_LIMIT));
+        let invisible = Value::symbol(&INVISIBLE_TEXT_PROPERTY);
         let next_text_change = self
             .buffer
             .layout_next_single_text_prop_change_after_emacs_byte_pos_bounded(
-                bytepos,
-                Value::symbol(&INVISIBLE_TEXT_PROPERTY),
-                scan_limit,
+                bytepos, invisible, scan_limit,
             )
             .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next))
             .unwrap_or_else(|| self.buffer.layout_point_max_char_pos().get());
         let next_overlay_change = self
             .buffer
             .layout_overlays()
-            .next_boundary_after_emacs_byte_pos(bytepos)
+            .next_property_boundary_after_until_emacs_byte_pos(
+                bytepos,
+                EmacsBytePos::new(usize::MAX),
+                &[invisible],
+            )
             .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next))
             .unwrap_or_else(|| self.buffer.layout_point_max_char_pos().get());
         next_text_change.min(next_overlay_change) as i64

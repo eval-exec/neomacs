@@ -795,6 +795,29 @@ impl EndpointBPlusTree {
         self.records.next_position_after(position, limit)
     }
 
+    fn next_after_filtered(
+        &self,
+        position: EmacsBytePos,
+        limit: EmacsBytePos,
+        property_filter: OverlayPropertyFilter,
+    ) -> Option<EmacsBytePos> {
+        if position >= limit {
+            return None;
+        }
+        // `DirectEndpointRangeQuery` matches strictly inside `(start, end)`.
+        // Extend `end` by 1 so endpoints at `limit` are included, matching
+        // `next_after`.
+        let exclusive_end = EmacsBytePos::new(limit.get().saturating_add(1));
+        let bounds = EmacsByteRange::new(position, exclusive_end);
+        self.records
+            .matches(DirectEndpointRangeQuery {
+                bounds,
+                property_filter,
+            })
+            .next()
+            .map(|record| record.key.position)
+    }
+
     fn previous_before(&self, position: EmacsBytePos, limit: EmacsBytePos) -> Option<EmacsBytePos> {
         self.records.previous_position_before(position, limit)
     }
@@ -1249,6 +1272,32 @@ impl LiveOverlayIndex {
         drop(intervals);
         super::overlay::note_overlay_live_records_visited(visited);
         next
+    }
+
+    pub(super) fn next_boundary_after_matching_no_publish(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        property_filter: OverlayPropertyFilter,
+        stale: &Cell<bool>,
+    ) -> Option<EmacsBytePos> {
+        if pos >= limit || stale.get() {
+            return None;
+        }
+        {
+            let core = self.core.read();
+            if core.generation != self.stamp {
+                stale.set(true);
+                return None;
+            }
+            if let Some(endpoints) = core.endpoints.get() {
+                let next = endpoints.next_after_filtered(pos, limit, property_filter);
+                drop(core);
+                super::overlay::note_overlay_live_records_visited(usize::from(next.is_some()));
+                return next;
+            }
+        }
+        self.next_boundary_after(pos, limit, stale)
     }
 
     pub(super) fn endpoint_records_strictly_within<'a>(
@@ -2614,6 +2663,29 @@ impl OverlayIndex {
                 endpoints.add_overlay_property_key(overlay, property);
             }
         });
+    }
+
+    #[cfg(test)]
+    pub(super) fn clear_direct_property_key_bloom_bit_for_test(&mut self, property: Value) {
+        self.direct_property_key_bloom &= !direct_property_key_bloom_bit(property.bits());
+    }
+
+    pub(super) fn next_boundary_after_matching_no_publish(
+        &self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        property_filter: OverlayPropertyFilter,
+    ) -> Option<EmacsBytePos> {
+        if pos >= limit {
+            return None;
+        }
+        {
+            let core = self.core.read();
+            if let Some(endpoints) = core.endpoints.get() {
+                return endpoints.next_after_filtered(pos, limit, property_filter);
+            }
+        }
+        self.next_boundary_after_no_alloc(pos, limit)
     }
 
     pub(super) fn next_boundary_after(
