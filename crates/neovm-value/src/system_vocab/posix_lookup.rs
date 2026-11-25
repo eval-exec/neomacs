@@ -66,27 +66,22 @@ pub unsafe fn retry_erange_lookup<T, R>(
 /// `runtime_identity/mod.rs`), and callers treat `None` as an absent lookup.
 #[cfg(all(unix, not(miri)))]
 pub fn lookup_user_name(uid: u32) -> Option<String> {
-    // SAFETY: `libc::passwd` is a C POD struct; `getpwuid_r` initializes
-    // `entry` and writes string data into `buf` when it returns `0` with a
-    // non-null `result`.
+    // SAFETY:
+    // - `libc::passwd` is a C POD struct; `getpwuid_r` initializes `entry` and
+    //   writes string data into `buf` when it returns `0` with a non-null
+    //   `result`.
+    // - `entry`, `buf` (with `len` bytes), and `result` are valid
+    //   out-parameters supplied by `retry_erange_lookup`.
+    // - When `pwd.pw_name` is non-null, it points to a NUL-terminated C string
+    //   inside the live scratch buffer for the duration of the extract closure.
     unsafe {
         retry_erange_lookup::<libc::passwd, String>(
-            |entry, buf, len, result| {
-                // SAFETY: `entry`, `buf` (with `len` bytes), and `result` are
-                // valid out-parameters supplied by `retry_erange_lookup`.
-                unsafe { libc::getpwuid_r(uid as libc::uid_t, entry, buf, len, result) }
-            },
+            |entry, buf, len, result| libc::getpwuid_r(uid as libc::uid_t, entry, buf, len, result),
             |pwd| {
                 if pwd.pw_name.is_null() {
                     return None;
                 }
-                // SAFETY: `pwd.pw_name` is a NUL-terminated C string inside
-                // the live scratch buffer.
-                Some(
-                    unsafe { CStr::from_ptr(pwd.pw_name) }
-                        .to_string_lossy()
-                        .into_owned(),
-                )
+                Some(CStr::from_ptr(pwd.pw_name).to_string_lossy().into_owned())
             },
         )
     }
@@ -105,27 +100,22 @@ pub fn lookup_user_name(_uid: u32) -> Option<String> {
 /// `runtime_identity/mod.rs`), and callers treat `None` as an absent lookup.
 #[cfg(all(unix, not(miri)))]
 pub fn lookup_group_name(gid: u32) -> Option<String> {
-    // SAFETY: `libc::group` is a C POD struct; `getgrgid_r` initializes
-    // `entry` and writes string data into `buf` when it returns `0` with a
-    // non-null `result`.
+    // SAFETY:
+    // - `libc::group` is a C POD struct; `getgrgid_r` initializes `entry` and
+    //   writes string data into `buf` when it returns `0` with a non-null
+    //   `result`.
+    // - `entry`, `buf` (with `len` bytes), and `result` are valid
+    //   out-parameters supplied by `retry_erange_lookup`.
+    // - When `grp.gr_name` is non-null, it points to a NUL-terminated C string
+    //   inside the live scratch buffer for the duration of the extract closure.
     unsafe {
         retry_erange_lookup::<libc::group, String>(
-            |entry, buf, len, result| {
-                // SAFETY: `entry`, `buf` (with `len` bytes), and `result` are
-                // valid out-parameters supplied by `retry_erange_lookup`.
-                unsafe { libc::getgrgid_r(gid as libc::gid_t, entry, buf, len, result) }
-            },
+            |entry, buf, len, result| libc::getgrgid_r(gid as libc::gid_t, entry, buf, len, result),
             |grp| {
                 if grp.gr_name.is_null() {
                     return None;
                 }
-                // SAFETY: `grp.gr_name` is a NUL-terminated C string inside
-                // the live scratch buffer.
-                Some(
-                    unsafe { CStr::from_ptr(grp.gr_name) }
-                        .to_string_lossy()
-                        .into_owned(),
-                )
+                Some(CStr::from_ptr(grp.gr_name).to_string_lossy().into_owned())
             },
         )
     }
