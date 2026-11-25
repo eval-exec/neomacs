@@ -204,7 +204,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `(dyn for<'a> FnMut(&'a neovm_core::Context, FrameId, WindowId, Vec<neomacs_display_protocol::input_progress::InputReceipt>) + 'static): Send`
            which is required by `neovm_core::Context: Send`
-           `(dyn for<'a> FnMut(&'a neovm_core::Context) -> (Option<Duration>, bool) + 'static): Send`
+           `(dyn for<'a> FnMut(&'a neovm_core::Context) -> DisplayMaintenanceOutcome + 'static): Send`
            which is required by `neovm_core::Context: Send`
            `(dyn for<'a, 'b> FnMut(&'a mut neovm_core::Context, &'b SnapshotRequest) -> Result<std::string::String, std::string::String> + 'static): Send`
            which is required by `neovm_core::Context: Send`
