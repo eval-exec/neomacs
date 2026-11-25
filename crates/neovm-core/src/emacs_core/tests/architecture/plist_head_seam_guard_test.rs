@@ -152,6 +152,9 @@ pub(crate) fn code_only(source: &str) -> String {
             }
             State::String | State::Char => {
                 if character == '\\' {
+                    if next == Some('\n') {
+                        out.push('\n');
+                    }
                     index += 2;
                     continue;
                 }
