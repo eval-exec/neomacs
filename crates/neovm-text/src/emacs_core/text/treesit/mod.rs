@@ -859,6 +859,12 @@ impl TreeSitterManager {
     /// `ts_parser_parse` to diff against, and dropped before return. That
     /// copy is not a walk.
     ///
+    /// `TreeSitterManager` owns raw `TSNode` invalidation: replacing
+    /// `parser.tree` frees the previous `TSTree`, so this method bumps
+    /// `reparse_epoch` and clears all `self.nodes` entries for `parser_id`
+    /// atomically before returning (matching `finish_buffer_edit`'s
+    /// `BufferEditAction::Invalidate` branch).
+    ///
     /// The callback type matches `Parser::parse_with_options` so a slice
     /// borrowed from the caller's buffer stays a concrete `T`, not a
     /// higher-ranked `&[u8]`.
@@ -907,6 +913,7 @@ impl TreeSitterManager {
         if collect_changes {
             parser.last_changed_ranges = changed_ranges.clone();
         }
+        self.clear_nodes_for_parser(parser_id);
         Ok(changed_ranges)
     }
 
@@ -1092,8 +1099,7 @@ impl TreeSitterManager {
         self.nodes.get(&id)
     }
 
-    #[doc(hidden)]
-    pub fn clear_nodes_for_parser(&mut self, parser_id: u64) {
+    fn clear_nodes_for_parser(&mut self, parser_id: u64) {
         self.nodes.retain(|_, entry| entry.parser_id != parser_id);
     }
 
@@ -1367,19 +1373,36 @@ impl TreeSitterManager {
         parser.generation = parser.generation.saturating_add(1);
     }
 
+    fn collect_nodes_for_walk_edit(
+        &self,
+        parser_id: u64,
+        parser_reparse_epoch: u64,
+        live_tree_addr: usize,
+    ) -> (Vec<(u64, ffi::TSNode)>, Vec<(u64, Option<ffi::TSNode>)>) {
+        let mut live_nodes = Vec::new();
+        let mut stale_removals = Vec::new();
+        for (&id, entry) in &self.nodes {
+            if entry.parser_id != parser_id {
+                continue;
+            }
+            if entry.reparse_epoch != parser_reparse_epoch
+                || (entry.raw.tree as usize) != live_tree_addr
+            {
+                stale_removals.push((id, None));
+                continue;
+            }
+            live_nodes.push((id, entry.raw));
+        }
+        (live_nodes, stale_removals)
+    }
+
     fn edit_parser_keeping_walk_clone(
         &mut self,
         parser_id: u64,
         edits: &[InputEdit],
         new_visible: EmacsByteRange,
     ) -> Vec<(u64, Option<ffi::TSNode>)> {
-        let node_raws: Vec<(u64, ffi::TSNode)> = self
-            .nodes
-            .iter()
-            .filter(|(_, entry)| entry.parser_id == parser_id)
-            .map(|(id, entry)| (*id, entry.raw))
-            .collect();
-        let (snapshot, snap_ptr, root_id) = {
+        let (snapshot, snap_ptr, live_tree_addr, root_id, parser_reparse_epoch) = {
             let Some(parser) = self.parsers.get(&parser_id) else {
                 return Vec::new();
             };
@@ -1388,9 +1411,17 @@ impl TreeSitterManager {
             };
             let snapshot = tree.clone_tree();
             let snap_ptr = snapshot.root_node().into_raw().tree;
-            let root_id = tree.tree().root_node().into_raw().id;
-            (snapshot, snap_ptr, root_id)
+            let live_root_raw = tree.tree().root_node().into_raw();
+            (
+                snapshot,
+                snap_ptr,
+                live_root_raw.tree as usize,
+                live_root_raw.id,
+                parser.reparse_epoch(),
+            )
         };
+        let (node_raws, stale_removals) =
+            self.collect_nodes_for_walk_edit(parser_id, parser_reparse_epoch, live_tree_addr);
         let mut planned = Vec::with_capacity(node_raws.len());
         for (id, raw) in node_raws {
             if raw.id == root_id {
@@ -1403,10 +1434,13 @@ impl TreeSitterManager {
             let mut on_snapshot = raw;
             on_snapshot.tree = snap_ptr;
             // SAFETY: `snapshot` is a `ts_tree_copy` of the pre-edit parser
-            // tree, so it owns the subtree `raw.id` names. The node stored
-            // later comes from the parser tree. A failed path drops the entry
-            // rather than leaving an id the snapshot will free (GNU
-            // bug#60127). That drop is safety, not a GNU match.
+            // tree, and `collect_nodes_for_walk_edit` verified that `entry`
+            // matches both `parser.reparse_epoch()` and `live_tree_addr`
+            // (in addition to `reparse_parser` clearing `self.nodes` on tree
+            // replacement), so `snapshot` owns the subtree `raw.id` names.
+            // The node stored later comes from the parser tree. A failed path
+            // drops the entry rather than leaving an id the snapshot will free
+            // (GNU bug#60127). That drop is safety, not a GNU match.
             let path = node_index_path(unsafe { tree_sitter::Node::from_raw(on_snapshot) });
             planned.push((id, PlannedNode::Path { old: raw, path }));
         }
@@ -1414,10 +1448,10 @@ impl TreeSitterManager {
 
         {
             let Some(parser) = self.parsers.get_mut(&parser_id) else {
-                return Vec::new();
+                return stale_removals;
             };
             let Some(tree) = parser.tree.as_mut() else {
-                return Vec::new();
+                return stale_removals;
             };
             for edit in edits {
                 tree.edit_tree(edit);
@@ -1427,13 +1461,14 @@ impl TreeSitterManager {
 
         let updates = {
             let Some(parser) = self.parsers.get(&parser_id) else {
-                return Vec::new();
+                return stale_removals;
             };
             let Some(tree) = parser.tree.as_ref() else {
-                return Vec::new();
+                return stale_removals;
             };
             let live_root = tree.tree().root_node();
-            let mut updates = Vec::with_capacity(planned.len());
+            let mut updates = Vec::with_capacity(stale_removals.len() + planned.len());
+            updates.extend(stale_removals);
             for (id, planned_node) in planned {
                 match planned_node {
                     PlannedNode::Keep(raw) => updates.push((id, Some(raw))),

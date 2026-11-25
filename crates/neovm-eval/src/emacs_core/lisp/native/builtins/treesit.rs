@@ -1001,7 +1001,9 @@ fn ensure_parser_reparsed(
             )
             .map_err(|()| treesit_parse_error(request.parser_value))?
     };
-    eval.treesit.clear_nodes_for_parser(parser_id);
+    // `TreeSitterManager::reparse_parser` owns clearing `self.nodes` for
+    // `parser_id` and bumping `reparse_epoch`; eval-side handles continue to
+    // gate reads on `parser.reparse_epoch() == handle.reparse_epoch`.
     Ok(Some(changed_ranges))
 }
 

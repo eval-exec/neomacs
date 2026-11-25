@@ -1759,3 +1759,137 @@ fn treesit_search_dotted_reparse_error_restores_specpdl_roots() {
         );
     }
 }
+
+#[test]
+fn treesit_reparse_parser_clears_stale_nodes_before_walk_clone_edit() {
+    let (mut eval, parser) = eval_with_json_parser(r#"{"a": 1}"#);
+    let _root = builtin_treesit_parser_root_node(&mut eval, vec![parser]).expect("root node");
+    let parser_id = runtime::parser_id(parser).expect("parser id");
+    let (orig_buffer_id, epoch0, child_raw) = {
+        let entry = eval.treesit.parser(parser_id).expect("live parser");
+        let child_raw = entry
+            .node_raw_at_index_path(&[0])
+            .expect("non-root child node on initial tree");
+        (entry.orig_buffer_id(), entry.reparse_epoch(), child_raw)
+    };
+    // SAFETY: `child_raw` belongs to `parser_id`'s current live tree and the
+    // tree is not mutated before `insert_node` returns.
+    let child_node = unsafe { tree_sitter::Node::from_raw(child_raw) };
+    let stale_id = eval.treesit.insert_node(parser_id, child_node, epoch0);
+    assert!(
+        eval.treesit.node(stale_id).is_some(),
+        "precondition: non-root child node stored before reparse"
+    );
+
+    // Direct safe-API `reparse_parser` call without any external eval-layer
+    // `clear_nodes_for_parser`: TreeSitterManager owns node invalidation when
+    // replacing the parser's TSTree.
+    let (visible, revision) = {
+        let buffer = eval
+            .edit
+            .buffers
+            .get(orig_buffer_id)
+            .expect("parser buffer");
+        (
+            buffer.accessible_emacs_byte_range(),
+            runtime::ParserInputRevision::for_buffer(buffer),
+        )
+    };
+    let reparsed_src = br#"{"a": 2}"#;
+    let mut read_reparsed = |byte_offset: usize, _position: Point| {
+        if byte_offset >= reparsed_src.len() {
+            &[][..]
+        } else {
+            &reparsed_src[byte_offset..]
+        }
+    };
+    eval.treesit
+        .reparse_parser(
+            parser_id,
+            visible,
+            revision,
+            false,
+            false,
+            &mut read_reparsed,
+        )
+        .expect("direct reparse_parser succeeds");
+
+    // Observable #1: stale node from the freed TSTree must already be gone
+    // before any subsequent walk_clone + edit_parser_keeping_walk_clone runs.
+    assert!(
+        eval.treesit.node(stale_id).is_none(),
+        "reparse_parser must clear stale nodes for parser_id when replacing TSTree"
+    );
+
+    let (epoch1, fresh_child_raw) = {
+        let entry = eval.treesit.parser(parser_id).expect("live parser");
+        assert!(
+            entry.reparse_epoch() > epoch0,
+            "reparse_parser must advance reparse_epoch"
+        );
+        let child_raw = entry
+            .node_raw_at_index_path(&[0])
+            .expect("non-root child node on reparsed tree");
+        (entry.reparse_epoch(), child_raw)
+    };
+    // SAFETY: `fresh_child_raw` belongs to `parser_id`'s reparsed live tree.
+    let fresh_child = unsafe { tree_sitter::Node::from_raw(fresh_child_raw) };
+    let fresh_id = eval.treesit.insert_node(parser_id, fresh_child, epoch1);
+
+    // Exercise the exact walk_clone + edit_parser_keeping_walk_clone sequence
+    // via begin_buffer_edit / finish_buffer_edit while a WalkClone is live.
+    let walk_clone = eval
+        .treesit
+        .parser(parser_id)
+        .expect("live parser")
+        .walk_clone()
+        .expect("walk clone on reparsed tree");
+    {
+        let buffer = eval
+            .edit
+            .buffers
+            .get(orig_buffer_id)
+            .expect("parser buffer");
+        let end = buffer.accessible_emacs_byte_range().end();
+        eval.treesit
+            .begin_buffer_edit(orig_buffer_id, buffer, EmacsByteRange::new(end, end));
+    }
+    {
+        let buffer = eval
+            .edit
+            .buffers
+            .get_mut(orig_buffer_id)
+            .expect("parser buffer mut");
+        buffer.insert(" ");
+    }
+    let new_end = {
+        let buffer = eval
+            .edit
+            .buffers
+            .get(orig_buffer_id)
+            .expect("parser buffer");
+        let end = buffer.accessible_emacs_byte_range().end();
+        eval.treesit.finish_buffer_edit(orig_buffer_id, buffer, end);
+        end
+    };
+    let _ = new_end;
+    drop(walk_clone);
+
+    assert!(
+        eval.treesit.node(stale_id).is_none(),
+        "stale pre-reparse node must stay absent after walk-clone edit"
+    );
+    let live_tree_ptr = eval
+        .treesit
+        .parser(parser_id)
+        .expect("live parser")
+        .root_raw()
+        .expect("live root after edit")
+        .tree;
+    let fresh_entry = eval
+        .treesit
+        .node(fresh_id)
+        .expect("fresh post-reparse node should be retargeted on walk-clone edit");
+    assert_eq!(fresh_entry.reparse_epoch(), epoch1);
+    assert_eq!(fresh_entry.raw().tree, live_tree_ptr);
+}
