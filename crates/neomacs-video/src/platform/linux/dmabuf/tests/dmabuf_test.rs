@@ -159,115 +159,45 @@ fn imported_dmabuf_resources_bind_to_owning_device_and_acquire_completion() {
 
 #[test]
 fn imported_resources_outlive_external_device_drop_and_wait_for_queue_completion() {
-    use std::future::Future;
-    use std::pin::pin;
     use std::sync::Arc;
-    use std::task::{Context, Poll, Wake, Waker};
-    use std::time::{Duration, Instant};
 
-    struct ThreadWake(std::thread::Thread);
-    impl Wake for ThreadWake {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = pin!(future);
-        let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
-        let mut cx = Context::from_waker(&waker);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            match future.as_mut().poll(&mut cx) {
-                Poll::Ready(val) => return val,
-                Poll::Pending => {
-                    assert!(Instant::now() < deadline, "wgpu future timed out");
-                    std::thread::park_timeout(Duration::from_millis(10));
-                }
-            }
-        }
-    }
-
-    let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_desc.backends = wgpu::Backends::VULKAN;
-    let instance = wgpu::Instance::new(instance_desc);
-    let Ok(adapter) = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+    let Some((instance, adapter, device, queue)) =
+        super::open_test_vulkan_foreign_device("dmabuf-b7-ownership-test")
     else {
-        eprintln!("skipping B7 Vulkan behavioral test: no headless Vulkan adapter");
-        return;
-    };
-    let Ok((device, queue)) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("dmabuf-b7-ownership-test"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::downlevel_defaults(),
-        ..Default::default()
-    })) else {
-        eprintln!("skipping B7 Vulkan behavioral test: failed to open Vulkan device");
+        eprintln!(
+            "skipping B7 Vulkan behavioral test: no headless Vulkan adapter with VK_EXT_queue_family_foreign"
+        );
         return;
     };
 
-    let create_test_resources = |device: &wgpu::Device| -> Option<super::ImportedResources> {
-        unsafe {
-            let hal = device.as_hal::<wgpu::hal::api::Vulkan>()?;
-            let raw_device = hal.raw_device().clone();
-            let image_info = vk::ImageCreateInfo::default()
-                .image_type(vk::ImageType::TYPE_2D)
-                .format(vk::Format::R8_UNORM)
-                .extent(vk::Extent3D {
-                    width: 4,
-                    height: 4,
-                    depth: 1,
-                })
-                .mip_levels(1)
-                .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(vk::ImageUsageFlags::SAMPLED)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .initial_layout(vk::ImageLayout::UNDEFINED);
-            let image = raw_device
-                .create_image(&image_info, None)
-                .expect("create Vulkan test image");
-            Some(super::ImportedResources {
-                device: raw_device,
-                image,
-                memories: Vec::new(),
-                queue_family: hal.queue_family_index(),
-                wgpu_device: device.clone(),
-            })
-        }
-    };
-
-    let Some(first) = create_test_resources(&device) else {
-        eprintln!("skipping B7 Vulkan behavioral test: adapter is not Vulkan");
-        return;
-    };
-    let resources = Arc::new(first);
-    let sole_owner = create_test_resources(&device).expect("Vulkan device stays Vulkan");
+    // Phase 1: exercise the real `ImportedDmaBufSurface::acquire()` path
+    // (`submit_foreign_acquire` + `SubmittedWorkRetirement` on
+    // `queue.on_submitted_work_done`), then verify `ImportedResources` drops
+    // cleanly once the GPU acquire submission finishes.
+    let resources =
+        super::create_test_imported_resources(&device).expect("Vulkan test resources");
     let weak = Arc::downgrade(&resources);
-
-    // Phase 1: verify SubmittedWorkRetirement retains Arc<ImportedResources>
-    // until queue completion runs.
-    let encoder = resources
-        .wgpu_device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("dmabuf-b7-noop-submit"),
-        });
-    queue.submit(std::iter::once(encoder.finish()));
-    let retirement = crate::sampling::SubmittedWorkRetirement::new(Arc::clone(&resources));
-    queue.on_submitted_work_done(retirement.into_completion_callback());
-    drop(resources);
+    let surface = super::ImportedDmaBufSurface {
+        resources,
+        queue: queue.clone(),
+    };
+    surface
+        .acquire()
+        .expect("real ImportedDmaBufSurface::acquire must succeed on VK_EXT_queue_family_foreign device");
+    drop(surface);
 
     let _ = device.poll(wgpu::PollType::wait_indefinitely());
     assert!(
         weak.upgrade().is_none(),
-        "ImportedResources must drop cleanly once queue completion runs"
+        "ImportedResources must drop cleanly once ImportedDmaBufSurface::acquire work completes"
     );
 
     // Phase 2: drop EVERY external handle (`device`, `queue`, `adapter`,
     // `instance`) while `sole_owner` is still alive. `sole_owner.wgpu_device`
     // is then the sole owner keeping the underlying `VkDevice` alive when
-    // `Drop::drop` runs `vkDestroyImage`.
+    // `Drop::drop` runs `vkDestroyImage` and `vkFreeMemory`.
+    let sole_owner =
+        super::create_test_imported_resources(&device).expect("Vulkan test sole-owner resources");
     drop(device);
     drop(queue);
     drop(adapter);

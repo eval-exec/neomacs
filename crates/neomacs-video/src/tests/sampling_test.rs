@@ -210,53 +210,9 @@ fn retirement_gate_defers_replaced_frames_until_draw_submission() {
 #[cfg(target_os = "linux")]
 #[test]
 fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() {
-    use std::future::Future;
-    use std::pin::pin;
-    use std::task::{Context, Poll, Wake, Waker};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
-    use super::sampling::{GpuFrameRelease, GpuVideoContext};
-    use crate::{GpuGeneration, VideoGeometry, VideoSamplingResources};
-
-    struct ThreadWake(std::thread::Thread);
-    impl Wake for ThreadWake {
-        fn wake(self: Arc<Self>) {
-            self.0.unpark();
-        }
-    }
-
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = pin!(future);
-        let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
-        let mut cx = Context::from_waker(&waker);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            match future.as_mut().poll(&mut cx) {
-                Poll::Ready(val) => return val,
-                Poll::Pending => {
-                    assert!(Instant::now() < deadline, "wgpu future timed out");
-                    std::thread::park_timeout(Duration::from_millis(10));
-                }
-            }
-        }
-    }
-
-    struct RawVulkanReleaseProbe(Arc<AtomicUsize>);
-    impl GpuFrameRelease for RawVulkanReleaseProbe {
-        fn record(&self, _device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
-            // Calling `as_hal_mut` puts `encoder` into `EncodingApi::Raw`.
-            // Recording this into an encoder that already held a wgpu
-            // RenderPass (`EncodingApi::Wgpu`) panics in wgpu-core 30.
-            // SAFETY: no raw Vulkan commands are mutated; we only verify the
-            // encoder is a fresh raw-only Vulkan command encoder.
-            unsafe {
-                encoder.as_hal_mut::<wgpu::hal::api::Vulkan, _, _>(|hal| {
-                    assert!(hal.is_some(), "expected Vulkan command encoder");
-                    self.0.fetch_add(1, Ordering::Relaxed);
-                });
-            }
-        }
-    }
+    use crate::{FrameImportPolicy, GpuGeneration, VideoGeometry, VideoSamplingResources};
 
     struct NativeLease(Arc<AtomicUsize>);
     impl Drop for NativeLease {
@@ -265,21 +221,12 @@ fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() 
         }
     }
 
-    let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_desc.backends = wgpu::Backends::VULKAN;
-    let instance = wgpu::Instance::new(instance_desc);
-    let Ok(adapter) = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+    let Some((_instance, _adapter, device, queue)) =
+        crate::platform::open_test_vulkan_foreign_device("video-b8-submit-test")
     else {
-        eprintln!("skipping B8 GPU submit test: no headless Vulkan adapter");
-        return;
-    };
-    let Ok((device, queue)) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("video-b8-submit-test"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::downlevel_defaults(),
-        ..Default::default()
-    })) else {
-        eprintln!("skipping B8 GPU submit test: failed to open Vulkan device");
+        eprintln!(
+            "skipping B8 GPU submit test: no headless Vulkan adapter with VK_EXT_queue_family_foreign"
+        );
         return;
     };
 
@@ -311,28 +258,32 @@ fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() 
         ..Default::default()
     });
     let sampling = VideoSamplingResources::new(&device, &packed_layout, &sampler);
-    let gpu = GpuVideoContext::with_sampling_resources(
+    let mut system = crate::VideoSystem::with_sampling_resources(
         device.clone(),
         queue.clone(),
         sampling,
         GpuGeneration::INITIAL,
+        FrameImportPolicy::AllowCpuUpload,
         VideoWake::noop(),
-    );
+    )
+    .expect("VideoSystem must initialize on headless Vulkan device");
 
-    let source_tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("video-b8-source"),
-        size: wgpu::Extent3d {
-            width: 4,
-            height: 4,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
+    let make_source_tex = |label: &'static str| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    };
     let target_tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("video-b8-target"),
         size: wgpu::Extent3d {
@@ -349,29 +300,33 @@ fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() 
     });
     let target_view = target_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let release_calls = Arc::new(AtomicUsize::new(0));
     let lease_drops = Arc::new(AtomicUsize::new(0));
-    let prepared = gpu.prepare_texture(source_tex, 64);
-    let frame = gpu.wrap_prepared_texture_with_release(
+    let draw_frame = system.test_gpu().wrap_prepared_texture_with_release(
         VideoGeometry::packed(4, 4),
-        prepared,
-        Box::new(RawVulkanReleaseProbe(Arc::clone(&release_calls))),
+        system
+            .test_gpu()
+            .prepare_texture(make_source_tex("video-b8-draw-source"), 64),
+        crate::platform::create_test_foreign_surface_release(&device, &queue)
+            .expect("real ForeignRelease for draw frame"),
+        NativeLease(Arc::new(AtomicUsize::new(0))),
+    );
+    let retired_frame = system.test_gpu().wrap_prepared_texture_with_release(
+        VideoGeometry::packed(4, 4),
+        system
+            .test_gpu()
+            .prepare_texture(make_source_tex("video-b8-retired-source"), 64),
+        crate::platform::create_test_foreign_surface_release(&device, &queue)
+            .expect("real ForeignRelease for retired frame"),
         NativeLease(Arc::clone(&lease_drops)),
     );
 
-    // Record a real wgpu RenderPass (`EncodingApi::Wgpu`), stage the replaced
-    // frame behind a live encoder token, and submit them together.
-    let mut gate = DrawRetirementGate::new();
-    let token = gate.issue_token();
-    assert!(gate.stage_or_retire(vec![frame]).is_empty());
-    assert_eq!(release_calls.load(Ordering::Relaxed), 0);
-    assert_eq!(lease_drops.load(Ordering::Relaxed), 0);
-
-    let mut draw_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+    // 1. Bind a real PreparedVideoDraw into a VideoRenderPass on a
+    //    VideoCommandEncoder (arming its private retirement token).
+    let mut encoder = system.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("video-b8-render-pass-encoder"),
     });
     {
-        let _pass = draw_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("video-b8-render-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &target_view,
@@ -387,80 +342,127 @@ fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() 
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        let draw = system.test_make_prepared_draw(&draw_frame);
+        draw.bind_to_pass(&mut pass, 1);
     }
 
-    let retired = gate.finish_encoder_token(Some(token));
-    assert_eq!(retired.len(), 1);
-    let _submission = gpu.submit_buffer_with_retirements(draw_encoder.finish(), retired);
-    assert_eq!(
-        release_calls.load(Ordering::Relaxed),
-        1,
-        "raw Vulkan release must execute in its own fresh encoder without panicking"
-    );
+    // 2. Replace/retire a frame and call `service()` BEFORE submitting
+    //    `encoder`: the private token inside `encoder` must keep the replaced
+    //    frame (and its real `ForeignRelease` + native lease) staged.
+    system.test_stage_retired_frame(retired_frame);
+    let _ = system.service(Instant::now());
+    assert_eq!(system.test_pending_retirements(), 1);
+    assert_eq!(lease_drops.load(Ordering::Relaxed), 0);
 
+    // 3. Submit via the real `VideoSystem::submit_command_encoder(encoder)`:
+    //    executes the real `ForeignRelease::record` (VkDevice identity check +
+    //    QUEUE_FAMILY_FOREIGN_EXT barrier in a separate raw encoder) alongside
+    //    the RenderPass draw buffer in one `queue.submit` batch.
+    let _submission = system.submit_command_encoder(encoder);
+    assert_eq!(system.test_pending_retirements(), 0);
     let _ = device.poll(wgpu::PollType::wait_indefinitely());
     assert_eq!(
         lease_drops.load(Ordering::Relaxed),
         1,
-        "native lease must drop once GPU submission completes"
+        "native lease must drop once VideoSystem::submit_command_encoder finishes on GPU"
     );
 
-    // Also drive the public VideoSystem submission glue (`create_command_encoder`
-    // + `begin_render_pass` + `submit_command_encoder`) and verify cross-system
-    // VideoCommandEncoder rejection on the live Vulkan device.
-    let system_sampling = VideoSamplingResources::new(&device, &packed_layout, &sampler);
-    if let Ok(mut system) = crate::VideoSystem::with_sampling_resources(
+    // 4. Abandoning an unsubmitted VideoCommandEncoder destroys its private
+    //    wgpu::CommandEncoder before releasing its token, so the next `service`
+    //    retires staged frames cleanly without stalling the decoder pool.
+    let second_retired = system.test_gpu().wrap_prepared_texture_with_release(
+        VideoGeometry::packed(4, 4),
+        system
+            .test_gpu()
+            .prepare_texture(make_source_tex("video-b8-abandoned-source"), 64),
+        crate::platform::create_test_foreign_surface_release(&device, &queue)
+            .expect("real ForeignRelease for abandoned-encoder frame"),
+        NativeLease(Arc::clone(&lease_drops)),
+    );
+    let mut abandoned = system.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("video-b8-abandoned-encoder"),
+    });
+    {
+        let mut pass = abandoned.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("video-b8-abandoned-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        let draw = system.test_make_prepared_draw(&draw_frame);
+        draw.bind_to_pass(&mut pass, 1);
+    }
+    system.test_stage_retired_frame(second_retired);
+    assert_eq!(system.test_pending_retirements(), 1);
+    drop(abandoned);
+    let _ = system.service(Instant::now());
+    assert_eq!(system.test_pending_retirements(), 0);
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    assert_eq!(
+        lease_drops.load(Ordering::Relaxed),
+        2,
+        "abandoned encoder drop + next service must retire staged frames cleanly"
+    );
+
+    // 5. Cross-system VideoRenderPass and VideoCommandEncoder are rejected.
+    let other_sampling = VideoSamplingResources::new(&device, &packed_layout, &sampler);
+    let other_system = crate::VideoSystem::with_sampling_resources(
         device.clone(),
         queue.clone(),
-        system_sampling,
+        other_sampling,
         GpuGeneration::INITIAL,
-        crate::FrameImportPolicy::AllowCpuUpload,
+        FrameImportPolicy::AllowCpuUpload,
         VideoWake::noop(),
-    ) {
-        let mut sys_encoder = system.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("video-b8-system-encoder"),
-        });
-        {
-            let _pass = sys_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("video-b8-system-pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
-        let _sys_submission = system.submit_command_encoder(sys_encoder);
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    )
+    .expect("second VideoSystem on headless Vulkan device");
 
-        let other_sampling = VideoSamplingResources::new(&device, &packed_layout, &sampler);
-        if let Ok(other_system) = crate::VideoSystem::with_sampling_resources(
-            device.clone(),
-            queue.clone(),
-            other_sampling,
-            GpuGeneration::INITIAL,
-            crate::FrameImportPolicy::AllowCpuUpload,
-            VideoWake::noop(),
-        ) {
-            let foreign_encoder =
-                other_system.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("video-b8-foreign-encoder"),
-                });
-            let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = system.submit_command_encoder(foreign_encoder);
-            }));
-            assert!(
-                rejected.is_err(),
-                "VideoSystem::submit_command_encoder must reject another system's VideoCommandEncoder"
-            );
-        }
-    }
+    let mut foreign_for_pass =
+        other_system.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("video-b8-foreign-pass-encoder"),
+        });
+    let rejected_pass = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut foreign_pass = foreign_for_pass.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("video-b8-foreign-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        let draw = system.test_make_prepared_draw(&draw_frame);
+        draw.bind_to_pass(&mut foreign_pass, 1);
+    }));
+    assert!(
+        rejected_pass.is_err(),
+        "PreparedVideoDraw::bind_to_pass must reject another system's VideoRenderPass"
+    );
+
+    let foreign_encoder = other_system.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("video-b8-foreign-encoder"),
+    });
+    let rejected_submit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = system.submit_command_encoder(foreign_encoder);
+    }));
+    assert!(
+        rejected_submit.is_err(),
+        "VideoSystem::submit_command_encoder must reject another system's VideoCommandEncoder"
+    );
 }

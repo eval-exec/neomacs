@@ -892,3 +892,141 @@ mod validation_fixture;
 pub(crate) fn assert_native_dmabuf_plane_validation(format: BiPlanarVideoFormat) {
     validation_fixture::exercise(format);
 }
+
+#[cfg(test)]
+fn block_on_test<F: std::future::Future>(future: F) -> F::Output {
+    use std::pin::pin;
+    use std::task::{Context, Poll, Wake, Waker};
+    use std::time::{Duration, Instant};
+
+    struct ThreadWake(std::thread::Thread);
+    impl Wake for ThreadWake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let mut future = pin!(future);
+    let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match future.as_mut().poll(&mut cx) {
+            Poll::Ready(val) => return val,
+            Poll::Pending => {
+                assert!(Instant::now() < deadline, "wgpu test future timed out");
+                std::thread::park_timeout(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+/// Open a headless Vulkan `wgpu::Device` with `VK_EXT_queue_family_foreign`
+/// enabled (matching the production renderer's interop device setup) so tests
+/// can execute real `ImportedDmaBufSurface::acquire()` and
+/// `ForeignRelease::record()` barriers.
+#[cfg(test)]
+pub(crate) fn open_test_vulkan_foreign_device(
+    label: &'static str,
+) -> Option<(wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+    let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    instance_desc.backends = wgpu::Backends::VULKAN;
+    let instance = wgpu::Instance::new(instance_desc);
+    let adapter = block_on_test(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        .ok()?;
+    let descriptor = wgpu::DeviceDescriptor {
+        label: Some(label),
+        required_features: wgpu::Features::empty(),
+        required_limits: wgpu::Limits::downlevel_defaults(),
+        ..Default::default()
+    };
+    // SAFETY: `adapter` is the exact Vulkan adapter adopted below; we only add
+    // `VK_EXT_queue_family_foreign` after checking physical-device support.
+    let (device, queue) = unsafe {
+        let hal = adapter.as_hal::<wgpu::hal::api::Vulkan>()?;
+        let foreign_ext = ash::ext::queue_family_foreign::NAME;
+        if !hal
+            .physical_device_capabilities()
+            .supports_extension(foreign_ext)
+        {
+            return None;
+        }
+        let opened = hal
+            .open_with_callback(
+                descriptor.required_features,
+                &descriptor.required_limits,
+                &descriptor.memory_hints,
+                Some(Box::new(move |args| {
+                    if !args.extensions.contains(&foreign_ext) {
+                        args.extensions.push(foreign_ext);
+                    }
+                })),
+            )
+            .ok()?;
+        adapter.create_device_from_hal(opened, &descriptor).ok()?
+    };
+    Some((instance, adapter, device, queue))
+}
+
+#[cfg(test)]
+fn create_test_imported_resources(device: &wgpu::Device) -> Option<Arc<ImportedResources>> {
+    // SAFETY: `device` is a live Vulkan `wgpu::Device`; image creation, memory
+    // allocation, and binding stay valid for the lifetime of `ImportedResources`
+    // because `ImportedResources.wgpu_device` retains `device`.
+    unsafe {
+        let hal = device.as_hal::<wgpu::hal::api::Vulkan>()?;
+        let raw_device = hal.raw_device().clone();
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk::Format::R8_UNORM)
+            .extent(vk::Extent3D {
+                width: 4,
+                height: 4,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::SAMPLED)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let image = raw_device
+            .create_image(&image_info, None)
+            .expect("create Vulkan test image");
+        let requirements = raw_device.get_image_memory_requirements(image);
+        let memory_type_index =
+            first_memory_type(requirements.memory_type_bits).expect("compatible test memory type");
+        let alloc_info = vk::MemoryAllocateInfo::default()
+            .allocation_size(requirements.size)
+            .memory_type_index(memory_type_index);
+        let memory = raw_device
+            .allocate_memory(&alloc_info, None)
+            .expect("allocate Vulkan test image memory");
+        raw_device
+            .bind_image_memory(image, memory, 0)
+            .expect("bind Vulkan test image memory");
+        Some(Arc::new(ImportedResources {
+            device: raw_device,
+            image,
+            memories: vec![memory],
+            queue_family: hal.queue_family_index(),
+            wgpu_device: device.clone(),
+        }))
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn create_test_foreign_surface_release(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Result<Box<dyn GpuFrameRelease>, String> {
+    let resources = create_test_imported_resources(device)
+        .ok_or_else(|| "test device is not Vulkan".to_owned())?;
+    let surface = ImportedDmaBufSurface {
+        resources,
+        queue: queue.clone(),
+    };
+    surface.acquire()?;
+    Ok(surface.release())
+}

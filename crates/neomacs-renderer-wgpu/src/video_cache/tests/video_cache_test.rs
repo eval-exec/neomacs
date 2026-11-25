@@ -25,6 +25,22 @@ fn native_bi_planar_shader_parses_and_validates() {
 }
 
 #[test]
+fn packed_video_copy_shader_parses_and_validates() {
+    let module = naga::front::wgsl::parse_str(include_str!("../../shaders/image.wgsl"))
+        .expect("image shader with packed video vs_copy should parse");
+    assert!(
+        module.entry_points.iter().any(|ep| ep.name == "vs_copy"),
+        "image.wgsl must expose vs_copy for packed shader-channel copies"
+    );
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::default(),
+    )
+    .validate(&module)
+    .expect("image shader with packed video vs_copy should validate");
+}
+
+#[test]
 fn shader_channels_materialize_native_video_instead_of_dropping_it() {
     assert_eq!(
         video_channel_preparation(neomacs_video::VideoSampleKind::Packed),

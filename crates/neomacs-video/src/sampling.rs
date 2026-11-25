@@ -1247,6 +1247,14 @@ pub struct PreparedVideoDraw<'a> {
 }
 
 impl<'a> PreparedVideoDraw<'a> {
+    #[cfg(test)]
+    pub(crate) const fn new_for_test(
+        frame: &'a GpuVideoFrame,
+        registry: &'a Arc<ActiveTokenRegistry>,
+    ) -> Self {
+        Self { frame, registry }
+    }
+
     pub const fn geometry(&self) -> VideoGeometry {
         self.frame.geometry()
     }

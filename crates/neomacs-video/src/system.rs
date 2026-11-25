@@ -440,6 +440,32 @@ impl VideoSystem {
             self.gpu.retire_after_submitted_work(retired);
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn test_gpu(&self) -> &GpuVideoContext {
+        &self.gpu
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_make_prepared_draw<'a>(
+        &'a self,
+        frame: &'a GpuVideoFrame,
+    ) -> crate::PreparedVideoDraw<'a> {
+        crate::PreparedVideoDraw::new_for_test(frame, self.retirement_gate.registry())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_stage_retired_frame(&mut self, frame: GpuVideoFrame) {
+        let retired = self.retirement_gate.stage_or_retire(vec![frame]);
+        if !retired.is_empty() {
+            self.gpu.retire_after_submitted_work(retired);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_pending_retirements(&self) -> usize {
+        self.retirement_gate.pending_len()
+    }
 }
 
 impl Drop for VideoSystem {
