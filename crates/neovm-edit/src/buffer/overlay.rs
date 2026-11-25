@@ -755,8 +755,12 @@ impl OverlayList {
     /// query includes overlays that start before the range and overlap it and
     /// empty overlays inside it, exactly the set a query at an in-range
     /// position can observe.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn snapshot_clone_in_range(&self, range: EmacsByteRange) -> Self {
+    ///
+    /// Private so the sole way to obtain a memoized range view is
+    /// [`Self::snapshot_in_range`], which wraps the result in an immutable
+    /// [`OverlaySnapshot`] and enforces the frozen-observer invariant by
+    /// construction.
+    fn snapshot_clone_in_range(&self, range: EmacsByteRange) -> Self {
         self.clone_selected_with_identity(
             self.index
                 .overlays_in_region(Self::view_query_range(range), range.end()),

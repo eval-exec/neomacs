@@ -3800,7 +3800,11 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
             charpos = next.max(charpos.saturating_add(1));
         }
 
-        false
+        // Symmetric lower-bound guard: if `char_from` fell below a bounded
+        // snapshot's `view_query_floor`, `note_overlay_view_query` latched
+        // underflow; refuse to certify `SourceLineEstimate` for an unobserved
+        // prefix.
+        self.buffer.layout_overlay_view_start_underflow()
     }
 
     /// Combined `invisible` status at `charpos` from the `invisible` text

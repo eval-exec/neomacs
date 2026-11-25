@@ -1783,3 +1783,46 @@ fn fresh_window_bounded_overlay_view_does_not_certify_source_line_estimate_past_
         "fresh bounded layout over-scrolled into hidden fold: window_start={bounded_start}, fold_start={fold_start_1}"
     );
 }
+
+/// Symmetry follow-up for #829: a bounded overlay snapshot whose capture starts
+/// at `view_start` must also refuse to certify `SourceLineEstimate` when
+/// `forward_scroll_measurement` queries `char_from < view_start` (lower-bound
+/// underflow), even when `char_to <= view_end`.
+#[test]
+fn bounded_overlay_view_does_not_certify_source_line_estimate_below_floor() {
+    let text: String = (0..500)
+        .map(|i| format!("line {i:04} abcdefghij\n"))
+        .collect();
+    let (mut eval, _frame, buffer, _window) =
+        crate::engine::tests::incr_editing_frame(&text, 640, 384);
+    // Active invisible overlay strictly BEFORE the bounded snapshot's floor.
+    eval.eval_str(
+        "(let ((ov (make-overlay 100 500)))
+           (overlay-put ov 'invisible t))",
+    )
+    .unwrap();
+    let buf_ref = eval.buffer_manager().get(buffer).unwrap();
+    let bounded_snapshot =
+        crate::neovm_bridge::LayoutBufferSnapshot::from_buffer_for_window_with_symbols_and_source(
+            buf_ref,
+            eval.variables(),
+            Some((2_000, 6_000)),
+            Some((2_000, 6_000)),
+            crate::display_property::DisplayPropertyTarget::Graphical,
+            eval.symbol_mode(),
+            &eval.owned_root_retainer(),
+            crate::neovm_bridge::OverlaySourceMode::Captured,
+        );
+    assert_eq!(
+        crate::neovm_bridge::RustBufferAccess::new(&bounded_snapshot)
+            .forward_scroll_measurement(0, 4_000),
+        crate::neovm_bridge::ForwardScrollMeasurement::DisplayRowsRequired,
+        "bounded overlay snapshot must return DisplayRowsRequired when char_from underflows view_query_floor"
+    );
+    assert!(
+        crate::neovm_bridge::LayoutBufferView::layout_overlay_view_start_underflow(
+            &bounded_snapshot
+        ),
+        "lower-bound query must also have latched layout_overlay_view_start_underflow"
+    );
+}
