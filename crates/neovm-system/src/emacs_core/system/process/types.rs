@@ -3980,14 +3980,26 @@ use super::child_status::{
 use neovm_eval::emacs_core::eval::data::process_state::StatusChangeSite;
 #[doc(hidden)]
 pub trait SystemProcessExt {
-    fn register_readable_source(
+    /// Register `source` for level-triggered readable events on `poller`.
+    ///
+    /// # Safety
+    /// The caller must delete `source` from `poller` (via `poller.delete`)
+    /// before closing or dropping the underlying descriptor, matching
+    /// `polling::Poller::add_with_mode`'s safety contract.
+    unsafe fn register_readable_source(
         poller: &polling::Poller,
-        source: impl polling::AsRawSource,
+        source: impl polling::AsSource,
         id: ProcessId,
     ) -> Result<(), String>;
-    fn register_writable_source(
+    /// Register `source` for level-triggered writable events on `poller`.
+    ///
+    /// # Safety
+    /// The caller must delete `source` from `poller` (via `poller.delete`)
+    /// before closing or dropping the underlying descriptor, matching
+    /// `polling::Poller::add_with_mode`'s safety contract.
+    unsafe fn register_writable_source(
         poller: &polling::Poller,
-        source: impl polling::AsRawSource,
+        source: impl polling::AsSource,
         id: ProcessId,
     ) -> Result<(), String>;
     fn modify_poll_source(
@@ -3995,14 +4007,24 @@ pub trait SystemProcessExt {
         source: impl polling::AsSource,
         event: polling::Event,
     ) -> Result<(), String>;
+    /// Register a borrowed Unix fd for readable events on `poller`.
+    ///
+    /// # Safety
+    /// The caller must delete `fd` from `poller` before closing or dropping
+    /// the descriptor that `fd` borrows.
     #[cfg(unix)]
-    fn register_readable_raw_fd(
+    unsafe fn register_readable_raw_fd(
         poller: &polling::Poller,
         fd: std::os::unix::io::BorrowedFd<'_>,
         id: ProcessId,
     ) -> Result<(), String>;
+    /// Register a borrowed Unix fd for writable events on `poller`.
+    ///
+    /// # Safety
+    /// The caller must delete `fd` from `poller` before closing or dropping
+    /// the descriptor that `fd` borrows.
     #[cfg(unix)]
-    fn register_writable_raw_fd(
+    unsafe fn register_writable_raw_fd(
         poller: &polling::Poller,
         fd: std::os::unix::io::BorrowedFd<'_>,
         id: ProcessId,
@@ -4399,19 +4421,17 @@ pub(crate) fn restore_skipping_adaptive_reads(processes: &mut ProcessManager, id
 }
 
 impl SystemProcessExt for ProcessManager {
-    fn register_readable_source(
+    unsafe fn register_readable_source(
         poller: &polling::Poller,
-        source: impl polling::AsRawSource,
+        source: impl polling::AsSource,
         id: ProcessId,
     ) -> Result<(), String> {
-        // SAFETY: ProcessManager only registers descriptors owned by the
-        // corresponding Process record.  `unregister_process_poll_sources`
-        // removes every registered descriptor from this poller before the
-        // Process drops or replaces the descriptor.
+        // SAFETY: `source` is a live `AsSource` and the caller guarantees it
+        // will be deleted from `poller` before being closed or dropped.
         unsafe {
             poller
                 .add_with_mode(
-                    source,
+                    &source.source(),
                     polling::Event::readable(id as usize),
                     polling::PollMode::Level,
                 )
@@ -4419,19 +4439,17 @@ impl SystemProcessExt for ProcessManager {
         }
     }
 
-    fn register_writable_source(
+    unsafe fn register_writable_source(
         poller: &polling::Poller,
-        source: impl polling::AsRawSource,
+        source: impl polling::AsSource,
         id: ProcessId,
     ) -> Result<(), String> {
-        // SAFETY: ProcessManager only registers descriptors owned by the
-        // corresponding Process record.  `unregister_process_poll_sources`
-        // removes every registered descriptor from this poller before the
-        // Process drops or replaces the descriptor.
+        // SAFETY: `source` is a live `AsSource` and the caller guarantees it
+        // will be deleted from `poller` before being closed or dropped.
         unsafe {
             poller
                 .add_with_mode(
-                    source,
+                    &source.source(),
                     polling::Event::writable(id as usize),
                     polling::PollMode::Level,
                 )
@@ -4450,21 +4468,23 @@ impl SystemProcessExt for ProcessManager {
     }
 
     #[cfg(unix)]
-    fn register_readable_raw_fd(
+    unsafe fn register_readable_raw_fd(
         poller: &polling::Poller,
         fd: std::os::unix::io::BorrowedFd<'_>,
         id: ProcessId,
     ) -> Result<(), String> {
-        Self::register_readable_source(poller, &fd, id)
+        // SAFETY: forwarded from `register_readable_raw_fd`'s caller contract.
+        unsafe { Self::register_readable_source(poller, fd, id) }
     }
 
     #[cfg(unix)]
-    fn register_writable_raw_fd(
+    unsafe fn register_writable_raw_fd(
         poller: &polling::Poller,
         fd: std::os::unix::io::BorrowedFd<'_>,
         id: ProcessId,
     ) -> Result<(), String> {
-        Self::register_writable_source(poller, &fd, id)
+        // SAFETY: forwarded from `register_writable_raw_fd`'s caller contract.
+        unsafe { Self::register_writable_source(poller, fd, id) }
     }
 
     #[cfg(unix)]
@@ -4484,7 +4504,9 @@ impl SystemProcessExt for ProcessManager {
     ) {
         use std::os::unix::io::{AsFd, AsRawFd};
         let _ = sys::set_fd_nonblocking(stdout.as_raw_fd());
-        let _ = Self::register_readable_raw_fd(poller, stdout.as_fd(), id);
+        // SAFETY: `stdout` is owned by the Process record and
+        // `unregister_process_poll_sources` deletes it before drop.
+        let _ = unsafe { Self::register_readable_raw_fd(poller, stdout.as_fd(), id) };
     }
 
     #[cfg(not(unix))]
@@ -4562,7 +4584,10 @@ impl SystemProcessExt for ProcessManager {
             match event {
                 Some(event) => {
                     if Self::modify_poll_source(poller, tls.tcp_stream(), event).is_err() {
-                        let _ = Self::register_readable_source(poller, tls.tcp_stream(), id);
+                        // SAFETY: `tls` is owned by `proc.live_io` and
+                        // `unregister_process_poll_sources` deletes it before drop.
+                        let _ =
+                            unsafe { Self::register_readable_source(poller, tls.tcp_stream(), id) };
                         let _ = Self::modify_poll_source(poller, tls.tcp_stream(), event);
                     }
                 }
@@ -4576,7 +4601,9 @@ impl SystemProcessExt for ProcessManager {
             match event {
                 Some(event) => {
                     if socket.modify_interest(poller, id, event).is_err() {
-                        let _ = socket.register_readable(poller, id);
+                        // SAFETY: `socket` is owned by `proc.live_io` and
+                        // `unregister_process_poll_sources` unregisters it before drop.
+                        let _ = unsafe { socket.register_readable(poller, id) };
                         let _ = socket.modify_interest(poller, id, event);
                     }
                 }
@@ -4609,7 +4636,9 @@ impl SystemProcessExt for ProcessManager {
             match event {
                 Some(event) => {
                     if Self::modify_raw_fd_interest(poller, borrowed, event).is_err() {
-                        let _ = Self::register_readable_raw_fd(poller, borrowed, id);
+                        // SAFETY: `pty_master` is owned by `proc.live_io` and
+                        // `unregister_process_poll_sources` deletes it before drop.
+                        let _ = unsafe { Self::register_readable_raw_fd(poller, borrowed, id) };
                         let _ = Self::modify_raw_fd_interest(poller, borrowed, event);
                     }
                 }
@@ -4628,7 +4657,10 @@ impl SystemProcessExt for ProcessManager {
     ) {
         use std::os::unix::io::{AsFd, AsRawFd};
         let _ = sys::set_fd_nonblocking(stdin.as_raw_fd());
-        let _ = Self::register_writable_raw_fd(poller, stdin.as_fd(), id);
+        // SAFETY: `stdin` is owned by `proc.live_io.child` and deleted via
+        // `unregister_child_stdin_writable_from_poller` /
+        // `unregister_process_poll_sources` before closing.
+        let _ = unsafe { Self::register_writable_raw_fd(poller, stdin.as_fd(), id) };
     }
 
     #[cfg(not(unix))]
@@ -5319,9 +5351,10 @@ impl SystemProcessExt for ProcessManager {
                 && let Some(poller) = stderr_transfer.wait_backend.poller()
             {
                 // SAFETY: `pty_pair.master` owns this descriptor until it is
-                // stored on the process below.
+                // stored on `proc.live_io.pty_master` below, and
+                // `unregister_process_poll_sources` deletes it before drop.
                 let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master_fd) };
-                let _ = Self::register_readable_raw_fd(poller, borrowed, id);
+                let _ = unsafe { Self::register_readable_raw_fd(poller, borrowed, id) };
             }
         }
 
@@ -6512,7 +6545,9 @@ impl SystemProcessExt for ProcessManager {
         };
         let event = polling::Event::new(id as usize, readable, writable);
         if Self::modify_poll_source(poller, tls.tcp_stream(), event).is_err() {
-            let _ = Self::register_readable_source(poller, tls.tcp_stream(), id);
+            // SAFETY: `tls` is owned by `proc.live_io` and
+            // `unregister_process_poll_sources` deletes it before drop.
+            let _ = unsafe { Self::register_readable_source(poller, tls.tcp_stream(), id) };
             let _ = Self::modify_poll_source(poller, tls.tcp_stream(), event);
         }
     }
@@ -6532,12 +6567,16 @@ impl SystemProcessExt for ProcessManager {
         }
         if let Some(poller) = self.wait_backend.poller() {
             if let Some(tls) = proc.live_io.tls_stream.as_ref() {
-                Self::register_readable_source(poller, tls.tcp_stream(), id)?;
+                // SAFETY: `tls` is owned by `proc.live_io` and
+                // `unregister_process_poll_sources` deletes it before drop.
+                unsafe { Self::register_readable_source(poller, tls.tcp_stream(), id)? };
                 return Ok(());
             }
 
             let socket = proc.live_io.network_socket.as_ref().ok_or("No socket")?;
-            socket.register_readable(poller, id)?;
+            // SAFETY: `socket` is owned by `proc.live_io` and
+            // `unregister_process_poll_sources` unregisters it before drop.
+            unsafe { socket.register_readable(poller, id)? };
         }
         Ok(())
     }
@@ -6565,7 +6604,9 @@ impl SystemProcessExt for ProcessManager {
         let proc = self.processes.get(&id).ok_or("Process not found")?;
         if let Some(poller) = self.wait_backend.poller() {
             let socket = proc.live_io.network_socket.as_ref().ok_or("No socket")?;
-            socket.register_writable(poller, id)?;
+            // SAFETY: `socket` is owned by `proc.live_io` and
+            // `unregister_process_poll_sources` unregisters it before drop.
+            unsafe { socket.register_writable(poller, id)? };
         }
         Ok(())
     }
@@ -9472,9 +9513,81 @@ mod borrowed_fd_tests {
 
     #[test]
     fn register_readable_raw_fd_borrows_a_live_pipe() {
-        let (reader, _writer) = std::io::pipe().expect("pipe");
+        let (reader, writer) = std::io::pipe().expect("pipe");
         let poller = polling::Poller::new().expect("poller");
-        ProcessManager::register_readable_raw_fd(&poller, reader.as_fd(), 1)
-            .expect("a live pipe end registers");
+        // SAFETY: `reader` and `writer` are deleted from `poller` before drop.
+        unsafe {
+            ProcessManager::register_readable_raw_fd(&poller, reader.as_fd(), 1)
+                .expect("a live pipe end registers");
+            ProcessManager::register_writable_source(&poller, &writer, 2)
+                .expect("a live pipe writer registers");
+        }
+        poller.delete(reader.as_fd()).expect("delete reader");
+        poller.delete(&writer).expect("delete writer");
+    }
+
+    /// Soundness B5 guard: `polling::Poller::add_with_mode` requires the caller
+    /// to remove the registered source before dropping/closing it. Every
+    /// `SystemProcessExt` and `NetworkSocketIo` registration wrapper around
+    /// `add_with_mode` must therefore be `unsafe fn`, and the generic source
+    /// wrappers must take `polling::AsSource` (not `AsRawSource`, which accepts
+    /// arbitrary raw `RawFd` integers such as `-1`).
+    #[test]
+    fn b5_poller_registration_methods_require_unsafe_and_as_source() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let types_full =
+            std::fs::read_to_string(root.join("src/emacs_core/system/process/types.rs"))
+                .expect("read process/types.rs");
+        let types_src = types_full
+            .split("mod borrowed_fd_tests")
+            .next()
+            .expect("production section before borrowed_fd_tests");
+        let mod_src = std::fs::read_to_string(root.join("src/emacs_core/system/process/mod.rs"))
+            .expect("read process/mod.rs");
+
+        let mut violations = Vec::new();
+        for name in [
+            "register_readable_source",
+            "register_writable_source",
+            "register_readable_raw_fd",
+            "register_writable_raw_fd",
+        ] {
+            let safe_sig = format!("    fn {name}(");
+            let unsafe_sig = format!("    unsafe fn {name}(");
+            if types_src.contains(&safe_sig) {
+                violations.push(format!("process/types.rs: `{name}` is still a safe `fn`"));
+            }
+            if types_src.matches(&unsafe_sig).count() < 2 {
+                violations.push(format!(
+                    "process/types.rs: expected trait + impl `unsafe fn {name}(`"
+                ));
+            }
+        }
+        if types_src.contains("AsRawSource") {
+            violations.push(
+                "process/types.rs: registration wrappers must take `AsSource`, not `AsRawSource`"
+                    .into(),
+            );
+        }
+        for name in ["register_readable", "register_writable"] {
+            let safe_sig = format!("    fn {name}(");
+            let unsafe_sig = format!("    unsafe fn {name}(");
+            if mod_src.contains(&safe_sig) {
+                violations.push(format!(
+                    "process/mod.rs: `NetworkSocketIo::{name}` is still a safe `fn`"
+                ));
+            }
+            if mod_src.matches(&unsafe_sig).count() < 2 {
+                violations.push(format!(
+                    "process/mod.rs: expected trait + impl `unsafe fn {name}(`"
+                ));
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "B5 poller-registration soundness violations:\n{}",
+            violations.join("\n")
+        );
     }
 }

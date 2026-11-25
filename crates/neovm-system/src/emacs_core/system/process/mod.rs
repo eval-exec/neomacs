@@ -229,8 +229,26 @@ impl ProcessInputEndpoint {
 }
 
 pub(crate) trait NetworkSocketIo {
-    fn register_readable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String>;
-    fn register_writable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String>;
+    /// Register this socket for readable events on `poller`.
+    ///
+    /// # Safety
+    /// The caller must call `unregister_readable` (or `poller.delete`) before
+    /// closing or dropping this socket.
+    unsafe fn register_readable(
+        &self,
+        poller: &polling::Poller,
+        id: ProcessId,
+    ) -> Result<(), String>;
+    /// Register this socket for writable events on `poller`.
+    ///
+    /// # Safety
+    /// The caller must call `unregister_readable` (or `poller.delete`) before
+    /// closing or dropping this socket.
+    unsafe fn register_writable(
+        &self,
+        poller: &polling::Poller,
+        id: ProcessId,
+    ) -> Result<(), String>;
     fn unregister_readable(&self, poller: &polling::Poller);
     fn read_stream_output(&mut self, buf: &mut [u8]) -> Option<std::io::Result<usize>>;
     fn write_input_once(
@@ -250,60 +268,84 @@ pub(crate) trait NetworkSocketIo {
 }
 
 impl NetworkSocketIo for NetworkSocket {
-    fn register_readable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String> {
-        match self {
-            Self::TcpStream(stream) => ProcessManager::register_readable_source(poller, stream, id),
-            Self::TcpListener(listener) => {
-                ProcessManager::register_readable_source(poller, listener, id)
-            }
-            Self::UdpSocket(socket) => ProcessManager::register_readable_source(poller, socket, id),
-            #[cfg(unix)]
-            Self::SeqpacketStream(socket) => {
-                ProcessManager::register_readable_source(poller, socket, id)
-            }
-            #[cfg(unix)]
-            Self::SeqpacketListener(socket) => {
-                ProcessManager::register_readable_source(poller, socket, id)
-            }
-            #[cfg(unix)]
-            Self::UnixStream(stream) => {
-                ProcessManager::register_readable_source(poller, stream, id)
-            }
-            #[cfg(unix)]
-            Self::UnixListener(listener) => {
-                ProcessManager::register_readable_source(poller, listener, id)
-            }
-            #[cfg(unix)]
-            Self::UnixDatagram(socket) => {
-                ProcessManager::register_readable_source(poller, socket, id)
+    unsafe fn register_readable(
+        &self,
+        poller: &polling::Poller,
+        id: ProcessId,
+    ) -> Result<(), String> {
+        // SAFETY: forwarded from `NetworkSocketIo::register_readable`'s caller contract.
+        unsafe {
+            match self {
+                Self::TcpStream(stream) => {
+                    ProcessManager::register_readable_source(poller, stream, id)
+                }
+                Self::TcpListener(listener) => {
+                    ProcessManager::register_readable_source(poller, listener, id)
+                }
+                Self::UdpSocket(socket) => {
+                    ProcessManager::register_readable_source(poller, socket, id)
+                }
+                #[cfg(unix)]
+                Self::SeqpacketStream(socket) => {
+                    ProcessManager::register_readable_source(poller, socket, id)
+                }
+                #[cfg(unix)]
+                Self::SeqpacketListener(socket) => {
+                    ProcessManager::register_readable_source(poller, socket, id)
+                }
+                #[cfg(unix)]
+                Self::UnixStream(stream) => {
+                    ProcessManager::register_readable_source(poller, stream, id)
+                }
+                #[cfg(unix)]
+                Self::UnixListener(listener) => {
+                    ProcessManager::register_readable_source(poller, listener, id)
+                }
+                #[cfg(unix)]
+                Self::UnixDatagram(socket) => {
+                    ProcessManager::register_readable_source(poller, socket, id)
+                }
             }
         }
     }
 
-    fn register_writable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String> {
-        match self {
-            Self::TcpStream(stream) => ProcessManager::register_writable_source(poller, stream, id),
-            Self::TcpListener(_) => Err("Listener sockets are not writable process sources".into()),
-            Self::UdpSocket(socket) => ProcessManager::register_writable_source(poller, socket, id),
-            #[cfg(unix)]
-            Self::SeqpacketStream(socket) => {
-                ProcessManager::register_writable_source(poller, socket, id)
-            }
-            #[cfg(unix)]
-            Self::SeqpacketListener(_) => {
-                Err("Listener sockets are not writable process sources".into())
-            }
-            #[cfg(unix)]
-            Self::UnixStream(stream) => {
-                ProcessManager::register_writable_source(poller, stream, id)
-            }
-            #[cfg(unix)]
-            Self::UnixListener(_) => {
-                Err("Listener sockets are not writable process sources".into())
-            }
-            #[cfg(unix)]
-            Self::UnixDatagram(socket) => {
-                ProcessManager::register_writable_source(poller, socket, id)
+    unsafe fn register_writable(
+        &self,
+        poller: &polling::Poller,
+        id: ProcessId,
+    ) -> Result<(), String> {
+        // SAFETY: forwarded from `NetworkSocketIo::register_writable`'s caller contract.
+        unsafe {
+            match self {
+                Self::TcpStream(stream) => {
+                    ProcessManager::register_writable_source(poller, stream, id)
+                }
+                Self::TcpListener(_) => {
+                    Err("Listener sockets are not writable process sources".into())
+                }
+                Self::UdpSocket(socket) => {
+                    ProcessManager::register_writable_source(poller, socket, id)
+                }
+                #[cfg(unix)]
+                Self::SeqpacketStream(socket) => {
+                    ProcessManager::register_writable_source(poller, socket, id)
+                }
+                #[cfg(unix)]
+                Self::SeqpacketListener(_) => {
+                    Err("Listener sockets are not writable process sources".into())
+                }
+                #[cfg(unix)]
+                Self::UnixStream(stream) => {
+                    ProcessManager::register_writable_source(poller, stream, id)
+                }
+                #[cfg(unix)]
+                Self::UnixListener(_) => {
+                    Err("Listener sockets are not writable process sources".into())
+                }
+                #[cfg(unix)]
+                Self::UnixDatagram(socket) => {
+                    ProcessManager::register_writable_source(poller, socket, id)
+                }
             }
         }
     }
