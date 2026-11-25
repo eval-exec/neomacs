@@ -1821,5 +1821,82 @@ fn suspend_emacs_rejects_bad_stuffstring_and_suspended_other_tty() {
     );
 }
 
+#[test]
+fn suspend_emacs_resizes_selected_frame_before_resume_hook_when_tty_resized() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+
+    struct ResizingSuspendHost {
+        size: Rc<Cell<(u32, u32)>>,
+        resized_to: (u32, u32),
+    }
+    impl TerminalHost for ResizingSuspendHost {
+        fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn sys_suspend(&mut self, _request: SuspendRequest<'_>) -> Result<(), String> {
+            // Simulate the terminal resizing while Emacs is stopped.
+            self.size.set(self.resized_to);
+            Ok(())
+        }
+        fn tty_winsize_cells(&mut self) -> Option<(u32, u32)> {
+            Some(self.size.get())
+        }
+    }
+
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    eval.set_variable("noninteractive", Value::NIL);
+    eval.set_variable("menu-bar-mode", Value::NIL);
+    eval.set_variable("tab-bar-mode", Value::NIL);
+    configure_terminal_runtime(TerminalRuntimeConfig::interactive(
+        Some("xterm-256color".to_string()),
+        neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+            256,
+        ),
+    ));
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval.frame_manager_mut().create_frame("F1", 80, 24, scratch);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+        frame.set_window_system(None);
+    }
+    let _ = eval.frame_manager_mut().select_frame(frame_id);
+
+    let size = Rc::new(Cell::new((80, 24)));
+    set_terminal_host(Box::new(ResizingSuspendHost {
+        size: Rc::clone(&size),
+        resized_to: (100, 32),
+    }));
+
+    let observed_in_hook = Rc::new(Cell::new((0u32, 0u32)));
+    eval.eval_str(
+        r#"
+(setq observed-resume-dims nil)
+(setq suspend-resume-hook
+      (list (lambda ()
+              (setq observed-resume-dims
+                    (list (frame-parameter nil 'width)
+                          (frame-parameter nil 'height))))))
+"#,
+    )
+    .expect("install suspend-resume-hook");
+
+    builtin_suspend_emacs(&mut eval, vec![]).expect("suspend-emacs");
+    let frame = eval.frame_manager().get(frame_id).expect("frame");
+    observed_in_hook.set((frame.width, frame.height));
+    assert_eq!(observed_in_hook.get(), (100, 32));
+    assert_eq!(
+        format!("{}", eval.eval_str("observed-resume-dims").unwrap()),
+        "(100 32)",
+        "suspend-resume-hook must observe the post-resume TTY dimensions (GNU src/keyboard.c:12470-12474)"
+    );
+}
+
 #[path = "gc_heap_ownership_test.rs"]
 mod gc_heap_ownership;

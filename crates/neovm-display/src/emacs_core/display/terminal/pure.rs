@@ -1907,6 +1907,7 @@ pub fn builtin_suspend_emacs(
             .map(|t| t.id)
     });
     if let Some(terminal_id) = active_hosted_tty {
+        let old_size = terminal_winsize_cells(terminal_id);
         let reset_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-reset-strings");
         with_terminal_host_for_id(terminal_id, |host| host.suspend_tty(&reset_strings))?;
         let request = SuspendRequest {
@@ -1923,10 +1924,17 @@ pub fn builtin_suspend_emacs(
             with_terminal_host_for_id(terminal_id, |host| host.resume_tty(&set_strings));
         suspend_result?;
         resume_result?;
-        // Limitation vs GNU `Fsuspend_emacs` (`src/keyboard.c:12460-12472`):
-        // post-resume terminal size changes are picked up asynchronously on
-        // the input reader's `QuerySize` transition / next redisplay rather
-        // than synchronously via `get_tty_size` + `change_frame_size`.
+        // Mirror GNU `Fsuspend_emacs` (`src/keyboard.c:12455,12470-12472`):
+        // re-query TTY size after resuming and resize the selected frame
+        // synchronously before `suspend-resume-hook` runs.
+        let new_size = terminal_winsize_cells(terminal_id);
+        if let (Some((old_w, old_h)), Some((new_w, new_h))) = (old_size, new_size)
+            && (new_w != old_w || new_h != old_h)
+            && new_w > 0
+            && new_h > 0
+        {
+            eval.apply_resize_input_event(new_w, new_h, 1.0, 0, false)?;
+        }
         eval.invalidate_redisplay();
     }
 

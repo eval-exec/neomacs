@@ -1137,10 +1137,228 @@ fn tty_mode_cannot_suspend_real_subshell_survives_sigint_like_gnu() {
     check_cannot_suspend_real_subshell_survives_sigint(&neo, "Neomacs", false);
 }
 
+fn run_suspend_emacs_resize_while_stopped(program: &Path, label: &str, is_gnu: bool) -> String {
+    // Non-orphaned job-control wrapper that resizes the PTY from 24x80 to
+    // 30x100 while the editor is stopped on SIGTSTP, then resumes it with
+    // SIGCONT and records `(list (frame-width) (frame-height))` observed inside
+    // `suspend-resume-hook` (GNU `src/keyboard.c:12455,12470-12474`).
+    const DRIVER: &str = r#"
+import fcntl, os, pty, select, signal, struct, sys, termios, time
+
+result_path = sys.argv[1]
+argv = sys.argv[2:]
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+ctrl_r, ctrl_w = os.pipe()
+res_r, res_w = os.pipe()
+
+shell_pid = os.fork()
+if shell_pid == 0:
+    os.close(master)
+    os.close(ctrl_w)
+    os.close(res_r)
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+    signal.signal(signal.SIGTTIN, signal.SIG_IGN)
+    signal.signal(signal.SIGTSTP, signal.SIG_IGN)
+    editor_pid = os.fork()
+    if editor_pid == 0:
+        os.close(ctrl_r)
+        os.close(res_w)
+        os.setpgid(0, 0)
+        os.dup2(slave, 0)
+        os.dup2(slave, 1)
+        os.dup2(slave, 2)
+        if slave > 2:
+            os.close(slave)
+        for sig in (signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU):
+            signal.signal(sig, signal.SIG_DFL)
+        os.execv(argv[0], argv)
+        os._exit(127)
+    try:
+        os.setpgid(editor_pid, editor_pid)
+    except PermissionError:
+        pass
+    os.tcsetpgrp(slave, editor_pid)
+    while True:
+        _, status = os.waitpid(editor_pid, os.WUNTRACED)
+        if os.WIFSTOPPED(status):
+            sig = os.WSTOPSIG(status)
+            os.write(res_w, f"STOPPED:{sig}\n".encode())
+            line = b""
+            while not line.endswith(b"\n"):
+                chunk = os.read(ctrl_r, 64)
+                if not chunk:
+                    os._exit(2)
+                line += chunk
+            os.tcsetpgrp(slave, editor_pid)
+            os.killpg(editor_pid, signal.SIGCONT)
+        elif os.WIFEXITED(status):
+            os.write(res_w, f"EXITED:{os.WEXITSTATUS(status)}\n".encode())
+            os._exit(0)
+        elif os.WIFSIGNALED(status):
+            os.write(res_w, f"SIGNALED:{os.WTERMSIG(status)}\n".encode())
+            os._exit(1)
+
+os.close(ctrl_r)
+os.close(res_w)
+
+boot = bytearray()
+deadline = time.monotonic() + 20.0
+while time.monotonic() < deadline:
+    r, _, _ = select.select([master], [], [], 0.2)
+    if r:
+        chunk = os.read(master, 65536)
+        if not chunk:
+            break
+        boot.extend(chunk)
+        if b"*scratch*" in boot and b"This buffer is for text that is not saved" in boot:
+            break
+else:
+    sys.stderr.write("editor did not reach *scratch*\n")
+    sys.exit(3)
+
+# Trigger C-z (suspend-emacs) and wait for real SIGTSTP stop.
+os.write(master, b"\x1a")
+res_buf = b""
+deadline = time.monotonic() + 15.0
+while time.monotonic() < deadline:
+    r, _, _ = select.select([master, res_r], [], [], 0.2)
+    if master in r:
+        try:
+            os.read(master, 65536)
+        except OSError:
+            pass
+    if res_r in r:
+        chunk = os.read(res_r, 1024)
+        if chunk:
+            res_buf += chunk
+            if b"\n" in res_buf:
+                break
+else:
+    sys.stderr.write(f"editor did not stop on SIGTSTP; res={res_buf!r}\n")
+    sys.exit(4)
+
+stop_line, res_buf = res_buf.split(b"\n", 1)
+if stop_line != f"STOPPED:{int(signal.SIGTSTP)}".encode():
+    sys.stderr.write(f"unexpected stop event: {stop_line!r}\n")
+    sys.exit(5)
+
+# Resize the PTY while stopped, then resume with SIGCONT.
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+os.close(slave)
+os.write(ctrl_w, b"CONT\n")
+
+# Wait for suspend-resume-hook to write the observed dimensions.
+deadline = time.monotonic() + 15.0
+while time.monotonic() < deadline:
+    r, _, _ = select.select([master], [], [], 0.1)
+    if r:
+        try:
+            os.read(master, 65536)
+        except OSError:
+            pass
+    if os.path.exists(result_path) and os.path.getsize(result_path) > 0:
+        break
+else:
+    sys.stderr.write("timed out waiting for suspend-resume-hook result file\n")
+    sys.exit(6)
+
+os.write(master, b"\x18\x03")
+deadline = time.monotonic() + 15.0
+while time.monotonic() < deadline:
+    r, _, _ = select.select([master, res_r], [], [], 0.2)
+    if master in r:
+        try:
+            os.read(master, 65536)
+        except OSError:
+            pass
+    if res_r in r:
+        chunk = os.read(res_r, 1024)
+        if chunk:
+            res_buf += chunk
+            if b"\n" in res_buf:
+                break
+else:
+    sys.stderr.write("editor did not exit cleanly after resume\n")
+    sys.exit(7)
+
+exit_line, _ = res_buf.split(b"\n", 1)
+os.waitpid(shell_pid, 0)
+if exit_line != b"EXITED:0":
+    sys.stderr.write(f"unexpected exit line: {exit_line!r}\n")
+    sys.exit(8)
+"#;
+
+    let temp = tempfile::tempdir().expect("tempdir for suspend-emacs resize test");
+    let home = temp.path().join("home");
+    let tmp = temp.path().join("tmp");
+    let result_path = temp.path().join("resume-size.sexp");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let hook_el = format!(
+        "(progn \
+           (menu-bar-mode -1) \
+           (add-hook 'suspend-resume-hook \
+             (lambda () \
+               (with-temp-file {:?} \
+                 (insert (prin1-to-string (list (frame-width) (frame-height))))))))",
+        result_path.to_str().expect("UTF-8 result path")
+    );
+
+    let mut cmd = Command::new("python3");
+    cmd.arg("-c")
+        .arg(DRIVER)
+        .arg(&result_path)
+        .arg(program)
+        .arg("-nw")
+        .arg("-Q");
+    if is_gnu {
+        cmd.arg("-no-comp-spawn")
+            .arg(QUIET_NATIVE_COMP_EVAL)
+            .arg(QUIET_MX_SUGGESTION_EVAL);
+    } else {
+        cmd.arg(QUIET_MX_SUGGESTION_EVAL);
+    }
+    cmd.arg("--eval")
+        .arg(&hook_el)
+        .env("TERM", TERM_TYPE)
+        .env("HOME", &home)
+        .env("TMPDIR", &tmp)
+        .env_remove("LANGUAGE")
+        .env_remove("LC_CTYPE")
+        .env_remove("EMACSLOADPATH");
+
+    let output = cmd.output().expect("spawn suspend-emacs resize driver");
+    assert!(
+        output.status.success(),
+        "{label}: suspend-emacs resize driver failed (status {:?}):\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::read_to_string(&result_path).expect("read resume-size.sexp")
+}
+
 #[test]
 fn tty_mode_strings_emitted_on_emergency_escape_like_gnu() {
     let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
     let neo = neomacs_tui_tests::neomacs_binary();
     check_emergency_escape_mode_strings(&gnu, "GNU", true);
     check_emergency_escape_mode_strings(&neo, "Neomacs", false);
+}
+
+#[test]
+fn tty_mode_suspend_emacs_applies_resize_before_resume_hook_like_gnu() {
+    let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
+    let neo = neomacs_tui_tests::neomacs_binary();
+    let gnu_size = run_suspend_emacs_resize_while_stopped(&gnu, "GNU", true);
+    let neo_size = run_suspend_emacs_resize_while_stopped(&neo, "Neomacs", false);
+    assert_eq!(
+        neo_size, gnu_size,
+        "suspend-resume-hook frame size mismatch vs GNU after PTY resize during SIGTSTP"
+    );
+    assert_eq!(gnu_size, "(100 30)");
 }
