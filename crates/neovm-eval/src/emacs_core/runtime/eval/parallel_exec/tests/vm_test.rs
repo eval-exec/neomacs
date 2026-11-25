@@ -26,8 +26,8 @@ use super::poll_tests::{
 };
 use super::vm::{
     ArithOps, ArithRefusal, CallClass, CallEnv, CallEscape, CodeRefusal, EscapeCompletion,
-    EscapeStack, EscapeWhy, HandlerDelta, NumericClass, RecordDelta, SerialUnwind,
-    SymbolCallLookup, VmCode, VmEntry, VmEscape, VmEscapeRequest, VmExec, VmOutcome, VmPlain,
+    EscapeWhy, HandlerDelta, NumericClass, RecordDelta, SerialUnwind, SymbolCallLookup,
+    UnwindCompletion, VmCode, VmEntry, VmEscape, VmEscapeRequest, VmExec, VmOutcome, VmPlain,
     VmPoll, VmProgram, VmSealed, classify_bytecode_function, classify_call_with_symbols,
     program_from_bytecode, static_stack_effect,
 };
@@ -225,15 +225,27 @@ impl EffectLog {
     }
 }
 
+enum ScriptStep {
+    Escape(EscapeCompletion),
+    Unwind(UnwindCompletion),
+}
+
 struct RecordingEscape {
     requests: Vec<VmEscapeRequest>,
     /// The escaping frame's segment at each escape, before anything applied.
     segments: Vec<Vec<Value>>,
     /// Both record LIFOs at each escape, before anything applied.
     lifos: Vec<(Lifo, Lifo)>,
-    /// One completion per escape, in order; `None` is the opcode's
-    /// fall-through.
-    script: Vec<Option<EscapeCompletion>>,
+    /// Published `OwnerBacktraceView` frame depth at each escape/unwind.
+    backtrace_depths: Vec<usize>,
+    /// Values published under `RootGroup::Handlers` at each escape/unwind.
+    handler_roots: Vec<Vec<Value>>,
+    /// One completion per escape/unwind, in order; `None` is fall-through.
+    script: Vec<Option<ScriptStep>>,
+    /// Optional per-escape `(backtrace_level, debug_on_exit)` updates queued
+    /// while stopped inside an escape.
+    debug_script: Vec<Vec<(usize, bool)>>,
+    pending_debug_updates: Vec<BacktraceDebugUpdate>,
     /// An unscripted `Return` reports the operand it published, the frame's
     /// value (`Breturn`: `val = TOP`, bytecode.c:897-921); the default
     /// completion reports nil.
@@ -264,7 +276,11 @@ impl RecordingEscape {
             requests: Vec::new(),
             segments: Vec::new(),
             lifos: Vec::new(),
+            backtrace_depths: Vec::new(),
+            handler_roots: Vec::new(),
             script: Vec::new(),
+            debug_script: Vec::new(),
+            pending_debug_updates: Vec::new(),
             mirror_return: false,
             handoff_undoes: true,
             pushes_foreign_record: false,
@@ -279,7 +295,22 @@ impl RecordingEscape {
         self
     }
 
+    fn with_debug_script(mut self, debug_script: Vec<Vec<(usize, bool)>>) -> Self {
+        self.debug_script = debug_script;
+        self
+    }
+
     fn with_script(script: Vec<Option<EscapeCompletion>>) -> Self {
+        Self {
+            script: script
+                .into_iter()
+                .map(|item| item.map(ScriptStep::Escape))
+                .collect(),
+            ..Self::new()
+        }
+    }
+
+    fn with_steps(script: Vec<Option<ScriptStep>>) -> Self {
         Self {
             script,
             ..Self::new()
@@ -317,7 +348,10 @@ impl RecordingEscape {
 
     fn mirroring_with_script(script: Vec<Option<EscapeCompletion>>) -> Self {
         Self {
-            script,
+            script: script
+                .into_iter()
+                .map(|item| item.map(ScriptStep::Escape))
+                .collect(),
             ..Self::mirroring_return()
         }
     }
@@ -330,6 +364,16 @@ impl RecordingEscape {
     }
 
     fn logging_with_script(script: Vec<Option<EscapeCompletion>>, log: EffectLog) -> Self {
+        Self {
+            script: script
+                .into_iter()
+                .map(|item| item.map(ScriptStep::Escape))
+                .collect(),
+            ..Self::logging(log)
+        }
+    }
+
+    fn logging_with_steps(script: Vec<Option<ScriptStep>>, log: EffectLog) -> Self {
         Self {
             script,
             ..Self::logging(log)
@@ -346,17 +390,9 @@ impl RecordingEscape {
             ..Self::logging_with_script(script, log)
         }
     }
-}
 
-impl VmEscape for RecordingEscape {
-    fn escape(
-        &mut self,
-        request: VmEscapeRequest,
-        arena: &FrameArena,
-        plain: &mut dyn PlainAccess,
-    ) -> EscapeCompletion {
+    fn record_observation(&mut self, request: &VmEscapeRequest, arena: &FrameArena) -> usize {
         let segment = arena.vm_segment(request.frame).unwrap_or(&[]).to_vec();
-        let top = segment.last().copied();
         if let Some(log) = &self.log {
             let why = match &request.why {
                 EscapeWhy::SerialUnwind(unwind) => {
@@ -393,25 +429,48 @@ impl VmEscape for RecordingEscape {
             };
             log.push(format!("escape {:?}{why}", request.op));
         }
-        // The serial side's half of a `PlainUnbind` hand-off, in GNU's
-        // order: the record leaves the slab (`do_one_unbind` decrements
-        // first, eval.c:3946-3955), then the watcher's Lisp runs - the
-        // script says whether it signaled - then the outer value is stored
-        // (`set_internal`, data.c:1697-1708 then :1720). A signal skips the store; the
-        // inner value stays.
-        let mut taken = Vec::new();
-        if let EscapeWhy::PlainUnbind { record, .. } = &request.why {
-            if self.handoff_undoes {
-                // A take the slab refuses (the record is not its top) leaves
-                // the record live; the walk's post-escape check decides.
-                taken.extend(plain.pop_binding(*record));
+        let view = OwnerBacktraceView::from_arena(arena);
+        let index = self.requests.len();
+        if let Some(actions) = self.debug_script.get(index) {
+            for &(level, enabled) in actions {
+                if let Some(entry) = view.frame_at(level) {
+                    self.pending_debug_updates.push(BacktraceDebugUpdate {
+                        frame: entry.frame_id,
+                        debug_on_exit: enabled,
+                    });
+                }
             }
-        } else if let EscapeWhy::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup)) =
+        }
+        let mut h_roots = Vec::new();
+        arena.trace_roots(&mut |group, value| {
+            if group == RootGroup::Handlers {
+                h_roots.push(value);
+            }
+        });
+        self.backtrace_depths.push(view.len());
+        self.handler_roots.push(h_roots);
+        self.segments.push(segment);
+        self.lifos.push(lifos(arena));
+        self.requests.push(request.clone());
+        index
+    }
+}
+
+impl VmEscape for RecordingEscape {
+    fn escape(
+        &mut self,
+        request: VmEscapeRequest,
+        arena: &FrameArena,
+        plain: &mut dyn PlainAccess,
+    ) -> EscapeCompletion {
+        let top = arena
+            .vm_segment(request.frame)
+            .and_then(|s| s.last().copied());
+        let index = self.record_observation(&request, arena);
+        let mut taken = Vec::new();
+        if let EscapeWhy::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup)) =
             &request.why
         {
-            // The Return's serial cleanup is the slow arm's `unbind_to`: it
-            // undoes only the returning frame's owner records above
-            // `vm.bind_base` (V7 F6), take then store.
             if self.handoff_undoes {
                 let frame_plain_count = arena
                     .vm(request.frame)
@@ -447,28 +506,88 @@ impl VmEscape for RecordingEscape {
                 plain.pop_binding(top);
             }
         }
-        self.segments.push(segment);
-        self.lifos.push(lifos(arena));
-        let index = self.requests.len();
-        self.requests.push(request.clone());
-        let completion = self
-            .script
-            .get_mut(index)
-            .and_then(Option::take)
-            .unwrap_or_else(|| {
-                if self.mirror_return && request.op == Op::Return {
-                    if let Some(top) = top {
-                        return completion(&Op::Return, vec![top]);
-                    }
+        let completion = match self.script.get_mut(index).and_then(Option::take) {
+            Some(ScriptStep::Escape(comp)) => comp,
+            Some(ScriptStep::Unwind(_)) => {
+                panic!("script[{index}] had UnwindCompletion for VmEscape::escape")
+            }
+            None => {
+                if self.mirror_return
+                    && request.op == Op::Return
+                    && let Some(top) = top
+                {
+                    completion(&Op::Return, vec![top])
+                } else {
+                    EscapeCompletion::fall_through(&request.op)
                 }
-                EscapeCompletion::fall_through(&request.op)
-            });
-        if matches!(completion.stack, EscapeStack::Completed { .. }) {
+            }
+        };
+        if matches!(completion, EscapeCompletion::Completed { .. }) {
             for record in taken {
                 restore_taken_binding(plain, record);
             }
         }
         completion
+    }
+
+    fn unwind(
+        &mut self,
+        request: VmEscapeRequest,
+        arena: &FrameArena,
+        plain: &mut dyn PlainAccess,
+    ) -> UnwindCompletion {
+        let index = self.record_observation(&request, arena);
+        let mut taken = Vec::new();
+        if let EscapeWhy::PlainUnbind { record, .. } = &request.why
+            && self.handoff_undoes
+        {
+            taken.extend(plain.pop_binding(*record));
+        }
+        let completion = match self.script.get_mut(index).and_then(Option::take) {
+            Some(ScriptStep::Unwind(comp)) => comp,
+            Some(ScriptStep::Escape(comp)) => match comp {
+                EscapeCompletion::Completed {
+                    records, handlers, ..
+                } => UnwindCompletion::Completed {
+                    popped_handlers: handlers.popped,
+                    popped_records: records.popped,
+                    pushed_records: records.pushed,
+                },
+                EscapeCompletion::Caught { handler, value } => UnwindCompletion::Caught {
+                    handler,
+                    value,
+                    popped_handlers: Vec::new(),
+                    popped_records: Vec::new(),
+                },
+                EscapeCompletion::CleanupCaught {
+                    handler,
+                    value,
+                    popped_records,
+                    popped_handlers,
+                } => UnwindCompletion::Caught {
+                    handler,
+                    value,
+                    popped_handlers,
+                    popped_records,
+                },
+                EscapeCompletion::Flow(flow) => UnwindCompletion::Flow(flow),
+            },
+            None => UnwindCompletion::Completed {
+                popped_handlers: Vec::new(),
+                popped_records: Vec::new(),
+                pushed_records: Vec::new(),
+            },
+        };
+        if matches!(completion, UnwindCompletion::Completed { .. }) {
+            for record in taken {
+                restore_taken_binding(plain, record);
+            }
+        }
+        completion
+    }
+
+    fn take_debug_on_exit_updates(&mut self) -> Vec<BacktraceDebugUpdate> {
+        std::mem::take(&mut self.pending_debug_updates)
     }
 
     fn refresh_call_env(&mut self) -> Option<CallEnv> {
@@ -1183,12 +1302,10 @@ fn handler(id: u64) -> SerialHandlerToken {
 /// A completed escape with the opcode's static `consumed`, no record change
 /// and no jump.
 fn completion(op: &Op, produced: Vec<Value>) -> EscapeCompletion {
-    EscapeCompletion {
-        stack: EscapeStack::Completed {
-            consumed: static_stack_effect(op).consumed,
-            produced,
-            jump: None,
-        },
+    EscapeCompletion::Completed {
+        consumed: static_stack_effect(op).consumed,
+        produced,
+        jump: None,
         records: RecordDelta::default(),
         handlers: HandlerDelta::default(),
     }
@@ -1197,12 +1314,10 @@ fn completion(op: &Op, produced: Vec<Value>) -> EscapeCompletion {
 /// A completed escape that also jumps: a `Switch` hit, the only opcode
 /// that may report one.
 fn completion_jumping(op: &Op, produced: Vec<Value>, jump: u32) -> EscapeCompletion {
-    EscapeCompletion {
-        stack: EscapeStack::Completed {
-            consumed: static_stack_effect(op).consumed,
-            produced,
-            jump: Some(jump),
-        },
+    EscapeCompletion::Completed {
+        consumed: static_stack_effect(op).consumed,
+        produced,
+        jump: Some(jump),
         records: RecordDelta::default(),
         handlers: HandlerDelta::default(),
     }
@@ -1212,23 +1327,31 @@ fn completion_jumping(op: &Op, produced: Vec<Value>, jump: u32) -> EscapeComplet
 /// pushed a specpdl entry the owner did not mirror (`save-excursion`, an
 /// unwind-protect, a localized binding).
 fn completion_pushing(op: &Op, token: SerialRecordToken) -> EscapeCompletion {
-    EscapeCompletion {
+    let effect = static_stack_effect(op);
+    EscapeCompletion::Completed {
+        consumed: effect.consumed,
+        produced: vec![Value::NIL; effect.produced as usize],
+        jump: None,
         records: RecordDelta {
             popped: Vec::new(),
             pushed: vec![token],
         },
-        ..EscapeCompletion::fall_through(op)
+        handlers: HandlerDelta::default(),
     }
 }
 
 /// A completed escape that also pops these serial records, innermost first.
 fn completion_popping(op: &Op, popped: &[SerialRecordToken]) -> EscapeCompletion {
-    EscapeCompletion {
+    let effect = static_stack_effect(op);
+    EscapeCompletion::Completed {
+        consumed: effect.consumed,
+        produced: vec![Value::NIL; effect.produced as usize],
+        jump: None,
         records: RecordDelta {
             popped: popped.to_vec(),
             pushed: Vec::new(),
         },
-        ..EscapeCompletion::fall_through(op)
+        handlers: HandlerDelta::default(),
     }
 }
 
@@ -1553,14 +1676,54 @@ fn vm_every_world_opcode_outside_the_arith_and_plain_classes_is_exactly_one_esca
             ops.push(Op::Nil);
         }
         ops.push(Op::Return);
-        let mut engine = harness();
+        let is_handler_push = matches!(
+            op,
+            Op::PushCatch(_) | Op::PushConditionCase(_) | Op::PushConditionCaseRaw(_)
+        );
+        let mut engine = if is_handler_push {
+            // V8 L1: handler-push opcodes must push exactly one serial handler
+            // token; Return then cleans it up via `NeedsSerialCleanup`.
+            let h = handler(1);
+            VmExec::new(
+                &(),
+                RecordingEscape::with_script(vec![
+                    Some(EscapeCompletion::Completed {
+                        consumed: effect.consumed,
+                        produced: Vec::new(),
+                        jump: None,
+                        records: RecordDelta::default(),
+                        handlers: HandlerDelta {
+                            popped: Vec::new(),
+                            pushed: Some(h),
+                        },
+                    }),
+                    Some(EscapeCompletion::Completed {
+                        consumed: 1,
+                        produced: vec![Value::NIL],
+                        jump: None,
+                        records: RecordDelta::default(),
+                        handlers: HandlerDelta {
+                            popped: vec![h],
+                            pushed: None,
+                        },
+                    }),
+                ]),
+                HarnessVmSealed,
+                HarnessArith::new(),
+                HarnessPlain::new(),
+                RecordingPoll::new(),
+            )
+        } else {
+            harness()
+        };
         let outcome = engine.run(&mut ctx, program(&ops));
         assert_eq!(done_value(&mut engine, outcome), Value::NIL, "{name}");
         let escape = engine.escape_handler();
+        let expected_requests = if is_handler_push { 2 } else { 1 };
         assert_eq!(
             escape.requests.len(),
-            1,
-            "{name}: the opcode; Return is owner-local"
+            expected_requests,
+            "{name}: the opcode (plus Return cleanup when a serial handler was installed)"
         );
         let request = &escape.requests[0];
         assert_eq!(request.op, op, "{name}");
@@ -1576,18 +1739,15 @@ fn vm_every_world_opcode_outside_the_arith_and_plain_classes_is_exactly_one_esca
             vec![Value::NIL; effect.consumed as usize],
             "{name}: segment at the escape"
         );
-        // The opcode's escape polls once; the Return behind it is
-        // owner-local (V4) and polls nothing.
         let mut expected = Vec::new();
         if is_call(&op) {
             expected.push(PollEdge::VmCall);
         }
         expected.push(PollEdge::SerialRequest);
-        assert_eq!(
-            engine.poll_handler().edges,
-            expected,
-            "{name}: edges; Return is owner-local"
-        );
+        if is_handler_push {
+            expected.push(PollEdge::SerialRequest);
+        }
+        assert_eq!(engine.poll_handler().edges, expected, "{name}: edges");
         assert_clear(&engine);
     }
     // 43 before V4; `Return` is typed now.
@@ -1736,21 +1896,18 @@ fn vm_a_completion_that_jumps_for_an_opcode_other_than_switch_is_a_typed_fault()
         (
             // The first escape seeds the bindings with one serial token;
             // Return then reports a jump and pops that token.
-            vec![Op::Nil, Op::PushConditionCase(4), Op::Nil, Op::Return],
+            vec![Op::Nil, Op::SaveExcursion, Op::Nil, Op::Return],
             vec![
-                Some(EscapeCompletion {
-                    records: RecordDelta {
-                        popped: Vec::new(),
-                        pushed: vec![token(1)],
-                    },
-                    ..completion(&Op::PushConditionCase(4), Vec::new())
-                }),
-                Some(EscapeCompletion {
+                Some(completion_pushing(&Op::SaveExcursion, token(1))),
+                Some(EscapeCompletion::Completed {
+                    consumed: static_stack_effect(&Op::Return).consumed,
+                    produced: vec![Value::T],
+                    jump: Some(0),
                     records: RecordDelta {
                         popped: vec![token(1)],
                         pushed: Vec::new(),
                     },
-                    ..completion_jumping(&Op::Return, vec![Value::T], 0)
+                    handlers: HandlerDelta::default(),
                 }),
             ],
             Op::Return,
@@ -1810,7 +1967,7 @@ fn vm_poll_refusal_is_engine_fault_poll_and_restarts() {
     let cases: Vec<(&str, Vec<Op>, PollEdge)> = vec![
         (
             "serial request",
-            vec![Op::Nil, Op::PushConditionCase(4), Op::Return],
+            vec![Op::Nil, Op::SymbolValue, Op::Return],
             PollEdge::SerialRequest,
         ),
         (
@@ -1870,18 +2027,20 @@ fn vm_a_signal_from_an_escape_settles_to_idle_and_never_resumes() {
         Op::Return,
     ];
     let script = vec![
-        Some(EscapeCompletion {
+        Some(EscapeCompletion::Completed {
+            consumed: static_stack_effect(&Op::PushConditionCase(4)).consumed,
+            produced: Vec::new(),
+            jump: None,
+            records: RecordDelta::default(),
             handlers: HandlerDelta {
                 popped: Vec::new(),
-                pushed: vec![handler(7)],
+                pushed: Some(handler(7)),
             },
-            ..completion(&Op::PushConditionCase(4), Vec::new())
         }),
-        Some(EscapeCompletion {
-            stack: EscapeStack::Flow(signal("error", vec![Value::string("boom")])),
-            records: RecordDelta::default(),
-            handlers: HandlerDelta::default(),
-        }),
+        Some(EscapeCompletion::Flow(signal(
+            "error",
+            vec![Value::string("boom")],
+        ))),
     ];
     let mut engine = VmExec::new(
         &(),
@@ -1922,35 +2081,34 @@ fn vm_an_escape_completion_with_the_wrong_arity_is_a_typed_fault_and_keeps_the_s
     // stays for inspection.
     let ops = vec![
         Op::Nil,
-        Op::PushConditionCase(4),
+        Op::SaveExcursion,
+        Op::PushConditionCase(5),
         Op::SymbolValue,
         Op::Return,
     ];
     let script = vec![
-        Some(EscapeCompletion {
-            records: RecordDelta {
-                popped: Vec::new(),
-                pushed: vec![token(1)],
-            },
+        Some(completion_pushing(&Op::SaveExcursion, token(1))),
+        Some(EscapeCompletion::Completed {
+            consumed: static_stack_effect(&Op::PushConditionCase(5)).consumed,
+            produced: Vec::new(),
+            jump: None,
+            records: RecordDelta::default(),
             handlers: HandlerDelta {
                 popped: Vec::new(),
-                pushed: vec![handler(5)],
+                pushed: Some(handler(5)),
             },
-            ..completion(&Op::PushConditionCase(4), Vec::new())
         }),
-        Some(EscapeCompletion {
-            stack: EscapeStack::Completed {
-                consumed: 1,
-                produced: Vec::new(),
-                jump: None,
-            },
+        Some(EscapeCompletion::Completed {
+            consumed: 1,
+            produced: Vec::new(),
+            jump: None,
             records: RecordDelta {
                 popped: vec![token(1)],
                 pushed: vec![token(2)],
             },
             handlers: HandlerDelta {
                 popped: vec![handler(5)],
-                pushed: vec![handler(6)],
+                pushed: Some(handler(6)),
             },
         }),
     ];
@@ -2034,42 +2192,57 @@ fn vm_an_escape_requested_without_its_operands_signals_invalid_byte_code_before_
 fn vm_escape_completions_mirror_serial_records_and_handlers_in_lifo_order() {
     let ops = vec![
         Op::Nil,
-        Op::PushConditionCase(4),
+        Op::SaveExcursion,
+        Op::PushConditionCase(5),
         Op::SymbolValue,
         Op::SymbolValue,
         Op::Return,
     ];
     let script = vec![
-        // Pushed outermost first: [A, B] with B innermost; one handler.
-        Some(EscapeCompletion {
+        // Pushed outermost first: [A, B] with B innermost; then one handler.
+        Some(EscapeCompletion::Completed {
+            consumed: 0,
+            produced: Vec::new(),
+            jump: None,
             records: RecordDelta {
                 popped: Vec::new(),
                 pushed: vec![token(1), token(2)],
             },
+            handlers: HandlerDelta::default(),
+        }),
+        Some(EscapeCompletion::Completed {
+            consumed: 0,
+            produced: Vec::new(),
+            jump: None,
+            records: RecordDelta::default(),
             handlers: HandlerDelta {
                 popped: Vec::new(),
-                pushed: vec![handler(10)],
+                pushed: Some(handler(10)),
             },
-            ..completion(&Op::PushConditionCase(4), Vec::new())
         }),
         // Popped innermost first: [B, A]; then C.
-        Some(EscapeCompletion {
+        Some(EscapeCompletion::Completed {
+            consumed: static_stack_effect(&Op::SymbolValue).consumed,
+            produced: vec![Value::NIL],
+            jump: None,
             records: RecordDelta {
                 popped: vec![token(2), token(1)],
                 pushed: vec![token(3)],
             },
-            ..completion(&Op::SymbolValue, vec![Value::NIL])
+            handlers: HandlerDelta::default(),
         }),
-        Some(EscapeCompletion {
+        Some(EscapeCompletion::Completed {
+            consumed: static_stack_effect(&Op::SymbolValue).consumed,
+            produced: vec![Value::NIL],
+            jump: None,
             records: RecordDelta {
                 popped: vec![token(3)],
                 pushed: Vec::new(),
             },
             handlers: HandlerDelta {
                 popped: vec![handler(10)],
-                pushed: Vec::new(),
+                pushed: None,
             },
-            ..completion(&Op::SymbolValue, vec![Value::NIL])
         }),
     ];
     let mut engine = VmExec::new(
@@ -2087,11 +2260,12 @@ fn vm_escape_completions_mirror_serial_records_and_handlers_in_lifo_order() {
         escape.lifos,
         vec![
             (vec![], vec![]),
+            (vec![Some(1), Some(2)], vec![]),
             (vec![Some(1), Some(2)], vec![Some(10)]),
             (vec![Some(3)], vec![Some(10)]),
         ]
     );
-    assert_eq!(escape.requests.len(), 3);
+    assert_eq!(escape.requests.len(), 4);
     assert_clear(&engine);
 }
 
@@ -2107,7 +2281,7 @@ fn vm_a_completion_that_pops_a_non_top_serial_record_faults_and_applies_nothing(
             },
             HandlerDelta {
                 popped: vec![handler(5)],
-                pushed: vec![handler(6)],
+                pushed: Some(handler(6)),
             },
             RecordStack::Bindings,
         ),
@@ -2119,7 +2293,7 @@ fn vm_a_completion_that_pops_a_non_top_serial_record_faults_and_applies_nothing(
             },
             HandlerDelta {
                 popped: vec![handler(6)],
-                pushed: Vec::new(),
+                pushed: None,
             },
             RecordStack::Handlers,
         ),
@@ -2127,26 +2301,29 @@ fn vm_a_completion_that_pops_a_non_top_serial_record_faults_and_applies_nothing(
     for (name, records, handlers, expected) in cases {
         let ops = vec![
             Op::Nil,
-            Op::PushConditionCase(4),
+            Op::SaveExcursion,
+            Op::PushConditionCase(5),
             Op::SymbolValue,
             Op::Return,
         ];
         let script = vec![
-            Some(EscapeCompletion {
-                records: RecordDelta {
-                    popped: Vec::new(),
-                    pushed: vec![token(1)],
-                },
+            Some(completion_pushing(&Op::SaveExcursion, token(1))),
+            Some(EscapeCompletion::Completed {
+                consumed: 0,
+                produced: Vec::new(),
+                jump: None,
+                records: RecordDelta::default(),
                 handlers: HandlerDelta {
                     popped: Vec::new(),
-                    pushed: vec![handler(5)],
+                    pushed: Some(handler(5)),
                 },
-                ..completion(&Op::PushConditionCase(4), Vec::new())
             }),
-            Some(EscapeCompletion {
+            Some(EscapeCompletion::Completed {
+                consumed: static_stack_effect(&Op::SymbolValue).consumed,
+                produced: vec![Value::NIL],
+                jump: None,
                 records,
                 handlers,
-                ..completion(&Op::SymbolValue, vec![Value::NIL])
             }),
         ];
         let mut engine = VmExec::new(
@@ -2818,12 +2995,15 @@ fn vm_a_return_cleanup_that_leaves_a_serial_handler_marker_faults() {
     let mut ctx = context();
     let ops = plain_program(vec![Op::Constant(0), Op::PushConditionCase(4), Op::Return]);
     let mut engine = harness_with(RecordingEscape::with_script(vec![
-        Some(EscapeCompletion {
+        Some(EscapeCompletion::Completed {
+            consumed: 0,
+            produced: Vec::new(),
+            jump: None,
+            records: RecordDelta::default(),
             handlers: HandlerDelta {
                 popped: Vec::new(),
-                pushed: vec![handler(10)],
+                pushed: Some(handler(10)),
             },
-            ..EscapeCompletion::fall_through(&Op::PushConditionCase(4))
         }),
         // The cleanup leaves the handler: pops nothing (it carries the value,
         // so the fault is the handler's, not a missing result's).
@@ -2869,11 +3049,10 @@ fn vm_idle_after_a_signal_inside_a_watched_let_poisons() {
     let plain = HarnessPlain::new().admit(x).watched(x).logging(log.clone());
     let mut engine = harness_with_plain(
         RecordingEscape::logging_with_script(
-            vec![Some(EscapeCompletion {
-                stack: EscapeStack::Flow(signal("error", vec![Value::string("boom")])),
-                records: RecordDelta::default(),
-                handlers: HandlerDelta::default(),
-            })],
+            vec![Some(EscapeCompletion::Flow(signal(
+                "error",
+                vec![Value::string("boom")],
+            )))],
             log.clone(),
         ),
         plain,
@@ -2976,12 +3155,15 @@ fn vm_a_return_under_a_serial_record_marker_takes_the_serial_cleanup() {
     let ops = plain_program(vec![Op::Constant(0), Op::SaveExcursion, Op::Return]);
     let mut engine = harness_with(RecordingEscape::with_script(vec![
         Some(completion_pushing(&Op::SaveExcursion, token(9))),
-        Some(EscapeCompletion {
+        Some(EscapeCompletion::Completed {
+            consumed: 1,
+            produced: vec![Value::fixnum(1)],
+            jump: None,
             records: RecordDelta {
                 popped: vec![token(9)],
                 pushed: Vec::new(),
             },
-            ..completion(&Op::Return, vec![Value::fixnum(1)])
+            handlers: HandlerDelta::default(),
         }),
     ]));
     let outcome = engine.run(&mut ctx, program_with(&ops, &[Value::fixnum(1)]));
@@ -3010,19 +3192,25 @@ fn vm_a_return_under_a_serial_handler_marker_takes_the_serial_cleanup() {
     let mut ctx = context();
     let ops = plain_program(vec![Op::Constant(0), Op::PushConditionCase(4), Op::Return]);
     let mut engine = harness_with(RecordingEscape::with_script(vec![
-        Some(EscapeCompletion {
+        Some(EscapeCompletion::Completed {
+            consumed: 0,
+            produced: Vec::new(),
+            jump: None,
+            records: RecordDelta::default(),
             handlers: HandlerDelta {
                 popped: Vec::new(),
-                pushed: vec![handler(10)],
+                pushed: Some(handler(10)),
             },
-            ..EscapeCompletion::fall_through(&Op::PushConditionCase(4))
         }),
-        Some(EscapeCompletion {
+        Some(EscapeCompletion::Completed {
+            consumed: 1,
+            produced: vec![Value::fixnum(1)],
+            jump: None,
+            records: RecordDelta::default(),
             handlers: HandlerDelta {
                 popped: vec![handler(10)],
-                pushed: Vec::new(),
+                pushed: None,
             },
-            ..completion(&Op::Return, vec![Value::fixnum(1)])
         }),
     ]));
     let outcome = engine.run(&mut ctx, program_with(&ops, &[Value::fixnum(1)]));
@@ -3056,12 +3244,15 @@ fn vm_a_return_with_stale_keys_still_escapes_once() {
     let mut engine = harness_with_plain(
         RecordingEscape::with_script(vec![
             Some(completion_pushing(&Op::SaveExcursion, token(9))),
-            Some(EscapeCompletion {
+            Some(EscapeCompletion::Completed {
+                consumed: 1,
+                produced: vec![one],
+                jump: None,
                 records: RecordDelta {
                     popped: vec![token(9)],
                     pushed: Vec::new(),
                 },
-                ..completion(&Op::Return, vec![one])
+                handlers: HandlerDelta::default(),
             }),
         ]),
         plain,
@@ -3103,11 +3294,10 @@ fn vm_idle_after_a_signal_inside_let_leaves_no_owner_binding() {
     let plain = HarnessPlain::new().admit(x).logging(log.clone());
     let mut engine = harness_with_plain(
         RecordingEscape::logging_with_script(
-            vec![Some(EscapeCompletion {
-                stack: EscapeStack::Flow(signal("error", vec![Value::string("boom")])),
-                records: RecordDelta::default(),
-                handlers: HandlerDelta::default(),
-            })],
+            vec![Some(EscapeCompletion::Flow(signal(
+                "error",
+                vec![Value::string("boom")],
+            )))],
             log.clone(),
         ),
         plain,
@@ -5361,12 +5551,15 @@ fn vm_unbind_walks_a_record_a_serial_run_pushes_in_addition_to_n() {
             vec![
                 Some(completion_pushing(&Op::SaveExcursion, token(1))),
                 // The run [S1] leaves; the completion pushes S5.
-                Some(EscapeCompletion {
+                Some(EscapeCompletion::Completed {
+                    consumed: 0,
+                    produced: Vec::new(),
+                    jump: None,
                     records: RecordDelta {
                         popped: vec![token(1)],
                         pushed: vec![token(5)],
                     },
-                    ..EscapeCompletion::fall_through(&Op::Unbind(2))
+                    handlers: HandlerDelta::default(),
                 }),
                 Some(completion_popping(&Op::Unbind(2), &[token(5)])),
                 // The Return's cleanup (DEBUG_ON_EXIT below): moves nothing.
@@ -5439,11 +5632,10 @@ fn vm_a_signalling_plain_unbind_hand_off_leaves_no_entry_and_takes_the_record_fi
         .logging(log_shared.clone());
     let mut engine = harness_with_plain(
         RecordingEscape::logging_with_script(
-            vec![Some(EscapeCompletion {
-                stack: EscapeStack::Flow(signal("error", vec![Value::string("unlet")])),
-                records: RecordDelta::default(),
-                handlers: HandlerDelta::default(),
-            })],
+            vec![Some(EscapeCompletion::Flow(signal(
+                "error",
+                vec![Value::string("unlet")],
+            )))],
             log_shared.clone(),
         ),
         plain,
@@ -8162,6 +8354,19 @@ impl VmEscape for BacktraceAdapterEscape {
             .unwrap_or_else(|| EscapeCompletion::fall_through(&request.op))
     }
 
+    fn unwind(
+        &mut self,
+        _request: VmEscapeRequest,
+        _arena: &FrameArena,
+        _plain: &mut dyn PlainAccess,
+    ) -> UnwindCompletion {
+        UnwindCompletion::Completed {
+            popped_handlers: Vec::new(),
+            popped_records: Vec::new(),
+            pushed_records: Vec::new(),
+        }
+    }
+
     fn take_debug_on_exit_updates(&mut self) -> Vec<BacktraceDebugUpdate> {
         std::mem::take(&mut self.pending_updates)
     }
@@ -8611,12 +8816,10 @@ fn vm_a_flagged_return_takes_the_serial_cleanup() {
     // Atomicity control: if an escape queues DEBUG_ON_EXIT = true AND violates
     // R3 (wrong produced arity), the contract fault keeps the scene untouched
     // and does NOT apply the debug_on_exit update.
-    let bad_completion = EscapeCompletion {
-        stack: EscapeStack::Completed {
-            consumed: 1,
-            produced: vec![Value::NIL, Value::NIL], // Call(0) expects produced == 1
-            jump: None,
-        },
+    let bad_completion = EscapeCompletion::Completed {
+        consumed: 1,
+        produced: vec![Value::NIL, Value::NIL], // Call(0) expects produced == 1
+        jump: None,
         records: RecordDelta::default(),
         handlers: HandlerDelta::default(),
     };
@@ -9212,11 +9415,8 @@ fn vm_a_callee_signal_settles_to_idle_until_v8() {
     );
     let flow_constants = [callee_escape_flow];
     let flow_ops = [Op::Constant(0), Op::Call(0), Op::Return];
-    let flow_completion = EscapeCompletion {
-        stack: EscapeStack::Flow(signal("error", vec![Value::string("callee boom")])),
-        records: RecordDelta::default(),
-        handlers: HandlerDelta::default(),
-    };
+    let flow_completion =
+        EscapeCompletion::Flow(signal("error", vec![Value::string("callee boom")]));
     let mut engine2 = VmExec::new(
         &(),
         RecordingEscape::with_script(vec![Some(flow_completion)]),
@@ -9352,12 +9552,10 @@ fn vm_child_return_cleanup_cannot_pop_caller_serial_markers_f6() {
     let bad_script = vec![
         Some(completion_pushing(&Op::SaveExcursion, caller_rec)), // caller
         Some(completion_pushing(&Op::SaveExcursion, child_rec)),  // child
-        Some(EscapeCompletion {
-            stack: EscapeStack::Completed {
-                consumed: 1,
-                produced: vec![Value::fixnum(9)],
-                jump: None,
-            },
+        Some(EscapeCompletion::Completed {
+            consumed: 1,
+            produced: vec![Value::fixnum(9)],
+            jump: None,
             records: RecordDelta {
                 popped: vec![child_rec, caller_rec],
                 pushed: vec![],
@@ -9398,12 +9596,10 @@ fn vm_child_return_cleanup_cannot_pop_caller_serial_markers_f6() {
     let good_script = vec![
         Some(completion_pushing(&Op::SaveExcursion, caller_rec)), // caller
         Some(completion_pushing(&Op::SaveExcursion, child_rec)),  // child
-        Some(EscapeCompletion {
-            stack: EscapeStack::Completed {
-                consumed: 1,
-                produced: vec![Value::fixnum(9)],
-                jump: None,
-            },
+        Some(EscapeCompletion::Completed {
+            consumed: 1,
+            produced: vec![Value::fixnum(9)],
+            jump: None,
             records: RecordDelta {
                 popped: vec![child_rec],
                 pushed: vec![],
@@ -9445,28 +9641,24 @@ fn vm_child_return_cleanup_cannot_pop_caller_serial_markers_f6() {
         Op::PopHandler, // pops caller_h
         Op::Return,
     ];
-    let push_handler = |op: &Op, tok: SerialHandlerToken| EscapeCompletion {
-        stack: EscapeStack::Completed {
-            consumed: static_stack_effect(op).consumed,
-            produced: vec![],
-            jump: None,
-        },
+    let push_handler = |op: &Op, tok: SerialHandlerToken| EscapeCompletion::Completed {
+        consumed: static_stack_effect(op).consumed,
+        produced: vec![],
+        jump: None,
         records: RecordDelta::default(),
         handlers: HandlerDelta {
             popped: vec![],
-            pushed: vec![tok],
+            pushed: Some(tok),
         },
     };
-    let pop_handler = |op: &Op, toks: &[SerialHandlerToken]| EscapeCompletion {
-        stack: EscapeStack::Completed {
-            consumed: static_stack_effect(op).consumed,
-            produced: vec![],
-            jump: None,
-        },
+    let pop_handler = |op: &Op, toks: &[SerialHandlerToken]| EscapeCompletion::Completed {
+        consumed: static_stack_effect(op).consumed,
+        produced: vec![],
+        jump: None,
         records: RecordDelta::default(),
         handlers: HandlerDelta {
             popped: toks.to_vec(),
-            pushed: vec![],
+            pushed: None,
         },
     };
 
@@ -9477,16 +9669,14 @@ fn vm_child_return_cleanup_cannot_pop_caller_serial_markers_f6() {
     let bad_h_script = vec![
         Some(push_handler(&Op::PushConditionCase(4), caller_h)),
         Some(push_handler(&Op::PushConditionCase(2), child_h)),
-        Some(EscapeCompletion {
-            stack: EscapeStack::Completed {
-                consumed: 1,
-                produced: vec![Value::fixnum(14)],
-                jump: None,
-            },
+        Some(EscapeCompletion::Completed {
+            consumed: 1,
+            produced: vec![Value::fixnum(14)],
+            jump: None,
             records: RecordDelta::default(),
             handlers: HandlerDelta {
                 popped: vec![child_h, caller_h],
-                pushed: vec![],
+                pushed: None,
             },
         }),
     ];
@@ -9522,16 +9712,14 @@ fn vm_child_return_cleanup_cannot_pop_caller_serial_markers_f6() {
     let good_h_script = vec![
         Some(push_handler(&Op::PushConditionCase(4), caller_h)),
         Some(push_handler(&Op::PushConditionCase(2), child_h)),
-        Some(EscapeCompletion {
-            stack: EscapeStack::Completed {
-                consumed: 1,
-                produced: vec![Value::fixnum(14)],
-                jump: None,
-            },
+        Some(EscapeCompletion::Completed {
+            consumed: 1,
+            produced: vec![Value::fixnum(14)],
+            jump: None,
             records: RecordDelta::default(),
             handlers: HandlerDelta {
                 popped: vec![child_h],
-                pushed: vec![],
+                pushed: None,
             },
         }),
         Some(pop_handler(&Op::PopHandler, &[caller_h])),
@@ -9580,12 +9768,10 @@ fn vm_child_return_cleanup_cannot_pop_caller_serial_markers_f6() {
     ];
     let p_script = vec![
         Some(completion_pushing(&Op::SaveExcursion, child_rec)),
-        Some(EscapeCompletion {
-            stack: EscapeStack::Completed {
-                consumed: 1,
-                produced: vec![Value::fixnum(88)],
-                jump: None,
-            },
+        Some(EscapeCompletion::Completed {
+            consumed: 1,
+            produced: vec![Value::fixnum(88)],
+            jump: None,
             records: RecordDelta {
                 popped: vec![child_rec],
                 pushed: vec![],
@@ -10679,12 +10865,10 @@ fn vm_a_child_return_with_a_serial_marker_above_its_bind_base_takes_needs_serial
     ];
     let script = vec![
         Some(completion_pushing(&Op::SaveExcursion, child_marker)),
-        Some(EscapeCompletion {
-            stack: EscapeStack::Completed {
-                consumed: 1,
-                produced: vec![Value::fixnum(99)],
-                jump: None,
-            },
+        Some(EscapeCompletion::Completed {
+            consumed: 1,
+            produced: vec![Value::fixnum(99)],
+            jump: None,
             records: RecordDelta {
                 popped: vec![child_marker],
                 pushed: vec![],
@@ -11234,46 +11418,40 @@ fn vm_owner_local_call_with_bad_nonrest_contract_poisons_with_dispatch_contract(
 // V8 — Handler landing pads and GNU-order unwind (V8-LANDING-PADS.md r1)
 // =========================================================================
 
-fn v8_push_handler(op: &Op, tok: SerialHandlerToken) -> EscapeCompletion {
-    EscapeCompletion {
+fn v8_push_handler(op: &Op, tok: SerialHandlerToken) -> ScriptStep {
+    let effect = static_stack_effect(op);
+    ScriptStep::Escape(EscapeCompletion::Completed {
+        consumed: effect.consumed,
+        produced: vec![Value::NIL; effect.produced as usize],
+        jump: None,
+        records: RecordDelta::default(),
         handlers: HandlerDelta {
             popped: Vec::new(),
-            pushed: vec![tok],
+            pushed: Some(tok),
         },
-        ..EscapeCompletion::fall_through(op)
-    }
+    })
 }
 
-fn v8_caught(tok: SerialHandlerToken, value: Value) -> EscapeCompletion {
-    EscapeCompletion {
-        stack: EscapeStack::Caught {
-            handler: tok,
-            value,
-        },
-        records: RecordDelta::default(),
-        handlers: HandlerDelta::default(),
-    }
+fn v8_caught(tok: SerialHandlerToken, value: Value) -> ScriptStep {
+    ScriptStep::Escape(EscapeCompletion::Caught {
+        handler: tok,
+        value,
+    })
+}
+
+fn v8_escape_flow(flow: Flow) -> ScriptStep {
+    ScriptStep::Escape(EscapeCompletion::Flow(flow))
 }
 
 fn v8_unwind_done(
     pop_handlers: &[SerialHandlerToken],
     pop_records: &[SerialRecordToken],
-) -> EscapeCompletion {
-    EscapeCompletion {
-        stack: EscapeStack::Completed {
-            consumed: 0,
-            produced: Vec::new(),
-            jump: None,
-        },
-        records: RecordDelta {
-            popped: pop_records.to_vec(),
-            pushed: Vec::new(),
-        },
-        handlers: HandlerDelta {
-            popped: pop_handlers.to_vec(),
-            pushed: Vec::new(),
-        },
-    }
+) -> ScriptStep {
+    ScriptStep::Unwind(UnwindCompletion::Completed {
+        popped_handlers: pop_handlers.to_vec(),
+        popped_records: pop_records.to_vec(),
+        pushed_records: Vec::new(),
+    })
 }
 
 fn v8_unwind_restart(
@@ -11281,29 +11459,28 @@ fn v8_unwind_restart(
     pop_records: &[SerialRecordToken],
     new_target: SerialHandlerToken,
     value: Value,
-) -> EscapeCompletion {
-    EscapeCompletion {
-        stack: EscapeStack::Caught {
-            handler: new_target,
-            value,
-        },
-        records: RecordDelta {
-            popped: pop_records.to_vec(),
-            pushed: Vec::new(),
-        },
-        handlers: HandlerDelta {
-            popped: pop_handlers.to_vec(),
-            pushed: Vec::new(),
-        },
-    }
+) -> ScriptStep {
+    ScriptStep::Unwind(UnwindCompletion::Caught {
+        handler: new_target,
+        value,
+        popped_handlers: pop_handlers.to_vec(),
+        popped_records: pop_records.to_vec(),
+    })
+}
+
+fn v8_unwind_flow(flow: Flow) -> ScriptStep {
+    ScriptStep::Unwind(UnwindCompletion::Flow(flow))
 }
 
 #[test]
 fn vm_a_caught_signal_restores_the_operand_depth_marks_and_dest_in_the_same_frame() {
     // V8 §7 row 1 & S2.
     // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
-    // - src/bytecode.c:970-976 (`Bpushconditioncase`: `push_handler(POP, type)`,
-    //   `c->bytecode_dest = FETCH2`, `c->bytecode_top = top` after operand pop);
+    // - src/bytecode.c:970-976 (`Bpushconditioncase`: records `c->bytecode_dest`
+    //   and `c->bytecode_top = top` after any operand pop; in Neomacs's bytecode
+    //   IR `Op::PushConditionCase` has `consumed = 0` while
+    //   `Op::PushConditionCaseRaw` and `Op::PushCatch` have `consumed = 1`,
+    //   both exercised below);
     // - src/eval.c:1857-1859 (`push_handler_nosignal`: records `f_lisp_eval_depth`,
     //   `pdlcount`, `act_rec`);
     // - src/bytecode.c:983-1003 (landing: `handlerlist = c->next`,
@@ -11345,7 +11522,7 @@ fn vm_a_caught_signal_restores_the_operand_depth_marks_and_dest_in_the_same_fram
     ];
     let mut engine = VmExec::new(
         &(),
-        RecordingEscape::with_script(script),
+        RecordingEscape::with_steps(script),
         HarnessVmSealed,
         HarnessArith::new(),
         HarnessPlain::new().admit(x),
@@ -11358,6 +11535,38 @@ fn vm_a_caught_signal_restores_the_operand_depth_marks_and_dest_in_the_same_fram
         "body's Plain binding x=99 must be unwound back to bind_mark=0"
     );
     assert_clear(&engine);
+
+    // Part B (MEDIUM-2.4): `Op::PushConditionCaseRaw` (`consumed = 1`, popping
+    // the condition list operand) computes `operand_len = available - 1`
+    // (`src/bytecode.c:974-976`: `top` AFTER `POP`), preserving `[10]` below.
+    let h_raw = handler(12);
+    let raw_ops = [
+        Op::Constant(0),             // 0: [10]
+        Op::Nil,                     // 1: [10, cond-list] (popped by PushConditionCaseRaw)
+        Op::PushConditionCaseRaw(7), // 2: available=2, consumed=1 -> operand_len=1 ([10]), dest=7
+        Op::Constant(3),             // 3: [10, 777]
+        Op::SymbolValue,             // 4: Caught { h_raw, 42 }
+        Op::PopHandler,              // 5: skipped
+        Op::Return,                  // 6: skipped
+        Op::Add,                     // 7: [10, 42] -> 52
+        Op::Return,                  // 8
+    ];
+    let raw_script = vec![
+        Some(v8_push_handler(&Op::PushConditionCaseRaw(7), h_raw)),
+        Some(v8_caught(h_raw, Value::fixnum(42))),
+        Some(v8_unwind_done(&[h_raw], &[])),
+    ];
+    let mut raw_engine = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(raw_script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let raw_out = raw_engine.run(&mut ctx, program_with(&raw_ops, &constants));
+    assert_eq!(done_value(&mut raw_engine, raw_out), Value::fixnum(52));
+    assert_clear(&raw_engine);
 }
 
 #[test]
@@ -11369,7 +11578,7 @@ fn vm_the_landing_pad_pc_is_the_handler_dest_not_the_next_pc() {
     // Mirrors Elisp:
     //   (condition-case e
     //       (progn (signal 'error '(777)) 999)
-    //     (error e))  => 777 (not 999 at next_pc).
+    //     (error (+ e 1000)))  => 1777 (not 999 at next_pc).
     let mut ctx = context();
     let h1 = handler(21);
     let constants = [Value::fixnum(999), Value::fixnum(1000)];
@@ -11393,7 +11602,7 @@ fn vm_the_landing_pad_pc_is_the_handler_dest_not_the_next_pc() {
     ];
     let mut engine = VmExec::new(
         &(),
-        RecordingEscape::with_script(script),
+        RecordingEscape::with_steps(script),
         HarnessVmSealed,
         HarnessArith::new(),
         HarnessPlain::new(),
@@ -11430,15 +11639,11 @@ fn vm_a_signal_with_no_matching_handler_still_settles_to_idle() {
     ];
     let script = vec![
         Some(v8_push_handler(&Op::PushConditionCase(4), h1)),
-        Some(EscapeCompletion {
-            stack: EscapeStack::Flow(signal("arith-error", vec![])),
-            records: RecordDelta::default(),
-            handlers: HandlerDelta::default(),
-        }),
+        Some(v8_escape_flow(signal("arith-error", vec![]))),
     ];
     let mut engine = VmExec::new(
         &(),
-        RecordingEscape::with_script(script),
+        RecordingEscape::with_steps(script),
         HarnessVmSealed,
         HarnessArith::new(),
         HarnessPlain::new(),
@@ -11466,8 +11671,9 @@ fn vm_a_signal_with_no_matching_handler_still_settles_to_idle() {
 #[test]
 fn vm_a_signal_in_a_v7_callee_lands_in_the_callers_handler_and_pops_the_callee_frames() {
     // V8 §7 row 4 / L4: depth 3 down to 1, CallDepth & bc_position refunded per
-    // popped frame, no exit hooks fired on popped callees, caller segment
-    // restored to `operand_len + 1`.
+    // popped frame, `ExitFlags::DEBUG_ON_EXIT` armed on BOTH popped callees
+    // (`leaf` and `mid`) and suppressed (no exit hooks fired on nonlocal unwind),
+    // caller segment restored to `operand_len + 1`.
     // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
     // - src/eval.c:1445-1459 (`unwind_to_catch`: `unbind_to`,
     //   `lisp_eval_depth = catch->f_lisp_eval_depth`, `set_act_rec`);
@@ -11480,7 +11686,8 @@ fn vm_a_signal_in_a_v7_callee_lands_in_the_callers_handler_and_pops_the_callee_f
     let h1 = handler(41);
     let leaf_x = plain_sym("pvm-v8-leaf-x");
 
-    // Depth 3: leaf binds leaf_x=5 then escapes on SymbolValue -> Caught { h1, 55 }
+    // Depth 3: leaf binds leaf_x=5, arms DEBUG_ON_EXIT on leaf (level 0) and
+    // mid (level 1) during an escape, then signals -> Caught { h1, 55 }.
     let leaf = make_v7_bytecode(
         0,
         0,
@@ -11488,7 +11695,8 @@ fn vm_a_signal_in_a_v7_callee_lands_in_the_callers_handler_and_pops_the_callee_f
             Op::Constant(0), // 5
             Op::VarBind(1),  // bind leaf_x = 5
             Op::Nil,
-            Op::SymbolValue, // signals -> Caught { h1, 55 }
+            Op::SymbolValue, // escape #1: arms DEBUG_ON_EXIT on leaf & mid
+            Op::SymbolValue, // escape #2: signals -> Caught { h1, 55 }
             Op::Unbind(1),
             Op::Return,
         ],
@@ -11523,12 +11731,19 @@ fn vm_a_signal_in_a_v7_callee_lands_in_the_callers_handler_and_pops_the_callee_f
     });
     let script = vec![
         Some(v8_push_handler(&Op::PushConditionCase(6), h1)),
+        Some(ScriptStep::Escape(EscapeCompletion::fall_through(
+            &Op::SymbolValue,
+        ))),
         Some(v8_caught(h1, Value::fixnum(55))),
         Some(v8_unwind_done(&[h1], &[])),
     ];
+    // Escape index 1 (inside `leaf` at depth 3) arms DEBUG_ON_EXIT on level 0
+    // (`leaf`) and level 1 (`mid`) so the unwind proves neither fires an exit hook.
+    let escape = RecordingEscape::with_steps(script)
+        .with_debug_script(vec![vec![], vec![(0, true), (1, true)]]);
     let mut engine = VmExec::new(
         &(),
-        RecordingEscape::with_script(script),
+        escape,
         HarnessVmSealed,
         HarnessArith::new(),
         HarnessPlain::new().admit(leaf_x),
@@ -11557,8 +11772,16 @@ fn vm_a_signal_in_a_v7_callee_lands_in_the_callers_handler_and_pops_the_callee_f
     assert!(engine.plain_handler().live_records().is_empty());
     assert_eq!(
         engine.escape_handler().requests.len(),
-        3,
-        "PushConditionCase, SymbolValue(Caught), final SerialUnwind(pop h1); no Return/debug-on-exit escape"
+        4,
+        "PushConditionCase, arming SymbolValue, signaling SymbolValue(Caught), final SerialUnwind(pop h1); zero Return/debug-on-exit escapes despite DEBUG_ON_EXIT armed on leaf and mid"
+    );
+    assert!(
+        engine
+            .escape_handler()
+            .requests
+            .iter()
+            .all(|r| r.op != Op::Return),
+        "nonlocal unwind must never fire debug-on-exit on popped callees"
     );
     assert_clear(&engine);
 }
@@ -11617,8 +11840,14 @@ fn vm_interleaved_owner_and_serial_records_unwind_in_lifo_order() {
     ];
     let script = vec![
         Some(v8_push_handler(&Op::PushConditionCase(12), h1)),
-        Some(completion_pushing(&Op::SaveExcursion, u1)),
-        Some(completion_pushing(&Op::SaveExcursion, u2)),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u1,
+        ))),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u2,
+        ))),
         Some(v8_caught(h1, Value::fixnum(505))),
         // Unwind step 1: Serial u2 (while b=3 is still bound!)
         Some(v8_unwind_done(&[], &[u2])),
@@ -11639,7 +11868,7 @@ fn vm_interleaved_owner_and_serial_records_unwind_in_lifo_order() {
         .logging(log.clone());
     let mut engine = VmExec::new(
         &(),
-        RecordingEscape::logging_with_script(script, log.clone()),
+        RecordingEscape::logging_with_steps(script, log.clone()),
         HarnessVmSealed,
         HarnessArith::new(),
         plain,
@@ -11667,6 +11896,14 @@ fn vm_interleaved_owner_and_serial_records_unwind_in_lifo_order() {
             "escape SymbolValue [h:51 r:]",
         ],
         "exact GNU LIFO unwind order across Plain, watched Plain, and Serial records"
+    );
+    // MEDIUM-2.5: prove the PlainUnbind hand-off specifically named `w`.
+    assert!(
+        matches!(
+            engine.escape_handler().requests[5].why,
+            EscapeWhy::PlainUnbind { symbol, .. } if symbol == w
+        ),
+        "interleaved watched hand-off must specifically name symbol `w`"
     );
     assert!(engine.plain_handler().live_records().is_empty());
     assert_clear(&engine);
@@ -11706,9 +11943,15 @@ fn vm_handler_pops_interleave_with_record_unbinding_in_gnu_order() {
     ];
     let script = vec![
         Some(v8_push_handler(&Op::PushConditionCase(8), h1)),
-        Some(completion_pushing(&Op::SaveExcursion, u_outer)),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_outer,
+        ))),
         Some(v8_push_handler(&Op::PushConditionCase(7), h2)),
-        Some(completion_pushing(&Op::SaveExcursion, u_inner)),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_inner,
+        ))),
         Some(v8_caught(h1, Value::fixnum(610))),
         // Step 1: u_inner runs with h2 STILL installed (`pop_handlers: []`)!
         Some(v8_unwind_done(&[], &[u_inner])),
@@ -11719,7 +11962,7 @@ fn vm_handler_pops_interleave_with_record_unbinding_in_gnu_order() {
     ];
     let mut engine = VmExec::new(
         &(),
-        RecordingEscape::with_script(script),
+        RecordingEscape::with_steps(script),
         HarnessVmSealed,
         HarnessArith::new(),
         HarnessPlain::new(),
@@ -11811,10 +12054,19 @@ fn vm_a_cleanup_that_signals_during_unwind_is_caught_by_the_intermediate_handler
     ];
     let script = vec![
         Some(v8_push_handler(&Op::PushConditionCase(12), h1)),
-        Some(completion_pushing(&Op::SaveExcursion, u_outer)),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_outer,
+        ))),
         Some(v8_push_handler(&Op::PushConditionCase(9), h2)),
-        Some(completion_pushing(&Op::SaveExcursion, u_raises)),
-        Some(completion_pushing(&Op::SaveExcursion, u_done)),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_raises,
+        ))),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_done,
+        ))),
         // Initial signal targets outer h1:
         Some(v8_caught(h1, Value::fixnum(111))),
         // Step 1: u_done runs and succeeds -> popped!
@@ -11828,18 +12080,21 @@ fn vm_a_cleanup_that_signals_during_unwind_is_caught_by_the_intermediate_handler
         // pop of h2 + land at dest=9!
         Some(v8_unwind_done(&[h2], &[])),
         // Normal exit after h2 landed: Unbind(1) pops u_outer, PopHandler pops h1!
-        Some(completion_popping(&Op::Unbind(1), &[u_outer])),
-        Some(EscapeCompletion {
+        Some(v8_unwind_done(&[], &[u_outer])),
+        Some(ScriptStep::Escape(EscapeCompletion::Completed {
+            consumed: 0,
+            produced: Vec::new(),
+            jump: None,
+            records: RecordDelta::default(),
             handlers: HandlerDelta {
                 popped: vec![h1],
-                pushed: vec![],
+                pushed: None,
             },
-            ..EscapeCompletion::fall_through(&Op::PopHandler)
-        }),
+        })),
     ];
     let mut engine = VmExec::new(
         &(),
-        RecordingEscape::logging_with_script(script, log.clone()),
+        RecordingEscape::logging_with_steps(script, log.clone()),
         HarnessVmSealed,
         HarnessArith::new(),
         HarnessPlain::new().admit(p).logging(log.clone()),
@@ -11918,7 +12173,7 @@ fn vm_throw_to_an_owner_catch_lands_with_the_thrown_value() {
     ];
     let mut engine = VmExec::new(
         &(),
-        RecordingEscape::with_script(script),
+        RecordingEscape::with_steps(script),
         HarnessVmSealed,
         HarnessArith::new(),
         HarnessPlain::new().admit(x),
@@ -11966,7 +12221,7 @@ fn vm_a_pure_owner_unwind_issues_exactly_one_escape() {
     ];
     let mut engine = VmExec::new(
         &(),
-        RecordingEscape::with_script(script),
+        RecordingEscape::with_steps(script),
         HarnessVmSealed,
         HarnessArith::new(),
         HarnessPlain::new().admit(x).admit(y),
@@ -11998,24 +12253,32 @@ fn vm_a_pure_owner_unwind_issues_exactly_one_escape() {
 
 #[test]
 fn vm_a_pending_signal_is_not_delivered_inside_the_final_unwind_request() {
-    // V8 §10 row 10: a `SerialUnwind` with empty `unbind` runs NO Lisp and is
-    // NOT a pending-signal delivery point.
-    // GNU function ordering mirrored (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
-    // - Pending signals (`Vquit_flag` / `pending_signals`) are delivered ONLY
-    //   at explicit `maybe_quit()` (`src/lisp.h:3897-3901`) -> `probably_quit()`
-    //   (`src/eval.c:1887-1895`) -> `process_quit_flag()` (`:1875-1884`) /
-    //   `process_pending_signals()` (`:1892-1893`) -> `quit()` / `Fsignal`
-    //   (`src/eval.c:1897-1935`).
-    // - `unwind_to_catch` (`src/eval.c:1423-1462`) NEVER calls `maybe_quit()`:
-    //   it restores C counters (`:1435-1443`), calls `unbind_to(pdlcount, Qnil)`
-    //   (`:1449`, which saves & clears `Vquit_flag` at `:3942-3944` and restores
-    //   it at `:3960-3961` without polling), pops `handlerlist = handlerlist->next`
-    //   (`:1452`), sets `lisp_eval_depth`/`act_rec` (`:1458-1459`), and calls
-    //   `sys_longjmp(catch->jmp, 1)` (`:1461`).
-    // - Because the final `SerialUnwind { pop_handlers, unbind: [] }` runs zero
-    //   Lisp cleanups (only handler pops `src/bytecode.c:1010` and C-side
-    //   restores), neither `maybe_quit()` nor `Fsignal` can execute inside it, so
-    //   a pending signal or restart is structurally impossible there. Instead,
+    // V8 §10 row 10 & #14608: a `SerialUnwind` with empty `unbind` runs NO
+    // Lisp and is NOT a pending-signal delivery point.
+    // Exact GNU function ordering (`unwind_to_catch` vs `handle_interrupt` vs
+    // `Fsignal`, emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - `unwind_to_catch` (`src/eval.c:1423-1462`): restores C counters
+    //   (`:1435-1443`), calling `unblock_input_to` (`:1436` ->
+    //   `src/keyboard.c:8379-8386`). When `level == 0 && pending_signals`,
+    //   `unblock_input_to` calls `process_pending_signals()` (`:8367-8372`) ->
+    //   `handle_async_input()` -> `handle_interrupt` (`src/keyboard.c:12615-12749`),
+    //   which ONLY sets `Vquit_flag = Qt` (`:12719`) and NEVER calls `Fsignal` or
+    //   `quit()` (the only throw in `handle_interrupt` is `quit_throw_to_read_char`
+    //   at `:12747-12748` when `waiting_for_input && !echoing`, false during unwind).
+    // - `unbind_to` (`src/eval.c:3940-3964`, called at `unwind_to_catch:1449`):
+    //   saves & clears `Vquit_flag` at `:3942-3944` and restores it at `:3960-3961`
+    //   without calling `maybe_quit()`.
+    // - `thread-signal` (`post_acquire_global_lock`, `src/thread.c:146-154`):
+    //   calls `Fsignal(sym, data)` only on global-lock acquisition, never inside
+    //   a Lisp-free `unwind_to_catch`.
+    // - Pending `Vquit_flag` / signals are delivered ONLY at explicit
+    //   `maybe_quit()` (`src/lisp.h:3897-3901`) -> `probably_quit()`
+    //   (`src/eval.c:1887-1895`) -> `process_quit_flag()` (`:1875-1884`) ->
+    //   `quit()` / `Fsignal` (`src/eval.c:1897-1935`), which `unwind_to_catch`
+    //   never calls before `sys_longjmp(catch->jmp, 1)` (`src/eval.c:1461`).
+    // - Therefore a restart or signal delivery is structurally impossible inside
+    //   the Lisp-free final `SerialUnwind { pop_handlers, unbind: [] }` (only
+    //   `Bpophandler`-style list unlinking `src/bytecode.c:1010`). Instead,
     //   landing sets `quitcounter = (unsigned char)-1` (`src/bytecode.c:982, 1003`)
     //   so any pending signal is observed AFTER landing at the next poll/escape.
     let mut ctx = context();
@@ -12036,15 +12299,11 @@ fn vm_a_pending_signal_is_not_delivered_inside_the_final_unwind_request() {
         Some(v8_push_handler(&Op::PushConditionCase(4), h1)),
         Some(v8_caught(h1, Value::fixnum(10))),
         Some(v8_unwind_done(&[h1], &[])),
-        Some(EscapeCompletion {
-            stack: EscapeStack::Flow(signal("quit", vec![])),
-            records: RecordDelta::default(),
-            handlers: HandlerDelta::default(),
-        }),
+        Some(v8_escape_flow(signal("quit", vec![]))),
     ];
     let mut ok_engine = VmExec::new(
         &(),
-        RecordingEscape::with_script(ok_script),
+        RecordingEscape::with_steps(ok_script),
         HarnessVmSealed,
         HarnessArith::new(),
         HarnessPlain::new(),
@@ -12063,20 +12322,17 @@ fn vm_a_pending_signal_is_not_delivered_inside_the_final_unwind_request() {
     assert_clear(&ok_engine);
 
     // Part B: structural contract — if a buggy serial side illegally delivers
-    // `EscapeStack::Flow` inside the Lisp-free final `SerialUnwind { unbind: [] }`
-    // request, the VM refuses it as a contract fault (`DispatchContract`) and poisons.
+    // `UnwindCompletion::Flow` inside the Lisp-free final `SerialUnwind { unbind: [] }`
+    // request, the VM refuses it as a contract fault (`DispatchContract(PopHandler)`)
+    // and poisons.
     let bad_script = vec![
         Some(v8_push_handler(&Op::PushConditionCase(4), h1)),
         Some(v8_caught(h1, Value::fixnum(10))),
-        Some(EscapeCompletion {
-            stack: EscapeStack::Flow(signal("quit", vec![])),
-            records: RecordDelta::default(),
-            handlers: HandlerDelta::default(),
-        }),
+        Some(v8_unwind_flow(signal("quit", vec![]))),
     ];
     let mut bad_engine = VmExec::new(
         &(),
-        RecordingEscape::with_script(bad_script),
+        RecordingEscape::with_steps(bad_script),
         HarnessVmSealed,
         HarnessArith::new(),
         HarnessPlain::new(),
@@ -12103,7 +12359,7 @@ fn vm_a_pending_signal_is_not_delivered_inside_the_final_unwind_request() {
 
 #[test]
 fn vm_a_restart_only_follows_a_cleanup_that_ran_lisp() {
-    // V8 §10 row 11: a restart (`EscapeStack::Caught`) is legal ONLY from a
+    // V8 §10 row 11: a restart (`UnwindCompletion::Caught`) is legal ONLY from a
     // `SerialUnwind` with non-empty `unbind` (a cleanup that ran Lisp). Returning
     // `Caught` from a Lisp-free `SerialUnwind { unbind: [] }` is a contract fault.
     // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
@@ -12131,7 +12387,7 @@ fn vm_a_restart_only_follows_a_cleanup_that_ran_lisp() {
     ];
     let mut engine = VmExec::new(
         &(),
-        RecordingEscape::with_script(bad_script),
+        RecordingEscape::with_steps(bad_script),
         HarnessVmSealed,
         HarnessArith::new(),
         HarnessPlain::new(),
@@ -12200,11 +12456,11 @@ fn vm_an_unwind_over_a_record_whose_symbol_gained_a_watcher_takes_the_serial_unb
         // Final pop of h1 + landing at dest = 8!
         Some(v8_unwind_done(&[h1], &[])),
         // Outer Unbind(1) also hands watched outer x=10 to serial PlainUnbind!
-        Some(EscapeCompletion::fall_through(&Op::Unbind(1))),
+        Some(v8_unwind_done(&[], &[])),
     ];
     let mut engine = VmExec::new(
         &(),
-        RecordingEscape::logging_with_script(script, log.clone()),
+        RecordingEscape::logging_with_steps(script, log.clone()),
         HarnessVmSealed,
         HarnessArith::new(),
         HarnessPlain::new().admit(x).watched(x).logging(log.clone()),
@@ -12239,5 +12495,528 @@ fn vm_an_unwind_over_a_record_whose_symbol_gained_a_watcher_takes_the_serial_unb
         "L3 unwind must hand off watched x via EscapeWhy::PlainUnbind"
     );
     assert!(engine.plain_handler().live_records().is_empty());
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_unbind_cleanup_that_signals_pops_prefix_and_lands_without_double_unbind() {
+    // V8 r2 HIGH-1 regression test:
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/eval.c:3955-3957 (`unbind_to`: `this_binding = *--specpdl_ptr`
+    //   pops the record BEFORE `do_one_unbind` runs its cleanup Lisp);
+    // - src/bytecode.c:843-852 (`Bunbind n` -> `unbind_to`).
+    // Part A mirrors Elisp:
+    //   (condition-case e (unwind-protect 1 (signal 'error '(boom))) (error e)) => 77.
+    let mut ctx = context();
+    let h1 = handler(131);
+    let u1 = token(1301);
+    let ops = [
+        Op::PushConditionCase(5), // 0: h1, dest = 5
+        Op::SaveExcursion,        // 1: u1 (models unwind-protect cleanup)
+        Op::Unbind(1),            // 2: runs u1; u1 signals -> Caught { h1, 77, popped: [u1] }
+        Op::PopHandler,           // 3: skipped
+        Op::Return,               // 4: skipped
+        Op::Return,               // 5: dest -> returns caught 77
+    ];
+    let script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(5), h1)),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u1,
+        ))),
+        // Op::Unbind(1) pops u1 before u1's cleanup signals into h1!
+        Some(v8_unwind_restart(&[], &[u1], h1, Value::fixnum(77))),
+        // unwind_to_handler sees u1 is ALREADY gone (never sent a second time!),
+        // so it issues ONLY the final pop of h1 + landing!
+        Some(v8_unwind_done(&[h1], &[])),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program(&ops));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(77));
+    let esc = engine.escape_handler();
+    assert_eq!(
+        esc.requests.len(),
+        4,
+        "PushConditionCase, SaveExcursion(u1), Unbind(1)->Caught(popped=[u1]), final SerialUnwind(pop h1); u1 must NEVER be sent a second time"
+    );
+    assert_eq!(
+        esc.requests[3].why,
+        EscapeWhy::SerialUnwind(SerialUnwind {
+            pop_handlers: vec![h1],
+            unbind: vec![],
+        })
+    );
+    assert_clear(&engine);
+
+    // Part B: multi-record `Op::Unbind(2)` over [u_outer, u_inner] where
+    // u_inner succeeds and u_outer signals -> `popped_records = [u_inner, u_outer]`,
+    // neither unbound twice; remaining record `u_below` above `h1` unwinds next.
+    let u_below = token(1302);
+    let u_outer = token(1303);
+    let u_inner = token(1304);
+    let ops_b = [
+        Op::PushConditionCase(7), // 0: h1, dest = 7
+        Op::SaveExcursion,        // 1: u_below
+        Op::SaveExcursion,        // 2: u_outer
+        Op::SaveExcursion,        // 3: u_inner
+        Op::Unbind(2),            // 4: [u_inner, u_outer] -> both popped before u_outer signals!
+        Op::PopHandler,           // 5: skipped
+        Op::Return,               // 6: skipped
+        Op::Return,               // 7: dest -> 88
+    ];
+    let script_b = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(7), h1)),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_below,
+        ))),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_outer,
+        ))),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_inner,
+        ))),
+        // Unbind(2) pops [u_inner, u_outer]; u_outer signals into h1:
+        Some(v8_unwind_restart(
+            &[],
+            &[u_inner, u_outer],
+            h1,
+            Value::fixnum(88),
+        )),
+        // unwind_to_handler unwinds ONLY remaining u_below, then pops h1:
+        Some(v8_unwind_done(&[], &[u_below])),
+        Some(v8_unwind_done(&[h1], &[])),
+    ];
+    let mut engine_b = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(script_b),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let out_b = engine_b.run(&mut ctx, program(&ops_b));
+    assert_eq!(done_value(&mut engine_b, out_b), Value::fixnum(88));
+    assert_eq!(
+        engine_b.escape_handler().requests[5].why,
+        EscapeWhy::SerialUnwind(SerialUnwind {
+            pop_handlers: vec![],
+            unbind: vec![u_below],
+        }),
+        "only u_below remains after Unbind(2) popped [u_inner, u_outer]"
+    );
+    assert_clear(&engine_b);
+
+    // Part C: `Return(NeedsSerialCleanup)` signals during callee frame cleanup
+    // into caller's owner handler (`EscapeCompletion::CleanupCaught`), popping
+    // callee's serial record prefix and landing in caller without double-unbind.
+    let u_callee = token(1305);
+    let callee = make_v7_bytecode(
+        0,
+        0,
+        vec![Op::SaveExcursion, Op::Nil, Op::Return],
+        vec![],
+        6,
+    );
+    let ops_c = [
+        Op::PushConditionCase(5), // 0: h1, dest = 5
+        Op::Constant(0),          // 1: callee
+        Op::Call(0),              // 2: callee returns via NeedsSerialCleanup -> CleanupCaught
+        Op::PopHandler,           // 3: skipped
+        Op::Return,               // 4: skipped
+        Op::Return,               // 5: dest -> 99
+    ];
+    let script_c = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(5), h1)),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_callee,
+        ))),
+        Some(ScriptStep::Escape(EscapeCompletion::CleanupCaught {
+            handler: h1,
+            value: Value::fixnum(99),
+            popped_records: vec![u_callee],
+            popped_handlers: vec![],
+        })),
+        Some(v8_unwind_done(&[h1], &[])),
+    ];
+    let mut engine_c = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(script_c),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let out_c = engine_c.run(&mut ctx, program_with(&ops_c, &[callee]));
+    assert_eq!(done_value(&mut engine_c, out_c), Value::fixnum(99));
+    assert_eq!(
+        engine_c.escape_handler().requests.len(),
+        4,
+        "u_callee popped by Return CleanupCaught and never re-sent by unwind_to_handler"
+    );
+    assert_clear(&engine_c);
+}
+
+#[test]
+fn vm_serial_unwind_stops_at_callee_bind_base_so_outer_cleanup_sees_popped_backtrace() {
+    // V8 r2 HIGH-2 regression test (V8 L4, GNU `src/eval.c:3946-3958`):
+    // Caller F1 installs h1 and pushes `u_outer`; V7 callee F2 pushes `u_inner`
+    // and signals targeting h1. `unwind_to_handler` MUST NOT batch `[u_inner, u_outer]`
+    // across F2's `bind_base`: `u_inner` must unwind first with backtrace depth 2
+    // (`[F2, F1]`), then F2 pops immediately at `F2.bind_base`, and `u_outer`
+    // unwinds in the next `SerialUnwind` with backtrace depth 1 (`[F1]`).
+    // Mirrors Elisp:
+    //   (condition-case e
+    //       (unwind-protect
+    //           (callee-with-unwind-protect-that-signals)
+    //         (record-backtrace-in-outer-cleanup))
+    //     (error e))
+    let mut ctx = context();
+    let h1 = handler(141);
+    let u_outer = token(1401);
+    let u_inner = token(1402);
+
+    let callee = make_v7_bytecode(
+        0,
+        0,
+        vec![
+            Op::SaveExcursion, // u_inner inside F2 (above F2.bind_base = 1)
+            Op::Nil,
+            Op::SymbolValue, // signals -> Caught { h1, 222 }
+            Op::Unbind(1),
+            Op::Return,
+        ],
+        vec![],
+        6,
+    );
+    let ops = [
+        Op::PushConditionCase(7), // 0: h1 at bind_mark = 0, dest = 7
+        Op::SaveExcursion,        // 1: u_outer in F1 (below F2.bind_base = 1)
+        Op::Constant(0),          // 2: callee
+        Op::Call(0),              // 3: enters F2 at depth 2 with bind_base = 1
+        Op::Unbind(1),            // 4: skipped
+        Op::PopHandler,           // 5: skipped
+        Op::Return,               // 6: skipped
+        Op::Return,               // 7: dest -> 222
+    ];
+    let script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(7), h1)),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_outer,
+        ))),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_inner,
+        ))),
+        Some(v8_caught(h1, Value::fixnum(222))),
+        // Unwind step 1: ONLY u_inner (capped at F2.bind_base = 1), F2 still live!
+        Some(v8_unwind_done(&[], &[u_inner])),
+        // Unwind step 2: F2 popped at F2.bind_base; now u_outer runs with ONLY F1 live!
+        Some(v8_unwind_done(&[], &[u_outer])),
+        // Unwind step 3: final pop of h1 + land in F1!
+        Some(v8_unwind_done(&[h1], &[])),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &[callee]));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(222));
+    let esc = engine.escape_handler();
+    assert_eq!(esc.requests.len(), 7);
+    assert_eq!(
+        esc.requests[4].why,
+        EscapeWhy::SerialUnwind(SerialUnwind {
+            pop_handlers: vec![],
+            unbind: vec![u_inner],
+        }),
+        "u_inner must unwind in its own SerialUnwind capped at callee bind_base"
+    );
+    assert_eq!(
+        esc.backtrace_depths[4], 2,
+        "OwnerBacktraceView must show depth 2 (F2 + F1) while u_inner runs"
+    );
+    assert_eq!(
+        esc.requests[5].why,
+        EscapeWhy::SerialUnwind(SerialUnwind {
+            pop_handlers: vec![],
+            unbind: vec![u_outer],
+        }),
+        "u_outer must run in a separate SerialUnwind after F2 popped"
+    );
+    assert_eq!(
+        esc.backtrace_depths[5], 1,
+        "OwnerBacktraceView must show depth 1 (F1 only — F2 already popped!) while u_outer runs"
+    );
+    assert_eq!(esc.backtrace_depths[6], 1);
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_v8_contract_holes_rejected_l1_cardinality_empty_prefix_and_slab_leak() {
+    // V8 r2 MEDIUM-1 regression test:
+    // 1. L1 push cardinality: handler-push returning `handlers.pushed = None` faults.
+    // 2. L1 empty records: handler-push returning non-empty `records.pushed` faults.
+    // 3. Zero-progress restart: `UnwindCompletion::Caught` with empty `popped_records`
+    //    faults instead of infinite-looping (`src/eval.c:3955`).
+    // 4. PlainUnbind Caught slab leak: `UnwindCompletion::Caught` leaving slab
+    //    record live faults (`EscapeRecordContract(Bindings)`).
+    // 5. `CleanupCaught` on an ordinary opcode (not `Return(NeedsSerialCleanup)`) faults.
+    let mut ctx = context();
+
+    // 1. PushConditionCase returning handlers.pushed == None -> DispatchContract!
+    let mut e1 = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(vec![Some(ScriptStep::Escape(
+            EscapeCompletion::fall_through(&Op::PushConditionCase(2)),
+        ))]),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    assert!(matches!(
+        fault_of(e1.run(
+            &mut ctx,
+            program(&[Op::PushConditionCase(2), Op::Nil, Op::Return])
+        )),
+        EngineFault::DispatchContract(Op::PushConditionCase(2))
+    ));
+    assert!(matches!(
+        e1.run(&mut ctx, program(&[Op::Nil, Op::Return])),
+        VmOutcome::Fault(EngineFault::Poisoned)
+    ));
+
+    // 2. PushConditionCase pushing a specpdl record alongside handler -> EscapeRecordContract!
+    let mut e2 = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(vec![Some(ScriptStep::Escape(
+            EscapeCompletion::Completed {
+                consumed: 0,
+                produced: Vec::new(),
+                jump: None,
+                records: RecordDelta {
+                    popped: Vec::new(),
+                    pushed: vec![token(1)],
+                },
+                handlers: HandlerDelta {
+                    popped: Vec::new(),
+                    pushed: Some(handler(151)),
+                },
+            },
+        ))]),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    assert!(matches!(
+        fault_of(e2.run(
+            &mut ctx,
+            program(&[Op::PushConditionCase(2), Op::Nil, Op::Return])
+        )),
+        EngineFault::EscapeRecordContract(RecordStack::Bindings)
+    ));
+
+    // 3. SerialUnwind Caught with empty `popped_records` -> EscapeRecordContract (no loop!)
+    let h1 = handler(152);
+    let u1 = token(1501);
+    let mut e3 = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(vec![
+            Some(v8_push_handler(&Op::PushConditionCase(5), h1)),
+            Some(ScriptStep::Escape(completion_pushing(
+                &Op::SaveExcursion,
+                u1,
+            ))),
+            Some(v8_caught(h1, Value::fixnum(1))),
+            Some(v8_unwind_restart(&[], &[], h1, Value::fixnum(2))),
+        ]),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    assert!(matches!(
+        fault_of(e3.run(
+            &mut ctx,
+            program(&[
+                Op::PushConditionCase(5),
+                Op::SaveExcursion,
+                Op::Nil,
+                Op::SymbolValue,
+                Op::Return,
+                Op::Return,
+            ])
+        )),
+        EngineFault::EscapeRecordContract(RecordStack::Bindings)
+    ));
+    assert_eq!(
+        e3.escape_handler().requests.len(),
+        4,
+        "empty-prefix Caught must fault immediately on request #4 without looping to a retry"
+    );
+
+    // 4. PlainUnbind Caught leaving slab record live -> EscapeRecordContract (no slab leak!)
+    let x = plain_sym("pvm-v8-slab-leak-x");
+    let mut e4 = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(vec![
+            Some(v8_push_handler(&Op::PushConditionCase(7), h1)),
+            Some(v8_caught(h1, Value::fixnum(1))),
+            Some(v8_unwind_restart(&[], &[], h1, Value::fixnum(2))),
+        ])
+        .leaving_plain_binding(),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new().admit(x).watched(x),
+        RecordingPoll::new(),
+    );
+    assert!(matches!(
+        fault_of(e4.run(
+            &mut ctx,
+            program_with(
+                &[
+                    Op::PushConditionCase(7),
+                    Op::Constant(1),
+                    Op::VarBind(0),
+                    Op::Nil,
+                    Op::SymbolValue,
+                    Op::Return,
+                    Op::Return,
+                    Op::Return,
+                ],
+                &[Value::from_sym_id(x), Value::fixnum(10)],
+            )
+        )),
+        EngineFault::EscapeRecordContract(RecordStack::Bindings)
+    ));
+    assert_eq!(
+        e4.escape_handler().requests.len(),
+        3,
+        "PlainUnbind Caught leaving slab record live must fault immediately on request #3"
+    );
+
+    // 5. CleanupCaught on ordinary SymbolValue -> DispatchContract!
+    let mut e5 = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(vec![
+            Some(v8_push_handler(&Op::PushConditionCase(4), h1)),
+            Some(ScriptStep::Escape(EscapeCompletion::CleanupCaught {
+                handler: h1,
+                value: Value::fixnum(1),
+                popped_records: vec![],
+                popped_handlers: vec![],
+            })),
+        ]),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    assert!(matches!(
+        fault_of(e5.run(
+            &mut ctx,
+            program(&[
+                Op::PushConditionCase(4),
+                Op::Nil,
+                Op::SymbolValue,
+                Op::Return,
+                Op::Return,
+            ])
+        )),
+        EngineFault::DispatchContract(Op::SymbolValue)
+    ));
+}
+
+#[test]
+fn vm_caught_heap_value_stays_rooted_in_handler_group_across_unwind_polls_and_restart() {
+    // V8 r2 MEDIUM-2.2 regression test:
+    // Proves a heap-allocated caught `Value` is published in `RootGroup::Handlers`
+    // across every unwind poll/escape, cleanly replaced with the new heap `Value`
+    // on an L5 restart, delivered to the landing pad, and revoked to 0 roots.
+    let mut ctx = context();
+    let h1 = handler(161);
+    let h2 = handler(162);
+    let u_raises = token(1601);
+    let v1 = Value::cons(Value::string("err-outer"), Value::fixnum(1));
+    let v2 = Value::cons(Value::string("err-restart"), Value::fixnum(2));
+    let ops = [
+        Op::PushConditionCase(7), // 0: h1
+        Op::PushConditionCase(6), // 1: h2, dest = 6
+        Op::SaveExcursion,        // 2: u_raises
+        Op::Nil,                  // 3
+        Op::SymbolValue,          // 4: Caught { h1, v1 }
+        Op::Return,               // 5: skipped
+        // dest = 6 (h2): lands with v2, pops h1, returns v2
+        Op::PopHandler, // 6
+        Op::Return,     // 7
+    ];
+    let script = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(7), h1)),
+        Some(v8_push_handler(&Op::PushConditionCase(6), h2)),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_raises,
+        ))),
+        Some(v8_caught(h1, v1)),
+        // u_raises runs while v1 is rooted in RootGroup::Handlers, then restarts to h2 with v2!
+        Some(v8_unwind_restart(&[], &[u_raises], h2, v2)),
+        // Final pop of h2 runs while v2 (NOT v1!) is rooted in RootGroup::Handlers!
+        Some(v8_unwind_done(&[h2], &[])),
+        // Normal PopHandler of h1 after landing: 0 handler roots live!
+        Some(ScriptStep::Escape(EscapeCompletion::Completed {
+            consumed: 0,
+            produced: Vec::new(),
+            jump: None,
+            records: RecordDelta::default(),
+            handlers: HandlerDelta {
+                popped: vec![h1],
+                pushed: None,
+            },
+        })),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program(&ops));
+    let landed = done_value(&mut engine, outcome);
+    assert_eq!(landed, v2);
+    assert_eq!(landed.cons_cdr(), Value::fixnum(2));
+    let esc = engine.escape_handler();
+    assert_eq!(
+        esc.handler_roots[4],
+        vec![v1],
+        "initial heap caught value v1 must be published in RootGroup::Handlers during unwind escape"
+    );
+    assert_eq!(
+        esc.handler_roots[5],
+        vec![v2],
+        "L5 restart must swap RootGroup::Handlers root from v1 to v2"
+    );
+    assert!(
+        esc.handler_roots[6].is_empty(),
+        "landing must pop RootGroup::Handlers root once value moves onto operand stack"
+    );
     assert_clear(&engine);
 }

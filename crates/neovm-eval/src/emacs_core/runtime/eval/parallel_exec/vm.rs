@@ -12,11 +12,13 @@
 //! [`VmEscape`], after the [`VmPoll`] edges r1 §6 names.
 //!
 //! An escape completion is a typed contract, checked before anything is
-//! applied: the operand counts against [`static_stack_effect`] (R3), and the
-//! serial record tokens against the top run of each LIFO (R1). A `Flow` from
-//! an escape ends the run and nothing resumes over it (R2): handler landing
-//! pads are an E6-P prerequisite, not a silent default. A contract fault
-//! keeps the scene it describes and refuses further work.
+//! applied: ordinary escapes return [`EscapeCompletion`] (L1 single-token
+//! handler pushes, L2/L7 delta-free `Caught`/`Flow`, R3 operand counts, R1
+//! serial LIFOs), while dynamic-record unwinds (`Op::Unbind` and V8's
+//! `unwind_to_handler`) return [`UnwindCompletion`]. A `Flow` ends the run and
+//! settles to `Idle`; a `Caught` drives GNU-order unwinding to the matched
+//! owner handler's [`LandingPad`]. A contract fault keeps the scene it
+//! describes and poisons the engine.
 //!
 //! Every [`Value`] that must survive a poll is reachable from the published
 //! arena: the frame's segment is the arena's operand vector, and a step
@@ -357,29 +359,6 @@ pub(crate) struct VmEscapeRequest {
     pub operands: OperandCursor,
 }
 
-/// What the serial side did with the operands.
-#[derive(Debug)]
-pub(crate) enum EscapeStack {
-    /// The fall-through effect. `jump` is a branch target inside the same
-    /// code, taken in place of the next pc; only `Switch` reports one (a hit
-    /// leaves through `op_branch`, bytecode.c:1752-1758). Any other opcode
-    /// reporting a jump is a [`EngineFault::DispatchContract`].
-    Completed {
-        consumed: u16,
-        produced: Vec<Value>,
-        jump: Option<u32>,
-    },
-    /// A handler the owner holds was selected by serial `signal_or_quit` or
-    /// `Fthrow` (`src/eval.c:1464-1481, 1996-2064`; V8 L2). The serial side
-    /// unwound only what this escape pushed; the VM drives the owner unwind.
-    Caught {
-        handler: SerialHandlerToken,
-        value: Value,
-    },
-    /// The serial side signaled or threw past every owner handler (V8 L7).
-    Flow(Flow),
-}
-
 /// The serial binding records one escape removed and added. `popped` is
 /// innermost first and must be the LIFO's top run; `pushed` is outermost
 /// first.
@@ -389,21 +368,57 @@ pub(crate) struct RecordDelta {
     pub pushed: Vec<SerialRecordToken>,
 }
 
-/// The serial handler records one escape removed and added; order and rule
-/// are [`RecordDelta`]'s.
+/// The serial handler records one escape removed and added. `popped` is
+/// innermost first and must be the LIFO's top run; `pushed` is at most one
+/// token (V8 L1: only `PushCatch`, `PushConditionCase`, and
+/// `PushConditionCaseRaw` install a handler with one computed [`LandingPad`]).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct HandlerDelta {
     pub popped: Vec<SerialHandlerToken>,
-    pub pushed: Vec<SerialHandlerToken>,
+    pub pushed: Option<SerialHandlerToken>,
 }
 
-/// One escape's result (r1 R1/R3): the operand effect and the record LIFO
-/// deltas.
+/// Result of an ordinary opcode escape ([`VmEscape::escape`], r1 R1/R3, V8
+/// L1/L2/L7).
+///
+/// L2 and L7 are structural: ordinary `Caught` and `Flow` cannot carry
+/// [`RecordDelta`] or [`HandlerDelta`] at all. Only
+/// `Return(NeedsSerialCleanup)` may report `CleanupCaught` with the serial
+/// prefix already popped above the returning frame's bases.
 #[derive(Debug)]
-pub(crate) struct EscapeCompletion {
-    pub stack: EscapeStack,
-    pub records: RecordDelta,
-    pub handlers: HandlerDelta,
+pub(crate) enum EscapeCompletion {
+    /// The fall-through effect (or `Switch` branch / `Return` value) plus
+    /// checked LIFO deltas. `jump` is valid only for `Op::Switch` (a hit
+    /// leaves through `op_branch`, `src/bytecode.c:1752-1758`).
+    Completed {
+        consumed: u16,
+        produced: Vec<Value>,
+        jump: Option<u32>,
+        records: RecordDelta,
+        handlers: HandlerDelta,
+    },
+    /// An ordinary opcode signaled or threw into an owner handler (V8 L2;
+    /// GNU `signal_or_quit` / `Fthrow`, `src/eval.c:1464-1481, 1996-2064`).
+    /// Structurally carries no record or handler deltas: the serial side
+    /// unwound only what this escape pushed.
+    Caught {
+        handler: SerialHandlerToken,
+        value: Value,
+    },
+    /// `Return(NeedsSerialCleanup)` signaled while running the returning
+    /// frame's serial cleanup or `debug-on-exit` into a caller's owner
+    /// handler: carries only the serial records and handlers already popped
+    /// above the returning frame's `bind_base`/`handler_base` (never pushes).
+    /// Rejected on any other opcode.
+    CleanupCaught {
+        handler: SerialHandlerToken,
+        value: Value,
+        popped_records: Vec<SerialRecordToken>,
+        popped_handlers: Vec<SerialHandlerToken>,
+    },
+    /// The serial side signaled or threw past every owner handler (V8 L7).
+    /// Structurally carries no record or handler deltas.
+    Flow(Flow),
 }
 
 impl EscapeCompletion {
@@ -411,38 +426,72 @@ impl EscapeCompletion {
     /// effect with nil operands, no jump and no record change.
     pub fn fall_through(op: &Op) -> Self {
         let StackEffect { consumed, produced } = static_stack_effect(op);
-        Self {
-            stack: EscapeStack::Completed {
-                consumed,
-                produced: vec![Value::NIL; produced as usize],
-                jump: None,
-            },
+        Self::Completed {
+            consumed,
+            produced: vec![Value::NIL; produced as usize],
+            jump: None,
             records: RecordDelta::default(),
             handlers: HandlerDelta::default(),
         }
     }
 }
 
+/// Result of a dynamic-record unwind request ([`VmEscape::unwind`], shared by
+/// `Op::Unbind(n)` and `VmExec::unwind_to_handler`, V8 L2/L3/L5/§10).
+///
+/// Structurally carries no operand stack effects, no handler pushes, and no
+/// pushed records on `Caught` or `Flow` (L2).
+#[derive(Debug)]
+pub(crate) enum UnwindCompletion {
+    /// Every requested handler and binding record unwound cleanly.
+    /// `pushed_records` holds any serial records pushed by cleanup Lisp (must
+    /// be empty for a Lisp-free `SerialUnwind { unbind: [] }`).
+    Completed {
+        popped_handlers: Vec<SerialHandlerToken>,
+        popped_records: Vec<SerialRecordToken>,
+        pushed_records: Vec<SerialRecordToken>,
+    },
+    /// A cleanup that ran Lisp (`!SerialUnwind::unbind.is_empty()` or
+    /// `PlainUnbind`) signaled or threw into an owner handler (V8 L5 /
+    /// HIGH-1). Structurally carries no pushed records or handlers (L2).
+    /// For `SerialUnwind`, `popped_records` must be a non-empty prefix of
+    /// `unwind.unbind` (GNU `src/eval.c:3955`, decrement before `do_one_unbind`).
+    Caught {
+        handler: SerialHandlerToken,
+        value: Value,
+        popped_handlers: Vec<SerialHandlerToken>,
+        popped_records: Vec<SerialRecordToken>,
+    },
+    /// A cleanup that ran Lisp signaled or threw past every owner handler
+    /// (V8 L7). Structurally carries no deltas.
+    Flow(Flow),
+}
+
 /// The serial side of an escape. The production impl arrives with E5.
 pub(crate) trait VmEscape {
-    /// `plain` is the owner's Plain storage. The serial side reaches it
-    /// through the escape because undoing an owner binding IS a write to
-    /// that storage: a `PlainUnbind` request is served by taking the record
-    /// it names (`PlainAccess::pop_binding`) and running the restore.
+    /// Ordinary opcode escape (`World` ops, refused `Plain` access, marker
+    /// arithmetic, `Return(NeedsSerialCleanup)`).
     ///
-    /// PROVISIONAL HARNESS SCAFFOLDING (peer #13059): production releases
-    /// the executor's Plain lease BY VALUE into the serial turn, where it
-    /// folds back into the owner Context, and the completion hands a fresh
-    /// lease back; the serial side then runs the ordinary
-    /// `unbind_owner_binding` slow path through `SerialTurn::with_world`,
-    /// one route to the slab at every instant. G1's production `VmEscape`
-    /// removes this parameter.
+    /// `plain` is the owner's Plain storage. PROVISIONAL HARNESS SCAFFOLDING
+    /// (peer #13059): production releases the executor's Plain lease BY VALUE
+    /// into the serial turn and hands a fresh lease back. G1's production
+    /// `VmEscape` removes this parameter.
     fn escape(
         &mut self,
         request: VmEscapeRequest,
         arena: &FrameArena,
         plain: &mut dyn PlainAccess,
     ) -> EscapeCompletion;
+
+    /// Dynamic-record unwind escape (`EscapeWhy::SerialUnwind` and
+    /// `EscapeWhy::PlainUnbind`), shared by `Op::Unbind(n)` and V8's
+    /// `unwind_to_handler`.
+    fn unwind(
+        &mut self,
+        request: VmEscapeRequest,
+        arena: &FrameArena,
+        plain: &mut dyn PlainAccess,
+    ) -> UnwindCompletion;
 
     /// Pending `backtrace-debug` flag updates recorded while the serial escape
     /// inspected the stopped owner's [`OwnerBacktraceView`] (V6). Drained once
@@ -1117,12 +1166,13 @@ where
     /// stays then: the binding LIFO, the slab and the roots - the frame and
     /// its handlers are already gone when the record loop runs.
     ///
-    /// V8 (F4): this order assumes the serial side removed its records on a
-    /// signal and never touches the owner's, while the Return cleanup
-    /// assumes the opposite (its `unbind_to` takes the owner's records).
-    /// The Flow contract - who unwinds owner records on a signal, and in
-    /// what interleaving with the serial cleanups, GNU's innermost-first
-    /// (`unbind_to`, eval.c:3940-3954) - is V8's to name and reconcile.
+    /// V8 L7 / E5 contract: an unhandled `Flow` means the signal escaped past
+    /// every owner handler (no `Caught` landing pad matched). E5's thread-entry
+    /// boundary unwinds serial records (and any watched/redirected owner
+    /// bindings requiring Lisp) before returning `Flow`; `unwind_to_idle` then
+    /// restores remaining untrapped owner Plain bindings inline and fails
+    /// closed (`Poisoned`) if any watched/redirected owner record was left
+    /// behind.
     fn unwind_to_idle(&mut self) -> Result<(), EngineFault> {
         while let Some(top) = self.arena.top_vm_id() {
             if self.arena.vm_truncate_operands(top, 0).is_none() || self.arena.pop(top).is_none() {
@@ -1531,7 +1581,7 @@ where
             Op::VarSet(_) | Op::VarBind(_) => {
                 self.step_var_write(access, op, frame, operands, branch_pc, program)
             }
-            Op::Unbind(_) => self.step_unbind(op, frame, operands, branch_pc, program),
+            Op::Unbind(_) => self.step_unbind(op, frame, branch_pc),
             _ => Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op))),
         }
     }
@@ -1697,18 +1747,15 @@ where
     /// that none of the named tokens is left above the frame's base. A
     /// record a completion pushes lands above the walk and is walked next,
     /// in addition to n, as GNU's loop to a fixed depth.
-    fn step_unbind(
-        &mut self,
-        op: Op,
-        frame: FrameId,
-        operands: OperandCursor,
-        branch_pc: usize,
-        program: VmProgram<'_>,
-    ) -> Step {
+    fn step_unbind(&mut self, op: Op, frame: FrameId, branch_pc: usize) -> Step {
         let Op::Unbind(count) = op else {
             return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op)));
         };
-        let Some(bind_base) = self.arena.vm(frame).map(|vm| vm.bind_base) else {
+        let Some((bind_base, handler_base)) = self
+            .arena
+            .vm(frame)
+            .map(|vm| (vm.bind_base, vm.handler_base))
+        else {
             return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
         };
         let count = usize::from(count);
@@ -1735,18 +1782,13 @@ where
                         Ok(PlainUnbind::Done) => {
                             // C2: the slab record this entry names is taken
                             // from the top of the slab's LIFO and undone;
-                            // only then does the entry leave. The entry's id
-                            // is not the slab's top: the record-contract fault,
-                            // nothing taken, the scene kept. Nothing touched
-                            // the LIFO between the peek and this pop.
+                            // only then does the entry leave.
                             self.arena.bindings_mut().pop();
                             remaining -= 1;
                         }
                         Ok(PlainUnbind::NeedsSerial { .. }) => {
-                            // The record handed off is the slab's top (the
-                            // entries mirror the records, C2); a record the
-                            // owner's frame never pushed sits above it
-                            // otherwise. Checked before anything is touched.
+                            // The record handed off is the slab's top (C2);
+                            // checked before anything is touched.
                             if self.plain.top_record() != Some(record.record) {
                                 tracing::error!(
                                     op = ?op,
@@ -1754,55 +1796,22 @@ where
                                 );
                                 return Self::record_contract_fault();
                             }
-                            // Refused: ONE escape naming the symbol and the
-                            // record, and the serial side undoes the binding
-                            // (`unbind_owner_binding`'s slow path). GNU's
-                            // `unbind_to` (eval.c:3940-3954) copies the
-                            // binding and decrements `specpdl_ptr` BEFORE
-                            // the unbind runs its code: an error in unbinding
-                            // never tries the entry twice, and a binding the
-                            // code pushes is walked next. The executor's entry
-                            // leaves the same way; the slab record stays for
-                            // the serial side to take.
+                            // GNU's `unbind_to` (eval.c:3940-3954) decrements
+                            // `specpdl_ptr` BEFORE `do_one_unbind`: an error
+                            // in a watcher never unbinds the entry twice.
                             self.arena.bindings_mut().pop();
                             let len_before = self.arena.bindings().above(bind_base).count();
-                            match self.escape(
-                                op.clone(),
-                                EscapeWhy::PlainUnbind {
-                                    symbol,
-                                    record: record.record,
-                                },
-                                frame,
-                                operands,
-                                branch_pc,
-                                program,
-                            ) {
-                                Step::Continue => {}
-                                step @ (Step::Frame | Step::Stop(_) | Step::Refill(_)) => {
-                                    return step;
+                            match self.unwind_plain_escape(symbol, record.record, &op, branch_pc) {
+                                Ok(UnwindEscapeOutcome::Done) => {}
+                                Ok(UnwindEscapeOutcome::Restart { target, value }) => {
+                                    return self.unwind_to_handler(target, value, op, branch_pc);
                                 }
-                            }
-                            if let Err(fault) = self.set_pc(frame, branch_pc) {
-                                return Step::Stop(VmOutcome::Fault(fault));
-                            }
-                            // The walk's own check: the serial side took the
-                            // slab record. (A serial run's check is that its
-                            // named tokens are gone; this is the same check
-                            // for the one record the hand-off named.)
-                            if self.plain.record_live(record.record) {
-                                tracing::error!(
-                                    op = ?op,
-                                    "a PlainUnbind escape left the owner record it was asked to undo"
-                                );
-                                return Self::record_contract_fault();
+                                Ok(UnwindEscapeOutcome::Flow(flow)) => {
+                                    return Step::Stop(VmOutcome::Signaled(flow));
+                                }
+                                Err(fault) => return Step::Stop(VmOutcome::Fault(fault)),
                             }
                             remaining -= 1;
-                            // A record the unbind's code pushed is walked
-                            // next, in addition to n: GNU walks to an
-                            // absolute specpdl index. Fewer records than the
-                            // escape found cannot happen once the completion
-                            // pops only what the request named; it is the
-                            // backstop.
                             let pushed = self.arena.bindings().above(bind_base).count() as isize
                                 - len_before as isize;
                             if pushed < 0 {
@@ -1835,36 +1844,26 @@ where
                     }
                     let run = records.len();
                     let named = records.clone();
-                    // GNU `unbind_to` (eval.c:3940-3954) walks to an absolute
-                    // specpdl index: a record the completion pushed during
-                    // the unbind is undone IN ADDITION to the n the opcode
-                    // named. The walk counts the originals, so a pushed record
-                    // is added to `remaining`, not taken from it.
                     let len_before = self.arena.bindings().above(bind_base).count();
-                    match self.escape(
-                        op.clone(),
-                        EscapeWhy::SerialUnwind(SerialUnwind {
-                            pop_handlers: Vec::new(),
-                            unbind: records,
-                        }),
-                        frame,
-                        operands,
-                        branch_pc,
-                        program,
-                    ) {
-                        Step::Continue => {}
-                        step @ (Step::Frame | Step::Stop(_) | Step::Refill(_)) => return step,
+                    let unwind = SerialUnwind {
+                        pop_handlers: Vec::new(),
+                        unbind: records,
+                    };
+                    match self.unwind_serial_escape(unwind, bind_base, handler_base, &op, branch_pc)
+                    {
+                        Ok(UnwindEscapeOutcome::Done) => {}
+                        Ok(UnwindEscapeOutcome::Restart { target, value }) => {
+                            // HIGH-1: `unwind_serial_escape` already popped
+                            // the non-empty prefix of `unwind.unbind` removed
+                            // before the cleanup signaled (GNU `eval.c:3955`),
+                            // so `unwind_to_handler` never unbinds it twice.
+                            return self.unwind_to_handler(target, value, op, branch_pc);
+                        }
+                        Ok(UnwindEscapeOutcome::Flow(flow)) => {
+                            return Step::Stop(VmOutcome::Signaled(flow));
+                        }
+                        Err(fault) => return Step::Stop(VmOutcome::Fault(fault)),
                     }
-                    // The escape's store advanced the pc; the walk is still
-                    // at this opcode.
-                    if let Err(fault) = self.set_pc(frame, branch_pc) {
-                        return Step::Stop(VmOutcome::Fault(fault));
-                    }
-                    // The walk's own check: none of the tokens the request
-                    // named is above the frame's base any more. A serial
-                    // record the count cut the run short of stays, on top,
-                    // and is the next run; a record the completion pushed
-                    // is walked next too.
                     let still_named = self
                         .arena
                         .bindings()
@@ -2060,18 +2059,103 @@ where
         };
         let completion = self.escape.escape(request, &self.arena, &mut self.plain);
         let debug_updates = self.escape.take_debug_on_exit_updates();
-        let (consumed, produced, jump) = match completion.stack {
-            EscapeStack::Flow(flow) => return Step::Stop(VmOutcome::Signaled(flow)),
-            EscapeStack::Caught { handler, value } => {
-                // V8 L2: the serial side unwound only what this escape pushed;
-                // deltas must report nothing beyond it before VM unwind starts.
-                if !completion.handlers.popped.is_empty() || !completion.handlers.pushed.is_empty()
+        let (consumed, produced, jump, records, handlers) = match completion {
+            EscapeCompletion::Flow(flow) => return Step::Stop(VmOutcome::Signaled(flow)),
+            EscapeCompletion::Caught { handler, value } => {
+                // V8 L2: `EscapeCompletion::Caught` structurally carries zero
+                // record or handler deltas.
+                if !debug_updates.is_empty() {
+                    let mut stopped = StoppedOwnerBacktrace::from_escape_park(&mut self.arena);
+                    for update in debug_updates {
+                        let _ = stopped.set_debug_on_exit(update.frame, update.debug_on_exit);
+                    }
+                }
+                if let Some(env) = self.escape.refresh_call_env() {
+                    self.set_call_env(env);
+                }
+                self.stop_state = OwnerStopState::Running;
+                return self.unwind_to_handler(handler, value, op, branch_pc);
+            }
+            EscapeCompletion::CleanupCaught {
+                handler,
+                value,
+                popped_records,
+                popped_handlers,
+            } => {
+                // HIGH-1: `CleanupCaught` is valid ONLY for
+                // `Return(NeedsSerialCleanup)` when the returning frame's
+                // serial cleanup or `debug-on-exit` signals into a caller's
+                // owner handler.
+                if !matches!(
+                    named,
+                    EscapeWhy::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup))
+                ) {
+                    tracing::error!(
+                        op = ?op,
+                        "CleanupCaught is only permitted for Return(NeedsSerialCleanup)"
+                    );
+                    return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op)));
+                }
+                let Some((bind_base, handler_base)) = self
+                    .arena
+                    .vm(frame)
+                    .map(|vm| (vm.bind_base, vm.handler_base))
+                else {
+                    return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
+                };
+                if !self
+                    .arena
+                    .bindings()
+                    .serial_run_matches_above(bind_base, &popped_records)
+                {
+                    return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                        RecordStack::Bindings,
+                    )));
+                }
+                if !self
+                    .arena
+                    .handlers()
+                    .serial_run_matches_above(handler_base, &popped_handlers)
                 {
                     return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
                         RecordStack::Handlers,
                     )));
                 }
-                if !completion.records.popped.is_empty() || !completion.records.pushed.is_empty() {
+                if self
+                    .arena
+                    .bindings_mut()
+                    .pop_serial_run_above(bind_base, &popped_records)
+                    .is_err()
+                {
+                    return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                        RecordStack::Bindings,
+                    )));
+                }
+                if self
+                    .arena
+                    .handlers_mut()
+                    .pop_serial_run_above(handler_base, &popped_handlers)
+                    .is_err()
+                {
+                    return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                        RecordStack::Handlers,
+                    )));
+                }
+                // Drop any top contiguous `Plain` entries above `bind_base`
+                // whose slab records were already unwound by the serial Return
+                // cleanup before it signaled, and verify no non-top `Plain`
+                // entry was orphaned.
+                while let Some(OwnerRecord::Plain(entry)) =
+                    self.arena.bindings().above(bind_base).last()
+                {
+                    if self.plain.record_live(entry.record) {
+                        break;
+                    }
+                    self.arena.bindings_mut().pop();
+                }
+                if self.arena.bindings().above(bind_base).any(|record| {
+                    matches!(record, OwnerRecord::Plain(entry) if !self.plain.record_live(entry.record))
+                }) {
                     return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
                         RecordStack::Bindings,
                     )));
@@ -2088,11 +2172,13 @@ where
                 self.stop_state = OwnerStopState::Running;
                 return self.unwind_to_handler(handler, value, op, branch_pc);
             }
-            EscapeStack::Completed {
+            EscapeCompletion::Completed {
                 consumed,
                 produced,
                 jump,
-            } => (consumed, produced, jump),
+                records,
+                handlers,
+            } => (consumed, produced, jump, records, handlers),
         };
         // R3: the typed effect, before anything is applied.
         let got_produced = u16::try_from(produced.len()).unwrap_or(u16::MAX);
@@ -2150,27 +2236,13 @@ where
                 available,
             }));
         }
-        // R1: both LIFOs are checked before either is touched, and the
-        // binding records the completion pops are exactly the ones the
-        // request named. "The top run" alone lets a completion pop past its
-        // request: the walk would then count the extra as pushed, or clamp
-        // the loss away, and unbind past n. GNU `unbind_to` walks to the
-        // absolute index the opcode named (eval.c:3940-3954).
+        // R1: both LIFOs are checked before either is touched.
         let (records_popped_ok, handlers_popped_ok) = match &named {
-            EscapeWhy::SerialUnwind(unwind) => (
-                completion.records.popped == unwind.unbind,
-                completion.handlers.popped == unwind.pop_handlers,
-            ),
-            EscapeWhy::PlainUnbind { .. } => (
-                completion.records.popped.is_empty(),
-                completion.handlers.popped.is_empty(),
-            ),
             // A refused Plain access pushes (a refused bind) or reads; it
             // never pops a record. A sealed cons op pops none.
-            EscapeWhy::PlainRefused { .. } | EscapeWhy::UnimplementedSealed(_) => (
-                completion.records.popped.is_empty(),
-                completion.handlers.popped.is_empty(),
-            ),
+            EscapeWhy::PlainRefused { .. } | EscapeWhy::UnimplementedSealed(_) => {
+                (records.popped.is_empty(), handlers.popped.is_empty())
+            }
             // A World escape names no token: `WorldSplit::Escape` is one
             // variant for every World op, so its pop is checked as the top
             // run strictly above `bind_base`/`handler_base` (V7 F6).
@@ -2179,14 +2251,14 @@ where
         let contract = if !self
             .arena
             .bindings()
-            .serial_run_matches_above(bind_base, &completion.records.popped)
+            .serial_run_matches_above(bind_base, &records.popped)
             || !records_popped_ok
         {
             Some(RecordStack::Bindings)
         } else if !self
             .arena
             .handlers()
-            .serial_run_matches_above(handler_base, &completion.handlers.popped)
+            .serial_run_matches_above(handler_base, &handlers.popped)
             || !handlers_popped_ok
         {
             Some(RecordStack::Handlers)
@@ -2202,26 +2274,50 @@ where
             );
             return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(stack)));
         }
-        // V8 L1: only `PushCatch`, `PushConditionCase`, and `PushConditionCaseRaw`
-        // may leave a surviving serial handler token, and the VM computes its
-        // `LandingPad` from the frame state right here before mutating either stack.
+        // V8 L1 (MEDIUM-1.2): ONLY `PushCatch`, `PushConditionCase`, and
+        // `PushConditionCaseRaw` may push a serial handler token, and they
+        // must push EXACTLY ONE token (structural via `Option`) with ZERO
+        // specpdl records pushed (GNU `push_handler_nosignal`,
+        // `src/eval.c:1840-1867`).
         let handler_dest = match &op {
             Op::PushCatch(dest) | Op::PushConditionCase(dest) | Op::PushConditionCaseRaw(dest) => {
                 Some(*dest)
             }
             _ => None,
         };
-        if !completion.handlers.pushed.is_empty() && handler_dest.is_none() {
-            tracing::error!(
-                op = ?op,
-                "only handler-push opcodes may leave a surviving serial handler token"
-            );
-            return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op)));
-        }
+        let pushed_handler = match (handler_dest, handlers.pushed) {
+            (Some(dest), Some(token)) => {
+                if !records.pushed.is_empty() {
+                    tracing::error!(
+                        op = ?op,
+                        "handler-push opcode cannot push specpdl binding records"
+                    );
+                    return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                        RecordStack::Bindings,
+                    )));
+                }
+                Some((dest, token))
+            }
+            (Some(_), None) => {
+                tracing::error!(
+                    op = ?op,
+                    "handler-push opcode must push exactly one serial handler token"
+                );
+                return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op)));
+            }
+            (None, Some(_)) => {
+                tracing::error!(
+                    op = ?op,
+                    "only handler-push opcodes may leave a surviving serial handler token"
+                );
+                return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(op)));
+            }
+            (None, None) => None,
+        };
         if self
             .arena
             .bindings_mut()
-            .pop_serial_run_above(bind_base, &completion.records.popped)
+            .pop_serial_run_above(bind_base, &records.popped)
             .is_err()
         {
             return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
@@ -2231,17 +2327,17 @@ where
         if self
             .arena
             .handlers_mut()
-            .pop_serial_run_above(handler_base, &completion.handlers.popped)
+            .pop_serial_run_above(handler_base, &handlers.popped)
             .is_err()
         {
             return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
                 RecordStack::Handlers,
             )));
         }
-        for token in &completion.records.pushed {
+        for token in &records.pushed {
             self.arena.bindings_mut().push(*token);
         }
-        if let Some(dest) = handler_dest {
+        if let Some((dest, token)) = pushed_handler {
             // V8 L1 & S2: GNU `Bpushcatch`/`Bpushconditioncase` (`src/bytecode.c:974-976`)
             // computes `c->bytecode_top = top` AFTER `POP` of the tag/handlers operand,
             // and `push_handler_nosignal` (`src/eval.c:1857-1859`) records
@@ -2253,11 +2349,9 @@ where
                 bind_mark: self.arena.bindings().mark(),
                 depth: self.arena.depth(),
             };
-            for token in &completion.handlers.pushed {
-                self.arena
-                    .handlers_mut()
-                    .push(OwnerHandler::Serial { token: *token, pad });
-            }
+            self.arena
+                .handlers_mut()
+                .push(OwnerHandler::Serial { token, pad });
         }
         if !debug_updates.is_empty() {
             let mut stopped = StoppedOwnerBacktrace::from_escape_park(&mut self.arena);
@@ -2601,9 +2695,13 @@ where
                                             pop_handlers: std::mem::take(&mut pending_handlers),
                                             unbind: Vec::new(),
                                         };
-                                        match self
-                                            .unwind_serial_escape(flush, &origin_op, origin_pc)
-                                        {
+                                        match self.unwind_serial_escape(
+                                            flush,
+                                            OwnerRecordMark::EMPTY,
+                                            HandlerMark::EMPTY,
+                                            &origin_op,
+                                            origin_pc,
+                                        ) {
                                             Ok(UnwindEscapeOutcome::Done) => {}
                                             Ok(UnwindEscapeOutcome::Restart { .. })
                                             | Ok(UnwindEscapeOutcome::Flow(_)) => {
@@ -2665,9 +2763,20 @@ where
                             }
                         }
                         OwnerRecord::Serial(innermost) => {
+                            // HIGH-2 / V8 L4 (GNU `src/eval.c:3946-3958`):
+                            // cap the batched serial run at the current top
+                            // callee frame's `bind_base` whenever a callee
+                            // frame sits above `h_pad.frame`, so the callee
+                            // pops before outer cleanups execute and outer
+                            // cleanups see the exact live backtrace.
+                            let stop_mark = self
+                                .arena
+                                .top_vm_id()
+                                .filter(|top| *top != h_pad.frame)
+                                .and_then(|top| self.arena.vm(top).map(|vm| vm.bind_base))
+                                .map_or(h_pad.bind_mark, |base| base.max(h_pad.bind_mark));
                             let mut run = vec![innermost];
-                            for entry in self.arena.bindings().above(h_pad.bind_mark).rev().skip(1)
-                            {
+                            for entry in self.arena.bindings().above(stop_mark).rev().skip(1) {
                                 match entry {
                                     OwnerRecord::Serial(next) => run.push(next),
                                     OwnerRecord::Plain(_) => break,
@@ -2677,7 +2786,13 @@ where
                                 pop_handlers: std::mem::take(&mut pending_handlers),
                                 unbind: run,
                             };
-                            match self.unwind_serial_escape(unwind, &origin_op, origin_pc) {
+                            match self.unwind_serial_escape(
+                                unwind,
+                                OwnerRecordMark::EMPTY,
+                                HandlerMark::EMPTY,
+                                &origin_op,
+                                origin_pc,
+                            ) {
                                 Ok(UnwindEscapeOutcome::Done) => {}
                                 Ok(UnwindEscapeOutcome::Restart {
                                     target: new_target,
@@ -2745,7 +2860,13 @@ where
                 pop_handlers: pending_handlers,
                 unbind: Vec::new(),
             };
-            match self.unwind_serial_escape(final_unwind, &origin_op, origin_pc) {
+            match self.unwind_serial_escape(
+                final_unwind,
+                OwnerRecordMark::EMPTY,
+                HandlerMark::EMPTY,
+                &origin_op,
+                origin_pc,
+            ) {
                 Ok(UnwindEscapeOutcome::Done) => {}
                 Ok(UnwindEscapeOutcome::Restart { .. }) | Ok(UnwindEscapeOutcome::Flow(_)) => {
                     return Step::Stop(VmOutcome::Fault(EngineFault::DispatchContract(
@@ -2805,12 +2926,19 @@ where
         Ok(())
     }
 
-    /// Issue one `EscapeWhy::SerialUnwind` request during `unwind_to_handler`.
+    /// Issue one `EscapeWhy::SerialUnwind` request (shared by `Op::Unbind(n)`
+    /// and `unwind_to_handler`, HIGH-1 / V8 L3 / L5 / §10).
+    ///
     /// Enforces §10 rows 10 & 11 (`Flow`/`Caught` forbidden when `unbind` is
-    /// empty) and exact handler/record token contracts before mutating LIFOs.
+    /// empty), MEDIUM-1.3 (non-empty prefix on `Caught`, preventing
+    /// zero-progress restart loops), structural L2 (no pushed records/handlers
+    /// on `Caught`), and exact handler/record token contracts above
+    /// `bind_floor`/`handler_floor` before mutating LIFOs.
     fn unwind_serial_escape(
         &mut self,
         unwind: SerialUnwind,
+        bind_floor: OwnerRecordMark,
+        handler_floor: HandlerMark,
         origin_op: &Op,
         origin_pc: usize,
     ) -> Result<UnwindEscapeOutcome, EngineFault> {
@@ -2832,10 +2960,10 @@ where
             frame: top,
             operands,
         };
-        let completion = self.escape.escape(request, &self.arena, &mut self.plain);
+        let completion = self.escape.unwind(request, &self.arena, &mut self.plain);
         let debug_updates = self.escape.take_debug_on_exit_updates();
-        match completion.stack {
-            EscapeStack::Flow(flow) => {
+        match completion {
+            UnwindCompletion::Flow(flow) => {
                 if !runs_lisp {
                     tracing::error!(
                         op = ?origin_op,
@@ -2845,9 +2973,11 @@ where
                 }
                 Ok(UnwindEscapeOutcome::Flow(flow))
             }
-            EscapeStack::Caught {
+            UnwindCompletion::Caught {
                 handler: new_target,
                 value: new_value,
+                popped_handlers,
+                popped_records,
             } => {
                 if !runs_lisp {
                     tracing::error!(
@@ -2856,36 +2986,35 @@ where
                     );
                     return Err(EngineFault::DispatchContract(Op::PopHandler));
                 }
-                if !completion.handlers.pushed.is_empty() {
-                    return Err(EngineFault::DispatchContract(origin_op.clone()));
-                }
-                if completion.handlers.popped != unwind.pop_handlers
+                if popped_handlers != unwind.pop_handlers
                     || !self
                         .arena
                         .handlers()
-                        .serial_run_matches(&completion.handlers.popped)
+                        .serial_run_matches_above(handler_floor, &popped_handlers)
                 {
                     return Err(EngineFault::EscapeRecordContract(RecordStack::Handlers));
                 }
-                if !unwind.unbind.starts_with(&completion.records.popped)
+                // MEDIUM-1.3 & GNU `src/eval.c:3955`: a cleanup that ran Lisp
+                // and signaled must have popped at least `unwind.unbind[0]`
+                // before signaling; an empty prefix would cause a zero-progress
+                // restart loop.
+                if popped_records.is_empty()
+                    || !unwind.unbind.starts_with(&popped_records)
                     || !self
                         .arena
                         .bindings()
-                        .serial_run_matches(&completion.records.popped)
+                        .serial_run_matches_above(bind_floor, &popped_records)
                 {
                     return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
                 }
                 self.arena
                     .handlers_mut()
-                    .pop_serial_run(&completion.handlers.popped)
+                    .pop_serial_run_above(handler_floor, &popped_handlers)
                     .map_err(|()| EngineFault::EscapeRecordContract(RecordStack::Handlers))?;
                 self.arena
                     .bindings_mut()
-                    .pop_serial_run(&completion.records.popped)
+                    .pop_serial_run_above(bind_floor, &popped_records)
                     .map_err(|()| EngineFault::EscapeRecordContract(RecordStack::Bindings))?;
-                for token in &completion.records.pushed {
-                    self.arena.bindings_mut().push(*token);
-                }
                 if !debug_updates.is_empty() {
                     let mut stopped = StoppedOwnerBacktrace::from_escape_park(&mut self.arena);
                     for update in debug_updates {
@@ -2901,42 +3030,43 @@ where
                     value: new_value,
                 })
             }
-            EscapeStack::Completed {
-                consumed,
-                produced,
-                jump,
+            UnwindCompletion::Completed {
+                popped_handlers,
+                popped_records,
+                pushed_records,
             } => {
-                if consumed != 0 || !produced.is_empty() || jump.is_some() {
-                    return Err(EngineFault::DispatchContract(origin_op.clone()));
+                if !runs_lisp && !pushed_records.is_empty() {
+                    tracing::error!(
+                        op = ?origin_op,
+                        "Lisp-free SerialUnwind(unbind=[]) illegally pushed binding records"
+                    );
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
                 }
-                if !completion.handlers.pushed.is_empty() {
-                    return Err(EngineFault::DispatchContract(origin_op.clone()));
-                }
-                if completion.handlers.popped != unwind.pop_handlers
+                if popped_handlers != unwind.pop_handlers
                     || !self
                         .arena
                         .handlers()
-                        .serial_run_matches(&completion.handlers.popped)
+                        .serial_run_matches_above(handler_floor, &popped_handlers)
                 {
                     return Err(EngineFault::EscapeRecordContract(RecordStack::Handlers));
                 }
-                if completion.records.popped != unwind.unbind
+                if popped_records != unwind.unbind
                     || !self
                         .arena
                         .bindings()
-                        .serial_run_matches(&completion.records.popped)
+                        .serial_run_matches_above(bind_floor, &popped_records)
                 {
                     return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
                 }
                 self.arena
                     .handlers_mut()
-                    .pop_serial_run(&completion.handlers.popped)
+                    .pop_serial_run_above(handler_floor, &popped_handlers)
                     .map_err(|()| EngineFault::EscapeRecordContract(RecordStack::Handlers))?;
                 self.arena
                     .bindings_mut()
-                    .pop_serial_run(&completion.records.popped)
+                    .pop_serial_run_above(bind_floor, &popped_records)
                     .map_err(|()| EngineFault::EscapeRecordContract(RecordStack::Bindings))?;
-                for token in &completion.records.pushed {
+                for token in &pushed_records {
                     self.arena.bindings_mut().push(*token);
                 }
                 if !debug_updates.is_empty() {
@@ -2954,9 +3084,12 @@ where
         }
     }
 
-    /// Issue one `EscapeWhy::PlainUnbind` hand-off during `unwind_to_handler`
-    /// for a Plain binding whose symbol gained a watcher or redirect (V8 §10
-    /// row 12; GNU `src/eval.c:3848-3870`).
+    /// Issue one `EscapeWhy::PlainUnbind` hand-off (shared by `Op::Unbind(n)`
+    /// and `unwind_to_handler`) for a Plain binding whose symbol gained a
+    /// watcher or redirect (V8 §10 row 12; GNU `src/eval.c:3848-3870`).
+    ///
+    /// MEDIUM-1.5: checks `!self.plain.record_live(record)` on BOTH `Completed`
+    /// and `Caught` so a signaling watcher cannot orphan the slab record.
     fn unwind_plain_escape(
         &mut self,
         symbol: SymId,
@@ -2981,25 +3114,28 @@ where
             frame: top,
             operands,
         };
-        let completion = self.escape.escape(request, &self.arena, &mut self.plain);
+        let completion = self.escape.unwind(request, &self.arena, &mut self.plain);
         let debug_updates = self.escape.take_debug_on_exit_updates();
-        match completion.stack {
-            EscapeStack::Flow(flow) => Ok(UnwindEscapeOutcome::Flow(flow)),
-            EscapeStack::Caught {
+        match completion {
+            UnwindCompletion::Flow(flow) => Ok(UnwindEscapeOutcome::Flow(flow)),
+            UnwindCompletion::Caught {
                 handler: new_target,
                 value: new_value,
+                popped_handlers,
+                popped_records,
             } => {
-                if !completion.handlers.pushed.is_empty() {
-                    return Err(EngineFault::DispatchContract(origin_op.clone()));
-                }
-                if !completion.handlers.popped.is_empty() {
+                if !popped_handlers.is_empty() {
                     return Err(EngineFault::EscapeRecordContract(RecordStack::Handlers));
                 }
-                if !completion.records.popped.is_empty() {
+                if !popped_records.is_empty() {
                     return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
                 }
-                for token in &completion.records.pushed {
-                    self.arena.bindings_mut().push(*token);
+                if self.plain.record_live(record) {
+                    tracing::error!(
+                        op = ?origin_op,
+                        "PlainUnbind Caught left the owner slab record live"
+                    );
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
                 }
                 if !debug_updates.is_empty() {
                     let mut stopped = StoppedOwnerBacktrace::from_escape_park(&mut self.arena);
@@ -3016,31 +3152,25 @@ where
                     value: new_value,
                 })
             }
-            EscapeStack::Completed {
-                consumed,
-                produced,
-                jump,
+            UnwindCompletion::Completed {
+                popped_handlers,
+                popped_records,
+                pushed_records,
             } => {
-                if consumed != 0 || !produced.is_empty() || jump.is_some() {
-                    return Err(EngineFault::DispatchContract(origin_op.clone()));
-                }
-                if !completion.handlers.pushed.is_empty() {
-                    return Err(EngineFault::DispatchContract(origin_op.clone()));
-                }
-                if !completion.handlers.popped.is_empty() {
+                if !popped_handlers.is_empty() {
                     return Err(EngineFault::EscapeRecordContract(RecordStack::Handlers));
                 }
-                if !completion.records.popped.is_empty() {
+                if !popped_records.is_empty() {
                     return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
                 }
                 if self.plain.record_live(record) {
                     tracing::error!(
                         op = ?origin_op,
-                        "L3 PlainUnbind escape left the owner record it was asked to undo"
+                        "PlainUnbind escape left the owner record it was asked to undo"
                     );
                     return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
                 }
-                for token in &completion.records.pushed {
+                for token in &pushed_records {
                     self.arena.bindings_mut().push(*token);
                 }
                 if !debug_updates.is_empty() {
