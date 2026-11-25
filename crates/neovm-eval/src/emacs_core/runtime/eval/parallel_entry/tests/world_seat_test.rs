@@ -1576,3 +1576,187 @@ fn l67b_b4_world_seat_refuses_wrong_context_slab() {
         ctx_a.retire_green_owner();
     });
 }
+
+/// L6.7b b4.3 / b4.4 red-first Lisp-path row (#14218 / #14220 Row 2):
+/// in a full `unit_runtime()` live Green era (`Control::open_era` + seated
+/// `ThreadKey::Main` holding `TurnRight::Era`) with a pre-freeze cons on
+/// `source` (`entry0.image.young` non-empty, `pending_mutators` containing
+/// `id_0`), lower `gc-cons-threshold` and `gc-cons-percentage` inside ONLY this
+/// `Context` (never process-wide) and evaluate real Lisp consing past one
+/// `ConsBlock` plus a safe point:
+/// `(progn (setq l67b-b43-keep (cons 777 888)) (make-list 5000 nil) (setq l67b-b43-after 1) l67b-b43-keep)`.
+///
+/// - On `b4.3` (before `peer-gcfix`'s `b4.4` wires
+///   `gc_collect_from_current_roots_impl_flow` -> `ActiveWorldSeat::exit` ->
+///   `Control::collect_era_interval` -> `ParkedWorldSeat::enter`): FAILS RED
+///   cleanly and boundedly, surfacing the exact `cons_allocator` panic
+///   (`queued log is pending`) instead of hanging or masking behind
+///   `keeper outcome: RecvError`.
+/// - Once `b4.4` lands: goes GREEN with zero test edits — `maybe_gc` routes
+///   through `GroupPort::collect`, `gc_collections` advances, `l67b-b43-keep`
+///   and `l67b-b4-pre-freeze` survive, Context-local GC knobs restore, and
+///   `era.finish()` succeeds.
+#[test]
+fn l67b_b43_lisp_cons_reaching_maybe_gc_while_entry0_frozen() {
+    crate::test_utils::init_test_tracing();
+    #[cfg(feature = "jit")]
+    {
+        crate::emacs_core::jit::force_jit_off_for_test(true);
+        crate::emacs_core::jit::cache::reset_carrier_tls();
+    }
+    crate::emacs_core::eval::parallel_entry::source_entry::install_inactive_source_module_probe_for_test();
+    let mut source = Box::new(Context::new_with_threading(
+        ThreadingMode::Green,
+        crate::test_utils::unit_runtime(),
+    ));
+    source.setup_thread_locals();
+    let private = Value::string("l67b-b43-lisp-maybe-gc");
+    source.lexenv = private;
+    source.gc_collect_exact();
+    assert!(
+        source.tagged_heap.tagged_heap_generational_enabled(),
+        "L6.7b b4.3/b4.4 Lisp maybe_gc row requires a generational heap"
+    );
+    // Pre-freeze cons on `source` with NO intervening GC so `entry0.image.young`
+    // is non-empty when the parallel era opens (`pending_mutators` has `id_0`).
+    let pre_freeze = source
+        .eval_str("(cons 10 20)")
+        .expect("pre-freeze cons on source");
+    source.set_variable("l67b-b4-pre-freeze", pre_freeze);
+    source.tagged_heap.close_alloc_regions();
+    let bootstrap = source.capture_green_bootstrap_for_test();
+    let (shell, start) = close(source).prepare_era().unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    let (panic_msg_tx, panic_msg_rx) = mpsc::sync_channel::<String>(1);
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |keeper| {
+            let _panic_guard = KeeperPanicGuard { keeper };
+            keeper
+                .keeper_baton_for_test()
+                .install_stowed_green_runtime_for_test(bootstrap);
+            let world_handle = keeper.keeper_baton_for_test().test_world_handle_for_test();
+            let control = world_handle.green_control_for_test();
+            let era_world_handle = world_handle.era_world_handle_for_test();
+
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(keeper, inbox_rx);
+            let link = driver.enroll_group();
+            let group_port = GroupPort::new(inbox.clone(), link);
+            drop(inbox);
+            control
+                .open_era_stowed_for_test(era_world_handle, group_port)
+                .expect("open era on stowed Green Control");
+
+            let (end, body_panicked) = std::thread::scope(|scope| {
+                let main_control = std::sync::Arc::clone(&control);
+                let panic_msg_tx = panic_msg_tx.clone();
+                let main_handle = scope.spawn(move || {
+                    let initial_turn = main_control
+                        .acquire_initial_era_turn()
+                        .expect("acquire initial era WorldTurn");
+                    let mut main =
+                        Context::new_seated_era_main_for_test(&world_handle, initial_turn);
+                    let body_result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            // Context-local GC knobs ONLY (never process-wide).
+                            let saved_threshold = main
+                                .eval_str("gc-cons-threshold")
+                                .expect("read Context-local gc-cons-threshold");
+                            let saved_percentage = main
+                                .eval_str("gc-cons-percentage")
+                                .expect("read Context-local gc-cons-percentage");
+                            main.eval_str("(setq gc-cons-threshold 1024 gc-cons-percentage 0.0)")
+                                .expect("lower Context-local gc-cons-threshold");
+                            let gc_before = main.tagged_heap.gc_collections();
+
+                            let val = main
+                                .eval_str(
+                                    "(progn
+                                       (setq l67b-b43-keep (cons 777 888))
+                                       (make-list 5000 nil)
+                                       (setq l67b-b43-after 1)
+                                       l67b-b43-keep)",
+                                )
+                                .expect("in-turn Lisp consing reaching maybe_gc must succeed");
+                            assert_eq!(print_value(&val), "(777 . 888)");
+                            assert_eq!(eval(&mut main, "l67b-b43-keep"), "(777 . 888)");
+                            assert_eq!(eval(&mut main, "l67b-b43-after"), "1");
+                            assert_eq!(eval(&mut main, "l67b-b4-pre-freeze"), "(10 . 20)");
+                            assert!(
+                                main.tagged_heap.gc_collections() > gc_before,
+                                "lowered Context-local gc-cons-threshold must trigger an in-turn collection"
+                            );
+
+                            main.set_variable("gc-cons-threshold", saved_threshold);
+                            main.set_variable("gc-cons-percentage", saved_percentage);
+                        }));
+
+                    let panicked = match body_result {
+                        Ok(()) => false,
+                        Err(payload) => {
+                            let msg = payload
+                                .downcast_ref::<String>()
+                                .map(String::as_str)
+                                .or_else(|| payload.downcast_ref::<&str>().copied())
+                                .unwrap_or("<non-string panic payload>")
+                                .to_string();
+                            let _ = panic_msg_tx.send(msg);
+                            true
+                        }
+                    };
+
+                    // Always tear down the Baton thread boundedly so `driver.run()`
+                    // never hangs even on the red-first panic path.
+                    if panicked {
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                            let final_right = main.retire_seated_era_main_for_test();
+                            main_control.release_era_turn_to_idle(final_right);
+                            if let Some(port) = main_control.take_era_port_for_exit() {
+                                port.exit();
+                            }
+                            drop(world_handle);
+                        }));
+                    } else {
+                        let final_right = main.retire_seated_era_main_for_test();
+                        main_control.release_era_turn_to_idle(final_right);
+                        let group_port = main_control
+                            .take_era_port_for_exit()
+                            .expect("take GroupPort for exit");
+                        group_port.exit();
+                        drop(world_handle);
+                    }
+                    panicked
+                });
+
+                let end = driver.run();
+                let body_panicked = main_handle.join().expect("main Baton thread joined");
+                (end, body_panicked)
+            });
+
+            if !body_panicked {
+                assert_eq!(end, DriverEnd::Drained, "keeper driver must drain cleanly");
+            }
+            keeper
+                .keeper_baton_for_test()
+                .uninstall_green_runtime_for_test();
+        });
+        match outcome {
+            Ok((end, ())) => tx.send(Ok(end)).expect("send keeper end"),
+            Err(failure) => tx.send(Err(failure.notice())).expect("send keeper notice"),
+        }
+    });
+
+    let outcome = rx.recv_timeout(BOUND);
+    let join = service.join();
+    if let Ok(msg) = panic_msg_rx.try_recv() {
+        panic!("L6.7b b4.4 RED-FIRST: in-turn Lisp maybe_gc panicked while entry0 frozen: {msg}");
+    }
+    join.expect("keeper service thread");
+    let end = outcome
+        .expect("keeper outcome")
+        .unwrap_or_else(|notice| panic!("l67b-b43-lisp-maybe-gc refused: {notice:?}"));
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    let returned = shell.accept_return(end).unwrap();
+    finish_fixture(returned, private);
+}
