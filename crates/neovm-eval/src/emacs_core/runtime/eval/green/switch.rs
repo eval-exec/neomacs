@@ -2451,7 +2451,10 @@ pub(super) fn run_carrier_job(
         // Park before publishing the exit: no other Lisp thread holds the
         // Baton until `finish` hands it on, so the idle registration is
         // visible to any dispatcher that runs after `exited` is observed.
-        super::carrier_tls::park_carrier_tls();
+        // SAFETY: `owner` is stowed and retired, carried World state is stowed,
+        // no TLS heap loan is live, and the carrier prologue runs
+        // `reset_carrier_tls()` before reusing this OS thread.
+        unsafe { super::carrier_tls::park_carrier_tls() };
         if baton.is_era() {
             let proof =
                 super::super::parallel_entry::world_seat::prove_retired_worker_stowed_for_era(
@@ -2556,8 +2559,9 @@ pub(super) fn run_carrier_job(
     // no heap or World object before it may be registered idle. Idle
     // registration precedes the exit publication so a dispatcher that runs
     // after `exited` is observed always finds the slot parked.
-    super::carrier_tls::park_carrier_tls();
-    if baton.is_era() {
+        SAFETY: `owner` is stowed and retired, carried World state is stowed, no
+        unsafe { super::carrier_tls::park_carrier_tls() };
+        if baton.is_era() {
         let proof =
             super::super::parallel_entry::world_seat::prove_retired_worker_stowed_for_era(&baton);
         baton.set_stowed_for_return(proof);

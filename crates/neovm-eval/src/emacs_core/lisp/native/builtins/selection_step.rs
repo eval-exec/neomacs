@@ -505,7 +505,8 @@ mod tests {
         let clear_heap = heap.root();
         // `TestHeap::new` installs. That pointer is not a Context, and the
         // constructor refuses every installed heap except the armed fallback.
-        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&heap);
+        // SAFETY: standalone `TestHeap` fixture cleared before constructing `direct_ctx`.
+        unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&heap) };
         let mut direct_ctx = Context::new(crate::test_utils::unit_runtime());
 
         super::super::reset_stubs_thread_locals();
@@ -611,7 +612,8 @@ mod tests {
         assert_same_batch(direct_clear, via_clear);
         assert_same_batch(direct_owner, via_owner);
 
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(clear_heap);
+        // SAFETY: teardown of standalone `TestHeap` fixture.
+        unsafe { neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(clear_heap) };
     }
 
     /// One selection program. The installed serial arm stays the direct call.
@@ -859,7 +861,8 @@ mod tests {
         let clear_heap = heap.root();
         // Same uninstall as the populated-cache row: the fixture is only the
         // pointer the trailing clear matches, not a live Context.
-        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&heap);
+        // SAFETY: standalone `TestHeap` fixture cleared before `run_owned_against_serial`.
+        unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&heap) };
         run_owned_against_serial(
             SelectionOp::ClipboardSet,
             vec![Value::symbol("clip")],
@@ -873,7 +876,8 @@ mod tests {
         );
         run_owned_against_serial(SelectionOp::PrimaryGet, vec![], prime_primary);
         run_owned_against_serial(SelectionOp::PrimaryOwner, vec![], prime_primary);
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(clear_heap);
+        // SAFETY: teardown of standalone `TestHeap` fixture.
+        unsafe { neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(clear_heap) };
     }
 }
 

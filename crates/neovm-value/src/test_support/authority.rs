@@ -113,7 +113,8 @@ impl Drop for TestHeapScope {
             // No previous heap: uninstall through the detach-then-pointer
             // checked clear before the nest's pointer restore. The heap stays
             // allocated. `end` then sees a slot that no longer names it.
-            crate::tagged::gc::clear_tagged_heap_if_installed(&self.heap);
+            // SAFETY: `TestHeapScope::drop` is retiring this standalone test heap.
+            unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&self.heap) };
         }
         // LIFO when a previous root was saved: the nest reinstalls it.
         // Either way the slot must not name this heap before retirement.

@@ -199,7 +199,9 @@ fn forced_collection_after_two_world_marks(join: MarkerJoin) {
         // Clear A's heap slot so A's collection enters the
         // `!tagged_heap_is_current` arm on an empty slot while B's concurrent
         // marker is still running on `parked_b`.
-        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&a.tagged_heap);
+        // SAFETY: `a` is immediately reactivated by `gc_collect_from_current_roots_impl`
+        // on the empty slot; no non-reactivating door runs while cleared.
+        unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&a.tagged_heap) };
         a.gc_collect_from_current_roots_impl(true);
         assert_eq!(a.tagged_heap.mark_phase(), MarkPhase::Idle);
         assert_eq!(
@@ -208,7 +210,9 @@ fn forced_collection_after_two_world_marks(join: MarkerJoin) {
         );
         parked_a = Some(a.park_for_test());
         let mut b_resumed = parked_b.resume_for_test().expect("resume b");
-        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&b_resumed.tagged_heap);
+        // SAFETY: `b_resumed` is immediately reactivated by
+        // `gc_collect_from_current_roots_impl` on the empty slot.
+        unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&b_resumed.tagged_heap) };
         b_resumed.gc_collect_from_current_roots_impl(true);
         b = Some(b_resumed);
     }));

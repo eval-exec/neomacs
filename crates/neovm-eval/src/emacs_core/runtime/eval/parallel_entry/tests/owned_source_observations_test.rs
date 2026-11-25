@@ -162,7 +162,12 @@ fn pentry_e2b_source_observations_foreign_heap_refuses_before_withdrawal() {
     let source = ready();
     let alive = source.world_lifetime_probe_for_test();
     let captured = capture(source).unwrap();
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&captured._frame.source.tagged_heap);
+    // SAFETY: `captured._frame.source` is captured/suspended and never evaluated again.
+    unsafe {
+        neovm_value::tagged::gc::clear_tagged_heap_if_installed(
+            &captured._frame.source.tagged_heap,
+        );
+    }
     let foreign = ready();
     let error = captured
         .withdraw_observations()

@@ -371,17 +371,30 @@ fn recent_reads_reset_on_heap_identity_change_and_preserve_same_heap_installatio
             probe_recent(owner.bits()),
             "same live heap retains its cache"
         );
+        // SAFETY: bare `TaggedHeap` unit test clearing `first` before switching
+        // to `second`; re-seeding `RECENT` ensures `set_tagged_heap(&mut second)`
+        // itself must reset the recent-read cache on identity change.
+        unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&first) };
+        assert!(!probe_recent(owner.bits()));
+        assert!(probe_recent(owner.bits()));
         set_tagged_heap(&mut second);
         assert!(
             !probe_recent(owner.bits()),
             "new heap cannot reuse an old identity hit"
         );
+        // SAFETY: bare `TaggedHeap` unit test clearing `second` before restoring
+        // `first`; re-seeding `RECENT` ensures `set_tagged_heap(&mut first)`
+        // itself resets the cache.
+        unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&second) };
+        assert!(!probe_recent(owner.bits()));
+        assert!(probe_recent(owner.bits()));
         set_tagged_heap(&mut first);
         assert!(
             !probe_recent(owner.bits()),
             "restored or migrated heap starts empty"
         );
-        crate::tagged::gc::clear_tagged_heap_if_installed(&first);
+        // SAFETY: standalone bare `TaggedHeap` test fixture cleared to verify reset.
+        unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&first) };
         assert!(
             !probe_recent(owner.bits()),
             "uninstallation clears before owner destruction"

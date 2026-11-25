@@ -433,6 +433,7 @@ fn recording_cache_faults_cannot_be_hidden_by_prior_recording() {
     // skipped second grant must not publish a reusable recording certificate.
     assert_eq!(logged(&mut heap).len(), 1);
     minor(&mut heap, &prior);
+    drop(heap);
 
     let mut corrupt = new_heap();
     let _prior = exhaust_tail(&mut corrupt);

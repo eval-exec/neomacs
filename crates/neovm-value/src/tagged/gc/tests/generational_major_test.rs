@@ -682,7 +682,8 @@ impl Drop for FirstPartitionCancelCleanup {
         unsafe {
             set_tagged_heap_root(std::ptr::NonNull::new(self.0).expect("partition cleanup heap"))
         };
-        clear_tagged_heap_if_installed(heap);
+        // SAFETY: teardown of bare `TaggedHeap` partition test fixture.
+        unsafe { clear_tagged_heap_if_installed(heap) };
     }
 }
 

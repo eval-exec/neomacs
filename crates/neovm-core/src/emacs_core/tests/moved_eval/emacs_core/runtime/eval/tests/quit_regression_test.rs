@@ -834,7 +834,10 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
         .and_then(|buffer| buffer.local_variable_binding_cell(symbol))
         .expect("existing canonical local cell");
     assert_eq!(owner.obarray().blv(symbol).unwrap().valcell(), binding_cell);
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(owner.tagged_heap());
+    // SAFETY: `owner` is not evaluated while `ambient` is active; only
+    // `discard_specpdl_to` (which must not allocate in `ambient`) runs before
+    // `ambient` drops and `owner` reactivates.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(owner.tagged_heap()) };
     let mut ambient = crate::test_utils::new_context();
     ambient.setup_thread_locals();
     let before = ambient.tagged_heap().bytes_since_gc_exact();

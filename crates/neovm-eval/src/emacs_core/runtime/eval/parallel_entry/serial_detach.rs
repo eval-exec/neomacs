@@ -210,7 +210,10 @@ impl Context {
         // serial turn before taking down carrier TLS, so the keeper's next
         // stop / collection never observes `ImageError::RegionsOpen`.
         self.tagged_heap.close_alloc_regions();
-        park_carrier_tls();
+        // SAFETY: `self` has parked its owner bindings and stowed carried
+        // World state under `AbortOnPanic`; no TLS heap loan is live, and
+        // `reattach_serial_owner` calls `reset_carrier_tls()` before returning.
+        unsafe { park_carrier_tls() };
         Ok(DetachedOwner {
             host: DetachedHostBindings { parked },
             tls: DetachedTls {

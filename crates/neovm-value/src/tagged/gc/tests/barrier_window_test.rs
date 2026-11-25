@@ -325,15 +325,22 @@ fn the_window_is_republished_at_every_writer_of_its_inputs() {
     // Installing another heap re-derives its window; reinstalling this one
     // re-derives this one's; uninstalling clears it.
     let mut other = legacy_gate_heap();
+    // SAFETY: bare `TaggedHeap` unit test switching to `other`; seed the prior
+    // window so `set_tagged_heap(&mut other)` must still re-derive `NONE`.
+    unsafe { clear_tagged_heap_if_installed(&heap) };
+    TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(wider));
     set_tagged_heap(&mut other);
     assert_eq!(
         published_barrier_window(),
         BarrierWindow::NONE,
         "other heap"
     );
+    // SAFETY: bare `TaggedHeap` unit test switching back to `heap`.
+    unsafe { clear_tagged_heap_if_installed(&other) };
     set_tagged_heap(&mut heap);
     assert_eq!(published_barrier_window(), wider, "reinstalled");
-    clear_tagged_heap_if_installed(&heap);
+    // SAFETY: bare `TaggedHeap` unit test checking barrier-window reset on clear.
+    unsafe { clear_tagged_heap_if_installed(&heap) };
     assert_eq!(
         published_barrier_window(),
         BarrierWindow::NONE,

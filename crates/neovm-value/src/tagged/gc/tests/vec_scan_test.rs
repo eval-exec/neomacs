@@ -84,7 +84,8 @@ fn a_dead_vector_marks_its_children_only_through_the_snapshot() {
             }
             heap.finish_incremental_sweep_now_for_test();
             assert!(heap.is_value_marked(keep));
-            clear_tagged_heap_if_installed(&heap);
+            // SAFETY: bare `TaggedHeap` unit-test fixture about to drop.
+            unsafe { clear_tagged_heap_if_installed(&heap) };
         }
     }
 }

@@ -635,7 +635,8 @@ mod tests {
         // TLS must compare only the root address while this loan is retained.
         let identity = heap.heap_identity();
         let collector = unsafe { (*root.as_ptr()).drain_to_quiescent(|_| {}) }.unwrap();
-        clear_tagged_heap_root_if_installed(root);
+        // SAFETY: standalone `TestHeap` fixture detached for quiescent collector check.
+        unsafe { clear_tagged_heap_root_if_installed(root) };
         assert!(!tagged_heap_is_installed());
         assert_eq!(collector.heap_identity(), identity);
         drop(collector);

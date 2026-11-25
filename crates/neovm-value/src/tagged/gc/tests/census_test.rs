@@ -248,7 +248,8 @@ fn census_changes_nothing_it_measures() {
             heap.memory_use_counts_snapshot(),
             heap.allocated_count(),
         );
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture about to drop.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
         out
     }
     assert_eq!(run(CensusMode::Off), run(CensusMode::Survivors));

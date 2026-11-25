@@ -18,7 +18,7 @@ fn full(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
 fn string_gc_pacing_counts_collectible_survivors_not_image_residents() {
     for generational in [false, true] {
         for deferred_first in [false, true] {
-            let mut heap = TaggedHeap::new();
+            let mut heap = Box::new(TaggedHeap::new());
             // SAFETY: this fixture owns the only heap view before publication.
             unsafe { heap.set_generational_enabled(generational) };
             set_tagged_heap(&mut heap);

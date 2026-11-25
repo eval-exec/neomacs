@@ -14,7 +14,8 @@ fn receipt() -> (
     // SAFETY: the fixture owns this heap. No collector, mutator, or store view
     // is live, and the drain callback does not re-enter the heap.
     let mut collector = unsafe { (*heap.root().as_ptr()).drain_to_quiescent(|_| {}) }.unwrap();
-    neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(heap.root());
+    // SAFETY: standalone `TestHeap` fixture detached for quiescent collector test.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(heap.root()) };
     let receipt = collector.detach_source_observations().unwrap();
     drop(collector);
     (heap, receipt)

@@ -79,6 +79,9 @@ fn heapborrow_r7_fixture_owner_and_tls_share_root() {
 #[test]
 fn heapborrow_r7_displaced_fixture_drop_preserves_new_installation() {
     let first = TestHeap::new();
+    // SAFETY: bare `TestHeap` fixture cleared before installing `second`;
+    // dropping `first` must still preserve `second`'s installation.
+    unsafe { clear_tagged_heap_if_installed(&first) };
     let second = TestHeap::new();
     drop(first);
     assert!(tagged_heap_is_current(&second));

@@ -95,7 +95,7 @@ fn storefast_null_heap_stores_keep_journal_and_captures_without_installing_a_hea
         TestHeap, clear_tagged_heap_if_installed, current_tagged_heap_identity,
         tagged_heap_is_installed,
     };
-    let heap = TestHeap::new();
+    let mut heap = TestHeap::new();
     let cons = Value::cons(Value::NIL, Value::NIL);
     let vector = Value::vector(vec![Value::NIL]);
     let record = Value::make_record(vec![Value::NIL]);
@@ -106,7 +106,8 @@ fn storefast_null_heap_stores_keep_journal_and_captures_without_installing_a_hea
     });
     let certificate = certificate.unwrap();
     assert!(certificate.unchanged());
-    clear_tagged_heap_if_installed(&heap);
+    // SAFETY: standalone `TestHeap` fixture cleared to exercise null-heap stores.
+    unsafe { clear_tagged_heap_if_installed(&heap) };
     let before = LispCollectionRevision::current();
     neovm_value::test_support::authority::with_cold_capture_for_test(|| {
         cons.set_car(Value::T);
@@ -131,7 +132,8 @@ fn storefast_null_heap_stores_keep_journal_and_captures_without_installing_a_hea
 
     let (_, unfinished) = capture(|| {
         cons.cons_cdr();
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: standalone `TestHeap` fixture cleared inside capture.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
         cons.set_cdr(Value::T);
     });
     assert!(unfinished.is_none());

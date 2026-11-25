@@ -199,18 +199,26 @@ fn inline_slot_heap_switch_rederives_generation_and_real_window_obligations() {
     assert!(set_cons_car(cons, TaggedValue::fixnum(53)));
     assert!(!generational.owner_card_is_dirty_for_test(cons));
 
+    // SAFETY: bare `TaggedHeap` unit test switching to `legacy`.
+    unsafe { clear_tagged_heap_if_installed(&generational) };
     let mut legacy = installed_heap(false);
     let image = FakeImage::leak(false);
     let mapped = image.register_cons(&mut legacy);
     assert!(set_cons_car(mapped, TaggedValue::char('s')));
     assert!(legacy.mapped_remembered.contains(&mapped.bits()));
 
+    // SAFETY: bare `TaggedHeap` unit test switching back to `generational`.
+    unsafe { clear_tagged_heap_if_installed(&legacy) };
     set_tagged_heap(&mut generational);
     let child = generational.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     assert!(set_cons_car(cons, child));
     // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
     unsafe { generational.set_concurrent_active_for_test(true) };
+    // SAFETY: bare `TaggedHeap` unit test switching to `legacy` and back.
+    unsafe { clear_tagged_heap_if_installed(&generational) };
     set_tagged_heap(&mut legacy);
+    // SAFETY: bare `TaggedHeap` unit test switching back to `generational`.
+    unsafe { clear_tagged_heap_if_installed(&legacy) };
     set_tagged_heap(&mut generational);
     assert!(set_cons_car(cons, TaggedValue::fixnum(59)));
     // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.

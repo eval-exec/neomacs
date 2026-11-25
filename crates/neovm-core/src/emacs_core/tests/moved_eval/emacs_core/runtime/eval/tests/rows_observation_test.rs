@@ -121,7 +121,10 @@ fn rows_observation_driver_and_partial_collection_refuse_before_replay() {
 fn rows_observation_replaced_or_inactive_context_refuses_before_saved_keys() {
     let (mut first, frame) = ready();
     let epoch = first.begin_static_rows_observation(frame).unwrap();
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(first.tagged_heap());
+    // SAFETY: `first` is only probed via `static_rows_observation_current`
+    // (must report InactiveContext) while `second` is active, then `second`
+    // drops before `first` reactivates.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(first.tagged_heap()) };
     let (second, _) = ready();
     assert_eq!(
         first.static_rows_observation_current(&epoch),

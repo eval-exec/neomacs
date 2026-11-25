@@ -222,7 +222,8 @@ fn tier_h_exact_box_inventory_needs_no_per_mutator_address_registry() {
     assert_eq!(snapshot.len(), 2);
     assert!(snapshot.get(addresses[1]).is_none());
     finish_cycle(&mut heap, &roots);
-    clear_tagged_heap_if_installed(&mut heap);
+    // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+    unsafe { clear_tagged_heap_if_installed(&mut heap) };
 }
 
 /// The fixture's live payload is accessed only under its captured entry lock.
@@ -849,7 +850,8 @@ fn tier_h_real_wrapper_retraces_done_table_and_releases_any_legacy_retirement_at
         assert!(!heap.owns_heap_value_for_test(removed));
         assert!(!heap.owns_heap_value_for_test(inserted));
         assert_eq!(weak.as_hash_table().unwrap().data.len(), 0);
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
     }
 }
 
@@ -870,7 +872,8 @@ fn tier_h_real_demand_trace_does_not_retain_dead_table_children() {
                 .non_cons_object_addrs
                 .contains(&(dead.as_veclike_ptr().unwrap() as usize))
         );
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
     }
 }
 
@@ -927,7 +930,8 @@ fn tier_h_real_weak_and_pending_tables_defer_before_header_claim() {
             assert!(heap.owns_heap_value_for_test(pending_child));
             assert!(!heap.owns_heap_value_for_test(key));
             assert!(!heap.owns_heap_value_for_test(value));
-            clear_tagged_heap_if_installed(&heap);
+            // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+            unsafe { clear_tagged_heap_if_installed(&heap) };
         }
     }
 }
@@ -961,7 +965,8 @@ fn tier_h_real_whole_replacement_preserves_old_and_new_callback_children() {
         assert!(!heap.owns_heap_value_for_test(old_hash));
         assert!(heap.owns_heap_value_for_test(new_cmp));
         assert!(heap.owns_heap_value_for_test(new_hash));
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
     }
 }
 
@@ -985,7 +990,8 @@ fn tier_h_old_table_remembers_young_child_for_next_minor() {
     start_cycle(&mut heap, &[owner]);
     finish_cycle(&mut heap, &[owner]);
     assert!(!heap.owns_heap_value_for_test(child));
-    clear_tagged_heap_if_installed(&heap);
+    // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+    unsafe { clear_tagged_heap_if_installed(&heap) };
 }
 
 #[test]
@@ -1014,7 +1020,8 @@ fn tier_h_snapshot_symbol_handoff_keeps_only_strongly_held_weak_keys() {
         finish_cycle(&mut heap, &roots);
         assert!(!heap.marked_symbols.contains(id));
         assert_eq!(weak.as_hash_table().unwrap().data.len(), 0);
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
     }
 }
 
@@ -1058,7 +1065,8 @@ fn tier_h_strong_to_weak_replacement_registers_current_weakness_and_callbacks() 
             assert!(!heap.owns_heap_value_for_test(old));
         }
         assert!(heap.owns_heap_value_for_test(callback));
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
     }
 }
 
@@ -1096,7 +1104,8 @@ fn tier_h_wrapper_unwind_poison_is_observed_and_join_refuses_to_sweep() {
         // The failed finish retains the active state, so nothing can sweep.
         assert!(heap.concurrent_mark_running);
         assert!(!heap.sweep_in_progress);
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
     }
 }
 

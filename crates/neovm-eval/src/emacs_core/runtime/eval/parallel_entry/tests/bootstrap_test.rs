@@ -92,7 +92,8 @@ fn pentry_e2b_bootstrap_foreign_tls_preparation_failure_retains_actual_shell() {
     assert!(neovm_value::tagged::gc::tagged_heap_is_current(
         &foreign.tagged_heap
     ));
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&foreign.tagged_heap);
+    // SAFETY: `foreign` is about to drop at the end of this test.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&foreign.tagged_heap) };
     assert!(alive());
 }
 

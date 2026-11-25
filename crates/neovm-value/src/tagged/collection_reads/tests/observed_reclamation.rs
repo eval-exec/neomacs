@@ -39,6 +39,8 @@ fn unrelated_heap_reclamation_preserves_live_envelope_geometry() {
     let rebuilds = geometry_rebuilds();
 
     let mut other_heap = Box::new(TaggedHeap::new());
+    // SAFETY: bare `TaggedHeap` unit test switching heaps on this thread.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&live_heap) };
     set_tagged_heap(&mut other_heap);
     let garbage = other_heap.alloc_cons(TaggedValue::make_int(7), TaggedValue::NIL);
     // A shared mark does not insert a dependency into this mutator's ledger.
@@ -49,6 +51,8 @@ fn unrelated_heap_reclamation_preserves_live_envelope_geometry() {
     other_heap.collect_rooted(std::iter::empty());
     assert_ne!(collection_observation_epoch(), epoch);
     assert!(!collection_observed_metadata(garbage.bits()));
+    // SAFETY: bare `TaggedHeap` unit test restoring `live_heap`.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&other_heap) };
     set_tagged_heap(&mut live_heap);
 
     assert_eq!(

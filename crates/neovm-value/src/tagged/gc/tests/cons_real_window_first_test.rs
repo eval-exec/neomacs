@@ -106,7 +106,13 @@ fn cons_real_window_first_pointer_overwrites_capture_preimages_with_open_young_r
 fn cons_real_window_first_pointer_stores_follow_span_tracking_heap_switch_and_uninstall() {
     // Construct BOTH heaps before the final uninstall. After uninstall this
     // test inspects mirrors/identity only: no store, fallback or heap creation.
-    let mut heaps = [installed_heap(false, true), installed_heap(true, true)];
+    let first = installed_heap(false, true);
+    // SAFETY: bare `TaggedHeap` unit-test fixture cleared before constructing second heap.
+    unsafe { clear_tagged_heap_if_installed(&first) };
+    let second = installed_heap(true, true);
+    // SAFETY: bare `TaggedHeap` unit-test fixture cleared before loop installs each heap.
+    unsafe { clear_tagged_heap_if_installed(&second) };
+    let mut heaps = [first, second];
     for heap in &mut heaps {
         set_tagged_heap(heap);
         assert_eq!(published_barrier_window(), BarrierWindow::NONE);
@@ -171,20 +177,28 @@ fn cons_real_window_first_pointer_stores_follow_span_tracking_heap_switch_and_un
         assert!(set_cons_car(owner, child));
         assert_eq!(slow_calls(), before);
         assert_eq!(owner.cons_car(), child);
+        // SAFETY: bare `TaggedHeap` unit-test fixture cleared before next iteration.
+        unsafe { clear_tagged_heap_if_installed(heap) };
     }
     // Reinstall each already-created heap. Their real spans and generation
     // protocol must be re-derived from the selected owner, not retained TLS.
-    for heap in &mut heaps {
+    for (idx, heap) in heaps.iter_mut().enumerate() {
         set_tagged_heap(heap);
         assert_mirrors(heap);
         assert_eq!(
             current_tagged_heap_identity(),
             Some(heap.tagged_heap_identity())
         );
+        if idx == 0 {
+            // SAFETY: bare `TaggedHeap` unit-test fixture cleared before installing `heaps[1]`.
+            unsafe { clear_tagged_heap_if_installed(heap) };
+        }
     }
-    clear_tagged_heap_if_installed(&heaps[0]);
+    // SAFETY: bare `TaggedHeap` unit-test fixtures cleared in reverse order.
+    unsafe { clear_tagged_heap_if_installed(&heaps[0]) };
     assert_mirrors(&heaps[1]);
-    clear_tagged_heap_if_installed(&heaps[1]);
+    // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+    unsafe { clear_tagged_heap_if_installed(&heaps[1]) };
     assert!(!tagged_heap_is_installed());
     assert_eq!(current_tagged_heap_identity(), None);
     assert_eq!(published_barrier_window(), BarrierWindow::NONE);

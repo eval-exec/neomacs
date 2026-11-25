@@ -2869,7 +2869,9 @@ impl Drop for Context {
             super::ConditionSnapshotAdmission::Dormant,
         );
         admission.unregister(&mut self.tagged_heap);
-        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&self.tagged_heap);
+        // SAFETY: `Context::drop` is tearing down this Context; no eval door
+        // can run on it after drop begins.
+        unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&self.tagged_heap) };
     }
 }
 

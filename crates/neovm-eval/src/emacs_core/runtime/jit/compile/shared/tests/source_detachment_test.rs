@@ -53,7 +53,8 @@ fn fixture() -> DetachedSourceCache {
     assert_eq!(compiled.unwrap(), Some(Value::fixnum(73).bits()));
     assert!(SHARED_JIT.with(|cell| cell.borrow().is_some()));
     let owner = SourceCacheOwner::for_context(&source);
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap);
+    // SAFETY: `source` is immediately wrapped in `ManuallyDrop` and never evaluated again.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap) };
     let _source = ManuallyDrop::new(source);
     // SAFETY: isolated sole-source fixture. Execution, store, and collector
     // frames have returned, the original Context is retained, and no

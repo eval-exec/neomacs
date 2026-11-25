@@ -313,9 +313,13 @@ impl Context {
         .expect("collection fixture drain");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
-            context.tagged_heap.heap_root(),
-        );
+        // SAFETY: `context` is not evaluated during the era and its heap is
+        // reinstalled right after the era ends before `after(&mut context, ...)`.
+        unsafe {
+            neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
+                context.tagged_heap.heap_root(),
+            );
+        }
         let era =
             crate::emacs_core::eval::world::WorldProofEra::admit_rooted(collector, keeper, frozen)
                 .unwrap_or_else(|failure| {
@@ -358,9 +362,13 @@ impl Context {
         .expect("collection fixture drain");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
-            context.tagged_heap.heap_root(),
-        );
+        // SAFETY: `context` is not evaluated during the era and its heap is
+        // reinstalled right after the era ends before `after(&mut context, ...)`.
+        unsafe {
+            neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
+                context.tagged_heap.heap_root(),
+            );
+        }
         let era =
             crate::emacs_core::eval::world::WorldProofEra::admit_rooted(collector, keeper, frozen)
                 .unwrap_or_else(|failure| {

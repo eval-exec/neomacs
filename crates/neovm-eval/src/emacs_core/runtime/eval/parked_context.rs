@@ -59,7 +59,9 @@ impl Context {
     /// Dropping the parked value drops the `Context`; it does not clear a heap
     /// installed by someone else.
     pub(crate) fn park(self) -> ParkedContext {
-        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&self.tagged_heap);
+        // SAFETY: `self` is consumed by value into `ParkedContext`, which has
+        // no eval API until explicitly resumed on an empty slot.
+        unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&self.tagged_heap) };
         ParkedContext { context: self }
     }
 

@@ -3512,7 +3512,8 @@ fn dropping_the_installed_heap_uninstalls_it() {
         tagged_heap_is_installed(),
         "dropping a heap that is not installed must leave the installed one"
     );
-    crate::tagged::gc::clear_tagged_heap_if_installed(&kept);
+    // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&kept) };
 }
 
 #[cfg(feature = "test-support")]

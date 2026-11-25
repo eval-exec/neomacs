@@ -935,7 +935,10 @@ impl TaggedHeap {
             .retire(handoff)
             .map_err(|_| MarkFinishError::PoisonedCollectorState)?
             .acknowledge();
-        crate::tagged::gc::clear_tagged_heap_if_installed(&self);
+        // SAFETY: `shutdown_owned_resources` requires the caller to own
+        // teardown with no active `Context` evaluating on this heap afterwards;
+        // the mutator retired above and no TLS-derived heap loan is live.
+        unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&self) };
         // E3.2: an explicit shutdown must run every owed native finalizer. The
         // stopped-collection deferral mode may still be set on an error path;
         // drain it first so the explicit intrusive reclaim below does not

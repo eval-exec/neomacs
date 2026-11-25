@@ -108,7 +108,9 @@ impl Drop for TaggedHeap {
             if let Some(collector) = retire_collector(self.identity) {
                 collector.detach();
             }
-            crate::tagged::gc::clear_tagged_heap_if_installed(self);
+            // SAFETY: `TaggedHeap::drop` is tearing down this heap; no active
+            // `Context` can evaluate on it after drop begins.
+            unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(self) };
             return;
         }
         // No job is in flight, so the heap's collector is idle in `recv`:
@@ -128,7 +130,9 @@ impl Drop for TaggedHeap {
         // installed -- and when a `Context` drop already uninstalled this one,
         // which is also why the frees below run with no heap installed either
         // way.
-        crate::tagged::gc::clear_tagged_heap_if_installed(self);
+        // SAFETY: `TaggedHeap::drop` is tearing down this heap; no active
+        // `Context` can evaluate on it after drop begins.
+        unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(self) };
         // Automatic destruction cannot invoke module finalizers or SQLite
         // teardown. Explicit shutdown reclaims those resources beforehand;
         // the fallback retains native payloads and frees inert Rust storage.

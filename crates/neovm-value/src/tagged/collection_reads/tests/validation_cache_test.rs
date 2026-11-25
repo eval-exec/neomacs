@@ -283,6 +283,8 @@ fn warmed_validation_never_admits_a_foreign_world() {
     let original_sequence = LispCollectionRevision::current();
 
     let mut second = Box::new(TaggedHeap::new());
+    // SAFETY: bare `TaggedHeap` unit test switching heaps on this thread.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&first) };
     set_tagged_heap(&mut second);
     let other = second.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     other.set_car(TaggedValue::T);
@@ -294,6 +296,8 @@ fn warmed_validation_never_admits_a_foreign_world() {
     });
     assert!(foreign.expect("foreign capture").reads_empty_for_test());
 
+    // SAFETY: bare `TaggedHeap` unit test restoring `first`.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&second) };
     set_tagged_heap(&mut first);
     assert!(reads.unchanged_and_observe());
     assert_eq!(reads.full_validation_invocations_for_test(), 1);

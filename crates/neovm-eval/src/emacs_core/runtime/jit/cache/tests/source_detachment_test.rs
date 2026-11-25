@@ -43,7 +43,8 @@ fn metadata_fixture() -> (ManuallyDrop<Box<Context>>, SourceCacheOwner) {
     COMPILED.with(|cache| cache.borrow_mut().insert(11, CacheEntry::NotCompilable));
     COMPILED_HEAP.with(|slot| slot.set(CompiledHeapPin::Pinned(owner.heap)));
     COMPILED_OBARRAY.with(|slot| slot.set(Some(owner.obarray.0)));
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap);
+    // SAFETY: `source` is immediately wrapped in `ManuallyDrop` and never evaluated again.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap) };
     (ManuallyDrop::new(source), owner)
 }
 
@@ -79,7 +80,8 @@ fn pentry_e2b_source_jit_cache_real_leaf_relocation_and_executable_retention() {
     collect_jit_reloc_gc_roots_for_heap(&mut census, source.tagged_heap.tagged_heap_identity());
     assert!(census.contains(&value));
     let owner = SourceCacheOwner::for_context(&source);
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap);
+    // SAFETY: `source` is immediately wrapped in `ManuallyDrop` and never evaluated again.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap) };
     let _source = ManuallyDrop::new(source);
     let _census = ManuallyDrop::new(census);
     let epoch = LEAF_SLOT_EPOCH.load(Ordering::Relaxed);
@@ -223,7 +225,8 @@ fn pentry_e2b_source_jit_cache_real_pending_job_is_not_cancelled_by_refusal() {
         "real completed backend is held before cache install"
     );
     let owner = SourceCacheOwner::for_context(&source);
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap);
+    // SAFETY: `source` is immediately wrapped in `ManuallyDrop` and never evaluated again.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap) };
     let _source = ManuallyDrop::new(source);
     assert_eq!(withdraw(owner).unwrap_err(), SourceCacheError::PendingJobs);
     assert_eq!(

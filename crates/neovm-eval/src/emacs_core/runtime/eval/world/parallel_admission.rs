@@ -148,7 +148,10 @@ impl Context {
             AdmissionScope<'heap>,
         ) -> (QuiescentCollector<'heap>, super::Baton, R),
     ) -> Result<R, OwnedParallelError> {
-        let prepared = self.prepare_owned_admission()?;
+        // SAFETY: `self` is not re-entered while `prepared` lives, and
+        // `recover_serial_context(recovery)` unconditionally reinstalls
+        // `self`'s heap before `admit_owned_with` returns.
+        let prepared = unsafe { self.prepare_owned_admission()? };
         let (recovery, result) = prepared.run(plan, body);
         self.recover_serial_context(recovery);
         result

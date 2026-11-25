@@ -98,7 +98,10 @@ fn storefast_world_capture_rejects_foreign_reads_after_return_to_its_owner() {
 }
 
 fn clear_heap_only(ctx: &Context) {
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
+    // SAFETY: unit test explicitly clearing the heap slot while leaving the
+    // other Context's CCL registry in TLS so the next reactivating door must
+    // reinstall its own registries on the empty slot.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap) };
 }
 
 /// Clear `ctx`'s heap slot (leaving `!tagged_heap_is_current`), then collect

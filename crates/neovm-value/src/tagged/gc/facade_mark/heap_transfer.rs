@@ -486,7 +486,9 @@ unsafe fn retire_transfer_tls(
     if installed {
         heap.preflight_source_store_retirement()
             .map_err(TransferError::Observations)?;
-        clear_tagged_heap_if_installed(heap);
+        // SAFETY: source heap is being retired for era transfer; no active
+        // `Context` evaluates on it while transferred.
+        unsafe { clear_tagged_heap_if_installed(heap) };
     }
     heap.retire_source_observation_membership()
         .map_err(TransferError::Observations)
@@ -1074,8 +1076,15 @@ static_assertions::assert_not_impl_any!(SourceRecoveryFailure: Send, Sync, Clone
 
 /// Address-only fault injection for the transfer tests. Writes the existing
 /// heap slot. This is not a new thread-local and not a production entry.
+///
+/// # Safety
+///
+/// Writes an arbitrary raw pointer directly into `TAGGED_HEAP` without mirror
+/// synchronization or foreign-heap refusal. Caller must ensure no live
+/// `Context` or TLS-derived heap loan reads the corrupted slot and must clean
+/// up TLS before returning control to normal evaluation.
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub fn poke_installed_heap_address(root: *mut super::super::TaggedHeap) {
+pub unsafe fn poke_installed_heap_address(root: *mut super::super::TaggedHeap) {
     super::super::TAGGED_HEAP.with(|slot| slot.set(root));
 }

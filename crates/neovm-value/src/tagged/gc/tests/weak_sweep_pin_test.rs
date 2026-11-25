@@ -51,8 +51,8 @@ fn pairs(table: TaggedValue) -> BTreeSet<(i64, i64)> {
         .collect()
 }
 
-fn fresh() -> TaggedHeap {
-    let mut heap = TaggedHeap::new();
+fn fresh() -> Box<TaggedHeap> {
+    let mut heap = Box::new(TaggedHeap::new());
     set_tagged_heap(&mut heap);
     heap
 }

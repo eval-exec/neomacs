@@ -805,7 +805,9 @@ impl<'a> RestoreActiveSourceAfterClone<'a> {
     fn enter(eval: &'a mut Context) -> Self {
         let saved_fontset = Some(crate::emacs_core::eval::lifecycle::fontset_registry_snapshot());
         let saved_loaded_dump = Some(snapshot_loaded_dump_stats());
-        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&eval.tagged_heap);
+        // SAFETY: `self.eval` is mutably borrowed for the entire clone nest and
+        // `Drop` unconditionally reactivates `eval` before control returns to it.
+        unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&eval.tagged_heap) };
         Self {
             eval,
             saved_fontset,

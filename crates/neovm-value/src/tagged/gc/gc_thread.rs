@@ -1695,13 +1695,15 @@ pub unsafe fn set_tagged_heap_root(root: std::ptr::NonNull<TaggedHeap>) {
 /// migrated; no production or integration-test caller can use it.
 #[cfg(any(test, feature = "test-support"))]
 pub fn set_tagged_heap(heap: &mut TaggedHeap) {
+    let target = heap as *mut TaggedHeap;
+    refuse_if_foreign_heap_installed(target, heap.tagged_heap_identity());
     if !tagged_heap_is_current(heap) {
         super::super::collection_reads::reset_recent_reads_for_heap_installation();
     }
     // Legacy tests retain their existing borrow-derived heap contract.
     unsafe { attach_store_protocol(std::ptr::NonNull::from(&mut *heap)) };
-    TAGGED_HEAP.with(|h| h.set(heap as *mut TaggedHeap));
-    unsafe { sync_heap_tls_mirrors(heap as *mut TaggedHeap) };
+    TAGGED_HEAP.with(|h| h.set(target));
+    unsafe { sync_heap_tls_mirrors(target) };
 }
 
 /// Refresh the per-heap TLS mirrors after the allocation slot was stored.
@@ -1752,8 +1754,24 @@ unsafe fn sync_heap_tls_mirrors(root: *mut TaggedHeap) {
 /// installs the heap again, and the debug assertion at job start proves the
 /// slot was empty, so a read before that install faults deterministically
 /// instead of following a stale but plausible pointer.
+///
+/// # Safety
+///
+/// 1. No live active `Context` remains evaluating on this OS thread (owner
+///    state and carried World state have already been stowed or retired).
+///    Clearing a live `Context`'s slot allows a subsequent constructor or
+///    loader to install a foreign heap and turn the cleared `Context` dormant
+///    (rt A3).
+/// 2. No loan or reference derived from the TLS slot is live on this thread.
+/// 3. Store-protocol / deferred-reset lifecycle obligation: unlike
+///    [`clear_tagged_heap_if_installed`], this clears only the carrier's
+///    heap-pointer slot and hot-path mirrors — it does **not** call
+///    `detach_store_protocol()`, `clear_installed_store_heap()`, or
+///    `reset_recent_reads_for_heap_installation()`. The caller must ensure
+///    carrier stow and deferred `reset_carrier_tls()` uphold those invariants
+///    before any subsequent job runs on this carrier.
 #[doc(hidden)]
-pub fn clear_carrier_heap_tls() {
+pub unsafe fn clear_carrier_heap_tls() {
     TAGGED_HEAP.with(|slot| slot.set(std::ptr::null_mut()));
     TAGGED_HEAP_ID.with(|slot| slot.set(None));
     TAGGED_HEAP_WRITE_TRACKING_MODE.with(|slot| slot.set(WriteTrackingMode::Disabled));
@@ -1824,17 +1842,35 @@ pub fn carrier_heap_is_acceptable_for_job_start() -> bool {
 /// The pointer identity check makes this safe to call unconditionally from a
 /// drop hook: an owner whose heap was already displaced by a later
 /// `set_tagged_heap` leaves the newer installation alone.
-pub fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
+///
+/// # Safety
+///
+/// 1. `heap` is the caller's own heap, on its owning thread.
+/// 2. The owner becomes dormant: until its heap is reinstalled through the
+///    refusing predicate (or dropped), no evaluation, allocation, collection,
+///    or non-reactivating `Context` entry may run against the cleared heap.
+/// 3. No loan or reference derived from the TLS slot is live.
+#[doc(hidden)]
+pub unsafe fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
     heap.detach_store_protocol();
-    clear_tagged_heap_root_if_installed(std::ptr::NonNull::from(heap));
+    // SAFETY: caller upholds `clear_tagged_heap_root_if_installed`'s contract
+    // and `detach_store_protocol()` just detached the store protocol above.
+    unsafe { clear_tagged_heap_root_if_installed(std::ptr::NonNull::from(heap)) };
 }
 
 /// Uninstall by address alone, without creating a heap reference. Admission
 /// may hold an exclusive collector loan while clearing its root-derived TLS
 /// alias; even a shared reference from that root would invalidate the loan.
 /// This compares pointers and resets TLS mirrors, never dereferencing `root`.
+///
+/// # Safety
+///
+/// Same contract as [`clear_tagged_heap_if_installed`] (caller's own heap on
+/// its owning thread, owner dormant until reinstalled through the refusing
+/// predicate, no loan or reference derived from the TLS slot is live), plus
+/// the store protocol for `root` must already be detached.
 #[doc(hidden)]
-pub fn clear_tagged_heap_root_if_installed(root: std::ptr::NonNull<TaggedHeap>) {
+pub unsafe fn clear_tagged_heap_root_if_installed(root: std::ptr::NonNull<TaggedHeap>) {
     let owned = root.as_ptr();
     let _ = TAGGED_HEAP.try_with(|h| {
         if h.get() == owned {
@@ -1998,18 +2034,35 @@ pub fn refuse_if_live_heap_installed() {
     }
 }
 
-/// Install `root` if the slot is empty, already names `root`, or holds the
-/// armed test-fallback heap; otherwise refuse with a cold panic.
+/// Refuse if TLS already names a different live heap (by address or identity)
+/// that is not the armed test-fallback heap.
+///
+/// Checking both raw pointer equality and `TAGGED_HEAP_ID` closes address-reuse
+/// bypasses (such as `std::mem::replace` on a `TaggedHeap` at the same stack
+/// slot while the previous heap remains live).
+#[inline]
+fn refuse_if_foreign_heap_installed(target: *const TaggedHeap, target_id: usize) {
+    let current = TAGGED_HEAP.with(|slot| slot.get());
+    let same_heap = current == (target as *mut TaggedHeap)
+        && TAGGED_HEAP_ID.with(|id| id.get()) == Some(target_id);
+    if !current.is_null() && !same_heap && !installed_slot_is_armed_test_fallback() {
+        refuse_foreign_heap_install();
+    }
+}
+
+/// Install `root` if the slot is empty, already names `root` (same address and
+/// heap identity), or holds the armed test-fallback heap; otherwise refuse with
+/// a cold panic.
 ///
 /// # Safety
 ///
 /// Same contract as [`set_tagged_heap_root`].
 #[doc(hidden)]
 pub unsafe fn install_tagged_heap_root_refusing_foreign(root: std::ptr::NonNull<TaggedHeap>) {
-    let current = TAGGED_HEAP.with(|slot| slot.get());
-    if !current.is_null() && current != root.as_ptr() && !installed_slot_is_armed_test_fallback() {
-        refuse_foreign_heap_install();
-    }
+    // SAFETY: caller upholds `set_tagged_heap_root`'s contract (`root` is a
+    // live `TaggedHeap` allocation root with no conflicting mutable borrow).
+    let target_id = unsafe { (*root.as_ptr()).tagged_heap_identity() };
+    refuse_if_foreign_heap_installed(root.as_ptr(), target_id);
     // SAFETY: caller upholds `set_tagged_heap_root`'s contract.
     unsafe { set_tagged_heap_root(root) };
 }

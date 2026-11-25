@@ -27,7 +27,8 @@ fn symbol_cons_stores_do_not_install_a_heap() {
     unsafe { heap.set_generational_enabled(false) };
     set_tagged_heap(&mut heap);
     let owner = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
-    clear_tagged_heap_if_installed(&heap);
+    // SAFETY: bare `TaggedHeap` unit test checking null-heap write recording.
+    unsafe { clear_tagged_heap_if_installed(&heap) };
     assert!(!tagged_heap_is_installed());
     let before = RECORD_HEAP_WRITE_CALLS.with(Cell::get);
 
@@ -102,12 +103,19 @@ fn generational_cons_protocol_window_rederives_on_heap_switch_and_uninstall() {
     // collector or compiled leaf runs.
     unsafe { disabled.set_generational_enabled(false) };
     disabled.extend_dump_span(4096, 4096);
+    // SAFETY: bare `TaggedHeap` unit test switching from `enabled` to `disabled`.
+    unsafe { clear_tagged_heap_if_installed(&enabled) };
     set_tagged_heap(&mut disabled);
     assert_published_windows(&disabled, BarrierWindow::span(4096, 8192));
     // A displaced heap's teardown must not disarm the current heap.
-    clear_tagged_heap_if_installed(&enabled);
+    // SAFETY: bare `TaggedHeap` unit test verifying non-current clear is a no-op.
+    unsafe { clear_tagged_heap_if_installed(&enabled) };
     assert_published_windows(&disabled, BarrierWindow::span(4096, 8192));
-    TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(BarrierWindow::NONE));
+    // SAFETY: bare `TaggedHeap` unit test clearing `disabled` before restoring
+    // `enabled`; seed a stale cons-barrier mirror so `set_tagged_heap` must
+    // still re-derive `enabled`'s window.
+    unsafe { clear_tagged_heap_if_installed(&disabled) };
+    TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(BarrierWindow::span(8, 16)));
     set_tagged_heap(&mut enabled);
     assert_published_windows(&enabled, BarrierWindow::NONE);
     drop(disabled);
@@ -122,19 +130,29 @@ fn generational_cons_protocol_window_rederives_on_heap_switch_and_uninstall() {
 fn generational_cons_protocol_window_fallback_install_derives_both_mirrors() {
     let mut heap = Box::new(TaggedHeap::new());
     set_tagged_heap(&mut heap);
-    clear_tagged_heap_if_installed(&heap);
+    // SAFETY: bare `TaggedHeap` unit test checking null-heap write recording.
+    unsafe { clear_tagged_heap_if_installed(&heap) };
     // Do not rely on a fallback allocation's first collection to publish it.
     TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(BarrierWindow::span(8, 16)));
-    unsafe {
+    // SAFETY: unit test checking fallback heap install when TLS is null; the
+    // returned `fallback_root` is only used after `with_tagged_heap` returns so
+    // no TLS-derived `&mut TaggedHeap` loan is live during the clear below.
+    let fallback_root = unsafe {
         with_tagged_heap(|fallback| {
             assert_published_windows(fallback, fallback.barrier_window());
             assert_eq!(
                 current_tagged_heap_identity(),
                 Some(fallback.tagged_heap_identity())
             );
-            clear_tagged_heap_if_installed(fallback);
+            std::ptr::NonNull::from(&*fallback)
         })
     };
+    // `with_tagged_heap` has returned, so no TLS-derived `&mut TaggedHeap` loan
+    // is live when we detach and clear the thread-local fallback heap.
+    // SAFETY: `fallback_root` points to the process-lifetime test fallback heap
+    // currently installed on this thread; no active `Context` or TLS heap loan
+    // is live.
+    unsafe { clear_tagged_heap_if_installed(fallback_root.as_ref()) };
     assert_eq!(published_cons_barrier_window(), BarrierWindow::NONE);
 }
 

@@ -135,7 +135,8 @@ impl Drop for MarkPhase {
         heap.mark_in_progress = false;
         heap.generational.major_in_progress = false;
         set_tagged_heap(heap);
-        clear_tagged_heap_if_installed(heap);
+        // SAFETY: teardown of bare `TaggedHeap` unit-test fixture.
+        unsafe { clear_tagged_heap_if_installed(heap) };
     }
 }
 

@@ -107,7 +107,8 @@ fn cons_shims() -> usize {
 fn heapless_runtime_lowering_does_not_install_a_fallback_heap() {
     let mut heap = neovm_value::tagged::gc::TaggedHeap::new();
     neovm_value::tagged::gc::set_tagged_heap(&mut heap);
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&heap);
+    // SAFETY: standalone bare `TaggedHeap` test fixture cleared to exercise null-heap store.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&heap) };
     // Each store reaches RtCtx's lazy generational-mode capture. With no
     // installed heap it must choose the legacy gate without creating one.
     for op in [Op::Setcar, Op::Setcdr] {

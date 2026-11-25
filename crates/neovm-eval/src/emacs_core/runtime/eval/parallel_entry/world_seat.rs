@@ -44,7 +44,7 @@
 //!   inside the active Lisp interval (or between `switch_out` and `switch_in`)
 //!   drops the armed [`WorldLend`], which automatically sends
 //!   `KeeperMsg::GroupAbandon { cause: Unwound }` (K7).
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use super::super::Context;
 use super::super::green::WorldSeatParkedRoots;
@@ -268,7 +268,13 @@ impl ParkedWorldSeat {
             stowed,
             "verified World carrier holder must stow into GreenRuntime"
         );
-        park_carrier_tls();
+        // SAFETY: `ctx` parked its seat/roots and stowed carried World state
+        // under `AbortOnPanic`; no TLS heap loan is live, and `enter` runs
+        // `reset_carrier_tls()` before reusing this thread.
+        #[allow(unsafe_code)]
+        unsafe {
+            park_carrier_tls();
+        }
         Ok(Self {
             slab,
             roots,
@@ -350,7 +356,12 @@ impl ParkedWorldSeat {
         let _parked = ctx.park_owner();
         let stowed = ctx.stow_serial_world_state();
         assert!(stowed, "teardown must stow World carriers back to Stowed");
-        park_carrier_tls();
+        // SAFETY: test teardown parked `ctx` and stowed World carriers under
+        // `AbortOnPanic`; no TLS heap loan is live and `ctx` is not re-entered.
+        #[allow(unsafe_code)]
+        unsafe {
+            park_carrier_tls();
+        }
         drop(self.retention);
     }
 }
@@ -449,7 +460,13 @@ impl ActiveWorldSeat {
                 stowed,
                 "active World seat must stow World carriers into GreenRuntime on switch_out"
             );
-            park_carrier_tls();
+            // SAFETY: active World seat parked its roots and stowed carried
+            // World state under `AbortOnPanic`; no TLS heap loan is live and
+            // the next seat runs `reset_carrier_tls()` on `enter`/`switch_in`.
+            #[allow(unsafe_code)]
+            unsafe {
+                park_carrier_tls();
+            }
             (roots, retention)
         };
         drop(self.retention);

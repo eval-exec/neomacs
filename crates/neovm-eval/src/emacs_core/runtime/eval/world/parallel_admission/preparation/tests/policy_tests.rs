@@ -29,13 +29,13 @@ fn pentry_e2b_closed_preparation_admits_the_preserved_weak_table_without_reclama
         .unwrap();
     let collections = source.tagged_heap.gc_collections();
     let recovery = {
+        // SAFETY: `source` is not re-entered until `recover_serial_context` below.
         let PreparedAdmission {
             collector,
             keeper,
             frozen,
             recovery,
-        } = source
-            .prepare_closed_source()
+        } = unsafe { source.prepare_closed_source() }
             .unwrap_or_else(|_| panic!("closed preparation"));
         // Closed preparation preserves the table (no retirement); since E3
         // slice 1 the preserved eligible table no longer refuses production
@@ -78,14 +78,13 @@ fn pentry_e2b_closed_preparation_admits_the_preserved_weak_table_without_reclama
 fn pentry_e2b_closed_preparation_empty_context_success_ends_before_recovery() {
     let mut source = source();
     let identity = source.tagged_heap.heap_identity();
+    // SAFETY: `source` is not re-entered until `recover_serial_context` below.
     let PreparedAdmission {
         collector,
         keeper,
         frozen,
         recovery,
-    } = source
-        .prepare_closed_source()
-        .unwrap_or_else(|_| panic!("closed preparation"));
+    } = unsafe { source.prepare_closed_source() }.unwrap_or_else(|_| panic!("closed preparation"));
     assert_eq!(collector.heap_identity(), identity);
     assert_eq!(frozen.heap_identity(), identity);
     assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
@@ -104,7 +103,9 @@ fn pentry_e2b_closed_preparation_actual_census_failure_retains_keeper() {
     let world = Arc::clone(&source.obarray.lease.0);
     let before = Arc::strong_count(&world);
     let loan = world.green.borrow_mut();
-    let mut failure = match source.prepare_closed_source() {
+    // SAFETY: test checks failure path before drain; `source` is never
+    // re-entered after `prepare_closed_source`.
+    let mut failure = match unsafe { source.prepare_closed_source() } {
         Ok(_) => panic!("actual Green slot loan must refuse census"),
         Err(failure) => failure,
     };
@@ -125,7 +126,9 @@ fn pentry_e2b_closed_preparation_actual_census_failure_retains_keeper() {
 #[test]
 fn pentry_e2b_closed_preparation_failure_before_keeper_never_installs_tls() {
     let mut source = source();
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap);
+    // SAFETY: unit test simulating detached preparation failure; `source` is
+    // not evaluated while cleared.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap) };
     let failure = ClosedSource::fail(
         &mut source,
         SerialRecovery::Unchanged,
@@ -141,7 +144,9 @@ fn pentry_e2b_closed_preparation_failure_before_keeper_never_installs_tls() {
 #[test]
 fn pentry_e2b_recovering_preparation_failure_still_installs_tls() {
     let mut source = source();
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap);
+    // SAFETY: unit test simulating detached preparation failure; `source` is
+    // not evaluated while cleared.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap) };
     let reason = RecoverSerial::fail(
         &mut source,
         SerialRecovery::Unchanged,
@@ -159,14 +164,13 @@ fn pentry_e2b_recovering_preparation_still_reclaims_empty_weak_table() {
     let mut source = source();
     source.install_empty_dead_windows_table();
     let before = source.tagged_heap.gc_collections();
+    // SAFETY: `source` is not re-entered until `recover_serial_context` below.
     let PreparedAdmission {
         collector,
         keeper,
         frozen,
         recovery,
-    } = source
-        .prepare_owned_admission()
-        .expect("ordinary serial preparation");
+    } = unsafe { source.prepare_owned_admission() }.expect("ordinary serial preparation");
     assert!(matches!(recovery, SerialRecovery::RecreateDeadWindows));
     drop(frozen);
     drop(collector);
@@ -188,7 +192,9 @@ fn abandoned_failure(action: impl FnOnce(ClosedPreparationFailure<'_>)) {
         .capture_parallel_legacy_roots(&keeper)
         .expect("actual census");
     let count = Arc::strong_count(&world);
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap);
+    // SAFETY: unit test simulating detached preparation failure; `source` is
+    // not evaluated while cleared.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&source.tagged_heap) };
     let failure = ClosedSource::fail(
         &mut source,
         SerialRecovery::Unchanged,

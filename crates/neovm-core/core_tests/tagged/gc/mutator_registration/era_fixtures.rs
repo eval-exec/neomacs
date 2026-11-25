@@ -170,9 +170,12 @@ impl EraFixtureExt for Context {
         .expect("collection fixture drain");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(world_view_heap_root(
-            context.tagged_heap(),
-        ));
+        // SAFETY: `context` is not evaluated while the collector loan is held.
+        unsafe {
+            neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(world_view_heap_root(
+                context.tagged_heap(),
+            ));
+        }
         // SAFETY: the fixture built this World and holds its sole retention;
         // the prepare callback derives the original retained epoch/backing.
         let era = unsafe {
@@ -209,9 +212,12 @@ impl EraFixtureExt for Context {
         .expect("collection fixture drain");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(world_view_heap_root(
-            context.tagged_heap(),
-        ));
+        // SAFETY: `context` is not evaluated while the collector loan is held.
+        unsafe {
+            neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(world_view_heap_root(
+                context.tagged_heap(),
+            ));
+        }
         // SAFETY: same original keeper and frozen private census as above.
         let era = unsafe {
             neovm_value::test_support::authority::admit_rooted_for_test(
@@ -257,9 +263,12 @@ impl EraFixtureExt for Context {
         .expect("fresh fixture collector drains completely");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(world_view_heap_root(
-            context.tagged_heap(),
-        ));
+        // SAFETY: `context` is not evaluated while the collector loan is held.
+        unsafe {
+            neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(world_view_heap_root(
+                context.tagged_heap(),
+            ));
+        }
         // SAFETY: the fresh sole-owner World above; same keeper preparation.
         let era = unsafe {
             neovm_value::test_support::authority::admit_for_test(
@@ -303,9 +312,12 @@ impl EraFixtureExt for Context {
         .expect("rooted fixture collector");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(world_view_heap_root(
-            context.tagged_heap(),
-        ));
+        // SAFETY: `context` is not evaluated while the collector loan is held.
+        unsafe {
+            neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(world_view_heap_root(
+                context.tagged_heap(),
+            ));
+        }
         // SAFETY: same fresh keeper and frozen census as above.
         let era = unsafe {
             neovm_value::test_support::authority::admit_for_test(

@@ -265,17 +265,13 @@ fn observed_heap_switch_dump_change_discards_empty_gap() {
     crate::test_utils::init_test_tracing();
     let _mode = ObservedMode::begin();
     let mut first = context();
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(first.tagged_heap());
-    let mut second = context();
-    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
-    set_tagged_heap(unsafe { first.tagged_heap_mut() });
     let owners = rooted_cons_triplet(&mut first);
     exclude_middle(&first, owners);
     let (_, reads) = capture(|| owners[0].cons_car());
     let reads = reads.expect("the first heap's owner remains retained");
 
-    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
-    set_tagged_heap(unsafe { second.tagged_heap_mut() });
+    let parked_first = first.park_for_test();
+    let mut second = context();
     // This valid writable image allocation outlives both heaps, as an actual
     // pdump mapping does. No fabricated header or non-object address is used.
     let image = Box::leak(Box::new(ConsCell {
@@ -297,8 +293,8 @@ fn observed_heap_switch_dump_change_discards_empty_gap() {
             .jit_barrier_window_for_test()
             .covers(image as *mut ConsCell as usize)
     );
-    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
-    set_tagged_heap(unsafe { first.tagged_heap_mut() });
+    let _parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     assert!(
         compiled_observation_gate(BarrierWindow::NONE)
             .excluded_for_test()

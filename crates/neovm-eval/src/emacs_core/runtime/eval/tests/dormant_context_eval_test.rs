@@ -272,11 +272,20 @@ fn pdump_clone_keeps_source_active_and_not_dormant() {
     let cloned = err.into_parked();
 
     // 3. clone_evaluator(&mut Context) also returns a ParkedContext and keeps
-    // source active with all heap-keyed caches (string-pos, regex) keyed to
-    // source, verified through non-reactivating `source.apply` calls.
+    // source active with all heap-keyed caches (string-pos, regex),
+    // integer-width TLS, and JIT stack limit bound to source, verified through
+    // non-reactivating `source.apply` calls.
+    let before_jit_limit = source.jit_stack_limit;
+    assert_ne!(before_jit_limit, 0);
     let cloned_imm = crate::emacs_core::pdump::clone_evaluator(&mut source)
         .expect("clone_evaluator should succeed");
     assert_eq!(current_tagged_heap_identity(), Some(source_id));
+    assert_eq!(
+        source.jit_stack_limit,
+        crate::emacs_core::eval::native_stack::jit_stack_limit_here(),
+        "jit_stack_limit must be refreshed to this thread's stack segment after clone_evaluator"
+    );
+    assert_eq!(source.jit_stack_limit, before_jit_limit);
     let cons_after = source
         .apply(
             Value::symbol("cons"),
@@ -310,6 +319,20 @@ fn pdump_clone_keeps_source_active_and_not_dormant() {
         )
         .expect("source.apply(string-match) after clone_evaluator");
     assert_eq!(matched, Value::fixnum(2));
+    // Prove integer-width TLS points to `source`'s obarray (not the clone's):
+    // mutating `integer-width` on `source` without reactivating must constrain
+    // `source.apply(expt, ...)` immediately (2^200 > BIGNUM_BITS_FLOOR = 128).
+    source.set_variable("integer-width", Value::fixnum(128));
+    assert!(
+        source
+            .apply(
+                Value::symbol("expt"),
+                vec![Value::fixnum(2), Value::fixnum(200)],
+            )
+            .is_err(),
+        "integer-width TLS must bind to source's obarray after clone_evaluator"
+    );
+    source.set_variable("integer-width", Value::fixnum(65536));
     assert_eq!(
         source
             .eval_str("pdump-clone-source-token")
@@ -421,8 +444,9 @@ fn pdump_reload_written_bootstrap_dump_round_trips_ok_and_err() {
         Value::fixnum(77)
     );
 
-    // Late Err path: dump fails AFTER symbol-table loading (corrupted ObjectStarts),
-    // and still restores fontset, runtime bindings, and eval cleanly.
+    // Mid-load Err path: dump fails AFTER symbol-table loading (corrupted
+    // ObjectStarts, before fontset/obarray reconstruction), and still restores
+    // fontset, runtime bindings, and eval cleanly.
     crate::emacs_core::pdump::dump_to_file(&eval, &good_path).expect("dump valid image");
     std::fs::copy(&good_path, &late_bad_path).expect("copy good dump for late failure");
     crate::emacs_core::pdump::mmap_image::corrupt_section_on_disk_for_test(
@@ -554,4 +578,90 @@ fn setup_thread_locals_refuses_over_foreign_heap_without_mutating_tls() {
         .expect("resume on empty slot");
     assert_eq!(current_tagged_heap_identity(), Some(ctx_id));
     assert_eq!(ctx.eval_str("42").expect("resumed eval"), Value::fixnum(42));
+}
+
+#[test]
+fn test_heap_install_and_set_tagged_heap_refuse_over_live_context() {
+    let active = Context::new(crate::test_utils::unit_runtime());
+    let active_id = active.tagged_heap().tagged_heap_identity();
+    assert_eq!(current_tagged_heap_identity(), Some(active_id));
+
+    let mut bare = neovm_value::tagged::gc::TaggedHeap::new();
+    let refused_set = catch_unwind(AssertUnwindSafe(|| {
+        neovm_value::tagged::gc::set_tagged_heap(&mut bare);
+    }));
+    let set_text =
+        panic_text(refused_set.expect_err("set_tagged_heap must refuse over a live Context"));
+    assert!(
+        set_text.contains("dormant Context"),
+        "set_tagged_heap refusal must name dormant Context, got {set_text}"
+    );
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(active_id),
+        "refused set_tagged_heap must leave active heap installed"
+    );
+
+    let refused_test_heap = catch_unwind(AssertUnwindSafe(|| {
+        let _heap = neovm_value::tagged::gc::TestHeap::new();
+    }));
+    let th_text = panic_text(
+        refused_test_heap.expect_err("TestHeap::new/install must refuse over a live Context"),
+    );
+    assert!(
+        th_text.contains("dormant Context"),
+        "TestHeap::install refusal must name dormant Context, got {th_text}"
+    );
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(active_id),
+        "refused TestHeap::new must leave active heap installed"
+    );
+
+    drop(active);
+    let mut heap = neovm_value::tagged::gc::TestHeap::new();
+    let heap_id = heap.tagged_heap_identity();
+    assert_eq!(current_tagged_heap_identity(), Some(heap_id));
+    heap.install();
+    assert_eq!(current_tagged_heap_identity(), Some(heap_id));
+}
+
+#[test]
+fn set_tagged_heap_refuses_same_address_mem_replace_heap() {
+    let mut slot = neovm_value::tagged::gc::TaggedHeap::new();
+    let first_id = slot.tagged_heap_identity();
+    neovm_value::tagged::gc::set_tagged_heap(&mut slot);
+    assert_eq!(current_tagged_heap_identity(), Some(first_id));
+
+    // Replace the heap at the exact same stack address while the first heap
+    // remains live. Pointer-only refusal would see `current == target` and
+    // silently overwrite the installed identity.
+    let first_live = std::mem::replace(&mut slot, neovm_value::tagged::gc::TaggedHeap::new());
+    let second_id = slot.tagged_heap_identity();
+    assert_ne!(first_id, second_id);
+
+    let refused = catch_unwind(AssertUnwindSafe(|| {
+        neovm_value::tagged::gc::set_tagged_heap(&mut slot);
+    }));
+    let text = panic_text(refused.expect_err(
+        "set_tagged_heap must refuse a mem::replace'd heap with a new identity at the same address",
+    ));
+    assert!(
+        text.contains("dormant Context"),
+        "same-address mem::replace refusal must name dormant Context, got {text}"
+    );
+    assert_eq!(
+        current_tagged_heap_identity(),
+        Some(first_id),
+        "refused same-address install must keep the original heap identity in TLS"
+    );
+
+    // Put `first_live` back at the installed address before detaching and
+    // dropping both heaps cleanly.
+    let second_dropped = std::mem::replace(&mut slot, first_live);
+    // SAFETY: `slot` holds `first_live` at the installed address; neither heap
+    // is entered again before drop.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&slot) };
+    drop(second_dropped);
+    drop(slot);
 }

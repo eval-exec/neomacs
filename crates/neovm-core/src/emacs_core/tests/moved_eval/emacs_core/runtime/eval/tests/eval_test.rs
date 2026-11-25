@@ -28056,7 +28056,12 @@ fn jit_heap_swap_clears_compiled_leaves() {
     let _fv = jit_cached_leaf_fixture(&mut ev, "jit-heap-swap-probe-fn");
     assert!(crate::emacs_core::jit::cache::compiled_cache_probe().0 >= 1);
 
-    let mut other = neovm_value::tagged::gc::TaggedHeap::new();
+    let parked = ev.park_for_test();
+    assert!(
+        crate::emacs_core::jit::cache::compiled_cache_probe().0 >= 1,
+        "parking leaves compiled leaves in cache until the foreign heap is installed"
+    );
+    let mut other = Box::new(neovm_value::tagged::gc::TaggedHeap::new());
     neovm_value::tagged::gc::set_tagged_heap(&mut other);
     let mut roots = Vec::new();
     crate::emacs_core::jit::cache::collect_jit_reloc_gc_roots(&mut roots);
@@ -28069,10 +28074,8 @@ fn jit_heap_swap_clears_compiled_leaves() {
         roots.is_empty(),
         "no reloc root may be traced from a cleared cache"
     );
-    // Restore the evaluator's own heap before it is dropped.
-    // SAFETY: test-only owner-thread heap restore through the non-swappable
-    // mutable accessor contract; the view is used in place and dropped here.
-    neovm_value::tagged::gc::set_tagged_heap(&mut **unsafe { ev.tagged_heap_mut() });
+    drop(other);
+    let _ev = parked.resume_for_test().expect("resume evaluator");
 }
 /// A `make-closure` PROTOTYPE shaped like `byte-compile-make-closure`'s: the
 /// first `placeholders` constant slots hold the symbols `V0..`, patched per

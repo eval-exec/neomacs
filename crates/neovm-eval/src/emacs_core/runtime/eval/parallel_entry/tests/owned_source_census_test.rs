@@ -138,7 +138,10 @@ fn pentry_e2b_source_census_rechecks_entry_before_the_actual_drain() {
     let retired = capture(source).unwrap().retire_text().unwrap();
     // Clear the retired source's heap slot so the foreign Context can install
     // cleanly; the retired source is not entered again, only refused on TLS.
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&retired._frame.source.tagged_heap);
+    // SAFETY: `retired._frame.source` is retired and never evaluated again.
+    unsafe {
+        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&retired._frame.source.tagged_heap);
+    }
     let foreign = ready();
     // Production prepare_census has no gap between retirement and the drain.
     // This reaches the private recheck with another heap already current.
@@ -164,16 +167,22 @@ fn pentry_e2b_source_census_rechecks_entry_before_the_actual_drain() {
 fn pentry_e2b_source_census_existing_keeper_from_another_world_refuses() {
     let source = ready();
     let mut first = capture(source).unwrap();
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&first._frame.source.tagged_heap);
+    // SAFETY: `first._frame.source` is captured/suspended and never evaluated again.
+    unsafe {
+        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&first._frame.source.tagged_heap);
+    }
     let foreign_source = ready();
     let foreign = capture(foreign_source).unwrap();
     // The shared preparation check rejects before it clears the installed heap.
-    let error = first
-        ._frame
-        .source
-        .close_owned_source_heap_tls(foreign._frame.effects.keeper())
-        .err()
-        .expect("another World's retained keeper is not admission");
+    // SAFETY: `first._frame.source` is captured/suspended and never evaluated again.
+    let error = unsafe {
+        first
+            ._frame
+            .source
+            .close_owned_source_heap_tls(foreign._frame.effects.keeper())
+    }
+    .err()
+    .expect("another World's retained keeper is not admission");
     assert_eq!(
         error,
         super::super::super::world::OwnedParallelError::Identity

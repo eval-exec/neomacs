@@ -33,9 +33,7 @@ fn gc_tls_ownership_terminal_values_survive_owner_collection_and_reactivation() 
             .bits(),
         expected[1]
     );
-    neovm_value::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap());
-
-    ctx.setup_thread_locals();
+    let mut ctx = ctx.park_for_test().resume_for_test().expect("resume ctx");
     let restored_handle = terminal_handle_value();
     assert_eq!(restored_handle.bits(), expected[0]);
     assert_eq!(

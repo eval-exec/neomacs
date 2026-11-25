@@ -4091,7 +4091,7 @@ fn every_must_reset_record_is_covered_by_a_real_carrier_reset() {
     let main_rs = std::fs::read_to_string(crates.join("neomacs/src/main.rs"))
         .expect("read neomacs/src/main.rs");
 
-    let park_steps = reset_steps(&carrier_tls, "pub(crate) fn park_carrier_tls()");
+    let park_steps = reset_steps(&carrier_tls, "pub(crate) unsafe fn park_carrier_tls()");
     let deferred_steps = reset_steps(&carrier_tls, "pub(crate) fn reset_carrier_tls()");
     let park: std::collections::BTreeSet<String> = park_steps
         .iter()
