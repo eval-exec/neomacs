@@ -2570,6 +2570,11 @@ pub(super) fn run_carrier_job(
     // no TLS heap loan is live, and the carrier prologue runs
     // `reset_carrier_tls()` before reusing this OS thread.
     unsafe { super::carrier_tls::park_carrier_tls() };
+    if baton.is_era() {
+        let proof =
+            super::super::parallel_entry::world_seat::prove_retired_worker_stowed_for_era(&baton);
+        baton.set_stowed_for_return(proof);
+    }
     let parked = pool.park(carrier);
     let retired = baton.retire_thread_completion(completion);
     control.finish(retired, baton);
