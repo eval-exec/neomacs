@@ -1902,6 +1902,22 @@ fn internal_char_font_nil_position_does_not_rebuild_the_face_table_per_call() {
 #[test]
 fn composition_font_or_frame_at_returns_tty_frame_and_honors_tty_type_inhibition() {
     crate::test_utils::init_test_tracing();
+    struct TerminalRuntimeResetGuard;
+    impl Drop for TerminalRuntimeResetGuard {
+        fn drop(&mut self) {
+            crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
+            crate::emacs_core::terminal::pure::reset_terminal_runtime();
+        }
+    }
+    let _reset_guard = TerminalRuntimeResetGuard;
+    crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
+    crate::emacs_core::terminal::pure::configure_terminal_runtime(
+        crate::emacs_core::terminal::pure::TerminalRuntimeConfig::interactive(
+            Some("xterm-256color".to_string()),
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256),
+        ),
+    );
+
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let buf_id = eval
         .edit
@@ -1919,6 +1935,14 @@ fn composition_font_or_frame_at_returns_tty_frame_and_honors_tty_type_inhibition
     eval.obarray_mut()
         .set_symbol_value("auto-composition-mode", Value::T);
 
+    let tty_type =
+        crate::emacs_core::terminal::pure::builtin_tty_type(&mut eval, vec![]).expect("tty-type");
+    assert_eq!(
+        tty_type,
+        Value::string("xterm-256color"),
+        "interactive TTY terminal must report a concrete tty-type string"
+    );
+
     let result = composition_font_or_frame_at(&mut eval, 4, Value::NIL);
     assert_eq!(
         result,
@@ -1927,27 +1951,21 @@ fn composition_font_or_frame_at_returns_tty_frame_and_honors_tty_type_inhibition
     );
 
     // Non-matching string auto-composition-mode does not inhibit.
-    eval.obarray_mut().set_symbol_value(
-        "auto-composition-mode",
-        Value::string("non-matching-tty-type"),
-    );
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-mode", Value::string("vt100"));
     assert_eq!(
         composition_font_or_frame_at(&mut eval, 4, Value::NIL),
         Some(Value::make_frame(frame_id.0)),
     );
 
     // Matching tty-type string inhibits (GNU inhibit_auto_composition).
-    let tty_type =
-        crate::emacs_core::terminal::pure::builtin_tty_type(&mut eval, vec![]).expect("tty-type");
-    if tty_type.is_string() {
-        eval.obarray_mut()
-            .set_symbol_value("auto-composition-mode", tty_type);
-        assert_eq!(
-            composition_font_or_frame_at(&mut eval, 4, Value::NIL),
-            None,
-            "matching tty-type string must inhibit automatic composition"
-        );
-    }
+    eval.obarray_mut()
+        .set_symbol_value("auto-composition-mode", tty_type);
+    assert_eq!(
+        composition_font_or_frame_at(&mut eval, 4, Value::NIL),
+        None,
+        "matching tty-type string must inhibit automatic composition"
+    );
 
     eval.obarray_mut()
         .set_symbol_value("auto-composition-mode", Value::NIL);
