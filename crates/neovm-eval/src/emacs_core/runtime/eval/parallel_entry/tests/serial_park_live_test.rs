@@ -2315,7 +2315,8 @@ fn l67b_a_group_collection_runs_first_and_the_group_resumes_next() {
 //   (default 1; the ruled points are 1 and 4).
 // - `L6_STOP_ITERS`: turns, intervals or collections per row (default 20).
 // Each row prints one `l6_stop_cost=` line with the timed section's elapsed
-// nanoseconds; timing runs are local, off the shared hosts.
+// nanoseconds and what one iteration measures (a collection row includes its
+// GC work); timing runs are local, off the shared hosts.
 // ---------------------------------------------------------------------------
 
 fn stop_cost_param(name: &str, default: usize) -> usize {
@@ -2342,6 +2343,16 @@ impl StopCostRow {
             StopCostRow::OwnerTurns => "owner_turns",
             StopCostRow::GroupIntervals => "group_intervals",
             StopCostRow::GroupCollections => "group_collections",
+        }
+    }
+
+    /// What one timed iteration contains. A collection row's time includes
+    /// the collection's own GC work, not only its two stops (lead #14142).
+    fn measures(self) -> &'static str {
+        match self {
+            StopCostRow::OwnerTurns => "stop+lend+form+return",
+            StopCostRow::GroupIntervals => "stop+world_lend+return",
+            StopCostRow::GroupCollections => "two_stops+gc_included",
         }
     }
 }
@@ -2436,8 +2447,10 @@ fn stop_cost(row: StopCostRow) {
             let (ran, elapsed) = runner.join().expect("the stop-cost runner");
             assert_eq!(ran, iters, "every turn ran");
             eprintln!(
-                "l6_stop_cost={} peers={peers} iters={iters} elapsed_ns={} per_iter_ns={}",
+                "l6_stop_cost={} measures={} peers={peers} iters={iters} elapsed_ns={} \
+                 per_iter_ns={}",
                 row.name(),
+                row.measures(),
                 elapsed.as_nanos(),
                 elapsed.as_nanos() / iters.max(1) as u128
             );
