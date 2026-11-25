@@ -1863,10 +1863,8 @@ pub(super) fn connect_datagram_network_process(
     server: bool,
     noquery: bool,
     stop: bool,
-    socket_type: NetworkSocketType,
     socket_options: Vec<NetworkSocketOptionSpec>,
 ) -> EvalResult {
-    let _ = socket_type;
     let service_str = network_service_to_addrinfo_string(&service)?;
     let host_str = host
         .clone()
@@ -2009,10 +2007,8 @@ pub(super) fn listen_stream_network_process(
     noquery: bool,
     stop: bool,
     server_backlog: Option<i32>,
-    socket_type: NetworkSocketType,
     socket_options: Vec<NetworkSocketOptionSpec>,
 ) -> EvalResult {
-    let _ = socket_type;
     let service_str = network_service_to_addrinfo_string(&service)?;
     let host_str = host
         .clone()
@@ -2798,7 +2794,6 @@ pub(crate) fn builtin_make_network_process(
             server,
             noquery,
             stop,
-            socket_type,
             socket_options,
         );
     }
@@ -2828,7 +2823,6 @@ pub(crate) fn builtin_make_network_process(
             noquery,
             stop,
             server_backlog,
-            socket_type,
             socket_options,
         );
     }

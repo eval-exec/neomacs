@@ -53,17 +53,22 @@ fn oracle_group_name_missing_gid_and_cons_to_integer_matches_gnu() {
     let expect = expect_test::expect![[
         r#""OK (t t t t t nil nil (error \"Not an in-range integer, integral float, or cons of integers\") (error \"Not an in-range integer, integral float, or cons of integers\") (error \"Not an in-range integer, integral float, or cons of integers\") (error \"Not an in-range integer, integral float, or cons of integers\") (error \"Invalid GID specification\") (error \"Invalid GID specification\"))""#
     ]];
+    // Probe from GID 4000000000 upward so the unassigned-GID rows stay
+    // deterministic even if a host happens to assign 4000000000 in /etc/group.
     crate::common::assert_oracle_parity_expect(
         r#"
-(let ((g (group-gid)))
+(let ((g (group-gid))
+      (missing 4000000000))
+  (while (and (< missing 4000000100) (group-name missing))
+    (setq missing (1+ missing)))
   (list
    (stringp (group-name g))
    (equal (group-name g) (group-name (float g)))
    (equal (group-name g) (group-name (cons (ash g -16) (logand g #xffff))))
    (equal (group-name 0) (group-name '(0 . 0)))
    (equal (group-name 0) (group-name '(0 0)))
-   (group-name 4000000000)
-   (group-name 4000000000.0)
+   (group-name missing)
+   (group-name (float missing))
    (condition-case e (group-name -1) (error e))
    (condition-case e (group-name 1.5) (error e))
    (condition-case e (group-name 5000000000) (error e))
@@ -75,6 +80,10 @@ fn oracle_group_name_missing_gid_and_cons_to_integer_matches_gnu() {
     );
 }
 
+// Gated to Linux because the `expect!` string pins glibc's
+// `gai_strerror(EAI_SERVICE)` ("Servname not supported for ai_socktype");
+// macOS/Darwin libsystem returns lowercase ("servname not supported for
+// ai_socktype") and no attested macOS GNU oracle binary is built in this repo.
 #[cfg(target_os = "linux")]
 #[test]
 fn oracle_make_network_process_unknown_service_matches_gnu() {
