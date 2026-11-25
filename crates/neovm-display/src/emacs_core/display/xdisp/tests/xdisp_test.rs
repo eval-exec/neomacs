@@ -9844,6 +9844,408 @@ fn window_text_pixel_size_display_before_invisible_and_tty_fringe() {
     );
 }
 
+#[test]
+fn window_text_pixel_size_unified_tty_fringe_when_and_space_list() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let put_prop = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                    start: i64,
+                    end: i64,
+                    name: &'static str,
+                    value: Value| {
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            eval,
+            vec![Value::fixnum(start), Value::fixnum(end), sym(name), value],
+        )
+        .expect("put-text-property");
+    };
+    let add_ov = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                  start: i64,
+                  end: i64,
+                  props: &[(&'static str, Value)]| {
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(start), Value::fixnum(end)],
+        )
+        .expect("make-overlay");
+        for &(k, v) in props {
+            neovm_edit::emacs_core::buffer::builtin_overlay_put(eval, vec![ov, sym(k), v])
+                .expect("overlay-put");
+        }
+    };
+    let run_case = |setup: &dyn Fn(&mut neovm_eval::emacs_core::eval::Context, BufferId),
+                    from: Value,
+                    to: Value|
+     -> (i64, i64) {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        setup(&mut eval, buf_id);
+        let result = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64), from, to],
+        )
+        .expect("window-text-pixel-size");
+        (
+            result.cons_car().as_int().expect("width"),
+            result.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    let fboundp_car = Value::list(vec![
+        sym("fboundp"),
+        Value::list(vec![sym("quote"), sym("car")]),
+    ]);
+    let fboundp_missing = Value::list(vec![
+        sym("fboundp"),
+        Value::list(vec![sym("quote"), sym("no-such-fn-n5g-xyz")]),
+    ]);
+    let left_fringe = Value::list(vec![sym("left-fringe"), sym("left-arrow")]);
+    let space_w2 = Value::list(vec![sym("space"), sym(":width"), Value::fixnum(2)]);
+    let space_align5 = Value::list(vec![sym("space"), sym(":align-to"), Value::fixnum(5)]);
+
+    // MEDIUM-1: Lisp-evaluated `when` before TTY fringe skips scan-anchored overlay strings.
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                let spec = Value::list(vec![
+                    sym("when"),
+                    fboundp_car,
+                    sym("left-fringe"),
+                    sym("left-arrow"),
+                ]);
+                put_prop(eval, 1, 2, "display", spec);
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (4, 1),
+        "MEDIUM-1: Lisp-evaluated when true -> TTY fringe skips before-string ZZ"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                let spec = Value::list(vec![
+                    sym("when"),
+                    fboundp_missing,
+                    sym("left-fringe"),
+                    sym("left-arrow"),
+                ]);
+                put_prop(eval, 1, 2, "display", spec);
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (7, 1),
+        "MEDIUM-1 control: Lisp-evaluated when nil keeps before-string ZZ and covered char"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                let spec = Value::list(vec![
+                    sym("disable-eval"),
+                    Value::list(vec![
+                        sym("when"),
+                        fboundp_car,
+                        sym("left-fringe"),
+                        sym("left-arrow"),
+                    ]),
+                ]);
+                put_prop(eval, 1, 2, "display", spec);
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (7, 1),
+        "MEDIUM-1 control: disable-eval blocks non-t when form"
+    );
+
+    // MEDIUM-2: `(space ...)` (and margin space) does not set `string_from_display_prop_p`,
+    // so a later TTY `(left-fringe ...)` in the same list/vector still advances `*position`,
+    // skipping scan-anchored overlay strings while keeping the stretch element.
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(
+                    eval,
+                    1,
+                    2,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (6, 1),
+        "MEDIUM-2: ((space :width 2) (left-fringe left-arrow)) keeps space and skips ZZ at pos 1"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(
+                    eval,
+                    1,
+                    2,
+                    "display",
+                    Value::vector(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (6, 1),
+        "MEDIUM-2: vector [(space :width 2) (left-fringe left-arrow)] matches list"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(
+                    eval,
+                    1,
+                    2,
+                    "display",
+                    Value::list(vec![left_fringe, space_w2]),
+                );
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (4, 1),
+        "fringe before space: fringe replaces first and ignores later space"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(
+                    eval,
+                    1,
+                    2,
+                    "display",
+                    Value::list(vec![Value::string("A"), left_fringe]),
+                );
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (7, 1),
+        "Text before fringe sets string_from_display_prop_p so fringe does NOT run"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                let margin_str = Value::list(vec![
+                    Value::list(vec![sym("margin"), sym("left-margin")]),
+                    Value::string("M"),
+                ]);
+                put_prop(
+                    eval,
+                    1,
+                    2,
+                    "display",
+                    Value::list(vec![margin_str, left_fringe]),
+                );
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (6, 1),
+        "margin string before fringe sets string_from_display_prop_p so ZZ stays"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                let margin_space = Value::list(vec![
+                    Value::list(vec![sym("margin"), sym("left-margin")]),
+                    space_w2,
+                ]);
+                put_prop(
+                    eval,
+                    1,
+                    2,
+                    "display",
+                    Value::list(vec![margin_space, left_fringe]),
+                );
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (4, 1),
+        "margin space before fringe does not set string_from_display_prop_p so fringe skips ZZ"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(eval, 1, 2, "display", space_align5);
+                add_ov(eval, 1, 1, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (9, 1),
+        "space :align-to 5 after before-string ZZ aligns from live column 2 -> total 9"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(
+                    eval,
+                    2,
+                    3,
+                    "display",
+                    Value::list(vec![space_align5, left_fringe]),
+                );
+                add_ov(eval, 3, 3, &[("before-string", Value::string("XX"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (8, 1),
+        "((space :align-to 5) (left-fringe ...)) loads run_end overlay XX before stretch -> 8"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+                put_prop(
+                    eval,
+                    2,
+                    3,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 3, 3, &[("before-string", Value::string("A\nBB"))]);
+            },
+            Value::NIL,
+            Value::NIL,
+        ),
+        (7, 2),
+        "((space :width 2) (left-fringe ...)) loads multiline run_end overlay before stretch -> (7, 2)"
+    );
+
+    // Spanning-FROM and ending-at-FROM non-consumed tty_fringe_direct_advance runs
+    // must keep `before_origin` active while `scan < FROM`, so neither the stretch
+    // nor `run_end` overlay strings leak into the measured output.
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                put_prop(
+                    eval,
+                    2,
+                    5,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+            },
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (3, 1),
+        "spanning-FROM 2..5 (FROM=3, no ov): pre-FROM stretch stays in prefix"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                put_prop(
+                    eval,
+                    2,
+                    5,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 5, 5, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (3, 1),
+        "spanning-FROM 2..5 (FROM=3, ov5 ZZ): pre-FROM stretch + run_end ov stay in prefix"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                put_prop(
+                    eval,
+                    2,
+                    5,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 5, 5, &[("before-string", Value::string("A\nBB"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (3, 1),
+        "spanning-FROM 2..5 (FROM=3, multiline ov5): stays in prefix, height=1"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                put_prop(
+                    eval,
+                    2,
+                    8,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 8, 8, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (0, 1),
+        "spanning-FROM 2..8 to EOB (FROM=3, ov8 ZZ): stays in prefix -> (0, 1)"
+    );
+    assert_eq!(
+        run_case(
+            &|eval, buf_id| {
+                eval.edit.buffers.get_mut(buf_id).unwrap().insert("abhello");
+                put_prop(
+                    eval,
+                    2,
+                    3,
+                    "display",
+                    Value::list(vec![space_w2, left_fringe]),
+                );
+                add_ov(eval, 3, 3, &[("before-string", Value::string("ZZ"))]);
+            },
+            Value::fixnum(3),
+            Value::NIL,
+        ),
+        (5, 1),
+        "ending-at-FROM 2..3 (FROM=3, ov3 ZZ): pre-FROM stretch + ov3 stay in prefix -> (5, 1)"
+    );
+}
+
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_test.rs"]
 mod mode_line_min_width_boundary_test;

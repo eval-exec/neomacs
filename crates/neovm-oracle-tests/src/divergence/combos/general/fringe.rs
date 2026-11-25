@@ -924,3 +924,115 @@ fn divergence_display_before_invisible_and_tty_fringe_batch() {
         expect,
     );
 }
+
+#[test]
+fn divergence_unified_tty_fringe_when_and_space_list_batch() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((4 . 1) (7 . 1) (7 . 1) (4 . 1) (4 . 1) (7 . 1) (7 . 1) (6 . 1) (6 . 1) (4 . 1) (7 . 1) (6 . 1) (4 . 1) (6 . 1) (8 . 1) (9 . 1) (8 . 1) (7 . 2) (4 . 1) (8 . 1) (3 . 1) (3 . 1) (3 . 1) (0 . 1) (0 . 1) (3 . 1) (5 . 1) (5 . 1) (5 . 1))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((measure (lambda (setup &optional from to)
+                  (with-temp-buffer
+                    (funcall setup)
+                    (switch-to-buffer (current-buffer))
+                    (window-text-pixel-size nil from to))))
+      (ov (lambda (b e &rest props)
+            (let ((o (make-overlay b e)))
+              (while props (overlay-put o (pop props) (pop props)))
+              o))))
+  (list
+   ;; MEDIUM-1: Lisp-evaluated `when` before TTY fringe + controls
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(when (fboundp 'car) left-fringe left-arrow))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(when (fboundp 'no-such-fn-n5g-xyz) left-fringe left-arrow))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(disable-eval (when (fboundp 'car) left-fringe left-arrow)))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 2 'display '(when (fboundp 'car) left-fringe left-arrow))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   ;; `when` side-effect creates overlay at pos 1: skipped on fringe, shown on string or nil
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display
+                        '(when (progn (unless (overlays-in 1 1) (overlay-put (make-overlay 1 1) 'before-string "ZZ")) t) left-fringe left-arrow))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display
+                        '(when (progn (unless (overlays-in 1 1) (overlay-put (make-overlay 1 1) 'before-string "ZZ")) t) . "Q"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display
+                        '(when (progn (unless (overlays-in 1 1) (overlay-put (make-overlay 1 1) 'before-string "ZZ")) nil) left-fringe left-arrow))))
+   ;; MEDIUM-2: `(space ...)` / margin-space vs string before TTY fringe in list/vector
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display [(space :width 2) (left-fringe left-arrow)])
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((left-fringe left-arrow) (space :width 2)))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '("A" (left-fringe left-arrow)))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(((margin left-margin) "M") (left-fringe left-arrow)))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(((margin left-margin) (space :width 2)) (left-fringe left-arrow)))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((space :width 2) (when (fboundp 'car) left-fringe left-arrow)))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((space :width 2) (when nil left-fringe left-arrow)))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   ;; Live `:align-to` column after scan overlay / after run_end overlay before stretch
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(space :align-to 5))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 2 3 'display '((space :align-to 5) (left-fringe left-arrow)))
+                      (funcall ov 3 3 'before-string "XX")))
+   ;; Run-end overlays before stretch: multiline at pos 3, EOB, and mid-line FROM
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 2 3 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 3 3 'before-string "A\nBB")))
+   (funcall measure (lambda () (insert "hi")
+                      (put-text-property 1 3 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 3 3 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 3 4 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 4 4 'before-string "ZZ")) 3 nil)
+   ;; Spanning-FROM and ending-at-FROM runs (scan < FROM): stretch & run_end overlays stay in prefix
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 2 5 'display '((space :width 2) (left-fringe left-arrow)))) 3 nil)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 2 5 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 5 5 'before-string "ZZ")) 3 nil)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 2 5 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 5 5 'before-string "A\nBB")) 3 nil)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 2 8 'display '((space :width 2) (left-fringe left-arrow)))) 3 nil)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 2 8 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 8 8 'before-string "ZZ")) 3 nil)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 2 5 'display '(((margin left-margin) (space :width 2)) (left-fringe left-arrow)))
+                      (funcall ov 5 5 'before-string "ZZ")) 3 nil)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 2 3 'display '((space :width 2) (left-fringe left-arrow)))) 3 nil)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 2 3 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 3 3 'before-string "ZZ")) 3 nil)
+   (funcall measure (lambda () (insert "abhello")
+                      (put-text-property 2 3 'display '((space :width 2) (left-fringe left-arrow)))
+                      (funcall ov 3 3 'before-string "A\nBB")) 3 nil)))"#,
+        expect,
+    );
+}

@@ -618,10 +618,21 @@ pub(crate) struct ElementExtent {
 /// an image's advance is an absolute pixel count that has no cell count at all.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum DisplayElement {
-    /// A `(space ...)` stretch, in text columns.
+    /// A `(space :width ...)` stretch, in text columns.
     Cells(f32),
+    /// A `(space :align-to N)` stretch resolved against the live row column at
+    /// delivery time (after any overlay strings preceding the stretch, matching
+    /// GNU `produce_stretch_glyph`).
+    AlignToCells(usize),
     /// An element with its own pixel metrics.
     Pixels(ElementExtent),
+    /// A `(space :align-to (PX))` pixel stretch resolved against the live row
+    /// column at delivery time.
+    AlignToPixels {
+        target: f32,
+        ascent: f32,
+        descent: f32,
+    },
     /// A replacing display string (`STRINGP (value)` in GNU
     /// `handle_single_display_spec`, `src/xdisp.c:6512-6603`).  Rendered into
     /// the same row state without re-entering replacing `display` properties
@@ -638,6 +649,21 @@ enum DisplayElement {
     /// `src/xdisp.c:6380-6475` and `32397-32405`, or an empty/all-invisible
     /// marginal-area spec).
     Consumed,
+}
+
+/// Outcome of GNU `handle_display_spec` / `handle_single_display_spec`
+/// (`src/xdisp.c:5999-6650`) for a single `display` property value.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ResolvedDisplay {
+    element: DisplayElement,
+    /// True when a `(left-fringe ...)` or `(right-fringe ...)` spec ran on a
+    /// non-window-system frame (`!FRAME_WINDOW_P`) in a buffer object
+    /// (`src/xdisp.c:6387-6402`), advancing `*position` directly to `run_end`
+    /// without calling `push_it` so overlay strings anchored at `scan` are
+    /// skipped.  GUI `push_it` behavior (`src/xdisp.c:6447-6470`) keeps
+    /// scan-anchored overlay strings and leaves this `false` (source-matched;
+    /// UNATTESTED under a live GUI display server).
+    tty_fringe_direct_advance: bool,
 }
 
 /// One display line's horizontal extent.
@@ -813,7 +839,6 @@ fn fallback_space_element(
     eval: &neovm_eval::emacs_core::eval::Context,
     frame: FrameId,
     plist: Value,
-    column: usize,
 ) -> Option<DisplayElement> {
     for (keyword, align) in [(":width", false), (":align-to", true)] {
         let Some(spec) = neovm_value::plist::plist_get(plist, &Value::symbol(keyword)) else {
@@ -823,12 +848,11 @@ fn fallback_space_element(
             && let Some(columns) = calc_space_columns(spec, align)
         {
             let columns = columns.max(0.0).round() as usize;
-            let advance = if align {
-                columns.saturating_sub(column)
+            return Some(if align {
+                DisplayElement::AlignToCells(columns)
             } else {
-                columns
-            };
-            return Some(DisplayElement::Cells(advance as f32));
+                DisplayElement::Cells(columns as f32)
+            });
         }
         if spec.is_cons() && spec.cons_cdr().is_nil() {
             let operand = spec.cons_car();
@@ -843,16 +867,19 @@ fn fallback_space_element(
                     frame.char_height,
                     frame.font_cell_ascent(),
                 );
-                let origin = if align {
-                    column as f32 * cell.width
+                return Some(if align {
+                    DisplayElement::AlignToPixels {
+                        target: pixels as f32,
+                        ascent: cell.ascent,
+                        descent: cell.descent(),
+                    }
                 } else {
-                    0.0
-                };
-                return Some(DisplayElement::Pixels(ElementExtent {
-                    advance: (pixels as f32 - origin).max(0.0),
-                    ascent: cell.ascent,
-                    descent: cell.descent(),
-                }));
+                    DisplayElement::Pixels(ElementExtent {
+                        advance: (pixels as f32).max(0.0),
+                        ascent: cell.ascent,
+                        descent: cell.descent(),
+                    })
+                });
             }
         }
     }
@@ -1289,6 +1316,12 @@ pub(crate) fn region_text_metrics_with_display(
             .filter(|buf| prop_env.buffer_has_no_display_or_invis(buf))
             .map_or(0usize, |_| end);
         let mut from_rewind = FromRewindState::None;
+        // Set when a non-string replacing display spec followed by a TTY fringe
+        // (`((space ...) (left-fringe ...))`) already processed overlay strings
+        // anchored at `run_end` before delivering its stretch, so the loop's
+        // next iteration at `run_end` (or trailing `end`) skips re-processing
+        // those same overlay strings.
+        let mut skip_overlay_strings_at_byte: Option<usize> = None;
         while scan < end {
             if state.y_limit_reached() {
                 break;
@@ -1378,35 +1411,111 @@ pub(crate) fn region_text_metrics_with_display(
                 state.reach_origin();
             }
 
-            // On a TTY frame, GNU `handle_single_display_spec`
-            // (`src/xdisp.c:6387-6402`) advances `*position` directly across a
-            // `(left-fringe ...)` / `(right-fringe ...)` spec without calling
-            // `push_it`, so `handle_stop` never loads overlay strings anchored
-            // at `scan`.
-            if let Some(run_end) =
-                tty_fringe_skip_run_end(eval, frame, buffer_id, scan, &prop_env.display_sym, end)
+            // GNU `handle_stop` (`src/xdisp.c:4250-4293`) runs `it_props[]`
+            // (`handle_display_prop` BEFORE `handle_invisible_prop`) before
+            // loading overlay strings (`get_overlay_strings_1`):
+            // - A TTY `(left-fringe ...)` / `(right-fringe ...)` spec advances
+            //   `*position` directly to `run_end` without `push_it`
+            //   (`src/xdisp.c:6387-6402`), so overlay strings anchored at
+            //   `scan` are skipped.  If an earlier non-string spec in the same
+            //   list/vector (such as `(space ...)` or `((margin ...) (space ...))`)
+            //   already pushed a stretch, `get_overlay_strings_1` loads overlay
+            //   strings at `run_end` before the stretch is delivered.
+            // - Any other replacing `display` spec pushes its element and
+            //   resets `*position = scan`, so overlay strings at `scan` still
+            //   run first; if those overlay strings evaluate Lisp `when`, GNU
+            //   recomputes `it_props[]` (`HANDLED_RECOMPUTE_PROPS`,
+            //   `src/xdisp.c:4291`).
+            // - A non-replacing or `(when nil ...)` spec falls through to
+            //   `invisible` at the same position (observing any
+            //   `default-text-properties` / `buffer-invisibility-spec`
+            //   mutations made by its `when` form).
+            let (mut display_run, display_ran_lisp) =
+                display_element_run(eval, frame, buffer_id, scan, &mut prop_env, end)?;
+            if display_ran_lisp {
+                next_prop_check_byte = 0;
+            }
+
+            if let Some((resolved, run_end)) = display_run
                 && run_end > scan
+                && resolved.tty_fringe_direct_advance
             {
-                state.last_code = None;
+                let run_end = run_end.min(end);
+                if resolved.element == DisplayElement::Consumed {
+                    state.last_code = None;
+                    scan = run_end;
+                    continue;
+                }
+                if state.before_origin() && scan >= range.from.get() {
+                    state.reach_origin();
+                }
+                if skip_overlay_strings_at_byte != Some(run_end) {
+                    if process_overlay_strings_at(
+                        eval,
+                        frame,
+                        buffer_id,
+                        run_end,
+                        &mut prop_env,
+                        at_origin_rewind,
+                        &mut from_rewind,
+                        &mut state,
+                    )? {
+                        next_prop_check_byte = 0;
+                    }
+                    skip_overlay_strings_at_byte = Some(run_end);
+                    if state.y_limit_reached() {
+                        break;
+                    }
+                }
+                state.push_display_element(eval, buffer_id, resolved.element, &prop_env);
                 scan = run_end;
                 continue;
             }
 
             // GNU's display iterator processes overlay strings anchored at a
-            // position *before* the buffer character there: before-strings of
-            // overlays starting here, plus after-strings of overlays ending here
-            // (see `load_overlay_strings`/`get_overlay_strings` in xdisp.c).  Each
-            // contributes its own laid-out columns to the running line width.
-            if process_overlay_strings_at(
-                eval,
-                frame,
-                buffer_id,
-                scan,
-                &mut prop_env,
-                at_origin_rewind,
-                &mut from_rewind,
-                &mut state,
-            )? {
+            // position *before* the buffer character (or pushed display
+            // element) there (see `load_overlay_strings`/`get_overlay_strings`
+            // in xdisp.c).  Root any resolved `DisplayElement::Text` across the
+            // overlay walk in case an overlay string evaluates Lisp.
+            let ov_ran_lisp = if skip_overlay_strings_at_byte == Some(scan) {
+                false
+            } else {
+                let text_root_scope = if let Some((
+                    ResolvedDisplay {
+                        element: DisplayElement::Text(text_val),
+                        ..
+                    },
+                    _,
+                )) = display_run
+                    && text_val.is_heap_object()
+                    && eval
+                        .edit
+                        .buffers
+                        .get(buffer_id)
+                        .is_some_and(|b| !b.overlays().is_empty())
+                {
+                    let scope = eval.save_specpdl_roots();
+                    eval.push_specpdl_root(text_val);
+                    Some(scope)
+                } else {
+                    None
+                };
+                let ov_res = process_overlay_strings_at(
+                    eval,
+                    frame,
+                    buffer_id,
+                    scan,
+                    &mut prop_env,
+                    at_origin_rewind,
+                    &mut from_rewind,
+                    &mut state,
+                );
+                if let Some(scope) = text_root_scope {
+                    eval.restore_specpdl_roots(scope);
+                }
+                ov_res?
+            };
+            if ov_ran_lisp {
                 next_prop_check_byte = 0;
             }
             if state.y_limit_reached() {
@@ -1420,33 +1529,26 @@ pub(crate) fn region_text_metrics_with_display(
                 state.reach_origin();
             }
 
-            // GNU `it_props[]` (`src/xdisp.c:1018-1019`) runs `handle_display_prop`
-            // BEFORE `handle_invisible_prop`: a replacing `display` property
-            // (string, `(space ...)`, image, margin, or fringe) replaces the
-            // covered text before `invisible` is consulted, while a non-replacing
-            // or `(when nil ...)` spec falls through to `invisible` at the same
-            // position (observing any `default-text-properties` /
-            // `buffer-invisibility-spec` mutations made by its `when` form).
-            let (display_run, display_ran_lisp) = display_element_run(
-                eval,
-                frame,
-                buffer_id,
-                scan,
-                state.line_columns(),
-                &mut prop_env,
-                end,
-            )?;
-            if display_ran_lisp {
-                next_prop_check_byte = 0;
+            // Mirror GNU `HANDLED_RECOMPUTE_PROPS` (`src/xdisp.c:4291`): if an
+            // overlay string at `scan` evaluated Lisp, re-resolve `display` at
+            // `scan` in case the overlay's `when` mutated buffer properties.
+            if ov_ran_lisp {
+                let (recomputed, recomputed_ran_lisp) =
+                    display_element_run(eval, frame, buffer_id, scan, &mut prop_env, end)?;
+                if recomputed_ran_lisp {
+                    next_prop_check_byte = 0;
+                }
+                display_run = recomputed;
             }
-            if let Some((element, run_end)) = display_run
+
+            if let Some((resolved, run_end)) = display_run
                 && run_end > scan
             {
                 if at_origin_rewind {
                     let saved_y_limit = state.y_limit.take();
                     let breaks_before = state.line_breaks;
-                    let is_text = matches!(element, DisplayElement::Text(_));
-                    state.push_display_element(eval, buffer_id, element, &prop_env);
+                    let is_text = matches!(resolved.element, DisplayElement::Text(_));
+                    state.push_display_element(eval, buffer_id, resolved.element, &prop_env);
                     state.y_limit = saved_y_limit;
                     if is_text && state.line_breaks > breaks_before {
                         if !state.glyphs_after_last_break {
@@ -1457,7 +1559,7 @@ pub(crate) fn region_text_metrics_with_display(
                         }
                     }
                 } else {
-                    state.push_display_element(eval, buffer_id, element, &prop_env);
+                    state.push_display_element(eval, buffer_id, resolved.element, &prop_env);
                 }
                 scan = run_end.min(end);
                 continue;
@@ -1534,7 +1636,7 @@ pub(crate) fn region_text_metrics_with_display(
         // laying out both kinds before stopping, so we must too.  The main loop only
         // visits positions `scan < end`, so `end` itself is processed exactly once
         // here with the same full `before = true` collection used in the loop body.
-        if !state.y_limit_reached() {
+        if !state.y_limit_reached() && skip_overlay_strings_at_byte != Some(end) {
             let at_end_origin_rewind = end == range.from.get() && origin_not_after_buffer_newline;
             if at_end_origin_rewind && state.before_origin() && range.from == range.line_start {
                 state.reach_origin();
@@ -1786,8 +1888,26 @@ impl ScanState {
                 self.advance_columns(columns);
                 self.last_code = None;
             }
+            DisplayElement::AlignToCells(target) => {
+                let advance = target.saturating_sub(self.line_columns());
+                self.advance_columns(advance as f32);
+                self.last_code = None;
+            }
             DisplayElement::Pixels(extent) => {
                 self.push_element(extent);
+                self.last_code = None;
+            }
+            DisplayElement::AlignToPixels {
+                target,
+                ascent,
+                descent,
+            } => {
+                let origin = self.line_columns() as f32 * self.cell.width;
+                self.push_element(ElementExtent {
+                    advance: (target - origin).max(0.0),
+                    ascent,
+                    descent,
+                });
                 self.last_code = None;
             }
             DisplayElement::Text(string) => {
@@ -2212,9 +2332,8 @@ fn resolve_display_element(
     object: Value,
     position: i64,
     buffer_position: i64,
-    cur_column: usize,
     prop_env: &mut MeasurePropEnv,
-) -> Result<(Option<DisplayElement>, bool), Flow> {
+) -> Result<(Option<ResolvedDisplay>, bool), Flow> {
     use crate::emacs_core::display_when::DisplayWhenContextExt;
     use neovm_eval::emacs_core::eval::data::display_spec::{
         DisplayEval, DisplayMarginLocation, DisplayPropertySpecs, DisplaySpecKind,
@@ -2247,8 +2366,28 @@ fn resolve_display_element(
         None
     };
 
+    let is_buffer_object = object.is_buffer();
     let mut ran_lisp = false;
-    let outcome = (|| -> Result<Option<DisplayElement>, Flow> {
+    let outcome = (|| -> Result<Option<ResolvedDisplay>, Flow> {
+        let mut resolved: Option<DisplayElement> = None;
+        let mut string_from_display_prop = false;
+        let mut tty_fringe_direct_advance = false;
+
+        // GNU `handle_display_spec` (`src/xdisp.c:6032-6060`) walks every spec
+        // in a buffer property list/vector (breaking early only for string
+        // objects, line 6043):
+        // - Once a string spec (direct or `((margin ...) STRING)`) runs, GNU
+        //   sets `it->string_from_display_prop_p = true` (`src/xdisp.c:6574`),
+        //   so line 6338 (`if (it->string_from_display_prop_p) return 0;`)
+        //   prevents any later replacing spec (including TTY fringe) from
+        //   running.
+        // - A `(space ...)` or `((margin ...) (space ...))` spec does NOT set
+        //   `string_from_display_prop_p`, so a later TTY `(left-fringe ...)` /
+        //   `(right-fringe ...)` in the same list/vector still runs and
+        //   advances `*position` directly to `run_end` (`src/xdisp.c:6387-6402`)
+        //   while keeping the earlier stretch element.
+        // - Other replacing specs only take effect when `display_replaced == 0`
+        //   (`src/xdisp.c:6521`).
         for mut spec in specs {
             if let Some((form, inner)) = display_spec_when_parts(spec) {
                 if form.is_nil() {
@@ -2272,48 +2411,68 @@ fn resolve_display_element(
                 spec = inner;
             }
 
+            if string_from_display_prop {
+                continue;
+            }
+
             let frame_window_p = eval
                 .frame_manager()
                 .get(frame)
                 .is_some_and(|frame| frame.effective_window_system().is_some());
 
             match display_spec_kind(spec, property.eval) {
+                // GNU `xdisp.c:6380-6475` requires `CONSP (XCDR (spec))`:
+                // `(left-fringe)` and `(left-fringe . sym)` leave the covered
+                // text intact, while any cons cdr (including `(left-fringe nil)`)
+                // consumes the covered text with zero inline width and zero
+                // baseline height (`xdisp.c:32397-32405`).  On TTY frames
+                // (`!FRAME_WINDOW_P`) in a buffer object, GNU returns directly
+                // with `*position = run_end` without `push_it`, even after an
+                // earlier non-string replacing spec such as `(space ...)`.
+                DisplaySpecKind::LeftFringe | DisplaySpecKind::RightFringe
+                    if spec.is_cons() && spec.cons_cdr().is_cons() =>
+                {
+                    if !frame_window_p && is_buffer_object {
+                        tty_fringe_direct_advance = true;
+                    }
+                    if resolved.is_none() {
+                        resolved = Some(DisplayElement::Consumed);
+                    }
+                }
                 // GNU `xdisp.c:6512-6603`: a string replaces the covered text
-                // in-place (taking precedence over later replacing specs in
-                // the same list/vector).
-                DisplaySpecKind::Text => {
-                    return Ok(Some(DisplayElement::Text(spec)));
+                // in-place and sets `string_from_display_prop_p = true`.
+                DisplaySpecKind::Text if resolved.is_none() => {
+                    resolved = Some(DisplayElement::Text(spec));
+                    string_from_display_prop = true;
                 }
                 // GNU `xdisp.c:6477-6562`: strip one `((margin AREA) CONTENT)`
                 // prefix.  `AREA == nil` (or omitted) displays `CONTENT` in
                 // `TEXT_AREA`; `left-margin` / `right-margin` display valid
                 // `CONTENT` in the margin (zero inline width, blocking later
-                // replacing specs).  An invalid area or non-valid content
-                // leaves `display_replaced == 0` so later specs still run.
-                DisplaySpecKind::Margin => {
+                // replacing specs).  String content also sets
+                // `string_from_display_prop_p = true` (`xdisp.c:6574`).
+                DisplaySpecKind::Margin if resolved.is_none() => {
                     if let Some(margin) = display_margin_spec(spec) {
                         let content = margin.content();
                         match margin.location() {
                             DisplayMarginLocation::Text => {
                                 match display_spec_kind(content, property.eval) {
                                     DisplaySpecKind::Text => {
-                                        return Ok(Some(DisplayElement::Text(content)));
+                                        resolved = Some(DisplayElement::Text(content));
+                                        string_from_display_prop = true;
                                     }
                                     DisplaySpecKind::Space => {
-                                        if let Some(element) = fallback_space_element(
-                                            eval,
-                                            frame,
-                                            content.cons_cdr(),
-                                            cur_column,
-                                        ) {
-                                            return Ok(Some(element));
+                                        if let Some(element) =
+                                            fallback_space_element(eval, frame, content.cons_cdr())
+                                        {
+                                            resolved = Some(element);
                                         }
                                     }
                                     DisplaySpecKind::Image if frame_window_p => {
                                         if let Some(extent) =
                                             image_element_extent(eval, frame, content)
                                         {
-                                            return Ok(Some(DisplayElement::Pixels(extent)));
+                                            resolved = Some(DisplayElement::Pixels(extent));
                                         }
                                     }
                                     _ => {}
@@ -2322,27 +2481,30 @@ fn resolve_display_element(
                             DisplayMarginLocation::Left | DisplayMarginLocation::Right => {
                                 match display_spec_kind(content, property.eval) {
                                     DisplaySpecKind::Text => {
-                                        if display_string_produces_glyphs(
-                                            eval, buffer_id, content, prop_env,
-                                        ) {
-                                            return Ok(Some(DisplayElement::MarginBaseline));
-                                        }
-                                        return Ok(Some(DisplayElement::Consumed));
+                                        resolved = Some(
+                                            if display_string_produces_glyphs(
+                                                eval, buffer_id, content, prop_env,
+                                            ) {
+                                                DisplayElement::MarginBaseline
+                                            } else {
+                                                DisplayElement::Consumed
+                                            },
+                                        );
+                                        string_from_display_prop = true;
                                     }
                                     DisplaySpecKind::Space => {
-                                        return Ok(Some(DisplayElement::MarginBaseline));
+                                        resolved = Some(DisplayElement::MarginBaseline);
                                     }
                                     DisplaySpecKind::Image if frame_window_p => {
                                         if let Some(extent) =
                                             image_element_extent(eval, frame, content)
                                         {
-                                            return Ok(Some(DisplayElement::Pixels(
-                                                ElementExtent {
+                                            resolved =
+                                                Some(DisplayElement::Pixels(ElementExtent {
                                                     advance: 0.0,
                                                     ascent: extent.ascent,
                                                     descent: extent.descent,
-                                                },
-                                            )));
+                                                }));
                                         }
                                     }
                                     _ => {}
@@ -2351,169 +2513,39 @@ fn resolve_display_element(
                         }
                     }
                 }
-                // GNU `xdisp.c:6380-6475` requires `CONSP (XCDR (spec))`:
-                // `(left-fringe)` and `(left-fringe . sym)` leave the covered
-                // text intact, while any cons cdr (including `(left-fringe nil)`)
-                // consumes the covered text with zero inline width and zero
-                // baseline height (`xdisp.c:32397-32405`).
-                DisplaySpecKind::LeftFringe | DisplaySpecKind::RightFringe
-                    if spec.is_cons() && spec.cons_cdr().is_cons() =>
-                {
-                    return Ok(Some(DisplayElement::Consumed));
-                }
-                DisplaySpecKind::Space => {
-                    if let Some(element) =
-                        fallback_space_element(eval, frame, spec.cons_cdr(), cur_column)
-                    {
-                        return Ok(Some(element));
+                DisplaySpecKind::Space if resolved.is_none() => {
+                    if let Some(element) = fallback_space_element(eval, frame, spec.cons_cdr()) {
+                        resolved = Some(element);
                     }
                 }
                 // An image replaces its text only on a frame that can display
                 // one: GNU's `valid_image_p` is false without a window system,
                 // and the covered characters are then displayed normally.
-                DisplaySpecKind::Image if frame_window_p => {
+                DisplaySpecKind::Image if frame_window_p && resolved.is_none() => {
                     if let Some(extent) = image_element_extent(eval, frame, spec) {
-                        return Ok(Some(DisplayElement::Pixels(extent)));
+                        resolved = Some(DisplayElement::Pixels(extent));
                     }
                 }
                 _ => {}
             }
+
+            if !is_buffer_object && resolved.is_some() {
+                break;
+            }
+            if string_from_display_prop && !needs_when_eval {
+                break;
+            }
         }
-        Ok(None)
+        Ok(resolved.map(|element| ResolvedDisplay {
+            element,
+            tty_fringe_direct_advance,
+        }))
     })();
 
     if let Some(scope) = root_scope {
         eval.restore_specpdl_roots(scope);
     }
     outcome.map(|el| (el, ran_lisp))
-}
-
-/// Mirror GNU `handle_single_display_spec` (`src/xdisp.c:6380-6405`) +
-/// `handle_stop` (`src/xdisp.c:4257-4270`) on a TTY frame for the plain
-/// `(left-fringe ...)` / `(right-fringe ...)` shape: advances `*position`
-/// directly to `run_end` without calling `push_it`, so overlay strings
-/// anchored at `pos` are skipped. Only runs when `!frame_window_p` and the
-/// buffer has overlays; GUI `push_it` behavior is source-matched but
-/// UNATTESTED under a live GUI display server.
-///
-/// Known pre-existing residuals (follow-up: unify this second spec classifier
-/// into `display_element_run` / `resolve_display_element` so one walker owns
-/// both `when` evaluation and TTY fringe direct-advance):
-/// - MEDIUM-1: bails on any Lisp-evaluated `when` form (e.g.
-///   `(when (fboundp 'car) left-fringe left-arrow)` + `before-string`:
-///   GNU `(4 . 1)` vs Neomacs `(6 . 1)`).
-/// - MEDIUM-2: bails on `DisplaySpecKind::Space` before a fringe in one list
-///   (e.g. `((space :width 2) (left-fringe left-arrow))` + `before-string`:
-///   GNU `(6 . 1)` vs Neomacs `(8 . 1)`). Do not widen `Text | Space` to skip
-///   `Space` without an oracle row because the `Text` outcome differs.
-fn tty_fringe_skip_run_end(
-    eval: &neovm_eval::emacs_core::eval::Context,
-    frame: FrameId,
-    buffer_id: BufferId,
-    pos: usize,
-    display_sym: &Value,
-    region_end: usize,
-) -> Option<usize> {
-    use neovm_eval::emacs_core::eval::data::display_spec::{
-        DisplayEval, DisplayPropertySpecs, DisplaySpecKind, display_margin_spec, display_spec_kind,
-        display_spec_when_parts,
-    };
-    use std::ops::ControlFlow;
-
-    if eval
-        .frame_manager()
-        .get(frame)
-        .is_some_and(|f| f.effective_window_system().is_some())
-    {
-        return None;
-    }
-    let buf = eval.edit.buffers.get(buffer_id)?;
-    if buf.overlays().is_empty() {
-        return None;
-    }
-    let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(pos));
-    let charpos1 = charpos0.get() as i64 + 1;
-    let (display, overlay) = neovm_edit::emacs_core::textprop::buffer_overlay_property_at_byte_pos(
-        eval.variables(),
-        &eval.edit.buffers,
-        buf,
-        pos,
-        *display_sym,
-        None,
-    )
-    .map(|(v, ov)| (v, Some(ov)))
-    .or_else(|| {
-        let v = neovm_edit::emacs_core::textprop::builtin_get_text_property_in_state(
-            eval.variables(),
-            &eval.edit.buffers,
-            &[Value::fixnum(charpos1), *display_sym],
-        )
-        .ok()?;
-        if v.is_nil() { None } else { Some((v, None)) }
-    })?;
-
-    let property = DisplayPropertySpecs::of(display);
-    let mut is_tty_fringe = false;
-    let _ = property.for_each(|mut spec| {
-        if let Some((form, inner)) = display_spec_when_parts(spec) {
-            if form.is_nil() {
-                return ControlFlow::Continue(());
-            }
-            if !eval.symbol_mode().unwrap(form).is_t() {
-                if property.eval == DisplayEval::Disabled {
-                    return ControlFlow::Continue(());
-                }
-                return ControlFlow::Break(());
-            }
-            spec = inner;
-        }
-        match display_spec_kind(spec, property.eval) {
-            DisplaySpecKind::LeftFringe | DisplaySpecKind::RightFringe
-                if spec.is_cons() && spec.cons_cdr().is_cons() =>
-            {
-                is_tty_fringe = true;
-                ControlFlow::Break(())
-            }
-            DisplaySpecKind::Text | DisplaySpecKind::Space => ControlFlow::Break(()),
-            DisplaySpecKind::Margin
-                if display_margin_spec(spec).is_some_and(|m| {
-                    matches!(
-                        display_spec_kind(m.content(), property.eval),
-                        DisplaySpecKind::Text | DisplaySpecKind::Space
-                    )
-                }) =>
-            {
-                ControlFlow::Break(())
-            }
-            _ => ControlFlow::Continue(()),
-        }
-    });
-    if !is_tty_fringe {
-        return None;
-    }
-
-    let run_end = if let Some(ov) = overlay {
-        buf.overlays()
-            .overlay_end_emacs_byte_pos(ov)
-            .map(|p| p.get())
-            .unwrap_or(region_end)
-    } else {
-        let run_end_char1 =
-            neovm_edit::emacs_core::textprop::builtin_next_single_property_change_in_state(
-                eval.variables(),
-                &eval.edit.buffers,
-                &[Value::fixnum(charpos1), *display_sym],
-            )
-            .ok()
-            .and_then(|v| match v.kind() {
-                ValueKind::Fixnum(n) => Some(n),
-                _ => None,
-            })
-            .unwrap_or_else(|| buf.accessible_char_region().end().get() as i64 + 1);
-        buf.char_pos_to_emacs_byte_pos_clamped(CharPos0::new((run_end_char1 - 1).max(0) as usize))
-            .get()
-    };
-    Some(run_end.min(region_end))
 }
 
 /// Whether `string` contains any visible glyph (a non-hidden character or an
@@ -2566,13 +2598,13 @@ fn display_string_produces_glyphs(
 /// The extent of the `display` property at buffer byte `pos`, if its value
 /// replaces the covered text with an element that has its own size.
 ///
-/// Returns `((element, run_end_byte), ran_lisp)`.  Mirrors the `display`-spec
+/// Returns `((resolved, run_end_byte), ran_lisp)`.  Mirrors the `display`-spec
 /// branch of GNU's display iterator: the covered run is laid out as ONE element
 /// -- a display string, a stretch glyph for `(space ...)`, an image glyph for
 /// `(image ...)`, a marginal-area spec, or a consumed zero-width run for
 /// `(left-fringe ...)` / `(right-fringe ...)` -- and the iterator jumps to the
-/// end of the run.  `cur_column` is the running row width in text columns,
-/// which `(space :align-to N)` needs (an absolute target column).
+/// end of the run.  `(space :align-to ...)` targets are captured symbolically
+/// and resolved against live `state.line_columns()` in `push_display_element`.
 ///
 /// Returns `(None, ran_lisp)` when there is no `display` property, or its value
 /// is not a spec this measurement models.  `ran_lisp` is true whenever a
@@ -2588,10 +2620,9 @@ fn display_element_run(
     frame: FrameId,
     buffer_id: BufferId,
     pos: usize,
-    cur_column: usize,
     prop_env: &mut MeasurePropEnv,
     region_end: usize,
-) -> Result<(Option<(DisplayElement, usize)>, bool), Flow> {
+) -> Result<(Option<(ResolvedDisplay, usize)>, bool), Flow> {
     let display_sym = prop_env.display_sym;
     let Some((charpos1, display, overlay)) = eval.edit.buffers.get(buffer_id).and_then(|buf| {
         let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(pos));
@@ -2621,7 +2652,7 @@ fn display_element_run(
         return Ok((None, false));
     };
 
-    let (element, ran_lisp) = resolve_display_element(
+    let (resolved, ran_lisp) = resolve_display_element(
         eval,
         frame,
         buffer_id,
@@ -2629,10 +2660,9 @@ fn display_element_run(
         Value::make_buffer(buffer_id),
         charpos1,
         charpos1,
-        cur_column,
         prop_env,
     )?;
-    let Some(element) = element else {
+    let Some(resolved) = resolved else {
         return Ok((None, ran_lisp));
     };
 
@@ -2663,7 +2693,7 @@ fn display_element_run(
             .get()
     };
 
-    Ok((Some((element, run_end.min(region_end))), ran_lisp))
+    Ok((Some((resolved, run_end.min(region_end))), ran_lisp))
 }
 
 /// GNU's invisible-run boundary for the measurement walk.
@@ -3178,7 +3208,6 @@ fn walk_overlay_string(
                 string,
                 char_index,
                 buf_charpos1,
-                state.line_columns(),
                 prop_env,
             )?;
             if ran_lisp {
@@ -3281,9 +3310,10 @@ fn walk_overlay_string(
 /// `char_index`, with the position its run ends at and whether a `when` clause
 /// evaluated Lisp.
 ///
-/// `cur_col` is the running column at the spec, needed for `:align-to` (an
-/// absolute target).  `run_end_char` is the next `display`-property change in
-/// the string (the end of the covered run), defaulting to the string length.
+/// `(space :align-to ...)` targets resolve lazily against live
+/// `state.line_columns()` in `push_display_element`.  `run_end_char` is the
+/// next `display`-property change in the string (the end of the covered run),
+/// defaulting to the string length.
 #[allow(clippy::too_many_arguments)]
 fn string_display_element_run(
     eval: &mut neovm_eval::emacs_core::eval::Context,
@@ -3292,7 +3322,6 @@ fn string_display_element_run(
     string: Value,
     char_index: usize,
     buf_charpos1: i64,
-    cur_col: usize,
     prop_env: &mut MeasurePropEnv,
 ) -> Result<(Option<(DisplayElement, usize)>, bool), Flow> {
     let display_sym = prop_env.display_sym;
@@ -3308,7 +3337,7 @@ fn string_display_element_run(
         return Ok((None, false));
     }
 
-    let (element, ran_lisp) = resolve_display_element(
+    let (resolved, ran_lisp) = resolve_display_element(
         eval,
         frame,
         buffer_id,
@@ -3316,10 +3345,9 @@ fn string_display_element_run(
         string,
         char_index as i64,
         buf_charpos1,
-        cur_col,
         prop_env,
     )?;
-    let Some(element) = element else {
+    let Some(resolved) = resolved else {
         return Ok((None, ran_lisp));
     };
 
@@ -3338,7 +3366,7 @@ fn string_display_element_run(
         .unwrap_or(schars)
         .min(schars);
 
-    Ok((Some((element, run_end_char)), ran_lisp))
+    Ok((Some((resolved.element, run_end_char)), ran_lisp))
 }
 
 fn trim_window_text_to_non_empty_line_end(bytes: &[u8]) -> &[u8] {
