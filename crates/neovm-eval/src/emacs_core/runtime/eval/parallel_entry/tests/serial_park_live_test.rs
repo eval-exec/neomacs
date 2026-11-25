@@ -2201,6 +2201,125 @@ fn l67a_serial_turn_only_debt_drives_due_collection() {
     });
 }
 
+/// Lead #14137 / peer #14140 nit 1: a REAL allocation on the era's `TaggedHeap`
+/// during a live serial turn (no `charge_serial_bytes_for_test` and no
+/// `set_gc_threshold_for_test`) crosses `gc_threshold`, causing the keeper's
+/// `should_collect_stopped` to trigger a major collection on the next stop,
+/// reclaim the unrooted allocation, reset debt, and not re-collect on a third
+/// turn.
+#[test]
+fn l67a_real_serial_turn_allocation_drives_due_collection() {
+    let mut source = ready();
+    let private = Value::string("l67a-k5-real-serial-alloc");
+    source.lexenv = private;
+    let heap_addr = source.tagged_heap.heap_root().as_ptr() as usize;
+    let (shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |era| {
+            let before = {
+                let mut stopped = retry_native("initial stop", || era.stop());
+                let report = retry_native("drain baseline debt", || {
+                    era.collect_requested(&mut stopped)
+                });
+                assert_eq!(
+                    era.should_collect_stopped(&mut stopped),
+                    Ok(false),
+                    "post-collection baseline debt must be 0"
+                );
+                complete_retrying("baseline stop", stopped.complete());
+                report.cycle
+            };
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let a = enroll_driver(era, &mut driver, &inbox, O);
+            drop(inbox);
+            let alloc_word = std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let owner = scope.spawn(move || {
+                    a.run(|state, home, port| {
+                        // Turn 1: baseline debt is 0, so Stop #1 does not
+                        // collect. While holding the granted serial turn (the
+                        // keeper is blocked in `await_return` with all other
+                        // owners stopped), allocate real vectors on the era's
+                        // TaggedHeap until `bytes_since_gc >= gc_threshold`.
+                        let mut t1 = driver_turn(state, home, port, "(setq sp-live 91)");
+                        let first_word = {
+                            // SAFETY: this owner holds the serial turn inside
+                            // the keeper's stop; no parallel owner is running
+                            // and the keeper is blocked awaiting `GiveBack`.
+                            let heap = unsafe {
+                                &mut *(heap_addr as *mut neovm_value::tagged::gc::TaggedHeap)
+                            };
+                            let threshold = heap.gc_threshold();
+                            assert!(
+                                heap.bytes_since_gc() < threshold,
+                                "turn 1 must start below gc_threshold"
+                            );
+                            let mut first = None;
+                            while heap.bytes_since_gc() < threshold {
+                                let v = heap.alloc_vector(vec![Value::NIL; 4096]);
+                                if first.is_none() {
+                                    first = Some(v.bits());
+                                }
+                            }
+                            first.expect("allocated at least one vector on era heap")
+                        };
+                        let s1 = t1.with_world(|ev| eval(ev, "sp-live"));
+                        assert_eq!(s1, "91");
+                        t1.end(port).ok().expect("turn 1 ends");
+
+                        // Turn 2: no `KeeperMsg::Collect`; Stop #2 observes the
+                        // real serial-turn allocation debt via
+                        // `should_collect_stopped` and collects.
+                        let mut t2 = driver_turn(state, home, port, "(setq sp-live 92)");
+                        let s2 = t2.with_world(|ev| eval(ev, "sp-live"));
+                        assert_eq!(s2, "92");
+                        t2.end(port).ok().expect("turn 2 ends");
+
+                        // Turn 3: debt was reset by Turn 2's collection; Stop #3
+                        // must NOT collect again.
+                        let mut t3 = driver_turn(state, home, port, "(setq sp-live 93)");
+                        let s3 = t3.with_world(|ev| eval(ev, "sp-live"));
+                        assert_eq!(s3, "93");
+                        t3.end(port).ok().expect("turn 3 ends");
+
+                        first_word
+                    })
+                });
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                owner.join().expect("A")
+            });
+            let mut stopped = stop_retrying(era);
+            assert_eq!(
+                era.gc_collections_for_test(&stopped).unwrap(),
+                before + 1,
+                "real serial-turn allocation must drive exactly one due collection"
+            );
+            assert_eq!(
+                era.should_collect_stopped(&mut stopped),
+                Ok(false),
+                "due collection must reset serial-turn allocation debt"
+            );
+            assert!(
+                !era.owns_heap_word_for_test(&stopped, alloc_word).unwrap(),
+                "unrooted vector allocated in turn 1 must be reclaimed by turn 2's due collection"
+            );
+            complete_retrying("verify stop", stopped.complete());
+        });
+        match outcome {
+            Ok((end, ())) => tx.send(Ok(end)).expect("send keeper end"),
+            Err(failure) => tx.send(Err(failure.notice())).expect("send keeper notice"),
+        }
+    });
+    let outcome = rx.recv().expect("keeper outcome");
+    service.join().expect("keeper service thread");
+    let end = outcome.unwrap_or_else(|notice| panic!("real serial alloc: era refused: {notice:?}"));
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    let returned = shell.accept_return(end).unwrap();
+    finish_fixture(returned, private);
+}
+
 /// D-8d (K5). A permanent in-stop collection failure (`Publication` from a
 /// poisoned cons allocator holding a lease) poisons the driver and wakes both
 /// the `Collect` waiter (`CollectRefusal::Poisoned`) and queued serial

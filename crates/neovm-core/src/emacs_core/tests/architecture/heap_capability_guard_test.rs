@@ -22,12 +22,14 @@
 //! of production builds and are deliberately unsound for unrooted borrows.
 //!
 //! The scan parses source syntax, not expanded macros or resolved types.
-//! `macro_rules` bodies, `<TaggedHeap>::method` (qself), renamed imports,
-//! and function pointers are invisible here; the compiler still requires
-//! `unsafe` at those calls. `Iterator::collect` takes no arguments, so a
-//! one-argument `.collect` is the heap entry. Items whose `cfg` needs `test`
-//! or `test-support` are not production. A child module declared
-//! `#[cfg(test)]` in its parent is still scanned, which can only false-positive.
+//! `macro_rules` bodies (other than `era_operations!`), `<TaggedHeap>::method`
+//! (qself), renamed imports, and function pointers are invisible here; the
+//! compiler still requires `unsafe` at those calls. UFCS calls (`Type::method`
+//! and `<T as Trait>::method`) to the era collection wrappers ARE scanned.
+//! `Iterator::collect` takes no arguments, so a one-argument `.collect` is the
+//! heap entry. Items whose `cfg` needs `test` or `test-support` are not
+//! production. A child module declared `#[cfg(test)]` in its parent is still
+//! scanned, which can only false-positive.
 
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
@@ -377,6 +379,10 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
                 if !sweep || !self.sweep_caller_allowed() {
                     self.note_call(&name, path.path.span().start().line);
                 }
+            } else if let Some(name) = era_collect_path_method(path, call.args.len())
+                && !self.era_collect_caller_allowed()
+            {
+                self.note_call(&name, path.path.span().start().line);
             }
             if let Some(last) = path.path.segments.last() {
                 let ident = last.ident.to_string();
@@ -452,6 +458,28 @@ fn heap_path_method(path: &syn::Path) -> Option<String> {
             .skip(1)
             .any(|name| name == "TaggedHeap" || name == "TestHeap" || name == "Self");
     receiver.then_some(method)
+}
+
+/// Detect UFCS calls to `ERA_COLLECT_METHODS`: both `Type::method(...)`
+/// (multi-segment path, including turbofish `Type::<T>::method`) and
+/// `<T>::method(...)` / `<T as Trait>::method(...)` (`qself.is_some()`).
+///
+/// `collect_requested` has a safe 2-arg UFCS homonym (`KeeperEra::collect_requested`),
+/// whereas the unsafe era wrappers take 3 arguments `(era, stopped, roots)`.
+/// `collect_stopped_with` and `collect_stopped_minor_with` have no safe homonym,
+/// so any UFCS call to them is flagged.
+fn era_collect_path_method(path: &syn::ExprPath, arg_count: usize) -> Option<String> {
+    let method = path.path.segments.last()?.ident.to_string();
+    if !ERA_COLLECT_METHODS.contains(&method.as_str()) {
+        return None;
+    }
+    if path.qself.is_none() && path.path.segments.len() <= 1 {
+        return None;
+    }
+    if method == "collect_requested" && arg_count != 3 {
+        return None;
+    }
+    Some(method)
 }
 
 /// True when the attribute keeps the item out of a production build
@@ -1602,5 +1630,68 @@ fn heap_capability_guard_flags_a_safe_era_collect_method_or_caller() {
     assert!(
         allowed_violations.is_empty(),
         "canonical KeeperEra::collect_requested adapter must stay allowed: {allowed_violations:?}"
+    );
+}
+
+#[test]
+fn heap_capability_guard_flags_ufcs_era_collect_calls() {
+    let ufcs_callers = survey_file(
+        r#"
+        pub fn ufcs_type(era: &ParallelHeapEra<Baton>, stopped: &mut Stop) {
+            unsafe { ParallelHeapEra::collect_requested(era, stopped, roots); }
+        }
+        pub fn ufcs_turbofish(era: &ParallelHeapEra<Baton>, stopped: &mut Stop) {
+            unsafe { ParallelHeapEra::<Baton>::collect_stopped_with(era, stopped, roots); }
+        }
+        pub fn ufcs_trait(era: &E, stopped: &mut Stop) {
+            unsafe { <E as EraExt>::collect_stopped_minor_with(era, stopped, roots); }
+        }
+        pub fn ufcs_qself_inherent(era: &ParallelHeapEra<Baton>, stopped: &mut Stop) {
+            unsafe { <ParallelHeapEra<Baton>>::collect_requested(era, stopped, roots); }
+        }
+        pub fn safe_keeper_ufcs(keeper: &KeeperEra, stopped: &mut Stop) {
+            let _ = KeeperEra::collect_requested(keeper, stopped);
+        }
+        "#,
+        "neovm-eval/src/emacs_core/runtime/eval/parallel_entry/keeper_driver.rs",
+    );
+    let problems = capability_problems(&ufcs_callers).join("\n");
+    assert!(
+        problems.contains("safe `ufcs_type` calls `collect_requested`"),
+        "Type::collect_requested UFCS must fail: {problems}"
+    );
+    assert!(
+        problems.contains("safe `ufcs_turbofish` calls `collect_stopped_with`"),
+        "Type::<T>::collect_stopped_with UFCS must fail: {problems}"
+    );
+    assert!(
+        problems.contains("safe `ufcs_trait` calls `collect_stopped_minor_with`"),
+        "<T as Trait>::collect_stopped_minor_with UFCS must fail: {problems}"
+    );
+    assert!(
+        problems.contains("safe `ufcs_qself_inherent` calls `collect_requested`"),
+        "<Type>::collect_requested UFCS must fail: {problems}"
+    );
+    assert!(
+        !problems.contains("safe_keeper_ufcs"),
+        "2-arg safe KeeperEra::collect_requested UFCS must stay allowed: {problems}"
+    );
+
+    let allowed_ufcs = survey_file(
+        r#"
+        pub(crate) fn collect_requested(era: &ParallelHeapEra<Baton>, stopped: &mut Stop) {
+            unsafe { ParallelHeapEra::collect_requested(era, stopped, roots); }
+        }
+        "#,
+        "neovm-eval/src/emacs_core/runtime/eval/parallel_entry/owned_source/keeper_service.rs",
+    );
+    assert!(
+        allowed_ufcs.violations.is_empty(),
+        "allowlisted keeper_service::collect_requested may use UFCS: {:?}",
+        allowed_ufcs
+            .violations
+            .iter()
+            .map(|v| (&v.function, &v.call))
+            .collect::<Vec<_>>()
     );
 }
