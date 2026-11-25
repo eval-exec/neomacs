@@ -8779,6 +8779,620 @@ fn test_window_text_pixel_size_newline_display_string_at_from() {
     assert_eq!(measure("hello", 1, 2, "AB\nCD", Some(1), Some(3)), (1, 1));
     assert_eq!(measure("hello", 1, 3, "AB\nCD", Some(2), None), (3, 1));
     assert_eq!(measure("h\ncd", 1, 2, "AB\nCD", None, None), (2, 2));
+    assert_eq!(measure("h\nc", 1, 2, "ABCD\nEFG", None, None), (1, 2));
+}
+
+/// GNU `window_text_pixel_size` (`src/xdisp.c:11867-11912`) rewinds via
+/// `move_it_by_lines (&it, 0)` across newline-bearing overlay strings
+/// (`before-string` / `after-string`) anchored at `FROM` when `FROM` is at
+/// `BEGV` or mid-line (not immediately preceded by a buffer `\n`), resetting
+/// `it.current_x = 0` (`src/xdisp.c:11868`) while retaining any baseline height
+/// produced after the newline.  When `FROM` is mid-line (`FROM > line_start`),
+/// even a single-line overlay string at `FROM` is part of the `start_x` prefix
+/// (`src/xdisp.c:11875`).  After a buffer `\n`, `move_it_by_lines` stops at
+/// `FROM` before the overlay string so it opens rows normally.
+#[test]
+fn test_window_text_pixel_size_newline_overlay_string_at_from() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let measure_ov = |text: &str,
+                      ov_start: i64,
+                      ov_end: i64,
+                      prop: &'static str,
+                      ov_str: Value,
+                      from: Option<i64>,
+                      to: Option<i64>| {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        if !text.is_empty() {
+            eval.edit
+                .buffers
+                .get_mut(buf_id)
+                .expect("buffer")
+                .insert(text);
+        }
+        let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(ov_start), Value::fixnum(ov_end)],
+        )
+        .expect("make-overlay");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(&mut eval, vec![ov, sym(prop), ov_str])
+            .expect("overlay-put");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![
+                Value::make_window(selected_window as u64),
+                from.map(Value::fixnum).unwrap_or(Value::NIL),
+                to.map(Value::fixnum).unwrap_or(Value::NIL),
+            ],
+        )
+        .expect("window-text-pixel-size");
+        (
+            res.cons_car().as_int().expect("width"),
+            res.cons_cdr().as_int().expect("height"),
+        )
+    };
+
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("\n"),
+            None,
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("AB\nCD"),
+            None,
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("AB\n"),
+            None,
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("\nCD"),
+            None,
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("A\nB\nC"),
+            None,
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "",
+            1,
+            1,
+            "before-string",
+            Value::string("AB\nCD"),
+            None,
+            None
+        ),
+        (0, 1)
+    );
+    assert_eq!(
+        measure_ov("", 1, 1, "before-string", Value::string("AB\n"), None, None),
+        (0, 0)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("XX"),
+            None,
+            None
+        ),
+        (7, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "xhello",
+            2,
+            2,
+            "before-string",
+            Value::string("AB\nCD"),
+            Some(2),
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "xhello",
+            2,
+            2,
+            "before-string",
+            Value::string("XX"),
+            Some(2),
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "ab\nhello",
+            4,
+            4,
+            "before-string",
+            Value::string("AB\nCD"),
+            Some(4),
+            None
+        ),
+        (7, 2)
+    );
+    assert_eq!(
+        measure_ov(
+            "ab\nhello",
+            4,
+            4,
+            "before-string",
+            Value::string("\n"),
+            Some(4),
+            None
+        ),
+        (5, 2)
+    );
+    assert_eq!(
+        measure_ov(
+            "xhello",
+            1,
+            2,
+            "after-string",
+            Value::string("AB\nCD"),
+            Some(2),
+            None
+        ),
+        (5, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "ab\nhello",
+            1,
+            4,
+            "after-string",
+            Value::string("AB\nCD"),
+            Some(4),
+            None
+        ),
+        (7, 2)
+    );
+    assert_eq!(
+        measure_ov(
+            "h\ncd",
+            1,
+            1,
+            "before-string",
+            Value::string("AB\nCD"),
+            None,
+            None
+        ),
+        (2, 2)
+    );
+    assert_eq!(
+        measure_ov(
+            "h\nc",
+            1,
+            1,
+            "before-string",
+            Value::string("ABCD\nEFG"),
+            None,
+            None
+        ),
+        (1, 2)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            1,
+            1,
+            "before-string",
+            Value::string("AB\nCD"),
+            Some(1),
+            Some(2)
+        ),
+        (1, 1)
+    );
+    assert_eq!(
+        measure_ov(
+            "hello",
+            2,
+            2,
+            "before-string",
+            Value::string("AB\nCD"),
+            None,
+            None
+        ),
+        (6, 2)
+    );
+    assert_eq!(
+        measure_ov(
+            "M-x ",
+            5,
+            5,
+            "before-string",
+            Value::string("\ncand1\ncand2"),
+            None,
+            None
+        ),
+        (5, 3)
+    );
+
+    // Invisible newline inside a before-string at FROM does not trigger rewind.
+    let invis_nl = Value::string("A\nB");
+    set_string_text_properties_for_value(
+        invis_nl,
+        vec![StringTextPropertyRun {
+            start: 1,
+            end: 2,
+            plist: Value::list(vec![sym("invisible"), Value::T]),
+        }],
+    );
+    assert_eq!(
+        measure_ov("hello", 1, 1, "before-string", invis_nl, None, None),
+        (7, 1)
+    );
+
+    // Two before-strings at FROM: priority 1 ("AB\n") is rewound, priority 2 ("ZZ") stays measured.
+    {
+        let (mut eval, selected_window) = pixel_size_tty_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert("hello");
+        let o1 = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(1), Value::fixnum(1)],
+        )
+        .expect("o1");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![o1, sym("priority"), Value::fixnum(1)],
+        )
+        .expect("prio1");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![o1, sym("before-string"), Value::string("AB\n")],
+        )
+        .expect("bstr1");
+        let o2 = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(1), Value::fixnum(1)],
+        )
+        .expect("o2");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![o2, sym("priority"), Value::fixnum(2)],
+        )
+        .expect("prio2");
+        neovm_edit::emacs_core::buffer::builtin_overlay_put(
+            &mut eval,
+            vec![o2, sym("before-string"), Value::string("ZZ")],
+        )
+        .expect("bstr2");
+        let res = builtin_window_text_pixel_size_ctx(
+            &mut eval,
+            vec![Value::make_window(selected_window as u64)],
+        )
+        .expect("window-text-pixel-size");
+        assert_eq!(
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            ),
+            (7, 1)
+        );
+    }
+}
+
+#[test]
+fn window_text_pixel_size_hotpath_textget_fallbacks_and_from_defer() {
+    crate::test_utils::init_test_tracing();
+    let sym = Value::symbol;
+    let run_case =
+        |setup: &dyn Fn(&mut neovm_eval::emacs_core::eval::Context, BufferId)| -> (i64, i64) {
+            let (mut eval, selected_window) = pixel_size_tty_context();
+            eval.eval_str(
+                "(progn \
+               (put 'n5dcat 'invisible t) \
+               (put 'n5dcatd 'display \"QQQQQQQQ\"))",
+            )
+            .expect("define category symbols");
+            let buf_id = eval
+                .edit
+                .buffers
+                .current_buffer()
+                .expect("current buffer")
+                .id();
+            setup(&mut eval, buf_id);
+            let res = builtin_window_text_pixel_size_ctx(
+                &mut eval,
+                vec![Value::make_window(selected_window as u64)],
+            )
+            .expect("window-text-pixel-size");
+            (
+                res.cons_car().as_int().expect("width"),
+                res.cons_cdr().as_int().expect("height"),
+            )
+        };
+    let put_prop = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                    start: i64,
+                    end: i64,
+                    prop: &'static str,
+                    val: Value| {
+        neovm_edit::emacs_core::textprop::builtin_put_text_property(
+            eval,
+            vec![
+                Value::fixnum(start),
+                Value::fixnum(end),
+                Value::symbol(prop),
+                val,
+            ],
+        )
+        .expect("put-text-property");
+    };
+    let add_before_string =
+        |eval: &mut neovm_eval::emacs_core::eval::Context, start: i64, end: i64, s: Value| {
+            let ov = neovm_edit::emacs_core::buffer::builtin_make_overlay(
+                &mut eval.edit.buffers,
+                vec![Value::fixnum(start), Value::fixnum(end)],
+            )
+            .expect("make-overlay");
+            neovm_edit::emacs_core::buffer::builtin_overlay_put(
+                eval,
+                vec![ov, Value::symbol("before-string"), s],
+            )
+            .expect("overlay-put");
+        };
+
+    // F1: `category` fallback in buffer intervals, overlay strings, and display strings (G1-G5).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            put_prop(eval, 1, 3, "category", sym("n5dcat"));
+        }),
+        (3, 1),
+        "G1: buffer category invisible t"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            put_prop(eval, 1, 3, "category", sym("n5dcatd"));
+        }),
+        (11, 1),
+        "G2: buffer category display string"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let s = Value::string("XABC");
+            set_string_text_properties_for_value(
+                s,
+                vec![StringTextPropertyRun {
+                    start: 1,
+                    end: 4,
+                    plist: Value::list(vec![sym("category"), sym("n5dcat")]),
+                }],
+            );
+            add_before_string(eval, 1, 1, s);
+        }),
+        (6, 1),
+        "G3: overlay before-string category invisible"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("xA");
+            let disp = Value::string("ABCDE");
+            set_string_text_properties_for_value(
+                disp,
+                vec![StringTextPropertyRun {
+                    start: 2,
+                    end: 4,
+                    plist: Value::list(vec![sym("category"), sym("n5dcat")]),
+                }],
+            );
+            put_prop(eval, 2, 3, "display", disp);
+        }),
+        (4, 1),
+        "G4: display string category invisible"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let s = Value::string("XABC");
+            set_string_text_properties_for_value(
+                s,
+                vec![StringTextPropertyRun {
+                    start: 1,
+                    end: 4,
+                    plist: Value::list(vec![sym("category"), sym("n5dcatd")]),
+                }],
+            );
+            add_before_string(eval, 1, 1, s);
+        }),
+        (14, 1),
+        "G5: overlay before-string category display"
+    );
+
+    // F2: `default-text-properties` fallback on propertyless buffers and strings (D3, D4, D19).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            eval.eval_str("(setq default-text-properties '(invisible t))")
+                .expect("setq default-text-properties");
+        }),
+        (0, 0),
+        "D3: buffer default-text-properties invisible"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            eval.eval_str("(setq default-text-properties '(display \"Q\"))")
+                .expect("setq default-text-properties");
+        }),
+        (1, 1),
+        "D4: buffer default-text-properties display"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            eval.eval_str("(setq default-text-properties '(invisible t))")
+                .expect("setq default-text-properties");
+            add_before_string(eval, 1, 1, Value::string("ABC"));
+        }),
+        (0, 0),
+        "D19: propertyless before-string honors default-text-properties invisible"
+    );
+
+    // F3: refresh cached property env even when `(when FORM . SPEC)` returns nil (E2, E4, overlay string).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            let buf = eval.edit.buffers.get_mut(buf_id).unwrap();
+            buf.insert("abcdef");
+            buf.set_buffer_local("buffer-invisibility-spec", Value::NIL);
+            let when_spec = eval
+                .eval_str("'(when (progn (setq buffer-invisibility-spec t) nil) . \"Q\")")
+                .expect("when spec");
+            put_prop(eval, 4, 5, "display", when_spec);
+            put_prop(eval, 5, 6, "invisible", Value::T);
+        }),
+        (5, 1),
+        "E2: when-nil enables buffer-invisibility-spec"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("abcdef");
+            let when_spec = eval
+                .eval_str(
+                    "'(when (progn (setq char-property-alias-alist '((invisible myinv))) nil) . \"Q\")",
+                )
+                .expect("when spec");
+            put_prop(eval, 4, 5, "display", when_spec);
+            put_prop(eval, 5, 6, "myinv", Value::T);
+        }),
+        (5, 1),
+        "E4: when-nil sets char-property-alias-alist"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            let buf = eval.edit.buffers.get_mut(buf_id).unwrap();
+            buf.insert("abc");
+            buf.set_buffer_local("buffer-invisibility-spec", Value::NIL);
+            let when_spec = eval
+                .eval_str("'(when (progn (setq buffer-invisibility-spec t) nil) . \"Q\")")
+                .expect("when spec");
+            let s = Value::string("XYW");
+            set_string_text_properties_for_value(
+                s,
+                vec![
+                    StringTextPropertyRun {
+                        start: 1,
+                        end: 2,
+                        plist: Value::list(vec![sym("display"), when_spec]),
+                    },
+                    StringTextPropertyRun {
+                        start: 2,
+                        end: 3,
+                        plist: Value::list(vec![sym("invisible"), Value::T]),
+                    },
+                ],
+            );
+            add_before_string(eval, 1, 1, s);
+        }),
+        (5, 1),
+        "overlay string when-nil enables buffer-invisibility-spec for later string char"
+    );
+
+    // F4: `keep_before_origin_for_display` must follow resolved display element, not raw newline bytes (F1-F3).
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let disp = Value::string("A\nB");
+            set_string_text_properties_for_value(
+                disp,
+                vec![StringTextPropertyRun {
+                    start: 1,
+                    end: 2,
+                    plist: Value::list(vec![sym("invisible"), Value::T]),
+                }],
+            );
+            put_prop(eval, 1, 2, "display", disp);
+            add_before_string(eval, 1, 1, Value::string("ZZ"));
+        }),
+        (8, 1),
+        "F1: invisible newline in display string at FROM must not swallow before-string"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let when_nil = eval.eval_str("'(when nil . \"A\\nB\")").expect("when nil");
+            put_prop(eval, 1, 2, "display", when_nil);
+            add_before_string(eval, 1, 1, Value::string("ZZ"));
+        }),
+        (7, 1),
+        "F2: false when display string at FROM must not swallow before-string"
+    );
+    assert_eq!(
+        run_case(&|eval, buf_id| {
+            eval.edit.buffers.get_mut(buf_id).unwrap().insert("hello");
+            let margin_nl = Value::list(vec![
+                Value::list(vec![sym("margin"), sym("left-margin")]),
+                Value::string("A\nB"),
+            ]);
+            put_prop(eval, 1, 2, "display", margin_nl);
+            add_before_string(eval, 1, 1, Value::string("ZZ"));
+        }),
+        (6, 1),
+        "F3: margin display string with newline at FROM must not swallow before-string"
+    );
 }
 
 #[cfg(test)]

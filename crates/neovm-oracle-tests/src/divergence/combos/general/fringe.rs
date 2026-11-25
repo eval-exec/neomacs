@@ -642,3 +642,157 @@ fn divergence_newline_display_string_at_from_measurement_batch() {
         expect,
     );
 }
+
+#[test]
+fn divergence_newline_overlay_string_at_from_measurement_batch() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((5 . 1) (5 . 1) (5 . 1) (5 . 1) (5 . 1) (0 . 1) (0 . 0) (7 . 1) (5 . 1) (5 . 1) (5 . 1) (7 . 2) (5 . 2) (5 . 1) (5 . 1) (7 . 2) (2 . 2) (1 . 2) (1 . 2) (7 . 1) (7 . 1) (5 . 1) (1 . 1) (6 . 2) (5 . 3) (4 . 1) (3 . 1) (10 . 3) (13 . 1))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((measure
+       (lambda (setup &optional from to)
+         (with-temp-buffer
+           (funcall setup)
+           (switch-to-buffer (current-buffer))
+           (window-text-pixel-size nil from to)))))
+  (list
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1))) (overlay-put ov 'before-string "\n"))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1))) (overlay-put ov 'before-string "AB\nCD"))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1))) (overlay-put ov 'before-string "AB\n"))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1))) (overlay-put ov 'before-string "\nCD"))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1))) (overlay-put ov 'before-string "A\nB\nC"))))
+   (funcall measure (lambda ()
+                      (let ((ov (make-overlay 1 1))) (overlay-put ov 'before-string "AB\nCD"))))
+   (funcall measure (lambda ()
+                      (let ((ov (make-overlay 1 1))) (overlay-put ov 'before-string "AB\n"))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1))) (overlay-put ov 'before-string "XX"))))
+   (funcall measure (lambda () (insert "xhello")
+                      (let ((ov (make-overlay 2 2))) (overlay-put ov 'before-string "AB\nCD"))) 2 nil)
+   (funcall measure (lambda () (insert "xhello")
+                      (let ((ov (make-overlay 2 2))) (overlay-put ov 'before-string "\n"))) 2 nil)
+   (funcall measure (lambda () (insert "xhello")
+                      (let ((ov (make-overlay 2 2))) (overlay-put ov 'before-string "XX"))) 2 nil)
+   (funcall measure (lambda () (insert "ab\nhello")
+                      (let ((ov (make-overlay 4 4))) (overlay-put ov 'before-string "AB\nCD"))) 4 nil)
+   (funcall measure (lambda () (insert "ab\nhello")
+                      (let ((ov (make-overlay 4 4))) (overlay-put ov 'before-string "\n"))) 4 nil)
+   (funcall measure (lambda () (insert "ab\nhello") (narrow-to-region 4 9)
+                      (let ((ov (make-overlay 4 4))) (overlay-put ov 'before-string "AB\nCD"))) 4 nil)
+   (funcall measure (lambda () (insert "xhello")
+                      (let ((ov (make-overlay 1 2))) (overlay-put ov 'after-string "AB\nCD"))) 2 nil)
+   (funcall measure (lambda () (insert "ab\nhello")
+                      (let ((ov (make-overlay 1 4))) (overlay-put ov 'after-string "AB\nCD"))) 4 nil)
+   (funcall measure (lambda () (insert "h\ncd")
+                      (let ((ov (make-overlay 1 1))) (overlay-put ov 'before-string "AB\nCD"))))
+   (funcall measure (lambda () (insert "h\nc")
+                      (let ((ov (make-overlay 1 1))) (overlay-put ov 'before-string "ABCD\nEFG"))))
+   (funcall measure (lambda () (insert "h\nc")
+                      (put-text-property 1 2 'display "ABCD\nEFG")))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1)))
+                        (overlay-put ov 'before-string (concat "A" (propertize "\n" 'invisible t) "B")))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((o1 (make-overlay 1 1)) (o2 (make-overlay 1 1)))
+                        (overlay-put o1 'priority 1) (overlay-put o1 'before-string "AB\n")
+                        (overlay-put o2 'priority 2) (overlay-put o2 'before-string "ZZ"))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((o1 (make-overlay 1 1)) (o2 (make-overlay 1 1)))
+                        (overlay-put o1 'priority 1) (overlay-put o1 'before-string "ZZ")
+                        (overlay-put o2 'priority 2) (overlay-put o2 'before-string "AB\nCD"))))
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 1 1))) (overlay-put ov 'before-string "AB\nCD"))) 1 2)
+   (funcall measure (lambda () (insert "hello")
+                      (let ((ov (make-overlay 2 2))) (overlay-put ov 'before-string "AB\nCD"))))
+   (funcall measure (lambda () (insert "M-x ")
+                      (let ((ov (make-overlay 5 5))) (overlay-put ov 'before-string "\ncand1\ncand2"))))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display "AB\nCD")
+                      (let ((ov (make-overlay 1 1))) (overlay-put ov 'before-string "ZZ"))))
+   (with-temp-buffer
+     (insert "abc")
+     (overlay-put (make-overlay (point-min) (point-min)) 'before-string "short\nten-cols!!\nx")
+     (switch-to-buffer (current-buffer))
+     (buffer-text-pixel-size))
+   (with-temp-buffer
+     (insert "abc")
+     (overlay-put (make-overlay (point-max) (point-max)) 'before-string "short\nten-cols!!\nx")
+     (switch-to-buffer (current-buffer))
+     (buffer-text-pixel-size))
+   (with-temp-buffer
+     (insert "abc")
+     (overlay-put (make-overlay (point-min) (point-min)) 'before-string "ten-cols!!")
+     (switch-to-buffer (current-buffer))
+     (buffer-text-pixel-size))))"#,
+        expect,
+    );
+}
+
+#[test]
+fn divergence_measurement_hotpath_textget_and_from_defer_batch() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK ((3 . 1) (11 . 1) (6 . 1) (4 . 1) (14 . 1) (0 . 0) (1 . 1) (0 . 0) (5 . 1) (5 . 1) (5 . 1) (8 . 1) (7 . 1) (6 . 1))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(let ((measure (lambda (setup &optional from to)
+                  (with-temp-buffer
+                    (funcall setup)
+                    (switch-to-buffer (current-buffer))
+                    (window-text-pixel-size nil from to))))
+      (ov (lambda (b e &rest props)
+            (let ((o (make-overlay b e)))
+              (while props (overlay-put o (pop props) (pop props)))
+              o))))
+  (put 'n5dcat 'invisible t)
+  (put 'n5dcatd 'display "QQQQQQQQ")
+  (list
+   ;; F1: category fallback (G1-G5)
+   (funcall measure (lambda () (insert "hello") (put-text-property 1 3 'category 'n5dcat)))
+   (funcall measure (lambda () (insert "hello") (put-text-property 1 3 'category 'n5dcatd)))
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 1 'before-string (concat "X" (propertize "ABC" 'category 'n5dcat)))))
+   (funcall measure (lambda () (insert "xA")
+                      (put-text-property 2 3 'display (concat "AB" (propertize "CD" 'category 'n5dcat) "E"))))
+   (funcall measure (lambda () (insert "hello")
+                      (funcall ov 1 1 'before-string (concat "X" (propertize "ABC" 'category 'n5dcatd)))))
+   ;; F2: default-text-properties fallback (D3, D4, D19)
+   (funcall measure (lambda () (insert "hello") (setq-local default-text-properties '(invisible t))))
+   (funcall measure (lambda () (insert "hello") (setq-local default-text-properties '(display "Q"))))
+   (funcall measure (lambda () (insert "hello")
+                      (setq-local default-text-properties '(invisible t))
+                      (funcall ov 1 1 'before-string "ABC")))
+   ;; F3: refresh env even when `(when FORM . SPEC)` returns nil (E2, E4, overlay string)
+   (funcall measure (lambda () (setq buffer-invisibility-spec nil)
+                      (insert "abc" (propertize "d" 'display '(when (progn (setq buffer-invisibility-spec t) nil) . "Q")) "ef")
+                      (put-text-property 5 6 'invisible t)))
+   (funcall measure (lambda ()
+                      (insert "abc" (propertize "d" 'display '(when (progn (setq-local char-property-alias-alist '((invisible myinv))) nil) . "Q")) "ef")
+                      (put-text-property 5 6 'myinv t)))
+   (funcall measure (lambda () (setq buffer-invisibility-spec nil)
+                      (insert "abc")
+                      (funcall ov 1 1 'before-string
+                        (concat "X"
+                          (propertize "Y" 'display '(when (progn (setq buffer-invisibility-spec t) nil) . "Q"))
+                          (propertize "W" 'invisible t)))))
+   ;; F4: resolved display element decides FROM defer (F1-F3)
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display (concat "A" (propertize "\n" 'invisible t) "B"))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '(when nil . "A\nB"))
+                      (funcall ov 1 1 'before-string "ZZ")))
+   (funcall measure (lambda () (insert "hello")
+                      (put-text-property 1 2 'display '((margin left-margin) "A\nB"))
+                      (funcall ov 1 1 'before-string "ZZ")))))"#,
+        expect,
+    );
+}

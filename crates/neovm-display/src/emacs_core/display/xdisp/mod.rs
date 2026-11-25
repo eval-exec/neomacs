@@ -966,6 +966,224 @@ pub(crate) enum CharColumnWidth {
     DisplayWidth,
 }
 
+/// Snapshot of the buffer-local variables that govern GNU `textget`
+/// (`lookup_char_property` with `textprop = true`, `src/intervals.c:1708-1742`)
+/// and `TEXT_PROP_MEANS_INVISIBLE` during a measurement walk.
+///
+/// Read once per [`region_text_metrics_with_display`] call and refreshed
+/// whenever a `display` `(when FORM . SPEC)` evaluation runs Lisp.  Every
+/// interval/string fast path consults this single predicate so `category`,
+/// `char-property-alias-alist`, and `default-text-properties` fallbacks are
+/// never bypassed.
+#[derive(Clone, Copy)]
+struct MeasurePropEnv {
+    display_sym: Value,
+    invisible_sym: Value,
+    category_sym: Value,
+    invis_spec: Value,
+    has_display_alias: bool,
+    has_invis_alias: bool,
+    has_default_display: bool,
+    has_default_invis: bool,
+}
+
+impl MeasurePropEnv {
+    fn alist_has_non_empty_entry(alist: Value, key: &Value) -> bool {
+        let mut tail = alist;
+        while tail.is_cons() {
+            let entry = tail.cons_car();
+            if entry.is_cons() && eq_value(&entry.cons_car(), key) {
+                return entry.cons_cdr().is_cons();
+            }
+            tail = tail.cons_cdr();
+        }
+        false
+    }
+
+    fn read(eval: &neovm_eval::emacs_core::eval::Context, buffer_id: BufferId) -> Self {
+        let mut env = Self {
+            display_sym: Value::symbol("display"),
+            invisible_sym: Value::symbol("invisible"),
+            category_sym: Value::symbol("category"),
+            invis_spec: Value::NIL,
+            has_display_alias: false,
+            has_invis_alias: false,
+            has_default_display: false,
+            has_default_invis: false,
+        };
+        env.refresh(eval, buffer_id);
+        env
+    }
+
+    fn refresh(&mut self, eval: &neovm_eval::emacs_core::eval::Context, buffer_id: BufferId) {
+        let Some(buf) = eval.edit.buffers.get(buffer_id) else {
+            self.invis_spec = Value::NIL;
+            self.has_display_alias = false;
+            self.has_invis_alias = false;
+            self.has_default_display = false;
+            self.has_default_invis = false;
+            return;
+        };
+        let vars = eval.variables();
+        self.invis_spec = vars
+            .value_in_buffer_by_name(Some(buf), "buffer-invisibility-spec")
+            .unwrap_or(Value::NIL);
+        let alias_alist = vars
+            .value_in_buffer_by_name(Some(buf), "char-property-alias-alist")
+            .unwrap_or(Value::NIL);
+        self.has_display_alias = Self::alist_has_non_empty_entry(alias_alist, &self.display_sym);
+        self.has_invis_alias = Self::alist_has_non_empty_entry(alias_alist, &self.invisible_sym);
+        let default_props = vars
+            .value_in_buffer_by_name(Some(buf), "default-text-properties")
+            .unwrap_or(Value::NIL);
+        self.has_default_display = default_props.is_cons()
+            && neovm_value::plist::plist_get(default_props, &self.display_sym)
+                .is_some_and(|v| !v.is_nil());
+        self.has_default_invis = default_props.is_cons()
+            && neovm_value::plist::plist_get(default_props, &self.invisible_sym)
+                .is_some_and(|v| !v.is_nil());
+    }
+
+    #[inline]
+    fn invis_active(&self) -> bool {
+        !self.invis_spec.is_nil()
+    }
+
+    /// True when a propertyless string cannot hide any char under `textget`.
+    #[inline]
+    fn propertyless_string_has_no_invis(&self) -> bool {
+        !self.invis_active() || !self.has_default_invis
+    }
+
+    /// True when a propertyless string or gap cannot produce `display` or
+    /// active `invisible` under `textget`.
+    #[inline]
+    fn propertyless_has_no_display_or_invis(&self) -> bool {
+        !self.has_default_display && (!self.invis_active() || !self.has_default_invis)
+    }
+
+    /// True when `table` cannot hide any char under `textget` (`invisible`,
+    /// `category`, aliases, and `default-text-properties` all ruled out).
+    fn table_has_no_invis(
+        &self,
+        table: &neovm_value::value::text_props::TextPropertyTable,
+    ) -> bool {
+        use neovm_value::value::text_props::PropertyNamePresence::DefinitelyAbsent;
+        if !self.invis_active() {
+            return true;
+        }
+        if self.has_default_invis || self.has_invis_alias {
+            return false;
+        }
+        table.property_name_presence(self.invisible_sym) == DefinitelyAbsent
+            && table.property_name_presence(self.category_sym) == DefinitelyAbsent
+    }
+
+    /// True when `table` cannot produce `display` or active `invisible` under
+    /// `textget`.
+    fn table_has_no_display_or_invis(
+        &self,
+        table: &neovm_value::value::text_props::TextPropertyTable,
+    ) -> bool {
+        use neovm_value::value::text_props::PropertyNamePresence::DefinitelyAbsent;
+        if self.has_default_display || self.has_display_alias {
+            return false;
+        }
+        if self.invis_active() && (self.has_default_invis || self.has_invis_alias) {
+            return false;
+        }
+        table.property_name_presence(self.display_sym) == DefinitelyAbsent
+            && table.property_name_presence(self.category_sym) == DefinitelyAbsent
+            && (!self.invis_active()
+                || table.property_name_presence(self.invisible_sym) == DefinitelyAbsent)
+    }
+
+    /// True when an overlay-free buffer cannot produce `display` or active
+    /// `invisible` anywhere under `textget`.
+    fn buffer_has_no_display_or_invis(&self, buf: &Buffer) -> bool {
+        use neovm_value::value::text_props::PropertyNamePresence::DefinitelyAbsent;
+        if !buf.overlays().is_empty() {
+            return false;
+        }
+        if self.has_default_display || self.has_display_alias {
+            return false;
+        }
+        if self.invis_active() && (self.has_default_invis || self.has_invis_alias) {
+            return false;
+        }
+        buf.text_props_property_name_presence(self.display_sym) == DefinitelyAbsent
+            && buf.text_props_property_name_presence(self.category_sym) == DefinitelyAbsent
+            && (!self.invis_active()
+                || buf.text_props_property_name_presence(self.invisible_sym) == DefinitelyAbsent)
+    }
+
+    /// True when one interval plist cannot produce `display` or active
+    /// `invisible` under `textget`.  Any `category` entry falls back to full
+    /// `textget`.
+    fn plist_has_no_display_or_invis(&self, plist: Option<Value>) -> bool {
+        if self.has_default_display || self.has_display_alias {
+            return false;
+        }
+        if self.invis_active() && (self.has_default_invis || self.has_invis_alias) {
+            return false;
+        }
+        let Some(pl) = plist else {
+            return true;
+        };
+        let mut tail = pl;
+        while tail.is_cons() {
+            let key = tail.cons_car();
+            let rest = tail.cons_cdr();
+            if !rest.is_cons() {
+                break;
+            }
+            let val = rest.cons_car();
+            if eq_value(&key, &self.category_sym) {
+                return false;
+            }
+            if eq_value(&key, &self.display_sym) && !val.is_nil() {
+                return false;
+            }
+            if self.invis_active() && eq_value(&key, &self.invisible_sym) && !val.is_nil() {
+                return false;
+            }
+            tail = rest.cons_cdr();
+        }
+        true
+    }
+
+    /// True when one interval plist cannot produce active `invisible` under
+    /// `textget`.  Any `category` entry falls back to full `textget`.
+    fn plist_has_no_invis(&self, plist: Option<Value>) -> bool {
+        if !self.invis_active() {
+            return true;
+        }
+        if self.has_default_invis || self.has_invis_alias {
+            return false;
+        }
+        let Some(pl) = plist else {
+            return true;
+        };
+        let mut tail = pl;
+        while tail.is_cons() {
+            let key = tail.cons_car();
+            let rest = tail.cons_cdr();
+            if !rest.is_cons() {
+                break;
+            }
+            let val = rest.cons_car();
+            if eq_value(&key, &self.category_sym) {
+                return false;
+            }
+            if eq_value(&key, &self.invisible_sym) && !val.is_nil() {
+                return false;
+            }
+            tail = rest.cons_cdr();
+        }
+        true
+    }
+}
+
 /// The one display-aware region scanner.
 ///
 /// Scans the buffer's byte range `[from, to)` honoring the `display` text
@@ -1031,21 +1249,21 @@ pub(crate) fn region_text_metrics_with_display(
             range.to
         };
 
-        let display_sym = Value::symbol("display");
-        let invisible_sym = Value::symbol("invisible");
         // GNU's `FETCH_BYTE (start_bpos) == '\n'`: a newline at FROM takes no place
         // on display, so the walk pretends to start at the next line's origin.
         let origin_is_newline = buf.emacs_byte_at_pos(range.from) == Some(b'\n');
         // GNU `window_text_pixel_size` (`src/xdisp.c:11867-11912`) rewinds via
         // `move_it_vertically_backward (&it, 0)` + `move_it_by_lines (&it, nlines)`
         // (`src/xdisp.c:11268-11347, 11511-11528`).  When `FROM` is at `BEGV` or
-        // mid-line (not immediately after a buffer `\n`), a newline-bearing
-        // display string at `FROM` is consumed as part of that rewound prefix
-        // before `start_x` is recorded; after a buffer `\n`, `move_it_by_lines`
-        // lands at `FROM` before entering the display string.
+        // mid-line (not immediately after a buffer `\n`), newline-bearing
+        // overlay strings and display strings at `FROM` are consumed in that
+        // rewound prefix and `it.current_x` is reset to 0 (`src/xdisp.c:11868`);
+        // after a buffer `\n`, `move_it_by_lines` lands at `FROM` before entering
+        // them.
         let accessible_start = buf.accessible_emacs_byte_region().start();
         let origin_not_after_buffer_newline = range.from <= accessible_start
             || buf.emacs_byte_at_pos(EmacsBytePos::new(range.from.get() - 1)) != Some(b'\n');
+        let mut prop_env = MeasurePropEnv::read(eval, buffer_id);
         let mut state = ScanState::new(
             cell,
             char_width,
@@ -1060,79 +1278,183 @@ pub(crate) fn region_text_metrics_with_display(
         // FROM == TO still reports the row FROM sits on.
         let mut scan = range.line_start.get().min(range.from.get());
         let end = scan_end.get().max(range.from.get());
+        // Byte horizon up to which an overlay-free buffer has no `display` /
+        // `invisible` (nor `category` / alias / default fallback), turning
+        // plain or font-lock-only spans into O(1) / O(intervals) scans instead
+        // of per-character property lookups.
+        let mut next_prop_check_byte = eval
+            .edit
+            .buffers
+            .get(buffer_id)
+            .filter(|buf| prop_env.buffer_has_no_display_or_invis(buf))
+            .map_or(0usize, |_| end);
+        let mut origin_rewind_reset_x = false;
         while scan < end {
             if state.y_limit_reached() {
                 break;
             }
 
-            if state.before_origin() && scan >= range.from.get() {
-                let maybe_nl_origin_display = scan == range.from.get()
-                    && origin_not_after_buffer_newline
-                    && eval.edit.buffers.get(buffer_id).is_some_and(|buf| {
-                        invisible_measure_run(eval, buf, scan, &invisible_sym, end).is_none()
-                            && raw_display_property_at(eval, buf, scan, &display_sym)
-                                .is_some_and(|v| value_contains_newline_string(v, 0))
-                    });
-                if maybe_nl_origin_display
-                    && let Some((element, run_end)) = display_element_run(
-                        eval,
-                        frame,
-                        buffer_id,
-                        scan,
-                        state.line_columns(),
-                        &display_sym,
-                        &invisible_sym,
-                        end,
-                    )?
-                    && run_end > scan
-                {
-                    let is_nl_text = matches!(
-                        element,
-                        DisplayElement::Text(s)
-                            if display_string_contains_visible_newline(
-                                eval,
-                                buffer_id,
-                                s,
-                                &invisible_sym,
-                            )
-                    );
-                    if !is_nl_text {
-                        state.reach_origin();
-                    }
-                    process_overlay_strings_at(
-                        eval,
-                        frame,
-                        buffer_id,
-                        scan,
-                        &display_sym,
-                        &invisible_sym,
-                        &mut state,
-                    )?;
-                    if state.y_limit_reached() {
-                        break;
-                    }
-                    state.push_display_element(eval, buffer_id, element, &invisible_sym);
-                    scan = run_end.min(end);
-                    continue;
+            if state.before_origin() && scan > range.from.get() {
+                if origin_rewind_reset_x {
+                    state.line.restart();
+                    origin_rewind_reset_x = false;
                 }
                 state.reach_origin();
-                // The origin's own character is still to be processed.
             }
+
+            // Fast path when `scan` lies inside a verified propertyless /
+            // non-display / non-invisible interval of an overlay-free buffer.
+            if scan < next_prop_check_byte {
+                if state.before_origin() && scan >= range.from.get() {
+                    state.reach_origin();
+                }
+                let Some(buf) = eval.edit.buffers.get(buffer_id) else {
+                    break;
+                };
+                let scan_pos = EmacsBytePos::new(scan);
+                let Some(code) = buf.char_code_after_emacs_byte_pos(scan_pos) else {
+                    break;
+                };
+                let char_len = buf
+                    .char_after_emacs_byte_len(scan_pos)
+                    .map(|len| len.get().max(1))
+                    .unwrap_or(1);
+                state.push_char(code);
+                scan += char_len;
+                continue;
+            }
+
+            // Advance `next_prop_check_byte` across the whole buffer or current
+            // interval when the buffer is overlay-free and `textget` is proven
+            // plain for `display` and active `invisible`.
+            if let Some(buf) = eval.edit.buffers.get(buffer_id)
+                && buf.overlays().is_empty()
+            {
+                let run_end_byte = if prop_env.buffer_has_no_display_or_invis(buf) {
+                    end
+                } else {
+                    let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(scan));
+                    let (plist, _, run_end_char) = buf.interval_plist_run_at_char_pos(charpos0);
+                    if prop_env.plist_has_no_display_or_invis(plist) {
+                        buf.char_pos_to_emacs_byte_pos_clamped(run_end_char).get()
+                    } else {
+                        0
+                    }
+                };
+                if run_end_byte > scan {
+                    next_prop_check_byte = run_end_byte;
+                    if state.before_origin() && scan >= range.from.get() {
+                        state.reach_origin();
+                    }
+                    let scan_pos = EmacsBytePos::new(scan);
+                    let Some(code) = buf.char_code_after_emacs_byte_pos(scan_pos) else {
+                        break;
+                    };
+                    let char_len = buf
+                        .char_after_emacs_byte_len(scan_pos)
+                        .map(|len| len.get().max(1))
+                        .unwrap_or(1);
+                    state.push_char(code);
+                    scan += char_len;
+                    continue;
+                }
+            }
+
+            let at_origin_rewind = state.before_origin()
+                && scan == range.from.get()
+                && origin_not_after_buffer_newline;
+
+            if state.before_origin() && scan == range.from.get() && !at_origin_rewind {
+                state.reach_origin();
+            }
+
+            // When BOTH overlay strings and a newline-bearing `display` property
+            // exist at a rewound `FROM`, resolve the `display` property once now
+            // so `keep_before_origin_for_display` follows the *resolved*
+            // `DisplayElement::Text` (not a raw structural prefilter that would
+            // misclassify invisible newlines, false `when` clauses, or margin
+            // specs).  The resolved element is reused below without re-running
+            // any `when` form.
+            let should_pre_resolve_display = at_origin_rewind
+                && eval.edit.buffers.get(buffer_id).is_some_and(|buf| {
+                    !buf.overlays().is_empty()
+                        && !collect_overlay_strings_at(buf, scan, true).is_empty()
+                        && (!prop_env.invis_active()
+                            || invisible_measure_run(
+                                eval,
+                                buf,
+                                scan,
+                                &prop_env.invisible_sym,
+                                prop_env.invis_spec,
+                                end,
+                            )
+                            .is_none())
+                        && raw_display_property_at(eval, buf, scan, &prop_env.display_sym)
+                            .is_some_and(|v| value_contains_newline_string(v, 0))
+                });
+            let pre_resolved_display = if should_pre_resolve_display {
+                let outcome = display_element_run(
+                    eval,
+                    frame,
+                    buffer_id,
+                    scan,
+                    state.line_columns(),
+                    &mut prop_env,
+                    end,
+                )?;
+                if outcome.1 {
+                    next_prop_check_byte = 0;
+                }
+                Some(outcome)
+            } else {
+                None
+            };
+            let keep_before_origin_for_display = matches!(
+                pre_resolved_display,
+                Some((Some((DisplayElement::Text(s), run_end)), _))
+                    if run_end > scan
+                        && display_string_contains_visible_newline(eval, buffer_id, s, &prop_env)
+            );
 
             // GNU's display iterator processes overlay strings anchored at a
             // position *before* the buffer character there: before-strings of
             // overlays starting here, plus after-strings of overlays ending here
             // (see `load_overlay_strings`/`get_overlay_strings` in xdisp.c).  Each
             // contributes its own laid-out columns to the running line width.
-            process_overlay_strings_at(
+            let overlay_policy = if at_origin_rewind {
+                OriginOverlayPolicy::AtRewoundOrigin {
+                    midline_prefix: range.from > range.line_start,
+                    keep_before_origin_for_display,
+                }
+            } else {
+                OriginOverlayPolicy::Normal
+            };
+            // Root any pre-resolved display string across overlay-string Lisp.
+            let pre_root_scope = if let Some((Some((DisplayElement::Text(s), _)), _)) =
+                pre_resolved_display
+                && s.is_heap_object()
+            {
+                let scope = eval.save_specpdl_roots();
+                eval.push_specpdl_root(s);
+                Some(scope)
+            } else {
+                None
+            };
+            let overlay_res = process_overlay_strings_at(
                 eval,
                 frame,
                 buffer_id,
                 scan,
-                &display_sym,
-                &invisible_sym,
+                &mut prop_env,
+                overlay_policy,
                 &mut state,
-            )?;
+            );
+            if let Some(scope) = pre_root_scope {
+                eval.restore_specpdl_roots(scope);
+            }
+            if overlay_res? {
+                next_prop_check_byte = 0;
+            }
             if state.y_limit_reached() {
                 break;
             }
@@ -1144,14 +1466,26 @@ pub(crate) fn region_text_metrics_with_display(
             // destination is hidden, so a clocktable cell measures the visible
             // description rather than the raw markup -- and so do outlines and
             // folded blocks.
-            let invisible_run = eval
-                .edit
-                .buffers
-                .get(buffer_id)
-                .and_then(|buf| invisible_measure_run(eval, buf, scan, &invisible_sym, end));
+            let invisible_run = if !prop_env.invis_active() {
+                None
+            } else {
+                eval.edit.buffers.get(buffer_id).and_then(|buf| {
+                    invisible_measure_run(
+                        eval,
+                        buf,
+                        scan,
+                        &prop_env.invisible_sym,
+                        prop_env.invis_spec,
+                        end,
+                    )
+                })
+            };
             if let Some((invisibility, run_end)) = invisible_run
                 && run_end > scan
             {
+                if state.before_origin() && scan >= range.from.get() {
+                    state.reach_origin();
+                }
                 if invisibility.shows_ellipsis() {
                     state.push_ellipsis();
                 }
@@ -1165,20 +1499,50 @@ pub(crate) fn region_text_metrics_with_display(
             // a marginal-area spec, or a `(left-fringe ...)` / `(right-fringe ...)`
             // spec -- defines the whole run's extent.  Resolve it once and advance
             // over the run atomically.
-            if let Some((element, run_end)) = display_element_run(
-                eval,
-                frame,
-                buffer_id,
-                scan,
-                state.line_columns(),
-                &display_sym,
-                &invisible_sym,
-                end,
-            )? && run_end > scan
+            let (display_run, display_ran_lisp) = match pre_resolved_display {
+                Some(outcome) => outcome,
+                None => display_element_run(
+                    eval,
+                    frame,
+                    buffer_id,
+                    scan,
+                    state.line_columns(),
+                    &mut prop_env,
+                    end,
+                )?,
+            };
+            if display_ran_lisp {
+                next_prop_check_byte = 0;
+            }
+            if let Some((element, run_end)) = display_run
+                && run_end > scan
             {
-                state.push_display_element(eval, buffer_id, element, &invisible_sym);
+                let nl_origin_display = state.before_origin()
+                    && scan == range.from.get()
+                    && origin_not_after_buffer_newline
+                    && matches!(
+                        element,
+                        DisplayElement::Text(s)
+                            if display_string_contains_visible_newline(
+                                eval,
+                                buffer_id,
+                                s,
+                                &prop_env,
+                            )
+                    );
+                if state.before_origin() && scan >= range.from.get() && !nl_origin_display {
+                    state.reach_origin();
+                }
+                state.push_display_element(eval, buffer_id, element, &prop_env);
+                if nl_origin_display {
+                    origin_rewind_reset_x = true;
+                }
                 scan = run_end.min(end);
                 continue;
+            }
+
+            if state.before_origin() && scan >= range.from.get() {
+                state.reach_origin();
             }
 
             let Some(buf) = eval.edit.buffers.get(buffer_id) else {
@@ -1208,13 +1572,23 @@ pub(crate) fn region_text_metrics_with_display(
         // visits positions `scan < end`, so `end` itself is processed exactly once
         // here with the same full `before = true` collection used in the loop body.
         if !state.y_limit_reached() {
+            let at_end_origin_rewind =
+                state.before_origin() && end == range.from.get() && origin_not_after_buffer_newline;
+            let end_policy = if at_end_origin_rewind {
+                OriginOverlayPolicy::AtRewoundOrigin {
+                    midline_prefix: range.from > range.line_start,
+                    keep_before_origin_for_display: false,
+                }
+            } else {
+                OriginOverlayPolicy::Normal
+            };
             process_overlay_strings_at(
                 eval,
                 frame,
                 buffer_id,
                 end,
-                &display_sym,
-                &invisible_sym,
+                &mut prop_env,
+                end_policy,
                 &mut state,
             )?;
         }
@@ -1223,6 +1597,9 @@ pub(crate) fn region_text_metrics_with_display(
         // last byte is the origin's own character left the origin unreached; both
         // still measure FROM's display line, one of GNU's rewound positions.
         if state.before_origin() {
+            if origin_rewind_reset_x {
+                state.line.restart();
+            }
             state.reach_origin();
         }
 
@@ -1413,7 +1790,7 @@ impl ScanState {
         eval: &neovm_eval::emacs_core::eval::Context,
         buffer_id: BufferId,
         element: DisplayElement,
-        invisible_sym: &Value,
+        prop_env: &MeasurePropEnv,
     ) {
         match element {
             DisplayElement::Cells(columns) => {
@@ -1425,7 +1802,7 @@ impl ScanState {
                 self.last_code = None;
             }
             DisplayElement::Text(string) => {
-                self.push_display_string(eval, buffer_id, string, invisible_sym);
+                self.push_display_string(eval, buffer_id, string, prop_env);
             }
             DisplayElement::MarginBaseline => {
                 self.note_text_baseline();
@@ -1450,7 +1827,7 @@ impl ScanState {
         eval: &neovm_eval::emacs_core::eval::Context,
         buffer_id: BufferId,
         string: Value,
-        invisible_sym: &Value,
+        prop_env: &MeasurePropEnv,
     ) {
         let Some(s) = string.as_lisp_string() else {
             self.last_code = None;
@@ -1463,39 +1840,63 @@ impl ScanState {
         }
         let bytes = s.as_bytes();
         let multibyte = s.is_multibyte();
+        let prop_table = neovm_value::value::borrow_string_text_properties_table_for_value(string);
+        let skip_all_invis = match prop_table {
+            None => prop_env.propertyless_string_has_no_invis(),
+            Some(table) => prop_env.table_has_no_invis(table),
+        };
+        let mut next_invis_check_char = if skip_all_invis { schars } else { 0usize };
         let mut char_index = 0usize;
         let mut byte_off = 0usize;
         while char_index < schars && byte_off < bytes.len() {
             if self.y_limit_reached() {
                 return;
             }
-            if let Some((invisibility, run_end_char)) = string_invisible_measure_run(
-                eval,
-                buffer_id,
-                string,
-                char_index,
-                invisible_sym,
-                schars,
-            ) && run_end_char > char_index
-            {
-                if invisibility.shows_ellipsis() {
-                    self.push_ellipsis();
+            if char_index >= next_invis_check_char {
+                let (interval_end, need_full_lookup) = match prop_table {
+                    Some(table) => {
+                        let (plist, _, run_end) =
+                            table.interval_plist_run_at_char_pos(CharPos0::new(char_index), schars);
+                        let run_end = run_end.get().max(char_index + 1);
+                        (run_end, !prop_env.plist_has_no_invis(plist))
+                    }
+                    None => (schars, true),
+                };
+                if !need_full_lookup {
+                    next_invis_check_char = interval_end;
+                } else if let Some((invisibility, run_end_char)) = string_invisible_measure_run(
+                    eval,
+                    buffer_id,
+                    string,
+                    char_index,
+                    &prop_env.invisible_sym,
+                    prop_env.invis_spec,
+                    schars,
+                ) && run_end_char > char_index
+                {
+                    if invisibility.shows_ellipsis() {
+                        self.push_ellipsis();
+                    }
+                    let mut skip = run_end_char.min(schars) - char_index;
+                    while skip > 0 && byte_off < bytes.len() {
+                        let len = if multibyte {
+                            neovm_value::emacs_char::string_char(&bytes[byte_off..])
+                                .1
+                                .max(1)
+                        } else {
+                            1
+                        };
+                        byte_off += len;
+                        char_index += 1;
+                        skip -= 1;
+                    }
+                    self.last_code = None;
+                    continue;
+                } else {
+                    // No Lisp runs inside a display string, so the same plist
+                    // throughout `[char_index, interval_end)` stays visible.
+                    next_invis_check_char = interval_end;
                 }
-                let mut skip = run_end_char.min(schars) - char_index;
-                while skip > 0 && byte_off < bytes.len() {
-                    let len = if multibyte {
-                        neovm_value::emacs_char::string_char(&bytes[byte_off..])
-                            .1
-                            .max(1)
-                    } else {
-                        1
-                    };
-                    byte_off += len;
-                    char_index += 1;
-                    skip -= 1;
-                }
-                self.last_code = None;
-                continue;
             }
             let (code, len) = if multibyte {
                 let (code, len) = neovm_value::emacs_char::string_char(&bytes[byte_off..]);
@@ -1816,8 +2217,8 @@ fn resolve_display_element(
     position: i64,
     buffer_position: i64,
     cur_column: usize,
-    invisible_sym: &Value,
-) -> Result<Option<DisplayElement>, Flow> {
+    prop_env: &mut MeasurePropEnv,
+) -> Result<(Option<DisplayElement>, bool), Flow> {
     use crate::emacs_core::display_when::DisplayWhenContextExt;
     use neovm_eval::emacs_core::eval::data::display_spec::{
         DisplayEval, DisplayMarginLocation, DisplayPropertySpecs, DisplaySpecKind,
@@ -1850,6 +2251,7 @@ fn resolve_display_element(
         None
     };
 
+    let mut ran_lisp = false;
     let outcome = (|| -> Result<Option<DisplayElement>, Flow> {
         for mut spec in specs {
             if let Some((form, inner)) = display_spec_when_parts(spec) {
@@ -1863,7 +2265,11 @@ fn resolve_display_element(
                     if inner.is_heap_object() {
                         eval.push_specpdl_root(inner);
                     }
-                    if !eval.display_when_form_holds(form, object, position, buffer_position)? {
+                    ran_lisp = true;
+                    let holds =
+                        eval.display_when_form_holds(form, object, position, buffer_position)?;
+                    prop_env.refresh(eval, buffer_id);
+                    if !holds {
                         continue;
                     }
                 }
@@ -1921,10 +2327,7 @@ fn resolve_display_element(
                                 match display_spec_kind(content, property.eval) {
                                     DisplaySpecKind::Text => {
                                         if display_string_produces_glyphs(
-                                            eval,
-                                            buffer_id,
-                                            content,
-                                            invisible_sym,
+                                            eval, buffer_id, content, prop_env,
                                         ) {
                                             return Ok(Some(DisplayElement::MarginBaseline));
                                         }
@@ -1986,7 +2389,7 @@ fn resolve_display_element(
     if let Some(scope) = root_scope {
         eval.restore_specpdl_roots(scope);
     }
-    outcome
+    outcome.map(|el| (el, ran_lisp))
 }
 
 /// Pure lookup of the raw `display` property (overlay or text property) at
@@ -2047,17 +2450,34 @@ fn display_string_produces_glyphs(
     eval: &neovm_eval::emacs_core::eval::Context,
     buffer_id: BufferId,
     string: Value,
-    invisible_sym: &Value,
+    prop_env: &MeasurePropEnv,
 ) -> bool {
     let Some(s) = string.as_lisp_string() else {
         return false;
     };
     let schars = s.schars();
+    if schars == 0 {
+        return false;
+    }
+    let skip_all_invis =
+        match neovm_value::value::borrow_string_text_properties_table_for_value(string) {
+            None => prop_env.propertyless_string_has_no_invis(),
+            Some(table) => prop_env.table_has_no_invis(table),
+        };
+    if skip_all_invis {
+        return true;
+    }
     let mut char_index = 0usize;
     while char_index < schars {
-        if let Some((invisibility, run_end_char)) =
-            string_invisible_measure_run(eval, buffer_id, string, char_index, invisible_sym, schars)
-            && run_end_char > char_index
+        if let Some((invisibility, run_end_char)) = string_invisible_measure_run(
+            eval,
+            buffer_id,
+            string,
+            char_index,
+            &prop_env.invisible_sym,
+            prop_env.invis_spec,
+            schars,
+        ) && run_end_char > char_index
         {
             if invisibility.shows_ellipsis() {
                 return true;
@@ -2076,7 +2496,7 @@ fn display_string_contains_visible_newline(
     eval: &neovm_eval::emacs_core::eval::Context,
     buffer_id: BufferId,
     string: Value,
-    invisible_sym: &Value,
+    prop_env: &MeasurePropEnv,
 ) -> bool {
     let Some(s) = string.as_lisp_string() else {
         return false;
@@ -2085,14 +2505,28 @@ fn display_string_contains_visible_newline(
     if !bytes.contains(&b'\n') {
         return false;
     }
+    let skip_all_invis =
+        match neovm_value::value::borrow_string_text_properties_table_for_value(string) {
+            None => prop_env.propertyless_string_has_no_invis(),
+            Some(table) => prop_env.table_has_no_invis(table),
+        };
+    if skip_all_invis {
+        return true;
+    }
     let schars = s.schars();
     let multibyte = s.is_multibyte();
     let mut char_index = 0usize;
     let mut byte_off = 0usize;
     while char_index < schars && byte_off < bytes.len() {
-        if let Some((_, run_end_char)) =
-            string_invisible_measure_run(eval, buffer_id, string, char_index, invisible_sym, schars)
-            && run_end_char > char_index
+        if let Some((_, run_end_char)) = string_invisible_measure_run(
+            eval,
+            buffer_id,
+            string,
+            char_index,
+            &prop_env.invisible_sym,
+            prop_env.invis_spec,
+            schars,
+        ) && run_end_char > char_index
         {
             let mut skip = run_end_char.min(schars) - char_index;
             while skip > 0 && byte_off < bytes.len() {
@@ -2127,16 +2561,18 @@ fn display_string_contains_visible_newline(
 /// The extent of the `display` property at buffer byte `pos`, if its value
 /// replaces the covered text with an element that has its own size.
 ///
-/// Returns `(element, run_end_byte)`.  Mirrors the `display`-spec branch of
-/// GNU's display iterator: the covered run is laid out as ONE element -- a
-/// display string, a stretch glyph for `(space ...)`, an image glyph for
+/// Returns `((element, run_end_byte), ran_lisp)`.  Mirrors the `display`-spec
+/// branch of GNU's display iterator: the covered run is laid out as ONE element
+/// -- a display string, a stretch glyph for `(space ...)`, an image glyph for
 /// `(image ...)`, a marginal-area spec, or a consumed zero-width run for
 /// `(left-fringe ...)` / `(right-fringe ...)` -- and the iterator jumps to the
 /// end of the run.  `cur_column` is the running row width in text columns,
 /// which `(space :align-to N)` needs (an absolute target column).
 ///
-/// Returns `None` when there is no `display` property, or its value is not a
-/// spec this measurement models.  Deliberately unmodelled: `(slice ...)`,
+/// Returns `(None, ran_lisp)` when there is no `display` property, or its value
+/// is not a spec this measurement models.  `ran_lisp` is true whenever a
+/// `(when FORM . SPEC)` clause evaluated Lisp (even if the clause returned nil
+/// so the returned element is `None`).  Deliberately unmodelled: `(slice ...)`,
 /// `(height ...)`, `(raise ...)`, `(space-width ...)`, `(min-width ...)`,
 /// `(xwidget ...)`, and the neomacs media heads (`video` / `webkit` /
 /// `surface`), which either modify text geometry or replace text in widgets
@@ -2148,10 +2584,10 @@ fn display_element_run(
     buffer_id: BufferId,
     pos: usize,
     cur_column: usize,
-    display_sym: &Value,
-    invisible_sym: &Value,
+    prop_env: &mut MeasurePropEnv,
     region_end: usize,
-) -> Result<Option<(DisplayElement, usize)>, Flow> {
+) -> Result<(Option<(DisplayElement, usize)>, bool), Flow> {
+    let display_sym = prop_env.display_sym;
     let Some((charpos1, display, overlay)) = eval.edit.buffers.get(buffer_id).and_then(|buf| {
         let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(pos));
         let charpos1 = charpos0.get() as i64 + 1;
@@ -2162,7 +2598,7 @@ fn display_element_run(
                 &eval.edit.buffers,
                 buf,
                 pos,
-                *display_sym,
+                display_sym,
                 None,
             )
             .map(|(v, ov)| (v, Some(ov)))
@@ -2170,17 +2606,17 @@ fn display_element_run(
                 let v = neovm_edit::emacs_core::textprop::builtin_get_text_property_in_state(
                     eval.variables(),
                     &eval.edit.buffers,
-                    &[Value::fixnum(charpos1), *display_sym],
+                    &[Value::fixnum(charpos1), display_sym],
                 )
                 .ok()?;
                 if v.is_nil() { None } else { Some((v, None)) }
             })?;
         Some((charpos1, display, overlay))
     }) else {
-        return Ok(None);
+        return Ok((None, false));
     };
 
-    let Some(element) = resolve_display_element(
+    let (element, ran_lisp) = resolve_display_element(
         eval,
         frame,
         buffer_id,
@@ -2189,14 +2625,14 @@ fn display_element_run(
         charpos1,
         charpos1,
         cur_column,
-        invisible_sym,
-    )?
-    else {
-        return Ok(None);
+        prop_env,
+    )?;
+    let Some(element) = element else {
+        return Ok((None, ran_lisp));
     };
 
     let Some(buf) = eval.edit.buffers.get(buffer_id) else {
-        return Ok(None);
+        return Ok((None, ran_lisp));
     };
     // End of the run: overlay-end for an overlay `display`, else the
     // text-property range end (GNU `OVERLAY_END` vs `get_property_and_range`).
@@ -2210,7 +2646,7 @@ fn display_element_run(
             neovm_edit::emacs_core::textprop::builtin_next_single_property_change_in_state(
                 eval.variables(),
                 &eval.edit.buffers,
-                &[Value::fixnum(charpos1), *display_sym],
+                &[Value::fixnum(charpos1), display_sym],
             )
             .ok()
             .and_then(|v| match v.kind() {
@@ -2222,7 +2658,7 @@ fn display_element_run(
             .get()
     };
 
-    Ok(Some((element, run_end.min(region_end))))
+    Ok((Some((element, run_end.min(region_end))), ran_lisp))
 }
 
 /// GNU's invisible-run boundary for the measurement walk.
@@ -2239,6 +2675,7 @@ fn invisible_measure_run(
     buf: &Buffer,
     pos: usize,
     invisible_sym: &Value,
+    invis_spec: Value,
     region_end: usize,
 ) -> Option<(Invisibility, usize)> {
     let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(pos));
@@ -2270,13 +2707,7 @@ fn invisible_measure_run(
     if prop.is_nil() {
         return None;
     }
-    // `buffer-invisibility-spec` is a DEFVAR_PER_BUFFER: read the measured
-    // buffer's own binding, and only after a hiding property is present.
-    let spec = eval
-        .variables()
-        .value_in_buffer_by_name(Some(buf), "buffer-invisibility-spec")
-        .unwrap_or(Value::NIL);
-    let invisibility = text_prop_means_invisible(prop, spec);
+    let invisibility = text_prop_means_invisible(prop, invis_spec);
     if !invisibility.hides_source() {
         return None;
     }
@@ -2310,10 +2741,11 @@ fn invisible_measure_run(
 /// strings alike) against the measured buffer's `buffer-invisibility-spec`.
 fn string_invisible_measure_run(
     eval: &neovm_eval::emacs_core::eval::Context,
-    buffer_id: BufferId,
+    _buffer_id: BufferId,
     string: Value,
     char_index: usize,
     invisible_sym: &Value,
+    invis_spec: Value,
     schars: usize,
 ) -> Option<(Invisibility, usize)> {
     let prop = neovm_edit::emacs_core::textprop::builtin_get_text_property_in_state(
@@ -2325,12 +2757,7 @@ fn string_invisible_measure_run(
     if prop.is_nil() {
         return None;
     }
-    let buf = eval.edit.buffers.get(buffer_id)?;
-    let spec = eval
-        .variables()
-        .value_in_buffer_by_name(Some(buf), "buffer-invisibility-spec")
-        .unwrap_or(Value::NIL);
-    let invisibility = text_prop_means_invisible(prop, spec);
+    let invisibility = text_prop_means_invisible(prop, invis_spec);
     if !invisibility.hides_source() {
         return None;
     }
@@ -2532,17 +2959,40 @@ fn collect_overlay_strings_at(buf: &Buffer, pos: usize, before: bool) -> Vec<Ove
     entries
 }
 
+/// How overlay strings anchored at `pos` interact with GNU's `FROM` rewind
+/// (`window_text_pixel_size`, `src/xdisp.c:11867-11912`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OriginOverlayPolicy {
+    /// Ordinary position (already past `FROM`, or strictly before `FROM`, or
+    /// `FROM` immediately after a buffer `\n`).
+    Normal,
+    /// Positioned at `FROM` while `state.before_origin()` still holds and
+    /// `FROM` is not immediately after a buffer `\n`.
+    AtRewoundOrigin {
+        /// `FROM > line_start`: GNU's `move_it_to (&it, start, ...)`
+        /// (`src/xdisp.c:11875`) walks even single-line overlay strings at
+        /// `FROM` into `start_x`.
+        midline_prefix: bool,
+        /// A newline-bearing display property at `FROM` may still need to run
+        /// before `reach_origin()`; keep `state.before_origin()` active until
+        /// the display property is resolved.
+        keep_before_origin_for_display: bool,
+    },
+}
+
 /// Process the overlay before- and after-strings anchored at buffer byte `pos`,
 /// folding each one's laid-out columns (and embedded newlines) into `state`.
+/// Returns `true` if any overlay string was walked.
+#[allow(clippy::too_many_arguments)]
 fn process_overlay_strings_at(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame: FrameId,
     buffer_id: BufferId,
     pos: usize,
-    display_sym: &Value,
-    invisible_sym: &Value,
+    prop_env: &mut MeasurePropEnv,
+    policy: OriginOverlayPolicy,
     state: &mut ScanState,
-) -> Result<(), Flow> {
+) -> Result<bool, Flow> {
     let Some((entries, buf_charpos1)) = eval.edit.buffers.get(buffer_id).and_then(|buf| {
         if buf.overlays().is_empty() {
             return None;
@@ -2557,7 +3007,7 @@ fn process_overlay_strings_at(
             + 1;
         Some((entries, charpos1))
     }) else {
-        return Ok(());
+        return Ok(false);
     };
     let root_scope = eval.save_specpdl_roots();
     for entry in &entries {
@@ -2565,20 +3015,61 @@ fn process_overlay_strings_at(
             eval.push_specpdl_root(entry.string);
         }
     }
-    let outcome = (|| -> Result<(), Flow> {
-        for entry in entries {
-            walk_overlay_string(
-                eval,
-                frame,
-                buffer_id,
-                entry.string,
-                buf_charpos1,
-                display_sym,
-                invisible_sym,
-                state,
-            )?;
+    let outcome = (|| -> Result<bool, Flow> {
+        match policy {
+            OriginOverlayPolicy::Normal => {
+                for entry in entries {
+                    walk_overlay_string(
+                        eval,
+                        frame,
+                        buffer_id,
+                        entry.string,
+                        buf_charpos1,
+                        prop_env,
+                        state,
+                    )?;
+                }
+            }
+            OriginOverlayPolicy::AtRewoundOrigin {
+                midline_prefix,
+                keep_before_origin_for_display,
+            } => {
+                let last_nl_idx = entries.iter().rposition(|entry| {
+                    display_string_contains_visible_newline(eval, buffer_id, entry.string, prop_env)
+                });
+                let reach_before_idx = match last_nl_idx {
+                    Some(idx) => Some(idx + 1),
+                    None if midline_prefix || keep_before_origin_for_display => None,
+                    None => Some(0),
+                };
+                for (idx, entry) in entries.into_iter().enumerate() {
+                    if reach_before_idx == Some(idx) && state.before_origin() {
+                        if last_nl_idx.is_some() {
+                            state.line.restart();
+                        }
+                        if !keep_before_origin_for_display {
+                            state.reach_origin();
+                        }
+                    }
+                    walk_overlay_string(
+                        eval,
+                        frame,
+                        buffer_id,
+                        entry.string,
+                        buf_charpos1,
+                        prop_env,
+                        state,
+                    )?;
+                }
+                if state.before_origin() && !keep_before_origin_for_display {
+                    if last_nl_idx.is_some() {
+                        state.line.restart();
+                    }
+                    state.reach_origin();
+                }
+            }
         }
-        Ok(())
+        Ok(true)
     })();
     eval.restore_specpdl_roots(root_scope);
     outcome
@@ -2603,8 +3094,7 @@ fn walk_overlay_string(
     buffer_id: BufferId,
     string: Value,
     buf_charpos1: i64,
-    display_sym: &Value,
-    invisible_sym: &Value,
+    prop_env: &mut MeasurePropEnv,
     state: &mut ScanState,
 ) -> Result<(), Flow> {
     let Some((schars, byte_len, multibyte)) = string
@@ -2617,6 +3107,12 @@ fn walk_overlay_string(
         return Ok(());
     }
 
+    let skip_all_props =
+        match neovm_value::value::borrow_string_text_properties_table_for_value(string) {
+            None => prop_env.propertyless_has_no_display_or_invis(),
+            Some(table) => prop_env.table_has_no_display_or_invis(table),
+        };
+    let mut next_prop_check_char = if skip_all_props { schars } else { 0usize };
     let mut char_index = 0usize; // 0-based char position into the string
     let mut byte_off = 0usize;
     while char_index < schars && byte_off < byte_len {
@@ -2624,70 +3120,107 @@ fn walk_overlay_string(
             return Ok(());
         }
 
-        // GNU `handle_stop` checks `invisible` before `display` on strings too
-        // (`handle_invisible_prop`, `src/xdisp.c:5215-5234`).
-        if let Some((invisibility, run_end_char)) =
-            string_invisible_measure_run(eval, buffer_id, string, char_index, invisible_sym, schars)
-            && run_end_char > char_index
-        {
-            if invisibility.shows_ellipsis() {
-                state.push_ellipsis();
+        if char_index >= next_prop_check_char {
+            // Fast O(1)/O(intervals) skip when `textget` is proven plain for
+            // `display` and active `invisible` across this string or interval.
+            match neovm_value::value::borrow_string_text_properties_table_for_value(string) {
+                None => {
+                    if prop_env.propertyless_has_no_display_or_invis() {
+                        next_prop_check_char = schars;
+                    }
+                }
+                Some(table) => {
+                    if prop_env.table_has_no_display_or_invis(table) {
+                        next_prop_check_char = schars;
+                    } else {
+                        let (plist, _, run_end) =
+                            table.interval_plist_run_at_char_pos(CharPos0::new(char_index), schars);
+                        if prop_env.plist_has_no_display_or_invis(plist) {
+                            next_prop_check_char = run_end.get().max(char_index + 1);
+                        }
+                    }
+                }
             }
-            let Some(bytes) = string.as_lisp_string().map(|s| s.as_bytes()) else {
-                return Ok(());
-            };
-            let mut skip = run_end_char.min(schars) - char_index;
-            while skip > 0 && byte_off < bytes.len() {
-                let len = if multibyte {
-                    neovm_value::emacs_char::string_char(&bytes[byte_off..])
-                        .1
-                        .max(1)
-                } else {
-                    1
-                };
-                byte_off += len;
-                char_index += 1;
-                skip -= 1;
-            }
-            state.last_code = None;
-            continue;
         }
 
-        // Resolve this string's own `display` property at the char position.  A
-        // spec that replaces its text -- a string, `(space ...)`, an image, a
-        // margin spec, or a fringe spec -- covers the run up to the next
-        // `display` change and defines its extent.
-        if let Some((element, run_end_char)) = string_display_element_run(
-            eval,
-            frame,
-            buffer_id,
-            string,
-            char_index,
-            buf_charpos1,
-            state.line_columns(),
-            display_sym,
-            invisible_sym,
-        )? && run_end_char > char_index
-        {
-            state.push_display_element(eval, buffer_id, element, invisible_sym);
-            let Some(bytes) = string.as_lisp_string().map(|s| s.as_bytes()) else {
-                return Ok(());
-            };
-            // Skip the covered chars (advance both char and byte cursors).
-            let mut skip = run_end_char.min(schars) - char_index;
-            while skip > 0 && byte_off < bytes.len() {
-                let len = if multibyte {
-                    neovm_value::emacs_char::string_char(&bytes[byte_off..])
-                        .1
-                        .max(1)
-                } else {
-                    1
+        if char_index >= next_prop_check_char {
+            // GNU `handle_stop` checks `invisible` before `display` on strings too
+            // (`handle_invisible_prop`, `src/xdisp.c:5215-5234`).
+            if prop_env.invis_active()
+                && let Some((invisibility, run_end_char)) = string_invisible_measure_run(
+                    eval,
+                    buffer_id,
+                    string,
+                    char_index,
+                    &prop_env.invisible_sym,
+                    prop_env.invis_spec,
+                    schars,
+                )
+                && run_end_char > char_index
+            {
+                if invisibility.shows_ellipsis() {
+                    state.push_ellipsis();
+                }
+                let Some(bytes) = string.as_lisp_string().map(|s| s.as_bytes()) else {
+                    return Ok(());
                 };
-                byte_off += len;
-                char_index += 1;
-                skip -= 1;
+                let mut skip = run_end_char.min(schars) - char_index;
+                while skip > 0 && byte_off < bytes.len() {
+                    let len = if multibyte {
+                        neovm_value::emacs_char::string_char(&bytes[byte_off..])
+                            .1
+                            .max(1)
+                    } else {
+                        1
+                    };
+                    byte_off += len;
+                    char_index += 1;
+                    skip -= 1;
+                }
+                state.last_code = None;
+                continue;
             }
-            continue;
+
+            // Resolve this string's own `display` property at the char position.  A
+            // spec that replaces its text -- a string, `(space ...)`, an image, a
+            // margin spec, or a fringe spec -- covers the run up to the next
+            // `display` change and defines its extent.
+            let (display_run, ran_lisp) = string_display_element_run(
+                eval,
+                frame,
+                buffer_id,
+                string,
+                char_index,
+                buf_charpos1,
+                state.line_columns(),
+                prop_env,
+            )?;
+            if ran_lisp {
+                next_prop_check_char = 0;
+            }
+            if let Some((element, run_end_char)) = display_run
+                && run_end_char > char_index
+            {
+                state.push_display_element(eval, buffer_id, element, prop_env);
+                let Some(bytes) = string.as_lisp_string().map(|s| s.as_bytes()) else {
+                    return Ok(());
+                };
+                // Skip the covered chars (advance both char and byte cursors).
+                let mut skip = run_end_char.min(schars) - char_index;
+                while skip > 0 && byte_off < bytes.len() {
+                    let len = if multibyte {
+                        neovm_value::emacs_char::string_char(&bytes[byte_off..])
+                            .1
+                            .max(1)
+                    } else {
+                        1
+                    };
+                    byte_off += len;
+                    char_index += 1;
+                    skip -= 1;
+                }
+                continue;
+            }
         }
 
         let Some(bytes) = string.as_lisp_string().map(|s| s.as_bytes()) else {
@@ -2711,7 +3244,8 @@ fn walk_overlay_string(
 
 /// String-object analogue of [`display_element_run`]: the element an overlay
 /// string's own `display` text property contributes at char position
-/// `char_index`, with the position its run ends at.
+/// `char_index`, with the position its run ends at and whether a `when` clause
+/// evaluated Lisp.
 ///
 /// `cur_col` is the running column at the spec, needed for `:align-to` (an
 /// absolute target).  `run_end_char` is the next `display`-property change in
@@ -2725,22 +3259,22 @@ fn string_display_element_run(
     char_index: usize,
     buf_charpos1: i64,
     cur_col: usize,
-    display_sym: &Value,
-    invisible_sym: &Value,
-) -> Result<Option<(DisplayElement, usize)>, Flow> {
+    prop_env: &mut MeasurePropEnv,
+) -> Result<(Option<(DisplayElement, usize)>, bool), Flow> {
+    let display_sym = prop_env.display_sym;
     // `get-text-property` on a string takes a 0-based char position.
     let Ok(display) = neovm_edit::emacs_core::textprop::builtin_get_text_property_in_state(
         eval.variables(),
         &eval.edit.buffers,
-        &[Value::fixnum(char_index as i64), *display_sym, string],
+        &[Value::fixnum(char_index as i64), display_sym, string],
     ) else {
-        return Ok(None);
+        return Ok((None, false));
     };
     if display.is_nil() {
-        return Ok(None);
+        return Ok((None, false));
     }
 
-    let Some(element) = resolve_display_element(
+    let (element, ran_lisp) = resolve_display_element(
         eval,
         frame,
         buffer_id,
@@ -2749,10 +3283,10 @@ fn string_display_element_run(
         char_index as i64,
         buf_charpos1,
         cur_col,
-        invisible_sym,
-    )?
-    else {
-        return Ok(None);
+        prop_env,
+    )?;
+    let Some(element) = element else {
+        return Ok((None, ran_lisp));
     };
 
     let schars = string.as_lisp_string().map(|s| s.schars()).unwrap_or(0);
@@ -2760,7 +3294,7 @@ fn string_display_element_run(
         neovm_edit::emacs_core::textprop::builtin_next_single_property_change_in_state(
             eval.variables(),
             &eval.edit.buffers,
-            &[Value::fixnum(char_index as i64), *display_sym, string],
+            &[Value::fixnum(char_index as i64), display_sym, string],
         )
         .ok()
         .and_then(|v| match v.kind() {
@@ -2770,7 +3304,7 @@ fn string_display_element_run(
         .unwrap_or(schars)
         .min(schars);
 
-    Ok(Some((element, run_end_char)))
+    Ok((Some((element, run_end_char)), ran_lisp))
 }
 
 fn trim_window_text_to_non_empty_line_end(bytes: &[u8]) -> &[u8] {

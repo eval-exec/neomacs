@@ -19238,51 +19238,84 @@ fn window_text_pixel_size_includes_overlay_after_string_align_to() {
 
 /// Overlay `before-string`s anchored at a position contribute their columns too,
 /// and embedded newlines split the string into lines for the max-width measure.
+///
+/// GNU Emacs 31.1 (`Fbuffer_text_pixel_size` -> `window_text_pixel_size(Qnil, Qnil)`
+/// -> `move_it_by_lines(&it, 0)`, `src/xdisp.c:11867, 12180`):
+/// - a multi-line `before-string` at `(point-max)` (e.g. vertico candidates) or
+///   any position `> (point-min)` contributes its widest line (`(10 . 3)` here);
+/// - a multi-line `before-string` at `(point-min)` (`BEGV`) is consumed in
+///   `move_it_by_lines`'s rewind before `FROM`, leaving only buffer text (`(3 . 1)`);
+/// - a single-line `before-string` at `(point-min)` is not rewound (`(13 . 1)`).
 #[test]
 fn buffer_text_pixel_size_includes_overlay_before_string_multiline() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::test_utils::new_context();
-    let buf_id = eval
-        .edit
-        .buffers
-        .current_buffer()
-        .expect("current buffer")
-        .id();
-    let frame_id =
-        eval.frame_manager_mut()
-            .create_frame("buf-pixel-overlay-before", 200, 24, buf_id);
-    eval.frame_manager_mut().select_frame(frame_id);
-    {
-        let frame = eval
-            .frame_manager_mut()
-            .selected_frame_mut()
-            .expect("selected frame");
-        frame.char_width = 1.0;
-        frame.char_height = 1.0;
-        frame.font_pixel_size = 1.0;
-        frame.set_window_system(None);
-    }
+    let measure = |ov_setup: &str| -> (i64, i64) {
+        let mut eval = crate::test_utils::new_context();
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id();
+        let frame_id =
+            eval.frame_manager_mut()
+                .create_frame("buf-pixel-overlay-before", 200, 24, buf_id);
+        eval.frame_manager_mut().select_frame(frame_id);
+        {
+            let frame = eval
+                .frame_manager_mut()
+                .selected_frame_mut()
+                .expect("selected frame");
+            frame.char_width = 1.0;
+            frame.char_height = 1.0;
+            frame.font_pixel_size = 1.0;
+            frame.set_window_system(None);
+        }
 
-    eval.edit
-        .buffers
-        .get_mut(buf_id)
-        .expect("buffer")
-        .insert("abc");
+        eval.edit
+            .buffers
+            .get_mut(buf_id)
+            .expect("buffer")
+            .insert("abc");
+        eval.eval_str(ov_setup)
+            .expect("install overlay before-string");
 
-    // Before-string at buffer start whose widest embedded line is 10 columns.
-    eval.eval_str(
-        r#"
-        (let ((ov (make-overlay (point-min) (point-min))))
-          (overlay-put ov 'before-string "short\nten-cols!!\nx"))"#,
-    )
-    .expect("install overlay before-string");
+        let result = crate::emacs_core::xdisp::builtin_buffer_text_pixel_size(&mut eval, vec![])
+            .expect("buffer-text-pixel-size");
+        (
+            result.cons_car().as_int().expect("width"),
+            result.cons_cdr().as_int().expect("height"),
+        )
+    };
 
-    let result = crate::emacs_core::xdisp::builtin_buffer_text_pixel_size(&mut eval, vec![])
-        .expect("buffer-text-pixel-size");
+    // Multi-line before-string at `(point-max)`: widest embedded line (10 cols) drives width.
     assert_eq!(
-        result.cons_car(),
-        Value::fixnum(10),
-        "before-string widest line (ten-cols!! = 10) should drive width past the 3-col buffer text"
+        measure(
+            r#"(let ((ov (make-overlay (point-max) (point-max))))
+                 (overlay-put ov 'before-string "short\nten-cols!!\nx"))"#,
+        ),
+        (10, 3),
+        "before-string widest line (ten-cols!! = 10) at point-max should drive width past 3-col buffer text"
+    );
+
+    // Multi-line before-string at `(point-min)`: GNU rewinds past the newline at BEGV -> (3 . 1).
+    assert_eq!(
+        measure(
+            r#"(let ((ov (make-overlay (point-min) (point-min))))
+                 (overlay-put ov 'before-string "short\nten-cols!!\nx"))"#,
+        ),
+        (3, 1),
+        "GNU buffer-text-pixel-size rewinds multi-line before-string at point-min to buffer text"
+    );
+
+    // Single-line before-string at `(point-min)` is not rewound -> 10 + 3 = (13 . 1).
+    assert_eq!(
+        measure(
+            r#"(let ((ov (make-overlay (point-min) (point-min))))
+                 (overlay-put ov 'before-string "ten-cols!!"))"#,
+        ),
+        (13, 1),
+        "single-line before-string at point-min adds to buffer text width"
     );
 }
 
