@@ -398,6 +398,15 @@ impl EraWorldHandle {
         })
     }
 
+    pub(crate) fn parallel_epoch_retention(
+        &self,
+    ) -> Result<
+        neovm_value::tagged::gc::FacadeEpochRetention,
+        neovm_value::tagged::gc::FacadeMarkExclusionError,
+    > {
+        self._retention.retain()
+    }
+
     /// Check whether this World's Green carriers are `CarriedHolder::Stowed`
     /// while holding a keeper-lent `WorldTurn` of matching heap identity.
     pub(crate) fn serial_world_is_stowed_under_turn(
@@ -613,6 +622,14 @@ impl TurnRight {
     #[inline]
     pub(crate) fn is_era(&self) -> bool {
         matches!(self, Self::Era(_))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn era_turn_epoch_for_test(&self) -> Option<std::num::NonZeroU64> {
+        match self {
+            Self::Solo(_) => None,
+            Self::Era(era) => Some(era.turn_identity().epoch),
+        }
     }
 
     /// Cold metadata retention for parallel root publications, with no heap loan.

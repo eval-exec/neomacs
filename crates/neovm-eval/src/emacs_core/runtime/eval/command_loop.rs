@@ -1613,6 +1613,20 @@ impl Context {
         #[cfg(debug_assertions)]
         crate::emacs_core::bytecode::vm::debug_assert_no_live_stack_cursor();
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("a collection");
+        // L6.7b b4.4: inside an open parallel era, route every Baton-thread GC
+        // through `ActiveWorldSeat::exit` -> `Control::collect_era_interval` ->
+        // `ParkedWorldSeat::enter`, strictly BEFORE setting `gc_driver_active`
+        // (Q2: the keeper is the GC driver, and `enter` requires
+        // `!self.gc_driver_active` to recycle its parked `RootBatchLease`).
+        if self.green_seat_holds_era_turn() {
+            // GNU `garbage_collect` (`src/alloc.c:5779ff`): an inhibited
+            // collection inside an era interval must return early without
+            // ending the interval or taking a keeper stop.
+            if self.gc_inhibit_depth > 0 {
+                return Ok(());
+            }
+            return self.gc_collect_era_interval(force_complete);
+        }
         // Inline set/restore, NOT a Drop guard (see the `gc_driver_active`
         // field doc): the body is infallible, so the trailing restore runs on
         // every normal exit (including the body's early `return`s), while a
@@ -2042,6 +2056,35 @@ impl Context {
             // runs the hook with GC inhibited.  Keep Neomacs' exact-GC stress
             // mode from treating hook bookkeeping allocation as a fresh
             // allocation-bearing safe point.
+            self.tagged_heap.reset_bytes_since_gc();
+        }
+        Ok(())
+    }
+
+    /// Shared post-collection bookkeeping for a keeper-driven stopped major
+    /// collection (used by L6.7b b4.4 `gc_collect_era_interval` and planned
+    /// L6.7c (c) `gc_collect_serial_turn`). Sourced from the keeper's
+    /// completed cycle with no second local scan.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn finish_keeper_collection(
+        &mut self,
+        report: &neovm_value::tagged::gc::CollectionReport,
+        start: std::time::Instant,
+    ) -> Result<(), Flow> {
+        debug_assert!(report.major, "keeper collection runs a major cycle");
+        self.gc_pending = false;
+        self.gc_count += 1;
+        self.publish_completed_cycle(start.elapsed());
+        self.sync_gc_threshold_from_runtime_settings();
+        self.tagged_heap.drain_pending_native_destroys();
+        self.drain_pending_surface_destroys();
+        self.drain_pending_video_destroys();
+        if !self.cconv_memo_defers_gc_hooks() {
+            self.run_doomed_finalizers()?;
+            self.run_post_gc_hook();
+        }
+        if self.gc_stress {
             self.tagged_heap.reset_bytes_since_gc();
         }
         Ok(())

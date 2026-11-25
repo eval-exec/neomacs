@@ -1413,6 +1413,12 @@ impl Control {
     }
 
     #[cfg(test)]
+    pub(crate) fn era_ring_waiter_raised_for_test(&self) -> bool {
+        let state = self.state();
+        matches!(&state.era, EraState::EraOpen(era) if era.waiter.raised())
+    }
+
+    #[cfg(test)]
     pub(crate) fn park_worker_for_coalesce_test(&self, key: ThreadKey, wait: Wait) {
         let mut state = self.state();
         Self::set_wait(&mut state, key, wait);
@@ -4142,13 +4148,6 @@ impl Control {
     /// `Control.state` is unlocked across `GroupPort::collect`, so concurrently
     /// woken sibling Baton threads join the FIFO and never emit a duplicate
     /// `BatonRequest` (`Identity` refusal).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "L6.7b b4.4 gc_collect_from_current_roots_impl_flow is the caller"
-        )
-    )]
     pub(crate) fn collect_era_interval(
         &self,
         lend: WorldLend,

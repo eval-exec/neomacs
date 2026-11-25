@@ -1926,6 +1926,166 @@ impl Context {
         self.try_retire_world_seat_parked_roots(parked_roots.key);
     }
 
+    /// True when this Context is seated in a Green runtime and currently holds
+    /// an open parallel-era turn right (`TurnRight::Era`, QD1).
+    ///
+    /// Cold-path check only (never called from `gc_safe_point_exact_should_collect`).
+    #[inline]
+    pub(crate) fn green_seat_holds_era_turn(&self) -> bool {
+        self.owner
+            .slab()
+            .and_then(|slab| slab.green_seat())
+            .and_then(|seat| seat.baton.as_ref())
+            .is_some_and(super::super::world::TurnRight::is_era)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn green_era_turn_epoch_for_test(&self) -> Option<std::num::NonZeroU64> {
+        self.owner
+            .slab()
+            .and_then(|slab| slab.green_seat())
+            .and_then(|seat| seat.baton.as_ref())
+            .and_then(super::super::world::TurnRight::era_turn_epoch_for_test)
+    }
+
+    /// L6.7b b4.4: run a synchronous collection from a seated Baton thread
+    /// inside an open parallel era via `ActiveWorldSeat::exit` ->
+    /// `Control::collect_era_interval` -> `ParkedWorldSeat::enter`.
+    ///
+    /// Called strictly BEFORE `gc_driver_active = true` (Q2: the keeper is the
+    /// GC driver, so `ParkedWorldSeat::enter` can recycle its parked
+    /// `RootBatchLease` immediately on resume). Never falls through to direct
+    /// `TaggedHeap` collection on refusal.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn gc_collect_era_interval(&mut self, _force_complete: bool) -> Result<(), Flow> {
+        use super::super::parallel_entry::world_seat::ActiveWorldSeat;
+        use super::super::world::{EraTurnRight, TurnRight};
+
+        debug_assert!(
+            !self.gc_driver_active,
+            "b4.4 Q2: gc_driver_active must remain false across era collection"
+        );
+        // 1. Pre-stop World prep while this Baton thread holds the World and
+        //    heap TLS (GNU `src/alloc.c:5796-5800`).
+        neovm_edit::emacs_core::undo::compact_buffers_for_gc(self);
+        let start = std::time::Instant::now();
+        self.lexenv_assq_cache.clear();
+        self.lexenv_special_cache.clear();
+
+        // 2. Take the active `TurnRight::Era` and `Control` from `GreenSeat`.
+        let (control, era_right) = {
+            let seat = self
+                .green_seat()
+                .expect("green_seat_holds_era_turn verified an active GreenSeat");
+            let control = Arc::clone(&seat.control);
+            let right = seat
+                .baton
+                .take()
+                .expect("green_seat_holds_era_turn verified TurnRight::Era");
+            let era_right = match right.into_era() {
+                Ok(era) => era,
+                Err(solo) => {
+                    seat.baton = Some(solo);
+                    unreachable!("green_seat_holds_era_turn verified TurnRight::Era");
+                }
+            };
+            (control, era_right)
+        };
+
+        // 3. Decompose `EraTurnRight` (`into_parts` restores `World::baton_holder`
+        //    to the keeper thread, HIGH-1) and adopt into `ActiveWorldSeat` so
+        //    `ActiveWorldSeat::exit` mints `StowedForReturn` strictly via
+        //    `world_seat` (Nit 6).
+        let (turn, lend, world_handle) = era_right.into_parts();
+        let seat_retention = match world_handle.parallel_epoch_retention() {
+            Ok(retention) => retention,
+            Err(error) => {
+                let restored = TurnRight::Era(Box::new(
+                    EraTurnRight::from_parts(turn, lend, world_handle)
+                        .expect("turn and world_handle came from the same EraTurnRight"),
+                ));
+                restored.enter();
+                self.green_seat().expect("seated").baton = Some(restored);
+                return Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string(format!(
+                        "era collection metadata retention refused: {error:?}"
+                    ))],
+                ));
+            }
+        };
+        let active = match ActiveWorldSeat::from_active_green_seat(self, turn, lend, seat_retention)
+        {
+            Ok(active) => active,
+            Err((turn, lend, retention, refusal)) => {
+                drop(retention);
+                let restored = TurnRight::Era(Box::new(
+                    EraTurnRight::from_parts(turn, lend, world_handle)
+                        .expect("turn and world_handle came from the same EraTurnRight"),
+                ));
+                restored.enter();
+                self.green_seat().expect("seated").baton = Some(restored);
+                return Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string(format!(
+                        "era collection seat adoption refused: {refusal:?}"
+                    ))],
+                ));
+            }
+        };
+
+        // 4. Exit the Baton-group interval: closes open alloc regions, parks
+        //    host bindings + JIT pins, publishes parked roots into
+        //    `GreenRuntime::parked`, stows World carriers to
+        //    `CarriedHolder::Stowed`, parks carrier TLS, and mints
+        //    `WorldReturned` via `WorldReturned::from_stowed_seat`.
+        let (parked, lend, returned) = active.exit(self);
+
+        // 5. Ask the keeper to collect first in its next stop and re-lend the
+        //    World to this Baton group at ring HEAD. `Control::collect_era_interval`
+        //    holds `GroupTurn::Collecting` unlocked across `GroupPort::collect`
+        //    so sibling wakes join FIFO without emitting a duplicate request.
+        let (report_tx, report_rx) = mpsc::sync_channel(1);
+        let (turn2, _epoch2, lend2) =
+            match control.collect_era_interval(lend, returned, Some(report_tx)) {
+                Ok(resumed) => resumed,
+                Err(refusal) => {
+                    // Fail closed: era is poisoned or closed and carrier TLS is
+                    // parked with no WorldTurn; never fall through to direct GC.
+                    panic!("era collection refused by keeper driver: {refusal:?}");
+                }
+            };
+        let report = match report_rx.recv() {
+            Ok(Ok(report)) => report,
+            Ok(Err(refusal)) => {
+                panic!("era collection report refused after re-grant: {refusal:?}");
+            }
+            Err(_) => {
+                panic!("era collection report channel closed after re-grant");
+            }
+        };
+
+        // 6. Re-enter the seated Baton Context on the re-granted WorldTurn
+        //    (restores carrier TLS, unstows World carriers, resumes JIT + host
+        //    bindings, and retires parked `RootBatchLease` under Q2).
+        let resumed = parked
+            .enter(self, turn2, lend2)
+            .expect("re-entering seated Baton Context after keeper collection must succeed");
+        let (turn2, lend2, retention2) = resumed.into_active_green_parts();
+        drop(retention2);
+        let new_right = TurnRight::Era(Box::new(
+            EraTurnRight::from_parts(turn2, lend2, world_handle)
+                .expect("keeper re-granted WorldTurn must match this World's heap identity"),
+        ));
+        new_right.enter();
+        self.green_seat().expect("seated Baton Context").baton = Some(new_right);
+
+        // 7. Post-collection bookkeeping on the resumed Baton thread sourced
+        //    from the keeper's completed collection (no second local scan).
+        self.finish_keeper_collection(&report, start)
+    }
+
     /// Test-only helper: admit a detached reader on this seated owner's parked
     /// `RootBatchLease` to exercise Q2 `ReadersOutstanding` deferral.
     #[cfg(test)]

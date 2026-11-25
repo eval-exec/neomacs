@@ -11144,7 +11144,10 @@ impl<'a> Vm<'a> {
     #[doc(hidden)]
     pub fn builtin_garbage_collect_shared(&mut self, args: &[Value]) -> EvalResult {
         builtins::expect_args("garbage-collect", args, 0)?;
-        if self.ctx.gc_inhibit_depth > 0 && neovm_value::hashtab::hash_test_parity_enabled() {
+        if self.ctx.gc_inhibit_depth > 0
+            && (neovm_value::hashtab::hash_test_parity_enabled()
+                || self.ctx.green_seat_holds_era_turn())
+        {
             return Ok(Value::NIL);
         }
         self.ctx.tagged_heap.request_gc_object_counts();

@@ -807,7 +807,9 @@ fn eval_error_to_flow(e: super::error::EvalError) -> Flow {
 #[doc(hidden)]
 pub fn builtin_garbage_collect(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("garbage-collect", &args, 0)?;
-    if eval.gc_inhibit_depth > 0 && neovm_value::hashtab::hash_test_parity_enabled() {
+    if eval.gc_inhibit_depth > 0
+        && (neovm_value::hashtab::hash_test_parity_enabled() || eval.green_seat_holds_era_turn())
+    {
         return Ok(Value::NIL);
     }
     eval.tagged_heap.request_gc_object_counts();

@@ -1248,3 +1248,419 @@ fn l67b_b43_prove_stowed_for_era_switch_panics_without_published_parked_roots() 
     // StowedForReturn without parked roots.
     let _proof = prove_stowed_for_era_switch(&mut main);
 }
+
+// ---------------------------------------------------------------------------
+// L6.7b b4.4: Product callers of `GroupPort::collect` inside an open era.
+// ---------------------------------------------------------------------------
+
+/// b4.4 (peer #14213 note 1; GNU `alloc.c:5779ff` `garbage_collection_inhibited`):
+/// an inhibited `(garbage-collect)` (subr or bytecode) or direct
+/// `gc_collect_exact_flow` / `gc_collect_from_current_roots_flow` inside a
+/// Baton-group era interval must return early WITHOUT ending the interval or
+/// taking a keeper stop.
+#[test]
+fn l67b_b44_inhibited_gc_in_era_does_not_end_interval_or_stop_keeper() {
+    let peer_go = Arc::new(AtomicBool::new(false));
+    let peer_ran = Arc::new(AtomicBool::new(false));
+    let peer_go_p = Arc::clone(&peer_go);
+    let peer_ran_p = Arc::clone(&peer_ran);
+
+    run_in_live_green_era(
+        "b44-inhibited-gc",
+        |src| {
+            assert_eq!(eval(src, "(setq b44-inh-peer-ran nil)"), "nil");
+        },
+        true,
+        move |state, port, home, idle_receipt| {
+            let start = Instant::now();
+            while !peer_go_p.load(Ordering::Acquire) {
+                assert!(start.elapsed() < BOUND, "wait for main to request peer");
+                std::thread::yield_now();
+            }
+            let (grant, lend) = port
+                .request_turn_with_receipt_for_test(idle_receipt)
+                .ok()
+                .expect("peer granted serial turn after main finishes");
+            let mut turn = begin_turn(state, home, (grant, lend), port, standalone)
+                .ok()
+                .expect("peer begins serial turn");
+            assert_eq!(
+                turn.with_world(|ev| {
+                    let res = eval(ev, "(setq b44-inh-peer-ran t)");
+                    ev.tagged_heap.close_alloc_regions();
+                    res
+                }),
+                "t"
+            );
+            peer_ran_p.store(true, Ordering::Release);
+            turn.end(port).ok().expect("peer ends serial turn");
+        },
+        move |main, control| {
+            // Queue the parallel owner while main holds the WorldTurn.
+            peer_go.store(true, Ordering::Release);
+            let start = Instant::now();
+            while !control.era_ring_waiter_raised_for_test() {
+                assert!(start.elapsed() < BOUND, "peer queued on ring");
+                std::thread::yield_now();
+            }
+
+            let epoch_before = main
+                .green_era_turn_epoch_for_test()
+                .expect("main holds TurnRight::Era");
+            let gc_before = main.tagged_heap.gc_collections();
+
+            // With gc_inhibit_depth > 0, neither `(garbage-collect)` (subr or
+            // bytecode) nor direct collector entry may collect or end the
+            // interval.
+            main.with_gc_inhibited(|ev| {
+                assert_eq!(
+                    eval(ev, "(garbage-collect)"),
+                    "nil",
+                    "inhibited (garbage-collect) in era must return nil"
+                );
+                assert_eq!(
+                    eval(
+                        ev,
+                        r#"(funcall (make-byte-code 0 "\300\040\207" [garbage-collect] 1))"#
+                    ),
+                    "nil",
+                    "inhibited bytecode (garbage-collect) in era must return nil"
+                );
+                ev.gc_collect_exact_flow()
+                    .expect("inhibited gc_collect_exact_flow returns Ok(())");
+                ev.gc_collect_from_current_roots_flow()
+                    .expect("inhibited gc_collect_from_current_roots_flow returns Ok(())");
+            });
+
+            assert_eq!(
+                main.green_era_turn_epoch_for_test(),
+                Some(epoch_before),
+                "inhibited GC must NOT end the Baton-group interval"
+            );
+            assert_eq!(
+                main.tagged_heap.gc_collections(),
+                gc_before,
+                "inhibited GC must NOT run any collection"
+            );
+            assert!(
+                !peer_ran.load(Ordering::Acquire),
+                "queued parallel owner must NOT preempt during inhibited GC"
+            );
+            assert_eq!(eval(main, "b44-inh-peer-ran"), "nil");
+
+            // Now yield so the queued peer runs and the era drains cleanly.
+            assert_eq!(eval(main, "(thread-yield)"), "nil");
+            assert!(peer_ran.load(Ordering::Acquire));
+            assert_eq!(eval(main, "b44-inh-peer-ran"), "t");
+        },
+    );
+}
+
+/// b4.4 Row 1 (plan §4): explicit `(garbage-collect)` via both the subr and
+/// the bytecode VM (`builtin_garbage_collect_shared`) inside an open era routes
+/// through `ActiveWorldSeat::exit` -> `Control::collect_era_interval` ->
+/// `ParkedWorldSeat::enter`. The keeper collects BEFORE a queued parallel owner
+/// runs, re-lends the World to the Baton group at ring HEAD (so the caller
+/// resumes before the queued owner), populates `(garbage-collect)` return stats,
+/// `gcs-done`, and `gc-elapsed`, and runs doomed finalizers + `post-gc-hook` on
+/// the resumed Baton thread.
+#[test]
+fn l67b_b44_garbage_collect_subr_and_bytecode_in_era_collect_before_queued_owner_and_resume_caller()
+{
+    let peer_go = Arc::new(AtomicBool::new(false));
+    let peer_ran = Arc::new(AtomicBool::new(false));
+    let peer_go_p = Arc::clone(&peer_go);
+    let peer_ran_p = Arc::clone(&peer_ran);
+
+    run_in_live_green_era(
+        "b44-gc-subr-and-bc",
+        |src| {
+            assert_eq!(eval(src, "(setq b44-peer-ran nil)"), "nil");
+            assert_eq!(eval(src, "(setq b44-hook-count 0)"), "0");
+            assert_eq!(eval(src, "(setq b44-fin-ran nil)"), "nil");
+        },
+        true,
+        move |state, port, home, idle_receipt| {
+            let start = Instant::now();
+            while !peer_go_p.load(Ordering::Acquire) {
+                assert!(start.elapsed() < BOUND, "wait for main");
+                std::thread::yield_now();
+            }
+            let (grant, lend) = port
+                .request_turn_with_receipt_for_test(idle_receipt)
+                .ok()
+                .expect("peer granted serial turn");
+            let mut turn = begin_turn(state, home, (grant, lend), port, standalone)
+                .ok()
+                .expect("peer begins serial turn");
+            assert_eq!(
+                turn.with_world(|ev| {
+                    let res = eval(ev, "(setq b44-peer-ran t)");
+                    ev.tagged_heap.close_alloc_regions();
+                    res
+                }),
+                "t"
+            );
+            peer_ran_p.store(true, Ordering::Release);
+            turn.end(port).ok().expect("peer ends serial turn");
+        },
+        move |main, control| {
+            // Install post-gc-hook and an unreferenced finalizer before queuing peer.
+            assert_eq!(
+                eval(
+                    main,
+                    "(progn
+                       (setq post-gc-hook
+                             (list (lambda ()
+                                     (setq b44-hook-count (1+ b44-hook-count)))))
+                       (make-finalizer (lambda () (setq b44-fin-ran t)))
+                       nil)"
+                ),
+                "nil"
+            );
+
+            // Queue parallel owner O on the serial ring while main holds the WorldTurn.
+            peer_go.store(true, Ordering::Release);
+            let start = Instant::now();
+            while !control.era_ring_waiter_raised_for_test() {
+                assert!(start.elapsed() < BOUND, "peer queued on ring");
+                std::thread::yield_now();
+            }
+
+            let epoch0 = main
+                .green_era_turn_epoch_for_test()
+                .expect("main holds TurnRight::Era");
+            let gc0 = main.tagged_heap.gc_collections();
+            let gcs_done_0 = main
+                .eval_str("gcs-done")
+                .expect("read gcs-done")
+                .as_int()
+                .expect("gcs-done int");
+            let gc_elapsed_0 = main
+                .eval_str("gc-elapsed")
+                .expect("read gc-elapsed")
+                .as_number_f64()
+                .expect("gc-elapsed number");
+
+            // 1. Subr `(garbage-collect)`: must advance keeper turn epoch,
+            //    return well-formed heapsize stats, run finalizer & post-gc-hook,
+            //    and resume BEFORE queued owner O (HEAD re-insert).
+            let stats1 = main
+                .eval_str("(garbage-collect)")
+                .expect("subr (garbage-collect) succeeds in era");
+            let buckets1 =
+                neovm_value::value::list_to_vec(&stats1).expect("(garbage-collect) returns a list");
+            assert!(
+                !buckets1.is_empty(),
+                "(garbage-collect) must return non-empty heapsize buckets"
+            );
+            let conses1 = neovm_value::value::list_to_vec(&buckets1[0])
+                .expect("first bucket is (conses SIZE USED FREE)");
+            assert_eq!(print_value(&conses1[0]), "conses");
+            assert!(
+                conses1[2].as_int().expect("conses USED") > 0,
+                "conses USED must reflect live heap objects"
+            );
+
+            let epoch1 = main
+                .green_era_turn_epoch_for_test()
+                .expect("main still holds TurnRight::Era after subr GC");
+            assert!(
+                epoch1 > epoch0,
+                "subr (garbage-collect) must route through GroupPort::collect (epoch {epoch1} > {epoch0})"
+            );
+            assert_eq!(main.tagged_heap.gc_collections(), gc0 + 1);
+            assert_eq!(
+                main.eval_str("gcs-done").unwrap().as_int().unwrap(),
+                gcs_done_0 + 1
+            );
+            assert_eq!(eval(main, "b44-fin-ran"), "t", "doomed finalizer ran");
+            assert_eq!(eval(main, "b44-hook-count"), "1", "post-gc-hook ran once");
+            assert!(
+                !peer_ran.load(Ordering::Acquire),
+                "b5 HEAD re-insert: caller must resume BEFORE queued owner O"
+            );
+            assert_eq!(eval(main, "b44-peer-ran"), "nil");
+
+            // 2. Bytecode `(garbage-collect)` (`builtin_garbage_collect_shared`):
+            //    same guarantees.
+            let stats2 = main
+                .eval_str(r#"(funcall (make-byte-code 0 "\300\040\207" [garbage-collect] 1))"#)
+                .expect("bytecode (garbage-collect) succeeds in era");
+            let buckets2 = neovm_value::value::list_to_vec(&stats2)
+                .expect("bytecode (garbage-collect) returns a list");
+            assert!(!buckets2.is_empty());
+            let epoch2 = main
+                .green_era_turn_epoch_for_test()
+                .expect("main still holds TurnRight::Era after bytecode GC");
+            assert!(
+                epoch2 > epoch1,
+                "bytecode (garbage-collect) must route through GroupPort::collect (epoch {epoch2} > {epoch1})"
+            );
+            assert_eq!(main.tagged_heap.gc_collections(), gc0 + 2);
+            assert_eq!(
+                main.eval_str("gcs-done").unwrap().as_int().unwrap(),
+                gcs_done_0 + 2
+            );
+            assert_eq!(
+                eval(main, "b44-hook-count"),
+                "2",
+                "post-gc-hook ran after bytecode GC"
+            );
+            assert!(
+                !peer_ran.load(Ordering::Acquire),
+                "b5 HEAD re-insert: caller still resumed BEFORE queued owner O"
+            );
+            assert_eq!(eval(main, "b44-peer-ran"), "nil");
+            let gc_elapsed_2 = main
+                .eval_str("gc-elapsed")
+                .expect("read gc-elapsed after GCs")
+                .as_number_f64()
+                .expect("gc-elapsed number");
+            assert!(
+                gc_elapsed_2 > gc_elapsed_0,
+                "gc-elapsed must advance across keeper collections ({gc_elapsed_2} > {gc_elapsed_0})"
+            );
+
+            // 3. `(garbage-collect-maybe FACTOR)`: allocate ~25% of gc_threshold
+            //    (below 1x threshold so automatic maybe_gc does not fire first,
+            //    above threshold/10 so `(garbage-collect-maybe 10)` fires via
+            //    GroupPort::collect and resumes before queued peer O); then a
+            //    subsequent `(garbage-collect-maybe 1)` with ~0 debt returns nil
+            //    without ending the interval.
+            let threshold = main.tagged_heap.gc_threshold();
+            let n = (threshold / 16 / 4).max(1024);
+            let form = format!("(progn (make-list {n} nil) (garbage-collect-maybe 10))");
+            assert_eq!(
+                eval(main, &form),
+                "t",
+                "(garbage-collect-maybe 10) must collect when debt exceeds threshold/10"
+            );
+            let epoch3 = main
+                .green_era_turn_epoch_for_test()
+                .expect("main still holds TurnRight::Era after garbage-collect-maybe");
+            assert!(
+                epoch3 > epoch2,
+                "(garbage-collect-maybe 10) must route through GroupPort::collect (epoch {epoch3} > {epoch2})"
+            );
+            assert!(
+                !peer_ran.load(Ordering::Acquire),
+                "b5 HEAD re-insert: caller resumed BEFORE queued owner O after garbage-collect-maybe"
+            );
+            assert_eq!(
+                eval(main, "(garbage-collect-maybe 1)"),
+                "nil",
+                "(garbage-collect-maybe 1) below threshold must return nil"
+            );
+            assert_eq!(
+                main.green_era_turn_epoch_for_test(),
+                Some(epoch3),
+                "no-op (garbage-collect-maybe 1) must not end interval"
+            );
+
+            // Clean up post-gc-hook and yield so queued owner O now runs.
+            assert_eq!(eval(main, "(setq post-gc-hook nil)"), "nil");
+            assert_eq!(eval(main, "(thread-yield)"), "nil");
+            assert!(peer_ran.load(Ordering::Acquire));
+            assert_eq!(eval(main, "b44-peer-ran"), "t");
+        },
+    );
+}
+
+/// b4.4 Row 3 (plan §4): inside an active Baton era interval, rooted cons
+/// survivors survive and unrooted garbage conses across >1 `ConsBlock` are
+/// reclaimed by both explicit `(garbage-collect)` and threshold `maybe_gc`
+/// (with positive pre-collect `owns_heap_value_for_test` controls), and
+/// `era.finish()` succeeds cleanly.
+#[test]
+fn l67b_b44_era_lisp_collect_preserves_rooted_cons_and_reclaims_garbage() {
+    run_in_live_green_era(
+        "b44-rooted-and-reclaim",
+        |_src| {},
+        false,
+        |_state, _port, _home, _idle| {},
+        |main, _control| {
+            let epoch0 = main
+                .green_era_turn_epoch_for_test()
+                .expect("main holds TurnRight::Era");
+            let survivor = main
+                .eval_str("(setq b44-survivor (cons 111 222))")
+                .expect("allocate rooted survivor cons");
+            let garbage_cons = main
+                .eval_str("(cons 333 444)")
+                .expect("allocate unrooted garbage cons");
+            // Allocate >1 ConsBlock (4096 cells/block) of unrooted conses.
+            assert_eq!(eval(main, "(progn (make-list 5000 nil) nil)"), "nil");
+
+            // Positive pre-collect controls.
+            assert!(
+                main.tagged_heap.owns_heap_value_for_test(survivor),
+                "survivor cons must be owned before collection"
+            );
+            assert!(
+                main.tagged_heap.owns_heap_value_for_test(garbage_cons),
+                "garbage cons must be owned before collection"
+            );
+
+            // 1. Explicit collection via `gc_collect_exact_flow` (same funnel
+            //    as `(garbage-collect)`, without return-list cons allocation
+            //    reusing `garbage_cons`'s freed cell before the check).
+            main.gc_collect_exact_flow()
+                .expect("explicit gc_collect_exact_flow in era");
+            let garbage_alive_1 = main.tagged_heap.owns_heap_value_for_test(garbage_cons);
+            let epoch1 = main
+                .green_era_turn_epoch_for_test()
+                .expect("main holds TurnRight::Era after explicit GC");
+            assert!(
+                epoch1 > epoch0,
+                "explicit collection must advance keeper epoch"
+            );
+            assert!(
+                !garbage_alive_1,
+                "unrooted garbage cons must be reclaimed by keeper collection"
+            );
+            assert!(
+                main.tagged_heap.owns_heap_value_for_test(survivor),
+                "rooted survivor cons must survive keeper collection"
+            );
+            assert_eq!(eval(main, "b44-survivor"), "(111 . 222)");
+
+            // 2. Threshold `maybe_gc` with Context-local lowered threshold:
+            //    use an unrooted vector so trailing `(setq b44-after 7)` cons
+            //    evaluation cannot reuse the freed slot before the check.
+            let saved_threshold = main.eval_str("gc-cons-threshold").unwrap();
+            let saved_percentage = main.eval_str("gc-cons-percentage").unwrap();
+            main.eval_str("(setq gc-cons-threshold 1024 gc-cons-percentage 0.0)")
+                .unwrap();
+            let garbage_vec = main.eval_str("(make-vector 32 99)").unwrap();
+            assert!(main.tagged_heap.owns_heap_value_for_test(garbage_vec));
+
+            assert_eq!(
+                eval(
+                    main,
+                    "(progn (make-list 5000 nil) (setq b44-after 7) b44-survivor)"
+                ),
+                "(111 . 222)"
+            );
+            let garbage_alive_2 = main.tagged_heap.owns_heap_value_for_test(garbage_vec);
+            let epoch2 = main
+                .green_era_turn_epoch_for_test()
+                .expect("main holds TurnRight::Era after threshold maybe_gc");
+            assert!(
+                epoch2 > epoch1,
+                "threshold maybe_gc in era must route through GroupPort::collect (epoch {epoch2} > {epoch1})"
+            );
+            assert!(
+                main.tagged_heap.owns_heap_value_for_test(survivor),
+                "rooted survivor cons must survive threshold era collection"
+            );
+            assert!(
+                !garbage_alive_2,
+                "unrooted garbage vector must be reclaimed by threshold era collection"
+            );
+
+            main.set_variable("gc-cons-threshold", saved_threshold);
+            main.set_variable("gc-cons-percentage", saved_percentage);
+        },
+    );
+}
