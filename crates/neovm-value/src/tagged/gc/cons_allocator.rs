@@ -13,7 +13,8 @@
 //! created here. A caller must unregister before releasing a block.
 
 use super::young_registry::{
-    StoppedYoungLogs, YoungBlockIndex, YoungBlockLog, YoungRegistrationId, YoungRegistryError,
+    StoppedYoungLogs, YoungBlockIndex, YoungBlockLog, YoungPendingIndex, YoungRegistrationId,
+    YoungRegistryError,
 };
 use super::*;
 use std::num::NonZeroUsize;
@@ -279,6 +280,23 @@ impl ConsAllocatorOwner {
             .as_deref_mut()
             .expect("allocator owner is initialized")
             .note_carve(base, log)
+    }
+
+    /// Merge young blocks recorded into the legacy owner's resident shell
+    /// (during a `WorldTurn` or `SerialTurn` while entry 0 was frozen) back
+    /// into entry 0's frozen `YoungBlockLog`, keeping block `YoungBlockIndex`
+    /// backlinks and `pending_mutators` consistent.
+    #[cold]
+    pub(super) fn merge_legacy_young_shell(
+        &mut self,
+        frozen: &mut YoungBlockLog,
+        shell: &mut YoungBlockLog,
+        repair_moved_pending: impl FnMut(YoungRegistrationId, YoungPendingIndex),
+    ) -> Result<(), YoungRegistryError> {
+        self.0
+            .as_deref_mut()
+            .expect("allocator owner is initialized")
+            .merge_legacy_young_shell(frozen, shell, repair_moved_pending)
     }
 
     /// # Safety
@@ -820,6 +838,83 @@ impl AllocatorState {
         Ok(age)
     }
 
+    /// Merge young blocks recorded into entry 0's resident shell back into
+    /// entry 0's frozen `YoungBlockLog`, repairing every moved block's
+    /// `YoungBlockIndex` backlink and deduplicating `pending_mutators` before
+    /// `restore_owner_payload` runs. Refuses before any state mutation if
+    /// either log or any block backlink fails preflight.
+    #[cold]
+    pub(super) fn merge_legacy_young_shell(
+        &mut self,
+        frozen: &mut YoungBlockLog,
+        shell: &mut YoungBlockLog,
+        mut repair_moved_pending: impl FnMut(YoungRegistrationId, YoungPendingIndex),
+    ) -> Result<(), YoungRegistryError> {
+        let id = frozen.id();
+        if id.heap_identity() != self.identity || shell.id().heap_identity() != self.identity {
+            return Err(YoungRegistryError::WrongHeap);
+        }
+        if shell.id() != id {
+            return Err(YoungRegistryError::UnknownRegistration);
+        }
+        if shell.blocks().is_empty() && shell.pending_index().is_none() {
+            return Ok(());
+        }
+        let shell_pending = match shell.pending_index() {
+            Some(index)
+                if !shell.blocks().is_empty()
+                    && self.pending_mutators.get(index.index()) == Some(&id) =>
+            {
+                index
+            }
+            _ => return Err(YoungRegistryError::UnknownRegistration),
+        };
+        match frozen.pending_index() {
+            Some(index)
+                if !frozen.blocks().is_empty()
+                    && self.pending_mutators.get(index.index()) == Some(&id)
+                    && index != shell_pending => {}
+            None if frozen.blocks().is_empty() => {}
+            _ => return Err(YoungRegistryError::UnknownRegistration),
+        }
+        for (pos, &base) in shell.blocks().iter().enumerate() {
+            let Some(&slot) = self.blocks.get(&base) else {
+                return Err(YoungRegistryError::UnknownRegistration);
+            };
+            let block = self.block(slot);
+            let backlink = block
+                .young_log_slot
+                .ok_or(YoungRegistryError::UnknownRegistration)?;
+            if backlink.registration != id
+                || backlink.index.index() != pos
+                || !block.young.load(Ordering::Relaxed)
+            {
+                return Err(YoungRegistryError::UnknownRegistration);
+            }
+        }
+        if frozen.blocks().is_empty() {
+            // Fast path: `shell`'s block backlinks (`1..=k`) and its single
+            // `pending_mutators` entry are already exact for `id`.
+            std::mem::swap(frozen, shell);
+            return Ok(());
+        }
+        for base in shell.drain_blocks() {
+            let new_index = frozen.push(base);
+            self.block_for_base_mut(base).young_log_slot = Some(YoungLogSlot {
+                registration: id,
+                index: new_index,
+            });
+        }
+        if let Some(moved_id) = shell.remove_pending(&mut self.pending_mutators) {
+            if moved_id == id {
+                frozen.repair_pending_index(shell_pending);
+            } else {
+                repair_moved_pending(moved_id, shell_pending);
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn mark_work_snapshot(&self) -> Vec<ConsBlockBase> {
         self.mark_work.clone()
     }
@@ -1324,6 +1419,18 @@ impl ConsAllocator {
         log: &mut YoungBlockLog,
     ) -> Result<ConsCarveAge, YoungRegistryError> {
         self.with_state_mut(|state, mode| state.note_carve(base, mode, log))
+    }
+
+    #[cold]
+    pub(super) fn merge_legacy_young_shell(
+        &mut self,
+        frozen: &mut YoungBlockLog,
+        shell: &mut YoungBlockLog,
+        repair_moved_pending: impl FnMut(YoungRegistrationId, YoungPendingIndex),
+    ) -> Result<(), YoungRegistryError> {
+        self.with_state_mut(|state, _mode| {
+            state.merge_legacy_young_shell(frozen, shell, repair_moved_pending)
+        })
     }
 
     pub(super) fn mark_work_snapshot(&self) -> Vec<ConsBlockBase> {

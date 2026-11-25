@@ -2551,6 +2551,127 @@ fn l67b_a_group_collection_runs_first_and_the_group_resumes_next() {
     });
 }
 
+/// Peer #14165 / pentry #14164: a Baton thread allocates fresh cons cells on
+/// the era's `TaggedHeap` during an active `WorldTurn` (populating the legacy
+/// resident young-log shell while entry 0 is frozen), closes its alloc regions,
+/// and triggers `GroupPort::collect` (b5). `restore_legacy_for_collection` must
+/// merge the shell's young blocks cleanly instead of refusing `RendezvousError::Loan`:
+/// the driver drains, the rooted cons survives with car/cdr intact, the unrooted
+/// cons is reclaimed, and a subsequent post-collect `WorldTurn` cons also finishes
+/// cleanly through `era.finish()`.
+#[test]
+fn l67b_b5_world_turn_cons_survives_or_reclaims_across_group_collect() {
+    let mut source = ready();
+    let private = Value::string("l67b-b5-world-turn-cons");
+    source.lexenv = private;
+    // Allocate a pre-freeze cons so entry 0's frozen young log is non-empty
+    // before the WorldTurn allocates into a fresh ConsBlock.
+    let _pre_freeze = source.tagged_heap.alloc_cons(Value::fixnum(11), Value::NIL);
+    source.tagged_heap.close_alloc_regions();
+    let heap_addr = source.tagged_heap.heap_root().as_ptr() as usize;
+    let (shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |era| {
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let mut group = enroll_group(&mut driver, &inbox);
+            drop(inbox);
+            let (report_tx, report_rx) = mpsc::sync_channel(1);
+            let (rooted_word, garbage_word, rooted_handle) = std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let runner = scope.spawn(move || {
+                    let (turn, _first, lend) = group
+                        .request_world()
+                        .ok()
+                        .expect("group granted first WorldTurn");
+                    // Allocate real cons cells on the era's TaggedHeap during
+                    // the active WorldTurn (keeper is stopped in await_world).
+                    let (rooted_word, garbage_word, rooted_handle) = {
+                        // SAFETY: this thread holds the active WorldTurn under
+                        // the keeper's stop; no parallel owner is running and
+                        // the keeper is blocked awaiting `WorldReturn`.
+                        let heap = unsafe {
+                            &mut *(heap_addr as *mut neovm_value::tagged::gc::TaggedHeap)
+                        };
+                        let rooted = heap.alloc_cons(Value::fixnum(4242), Value::fixnum(9090));
+                        // SAFETY: exclusive WorldTurn holder; no collection runs
+                        // between allocation and SharedRoot registration.
+                        let handle = unsafe {
+                            neovm_value::tagged::transport::SharedRoot::new(heap, rooted)
+                        };
+                        let garbage = heap.alloc_cons(Value::fixnum(7777), Value::NIL);
+                        // Also fill past one ConsBlock (~2k cells) so a fresh
+                        // second block enters the resident shell while entry 0's
+                        // frozen log is already non-empty, exercising both
+                        // backlink repair and pending_mutators deduplication in
+                        // capture_parallel_major.
+                        for i in 0..4096usize {
+                            let _ = heap.alloc_cons(Value::fixnum(i as i64), Value::NIL);
+                        }
+                        heap.close_alloc_regions();
+                        (rooted.bits(), garbage.bits(), handle)
+                    };
+                    let (turn2, _again, lend2) = group
+                        .collect(lend, WorldReturned::from_end(turn), Some(report_tx))
+                        .ok()
+                        .expect("b5 GroupPort::collect must not poison after WorldTurn consing");
+                    // Verify the rooted cons survived with car/cdr intact, then
+                    // allocate another cons in the resumed WorldTurn with no
+                    // subsequent collection to exercise `EraCore::prepare_finish`
+                    // merging the resident shell on era finish.
+                    {
+                        // SAFETY: active resumed WorldTurn under keeper stop.
+                        let heap = unsafe {
+                            &mut *(heap_addr as *mut neovm_value::tagged::gc::TaggedHeap)
+                        };
+                        let survived = rooted_handle
+                            .materialize(heap)
+                            .expect("rooted cons survives on this heap")
+                            .value();
+                        assert_eq!(survived.bits(), rooted_word);
+                        assert_eq!(survived.cons_car_unobserved(), Value::fixnum(4242));
+                        assert_eq!(survived.cons_cdr_unobserved(), Value::fixnum(9090));
+                        let _post = heap.alloc_cons(Value::fixnum(1234), Value::NIL);
+                        heap.close_alloc_regions();
+                    }
+                    group.give_back(lend2, WorldReturned::from_end(turn2));
+                    group.exit();
+                    (rooted_word, garbage_word, rooted_handle)
+                });
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                runner.join().expect("group runner")
+            });
+            let report = report_rx
+                .recv_timeout(BOUND)
+                .expect("collection report sent")
+                .expect("collection succeeded");
+            assert!(report.major);
+            let stopped = stop_retrying(era);
+            assert!(
+                era.owns_heap_word_for_test(&stopped, rooted_word).unwrap(),
+                "rooted cons allocated in WorldTurn must survive b5 group collection"
+            );
+            assert!(
+                !era.owns_heap_word_for_test(&stopped, garbage_word).unwrap(),
+                "unrooted cons allocated in WorldTurn must be reclaimed by b5 group collection"
+            );
+            complete_retrying("verify stop", stopped.complete());
+            drop(rooted_handle);
+        });
+        match outcome {
+            Ok((end, ())) => tx.send(Ok(end)).expect("send keeper end"),
+            Err(failure) => tx.send(Err(failure.notice())).expect("send keeper notice"),
+        }
+    });
+    let outcome = rx.recv().expect("keeper outcome");
+    service.join().expect("keeper service thread");
+    let end = outcome.unwrap_or_else(|notice| panic!("world-turn cons era refused: {notice:?}"));
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    let returned = shell.accept_return(end).unwrap();
+    finish_fixture(returned, private);
+}
+
 // ---------------------------------------------------------------------------
 // The stop-cost rows (PLAN-L6-AMEND K3; lead #14000 QB2/QB3). Measurement
 // rows: each also asserts that every turn ran. Test-driver parameters, never

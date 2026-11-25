@@ -14,7 +14,7 @@ use super::super::mutator_gc::{MutatorGcState, SatbMutatorState};
 use super::super::owner_alloc_region::OwnerAllocRegion;
 use super::super::pacing::GenerationPacingCounters;
 use super::super::young_registry::{
-    YoungBlockLog, YoungLogSlot, YoungRegistrationId, YoungRegistryError,
+    YoungBlockLog, YoungLogSlot, YoungPendingIndex, YoungRegistrationId, YoungRegistryError,
 };
 use super::super::{HeapIdentity, MEMORY_USE_COUNT_LEN, TaggedHeap};
 use crate::intern::SymId;
@@ -714,15 +714,28 @@ impl PublishedGcImage {
         Ok(())
     }
 
-    /// Like [`Self::restore_legacy`], but folds any live serial-turn GC facts
-    /// accrued directly on `heap` (e.g. `bytes_since_gc` from serial turns
-    /// while entry 0 was frozen) into the restored legacy state instead of
-    /// refusing with `DestinationOccupied`.
+    /// Like [`Self::restore_legacy`], but folds any live serial-turn /
+    /// `WorldTurn` GC facts and resident young-log blocks accrued directly on
+    /// `heap` while entry 0 was frozen into the restored legacy state instead
+    /// of refusing with `DestinationOccupied` or `LogNotLoaned`.
+    ///
+    /// When both `self.young` and `heap`'s resident shell hold pending young
+    /// blocks, removing the shell's duplicate `pending_mutators` entry may
+    /// swap-remove another live registration into the freed slot; `repair_moved_pending`
+    /// updates that registration's `YoungBlockLog::pending` index.
     pub(in crate::tagged::gc) fn restore_legacy_for_collection(
-        self,
+        mut self,
         heap: &mut TaggedHeap,
+        repair_moved_pending: impl FnMut(YoungRegistrationId, YoungPendingIndex),
     ) -> Result<(), RestoreImageFailure> {
-        if empty_destination(heap.current_mutator_gc(), heap.current_mutator_satb(), &[]) {
+        let young_shell_empty = heap
+            .current_mutator_satb()
+            .young
+            .resident()
+            .is_ok_and(|shell| shell.blocks().is_empty() && shell.pending_index().is_none());
+        if young_shell_empty
+            && empty_destination(heap.current_mutator_gc(), heap.current_mutator_satb(), &[])
+        {
             return self.restore_legacy(heap);
         }
         let result = validate_closed(
@@ -741,6 +754,22 @@ impl PublishedGcImage {
         });
         if let Err(error) = result {
             return Err(RestoreImageFailure { error, image: self });
+        }
+        if !young_shell_empty {
+            let merge_result = match heap._satb_layout_reserve.current_young_log_mut() {
+                Ok(shell) => heap.cons_allocator.merge_legacy_young_shell(
+                    &mut self.young,
+                    shell,
+                    repair_moved_pending,
+                ),
+                Err(error) => Err(error),
+            };
+            if let Err(error) = merge_result {
+                return Err(RestoreImageFailure {
+                    error: error.into(),
+                    image: self,
+                });
+            }
         }
         let stats = std::mem::take(&mut heap.region_stats);
         let mut live_hot = std::mem::replace(heap.current_mutator_gc_mut(), MutatorGcState::new());

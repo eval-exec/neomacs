@@ -1277,12 +1277,17 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             }
             current.phase = EntryPhase::Retired;
         }
-        if let Err(failure) = image.restore_legacy(
+        if let Err(failure) = image.restore_legacy_for_collection(
             self.collector
                 .get_mut()
                 .as_mut()
                 .expect("live era")
                 .registration_heap_mut(),
+            |moved_id, _| {
+                unreachable!(
+                    "all retiring peer young logs were verified empty before prepare_finish: {moved_id:?}"
+                );
+            },
         ) {
             legacy.image = Some(failure.image);
             registry.poison();

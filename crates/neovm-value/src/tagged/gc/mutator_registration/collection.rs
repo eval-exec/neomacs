@@ -884,7 +884,15 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         // legacy collector method asks its inline registry to resolve it,
         // folding any live serial-turn GC facts accrued directly on `heap`.
         let legacy = images.images[0].1.take().expect("frozen serial image");
-        if let Err(failure) = legacy.restore_legacy_for_collection(heap) {
+        if let Err(failure) = legacy.restore_legacy_for_collection(heap, |moved_id, new_index| {
+            images.images[1..]
+                .iter_mut()
+                .find(|(entry, _)| entry.young == moved_id)
+                .and_then(|(_, image)| image.as_mut())
+                .expect("pending young registration must belong to a live published image")
+                .young_mut()
+                .repair_pending_index(new_index);
+        }) {
             images.images[0].1 = Some(failure.image);
             return Err(RegistrationError::from(failure.error).into());
         }

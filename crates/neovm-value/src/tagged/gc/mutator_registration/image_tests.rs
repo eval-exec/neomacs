@@ -10,8 +10,8 @@ use super::super::satb::SatbHandoff;
 use super::super::young_registry::{
     YoungLogSlot, YoungRegistrationId, YoungRegistryControl, YoungRegistryError,
 };
-use super::super::{ConsBlock, HeapIdentity, TaggedHeap};
-use super::image::{ImageError, OwnerGcState, PublishedGcWork};
+use super::super::{CONS_BLOCK_SIZE, ConsBlock, HeapIdentity, TaggedHeap};
+use super::image::{ImageError, OwnerGcState, PublishedGcImage, PublishedGcWork};
 use crate::intern::{NIL_SYM_ID, T_SYM_ID};
 use crate::tagged::header::{ConsCell, GcHeader, HeapObjectKind};
 use crate::tagged::value::TaggedValue;
@@ -479,4 +479,172 @@ fn parallel_young_ids_are_unique_across_threads_and_heaps() {
     assert_eq!(ordinals.len(), ids.len());
     let legacy = YoungRegistryControl::new(heaps[0]).1;
     assert!(!legacy.id().is_parallel());
+}
+
+#[test]
+fn restore_legacy_for_collection_merges_shell_young_blocks_into_empty_frozen_log() {
+    let mut heap = TaggedHeap::new();
+    if !heap.tagged_heap_generational_enabled() {
+        return;
+    }
+    heap.close_alloc_regions();
+    let legacy = PublishedGcImage::from_legacy(&mut heap).unwrap();
+    assert!(legacy.young().blocks().is_empty());
+
+    // Simulate a WorldTurn / serial-turn cons allocation while entry 0 is frozen.
+    let _c = heap.alloc_cons(TaggedValue::fixnum(101), TaggedValue::fixnum(202));
+    heap.close_alloc_regions();
+    assert!(
+        !heap
+            .current_mutator_satb()
+            .young
+            .resident()
+            .unwrap()
+            .blocks()
+            .is_empty(),
+        "alloc_cons after freeze must populate the resident young shell"
+    );
+
+    let expected_blocks = heap
+        .current_mutator_satb()
+        .young
+        .resident()
+        .unwrap()
+        .blocks()
+        .to_vec();
+    legacy
+        .restore_legacy_for_collection(&mut heap, |moved_id, _| {
+            panic!("unexpected peer pending repair: {moved_id:?}");
+        })
+        .expect("restore_legacy_for_collection must fold resident shell young blocks");
+    let restored = heap.current_mutator_satb().young.resident().unwrap();
+    assert_eq!(restored.blocks(), expected_blocks.as_slice());
+    assert!(restored.pending_index().is_some());
+}
+
+#[test]
+fn restore_legacy_for_collection_merges_nonempty_frozen_and_shell_young_blocks() {
+    let mut heap = TaggedHeap::new();
+    if !heap.tagged_heap_generational_enabled() {
+        return;
+    }
+    // Allocate a cons so the frozen legacy image already owns a non-empty young
+    // block and a pending entry.
+    let _pre = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
+    heap.close_alloc_regions();
+    let legacy = PublishedGcImage::from_legacy(&mut heap).unwrap();
+    let frozen_blocks = legacy.young().blocks().to_vec();
+    assert!(
+        !frozen_blocks.is_empty(),
+        "frozen legacy image must hold the pre-freeze young block"
+    );
+
+    // Fill the rest of the first ConsBlock so a fresh second ConsBlock is
+    // allocated and recorded into the resident shell (giving both frozen and
+    // shell distinct non-empty young logs + duplicate pending_mutators entries).
+    for i in 0..=CONS_BLOCK_SIZE {
+        let _ = heap.alloc_cons(TaggedValue::fixnum(i as i64), TaggedValue::NIL);
+    }
+    heap.close_alloc_regions();
+    let shell_blocks = heap
+        .current_mutator_satb()
+        .young
+        .resident()
+        .unwrap()
+        .blocks()
+        .to_vec();
+    assert!(
+        !shell_blocks.is_empty(),
+        "filling past one ConsBlock must record a fresh young block in the resident shell"
+    );
+
+    legacy
+        .restore_legacy_for_collection(&mut heap, |moved_id, _| {
+            panic!("unexpected peer pending repair: {moved_id:?}");
+        })
+        .expect("restore_legacy_for_collection must merge nonempty frozen + shell young logs");
+    let restored = heap.current_mutator_satb().young.resident().unwrap();
+    let mut expected = frozen_blocks;
+    expected.extend_from_slice(&shell_blocks);
+    assert_eq!(restored.blocks(), expected.as_slice());
+    assert!(restored.pending_index().is_some());
+}
+
+#[test]
+fn restore_legacy_for_collection_repairs_swapped_peer_pending_index() {
+    let mut heap = TaggedHeap::new();
+    if !heap.tagged_heap_generational_enabled() {
+        return;
+    }
+    // 1. Pre-freeze cons -> legacy id_0 sits at pending_mutators[0].
+    let _pre = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
+    heap.close_alloc_regions();
+    let legacy = PublishedGcImage::from_legacy(&mut heap).unwrap();
+    let frozen_blocks = legacy.young().blocks().to_vec();
+
+    // 2. Shell cons past CONS_BLOCK_SIZE -> duplicate id_0 sits at pending_mutators[1].
+    for i in 0..=CONS_BLOCK_SIZE {
+        let _ = heap.alloc_cons(TaggedValue::fixnum(i as i64), TaggedValue::NIL);
+    }
+    heap.close_alloc_regions();
+    let shell_blocks = heap
+        .current_mutator_satb()
+        .young
+        .resident()
+        .unwrap()
+        .blocks()
+        .to_vec();
+    let shell_pending = heap
+        .current_mutator_satb()
+        .young
+        .resident()
+        .unwrap()
+        .pending_index()
+        .expect("shell is pending");
+
+    // 3. Register a third ConsBlock owned by `heap` and record a carve on a
+    //    parallel peer log so `peer_id` sits at the tail of `pending_mutators`
+    //    (`index > shell_pending`).
+    let peer_id = YoungRegistrationId::issue_parallel(heap.heap_identity()).unwrap();
+    let mut peer_slot = YoungLogSlot::new_parallel(peer_id);
+    let peer_block = ConsBlock::new();
+    let peer_base = ConsBlockBase::of(&peer_block);
+    heap.cons_allocator.register(&peer_block);
+    heap.cons_blocks.push(peer_block);
+    heap.cons_allocator
+        .note_carve(peer_base, peer_slot.resident_mut().unwrap())
+        .unwrap();
+    let peer_pending_before = peer_slot
+        .resident()
+        .unwrap()
+        .pending_index()
+        .expect("peer is pending");
+    assert!(
+        peer_pending_before.index() > shell_pending.index(),
+        "peer must sit at pending_mutators tail so swap_remove moves it"
+    );
+
+    // 4. Merging shell into frozen removes `shell_pending` via swap_remove and
+    //    must report `(peer_id, shell_pending)` so the peer log repairs its index.
+    let mut repaired = None;
+    legacy
+        .restore_legacy_for_collection(&mut heap, |moved_id, new_index| {
+            assert!(repaired.is_none(), "at most one peer index moves");
+            repaired = Some((moved_id, new_index));
+            assert_eq!(moved_id, peer_id);
+            peer_slot
+                .resident_mut()
+                .unwrap()
+                .repair_pending_index(new_index);
+        })
+        .expect("restore_legacy_for_collection repairs swapped peer pending index");
+    assert_eq!(repaired, Some((peer_id, shell_pending)));
+    assert_eq!(
+        peer_slot.resident().unwrap().pending_index(),
+        Some(shell_pending)
+    );
+    let restored = heap.current_mutator_satb().young.resident().unwrap();
+    let mut expected = frozen_blocks;
+    expected.extend_from_slice(&shell_blocks);
+    assert_eq!(restored.blocks(), expected.as_slice());
 }
