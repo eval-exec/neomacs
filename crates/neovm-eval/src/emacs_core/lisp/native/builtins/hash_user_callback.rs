@@ -123,6 +123,8 @@ pub(crate) fn with_user_test_guard<T>(
     // Every activation counts, atomically (Rev R2): two owners in user tests
     // on one shared table nest instead of racing one bool byte. Checked add
     // refuses u8 overflow without wrapping `test_depth` to 0.
+    // SAFETY: `table_object` is a live `HashTableObj` rooted by the caller,
+    // and `test_depth` is an `AtomicU8` designed for shared atomic access.
     let previous = unsafe { &*depth.as_ptr() }
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |cur| {
             cur.checked_add(1)
