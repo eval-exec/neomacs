@@ -294,12 +294,12 @@ fn undo_list_reads_answer_the_shared_state() {
 
 #[test]
 fn root_owner_ns_confirm_quit_bindings_publish_and_restore_host_projection() {
-    use crate::emacs_core::eval::{GuiFrameHostRequest, protocol::DisplayHost};
+    use crate::emacs_core::eval::GuiFrameHostRequest;
     use std::cell::RefCell;
     use std::rc::Rc;
 
     struct Host(Rc<RefCell<Vec<bool>>>);
-    impl DisplayHost for Host {
+    impl crate::emacs_core::eval::protocol::DisplayConnection for Host {
         fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
@@ -312,6 +312,8 @@ fn root_owner_ns_confirm_quit_bindings_publish_and_restore_host_projection() {
             self.0.borrow_mut().push(enabled);
         }
     }
+
+    impl crate::emacs_core::eval::protocol::DisplayServices for Host {}
 
     let mut ev = projected(&[]);
     // Linux does not seed the NS-only variable. Establish the same initial

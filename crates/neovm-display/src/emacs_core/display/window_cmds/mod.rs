@@ -6339,7 +6339,7 @@ fn live_gui_resize_pixels_from_logical_size(
 pub(crate) fn resize_live_gui_frame(
     frames: &mut FrameManager,
     buffers: &BufferManager,
-    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    display_host: &mut neovm_eval::emacs_core::eval::DisplayTerminals,
     fid: FrameId,
     text_width_px: u32,
     text_height_px: u32,
@@ -6409,7 +6409,10 @@ pub(crate) fn resize_live_gui_frame(
     }
     if !pretend
         && !is_child_frame
-        && let Some(host) = display_host.as_mut()
+        && let Some(terminal) = frames
+            .get(fid)
+            .map(|frame| neovm_eval::emacs_core::eval::TerminalNumber::new(frame.terminal_id))
+        && let Some(host) = display_host.connection_mut(terminal)
     {
         let (geometry_hints, visibility, decorated) = frames
             .get(fid)
@@ -6450,7 +6453,7 @@ pub(crate) fn resize_live_gui_frame(
 pub(crate) fn request_live_gui_frame_resize(
     frames: &mut FrameManager,
     buffers: &BufferManager,
-    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    display_host: &mut neovm_eval::emacs_core::eval::DisplayTerminals,
     fid: FrameId,
     text_width_px: u32,
     text_height_px: u32,
@@ -6485,7 +6488,7 @@ pub(crate) fn request_live_gui_frame_resize(
         total_height_px,
         cols,
         text_lines,
-        display_host.is_some()
+        display_host.hosts_display()
     );
 
     if pretend {
@@ -6509,7 +6512,12 @@ pub(crate) fn request_live_gui_frame_resize(
     let is_child_frame = frames
         .get(fid)
         .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some());
-    if !is_child_frame && let Some(host) = display_host.as_mut() {
+    if !is_child_frame
+        && let Some(terminal) = frames
+            .get(fid)
+            .map(|frame| neovm_eval::emacs_core::eval::TerminalNumber::new(frame.terminal_id))
+        && let Some(host) = display_host.connection_mut(terminal)
+    {
         let (geometry_hints, visibility, decorated) = frames
             .get(fid)
             .map(|frame| {
@@ -6580,7 +6588,8 @@ pub(crate) fn flush_pending_live_gui_resize(
     );
 
     if pending.is_queued() {
-        let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+        let (frames, buffers, display_host) =
+            eval.frame_manager_buffers_and_display_terminals_mut();
         super::frame::request_live_gui_frame_resize_and_keep_pending(
             frames,
             buffers,
@@ -7909,10 +7918,9 @@ fn current_gui_frame_metrics_in_state(frames: &FrameManager) -> GuiFrameMetrics 
 }
 
 fn current_primary_window_size(
-    display_host: &Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    display: Option<&dyn neovm_eval::emacs_core::eval::DisplayConnection>,
 ) -> Option<neovm_eval::emacs_core::eval::GuiFrameHostSize> {
-    display_host
-        .as_ref()
+    display
         .and_then(|host| host.current_primary_window_size())
         .filter(|size| size.width > 0 && size.height > 0)
 }
@@ -8006,8 +8014,7 @@ pub fn builtin_x_create_frame(
     // frame obtains its own font and dimensions from the host below.
     eval.sync_pending_resize_events();
     let opening_gui_frame = eval
-        .display_host
-        .as_ref()
+        .default_display_connection()
         .is_some_and(|host| host.opening_gui_frame_pending());
     // Reopening a daemon GUI from its retained terminal uses native font
     // defaults even after the one-shot primary window was adopted. Its Lisp
@@ -8017,7 +8024,7 @@ pub fn builtin_x_create_frame(
             .frame_manager()
             .selected_frame()
             .is_some_and(|frame| frame.effective_window_system().is_none());
-    let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+    let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_terminals_mut();
     let result = x_create_frame_impl(frames, buffers, display_host, args);
     eval.sync_keyboard_terminal_owner();
     if let Ok(value) = &result
@@ -8083,7 +8090,7 @@ pub fn builtin_x_create_frame(
                     .then(|| neovm_eval::emacs_core::eval::GuiFrameHostRequest::for_frame(frame))
             });
             if let Some(request) = request
-                && let Some(host) = eval.display_host.as_mut()
+                && let Some(host) = eval.frame_display_connection_mut(request.frame_id)
             {
                 host.finish_gui_frame_creation(request)
                     .map_err(|message| signal("error", vec![Value::string(message)]))?;
@@ -8099,7 +8106,7 @@ pub fn builtin_x_create_frame(
 pub(crate) fn x_create_frame_impl(
     frames: &mut FrameManager,
     buffers: &mut BufferManager,
-    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    display_host: &mut neovm_eval::emacs_core::eval::DisplayTerminals,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("x-create-frame", &args, 1)?;
@@ -8118,7 +8125,7 @@ pub(crate) fn x_create_frame_impl(
     }
     tracing::debug!(
         "x_create_frame_impl: display_host_available={} params={:?}",
-        display_host.is_some(),
+        display_host.hosts_display(),
         args.first()
     );
     let explicit_font_value = Value::symbol("font")
@@ -8128,9 +8135,16 @@ pub(crate) fn x_create_frame_impl(
     let parent_id = parsed
         .parent_frame
         .filter(|parent_id| frames.get(*parent_id).is_some());
+    // The opening-frame protocol is frame-less (class 2): the selected
+    // frame's display, else the most recently opened one.
+    let default_display = display_host.default_terminal(
+        frames
+            .selected_frame()
+            .map(|frame| neovm_eval::emacs_core::eval::TerminalNumber::new(frame.terminal_id)),
+    );
     let opening_frame_adoption = parent_id.is_none()
-        && display_host
-            .as_ref()
+        && default_display
+            .and_then(|terminal| display_host.connection(terminal))
             .is_some_and(|host| host.opening_gui_frame_pending());
     // A daemon can return to its initial TTY frame after its last GUI frame
     // closes. New top-level GUI frames still need native identity and font
@@ -8141,8 +8155,8 @@ pub(crate) fn x_create_frame_impl(
                 .selected_frame()
                 .is_some_and(|frame| frame.effective_window_system().is_none()));
     let initial_defaults = if needs_graphical_defaults {
-        display_host
-            .as_mut()
+        default_display
+            .and_then(|terminal| display_host.connection_mut(terminal))
             .map(|host| host.prepare_initial_gui_frame())
             .transpose()
             .map_err(|message| signal("error", vec![Value::string(message)]))?
@@ -8209,7 +8223,11 @@ pub(crate) fn x_create_frame_impl(
     let host_size = initial_defaults
         .as_ref()
         .map(|defaults| defaults.size)
-        .or_else(|| current_primary_window_size(&*display_host));
+        .or_else(|| {
+            current_primary_window_size(
+                default_display.and_then(|terminal| display_host.connection(terminal)),
+            )
+        });
     let is_child_frame = parent_id.is_some();
     let internal_border_width = parsed_effective_internal_border_width(&parsed, is_child_frame);
     let width_px = parsed
@@ -8445,7 +8463,18 @@ pub(crate) fn x_create_frame_impl(
         );
         // No native allocation exists yet. Finish logical geometry against
         // the actual opened font, then publish it in the realization request.
-        resize_live_gui_frame(frames, buffers, &mut None, fid, width, height, false, true)?;
+        // An empty registry is "no display": nothing native is reached.
+        let mut no_display = neovm_eval::emacs_core::eval::DisplayTerminals::new();
+        resize_live_gui_frame(
+            frames,
+            buffers,
+            &mut no_display,
+            fid,
+            width,
+            height,
+            false,
+            true,
+        )?;
     }
     if is_child_frame {
         // Resolve text dimensions after installing effective chrome and the
@@ -8500,7 +8529,12 @@ pub(crate) fn x_create_frame_impl(
     // Identity, opened default font, chrome and owned mini geometry are final.
     adjust_frame_glyph_matrices_in_state(frames, buffers, fid);
     super::frame::position::apply_frame_position(frames, fid, parsed.left, parsed.top);
-    if !is_child_frame && let Some(host) = display_host.as_mut() {
+    if !is_child_frame
+        && let Some(terminal) = frames
+            .get(fid)
+            .map(|frame| neovm_eval::emacs_core::eval::TerminalNumber::new(frame.terminal_id))
+        && let Some(host) = display_host.connection_mut(terminal)
+    {
         let (width, height, geometry_hints, visibility, decorated) = frames
             .get(fid)
             .map(|frame| {
@@ -8761,7 +8795,13 @@ pub(crate) fn delete_frame_owned(
             selected: SelectedFrameAfterDeletion::Cleared,
         } => {}
     }
-    if let Some(host) = eval.display_host.as_mut() {
+    // The frame record is gone; its terminal still names its display.
+    if let Some(host) =
+        eval.display_terminals
+            .connection_mut(neovm_eval::emacs_core::eval::TerminalNumber::new(
+                terminal_id,
+            ))
+    {
         host.retire_gui_frame_alpha(fid)
             .map_err(|message| signal("error", vec![Value::string(message)]))?;
         if was_gui_child_frame {

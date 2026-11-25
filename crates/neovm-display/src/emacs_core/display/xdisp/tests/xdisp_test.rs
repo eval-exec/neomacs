@@ -13,9 +13,9 @@ use neomacs_display_protocol::ResolvedImageMetadata;
 use neovm_edit::buffer::buffer::BUFFER_SLOT_BUFFER_FILE_CODING_SYSTEM;
 use neovm_edit::buffer::{BufferTextBackendKind, CharPos0, LispCharPos1};
 use neovm_eval::emacs_core::eval::Context;
-use neovm_eval::emacs_core::eval::DisplayHost;
 use neovm_eval::emacs_core::eval::VariableView;
 use neovm_eval::emacs_core::eval::data::display_spec::display_prop_replacing_p;
+use neovm_eval::emacs_core::eval::{DisplayConnection, DisplayServices};
 use neovm_value::error::FlowKind;
 use neovm_value::intern::intern;
 use neovm_value::value::{
@@ -2500,7 +2500,7 @@ fn pixel_size_image_context() -> (Context, i64) {
 #[derive(Default)]
 struct DecodedImageHost;
 
-impl DisplayHost for DecodedImageHost {
+impl DisplayConnection for DecodedImageHost {
     fn realize_gui_frame(
         &mut self,
         _request: neovm_eval::emacs_core::eval::GuiFrameHostRequest,
@@ -2514,7 +2514,9 @@ impl DisplayHost for DecodedImageHost {
     ) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for DecodedImageHost {
     fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
         Some(self)
     }

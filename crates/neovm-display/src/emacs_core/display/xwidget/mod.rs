@@ -431,7 +431,7 @@ fn create(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         xwidget_id.get(),
         webview_id,
     );
-    if let Some(host) = eval.display_host.as_ref() {
+    if let Some(host) = eval.default_display_connection() {
         host.create_webkit_xwidget(webview_id, width.max(1) as u32, height.max(1) as u32)
             .map_err(|err| signal("error", vec![Value::string(err)]))?;
     }
@@ -633,7 +633,7 @@ fn kill(eval: &mut Context, args: Vec<Value>) -> EvalResult {
             xwidgets.publish(&mut vars)
         });
     }
-    if let Some(host) = eval.display_host.as_ref() {
+    if let Some(host) = eval.default_display_connection() {
         host.destroy_webkit_xwidget(id)
             .map_err(|err| signal("error", vec![Value::string(err)]))?;
     }
@@ -654,7 +654,7 @@ fn resize(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         xwidget.width = width;
         xwidget.height = height;
     });
-    if let Some(host) = eval.display_host.as_ref() {
+    if let Some(host) = eval.default_display_connection() {
         host.resize_webkit_xwidget(id, width.max(1) as u32, height.max(1) as u32)
             .map_err(|err| signal("error", vec![Value::string(err)]))?;
     }
@@ -680,7 +680,7 @@ fn navigate_webkit(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     let value = expect_live_webkit_xwidget(args[0])?;
     let uri = expect_string(args[1])?;
     let id = value.as_xwidget().unwrap().webview_id;
-    if let Some(host) = eval.display_host.as_ref() {
+    if let Some(host) = eval.default_display_connection() {
         host.load_webkit_xwidget_uri(id, uri.clone())
             .map_err(|err| signal("error", vec![Value::string(err)]))?;
     }
@@ -711,7 +711,7 @@ fn execute_script(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         eval.xwidgets_mut()
             .register_script_callback(request, id, function);
     }
-    if let Some(host) = eval.display_host.as_ref() {
+    if let Some(host) = eval.default_display_connection() {
         if let Err(error) = host.execute_webkit_xwidget_script(id, request, script) {
             eval.xwidgets_mut().remove_script_callback(request);
             return Err(signal("error", vec![Value::string(error)]));

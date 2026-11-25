@@ -849,7 +849,7 @@ impl RecordingDisplayHost {
     }
 }
 
-impl DisplayHost for RecordingDisplayHost {
+impl crate::emacs_core::DisplayConnection for RecordingDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -867,11 +867,13 @@ impl DisplayHost for RecordingDisplayHost {
     }
 }
 
+impl crate::emacs_core::DisplayServices for RecordingDisplayHost {}
+
 struct VisualConfigRecordingDisplayHost {
     visual_calls: Rc<RefCell<Vec<neomacs_display_protocol::VisualConfig>>>,
 }
 
-impl DisplayHost for VisualConfigRecordingDisplayHost {
+impl crate::emacs_core::DisplayConnection for VisualConfigRecordingDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -888,6 +890,8 @@ impl DisplayHost for VisualConfigRecordingDisplayHost {
         Ok(())
     }
 }
+
+impl crate::emacs_core::DisplayServices for VisualConfigRecordingDisplayHost {}
 
 #[test]
 fn eval_with_explicit_lexenv_restores_outer_lexenv() {
@@ -30324,7 +30328,7 @@ struct QuitConfirmationRecordingHost {
     values: Rc<RefCell<Vec<bool>>>,
 }
 
-impl DisplayHost for QuitConfirmationRecordingHost {
+impl crate::emacs_core::DisplayConnection for QuitConfirmationRecordingHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -30337,6 +30341,8 @@ impl DisplayHost for QuitConfirmationRecordingHost {
         self.values.borrow_mut().push(enabled);
     }
 }
+
+impl crate::emacs_core::DisplayServices for QuitConfirmationRecordingHost {}
 
 fn attach_quit_confirmation_host(eval: &mut Context) -> Rc<RefCell<Vec<bool>>> {
     let values = Rc::new(RefCell::new(Vec::new()));

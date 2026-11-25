@@ -2118,6 +2118,7 @@ impl LayoutEngine {
             inputs.window_system.clone(),
             self.font_sizing,
         );
+        face_resolver.bind_frame(frame_id);
         self.bind_face_composed_sources(&mut face_resolver);
         self.prepare_face_resolver_tty(&mut face_resolver, frame_id, evaluator);
         let default_resolved = face_resolver.default_face();
@@ -2473,6 +2474,7 @@ impl LayoutEngine {
                         None,
                         self.font_sizing,
                     );
+                    face_resolver.bind_frame(frame_id);
                     self.bind_face_composed_sources(&mut face_resolver);
                     self.prepare_face_resolver_tty(&mut face_resolver, frame_id, evaluator);
                     resolver_face_change_count = after_sync;
@@ -7918,7 +7920,7 @@ impl LayoutEngine {
             let (display_host, evaluator) = if face_resolver.has_tty_realization() {
                 (None, Some(&mut *evaluator))
             } else {
-                (evaluator.display_host.as_deref(), None)
+                (face_resolver.frame_display(evaluator), None)
             };
             let evaluator = std::cell::RefCell::new(evaluator);
             let realize = |face: &mut super::neovm_bridge::ResolvedFace| {

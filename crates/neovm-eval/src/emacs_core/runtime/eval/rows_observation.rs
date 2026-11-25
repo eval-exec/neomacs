@@ -128,7 +128,7 @@ impl Context {
     #[doc(hidden)]
     pub fn rows_environment_current(&self, frame: FrameId) -> Result<(), RowsObservationRefusal> {
         self.rows_mutator_current()?;
-        if self.display_host.is_some() {
+        if self.display_terminals.hosts_display() {
             return Err(RowsObservationRefusal::DisplayHostInstalled);
         }
         let owner = self
@@ -176,7 +176,9 @@ impl Context {
         authority: Option<&InertRowsHostAuthority>,
     ) -> Result<RowsObservationEpoch, RowsObservationRefusal> {
         self.rows_mutator_current()?;
-        let host = match (self.display_host.as_deref(), authority) {
+        // The audited services are the process display services: the
+        // geometry, image and font half a Rows scope could read.
+        let host = match (self.display_terminals.services(), authority) {
             (None, Some(_) | None) => RowsHostIdentity::Absent,
             (Some(host), Some(authority)) if authority.accepts(host) => {
                 RowsHostIdentity::Inert(authority.host_type())
@@ -298,8 +300,8 @@ impl Context {
                 // only; no host-provided service, face normalization,
                 // collection or saved-key read.
                 let current_host = self
-                    .display_host
-                    .as_deref()
+                    .display_terminals
+                    .services()
                     .map(|host| RowsHostIdentity::Inert(actual_rows_host_type(host)))
                     .unwrap_or(RowsHostIdentity::Absent);
                 if current_host != *host {

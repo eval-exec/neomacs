@@ -36,7 +36,7 @@ fn unchanged_highlight_and_stale_focus_do_not_reapply_policy() {
 
 #[test]
 fn shared_child_reader_projects_redirects_into_applied_native_opacity() {
-    use neovm_core::emacs_core::{DisplayHost, GuiFrameHostRequest, Value};
+    use neovm_core::emacs_core::{GuiFrameHostRequest, Value};
     use neovm_core::window::{DisplayFrameManagerExt, FrameId};
     use std::sync::{Arc, Mutex};
 
@@ -46,7 +46,7 @@ fn shared_child_reader_projects_redirects_into_applied_native_opacity() {
         snapshots: Arc<Mutex<Vec<AppliedOpacitySnapshot>>>,
         owner: Arc<Mutex<Option<(FrameId, FrameId)>>>,
     }
-    impl DisplayHost for Host {
+    impl neovm_core::emacs_core::DisplayConnection for Host {
         fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
@@ -73,6 +73,8 @@ fn shared_child_reader_projects_redirects_into_applied_native_opacity() {
             Ok(())
         }
     }
+
+    impl neovm_core::emacs_core::DisplayServices for Host {}
     for abort in [false, true] {
         let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
         let buffer = eval.buffer_manager_mut().create_buffer("*scratch*");

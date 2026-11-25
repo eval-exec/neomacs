@@ -45,7 +45,7 @@ use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::glyph_matrix::{GlyphArea, GlyphRow, GlyphStringId};
 use neomacs_display_protocol::types::FaceId;
 use neovm_core::emacs_core::Value;
-use neovm_core::emacs_core::eval::DisplayHost;
+use neovm_core::emacs_core::eval::FrameDisplay;
 use neovm_core::emacs_core::image_catalog::ImageScaleEnvironment;
 
 #[cfg(test)]
@@ -860,7 +860,7 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
         source: &mut S,
         state: &mut DisplayRowSourceState,
         face_resolver: &FaceResolver,
-        display_host: Option<&dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'_>>,
         face_ids: &mut FrameFaceAttempt,
         root_scope: StringSourceRootScope,
     ) -> Option<RenderedDisplayRow> {
@@ -883,7 +883,7 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
         source: &mut S,
         state: &mut DisplayRowSourceState,
         face_resolver: &FaceResolver,
-        display_host: Option<&dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'_>>,
         face_ids: &mut FrameFaceAttempt,
         root_scope: StringSourceRootScope,
     ) -> Option<DisplayRowRenderIntoRowResult> {
@@ -925,7 +925,7 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
 pub(crate) struct DisplayRowRenderContext<'a, 'ids> {
     automatic_composition: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
     face_resolver: &'a FaceResolver,
-    display_host: Option<&'a dyn DisplayHost>,
+    display_host: Option<FrameDisplay<'a>>,
     face_ids: &'ids mut FrameFaceAttempt,
     face_realizer: Option<&'a dyn Fn(&mut ResolvedFace)>,
     root_scope: StringSourceRootScope,
@@ -941,7 +941,7 @@ impl<'a, 'ids> DisplayRowRenderContext<'a, 'ids> {
     }
     pub(crate) fn new(
         face_resolver: &'a FaceResolver,
-        display_host: Option<&'a dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'a>>,
         face_ids: &'ids mut FrameFaceAttempt,
         root_scope: StringSourceRootScope,
     ) -> Self {
@@ -976,7 +976,7 @@ impl<'a, 'ids> DisplayRowRenderContext<'a, 'ids> {
         DisplaySourceResolveParams::new(
             DisplaySourceFaceBasis::new(self.face_resolver, base_face_id, base_face, fallback)
                 .with_face_realizer(self.face_realizer),
-            self.display_host.map(|host| host as &'b dyn DisplayHost),
+            self.display_host.map(|host| host as FrameDisplay<'b>),
             image_scale_environment,
         )
         .with_automatic_composition(self.automatic_composition)
@@ -1017,7 +1017,7 @@ impl<'metrics, 'context, 'ids> DisplayRowRenderExecutor<'metrics, 'context, 'ids
         font_metrics: &'metrics mut Option<FontMetricsService>,
         measurement_mode: DisplayRowMeasurementMode,
         face_resolver: &'context FaceResolver,
-        display_host: Option<&'context dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'context>>,
         face_ids: &'ids mut FrameFaceAttempt,
         root_scope: StringSourceRootScope,
     ) -> Self {

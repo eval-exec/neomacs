@@ -1,10 +1,10 @@
 //! Audited type authority for the native services of a numeric Rows query.
-use super::DisplayHost;
+use super::DisplayServices;
 use std::any::TypeId;
 
 /// Unnameable outside the private rows_authority module's parent subtree.
 ///
-/// `pub` is required because DisplayHost's provided method is public; the
+/// `pub` is required because DisplayServices' provided method is public; the
 /// private containing module, lack of a re-export and private field keep this
 /// type sealed. In particular, do not expose an associated-type alias or
 /// other public naming path: external host implementations must inherit the
@@ -13,7 +13,7 @@ use std::any::TypeId;
 pub struct ActualHostType(TypeId);
 
 impl ActualHostType {
-    /// Only the trusted DisplayHost default needs to construct this value.
+    /// Only the trusted DisplayServices default needs to construct this value.
     #[doc(hidden)]
     pub fn of<T: ?Sized + 'static>() -> Self {
         Self(TypeId::of::<T>())
@@ -53,14 +53,14 @@ impl InertRowsHostAuthority {
     /// It must validate the ACTUAL installed host's sealed TypeId before
     /// trusting this contract and recheck all owner/GC/source/freshness guards.
     /// A token alone permits no saved pointer access or query-cache admission.
-    pub unsafe fn for_type<T: DisplayHost + 'static>() -> Self {
+    pub unsafe fn for_type<T: DisplayServices + 'static>() -> Self {
         Self {
             host_type: TypeId::of::<T>(),
         }
     }
 
     #[doc(hidden)]
-    pub fn accepts(self, host: &(dyn DisplayHost + 'static)) -> bool {
+    pub fn accepts(self, host: &(dyn DisplayServices + 'static)) -> bool {
         // The private return type seals the provided method against external
         // overrides. Its default computes TypeId for the actual implementor;
         // this is not a forwardable public identity declaration. The 'static
@@ -76,6 +76,6 @@ impl InertRowsHostAuthority {
 
 /// Crate-only extraction for original-epoch host revalidation. No public
 /// caller can construct an identity or declare a forwarded type through it.
-pub(crate) fn actual_rows_host_type(host: &(dyn DisplayHost + 'static)) -> TypeId {
+pub(crate) fn actual_rows_host_type(host: &(dyn DisplayServices + 'static)) -> TypeId {
     host.__rows_host_identity().0
 }

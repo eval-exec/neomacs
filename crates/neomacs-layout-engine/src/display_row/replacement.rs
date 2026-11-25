@@ -44,7 +44,7 @@ use crate::types::WindowParams;
 use neomacs_display_protocol::types::{Color, FaceId};
 #[cfg(test)]
 use neovm_core::emacs_core::Value;
-use neovm_core::emacs_core::eval::DisplayHost;
+use neovm_core::emacs_core::eval::FrameDisplay;
 
 pub(crate) struct DisplayReplacementStringItemMeasurer {
     active_face_state: DisplayRowActiveFaceState,
@@ -814,7 +814,7 @@ impl DisplayPropertyReplacementAppendRequest {
         current_x: f32,
         content_x: f32,
         params: &WindowParams,
-        display_host: Option<&dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'_>>,
         glyph_y_offset: f32,
         fallback_metrics: DisplayRowFallbackMetrics,
         start_position: DisplayRowPosition,
@@ -906,7 +906,7 @@ impl DisplayPropertyReplacementRowRenderRequest {
         current_x: f32,
         content_x: f32,
         params: &WindowParams,
-        display_host: Option<&dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'_>>,
         glyph_y_offset: f32,
         fallback_metrics: DisplayRowFallbackMetrics,
         start_position: DisplayRowPosition,

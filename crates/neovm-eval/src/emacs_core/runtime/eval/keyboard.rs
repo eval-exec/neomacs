@@ -1937,10 +1937,10 @@ fn sync_pending_resize_events_in_keyboard_runtime(
 fn sync_opening_gui_frame_size_from_host_in_keyboard_runtime(
     frames: &mut crate::emacs_core::eval::data::window_state::FrameManager,
     buffers: &neovm_edit::buffer::BufferManager,
-    display_host: Option<&dyn crate::emacs_core::eval::DisplayHost>,
+    display: Option<&dyn crate::emacs_core::eval::DisplayConnection>,
 ) -> Option<neovm_value::display_vocab::FrameId> {
     let trace_host_sync = diagnostic_knobs::trace_host_sync_enabled();
-    let Some(host) = display_host else {
+    let Some(host) = display else {
         if trace_host_sync {
             tracing::debug!("sync_opening_gui_frame_size_from_host: no display host");
         }
@@ -2151,8 +2151,8 @@ impl crate::emacs_core::eval::Context {
                     // Async media completed or lost renderer residency, so
                     // retained image glyphs must not be reused. Reconcile the
                     // exact identity before bumping media_generation.
-                    if let Some(host) = self.display_host.as_ref() {
-                        host.reconcile_image_catalog_for_media_rebuild(event);
+                    if let Some(services) = self.display_terminals.services() {
+                        services.reconcile_image_catalog_for_media_rebuild(event);
                     }
                     self.invalidate_media();
                     super::frontend_events::InternalEventEffects {
@@ -3153,10 +3153,12 @@ impl crate::emacs_core::eval::Context {
             &mut self.command_loop.keyboard,
             &mut publications,
         );
+        // The opening-frame protocol is frame-less (class 2).
+        let display = self.default_display_terminal();
         if let Some(frame) = sync_opening_gui_frame_size_from_host_in_keyboard_runtime(
             &mut self.frames,
             &self.edit.buffers,
-            self.display_host.as_deref(),
+            display.and_then(|terminal| self.display_terminals.connection(terminal)),
         ) {
             if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
                 publications.push(frame);
@@ -3186,10 +3188,12 @@ impl crate::emacs_core::eval::Context {
                 Instant::now() + timeout,
             )
             .unwrap_or(false);
+        // The opening-frame protocol is frame-less (class 2).
+        let display = self.default_display_terminal();
         if let Some(frame) = sync_opening_gui_frame_size_from_host_in_keyboard_runtime(
             &mut self.frames,
             &self.edit.buffers,
-            self.display_host.as_deref(),
+            display.and_then(|terminal| self.display_terminals.connection(terminal)),
         ) {
             super::redisplay_hooks::adjust_gui_glyph_matrices(self, frame, false);
             self.gnu_mark_frame_redisplay(frame);
@@ -3531,7 +3535,9 @@ impl crate::emacs_core::eval::Context {
     ) -> Result<bool, neovm_value::error::Flow> {
         use neomacs_display_protocol::SystemFontRole;
 
-        let Some(host) = self.display_host.as_mut() else {
+        // A display-scoped event without a terminal tag (M5c adds it): the
+        // display that reported it is the frame-less default (class 2).
+        let Some(host) = self.default_display_connection_mut() else {
             return Ok(false);
         };
         let changes = [SystemFontRole::Monospace, SystemFontRole::Application]
@@ -3603,7 +3609,7 @@ impl crate::emacs_core::eval::Context {
         tracing::warn!(
             "display reset: re-resolving GPU-resident media and forcing a full redisplay"
         );
-        if let Some(host) = self.display_host.as_deref() {
+        if let Some(host) = self.default_display_connection() {
             host.display_reset();
         }
         self.invalidate_redisplay();
@@ -6034,8 +6040,7 @@ impl crate::emacs_core::eval::Context {
         // User help callbacks may run while the GUI invalidates this intent.
         // Preserve the starting context, not the callback-completion context.
         let tooltip_generation = self
-            .display_host
-            .as_ref()
+            .default_display_connection()
             .and_then(|host| host.tooltip_generation());
         if !help.is_nil() && !help.is_string() {
             help = if self.function_value_is_callable(&help) {

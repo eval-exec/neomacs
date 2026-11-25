@@ -14,7 +14,7 @@ struct DeferredTtyPopupHost {
     force_full_redraw: Arc<AtomicBool>,
 }
 
-impl DisplayHost for DeferredTtyPopupHost {
+impl neovm_core::emacs_core::DisplayConnection for DeferredTtyPopupHost {
     fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
         self.recording.realize_gui_frame(request)
     }
@@ -35,6 +35,8 @@ impl DisplayHost for DeferredTtyPopupHost {
         self.recording.hide_popup_menu(token)
     }
 }
+
+impl neovm_core::emacs_core::DisplayServices for DeferredTtyPopupHost {}
 
 /// Resets the existing per-test-thread knob override even if an assertion fails.
 struct IdleSkipOn;

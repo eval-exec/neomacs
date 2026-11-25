@@ -1,4 +1,6 @@
-use crate::emacs_core::eval::{Context, DisplayHost, GuiFrameHostRequest, PopupMenuRequest};
+use crate::emacs_core::eval::{
+    Context, DisplayConnection, DisplayServices, GuiFrameHostRequest, PopupMenuRequest,
+};
 use crate::emacs_core::keyboard::*;
 use crate::emacs_core::minibuffer::*;
 use crate::emacs_core::minibuffer::{
@@ -29,7 +31,7 @@ struct RecordingPopupHost {
     hidden: Arc<Mutex<usize>>,
 }
 
-impl DisplayHost for RecordingPopupHost {
+impl DisplayConnection for RecordingPopupHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -51,6 +53,8 @@ impl DisplayHost for RecordingPopupHost {
         Ok(())
     }
 }
+
+impl DisplayServices for RecordingPopupHost {}
 
 fn install_mouse_help_echo_snapshot_with_value(eval: &mut Context, help: Value) -> Value {
     let buf_id = eval
@@ -1671,7 +1675,7 @@ struct MinibufferFocusHost {
     redirects: Arc<Mutex<Vec<FocusProjection>>>,
 }
 
-impl DisplayHost for MinibufferFocusHost {
+impl DisplayConnection for MinibufferFocusHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -1688,6 +1692,8 @@ impl DisplayHost for MinibufferFocusHost {
         Ok(())
     }
 }
+
+impl DisplayServices for MinibufferFocusHost {}
 
 #[test]
 fn shared_child_minibuffer_publishes_focus_on_entry_and_unwind() {

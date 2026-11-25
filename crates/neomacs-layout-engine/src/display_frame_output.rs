@@ -26,7 +26,7 @@ use neomacs_display_protocol::glyph_matrix::{FrameDisplayState, ScrollBarItem};
 use neomacs_display_protocol::types::FaceId;
 use neomacs_display_protocol::types::{Color, DisplayWindowId, Rect};
 use neomacs_display_protocol::{ContentTransitionIntent, TransitionDirection};
-use neovm_core::emacs_core::eval::DisplayHost;
+use neovm_core::emacs_core::eval::FrameDisplay;
 use neovm_core::window::PresentedWindowRegions;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
@@ -212,7 +212,7 @@ impl FrameOutputOwner {
         &mut self,
         request: FrameTabBarDisplayRowRequest<'_>,
         render_services: ChromeRowRenderServices<'_, '_>,
-        display_host: Option<&dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'_>>,
     ) -> Option<FrameTabBarDisplayRowRender> {
         request.render(&mut FrameTabBarDisplayRowRenderState::new(
             FrameChromeOutputTarget::from_builder(&mut self.builder),

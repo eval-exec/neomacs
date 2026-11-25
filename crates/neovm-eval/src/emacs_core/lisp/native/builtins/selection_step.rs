@@ -725,7 +725,7 @@ mod tests {
         primary: Option<String>,
     }
 
-    impl crate::emacs_core::eval::protocol::DisplayHost for RecordingClipboardHost {
+    impl crate::emacs_core::eval::protocol::DisplayConnection for RecordingClipboardHost {
         fn realize_gui_frame(
             &mut self,
             _request: crate::emacs_core::eval::GuiFrameHostRequest,
@@ -768,6 +768,8 @@ mod tests {
             })
         }
     }
+
+    impl crate::emacs_core::eval::protocol::DisplayServices for RecordingClipboardHost {}
 
     /// The flip's production wiring: a Green hosted Context activates Local
     /// from `set_display_host`, and the stubs then reach the attached host.
@@ -868,7 +870,7 @@ mod cut4b {
         state: Rc<RefCell<ClipboardState>>,
     }
 
-    impl crate::emacs_core::eval::protocol::DisplayHost for SharedClipboardHost {
+    impl crate::emacs_core::eval::protocol::DisplayConnection for SharedClipboardHost {
         fn realize_gui_frame(
             &mut self,
             _request: crate::emacs_core::eval::GuiFrameHostRequest,
@@ -920,6 +922,8 @@ mod cut4b {
             Ok(self.state.borrow().owner.unwrap_or(SelectionOwner::None))
         }
     }
+
+    impl crate::emacs_core::eval::protocol::DisplayServices for SharedClipboardHost {}
 
     /// A real Green runtime, then a host attached (so the C4c refusal is not
     /// hit), then Lisp runs as main. The worker is a real owner carrier.

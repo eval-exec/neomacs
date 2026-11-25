@@ -70,7 +70,7 @@ use neovm_core::buffer::BufferId;
 use neovm_core::display_evaluation::DisplayEvaluationContextExt;
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::Value;
-use neovm_core::emacs_core::eval::DisplayHost;
+use neovm_core::emacs_core::eval::FrameDisplay;
 use neovm_core::emacs_core::image_catalog::ImageScaleEnvironment;
 use neovm_core::emacs_core::keymap::{KeymapMarker, MenuItemProperty, is_list_keymap};
 use neovm_core::emacs_core::value::list_to_vec;
@@ -287,7 +287,7 @@ impl<'emit, 'face> ChromeRowRenderServices<'emit, 'face> {
     fn render_lisp_string_source_request(
         &mut self,
         request: DisplayRowLispStringSourceRenderRequest<'_>,
-        display_host: Option<&dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'_>>,
     ) -> Option<RenderedDisplayRow> {
         let mut render_executor = DisplayRowRenderExecutor::new(
             &mut *self.font_metrics,
@@ -433,7 +433,7 @@ impl<'face> FrameTabBarDisplayRowRequest<'face> {
 pub(crate) struct FrameTabBarDisplayRowRenderState<'emit, 'output, 'face> {
     output: FrameChromeOutputTarget<'emit>,
     render_services: ChromeRowRenderServices<'emit, 'face>,
-    display_host: Option<&'emit dyn DisplayHost>,
+    display_host: Option<FrameDisplay<'emit>>,
     _output: std::marker::PhantomData<&'output mut ()>,
 }
 
@@ -441,7 +441,7 @@ impl<'emit, 'output, 'face> FrameTabBarDisplayRowRenderState<'emit, 'output, 'fa
     pub(crate) fn new(
         output: FrameChromeOutputTarget<'emit>,
         render_services: ChromeRowRenderServices<'emit, 'face>,
-        display_host: Option<&'emit dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'emit>>,
     ) -> Self {
         Self {
             output,
@@ -1027,7 +1027,7 @@ impl<'face> ChromeDisplayRowRenderRequest<'face> {
     fn render_row(
         self,
         render_services: &mut ChromeRowRenderServices<'_, '_>,
-        display_host: Option<&dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'_>>,
     ) -> Option<ChromeDisplayRowRenderedRequest> {
         let rendered =
             render_services.render_lisp_string_source_request(self.render_request, display_host)?;
@@ -1170,7 +1170,7 @@ impl<'face> WindowChromeDisplayRowRenderRequest<'face> {
     fn render_measured(
         self,
         render_services: &mut ChromeRowRenderServices<'_, '_>,
-        display_host: Option<&dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'_>>,
     ) -> Option<WindowChromeDisplayRowRender> {
         let measured = self
             .row
@@ -1200,7 +1200,7 @@ impl<'face> WindowChromeDisplayRowRenderRequest<'face> {
             let (display_host, evaluator) = if resolver.has_tty_realization() {
                 (None, Some(&mut *state.evaluator))
             } else {
-                (state.evaluator.display_host.as_deref(), None)
+                (resolver.frame_display(state.evaluator), None)
             };
             let evaluator = std::cell::RefCell::new(evaluator);
             let realize = |face: &mut ResolvedFace| {

@@ -127,8 +127,8 @@ pub(super) fn resolve_window_display_source_params_legacy(
         }
     }
     params.space_image_catalog = evaluator
-        .display_host
-        .as_ref()
+        .display_terminals
+        .services()
         .and_then(|host| host.image_catalog_shared())
         .map(crate::types::SharedImageCatalog);
     let params = &params;
@@ -267,8 +267,8 @@ pub(super) fn resolve_window_display_source_params(
         }
     }
     params.space_image_catalog = evaluator
-        .display_host
-        .as_ref()
+        .display_terminals
+        .services()
         .and_then(|host| host.image_catalog_shared())
         .map(crate::types::SharedImageCatalog);
 

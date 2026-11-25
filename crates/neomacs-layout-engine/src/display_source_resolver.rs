@@ -36,7 +36,7 @@ use neomacs_display_protocol::types::FaceId;
 use neovm_core::buffer::CharPos0;
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::emacs_char::EmacsChar;
-use neovm_core::emacs_core::eval::{DisplayHost, SurfaceChannelKind};
+use neovm_core::emacs_core::eval::{FrameDisplay, SurfaceChannelKind};
 use neovm_core::emacs_core::image_catalog::ImageScaleEnvironment;
 use neovm_core::emacs_core::value::list_to_vec;
 use neovm_core::emacs_core::video::parse_video_display_reference;
@@ -121,7 +121,7 @@ pub(crate) struct DisplaySourceResolveParams<'a> {
     pub(crate) automatic_composition:
         Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
     face_basis: DisplaySourceFaceBasis<'a>,
-    display_host: Option<&'a dyn DisplayHost>,
+    display_host: Option<FrameDisplay<'a>>,
     image_scale_environment: ImageScaleEnvironment,
 }
 
@@ -135,7 +135,7 @@ impl<'a> DisplaySourceResolveParams<'a> {
     }
     pub(crate) fn new(
         face_basis: DisplaySourceFaceBasis<'a>,
-        display_host: Option<&'a dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'a>>,
         image_scale_environment: ImageScaleEnvironment,
     ) -> Self {
         Self {
@@ -150,7 +150,7 @@ impl<'a> DisplaySourceResolveParams<'a> {
         self.face_basis
     }
 
-    fn display_host(self) -> Option<&'a dyn DisplayHost> {
+    fn display_host(self) -> Option<FrameDisplay<'a>> {
         self.display_host
     }
 
@@ -471,7 +471,7 @@ fn resolved_media_replacement(geometry: DisplayMediaReplacement) -> ResolvedDisp
 pub(crate) fn resolve_display_replacement(
     display_prop: Value,
     replacement: &DisplayMediaReplacementProperty,
-    display_host: Option<&dyn DisplayHost>,
+    display_host: Option<FrameDisplay<'_>>,
     resolved_face: &ResolvedFace,
     fallback_metrics: DisplayRowFallbackMetrics,
     image_scale_environment: ImageScaleEnvironment,
@@ -506,7 +506,7 @@ impl DisplayReplacementMediaSourceItem {
     pub(crate) fn resolve_display_property(
         display_prop: Value,
         replacement: &DisplayMediaReplacementProperty,
-        display_host: Option<&dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'_>>,
         active_face_state: &DisplayRowActiveFaceState,
         fallback_metrics: DisplayRowFallbackMetrics,
         image_scale_environment: ImageScaleEnvironment,
@@ -549,7 +549,7 @@ pub(crate) struct DisplayPropertyReplacementSourceResolveRequest<'a, 'source> {
     current_x: f32,
     content_x: f32,
     params: &'a WindowParams,
-    display_host: Option<&'a dyn DisplayHost>,
+    display_host: Option<FrameDisplay<'a>>,
 }
 
 impl<'a, 'source> DisplayPropertyReplacementSourceResolveRequest<'a, 'source> {
@@ -563,7 +563,7 @@ impl<'a, 'source> DisplayPropertyReplacementSourceResolveRequest<'a, 'source> {
         current_x: f32,
         content_x: f32,
         params: &'a WindowParams,
-        display_host: Option<&'a dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'a>>,
     ) -> Self {
         Self {
             display_property,
@@ -1164,7 +1164,7 @@ pub(crate) fn resolve_next_display_source_item(
 
 #[derive(Clone, Copy)]
 pub(crate) struct DisplayMediaResolveParams<'a> {
-    pub(crate) display_host: &'a dyn DisplayHost,
+    pub(crate) display_host: FrameDisplay<'a>,
     /// The face this image is displayed under; a specification's `:foreground`
     /// overrides it.
     pub(crate) default_fg: u32,
@@ -1384,7 +1384,7 @@ fn display_media_id(id: u32) -> i32 {
 
 pub(crate) fn resolve_display_property_media(
     display_prop: &Value,
-    display_host: Option<&dyn DisplayHost>,
+    display_host: Option<FrameDisplay<'_>>,
     resolved_face: &ResolvedFace,
     fallback_metrics: DisplayRowFallbackMetrics,
     image_scale_environment: ImageScaleEnvironment,

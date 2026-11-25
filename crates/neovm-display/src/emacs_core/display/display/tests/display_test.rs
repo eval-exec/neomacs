@@ -16,7 +16,9 @@ use crate::emacs_core::terminal::pure::{
     terminal_handle_value,
 };
 use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity, SelectionOwner};
-use neovm_eval::emacs_core::eval::{DisplayHost, GuiFrameHostRequest, PopupMenuRequest};
+use neovm_eval::emacs_core::eval::{
+    DisplayConnection, DisplayServices, GuiFrameHostRequest, PopupMenuRequest,
+};
 use neovm_value::error::EvalError;
 use neovm_value::intern::resolve_sym;
 use std::cell::RefCell;
@@ -26,7 +28,7 @@ use std::sync::{Arc, Mutex};
 
 struct ImageCapableDisplayHost;
 
-impl DisplayHost for ImageCapableDisplayHost {
+impl DisplayConnection for ImageCapableDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -36,9 +38,11 @@ impl DisplayHost for ImageCapableDisplayHost {
     }
 }
 
+impl DisplayServices for ImageCapableDisplayHost {}
+
 struct ItalicCapableDisplayHost;
 
-impl DisplayHost for ItalicCapableDisplayHost {
+impl DisplayConnection for ItalicCapableDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -46,7 +50,9 @@ impl DisplayHost for ItalicCapableDisplayHost {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for ItalicCapableDisplayHost {
     fn resolve_frame_font(
         &mut self,
         _frame_id: crate::window::FrameId,
@@ -84,7 +90,7 @@ struct FreshIdSameFontDisplayHost {
     next_id: u32,
 }
 
-impl DisplayHost for FreshIdSameFontDisplayHost {
+impl DisplayConnection for FreshIdSameFontDisplayHost {
     fn supports_graphical_face_attribute(
         &self,
         _attribute: neovm_eval::emacs_core::eval::GraphicalFaceAttribute,
@@ -99,7 +105,9 @@ impl DisplayHost for FreshIdSameFontDisplayHost {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for FreshIdSameFontDisplayHost {
     fn resolve_frame_font(
         &mut self,
         _frame_id: crate::window::FrameId,
@@ -136,7 +144,7 @@ impl DisplayHost for FreshIdSameFontDisplayHost {
 
 struct FailingClipboardDisplayHost;
 
-impl DisplayHost for FailingClipboardDisplayHost {
+impl DisplayConnection for FailingClipboardDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -166,9 +174,11 @@ impl DisplayHost for FailingClipboardDisplayHost {
     }
 }
 
+impl DisplayServices for FailingClipboardDisplayHost {}
+
 struct SelectionOwnerDisplayHost(SelectionOwner);
 
-impl DisplayHost for SelectionOwnerDisplayHost {
+impl DisplayConnection for SelectionOwnerDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -181,6 +191,8 @@ impl DisplayHost for SelectionOwnerDisplayHost {
         Ok(self.0)
     }
 }
+
+impl DisplayServices for SelectionOwnerDisplayHost {}
 
 fn clear_terminal_parameters() {
     reset_terminal_thread_locals();
@@ -1021,7 +1033,7 @@ struct XOpenConnectionDisplayHost {
     state: Arc<Mutex<XOpenConnectionHostState>>,
 }
 
-impl DisplayHost for XOpenConnectionDisplayHost {
+impl DisplayConnection for XOpenConnectionDisplayHost {
     fn graphical_connection_identity(
         &self,
         display: Option<&str>,
@@ -1068,6 +1080,8 @@ impl DisplayHost for XOpenConnectionDisplayHost {
         Ok(())
     }
 }
+
+impl DisplayServices for XOpenConnectionDisplayHost {}
 
 fn x_open_connection_test_context() -> neovm_eval::emacs_core::eval::Context {
     reset_terminal_thread_locals();
@@ -4283,7 +4297,7 @@ struct FocusRecordingDisplayHost {
     requests: Rc<RefCell<Vec<(crate::window::FrameId, bool)>>>,
 }
 
-impl DisplayHost for FocusRecordingDisplayHost {
+impl DisplayConnection for FocusRecordingDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -4301,6 +4315,8 @@ impl DisplayHost for FocusRecordingDisplayHost {
         Ok(())
     }
 }
+
+impl DisplayServices for FocusRecordingDisplayHost {}
 
 /// GNU `x-focus-frame` calls the terminal's `focus_frame_hook`
 /// (`src/frame.c:3767`); the win32 hook activates the frame window

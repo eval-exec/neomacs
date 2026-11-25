@@ -3850,7 +3850,7 @@ fn modify_frame_parameters_resolves_child_fractional_size_before_position() {
         Value::cons(Value::symbol("minibuffer"), Value::symbol("only")),
         Value::cons(Value::symbol("visibility"), Value::NIL),
     ]);
-    let (xf_frames, xf_buffers, xf_host) = ev.frame_manager_buffers_and_display_host_mut();
+    let (xf_frames, xf_buffers, xf_host) = ev.frame_manager_buffers_and_display_terminals_mut();
     let child = super::x_create_frame_impl(xf_frames, xf_buffers, xf_host, vec![params])
         .expect("x-create-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));
@@ -5373,7 +5373,7 @@ fn x_create_frame_minibuffer_only_uses_root_as_minibuffer() {
         Value::cons(Value::symbol("child-frame-border-width"), Value::fixnum(3)),
         Value::cons(Value::symbol("visibility"), Value::NIL),
     ]);
-    let (xf_frames, xf_buffers, xf_host) = ev.frame_manager_buffers_and_display_host_mut();
+    let (xf_frames, xf_buffers, xf_host) = ev.frame_manager_buffers_and_display_terminals_mut();
     let child = super::x_create_frame_impl(xf_frames, xf_buffers, xf_host, vec![params])
         .expect("x-create-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));
@@ -5435,7 +5435,7 @@ fn pixelwise_child_frame_resize_preserves_requested_text_pixels() {
         ),
         Value::cons(Value::symbol("visibility"), Value::NIL),
     ]);
-    let (xf_frames, xf_buffers, xf_host) = ev.frame_manager_buffers_and_display_host_mut();
+    let (xf_frames, xf_buffers, xf_host) = ev.frame_manager_buffers_and_display_terminals_mut();
     let child = super::x_create_frame_impl(xf_frames, xf_buffers, xf_host, vec![params])
         .expect("x-create-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));
@@ -5497,7 +5497,7 @@ fn set_frame_size_and_position_pixelwise_resizes_gui_child_frame() {
         ),
         Value::cons(Value::symbol("visibility"), Value::NIL),
     ]);
-    let (xf_frames, xf_buffers, xf_host) = ev.frame_manager_buffers_and_display_host_mut();
+    let (xf_frames, xf_buffers, xf_host) = ev.frame_manager_buffers_and_display_terminals_mut();
     let child = super::x_create_frame_impl(xf_frames, xf_buffers, xf_host, vec![params])
         .expect("x-create-frame");
     let child_id = crate::window::FrameId(child.as_frame_id().expect("child frame"));

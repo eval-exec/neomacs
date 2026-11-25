@@ -478,9 +478,12 @@ fn suspend_tty_runs_hook_and_invokes_terminal_host() {
         ),
     ));
     let log = Rc::new(RefCell::new(Vec::new()));
-    set_terminal_host(Box::new(RecordingTerminalHost {
-        log: Rc::clone(&log),
-    }));
+    set_terminal_host(
+        &mut eval,
+        Box::new(RecordingTerminalHost {
+            log: Rc::clone(&log),
+        }),
+    );
     eval.eval_str(
         r#"
 (setq suspend-log nil)
@@ -510,9 +513,12 @@ fn resume_tty_runs_hook_after_terminal_host_resume() {
         ),
     ));
     let log = Rc::new(RefCell::new(Vec::new()));
-    set_terminal_host(Box::new(RecordingTerminalHost {
-        log: Rc::clone(&log),
-    }));
+    set_terminal_host(
+        &mut eval,
+        Box::new(RecordingTerminalHost {
+            log: Rc::clone(&log),
+        }),
+    );
     builtin_suspend_tty(&mut eval, vec![]).expect("suspend tty");
     eval.eval_str(
         r#"
@@ -678,11 +684,13 @@ fn delete_terminal_force_invokes_terminal_host_delete_hook() {
         ),
     ));
     let log = Rc::new(RefCell::new(Vec::new()));
-    set_terminal_host(Box::new(RecordingTerminalHost {
-        log: Rc::clone(&log),
-    }));
-
     let mut eval = Context::new(crate::test_utils::unit_runtime());
+    set_terminal_host(
+        &mut eval,
+        Box::new(RecordingTerminalHost {
+            log: Rc::clone(&log),
+        }),
+    );
     assert_eq!(
         builtin_delete_terminal(&mut eval, vec![Value::NIL, Value::T]).unwrap(),
         Value::NIL
@@ -756,9 +764,8 @@ fn delete_terminal_noelisp_ignores_host_delete_failures() {
             256,
         ),
     ));
-    set_terminal_host(Box::new(FailingDeleteTerminalHost));
-
     let mut eval = Context::new(crate::test_utils::unit_runtime());
+    set_terminal_host(&mut eval, Box::new(FailingDeleteTerminalHost));
     assert_eq!(
         delete_terminal_noelisp_owned(&mut eval, TERMINAL_ID).unwrap(),
         Value::NIL

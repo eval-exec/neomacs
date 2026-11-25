@@ -9,6 +9,8 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::time::Instant;
 
+use neovm_value::display_vocab::TerminalNumber;
+
 /// Evaluator-host confinement, distinct from process-main toolkit ownership.
 ///
 /// There is deliberately no production constructor. An arbitrary Context,
@@ -177,7 +179,8 @@ impl<K: RegisteredRecord> RegisteredRootRef<'_, K> {
 // than in the sibling `selection` module because the host-effect compile
 // fixtures include `contracts.rs` as a standalone crate, where a
 // `crate::host_effect` path does not resolve. `host_effect::selection`
-// re-exports these names for the production call sites.
+// re-exports these names for the production call sites. The terminal
+// identity comes from `neovm-value`, which those fixtures also link.
 
 /// One selection host request, already converted from Lisp on the caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -219,6 +222,50 @@ pub enum SelectionOwnerReply {
     Unknown,
 }
 
+// Text-terminal device vocabulary, here for the same reason as the
+// selection vocabulary above; `host_effect::terminal_device` re-exports it.
+
+/// A request to the owner of a text terminal's native device, already
+/// decided by the calling Lisp thread. Main owns every device (the display
+/// registry), so a Green worker's request crosses to main and main performs
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalDeviceRequest {
+    /// Run one effect on the device.
+    Effect(TerminalDeviceEffect),
+    /// The terminal's record is gone: the registry forgets its device.
+    Release,
+}
+
+/// One effect on a text terminal's native device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalDeviceEffect {
+    /// `suspend-tty`: restore the device's modes and stop using it.
+    Suspend,
+    /// `resume-tty`: take the device back.
+    Resume,
+    /// `send-string-to-terminal`: these bytes to the device's output stream.
+    Write(Vec<u8>),
+    /// GNU `get_tty_size` on the device's input.
+    Winsize,
+    /// `delete-terminal`: the device's own teardown.
+    Delete,
+}
+
+/// The device owner's answer to a [`TerminalDeviceRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalDeviceReply {
+    /// The effect ran.
+    Done,
+    /// The device's winsize: `Some((0, 0))` is a failed ioctl or a real 0x0,
+    /// `None` a device with no input to ask.
+    Winsize(Option<(u32, u32)>),
+    /// The terminal has no device in the registry.
+    NoDevice,
+    /// The device refused; the caller signals `(error MESSAGE)`.
+    HostError(String),
+}
+
 /// Small closed native-owned vocabulary, without a generic Send escape hatch.
 ///
 /// Method-specific units and validation belong to the later owned adapters;
@@ -230,9 +277,24 @@ pub enum OwnedNativeData {
     Bytes(Vec<u8>),
     Truth(NativeTruth),
     /// A selection request, already converted by the calling Lisp thread.
-    SelectionRequest(SelectionRequest),
+    /// The selection primitives take no terminal, so they address GNU
+    /// `check_x_display_info (Qnil)`: the requester supplies its selected
+    /// frame's terminal (World state), and the display owner completes the
+    /// rule against the display registry only it can read.
+    SelectionRequest {
+        selected_terminal: Option<TerminalNumber>,
+        request: SelectionRequest,
+    },
     /// A selection reply, converted back by the requesting Lisp thread.
     SelectionReply(SelectionHostReply),
+    /// An effect on TERMINAL's text-terminal device. The terminal is named
+    /// explicitly: the device primitives address one terminal.
+    TerminalDeviceRequest {
+        terminal: TerminalNumber,
+        request: TerminalDeviceRequest,
+    },
+    /// The device owner's answer, decoded by the requesting Lisp thread.
+    TerminalDeviceReply(TerminalDeviceReply),
 }
 
 /// A native truth result has explicit meaning at the owned boundary.

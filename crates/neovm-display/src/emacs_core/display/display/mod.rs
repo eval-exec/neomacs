@@ -921,7 +921,8 @@ pub(crate) fn builtin_display_images_p(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_optional_display_designator_eval(eval, "display-images-p", &args)?;
-    Ok(Value::bool_val(eval.display_host.is_some()))
+    // Class 3: the registry predicate equal to the pre-M3 `is_some()`.
+    Ok(Value::bool_val(eval.display_terminals.hosts_display()))
 }
 
 /// GNU `tty_supports_face_attributes_p` (src/xfaces.c): can THIS terminal render
@@ -1219,7 +1220,7 @@ impl GraphicalFaceRequest {
         }
     }
 
-    fn supported_by(&self, host: &dyn super::display_host::DisplayHost) -> bool {
+    fn supported_by(&self, host: &dyn super::display_host::DisplayConnection) -> bool {
         match self {
             Self::None => true,
             Self::SameAsDefault => false,
@@ -1274,7 +1275,7 @@ pub fn builtin_display_supports_face_attributes_p(
     let requested_attributes = crate::face::Face::from_plist("anonymous", &attributes);
     let requested_face = default_face.merge(&requested_attributes);
     let graphical_request = GraphicalFaceRequest::from_faces(&default_face, &requested_attributes);
-    let host = match backend {
+    match backend {
         FrameFaceBackend::TextTerminal => {
             return Ok(Value::bool_val(tty_supports_face_attributes_p(
                 &default_face,
@@ -1282,16 +1283,19 @@ pub fn builtin_display_supports_face_attributes_p(
             )));
         }
         FrameFaceBackend::WindowSystem => {
-            let Some(host) = eval.display_host.as_mut() else {
+            // The frame's own display decides what it can render (class 1).
+            let Some(connection) = eval.frame_display_connection(frame_id) else {
                 return Ok(Value::NIL);
             };
-            host
+            if !graphical_request.supported_by(connection) {
+                return Ok(Value::NIL);
+            }
         }
-    };
-
-    if !graphical_request.supported_by(&**host) {
-        return Ok(Value::NIL);
     }
+    // Font selection is a process display service.
+    let Some(host) = eval.display_terminals.services_mut() else {
+        return Ok(Value::NIL);
+    };
 
     let font_attribute = requested_attributes.family.is_some()
         || requested_attributes.foundry.is_some()
@@ -1791,8 +1795,7 @@ impl TtyMenuHelpTracker {
 impl TtyMenuHelpUpdate {
     fn publish(self, ctx: &mut Context, selected: usize) -> Result<(), Flow> {
         if ctx
-            .display_host
-            .as_ref()
+            .default_display_connection()
             .is_some_and(|host| host.owns_native_menu_tooltips())
             && ctx
                 .visible_variable_value_or_nil("tooltip-mode")
@@ -1898,6 +1901,7 @@ struct NativePopupSession<'menu> {
 
 impl NativePopupSession<'_> {
     fn run(mut self, ctx: &mut Context) -> EvalResult {
+        let popup_frame = self.frame_id;
         let specpdl_count = ctx.specpdl().len();
         for event in self.events {
             ctx.push_specpdl_root(*event);
@@ -1934,8 +1938,7 @@ impl NativePopupSession<'_> {
         let result_root_scope = ctx.save_vm_roots();
         ctx.push_eval_result_roots(&result);
         let _ = ctx
-            .display_host
-            .as_mut()
+            .popup_display_connection_mut(popup_frame)
             .map(|host| host.hide_popup_menu(token));
         let result = ctx.unbind_to_with_result(specpdl_count, result);
         // TTY popups paint outside the redisplay screen model. GNU's
@@ -1957,7 +1960,7 @@ pub fn builtin_x_popup_dialog(ctx: &mut Context, args: Vec<Value>) -> EvalResult
         tracing::info!("x-popup-dialog interactive: no input receiver");
         return Ok(Value::NIL);
     }
-    if ctx.display_host.is_none() {
+    if !ctx.display_terminals.hosts_display() {
         tracing::info!("x-popup-dialog interactive: no display host");
         return Ok(Value::NIL);
     }
@@ -1975,8 +1978,7 @@ pub fn builtin_x_popup_dialog(ctx: &mut Context, args: Vec<Value>) -> EvalResult
     let placement =
         neomacs_display_protocol::PopupPlacement::at(neomacs_display_protocol::Point::new(x, y));
     let visible_rows = ctx
-        .display_host
-        .as_ref()
+        .popup_display_connection(frame_id)
         .and_then(|host| host.popup_menu_visible_rows(x, y, entries.len()))
         .unwrap_or(entries.len())
         .min(entries.len());
@@ -2045,7 +2047,7 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
         tracing::info!("x-popup-menu interactive: no input receiver");
         return Ok(Value::NIL);
     }
-    if ctx.display_host.is_none() {
+    if !ctx.display_terminals.hosts_display() {
         tracing::info!("x-popup-menu interactive: no display host");
         return Ok(Value::NIL);
     }
@@ -2053,9 +2055,14 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
     let placement = popup_position.placement;
     let estimated_origin = popup_position.estimated_origin();
     let (x, y) = (estimated_origin.x, estimated_origin.y);
+    // The menu is shown on the selected frame (see `frame_id` below).
+    let menu_frame = ctx
+        .frame_manager()
+        .selected_frame()
+        .map(|frame| frame.id)
+        .unwrap_or(FrameId(0));
     let visible_rows = ctx
-        .display_host
-        .as_ref()
+        .popup_display_connection(menu_frame)
         .and_then(|host| host.popup_menu_visible_rows(x, y, entries.len()))
         .unwrap_or(entries.len())
         .min(entries.len());
@@ -2314,7 +2321,7 @@ fn show_popup_menu_selection(
     token.next_revision();
     let tooltips = tooltip::menu_tooltips(ctx, frame_id);
     {
-        let Some(host) = ctx.display_host.as_mut() else {
+        let Some(host) = ctx.popup_display_connection_mut(frame_id) else {
             return Ok(());
         };
         host.show_popup_menu(PopupMenuRequest {
@@ -2649,7 +2656,10 @@ pub fn builtin_x_popup_menu(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     let position = args[0];
     let menu = args[1];
 
-    if ctx.display_host.is_some() && ctx.input_rx().as_ref().is_some() && !position.is_nil() {
+    if ctx.display_terminals.hosts_display()
+        && ctx.input_rx().as_ref().is_some()
+        && !position.is_nil()
+    {
         // Every MENU shape GNU accepts is decoded (and validated) by the
         // interactive path now; the batch entry below remains the
         // no-display/no-input validator, where GNU still builds the menu
@@ -2716,7 +2726,7 @@ pub fn builtin_x_focus_frame(eval: &mut Context, args: Vec<Value>) -> EvalResult
         // activates the frame window (`src/w32term.c:7386`). Selection alone
         // leaves the OS focus where it was, which is what broke `other-frame`.
         let no_activate = args.get(1).is_some_and(|value| value.is_truthy());
-        if let Some(host) = eval.display_host.as_mut() {
+        if let Some(host) = eval.frame_display_connection_mut(fid) {
             host.focus_gui_frame(fid, no_activate)
                 .map_err(|message| signal("error", vec![Value::string(message)]))?;
         }
@@ -2885,8 +2895,7 @@ pub fn builtin_x_get_resource(
             .is_some_and(|value| value.is_truthy()),
     };
     Ok(eval
-        .display_host
-        .as_ref()
+        .default_display_connection()
         .and_then(|host| host.gui_resource(&query))
         .filter(|value| !value.is_empty())
         .map_or(Value::NIL, Value::string))
@@ -2906,8 +2915,7 @@ pub(crate) fn builtin_ns_get_resource(eval: &mut Context, args: Vec<Value>) -> E
     })?;
     // GNU ignores OWNER and preserves empty strings in this direct getter.
     Ok(eval
-        .display_host
-        .as_ref()
+        .default_display_connection()
         .and_then(|host| host.ns_resource(&name))
         .map_or(Value::NIL, Value::string))
 }
@@ -2934,7 +2942,7 @@ pub(crate) fn builtin_ns_set_resource(eval: &mut Context, args: Vec<Value>) -> E
             )
         })?)
     };
-    if let Some(host) = eval.display_host.as_mut() {
+    if let Some(host) = eval.default_display_connection_mut() {
         host.set_ns_resource(&name, value.as_deref());
     }
     Ok(Value::NIL)
@@ -3339,7 +3347,7 @@ pub fn builtin_x_open_connection(
             }
         })?;
         if let Some(resources) = resources.as_deref()
-            && let Some(host) = eval.display_host.as_mut()
+            && let Some(host) = eval.default_display_connection_mut()
         {
             host.set_gui_resource_database(resources);
         }
@@ -3356,8 +3364,7 @@ pub fn builtin_x_open_connection(
             Some(requested_display.as_str())
         };
         let admitted = match eval
-            .display_host
-            .as_ref()
+            .default_display_connection()
             .map(|host| host.graphical_connection_identity(host_display))
         {
             Some(Ok(Some(_))) => true,
@@ -3376,7 +3383,7 @@ pub fn builtin_x_open_connection(
         };
         if admitted {
             if let Some(resources) = resources.as_deref()
-                && let Some(host) = eval.display_host.as_mut()
+                && let Some(host) = eval.default_display_connection_mut()
             {
                 host.set_gui_resource_database(resources);
             }
@@ -3413,8 +3420,7 @@ pub(crate) fn ensure_daemon_graphical_connection(
         })
         .transpose()?;
     let identity = eval
-        .display_host
-        .as_ref()
+        .default_display_connection()
         .map(|host| host.graphical_connection_identity(display.as_deref()))
         .transpose()
         .map_err(|message| signal("error", vec![Value::string(message)]))?

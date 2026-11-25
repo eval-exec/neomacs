@@ -59,8 +59,9 @@ use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::display_host::TerminalCreateRequest;
 use neovm_core::emacs_core::error::EvalError;
 use neovm_core::emacs_core::eval::{
-    DisplayHost, PopupMenuEntry, PopupMenuRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
-    VideoResolveRequest, VideoResolveSource, WebKitResolveRequest, WebKitResolveSource,
+    DisplayConnection, DisplayServices, PopupMenuEntry, PopupMenuRequest, ShaderSurfaceLanguage,
+    ShaderSurfaceUniformInit, VideoResolveRequest, VideoResolveSource, WebKitResolveRequest,
+    WebKitResolveSource,
 };
 use neovm_core::emacs_core::image_catalog::{AxisSize, ImageRotation, ImageSizeSpec};
 use neovm_core::emacs_core::image_catalog::{
@@ -3013,7 +3014,7 @@ struct StartupGuiDisplayHost {
     identity: neomacs_display_protocol::GraphicalDisplayIdentity,
 }
 
-impl DisplayHost for StartupGuiDisplayHost {
+impl DisplayConnection for StartupGuiDisplayHost {
     fn graphical_connection_identity(
         &self,
         display: Option<&str>,
@@ -3038,6 +3039,8 @@ impl DisplayHost for StartupGuiDisplayHost {
     }
 }
 
+impl DisplayServices for StartupGuiDisplayHost {}
+
 /// Records `resize_gui_frame` so a test can see an explicit size.
 #[cfg(target_os = "linux")]
 struct RecordingResizeHost {
@@ -3045,7 +3048,7 @@ struct RecordingResizeHost {
 }
 
 #[cfg(target_os = "linux")]
-impl DisplayHost for RecordingResizeHost {
+impl DisplayConnection for RecordingResizeHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -3055,6 +3058,8 @@ impl DisplayHost for RecordingResizeHost {
         Ok(())
     }
 }
+
+impl DisplayServices for RecordingResizeHost {}
 
 /// Give a GUI startup fixture the display connection its bootstrap declares.
 fn install_synthetic_startup_display(eval: &mut Context) {
@@ -3210,7 +3215,7 @@ fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
         terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
-    neovm_core::emacs_core::DisplayHost::realize_gui_frame(
+    neovm_core::emacs_core::DisplayConnection::realize_gui_frame(
         &mut host,
         GuiFrameHostRequest {
             resize_request_id: None,
@@ -3294,7 +3299,7 @@ fn opening_gui_frame_adoption_applies_fullscreen_mode() {
         terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
-    neovm_core::emacs_core::DisplayHost::realize_gui_frame(
+    neovm_core::emacs_core::DisplayConnection::realize_gui_frame(
         &mut host,
         GuiFrameHostRequest {
             resize_request_id: None,
@@ -3359,9 +3364,9 @@ fn primary_display_host_destroy_gui_frame_routes_primary_and_secondary_windows()
         terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
-    neovm_core::emacs_core::DisplayHost::destroy_gui_frame(&mut host, FrameId(0x100000002))
+    neovm_core::emacs_core::DisplayConnection::destroy_gui_frame(&mut host, FrameId(0x100000002))
         .expect("destroy secondary frame");
-    neovm_core::emacs_core::DisplayHost::destroy_gui_frame(&mut host, FrameId(0x100000001))
+    neovm_core::emacs_core::DisplayConnection::destroy_gui_frame(&mut host, FrameId(0x100000001))
         .expect("destroy primary frame");
 
     let commands: Vec<_> = cmd_rx.try_iter().collect();
@@ -3423,7 +3428,7 @@ fn primary_display_host_popup_menu_routes_primary_and_secondary_frames() {
         depth: 0,
     };
     for frame_id in [FrameId(0x100000001), FrameId(0x100000002)] {
-        neovm_core::emacs_core::DisplayHost::show_popup_menu(
+        neovm_core::emacs_core::DisplayConnection::show_popup_menu(
             &mut host,
             PopupMenuRequest {
                 tooltips: None,
@@ -4007,7 +4012,7 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
     for _ in 0..2 {
         let started = Instant::now();
         assert_eq!(
-            neovm_core::emacs_core::DisplayHost::resolve_image_sync(
+            neovm_core::emacs_core::DisplayServices::resolve_image_sync(
                 &host,
                 request.clone(),
                 ImageSizeLimit::UNLIMITED,
@@ -4055,8 +4060,8 @@ fn primary_display_host_request_video_reuses_supported_handle_or_reports_unavail
         autoplay: true,
     };
 
-    let first = neovm_core::emacs_core::DisplayHost::request_video(&host, request.clone());
-    let second = neovm_core::emacs_core::DisplayHost::request_video(&host, request);
+    let first = neovm_core::emacs_core::DisplayConnection::request_video(&host, request.clone());
+    let second = neovm_core::emacs_core::DisplayConnection::request_video(&host, request);
 
     #[cfg(feature = "video")]
     {
@@ -4154,7 +4159,7 @@ fn primary_display_host_request_video_uri_preserves_supported_source_or_reports_
         autoplay: false,
     };
 
-    let resolved = neovm_core::emacs_core::DisplayHost::request_video(&host, request);
+    let resolved = neovm_core::emacs_core::DisplayConnection::request_video(&host, request);
 
     #[cfg(feature = "video")]
     {
@@ -4218,11 +4223,12 @@ fn primary_display_host_video_session_lifecycle_respects_compiled_capability() {
 
     #[cfg(feature = "video")]
     {
-        let id = neovm_core::emacs_core::DisplayHost::create_video(&host, open.clone())
+        let id = neovm_core::emacs_core::DisplayConnection::create_video(&host, open.clone())
             .expect("create video session");
-        neovm_core::emacs_core::DisplayHost::control_video(&host, id, PlaybackAction::Pause)
+        neovm_core::emacs_core::DisplayConnection::control_video(&host, id, PlaybackAction::Pause)
             .expect("pause video session");
-        neovm_core::emacs_core::DisplayHost::destroy_video(&host, id).expect("close video session");
+        neovm_core::emacs_core::DisplayConnection::destroy_video(&host, id)
+            .expect("close video session");
 
         let commands: Vec<_> = cmd_rx.try_iter().collect();
         assert_eq!(commands.len(), 3);
@@ -4250,24 +4256,28 @@ fn primary_display_host_video_session_lifecycle_respects_compiled_capability() {
     {
         let unsupported = "native video support is not compiled into this Neomacs build";
         assert_eq!(
-            neovm_core::emacs_core::DisplayHost::create_video(&host, open),
+            neovm_core::emacs_core::DisplayConnection::create_video(&host, open),
             Err(unsupported.to_owned())
         );
         let id = neomacs_display_protocol::VideoId::new(1);
         assert_eq!(
-            neovm_core::emacs_core::DisplayHost::control_video(&host, id, PlaybackAction::Pause),
+            neovm_core::emacs_core::DisplayConnection::control_video(
+                &host,
+                id,
+                PlaybackAction::Pause
+            ),
             Err(unsupported.to_owned())
         );
         assert_eq!(
-            neovm_core::emacs_core::DisplayHost::video_diagnostics(&host),
+            neovm_core::emacs_core::DisplayConnection::video_diagnostics(&host),
             Err(unsupported.to_owned())
         );
         assert_eq!(
-            neovm_core::emacs_core::DisplayHost::begin_video_measurement_epoch(&host),
+            neovm_core::emacs_core::DisplayConnection::begin_video_measurement_epoch(&host),
             Err(unsupported.to_owned())
         );
         assert_eq!(
-            neovm_core::emacs_core::DisplayHost::destroy_video(&host, id),
+            neovm_core::emacs_core::DisplayConnection::destroy_video(&host, id),
             Ok(())
         );
         assert!(
@@ -4311,10 +4321,10 @@ fn primary_display_host_request_webkit_queues_create_and_load_once_with_stable_i
         height: 300,
     };
 
-    let first = neovm_core::emacs_core::DisplayHost::request_webkit(&host, request.clone())
+    let first = neovm_core::emacs_core::DisplayConnection::request_webkit(&host, request.clone())
         .expect("request webkit")
         .expect("webkit handle");
-    let second = neovm_core::emacs_core::DisplayHost::request_webkit(&host, request)
+    let second = neovm_core::emacs_core::DisplayConnection::request_webkit(&host, request)
         .expect("request cached webkit")
         .expect("webkit handle");
 
@@ -4369,7 +4379,7 @@ fn primary_display_host_preserves_file_navigation_as_a_typed_path() {
         height: 300,
     };
 
-    neovm_core::emacs_core::DisplayHost::request_webkit(&host, request)
+    neovm_core::emacs_core::DisplayConnection::request_webkit(&host, request)
         .expect("request file webkit")
         .expect("webkit handle");
 
@@ -4411,17 +4421,17 @@ fn primary_display_host_xwidget_lifecycle_uses_explicit_xwidget_id() {
     };
 
     let id = WebViewId::new(42);
-    neovm_core::emacs_core::DisplayHost::create_webkit_xwidget(&host, id, 400, 300)
+    neovm_core::emacs_core::DisplayConnection::create_webkit_xwidget(&host, id, 400, 300)
         .expect("create xwidget");
-    neovm_core::emacs_core::DisplayHost::load_webkit_xwidget_uri(
+    neovm_core::emacs_core::DisplayConnection::load_webkit_xwidget_uri(
         &host,
         id,
         LispString::from_utf8("https://example.com"),
     )
     .expect("load xwidget");
-    neovm_core::emacs_core::DisplayHost::resize_webkit_xwidget(&host, id, 320, 240)
+    neovm_core::emacs_core::DisplayConnection::resize_webkit_xwidget(&host, id, 320, 240)
         .expect("resize xwidget");
-    neovm_core::emacs_core::DisplayHost::destroy_webkit_xwidget(&host, id)
+    neovm_core::emacs_core::DisplayConnection::destroy_webkit_xwidget(&host, id)
         .expect("destroy xwidget");
 
     let commands: Vec<_> = cmd_rx.try_iter().collect();
@@ -4559,7 +4569,7 @@ fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
     };
 
     let started = Instant::now();
-    neovm_core::emacs_core::DisplayHost::resize_gui_frame(
+    neovm_core::emacs_core::DisplayConnection::resize_gui_frame(
         &mut host,
         GuiFrameHostRequest {
             resize_request_id: None,
@@ -4634,7 +4644,7 @@ fn primary_window_display_host_forwards_visual_config_to_renderer() {
     let mut config = neomacs_display_protocol::VisualConfig::default();
     config.cursor_blink.enabled = false;
     config.cursor_blink.interval = std::time::Duration::from_millis(250);
-    neovm_core::emacs_core::DisplayHost::set_visual_config(&mut host, config)
+    neovm_core::emacs_core::DisplayConnection::set_visual_config(&mut host, config)
         .expect("visual config command should forward");
 
     let commands: Vec<_> = cmd_rx.try_iter().collect();
@@ -4676,9 +4686,9 @@ fn primary_window_display_host_forwards_chrome_controls_to_renderer() {
         terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
-    neovm_core::emacs_core::DisplayHost::set_scroll_indicators(&mut host, true)
+    neovm_core::emacs_core::DisplayConnection::set_scroll_indicators(&mut host, true)
         .expect("scroll indicator command should forward");
-    neovm_core::emacs_core::DisplayHost::set_extra_spacing(&mut host, 4.0, 2.0)
+    neovm_core::emacs_core::DisplayConnection::set_extra_spacing(&mut host, 4.0, 2.0)
         .expect("extra spacing command should forward");
 
     let commands: Vec<_> = cmd_rx.try_iter().collect();
@@ -4757,14 +4767,14 @@ fn primary_window_display_host_round_trips_clipboard_requests_through_renderer()
         terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
-    neovm_core::emacs_core::DisplayHost::set_clipboard_text(&mut host, Some("copied"))
+    neovm_core::emacs_core::DisplayConnection::set_clipboard_text(&mut host, Some("copied"))
         .expect("clipboard set should round-trip through renderer");
     assert_eq!(
-        neovm_core::emacs_core::DisplayHost::primary_selection_text(&mut host).unwrap(),
+        neovm_core::emacs_core::DisplayConnection::primary_selection_text(&mut host).unwrap(),
         Some("selected".to_owned())
     );
     assert_eq!(
-        neovm_core::emacs_core::DisplayHost::primary_selection_owner(&mut host).unwrap(),
+        neovm_core::emacs_core::DisplayConnection::primary_selection_owner(&mut host).unwrap(),
         SelectionOwner::OtherProcess
     );
     worker.join().unwrap();
@@ -4775,26 +4785,26 @@ fn tty_display_host_reports_clipboard_as_unsupported() {
     let mut host = TtyPopupDisplayHost::new(Arc::new(AtomicBool::new(false)));
 
     assert_eq!(
-        neovm_core::emacs_core::DisplayHost::set_clipboard_text(&mut host, Some("copied")),
+        neovm_core::emacs_core::DisplayConnection::set_clipboard_text(&mut host, Some("copied")),
         Err("system clipboard is unavailable in TTY mode".to_owned())
     );
     assert_eq!(
-        neovm_core::emacs_core::DisplayHost::clipboard_text(&mut host),
+        neovm_core::emacs_core::DisplayConnection::clipboard_text(&mut host),
         Err("system clipboard is unavailable in TTY mode".to_owned())
     );
     assert_eq!(
-        neovm_core::emacs_core::DisplayHost::set_primary_selection_text(
+        neovm_core::emacs_core::DisplayConnection::set_primary_selection_text(
             &mut host,
             Some("selected")
         ),
         Err("PRIMARY selection is unavailable in TTY mode".to_owned())
     );
     assert_eq!(
-        neovm_core::emacs_core::DisplayHost::primary_selection_text(&mut host),
+        neovm_core::emacs_core::DisplayConnection::primary_selection_text(&mut host),
         Err("PRIMARY selection is unavailable in TTY mode".to_owned())
     );
     assert_eq!(
-        neovm_core::emacs_core::DisplayHost::primary_selection_owner(&mut host),
+        neovm_core::emacs_core::DisplayConnection::primary_selection_owner(&mut host),
         Err("PRIMARY selection is unavailable in TTY mode".to_owned())
     );
 }
@@ -8329,7 +8339,7 @@ fn primary_display_host_reports_quality_policy_frame_shader_suppression() {
         terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
-    let error = neovm_core::emacs_core::DisplayHost::set_frame_shader(
+    let error = neovm_core::emacs_core::DisplayConnection::set_frame_shader(
         &host,
         Some((
             "fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> { return vec4<f32>(1.0); }".to_owned(),
@@ -8345,7 +8355,7 @@ fn primary_display_host_reports_quality_policy_frame_shader_suppression() {
     host.render_capabilities = Arc::new(SharedRenderCapabilities::new(
         FrameShaderAvailability::Available,
     ));
-    neovm_core::emacs_core::DisplayHost::set_frame_shader(
+    neovm_core::emacs_core::DisplayConnection::set_frame_shader(
         &host,
         Some((
             "fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> { return vec4<f32>(u_gain()); }"
@@ -8361,7 +8371,7 @@ fn primary_display_host_reports_quality_policy_frame_shader_suppression() {
     .expect("hardware policy accepts a frame shader");
     let _installation = cmd_rx.recv().expect("installation command");
 
-    neovm_core::emacs_core::DisplayHost::set_frame_shader_uniform(
+    neovm_core::emacs_core::DisplayConnection::set_frame_shader_uniform(
         &host,
         "gain",
         [0.75, 0.0, 0.0, 0.0],
@@ -8369,7 +8379,7 @@ fn primary_display_host_reports_quality_policy_frame_shader_suppression() {
     .expect("live uniform update");
     let _uniform_update = cmd_rx.recv().expect("uniform command");
 
-    neovm_core::emacs_core::DisplayHost::display_reset(&host);
+    neovm_core::emacs_core::DisplayConnection::display_reset(&host);
     let RenderCommand::Asset(AssetCommand::FrameShaderSet {
         request: _,
         composed: Some((_, _, uniforms)),
@@ -8410,7 +8420,7 @@ fn primary_display_host_routes_typed_terminal_requests_to_the_renderer() {
         terminal_state: super::super::TerminalHostState::new(shared_terminals),
     };
 
-    let id = neovm_core::emacs_core::DisplayHost::create_terminal(
+    let id = neovm_core::emacs_core::DisplayConnection::create_terminal(
         &host,
         TerminalCreateRequest {
             size: TerminalGridSize {
@@ -8422,9 +8432,9 @@ fn primary_display_host_routes_typed_terminal_requests_to_the_renderer() {
         },
     )
     .expect("terminal create should queue");
-    neovm_core::emacs_core::DisplayHost::write_terminal(&host, id, b"echo typed\r".to_vec())
+    neovm_core::emacs_core::DisplayConnection::write_terminal(&host, id, b"echo typed\r".to_vec())
         .expect("terminal input should queue");
-    neovm_core::emacs_core::DisplayHost::resize_terminal(
+    neovm_core::emacs_core::DisplayConnection::resize_terminal(
         &host,
         id,
         TerminalGridSize {
@@ -8433,32 +8443,32 @@ fn primary_display_host_routes_typed_terminal_requests_to_the_renderer() {
         },
     )
     .expect("terminal resize should queue");
-    neovm_core::emacs_core::DisplayHost::set_floating_terminal(
+    neovm_core::emacs_core::DisplayConnection::set_floating_terminal(
         &host,
         id,
         TerminalFloatPlacement::new(12.5, 24.0, 0.9).unwrap(),
     )
     .expect("terminal placement should queue");
     assert_eq!(
-        neovm_core::emacs_core::DisplayHost::terminal_text(&host, id)
+        neovm_core::emacs_core::DisplayConnection::terminal_text(&host, id)
             .expect("terminal text lookup should succeed"),
         None
     );
-    neovm_core::emacs_core::DisplayHost::destroy_terminal(&host, id)
+    neovm_core::emacs_core::DisplayConnection::destroy_terminal(&host, id)
         .expect("terminal destroy should queue");
     assert_eq!(
-        neovm_core::emacs_core::DisplayHost::terminal_text(&host, id)
+        neovm_core::emacs_core::DisplayConnection::terminal_text(&host, id)
             .expect("destroyed terminal observation should settle"),
         None
     );
     assert!(
-        neovm_core::emacs_core::DisplayHost::write_terminal(&host, id, b"stale".to_vec())
+        neovm_core::emacs_core::DisplayConnection::write_terminal(&host, id, b"stale".to_vec())
             .unwrap_err()
             .contains("being destroyed")
     );
     let arbitrary_id = neomacs_display_protocol::TerminalId::new(999).unwrap();
     assert!(
-        neovm_core::emacs_core::DisplayHost::terminal_text(&host, arbitrary_id)
+        neovm_core::emacs_core::DisplayConnection::terminal_text(&host, arbitrary_id)
             .unwrap_err()
             .contains("unknown neo-term terminal id")
     );

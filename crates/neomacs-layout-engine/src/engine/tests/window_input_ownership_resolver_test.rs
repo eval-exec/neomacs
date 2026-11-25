@@ -16,13 +16,16 @@ struct ResolverHost {
     catalog: Rc<dyn ImageCatalog>,
     calls: Rc<Cell<usize>>,
 }
-impl DisplayHost for ResolverHost {
+impl neovm_core::emacs_core::DisplayConnection for ResolverHost {
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         panic!("source adjustment must not realize a GUI frame")
     }
     fn resize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         panic!("source adjustment must not resize a GUI frame")
     }
+}
+
+impl neovm_core::emacs_core::DisplayServices for ResolverHost {
     fn image_catalog_shared(&self) -> Option<Rc<dyn ImageCatalog>> {
         self.calls.set(self.calls.get() + 1);
         Some(Rc::clone(&self.catalog))

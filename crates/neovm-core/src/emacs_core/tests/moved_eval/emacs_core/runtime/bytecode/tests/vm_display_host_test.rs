@@ -13,7 +13,9 @@ use neovm_display::window::DisplayFrameManagerExt;
 use neovm_value::display_vocab::WindowSystemKind;
 use neovm_value::value::Value;
 
-use crate::emacs_core::eval::{Context, DisplayHost, GuiFrameHostRequest, GuiFrameHostSize};
+use crate::emacs_core::eval::{
+    Context, DisplayConnection, DisplayServices, GuiFrameHostRequest, GuiFrameHostSize,
+};
 
 fn vm_eval_with_init_str(src: &str, init: impl FnOnce(&mut Context)) -> String {
     let mut eval = crate::test_utils::new_context();
@@ -38,7 +40,7 @@ impl VmRecordingDisplayHost {
     }
 }
 
-impl DisplayHost for VmRecordingDisplayHost {
+impl DisplayConnection for VmRecordingDisplayHost {
     fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
         self.realized.borrow_mut().push(request);
         Ok(())
@@ -52,6 +54,8 @@ impl DisplayHost for VmRecordingDisplayHost {
         self.primary_size
     }
 }
+
+impl DisplayServices for VmRecordingDisplayHost {}
 
 #[test]
 fn vm_frame_native_metrics_sync_pending_resize_events() {

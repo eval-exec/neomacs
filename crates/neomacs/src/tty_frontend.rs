@@ -3,7 +3,9 @@ use std::io::Write;
 
 use neomacs_display_protocol::SelectionOwner;
 use neomacs_display_runtime::thread_comm::{LifecycleCommand, RenderCommand, RenderCommandSender};
-use neovm_core::emacs_core::{DisplayHost, GuiFrameHostRequest, PopupMenuRequest};
+use neovm_core::emacs_core::{
+    DisplayConnection, DisplayServices, GuiFrameHostRequest, PopupMenuRequest,
+};
 
 // Re-export the cross-platform TTY input reader from display-runtime.
 pub use neomacs_display_runtime::tty_input::TtyInputReader;
@@ -24,6 +26,10 @@ impl TtyTerminalHost {
     }
 }
 
+/// The primary TTY's display half: popup menus drawn on this terminal and the
+/// Lisp-visible selection refusals. It sits beside the TTY's device in the
+/// initial terminal's termcap backing (remote-display M3).
+///
 /// Popup I/O is separate from the inherited absent geometry/image/font
 /// services. `frame_layout::tty_rows_host_authority` audits those services for
 /// every instance state; adding a geometry service must revisit that contract.
@@ -37,7 +43,7 @@ impl TtyPopupDisplayHost {
     }
 }
 
-impl DisplayHost for TtyPopupDisplayHost {
+impl DisplayConnection for TtyPopupDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -174,6 +180,9 @@ impl DisplayHost for TtyPopupDisplayHost {
         Ok(())
     }
 }
+
+/// Every font, image and geometry service keeps its inert trait default.
+impl DisplayServices for TtyPopupDisplayHost {}
 
 impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
     fn suspend_tty(&mut self) -> Result<(), String> {

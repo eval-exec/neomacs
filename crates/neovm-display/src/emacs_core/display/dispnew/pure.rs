@@ -276,7 +276,11 @@ pub fn builtin_send_string_to_terminal(
             vec![Value::symbol("terminal-live-p"), designator],
         ));
     };
-    crate::emacs_core::terminal::pure::write_bytes_to_terminal(terminal_id, string.as_bytes())?;
+    crate::emacs_core::terminal::pure::write_bytes_to_terminal(
+        eval,
+        terminal_id,
+        string.as_bytes(),
+    )?;
     Ok(Value::NIL)
 }
 

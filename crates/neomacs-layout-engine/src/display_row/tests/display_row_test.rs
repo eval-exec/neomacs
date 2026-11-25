@@ -19,8 +19,8 @@ use neomacs_display_protocol::types::FaceId;
 use neomacs_display_protocol::{ImageLayoutExtent, ImageReportedExtent, Rect, VideoId};
 use neovm_core::buffer::{CharPos0, EmacsBytePos, EmacsByteRange};
 use neovm_core::emacs_core::eval::{
-    DisplayHost, GuiFrameHostRequest, ResolvedVideo, ResolvedWebKit, VideoResolveRequest,
-    WebKitResolveRequest,
+    DisplayConnection, DisplayHost, DisplayServices, FrameDisplay, GuiFrameHostRequest,
+    ResolvedVideo, ResolvedWebKit, VideoResolveRequest, WebKitResolveRequest,
 };
 use neovm_core::emacs_core::image_catalog::{
     ImageCatalog, ImageLookup, ImageResolveRequest, ImageSizeLimit, PendingImage, ReadyImage,
@@ -469,7 +469,7 @@ fn render_lisp_string_row_with_display_host(
 ) -> Option<RenderedDisplayRow> {
     let mut context = DisplayRowRenderContext::new(
         face_resolver,
-        display_host,
+        display_host.map(FrameDisplay::of_host),
         face_ids,
         StringSourceRootScope::CallbackFree,
     );
@@ -508,25 +508,13 @@ impl RecordingDisplayRowMediaHost {
     }
 }
 
-impl DisplayHost for RecordingDisplayRowMediaHost {
+impl DisplayConnection for RecordingDisplayRowMediaHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
 
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
-    }
-
-    fn resolve_image_sync(
-        &self,
-        _request: ImageResolveRequest,
-        _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
-        panic!("display row rendering must not use synchronous image resolution");
-    }
-
-    fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
-        Some(self)
     }
 
     fn request_video(&self, request: VideoResolveRequest) -> Result<Option<ResolvedVideo>, String> {
@@ -550,6 +538,20 @@ impl DisplayHost for RecordingDisplayRowMediaHost {
         Ok(Some(ResolvedWebKit {
             webview_id: neomacs_display_protocol::WebViewId::new(99),
         }))
+    }
+}
+
+impl DisplayServices for RecordingDisplayRowMediaHost {
+    fn resolve_image_sync(
+        &self,
+        _request: ImageResolveRequest,
+        _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
+    ) -> Result<Option<ReadyImage>, String> {
+        panic!("display row rendering must not use synchronous image resolution");
+    }
+
+    fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
+        Some(self)
     }
 }
 

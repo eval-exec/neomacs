@@ -8,7 +8,7 @@
 use neomacs_display_protocol::VideoId;
 use neomacs_video_model::VideoOpenRequest;
 use neovm_eval::emacs_core::eval::{
-    Context, DisplayHost, GuiFrameHostRequest, ShaderSurfaceCreateRequest,
+    Context, DisplayConnection, DisplayServices, GuiFrameHostRequest, ShaderSurfaceCreateRequest,
 };
 use neovm_value::value::Value;
 use std::sync::{Arc, Mutex};
@@ -25,7 +25,7 @@ struct RecordingSurfaceDisplayHost {
     destroys: Arc<Mutex<Vec<u32>>>,
 }
 
-impl DisplayHost for RecordingSurfaceDisplayHost {
+impl DisplayConnection for RecordingSurfaceDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -67,6 +67,8 @@ impl DisplayHost for RecordingSurfaceDisplayHost {
         Ok(())
     }
 }
+
+impl DisplayServices for RecordingSurfaceDisplayHost {}
 
 fn surface_context() -> (Context, RecordingSurfaceDisplayHost) {
     let host = RecordingSurfaceDisplayHost::default();

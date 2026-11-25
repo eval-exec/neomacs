@@ -222,12 +222,12 @@ use neovm_core::emacs_core::load::{
 use neovm_core::emacs_core::print_value_with_eval;
 use neovm_core::emacs_core::terminal::pure::{
     TerminalRuntimeConfig, configure_terminal_runtime, ensure_terminal_runtime_owner,
-    reset_terminal_host, reset_terminal_runtime, set_initial_terminal_winsize_query,
-    set_terminal_host,
+    reset_terminal_runtime, set_initial_terminal_winsize_query,
 };
 use neovm_core::emacs_core::value::list_length;
 use neovm_core::emacs_core::{
-    Context, DisplayHost, GraphicalFaceAttribute, GuiFrameHostRequest, PopupMenuRequest,
+    Context, DisplayConnection, DisplayServices, GraphicalFaceAttribute, GuiFrameHostRequest,
+    PopupMenuRequest,
 };
 use neovm_core::face::{FaceHeight, FontWeight, LFaceAttr};
 use neovm_core::heap_types::LispString;
@@ -1875,7 +1875,9 @@ fn render_fullscreen_mode(fullscreen: FrameFullscreen) -> WindowFullscreenMode {
     }
 }
 
-impl DisplayHost for PrimaryWindowDisplayHost {
+/// The in-process GUI provides both display halves in one object: the window-system
+/// connection of the initial terminal and the process display services.
+impl DisplayConnection for PrimaryWindowDisplayHost {
     /// Validate daemon admission against the connection owned by this host;
     /// accepting a name never opens a second native connection.
     fn graphical_connection_identity(
@@ -2134,18 +2136,6 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .map_err(|err| format!("failed to cache GUI frame title: {err}"))?
             .insert(request.frame_id, request.title);
         Ok(())
-    }
-
-    fn list_font_families(
-        &mut self,
-        _frame_id: FrameId,
-    ) -> Result<Vec<AvailableFontFamilyName>, String> {
-        Ok(self
-            .synchronized_font_metrics()
-            .list_font_families()
-            .into_iter()
-            .filter_map(|family| AvailableFontFamilyName::from_utf8(family.as_str()))
-            .collect())
     }
 
     fn set_clipboard_text(&mut self, text: Option<&str>) -> Result<(), String> {
@@ -2644,425 +2634,6 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             RenderCommand::Config(ConfigCommand::SetModifierPolicy(policy)),
             "failed to set the NS modifier policy",
         )
-    }
-
-    fn synchronize_symbol_font_policy(
-        &mut self,
-        use_primary_font: bool,
-        char_script_table: Option<Value>,
-    ) {
-        // The same GNU symbol-reuse rule the layout engine's font service
-        // applies; this host's service is the evaluator-path counterpart and
-        // has no other source for the policy.
-        self.synchronized_font_metrics()
-            .synchronize_symbol_font_policy(use_primary_font, char_script_table);
-    }
-
-    fn resolve_font_for_char(
-        &mut self,
-        request: FontResolveRequest,
-    ) -> Result<Option<ResolvedFontMatch>, String> {
-        // cosmic-text/fontdb consume Unicode scalar values. Keep the full
-        // Emacs character in the protocol and reject unsupported raw-byte or
-        // non-Unicode codes only at this explicit backend boundary.
-        let Some(character) = request.character.as_rust_char() else {
-            return Ok(None);
-        };
-        let requested_family_storage = request.face.family_runtime_string_owned();
-        let requested_family = requested_family_storage.as_deref().unwrap_or("Monospace");
-        let requested_weight = request
-            .face
-            .weight
-            .unwrap_or(FontWeight::NORMAL)
-            .css_weight();
-        let requested_italic = request
-            .face
-            .slant
-            .map(|slant| slant.is_italic())
-            .unwrap_or(false);
-        let font_size = self.font_sizing.font_size_px_for_face(&request.face);
-        let selected = self
-            .synchronized_font_metrics()
-            .select_font_for_realized_face_char(
-                character,
-                neomacs_layout_engine::font::metrics::RealizedFaceFontSelection::new(
-                    requested_family,
-                    requested_weight,
-                    requested_italic,
-                    font_size,
-                ),
-            );
-        tracing::debug!(
-            target: "neomacs::font_at",
-            character = request.character.code(),
-            requested_family,
-            requested_weight,
-            requested_italic,
-            font_size,
-            request_face = ?request.face,
-            selected = ?selected,
-            "display host resolved font-at request"
-        );
-        Ok(selected.map(|font| {
-            let glyph_code = font.glyph_code;
-            ResolvedFontMatch {
-                glyph_code,
-                font: core_opened_font_from_selection(font, |file, face_index| {
-                    self.font_otf_capability(file, face_index).ok().flatten()
-                }),
-            }
-        }))
-    }
-
-    fn resolve_frame_font(
-        &mut self,
-        frame_id: FrameId,
-        request: FrameFontRequest,
-    ) -> Result<Option<ResolvedFrameFont>, String> {
-        // Every frame in this host shares one frontend/display connection.
-        // Its logical point policy is therefore shared just like GNU's
-        // display-level FRAME_RES; backing/device scale remains frame-local
-        // and is applied later by the renderer.
-        let font_sizing = self.font_sizing;
-        let face = request.face();
-        let requested_family_storage = face.family_runtime_string_owned();
-        let requested_family = requested_family_storage.as_deref().unwrap_or("Monospace");
-        let requested_weight = face.weight.unwrap_or(FontWeight::NORMAL).css_weight();
-        let requested_slant = face.slant.unwrap_or(neovm_core::face::FontSlant::Normal);
-        let requested_width = face.width.unwrap_or(neovm_core::face::FontWidth::Normal);
-        let foundry = face
-            .foundry
-            .as_ref()
-            .and_then(|value| value.as_lisp_string())
-            .map(|value| neovm_core::emacs_core::emacs_char::to_utf8_lossy(value.as_bytes()));
-        let Some(font_size) = font_sizing.font_size_px_for_request(request.size()) else {
-            return Ok(None);
-        };
-        let pixel_size = (font_size.get().round() as u32).max(1);
-        let metrics = self.synchronized_font_metrics();
-        let selected = if request.selection() == FrameFontSelection::FontSpecification {
-            // An absent family retains this host's existing Monospace default;
-            // the request does not yet carry the old lface's inherited context.
-            let query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(
-                neomacs_layout_engine::font_backend::FontFamilyName::new(requested_family),
-            )
-            .with_selection(neovm_core::emacs_core::eval::FontSpecSelection::OpenBySpec)
-            .with_weight(requested_weight)
-            .with_slant(requested_slant)
-            .with_width(requested_width);
-            metrics
-                .resolve_font_entity(&query)
-                .and_then(|entity| metrics.open_platform_match_font(&entity.matched, pixel_size))
-        } else {
-            metrics.open_face_font(
-                requested_family,
-                foundry.as_deref(),
-                requested_weight,
-                requested_slant,
-                requested_width,
-                pixel_size,
-            )
-        };
-        let Some(font) = selected else {
-            return Ok(None);
-        };
-        let height_tenths =
-            font_sizing.face_height_tenths_for_layout_pixels(font.metrics.pixel_size.max(1));
-        tracing::debug!(
-            frame_id = frame_id.0,
-            requested_size = ?request.size(),
-            realized_pixel_size = font.metrics.pixel_size,
-            height_tenths,
-            "resolved frame-local font geometry"
-        );
-        Ok(Some(ResolvedFrameFont {
-            height_tenths,
-            font: core_opened_font_from_selection(font, |file, face_index| {
-                self.font_otf_capability(file, face_index).ok().flatten()
-            }),
-        }))
-    }
-
-    fn resolve_font_for_spec(
-        &mut self,
-        request: FontSpecResolveRequest,
-    ) -> Result<Option<ResolvedFontSpecMatch>, String> {
-        let query = font_entity_query(&request);
-        let entity = self.synchronized_font_metrics().resolve_font_entity(&query);
-        Ok(entity.map(|entity| core_font_entity_match(&mut self.font_entities, entity)))
-    }
-
-    fn list_fonts_for_spec(
-        &mut self,
-        request: neovm_core::emacs_core::eval::FontSpecListQuery,
-        prefer: Option<neovm_core::emacs_core::eval::FontSpecListQuery>,
-        maximum: Option<usize>,
-        filter: Option<&mut neovm_core::emacs_core::eval::FontListFilter<'_>>,
-    ) -> Result<
-        Vec<neovm_core::emacs_core::eval::ListedFontEntity>,
-        neovm_core::emacs_core::eval::FontListError,
-    > {
-        use neomacs_layout_engine::font::resolver::FontEntityListConstraints;
-        if maximum == Some(0) {
-            return Ok(Vec::new());
-        }
-        let Some(query) = font_listing_entity_query(&request.specification) else {
-            return Ok(Vec::new());
-        };
-        let constraints =
-            |query: &neovm_core::emacs_core::eval::FontSpecListQuery| FontEntityListConstraints {
-                driver: query.driver,
-                foundry: query
-                    .foundry
-                    .as_ref()
-                    .and_then(LispString::as_utf8_str)
-                    .map(str::to_owned),
-                adstyle: query
-                    .adstyle
-                    .as_ref()
-                    .and_then(LispString::as_utf8_str)
-                    .map(str::to_owned),
-                pixel_size: query
-                    .size
-                    .map(|size| font_listing_pixel_size(self.font_sizing, size)),
-                spacing: query.spacing,
-                average_width: query.average_width,
-            };
-        let primary = constraints(&request);
-        let preferred = prefer
-            .as_ref()
-            .map(|query| (font_entity_query(&query.specification), constraints(query)));
-        let _ = self.synchronized_font_metrics();
-        let Some(service) = self.font_metrics.as_ref() else {
-            return Ok(Vec::new());
-        };
-        // Other native adapters retain their preexisting empty listing path.
-        // This change verifies Linux Fontconfig enumeration only.
-        if service.font_backend_kind()
-            != neomacs_display_protocol::font::FontBackendKind::Fontconfig
-        {
-            return Ok(Vec::new());
-        }
-        core_visit_listed_font_entities(
-            service,
-            &mut self.font_entities,
-            &query,
-            &primary,
-            preferred
-                .as_ref()
-                .map(|(query, constraints)| (query, constraints)),
-            maximum,
-            filter,
-        )
-    }
-
-    fn font_character_coverage(
-        &mut self,
-        request: FontCoverageRequest,
-    ) -> Result<FontCoverage, String> {
-        let Some(ch) = request.character.as_rust_char() else {
-            return Ok(FontCoverage::Absent);
-        };
-        let coverage = match request.target {
-            FontCoverageTarget::Entity(handle) => {
-                let Some(font) = self.font_entities.get(handle).cloned() else {
-                    return Ok(FontCoverage::NeedsOpening);
-                };
-                self.synchronized_font_metrics()
-                    .font_has_char_in_match(&font, ch)
-            }
-            FontCoverageTarget::Opened(identity) => self
-                .synchronized_font_metrics()
-                .font_has_char_in_identity(&identity, ch),
-        };
-        Ok(match coverage {
-            Some(true) => FontCoverage::Present,
-            Some(false) => FontCoverage::Absent,
-            None => FontCoverage::NeedsOpening,
-        })
-    }
-
-    fn font_opening_pixel_size(
-        &mut self,
-        size: neovm_core::emacs_core::eval::FontOpeningSize,
-    ) -> Result<Option<u32>, String> {
-        Ok(Some(self.font_sizing.font_opening_size_px(size).get()))
-    }
-
-    fn probe_font_px_metrics(
-        &mut self,
-        file: &str,
-        face_index: u32,
-        pixel_size: u32,
-        wght: Option<f32>,
-    ) -> Result<Option<neovm_core::emacs_core::eval::FontPxProbeResult>, String> {
-        let metrics = neomacs_layout_engine::font::probe::probe_font_px_metrics(
-            file, face_index, pixel_size, wght,
-        );
-        if let Some(metrics) = metrics {
-            self.synchronized_font_metrics()
-                .observe_opened_font_metrics(metrics.ascent, metrics.descent);
-        }
-        Ok(metrics.map(core_font_px_metrics))
-    }
-
-    fn open_font_entity(
-        &mut self,
-        request: neovm_core::emacs_core::eval::FontOpenEntityRequest,
-    ) -> Result<Option<Value>, String> {
-        let Some(handle) = request.handle else {
-            return Ok(None);
-        };
-        let Some(matched) = self.font_entities.get(handle).cloned() else {
-            return Ok(None);
-        };
-        let pixel_size = self.font_sizing.font_opening_size_px(request.size).get();
-        let reported_size = request.reported_size.unwrap_or(i64::from(pixel_size));
-        let Some(selected) = self
-            .synchronized_font_metrics()
-            .open_platform_match_font(&matched, pixel_size)
-        else {
-            return Ok(None);
-        };
-        let capability = selected
-            .resolved
-            .identity
-            .file_path
-            .as_deref()
-            .and_then(|file| {
-                self.font_otf_capability(file, selected.resolved.identity.file_face_index())
-                    .ok()
-                    .flatten()
-            });
-        let opened = core_opened_font_from_selection(selected, |_, _| capability.clone());
-        Ok(Some(neovm_core::emacs_core::font::font_object_from_opened(
-            &opened,
-            reported_size,
-            matched.metadata.spacing,
-        )))
-    }
-
-    fn font_open_point_pixels(&mut self, points: f64) -> Result<Option<i64>, String> {
-        // GNU Fopen_font: POINT_TO_PIXEL (round-half-up, then C truncation
-        // toward zero) with the frame's integer resolution.  The zero -> 120
-        // rule is applied by the caller after this conversion.
-        if !points.is_finite() {
-            return Ok(None);
-        }
-        let dpi = f64::from(self.font_sizing.layout_dpi().trunc());
-        let pixels = (points * dpi / 72.0 + 0.5).trunc();
-        if !pixels.is_finite() || pixels < i64::MIN as f64 || pixels > i64::MAX as f64 {
-            return Ok(None);
-        }
-        Ok(Some(pixels as i64))
-    }
-
-    fn probe_font_entity_metrics(
-        &mut self,
-        request: FontEntityMetricsRequest,
-    ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
-        let pixel_size = self.font_sizing.font_opening_size_px(request.size).get();
-        let family = request
-            .family
-            .as_ref()
-            .and_then(LispString::as_utf8_str)
-            .and_then(neomacs_layout_engine::font_backend::FontFamilyName::new);
-        let mut query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(family);
-        if let Some(registry) = request.registry.as_ref().and_then(LispString::as_utf8_str) {
-            query = query.with_registry(registry);
-        }
-        if let Some(postscript_name) = request
-            .postscript_name
-            .as_ref()
-            .and_then(LispString::as_utf8_str)
-        {
-            query = query.with_postscript_name(postscript_name);
-        }
-        if let Some(weight) = request.weight {
-            query = query.with_weight(weight.css_weight());
-        }
-        if let Some(slant) = request.slant {
-            query = query.with_slant(slant);
-        }
-        if let Some(width) = request.width {
-            query = query.with_width(width);
-        }
-
-        if let Some(opened) = self
-            .synchronized_font_metrics()
-            .open_font_entity(&query, pixel_size)
-        {
-            let file = opened.entity.matched.file_path().map(LispString::from_utf8);
-            let capability = match &opened.entity.matched.asset {
-                neomacs_display_protocol::font::FontOutlineAsset::File(file) => self
-                    .font_otf_capability(file.path(), file.face_index())
-                    .ok()
-                    .flatten(),
-                asset => font_otf_capability_for_asset(asset),
-            };
-            return Ok(Some(ResolvedFontEntityMetrics {
-                metrics: core_font_px_metrics(opened.metrics),
-                file,
-                capability,
-            }));
-        }
-
-        // Compatibility fallback for callers that only have a standalone
-        // font file. Native entities must take the path above so a collection
-        // face or named variation is not silently reopened as face zero.
-        let Some(file) = request.file.as_ref().and_then(LispString::as_utf8_str) else {
-            return Ok(None);
-        };
-        let Some(metrics) = neomacs_layout_engine::font::probe::probe_font_px_metrics(
-            file,
-            0,
-            pixel_size,
-            request.weight.map(|weight| f32::from(weight.css_weight())),
-        ) else {
-            return Ok(None);
-        };
-        self.synchronized_font_metrics()
-            .observe_opened_font_metrics(metrics.ascent, metrics.descent);
-        let capability = self.font_otf_capability(file, 0).ok().flatten();
-        Ok(Some(ResolvedFontEntityMetrics {
-            metrics: core_font_px_metrics(metrics),
-            file: request.file,
-            capability,
-        }))
-    }
-
-    fn font_otf_capability(
-        &mut self,
-        file: &str,
-        face_index: u32,
-    ) -> Result<Option<neovm_core::emacs_core::eval::FontOtfCapability>, String> {
-        Ok(self
-            .synchronized_font_metrics()
-            .otf_capability_for_file(file, face_index)
-            .map(core_font_otf_capability))
-    }
-
-    fn resolve_image_sync(
-        &self,
-        request: ImageResolveRequest,
-        limit: ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
-        self.image_catalog.resolve_sync(request, limit)
-    }
-
-    fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
-        Some(&*self.image_catalog)
-    }
-
-    fn image_catalog_shared(&self) -> Option<Rc<dyn ImageCatalog>> {
-        Some(self.image_catalog.clone())
-    }
-
-    fn reconcile_image_catalog_for_media_rebuild(
-        &self,
-        event: neovm_core::emacs_core::image_catalog::ImageStateEvent,
-    ) {
-        self.image_catalog.reconcile_renderer_state(event);
     }
 
     fn request_video(&self, request: VideoResolveRequest) -> Result<Option<ResolvedVideo>, String> {
@@ -3717,6 +3288,439 @@ impl DisplayHost for PrimaryWindowDisplayHost {
     }
 }
 
+impl DisplayServices for PrimaryWindowDisplayHost {
+    fn list_font_families(
+        &mut self,
+        _frame_id: FrameId,
+    ) -> Result<Vec<AvailableFontFamilyName>, String> {
+        Ok(self
+            .synchronized_font_metrics()
+            .list_font_families()
+            .into_iter()
+            .filter_map(|family| AvailableFontFamilyName::from_utf8(family.as_str()))
+            .collect())
+    }
+
+    fn synchronize_symbol_font_policy(
+        &mut self,
+        use_primary_font: bool,
+        char_script_table: Option<Value>,
+    ) {
+        // The same GNU symbol-reuse rule the layout engine's font service
+        // applies; this host's service is the evaluator-path counterpart and
+        // has no other source for the policy.
+        self.synchronized_font_metrics()
+            .synchronize_symbol_font_policy(use_primary_font, char_script_table);
+    }
+
+    fn resolve_font_for_char(
+        &mut self,
+        request: FontResolveRequest,
+    ) -> Result<Option<ResolvedFontMatch>, String> {
+        // cosmic-text/fontdb consume Unicode scalar values. Keep the full
+        // Emacs character in the protocol and reject unsupported raw-byte or
+        // non-Unicode codes only at this explicit backend boundary.
+        let Some(character) = request.character.as_rust_char() else {
+            return Ok(None);
+        };
+        let requested_family_storage = request.face.family_runtime_string_owned();
+        let requested_family = requested_family_storage.as_deref().unwrap_or("Monospace");
+        let requested_weight = request
+            .face
+            .weight
+            .unwrap_or(FontWeight::NORMAL)
+            .css_weight();
+        let requested_italic = request
+            .face
+            .slant
+            .map(|slant| slant.is_italic())
+            .unwrap_or(false);
+        let font_size = self.font_sizing.font_size_px_for_face(&request.face);
+        let selected = self
+            .synchronized_font_metrics()
+            .select_font_for_realized_face_char(
+                character,
+                neomacs_layout_engine::font::metrics::RealizedFaceFontSelection::new(
+                    requested_family,
+                    requested_weight,
+                    requested_italic,
+                    font_size,
+                ),
+            );
+        tracing::debug!(
+            target: "neomacs::font_at",
+            character = request.character.code(),
+            requested_family,
+            requested_weight,
+            requested_italic,
+            font_size,
+            request_face = ?request.face,
+            selected = ?selected,
+            "display host resolved font-at request"
+        );
+        Ok(selected.map(|font| {
+            let glyph_code = font.glyph_code;
+            ResolvedFontMatch {
+                glyph_code,
+                font: core_opened_font_from_selection(font, |file, face_index| {
+                    self.font_otf_capability(file, face_index).ok().flatten()
+                }),
+            }
+        }))
+    }
+
+    fn resolve_frame_font(
+        &mut self,
+        frame_id: FrameId,
+        request: FrameFontRequest,
+    ) -> Result<Option<ResolvedFrameFont>, String> {
+        // Every frame in this host shares one frontend/display connection.
+        // Its logical point policy is therefore shared just like GNU's
+        // display-level FRAME_RES; backing/device scale remains frame-local
+        // and is applied later by the renderer.
+        let font_sizing = self.font_sizing;
+        let face = request.face();
+        let requested_family_storage = face.family_runtime_string_owned();
+        let requested_family = requested_family_storage.as_deref().unwrap_or("Monospace");
+        let requested_weight = face.weight.unwrap_or(FontWeight::NORMAL).css_weight();
+        let requested_slant = face.slant.unwrap_or(neovm_core::face::FontSlant::Normal);
+        let requested_width = face.width.unwrap_or(neovm_core::face::FontWidth::Normal);
+        let foundry = face
+            .foundry
+            .as_ref()
+            .and_then(|value| value.as_lisp_string())
+            .map(|value| neovm_core::emacs_core::emacs_char::to_utf8_lossy(value.as_bytes()));
+        let Some(font_size) = font_sizing.font_size_px_for_request(request.size()) else {
+            return Ok(None);
+        };
+        let pixel_size = (font_size.get().round() as u32).max(1);
+        let metrics = self.synchronized_font_metrics();
+        let selected = if request.selection() == FrameFontSelection::FontSpecification {
+            // An absent family retains this host's existing Monospace default;
+            // the request does not yet carry the old lface's inherited context.
+            let query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(
+                neomacs_layout_engine::font_backend::FontFamilyName::new(requested_family),
+            )
+            .with_selection(neovm_core::emacs_core::eval::FontSpecSelection::OpenBySpec)
+            .with_weight(requested_weight)
+            .with_slant(requested_slant)
+            .with_width(requested_width);
+            metrics
+                .resolve_font_entity(&query)
+                .and_then(|entity| metrics.open_platform_match_font(&entity.matched, pixel_size))
+        } else {
+            metrics.open_face_font(
+                requested_family,
+                foundry.as_deref(),
+                requested_weight,
+                requested_slant,
+                requested_width,
+                pixel_size,
+            )
+        };
+        let Some(font) = selected else {
+            return Ok(None);
+        };
+        let height_tenths =
+            font_sizing.face_height_tenths_for_layout_pixels(font.metrics.pixel_size.max(1));
+        tracing::debug!(
+            frame_id = frame_id.0,
+            requested_size = ?request.size(),
+            realized_pixel_size = font.metrics.pixel_size,
+            height_tenths,
+            "resolved frame-local font geometry"
+        );
+        Ok(Some(ResolvedFrameFont {
+            height_tenths,
+            font: core_opened_font_from_selection(font, |file, face_index| {
+                self.font_otf_capability(file, face_index).ok().flatten()
+            }),
+        }))
+    }
+
+    fn resolve_font_for_spec(
+        &mut self,
+        request: FontSpecResolveRequest,
+    ) -> Result<Option<ResolvedFontSpecMatch>, String> {
+        let query = font_entity_query(&request);
+        let entity = self.synchronized_font_metrics().resolve_font_entity(&query);
+        Ok(entity.map(|entity| core_font_entity_match(&mut self.font_entities, entity)))
+    }
+
+    fn list_fonts_for_spec(
+        &mut self,
+        request: neovm_core::emacs_core::eval::FontSpecListQuery,
+        prefer: Option<neovm_core::emacs_core::eval::FontSpecListQuery>,
+        maximum: Option<usize>,
+        filter: Option<&mut neovm_core::emacs_core::eval::FontListFilter<'_>>,
+    ) -> Result<
+        Vec<neovm_core::emacs_core::eval::ListedFontEntity>,
+        neovm_core::emacs_core::eval::FontListError,
+    > {
+        use neomacs_layout_engine::font::resolver::FontEntityListConstraints;
+        if maximum == Some(0) {
+            return Ok(Vec::new());
+        }
+        let Some(query) = font_listing_entity_query(&request.specification) else {
+            return Ok(Vec::new());
+        };
+        let constraints =
+            |query: &neovm_core::emacs_core::eval::FontSpecListQuery| FontEntityListConstraints {
+                driver: query.driver,
+                foundry: query
+                    .foundry
+                    .as_ref()
+                    .and_then(LispString::as_utf8_str)
+                    .map(str::to_owned),
+                adstyle: query
+                    .adstyle
+                    .as_ref()
+                    .and_then(LispString::as_utf8_str)
+                    .map(str::to_owned),
+                pixel_size: query
+                    .size
+                    .map(|size| font_listing_pixel_size(self.font_sizing, size)),
+                spacing: query.spacing,
+                average_width: query.average_width,
+            };
+        let primary = constraints(&request);
+        let preferred = prefer
+            .as_ref()
+            .map(|query| (font_entity_query(&query.specification), constraints(query)));
+        let _ = self.synchronized_font_metrics();
+        let Some(service) = self.font_metrics.as_ref() else {
+            return Ok(Vec::new());
+        };
+        // Other native adapters retain their preexisting empty listing path.
+        // This change verifies Linux Fontconfig enumeration only.
+        if service.font_backend_kind()
+            != neomacs_display_protocol::font::FontBackendKind::Fontconfig
+        {
+            return Ok(Vec::new());
+        }
+        core_visit_listed_font_entities(
+            service,
+            &mut self.font_entities,
+            &query,
+            &primary,
+            preferred
+                .as_ref()
+                .map(|(query, constraints)| (query, constraints)),
+            maximum,
+            filter,
+        )
+    }
+
+    fn font_character_coverage(
+        &mut self,
+        request: FontCoverageRequest,
+    ) -> Result<FontCoverage, String> {
+        let Some(ch) = request.character.as_rust_char() else {
+            return Ok(FontCoverage::Absent);
+        };
+        let coverage = match request.target {
+            FontCoverageTarget::Entity(handle) => {
+                let Some(font) = self.font_entities.get(handle).cloned() else {
+                    return Ok(FontCoverage::NeedsOpening);
+                };
+                self.synchronized_font_metrics()
+                    .font_has_char_in_match(&font, ch)
+            }
+            FontCoverageTarget::Opened(identity) => self
+                .synchronized_font_metrics()
+                .font_has_char_in_identity(&identity, ch),
+        };
+        Ok(match coverage {
+            Some(true) => FontCoverage::Present,
+            Some(false) => FontCoverage::Absent,
+            None => FontCoverage::NeedsOpening,
+        })
+    }
+
+    fn font_opening_pixel_size(
+        &mut self,
+        size: neovm_core::emacs_core::eval::FontOpeningSize,
+    ) -> Result<Option<u32>, String> {
+        Ok(Some(self.font_sizing.font_opening_size_px(size).get()))
+    }
+
+    fn probe_font_px_metrics(
+        &mut self,
+        file: &str,
+        face_index: u32,
+        pixel_size: u32,
+        wght: Option<f32>,
+    ) -> Result<Option<neovm_core::emacs_core::eval::FontPxProbeResult>, String> {
+        let metrics = neomacs_layout_engine::font::probe::probe_font_px_metrics(
+            file, face_index, pixel_size, wght,
+        );
+        if let Some(metrics) = metrics {
+            self.synchronized_font_metrics()
+                .observe_opened_font_metrics(metrics.ascent, metrics.descent);
+        }
+        Ok(metrics.map(core_font_px_metrics))
+    }
+
+    fn open_font_entity(
+        &mut self,
+        request: neovm_core::emacs_core::eval::FontOpenEntityRequest,
+    ) -> Result<Option<Value>, String> {
+        let Some(handle) = request.handle else {
+            return Ok(None);
+        };
+        let Some(matched) = self.font_entities.get(handle).cloned() else {
+            return Ok(None);
+        };
+        let pixel_size = self.font_sizing.font_opening_size_px(request.size).get();
+        let reported_size = request.reported_size.unwrap_or(i64::from(pixel_size));
+        let Some(selected) = self
+            .synchronized_font_metrics()
+            .open_platform_match_font(&matched, pixel_size)
+        else {
+            return Ok(None);
+        };
+        let capability = selected
+            .resolved
+            .identity
+            .file_path
+            .as_deref()
+            .and_then(|file| {
+                self.font_otf_capability(file, selected.resolved.identity.file_face_index())
+                    .ok()
+                    .flatten()
+            });
+        let opened = core_opened_font_from_selection(selected, |_, _| capability.clone());
+        Ok(Some(neovm_core::emacs_core::font::font_object_from_opened(
+            &opened,
+            reported_size,
+            matched.metadata.spacing,
+        )))
+    }
+
+    fn font_open_point_pixels(&mut self, points: f64) -> Result<Option<i64>, String> {
+        // GNU Fopen_font: POINT_TO_PIXEL (round-half-up, then C truncation
+        // toward zero) with the frame's integer resolution.  The zero -> 120
+        // rule is applied by the caller after this conversion.
+        if !points.is_finite() {
+            return Ok(None);
+        }
+        let dpi = f64::from(self.font_sizing.layout_dpi().trunc());
+        let pixels = (points * dpi / 72.0 + 0.5).trunc();
+        if !pixels.is_finite() || pixels < i64::MIN as f64 || pixels > i64::MAX as f64 {
+            return Ok(None);
+        }
+        Ok(Some(pixels as i64))
+    }
+
+    fn probe_font_entity_metrics(
+        &mut self,
+        request: FontEntityMetricsRequest,
+    ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
+        let pixel_size = self.font_sizing.font_opening_size_px(request.size).get();
+        let family = request
+            .family
+            .as_ref()
+            .and_then(LispString::as_utf8_str)
+            .and_then(neomacs_layout_engine::font_backend::FontFamilyName::new);
+        let mut query = neomacs_layout_engine::font::resolver::FontEntityQuery::new(family);
+        if let Some(registry) = request.registry.as_ref().and_then(LispString::as_utf8_str) {
+            query = query.with_registry(registry);
+        }
+        if let Some(postscript_name) = request
+            .postscript_name
+            .as_ref()
+            .and_then(LispString::as_utf8_str)
+        {
+            query = query.with_postscript_name(postscript_name);
+        }
+        if let Some(weight) = request.weight {
+            query = query.with_weight(weight.css_weight());
+        }
+        if let Some(slant) = request.slant {
+            query = query.with_slant(slant);
+        }
+        if let Some(width) = request.width {
+            query = query.with_width(width);
+        }
+
+        if let Some(opened) = self
+            .synchronized_font_metrics()
+            .open_font_entity(&query, pixel_size)
+        {
+            let file = opened.entity.matched.file_path().map(LispString::from_utf8);
+            let capability = match &opened.entity.matched.asset {
+                neomacs_display_protocol::font::FontOutlineAsset::File(file) => self
+                    .font_otf_capability(file.path(), file.face_index())
+                    .ok()
+                    .flatten(),
+                asset => font_otf_capability_for_asset(asset),
+            };
+            return Ok(Some(ResolvedFontEntityMetrics {
+                metrics: core_font_px_metrics(opened.metrics),
+                file,
+                capability,
+            }));
+        }
+
+        // Compatibility fallback for callers that only have a standalone
+        // font file. Native entities must take the path above so a collection
+        // face or named variation is not silently reopened as face zero.
+        let Some(file) = request.file.as_ref().and_then(LispString::as_utf8_str) else {
+            return Ok(None);
+        };
+        let Some(metrics) = neomacs_layout_engine::font::probe::probe_font_px_metrics(
+            file,
+            0,
+            pixel_size,
+            request.weight.map(|weight| f32::from(weight.css_weight())),
+        ) else {
+            return Ok(None);
+        };
+        self.synchronized_font_metrics()
+            .observe_opened_font_metrics(metrics.ascent, metrics.descent);
+        let capability = self.font_otf_capability(file, 0).ok().flatten();
+        Ok(Some(ResolvedFontEntityMetrics {
+            metrics: core_font_px_metrics(metrics),
+            file: request.file,
+            capability,
+        }))
+    }
+
+    fn font_otf_capability(
+        &mut self,
+        file: &str,
+        face_index: u32,
+    ) -> Result<Option<neovm_core::emacs_core::eval::FontOtfCapability>, String> {
+        Ok(self
+            .synchronized_font_metrics()
+            .otf_capability_for_file(file, face_index)
+            .map(core_font_otf_capability))
+    }
+
+    fn resolve_image_sync(
+        &self,
+        request: ImageResolveRequest,
+        limit: ImageSizeLimit,
+    ) -> Result<Option<ReadyImage>, String> {
+        self.image_catalog.resolve_sync(request, limit)
+    }
+
+    fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
+        Some(&*self.image_catalog)
+    }
+
+    fn image_catalog_shared(&self) -> Option<Rc<dyn ImageCatalog>> {
+        Some(self.image_catalog.clone())
+    }
+
+    fn reconcile_image_catalog_for_media_rebuild(
+        &self,
+        event: neovm_core::emacs_core::image_catalog::ImageStateEvent,
+    ) {
+        self.image_catalog.reconcile_renderer_state(event);
+    }
+}
+
 fn frame_host_title(eval: &mut Context, frame_id: FrameId) -> LispString {
     let Some((selected_window_id, buffer_id, fallback_title, target_cols)) =
         eval.frame_manager().get(frame_id).map(|frame| {
@@ -3780,8 +3784,7 @@ fn frame_host_title(eval: &mut Context, frame_id: FrameId) -> LispString {
 #[cfg(test)]
 fn adopt_existing_primary_gui_frame(eval: &mut Context) -> Result<(), String> {
     if eval
-        .display_host
-        .as_ref()
+        .default_display_connection()
         .is_none_or(|host| !host.opening_gui_frame_pending())
     {
         return Ok(());
@@ -3821,7 +3824,7 @@ fn adopt_existing_primary_gui_frame(eval: &mut Context) -> Result<(), String> {
         eval.builtin_var_value_by_name("frame-alpha-lower-limit")
             .unwrap_or(Value::fixnum(20)),
     );
-    let Some(host) = eval.display_host.as_mut() else {
+    let Some(host) = eval.frame_display_connection_mut(frame_id) else {
         return Ok(());
     };
     host.set_gui_frame_alpha(frame_id, alpha, limit)?;
@@ -3851,7 +3854,7 @@ fn sync_live_gui_frame_titles(eval: &mut Context) {
         if eval.has_mode_line_display_flow() {
             return;
         }
-        if let Some(host) = eval.display_host.as_mut() {
+        if let Some(host) = eval.frame_display_connection_mut(frame_id) {
             let _ = host.set_gui_frame_title(frame_id, title);
         }
     }
@@ -4069,7 +4072,7 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
             // chrome sync must not consume a pending unused-font opening.
             neovm_core::emacs_core::window_cmds::adjust_frame_glyph_matrices(eval, frame_id);
         }
-        if let Some(host) = eval.display_host.as_mut() {
+        if let Some(host) = eval.frame_display_connection_mut(frame_id) {
             let _ = host.set_gui_frame_geometry_hints(frame_id, hints);
         }
     }
@@ -4672,7 +4675,6 @@ fn run_gui_evaluator_worker(
     // any window. Install it synchronously so init.el can query the display
     // even before the command loop starts draining native input events.
     prime_initial_monitor_snapshot(&shared_monitors);
-    reset_terminal_host();
     reset_terminal_runtime();
     // GNU's `x_term_init'/`pgtk_term_init' create an output_x_window/output_pgtk
     // terminal and name it after the display connection (":0", "wayland-0", …),
@@ -5425,7 +5427,6 @@ pub fn run(mode: RuntimeMode) {
         evaluator.configure_daemon(options.name.clone(), daemon_notifier);
     }
     if tty_init::should_enable_live_tty_io(&startup) {
-        reset_terminal_host();
         configure_terminal_runtime(tty_init::detect_tty_runtime(&startup));
         // Root `make-terminal-frame` re-reads this terminal's winsize
         // (`frame.c:1861`). The query lives on the initial terminal's
@@ -5455,7 +5456,6 @@ pub fn run(mode: RuntimeMode) {
         // seeded, which is what GNU reports.
         evaluator.set_variable("baud-rate", Value::fixnum(tty_init::detect_baud_rate()));
     } else {
-        reset_terminal_host();
         reset_terminal_runtime();
     }
     // GNU Emacs does NOT disable GC during startup — GC runs normally.
@@ -5488,12 +5488,17 @@ pub fn run(mode: RuntimeMode) {
     let tty_popup_force_full_redraw = Arc::new(AtomicBool::new(false));
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
     if tty_init::should_enable_live_tty_io(&startup) {
-        set_terminal_host(Box::new(tty_frontend::TtyTerminalHost::new(
-            emacs_comms.cmd_tx.clone(),
-        )));
-        evaluator.set_display_host(Box::new(tty_frontend::TtyPopupDisplayHost::new(
-            tty_popup_force_full_redraw.clone(),
-        )));
+        // The primary TTY's device and its popup and selection half are one
+        // termcap backing on the initial terminal (remote-display M3).
+        evaluator.install_display_host(
+            neovm_core::emacs_core::TerminalNumber::INITIAL,
+            neovm_core::emacs_core::display_host::DisplayHostPlacement::Termcap(Box::new(
+                tty_frontend::TtyTerminalHost::new(emacs_comms.cmd_tx.clone()),
+            )),
+            Box::new(tty_frontend::TtyPopupDisplayHost::new(
+                tty_popup_force_full_redraw.clone(),
+            )),
+        );
     }
 
     // Prepare the unbounded native publication owner before the reader can

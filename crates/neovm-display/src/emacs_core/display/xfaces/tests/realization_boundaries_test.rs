@@ -480,7 +480,6 @@ fn face_frame_class_uses_live_terminal_output_kind() {
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
-            pure::reset_terminal_host();
             pure::reset_terminal_runtime();
         }
     }
@@ -511,7 +510,7 @@ fn face_frame_class_uses_live_terminal_output_kind() {
     // an old bootstrap frame.initial flag can override the installed kind.
     assert!(context.frame_is_tty_face_target(initial));
     assert!(context.frame_is_tty_face_target(bare));
-    pure::set_terminal_host(Box::new(Host));
+    pure::set_terminal_host(&mut context, Box::new(Host));
     pure::builtin_suspend_tty(&mut context, vec![Value::make_frame(bare.0)])
         .expect("suspend configured primary tty");
     assert!(context.frame_is_tty_face_target(bare));
@@ -709,7 +708,6 @@ fn realization_miss_roots_the_source_table_through_the_frame_lease() {
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
-            pure::reset_terminal_host();
             pure::reset_terminal_runtime();
         }
     }

@@ -421,7 +421,7 @@ pub(crate) fn builtin_frame_after_make_frame(
             .then(|| crate::emacs_core::eval::GuiFrameHostRequest::for_frame(frame))
         });
         if let Some(request) = request
-            && let Some(host) = eval.display_host.as_mut()
+            && let Some(host) = eval.frame_display_connection_mut(request.frame_id)
         {
             host.finish_gui_frame_creation(request)
                 .map_err(|message| signal("error", vec![Value::string(message)]))?;

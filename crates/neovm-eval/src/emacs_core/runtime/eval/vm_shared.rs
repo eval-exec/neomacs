@@ -52,22 +52,6 @@ impl Context {
         &mut self.kmacro
     }
 
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    #[doc(hidden)]
-    pub fn gui_frame_creation_state(
-        &mut self,
-    ) -> (
-        &mut FrameManager,
-        &mut BufferManager,
-        &mut Option<Box<dyn DisplayHost>>,
-    ) {
-        (
-            &mut self.frames,
-            &mut self.edit.buffers,
-            &mut self.display_host,
-        )
-    }
-
     #[doc(hidden)]
     pub fn recursive_command_loop_depth(&self) -> usize {
         // GNU's `command_loop_level` starts at -1 before entering the

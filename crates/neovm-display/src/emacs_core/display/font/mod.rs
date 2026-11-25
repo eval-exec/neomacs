@@ -38,7 +38,7 @@ use super::xfaces::{
 };
 use neovm_value::error::{EvalResult, Flow, signal};
 
-use super::display_host::{FontOpeningSize, FrameFontRequest};
+use super::display_host::{FontOpeningSize, FrameFontRequest, TerminalNumber};
 use crate::emacs_core::xfaces::realization::XfacesRealizationContextExt;
 use crate::face::realization::FrameFaceRealizationCacheExt;
 use crate::face::remapping::FaceTableRemappingExt;
@@ -481,7 +481,7 @@ pub(crate) fn resolve_live_frame_font_request(
     frame_id: FrameId,
     requested: &Value,
 ) -> LiveFrameFontResolution {
-    let (frames, display_host) = eval.frame_manager_read_and_display_host_mut();
+    let (frames, display_host) = eval.frame_manager_read_and_display_terminals_mut();
     resolve_live_frame_font_request_in_state(frames, display_host, frame_id, requested)
 }
 
@@ -492,13 +492,13 @@ pub(crate) fn try_resolve_live_frame_font_request(
     frame_id: FrameId,
     requested: &Value,
 ) -> Result<LiveFrameFontResolution, UnavailableFrameFont> {
-    let (frames, display_host) = eval.frame_manager_read_and_display_host_mut();
+    let (frames, display_host) = eval.frame_manager_read_and_display_terminals_mut();
     try_resolve_live_frame_font_request_in_state(frames, display_host, frame_id, requested)
 }
 
 fn resolve_live_frame_font_request_in_state(
     frames: &FrameManager,
-    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    display_host: &mut neovm_eval::emacs_core::eval::DisplayTerminals,
     frame_id: FrameId,
     requested: &Value,
 ) -> LiveFrameFontResolution {
@@ -510,7 +510,7 @@ fn resolve_live_frame_font_request_in_state(
 
 fn try_resolve_live_frame_font_request_in_state(
     frames: &FrameManager,
-    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    display_host: &mut neovm_eval::emacs_core::eval::DisplayTerminals,
     frame_id: FrameId,
     requested: &Value,
 ) -> Result<LiveFrameFontResolution, UnavailableFrameFont> {
@@ -532,7 +532,7 @@ fn try_resolve_live_frame_font_request_in_state(
     {
         return Ok(LiveFrameFontResolution { font_value });
     }
-    let Some(host) = display_host.as_mut() else {
+    let Some(host) = display_host.services_mut() else {
         return Ok(retained());
     };
     let mut spec = font_string_text(requested)
@@ -723,7 +723,7 @@ fn sync_live_frame_font_state_rooted(
             )
         },
     );
-    let (frames, display_host) = eval.frame_manager_and_display_host_mut();
+    let (frames, display_host) = eval.frame_manager_and_display_terminals_mut();
     // Install the opened metrics first, as GNU's native font hook does. Keep
     // a grown minibuffer until the final vertical policy is known.
     sync_live_frame_font_state_in_state(
@@ -739,7 +739,7 @@ fn sync_live_frame_font_state_rooted(
     };
     if old_metrics == (frame.char_width, frame.char_height, frame.font_pixel_size)
         || frame.effective_window_system().is_none()
-        || eval.display_host.is_none()
+        || !eval.display_terminals.hosts_display()
     {
         return Ok(());
     }
@@ -847,7 +847,7 @@ fn sync_live_frame_font_state_rooted(
             .max(min_inner_height),
         ResizePolicy::PreserveAllocation => super::window_cmds::frame_text_height_pixels(frame),
     };
-    let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+    let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_terminals_mut();
     if let Err(err) = super::frame::request_live_gui_frame_resize_and_keep_pending(
         frames,
         buffers,
@@ -873,7 +873,7 @@ fn sync_live_frame_font_state_rooted(
 
 fn sync_live_frame_font_state_in_state(
     frames: &mut FrameManager,
-    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    display_host: &mut neovm_eval::emacs_core::eval::DisplayTerminals,
     frame_id: FrameId,
     resolution: &LiveFrameFontResolution,
     geometry_policy: ResizePolicy,
@@ -967,7 +967,8 @@ fn sync_live_frame_font_state_in_state(
     }
 
     if let Some(geometry_hints) = geometry_hints
-        && let Some(host) = display_host.as_mut()
+        && let Some(terminal) = frames.get(frame_id).map(|frame| frame.terminal_id)
+        && let Some(host) = display_host.connection_mut(TerminalNumber::new(terminal))
         && let Err(err) = host.set_gui_frame_geometry_hints(frame_id, geometry_hints)
     {
         tracing::warn!(
@@ -980,7 +981,7 @@ fn sync_live_frame_font_state_in_state(
 
 pub(crate) fn sync_live_frame_font_parameter_in_state(
     frames: &mut FrameManager,
-    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    display_host: &mut neovm_eval::emacs_core::eval::DisplayTerminals,
     frame_id: FrameId,
     requested: Value,
 ) {
@@ -1027,8 +1028,8 @@ pub(crate) fn sync_live_default_face_font_state(
     };
     let requested_face = runtime_face_from_lisp_face_vector("default", vector);
     let realized = eval
-        .display_host
-        .as_mut()
+        .display_terminals
+        .services_mut()
         .and_then(|host| {
             host.resolve_frame_font(
                 frame_id,
@@ -2712,7 +2713,7 @@ fn list_fonts_for_pattern(
     let patterns: Vec<_> = list_iter(ignored)
         .filter_map(|pattern| pattern.as_lisp_string().cloned())
         .collect();
-    let Some(host) = eval.display_host.as_mut() else {
+    let Some(host) = eval.display_terminals.services_mut() else {
         return Ok(Value::NIL);
     };
     let mut accept = |listed: &neovm_eval::emacs_core::eval::ListedFontEntity| {
@@ -2924,8 +2925,8 @@ pub(crate) fn x_list_fonts(
             table.resolve("default")
         };
         let opened = eval
-            .display_host
-            .as_mut()
+            .display_terminals
+            .services_mut()
             .map(|host| host.resolve_frame_font(frame_id, FrameFontRequest::from_face(face)))
             .transpose()
             .map_err(|error| signal("error", vec![Value::string(error)]))?
@@ -3079,7 +3080,7 @@ fn match_font_spec_request(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     request: neovm_eval::emacs_core::eval::FontSpecResolveRequest,
 ) -> EvalResult {
-    let Some(host) = eval.display_host.as_mut() else {
+    let Some(host) = eval.display_terminals.services_mut() else {
         return Ok(Value::NIL);
     };
     let matched = host
@@ -3107,7 +3108,7 @@ pub(crate) fn font_family_list(
 ) -> EvalResult {
     expect_max_args("font-family-list", &args, 1)?;
     let frame_id = find_font_frame_id(eval, args.first())?;
-    let Some(host) = eval.display_host.as_mut() else {
+    let Some(host) = eval.display_terminals.services_mut() else {
         return Ok(Value::NIL);
     };
     let families = host
@@ -3380,8 +3381,8 @@ pub(crate) fn resolve_current_buffer_remapped_default_face_font(
     let remapping = FaceRemapping::from_lisp(&remapping_value);
     let face_table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, true);
     let remapped_default = face_table.resolve_with_remapping("default", &remapping);
-    eval.display_host
-        .as_mut()?
+    eval.display_terminals
+        .services_mut()?
         .resolve_frame_font(frame_id, FrameFontRequest::from_face(remapped_default))
         .ok()
         .flatten()
@@ -3999,8 +4000,8 @@ fn font_info_vector_for_entity(
         font_vector_get_flexible(&elems, name).and_then(|value| font_value_text_lisp_string(&value))
     };
     let opened = eval
-        .display_host
-        .as_mut()
+        .display_terminals
+        .services_mut()
         .and_then(|host| {
             host.probe_font_entity_metrics(neovm_eval::emacs_core::eval::FontEntityMetricsRequest {
                 frame_id,
@@ -4125,8 +4126,8 @@ fn font_full_name(fields: &[Value], pixel_size: i64) -> String {
 
 /// `(opentype GSUB . GPOS)` for a font file, or nil when unavailable.
 fn otf_capability_lisp(eval: &mut neovm_eval::emacs_core::eval::Context, file: &str) -> Value {
-    eval.display_host
-        .as_mut()
+    eval.display_terminals
+        .services_mut()
         .and_then(|host| host.font_otf_capability(file, 0).ok())
         .flatten()
         .as_ref()
@@ -4203,8 +4204,8 @@ pub(crate) fn resolve_font_match(
     face: &RuntimeFace,
 ) -> Option<neovm_eval::emacs_core::eval::ResolvedFontMatch> {
     let (use_primary_font, char_script_table) = symbol_font_policy_inputs(eval);
-    eval.display_host
-        .as_mut()
+    eval.display_terminals
+        .services_mut()
         .and_then(|host| {
             host.synchronize_symbol_font_policy(use_primary_font, char_script_table);
             host.resolve_font_for_char(super::display_host::FontResolveRequest {
@@ -4731,7 +4732,7 @@ pub(crate) fn font_has_char_p(
         };
         FontCoverageTarget::Entity(handle)
     };
-    let Some(host) = eval.display_host.as_mut() else {
+    let Some(host) = eval.display_terminals.services_mut() else {
         return Ok(Value::NIL);
     };
     match host
@@ -4895,7 +4896,7 @@ fn font_spec_pixel_size(
         .and_then(|value| value.as_fixnum())
         .and_then(|dpi| u32::try_from(dpi).ok())
         .and_then(std::num::NonZeroU32::new);
-    Some(match eval.display_host.as_mut() {
+    Some(match eval.display_terminals.services_mut() {
         Some(host) => host
             .font_opening_pixel_size(FontOpeningSize::Points { size, dpi })
             .ok()
@@ -5023,7 +5024,7 @@ fn font_script_matches(
     };
     let frame_id = super::window_cmds::ensure_selected_frame_id(eval);
     let supported = |eval: &mut neovm_eval::emacs_core::eval::Context, ch| {
-        let Some(host) = eval.display_host.as_mut() else {
+        let Some(host) = eval.display_terminals.services_mut() else {
             return false;
         };
         matches!(

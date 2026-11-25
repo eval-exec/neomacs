@@ -1,6 +1,8 @@
 //! Re-homed from display::tooltip::tests (TEST-SUPPORT-DESIGN 1a, boot facade).
 use neomacs_display_protocol::tooltip::TooltipRequest;
-use neovm_eval::emacs_core::eval::{Context, DisplayHost, GuiFrameHostRequest};
+use neovm_eval::emacs_core::eval::{
+    Context, DisplayConnection, DisplayServices, GuiFrameHostRequest,
+};
 use neovm_value::display_vocab::FrameId;
 use neovm_value::value::Value;
 use std::sync::{Arc, Mutex};
@@ -13,7 +15,7 @@ struct TooltipProbe {
     invalidate_on_hide: bool,
 }
 struct TooltipHost(Arc<Mutex<TooltipProbe>>);
-impl DisplayHost for TooltipHost {
+impl DisplayConnection for TooltipHost {
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -41,6 +43,8 @@ impl DisplayHost for TooltipHost {
         )
     }
 }
+
+impl DisplayServices for TooltipHost {}
 
 #[test]
 fn help_callback_cannot_stamp_stale_help_with_a_new_generation() {

@@ -13,7 +13,7 @@
 //! and creates no buffer-specific or Lisp-state cache.
 
 use neomacs_display_protocol::face::TtySpaceIdentity;
-use neovm_core::emacs_core::eval::VariableView;
+use neovm_core::emacs_core::eval::{FrameDisplay, VariableView};
 use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::xfaces::realization::XfacesRealizationContextExt;
 use neovm_core::face::realization::BasicFace;
@@ -4692,6 +4692,12 @@ pub struct FaceResolver {
     composed_sources: std::rc::Rc<std::cell::RefCell<ComposedSourceCache>>,
     font_sizing: FontSizing,
     frame_font_domain: FrameFontDomain,
+    /// The frame these faces are realized for: GNU's face cache points back
+    /// at its frame (`struct face_cache`, src/dispextern.h:1983-1984), and
+    /// display reaches images and xwidgets through that frame (`it->f`).
+    /// Layout reads the frame's display through it. Pure resolvers built
+    /// without an evaluator frame have none.
+    frame: Option<FrameId>,
 }
 
 /// Shared-source interning for face compositions, mirroring GNU's face cache
@@ -5204,6 +5210,24 @@ impl FaceResolver {
             composed_sources: std::rc::Rc::new(std::cell::RefCell::default()),
             font_sizing,
             frame_font_domain,
+            frame: None,
+        }
+    }
+
+    /// Bind this resolver to FRAME, the frame production layout realizes its
+    /// faces for.
+    pub(crate) fn bind_frame(&mut self, frame: FrameId) {
+        self.frame = Some(frame);
+    }
+
+    /// What layout reads from the display of this resolver's frame: the
+    /// process display services and the frame's terminal connection. A
+    /// resolver bound to no frame reads the services alone, so it opens no
+    /// media session on any display.
+    pub(crate) fn frame_display<'c>(&self, evaluator: &'c Context) -> Option<FrameDisplay<'c>> {
+        match self.frame {
+            Some(frame) => evaluator.frame_display(frame),
+            None => evaluator.display_terminals.frame_display(None),
         }
     }
 

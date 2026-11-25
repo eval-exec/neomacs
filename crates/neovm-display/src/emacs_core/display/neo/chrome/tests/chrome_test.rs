@@ -1,7 +1,7 @@
 //! Tests for the evaluator-to-renderer chrome controls.
 
 use super::*;
-use crate::emacs_core::display_host::DisplayHost;
+use crate::emacs_core::display_host::{DisplayConnection, DisplayServices};
 use neovm_eval::emacs_core::eval::{Context, GuiFrameHostRequest};
 use neovm_value::value::Value;
 use std::sync::{Arc, Mutex};
@@ -12,7 +12,7 @@ struct CapturingHost {
     spacing: Arc<Mutex<Vec<(f32, f32)>>>,
 }
 
-impl DisplayHost for CapturingHost {
+impl DisplayConnection for CapturingHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -34,6 +34,8 @@ impl DisplayHost for CapturingHost {
         Ok(())
     }
 }
+
+impl DisplayServices for CapturingHost {}
 
 #[test]
 fn chrome_subrs_are_registered() {

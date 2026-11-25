@@ -93,11 +93,13 @@ enum SemanticContinuation {
     Semantic,
 }
 
+/// The display adapter main's pump serves routed requests with. Text-terminal
+/// device requests bypass it (see [`NativeBackend::start`]).
 enum NativeBackend {
     Closed,
     /// Hosted main's real adapter: selection effects only in this slice.
-    /// The pump was built with the host attached; `start` receives the
-    /// borrowed display host and nothing else.
+    /// The pump was built with the host attached; `start` receives main's
+    /// display registry and nothing else.
     HostEffects,
     #[cfg(test)]
     Fixture(FixtureNativeDriver),
@@ -117,8 +119,18 @@ impl NativeBackend {
         key: HostRequestKey,
         native: OwnedNativeData,
         route: NativeCompletionRoute,
-        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        host: Option<&mut crate::emacs_core::eval::DisplayTerminals>,
     ) -> NativeAdapterStep<StepKey> {
+        // Main owns every text terminal's device in every session, hosted or
+        // not, so this family does not depend on the installed adapter. Only
+        // main serves, and main always lends its registry.
+        if let OwnedNativeData::TerminalDeviceRequest { terminal, request } = native {
+            let _ = (key, route);
+            let Some(host) = host else { fatal_pump() };
+            return NativeAdapterStep::Complete(super::terminal_device::perform_terminal_device(
+                host, terminal, request,
+            ));
+        }
         match self {
             Self::Closed => {
                 let _ = (key, native, route, host);
@@ -127,10 +139,18 @@ impl NativeBackend {
             Self::HostEffects => {
                 let _ = (key, route);
                 let Some(host) = host else { fatal_pump() };
-                let OwnedNativeData::SelectionRequest(request) = native else {
+                let OwnedNativeData::SelectionRequest {
+                    selected_terminal,
+                    request,
+                } = native
+                else {
                     fatal_pump()
                 };
-                NativeAdapterStep::Complete(super::selection::perform_selection(host, request))
+                NativeAdapterStep::Complete(super::selection::perform_selection(
+                    host,
+                    selected_terminal,
+                    request,
+                ))
             }
             #[cfg(test)]
             Self::Fixture(driver) => match driver(key, native, route) {
@@ -428,7 +448,7 @@ impl MainNativePump {
         baton: Baton,
         control: &Control,
         receiver: &Receiver<Wake>,
-        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        host: Option<&mut crate::emacs_core::eval::DisplayTerminals>,
     ) -> ServiceReturn {
         self.run(DriverTurn::Start { key, baton }, control, receiver, host)
     }
@@ -439,7 +459,7 @@ impl MainNativePump {
         baton: Baton,
         control: &Control,
         receiver: &Receiver<Wake>,
-        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        host: Option<&mut crate::emacs_core::eval::DisplayTerminals>,
     ) -> ServiceReturn {
         self.run(DriverTurn::Drive(baton), control, receiver, host)
     }
@@ -450,7 +470,7 @@ impl MainNativePump {
         baton: Baton,
         control: &Control,
         receiver: &Receiver<Wake>,
-        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        host: Option<&mut crate::emacs_core::eval::DisplayTerminals>,
     ) -> ServiceReturn {
         self.run(
             DriverTurn::Continue { parent, baton },
@@ -622,7 +642,7 @@ impl MainNativePump {
         mut turn: DriverTurn,
         control: &Control,
         receiver: &Receiver<Wake>,
-        mut host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        mut host: Option<&mut crate::emacs_core::eval::DisplayTerminals>,
     ) -> ServiceReturn {
         loop {
             let baton = match turn {
@@ -1054,7 +1074,7 @@ impl OwnerReceive {
         parent: HostRequestKey,
         baton: Baton,
         control: &Control,
-        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        host: Option<&mut crate::emacs_core::eval::DisplayTerminals>,
     ) -> ServiceReturn {
         match &mut self.state {
             ReceiveState::Main { channel, pump } => {
@@ -1070,7 +1090,7 @@ impl OwnerReceive {
         key: HostRequestKey,
         baton: Baton,
         control: &Control,
-        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        host: Option<&mut crate::emacs_core::eval::DisplayTerminals>,
     ) -> ServiceReturn {
         match &mut self.state {
             ReceiveState::Main { channel, pump } => {
@@ -1085,7 +1105,7 @@ impl OwnerReceive {
         &mut self,
         baton: Baton,
         control: &Control,
-        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        host: Option<&mut crate::emacs_core::eval::DisplayTerminals>,
     ) -> ServiceReturn {
         match &mut self.state {
             ReceiveState::Main { channel, pump } => pump.drive(baton, control, channel, host),

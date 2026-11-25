@@ -156,8 +156,8 @@ fn resolve_channel_value(
                 surface_error("neomacs-surface-create: invalid image spec in :channel0")
             })?;
             let catalog = eval
-                .display_host
-                .as_ref()
+                .display_terminals
+                .services()
                 .and_then(|host| host.image_catalog())
                 .ok_or_else(|| {
                     surface_error("neomacs-surface-create: no image catalog for :channel0")
@@ -180,7 +180,7 @@ fn resolve_channel_value(
             let id = match reference {
                 VideoDisplayReference::Session(id) => id,
                 VideoDisplayReference::Resolve(request) => {
-                    let host = eval.display_host.as_ref().ok_or_else(|| {
+                    let host = eval.default_display_connection().ok_or_else(|| {
                         surface_error("neomacs-surface-create: no display host for :channel0")
                     })?;
                     host.request_video(request)
@@ -305,7 +305,7 @@ fn create(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         animate,
         fps,
     };
-    let host = eval.display_host.as_ref().ok_or_else(|| {
+    let host = eval.default_display_connection().ok_or_else(|| {
         surface_error("neomacs-surface-create: no GUI display host in this session")
     })?;
     let id = host.create_shader_surface(request).map_err(surface_error)?;
@@ -323,7 +323,7 @@ fn set_uniform(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         surface_error("neomacs-surface-set-uniform: ID must be a surface handle or id")
     })?;
     let entry = parse_uniform_entry(Value::cons(args[1], args[2]))?;
-    if let Some(host) = eval.display_host.as_ref() {
+    if let Some(host) = eval.default_display_connection() {
         host.set_shader_surface_uniform(id, &entry.name, entry.value)
             .map_err(surface_error)?;
     }
@@ -340,7 +340,7 @@ fn destroy(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     let id = surface_id_from_value(args[0]).ok_or_else(|| {
         surface_error("neomacs-surface-destroy: ID must be a surface handle or id")
     })?;
-    if let Some(host) = eval.display_host.as_ref() {
+    if let Some(host) = eval.default_display_connection() {
         host.destroy_shader_surface(id).map_err(surface_error)?;
     }
     Ok(Value::NIL)
@@ -349,7 +349,7 @@ fn destroy(eval: &mut Context, args: Vec<Value>) -> EvalResult {
 /// (neomacs-surface-available-p) — non-nil when a GUI display host that can
 /// render shader surfaces is attached.
 fn available(eval: &mut Context, _args: Vec<Value>) -> EvalResult {
-    Ok(Value::bool_val(eval.display_host.is_some()))
+    Ok(Value::bool_val(eval.display_terminals.hosts_display()))
 }
 
 /// (neomacs-frame-shader SOURCE &optional LANGUAGE UNIFORMS)
@@ -393,7 +393,7 @@ fn set_frame_shader(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         }
         Some((text, language, uniforms))
     };
-    let host = eval.display_host.as_ref().ok_or_else(|| {
+    let host = eval.default_display_connection().ok_or_else(|| {
         surface_error("neomacs-frame-shader: no GUI display host in this session")
     })?;
     host.set_frame_shader(source).map_err(surface_error)?;
@@ -408,7 +408,7 @@ fn set_frame_shader(eval: &mut Context, args: Vec<Value>) -> EvalResult {
 /// recompile. Signals an error when no frame shader is installed.
 fn set_frame_shader_uniform(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     let entry = parse_uniform_entry(Value::cons(args[0], args[1]))?;
-    let host = eval.display_host.as_ref().ok_or_else(|| {
+    let host = eval.default_display_connection().ok_or_else(|| {
         surface_error("neomacs-frame-shader-set-uniform: no GUI display host in this session")
     })?;
     host.set_frame_shader_uniform(&entry.name, entry.value)

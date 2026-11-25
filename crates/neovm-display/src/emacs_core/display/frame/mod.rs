@@ -134,21 +134,29 @@ pub fn builtin_frame_ancestor_p(
 pub fn sync_gui_frame_focus_redirects(
     eval: &mut neovm_eval::emacs_core::eval::Context,
 ) -> EvalResult {
-    let redirects = eval
+    let redirects: Vec<_> = eval
         .frame_manager()
         .frame_list()
         .into_iter()
         .filter_map(|id| {
             let frame = eval.frame_manager().get(id)?;
-            frame
-                .effective_window_system()
-                .is_some()
-                .then_some((id, frame.focus_frame.as_frame_id().map(FrameId)))
+            frame.effective_window_system().is_some().then_some((
+                frame.terminal_id,
+                (id, frame.focus_frame.as_frame_id().map(FrameId)),
+            ))
         })
         .collect();
-    if let Some(host) = eval.display_host.as_mut() {
-        host.set_gui_frame_focus_redirects(redirects)
-            .map_err(|message| signal("error", vec![Value::string(message)]))?;
+    // Each display receives the redirects of its own frames (class 1).
+    for terminal in eval.display_terminals.connected_terminals() {
+        let own = redirects
+            .iter()
+            .filter(|(frame_terminal, _)| *frame_terminal == terminal.get())
+            .map(|(_, redirect)| *redirect)
+            .collect();
+        if let Some(host) = eval.display_terminals.connection_mut(terminal) {
+            host.set_gui_frame_focus_redirects(own)
+                .map_err(|message| signal("error", vec![Value::string(message)]))?;
+        }
     }
     Ok(Value::NIL)
 }
@@ -166,7 +174,7 @@ pub(crate) fn sync_gui_frame_alpha(
         eval.builtin_var_value(intern("frame-alpha-lower-limit"))
             .unwrap_or(Value::fixnum(20)),
     );
-    if let Some(host) = eval.display_host.as_mut() {
+    if let Some(host) = eval.frame_display_connection_mut(frame) {
         host.set_gui_frame_alpha(frame, alpha, limit)
             .map_err(|message| signal("error", vec![Value::string(message)]))?;
     }
@@ -849,7 +857,8 @@ pub fn note_linux_toolkit_tool_bar_allocation(
             frame.tool_bar_items_packed = true;
         }
         if grow {
-            let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+            let (frames, buffers, display_host) =
+                eval.frame_manager_buffers_and_display_terminals_mut();
             if let Err(err) = resize_live_gui_frame(
                 frames,
                 buffers,
@@ -871,7 +880,7 @@ pub fn note_linux_toolkit_tool_bar_allocation(
         // eats text rows. This is not a host request: the pixels already
         // match the window that omitted the bar.
         {
-            let (frames, buffers, _) = eval.frame_manager_buffers_and_display_host_mut();
+            let (frames, buffers, _) = eval.frame_manager_buffers_and_display_terminals_mut();
             if let Some(frame) = frames.get_mut(fid) {
                 frame.resize_pixelwise_with_buffer_constraints(buffers, outer_width, outer_height);
             }
@@ -935,7 +944,7 @@ pub fn builtin_set_frame_height(
     };
     let text_height_px = check_frame_pixels(&args[1], pixelwise, char_height)?;
     if uses_window_system_pixels {
-        if ctx.display_host.is_some() && !pretend {
+        if ctx.display_terminals.hosts_display() && !pretend {
             let desired_cols = {
                 let frame = ctx
                     .frame_manager()
@@ -947,7 +956,8 @@ pub fn builtin_set_frame_height(
                 .floor()
                 .max(1.0) as i64;
             let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
-            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
+            let (frames, buffers, display_host) =
+                ctx.frame_manager_buffers_and_display_terminals_mut();
             request_live_gui_frame_resize_and_keep_pending(
                 frames,
                 buffers,
@@ -968,7 +978,8 @@ pub fn builtin_set_frame_height(
             )?;
         } else {
             let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
-            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
+            let (frames, buffers, display_host) =
+                ctx.frame_manager_buffers_and_display_terminals_mut();
             request_live_gui_frame_resize(
                 frames,
                 buffers,
@@ -1069,8 +1080,9 @@ pub fn builtin_set_frame_width(
     };
     let text_width_px = check_frame_pixels(&args[1], pixelwise, char_width)?;
     if uses_window_system_pixels {
-        if ctx.display_host.is_some() && !pretend {
-            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
+        if ctx.display_terminals.hosts_display() && !pretend {
+            let (frames, buffers, display_host) =
+                ctx.frame_manager_buffers_and_display_terminals_mut();
             request_live_gui_frame_resize_and_keep_pending(
                 frames,
                 buffers,
@@ -1080,7 +1092,8 @@ pub fn builtin_set_frame_width(
                 true,
             )?;
         } else {
-            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
+            let (frames, buffers, display_host) =
+                ctx.frame_manager_buffers_and_display_terminals_mut();
             request_live_gui_frame_resize(
                 frames,
                 buffers,
@@ -1202,9 +1215,10 @@ pub fn builtin_set_frame_size(
         let desired_total_lines = ((text_height_px as f32) / char_height.max(1.0))
             .floor()
             .max(1.0) as i64;
-        if ctx.display_host.is_some() {
+        if ctx.display_terminals.hosts_display() {
             let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
-            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
+            let (frames, buffers, display_host) =
+                ctx.frame_manager_buffers_and_display_terminals_mut();
             request_live_gui_frame_resize_and_keep_pending(
                 frames,
                 buffers,
@@ -1225,7 +1239,8 @@ pub fn builtin_set_frame_size(
             )?;
         } else {
             let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
-            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
+            let (frames, buffers, display_host) =
+                ctx.frame_manager_buffers_and_display_terminals_mut();
             request_live_gui_frame_resize(
                 frames,
                 buffers,
@@ -1373,7 +1388,7 @@ fn move_gui_frame_window(
     let Some((x, y)) = absolute_window_position(left, top) else {
         return Ok(());
     };
-    if let Some(host) = eval.display_host.as_mut() {
+    if let Some(host) = eval.frame_display_connection_mut(fid) {
         host.set_gui_frame_position(fid, x, y)
             .map_err(|message| signal("error", vec![Value::string(message)]))?;
     }
@@ -1525,7 +1540,7 @@ pub fn builtin_make_terminal_frame(
             "tty-erase-char",
             Value::fixnum(i64::from(opened.erase_char())),
         );
-        let size = super::terminal::pure::install_opened_tty(&request, opened);
+        let size = super::terminal::pure::install_opened_tty(eval, &request, opened);
         let displays_chrome = !eval.noninteractive();
         let (frames, buffers) = eval.frame_manager_and_buffers_mut();
         if let Some(frame) = frames.get_mut(frame_id) {
@@ -1549,7 +1564,8 @@ pub fn builtin_make_terminal_frame(
     }
     // GNU `Fmake_terminal_frame` -> `init_tty` signals "Unknown terminal type"
     // when the terminal has no type (--batch). Mirror that.
-    if eval.display_host.is_none() && !super::terminal::pure::selected_terminal_is_usable_tty(eval)
+    if !eval.display_terminals.hosts_display()
+        && !super::terminal::pure::selected_terminal_is_usable_tty(eval)
     {
         return Err(signal(
             "error",
@@ -1600,7 +1616,7 @@ fn make_terminal_frame_on_existing_terminal(
     let (width, height) = if parent.is_some() {
         (stored.0.max(1), stored.1.max(1))
     } else {
-        let (cols, rows) = root_tty_winsize(terminal_id, stored);
+        let (cols, rows) = root_tty_winsize(eval, terminal_id, stored)?;
         clamped_tty_root_cells(cols, rows, menu, tab)
     };
     let (frames, buffers) = eval.frame_manager_and_buffers_mut();
@@ -1673,11 +1689,15 @@ fn clamped_tty_root_cells(cols: u32, rows: u32, menu: u32, tab: u32) -> (u32, u3
     (cols.max(MIN_COLS), rows.max(total_floor))
 }
 
-fn root_tty_winsize(terminal_id: u64, stored: (u32, u32)) -> (u32, u32) {
+fn root_tty_winsize(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    terminal_id: u64,
+    stored: (u32, u32),
+) -> Result<(u32, u32), Flow> {
     // GNU reads `get_tty_size(fileno(FRAME_TTY(f)->input))` (`frame.c:1861`).
     // `(0, 0)` is that answer. A terminal with no query, no host fd, and no
     // open size has nothing else to read, so the frame cells remain.
-    super::terminal::pure::terminal_winsize_cells(terminal_id).unwrap_or(stored)
+    Ok(super::terminal::pure::terminal_winsize_cells(eval, terminal_id)?.unwrap_or(stored))
 }
 
 fn tty_root_bar_lines(
@@ -2430,7 +2450,9 @@ pub fn builtin_modify_frame_parameters(
                                     frame.effective_window_system().is_some()
                                         && frame.parent_frame.as_frame_id().is_none()
                                 });
-                            if is_top_level_gui && let Some(host) = eval.display_host.as_mut() {
+                            if is_top_level_gui
+                                && let Some(host) = eval.frame_display_connection_mut(fid)
+                            {
                                 host.set_gui_frame_undecorated(fid, undecorated).map_err(
                                     |message| signal("error", vec![Value::string(message)]),
                                 )?;
@@ -2466,7 +2488,9 @@ pub fn builtin_modify_frame_parameters(
                                         frame.effective_window_system().is_some()
                                             && frame.parent_frame.as_frame_id().is_none()
                                     });
-                                if is_top_level_gui && let Some(host) = eval.display_host.as_mut() {
+                                if is_top_level_gui
+                                    && let Some(host) = eval.frame_display_connection_mut(fid)
+                                {
                                     host.set_gui_frame_fullscreen(fid, fullscreen).map_err(
                                         |message| signal("error", vec![Value::string(message)]),
                                     )?;
@@ -2526,7 +2550,7 @@ pub fn builtin_modify_frame_parameters(
         } else {
             true
         };
-        let (frames, buffers, host) = eval.frame_manager_buffers_and_display_host_mut();
+        let (frames, buffers, host) = eval.frame_manager_buffers_and_display_terminals_mut();
         request_live_gui_frame_resize_and_keep_pending(
             frames,
             buffers,
@@ -2587,7 +2611,8 @@ pub fn builtin_modify_frame_parameters(
             let (text_width_px, text_height_px) =
                 resize_request.text_pixels(&eval.frame_manager(), fid)?;
             let include_tool_bar = explicit_outer_includes_tool_bar(eval, fid)?;
-            let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+            let (frames, buffers, display_host) =
+                eval.frame_manager_buffers_and_display_terminals_mut();
             resize_live_gui_frame(
                 frames,
                 buffers,
@@ -2945,7 +2970,7 @@ pub(crate) fn set_top_level_non_window_pixelwise_totals(
 pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
     frames: &mut FrameManager,
     buffers: &BufferManager,
-    display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
+    display_host: &mut neovm_eval::emacs_core::eval::DisplayTerminals,
     fid: FrameId,
     request: FrameResizeRequest,
     include_tool_bar: bool,
@@ -2972,7 +2997,13 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
     let is_child_frame = frames
         .get(fid)
         .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some());
-    let Some(host) = display_host.as_mut().filter(|_| !is_child_frame) else {
+    let terminal = frames
+        .get(fid)
+        .map(|frame| neovm_eval::emacs_core::eval::TerminalNumber::new(frame.terminal_id));
+    let Some(host) = terminal
+        .filter(|_| !is_child_frame)
+        .and_then(|terminal| display_host.connection_mut(terminal))
+    else {
         return request_live_gui_frame_resize(
             frames,
             buffers,
@@ -3061,7 +3092,7 @@ pub(crate) fn set_frame_visibility(
     }
 
     if is_gui_child_frame {
-        if let Some(host) = eval.display_host.as_mut() {
+        if let Some(host) = eval.frame_display_connection_mut(fid) {
             if visibility.is_visible() {
                 host.show_gui_child_frame(fid)
             } else {
@@ -3069,7 +3100,7 @@ pub(crate) fn set_frame_visibility(
             }
             .map_err(|message| signal("error", vec![Value::string(message)]))?;
         }
-    } else if is_gui_frame && let Some(host) = eval.display_host.as_mut() {
+    } else if is_gui_frame && let Some(host) = eval.frame_display_connection_mut(fid) {
         host.set_gui_frame_visibility(fid, visibility)
             .map_err(|message| signal("error", vec![Value::string(message)]))?;
     }

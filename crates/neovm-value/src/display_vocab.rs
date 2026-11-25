@@ -12,6 +12,33 @@ pub struct FrameId(pub u64);
 /// as Lisp integers.
 pub const FRAME_ID_BASE: u64 = 1 << 32;
 
+/// An Emacs terminal number: GNU `struct terminal.id`, the identity of
+/// `terminal-list` entries and `frame-terminal`.
+///
+/// Not the display protocol's `TerminalId`, which names a neo-term emulator
+/// inside one display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TerminalNumber(u64);
+
+impl TerminalNumber {
+    /// Terminal 0, the record the evaluator creates first. In batch, `-nw`
+    /// and TTY-daemon sessions it is GNU's `initial_terminal`, which holds
+    /// `F1`. A GUI session describes record 0 again as its window-system
+    /// terminal and puts `F1` on terminal 1 (`neomacs/src/main.rs`
+    /// `bootstrap_gui_startup_terminal`), where GNU keeps `F1` on terminal 0
+    /// and numbers the first display 1 (`src/terminal.c` `create_terminal`,
+    /// `init_initial_terminal`).
+    pub const INITIAL: Self = Self(0);
+
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 pub use neovm_display_identity::{FrameVisibility, GuiResizeRequestId};
 
 /// Evaluator-owned correlation ID for one asynchronous xwidget script call.

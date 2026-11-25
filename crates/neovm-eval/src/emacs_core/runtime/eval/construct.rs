@@ -305,7 +305,7 @@ impl Context {
         ev.frame_snapshot_fn = None;
         ev.window_layout_query_adapter = WindowLayoutQueryAdapter::Unavailable;
         ev.scroll_goal = None;
-        ev.display_host = None;
+        ev.display_terminals = DisplayTerminals::new();
         *ev.coding_systems = CodingSystemManager::new();
         *ev.face_table = FaceTable::new();
         ev.face_change_count = 0;
@@ -2383,7 +2383,7 @@ impl Context {
             frame_snapshot_fn: None,
             window_layout_query_adapter: WindowLayoutQueryAdapter::Unavailable,
             scroll_goal: None,
-            display_host: None,
+            display_terminals: DisplayTerminals::new(),
             tty_frame_host_factory: None,
             visual_config: neomacs_display_protocol::VisualConfig::default(),
             pending_menu_bar_popup_anchor: None,

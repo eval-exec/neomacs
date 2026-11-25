@@ -5,7 +5,6 @@ use neovm_core::emacs_core::terminal::pure;
 struct RestoreTerminal;
 impl Drop for RestoreTerminal {
     fn drop(&mut self) {
-        pure::reset_terminal_host();
         pure::reset_terminal_runtime();
     }
 }

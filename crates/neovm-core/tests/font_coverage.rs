@@ -1,20 +1,25 @@
 //! Public Lisp glyph coverage across the platform display-host boundary.
 use neovm_core::emacs_core::{
     display_host::{FontCoverage, FontCoverageRequest, FontCoverageTarget, FontEntityHandle},
-    eval::{DisplayHost, FontSpecResolveRequest, GuiFrameHostRequest, ResolvedFontSpecMatch},
+    eval::{
+        DisplayConnection, DisplayServices, FontSpecResolveRequest, GuiFrameHostRequest,
+        ResolvedFontSpecMatch,
+    },
     load_boot::create_bootstrap_evaluator_cached,
 };
 use neovm_core::heap_types::LispString;
 
 struct CoverageHost;
-impl DisplayHost for CoverageHost {
+impl DisplayConnection for CoverageHost {
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
     fn resize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for CoverageHost {
     fn resolve_font_for_spec(
         &mut self,
         _request: FontSpecResolveRequest,

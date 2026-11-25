@@ -1212,7 +1212,7 @@ impl LayoutEngine {
             evaluator.face_table(),
             evaluator.variables(),
         );
-        let resolver = crate::neovm_bridge::FaceResolver::new_with_font_sizing(
+        let mut resolver = crate::neovm_bridge::FaceResolver::new_with_font_sizing(
             evaluator.face_table(),
             0xffffff,
             bootstrap.background,
@@ -1220,6 +1220,7 @@ impl LayoutEngine {
             ws,
             self.font_sizing,
         );
+        resolver.bind_frame(frame);
         resolver.set_current_window_parameters(
             evaluator.frame_manager().window_parameters_pairs(window),
         );

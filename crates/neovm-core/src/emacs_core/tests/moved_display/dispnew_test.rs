@@ -118,8 +118,7 @@ fn configure_interactive_tty_terminal() {
 }
 
 fn reset_terminal_to_bootstrap() {
-    use crate::emacs_core::terminal::pure::{reset_terminal_host, reset_terminal_runtime};
-    reset_terminal_host();
+    use crate::emacs_core::terminal::pure::reset_terminal_runtime;
     reset_terminal_runtime();
 }
 
@@ -142,10 +141,13 @@ fn send_string_to_terminal_delivers_bytes_to_the_termcap_host() {
     crate::test_utils::init_test_tracing();
     configure_interactive_tty_terminal();
     let writes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    crate::emacs_core::terminal::pure::set_terminal_host(Box::new(ByteRecordingHost {
-        writes: std::rc::Rc::clone(&writes),
-    }));
     let mut eval = crate::test_utils::new_context();
+    crate::emacs_core::terminal::pure::set_terminal_host(
+        &mut eval,
+        Box::new(ByteRecordingHost {
+            writes: std::rc::Rc::clone(&writes),
+        }),
+    );
     builtin_send_string_to_terminal(&mut eval, vec![Value::string("PROBE-BYTES")]).unwrap();
     assert_eq!(
         writes.borrow().as_slice(),
@@ -213,10 +215,13 @@ fn send_string_to_terminal_rejects_a_window_system_terminal() {
 fn send_string_to_terminal_rejects_a_suspended_terminal() {
     crate::test_utils::init_test_tracing();
     configure_interactive_tty_terminal();
-    crate::emacs_core::terminal::pure::set_terminal_host(Box::new(ByteRecordingHost {
-        writes: std::rc::Rc::default(),
-    }));
     let mut eval = crate::test_utils::new_context();
+    crate::emacs_core::terminal::pure::set_terminal_host(
+        &mut eval,
+        Box::new(ByteRecordingHost {
+            writes: std::rc::Rc::default(),
+        }),
+    );
     crate::emacs_core::terminal::pure::builtin_suspend_tty(&mut eval, vec![]).unwrap();
     let result = builtin_send_string_to_terminal(&mut eval, vec![Value::string("x")]);
     assert_eq!(

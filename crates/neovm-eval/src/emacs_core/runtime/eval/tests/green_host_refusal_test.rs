@@ -9,7 +9,7 @@ use neomacs_display_protocol::SelectionOwner;
 
 struct NullDisplayHost;
 
-impl crate::emacs_core::eval::protocol::DisplayHost for NullDisplayHost {
+impl crate::emacs_core::eval::protocol::DisplayConnection for NullDisplayHost {
     fn realize_gui_frame(
         &mut self,
         _request: crate::emacs_core::eval::GuiFrameHostRequest,
@@ -44,6 +44,8 @@ impl crate::emacs_core::eval::protocol::DisplayHost for NullDisplayHost {
         Ok(SelectionOwner::None)
     }
 }
+
+impl crate::emacs_core::eval::protocol::DisplayServices for NullDisplayHost {}
 
 fn green_context() -> Context {
     Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime())

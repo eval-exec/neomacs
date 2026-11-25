@@ -11,7 +11,7 @@ use neomacs_display_protocol::ResolvedImageMetadata;
 use neomacs_display_protocol::image_diagnostic::{
     ImageDiagnostic, ImageDiagnosticSubject, ImageFormatName,
 };
-use neovm_eval::emacs_core::eval::{DisplayHost, GuiFrameHostRequest};
+use neovm_eval::emacs_core::eval::{DisplayConnection, DisplayServices, GuiFrameHostRequest};
 use neovm_value::error::{FlowRef, FlowResultExt as _};
 use neovm_value::value::list_to_vec;
 use std::sync::{Arc, Mutex};
@@ -120,7 +120,7 @@ struct RecordingImageDisplayHost {
     fixed_embedded: ImageEmbeddedMetadata,
 }
 
-impl DisplayHost for RecordingImageDisplayHost {
+impl DisplayConnection for RecordingImageDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -128,7 +128,9 @@ impl DisplayHost for RecordingImageDisplayHost {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for RecordingImageDisplayHost {
     fn resolve_image_sync(
         &self,
         request: ImageResolveRequest,
@@ -2138,7 +2140,7 @@ impl FailingImageDisplayHost {
     }
 }
 
-impl DisplayHost for FailingImageDisplayHost {
+impl DisplayConnection for FailingImageDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -2146,7 +2148,9 @@ impl DisplayHost for FailingImageDisplayHost {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for FailingImageDisplayHost {
     fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
         Some(self)
     }

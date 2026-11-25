@@ -6,7 +6,7 @@
 //! parked Context, which stays exclusively its own thread's.
 
 use super::super::world::Baton;
-use super::super::{Context, Flow, Value};
+use super::super::{Context, Flow, TerminalNumber, Value};
 use super::carrier::CarrierJob;
 use super::host_service::{
     self, HostRequestKey, MainNativeDrain, NativeSettlement, OwnerReceive, PreparedHostCall,
@@ -19,6 +19,7 @@ use super::scheduler::{
 use crate::host_effect::contracts::OwnedNativeData;
 use crate::host_effect::native_outcome::{CancelReason, NativeOutcome, NativeReply};
 use crate::host_effect::selection::{SelectionReply, SelectionRequest};
+use crate::host_effect::terminal_device::{TerminalDeviceReply, TerminalDeviceRequest};
 use crate::host_effect::wake::native_wait::{NativeWaitHandoff, RealWaitPermit};
 use neovm_value::error::LispCondition;
 use neovm_value::error::signal;
@@ -30,11 +31,37 @@ use std::time::{Duration, Instant};
 #[doc(hidden)]
 pub use crate::host_effect::wake::SelectTurn;
 
-/// A selection request's terminal, decoded on the requesting owner.
-enum SelectionTerminal {
-    Reply(SelectionReply),
+/// A routed host request's terminal state, decoded on the requesting owner.
+enum RoutedTerminal<T> {
+    Reply(T),
     Interrupted(CancelReason),
     HostClosed,
+}
+
+/// The routed families a non-main owner sends to main.
+#[derive(Clone, Copy, Debug)]
+enum RoutedFamily {
+    Selection,
+    TerminalDevice,
+}
+
+impl RoutedFamily {
+    /// What the requester signals when main's service admission is closed.
+    fn closed_message(self) -> &'static str {
+        match self {
+            Self::Selection => "Display host is closed",
+            Self::TerminalDevice => "TTY terminal host is closed",
+        }
+    }
+}
+
+/// The outcome a routed native settlement carries. Cancellation after
+/// dispatch still completes natively, so its outcome is the answer.
+fn settled_outcome(settlement: &NativeSettlement) -> &NativeOutcome {
+    match settlement {
+        NativeSettlement::Completed(outcome) => outcome,
+        NativeSettlement::CompletedAfterCancellation { outcome, .. } => outcome,
+    }
 }
 
 /// Decode the native settlement of a selection host request. The service's
@@ -43,29 +70,55 @@ enum SelectionTerminal {
 fn decode_selection_settlement(
     _owner: &RestoredHostOwner<'_>,
     settlement: &NativeSettlement,
-) -> Result<SelectionTerminal, Flow> {
-    let outcome = match settlement {
-        NativeSettlement::Completed(outcome) => outcome,
-        NativeSettlement::CompletedAfterCancellation { outcome, .. } => outcome,
-    };
-    match outcome {
+) -> Result<RoutedTerminal<SelectionReply>, Flow> {
+    match settled_outcome(settlement) {
         NativeOutcome::Reply(NativeReply::Returned(OwnedNativeData::SelectionReply(reply))) => {
-            Ok(SelectionTerminal::Reply(reply.clone()))
+            Ok(RoutedTerminal::Reply(reply.clone()))
         }
         NativeOutcome::Reply(NativeReply::LispError(OwnedNativeData::SelectionReply(
             SelectionReply::HostError(message),
-        ))) => Ok(SelectionTerminal::Reply(SelectionReply::HostError(
+        ))) => Ok(RoutedTerminal::Reply(SelectionReply::HostError(
             message.clone(),
         ))),
-        NativeOutcome::Interrupted(reason) => Ok(SelectionTerminal::Interrupted(*reason)),
-        NativeOutcome::HostClosed => Ok(SelectionTerminal::HostClosed),
+        NativeOutcome::Interrupted(reason) => Ok(RoutedTerminal::Interrupted(*reason)),
+        NativeOutcome::HostClosed => Ok(RoutedTerminal::HostClosed),
         other => {
             tracing::error!(
                 ?other,
                 "selection settlement carried a foreign native payload"
             );
-            Err(selection_internal_error(
+            Err(routed_internal_error(
                 "selection settlement payload does not match the request",
+            ))
+        }
+    }
+}
+
+/// Decode the native settlement of a text-terminal device request. The
+/// service sends exactly one `TerminalDeviceReply`, a device error as a Lisp
+/// error; any other payload is a service invariant violation.
+fn decode_terminal_device_settlement(
+    _owner: &RestoredHostOwner<'_>,
+    settlement: &NativeSettlement,
+) -> Result<RoutedTerminal<TerminalDeviceReply>, Flow> {
+    match settled_outcome(settlement) {
+        NativeOutcome::Reply(NativeReply::Returned(OwnedNativeData::TerminalDeviceReply(
+            reply,
+        ))) => Ok(RoutedTerminal::Reply(reply.clone())),
+        NativeOutcome::Reply(NativeReply::LispError(OwnedNativeData::TerminalDeviceReply(
+            TerminalDeviceReply::HostError(message),
+        ))) => Ok(RoutedTerminal::Reply(TerminalDeviceReply::HostError(
+            message.clone(),
+        ))),
+        NativeOutcome::Interrupted(reason) => Ok(RoutedTerminal::Interrupted(*reason)),
+        NativeOutcome::HostClosed => Ok(RoutedTerminal::HostClosed),
+        other => {
+            tracing::error!(
+                ?other,
+                "terminal device settlement carried a foreign native payload"
+            );
+            Err(routed_internal_error(
+                "terminal device settlement payload does not match the request",
             ))
         }
     }
@@ -74,9 +127,9 @@ fn decode_selection_settlement(
 /// The existing invariant-violation shape: a debug assertion, an error log,
 /// and a signal that names itself internal, so it cannot be read as GNU
 /// behavior.
-fn selection_internal_error(message: &str) -> Flow {
-    debug_assert!(false, "selection host invariant: {message}");
-    tracing::error!(message, "selection host invariant violated");
+fn routed_internal_error(message: &str) -> Flow {
+    debug_assert!(false, "routed host invariant: {message}");
+    tracing::error!(message, "routed host invariant violated");
     signal(
         LispCondition::Error,
         vec![Value::string(format!("neovm internal error: {message}"))],
@@ -195,10 +248,11 @@ pub struct MainNativeHandoff<'native> {
     receiver: &'native mut OwnerReceive,
     wait_end: Instant,
     authority: MainWaitAuthority,
-    /// The display host main attached, if any. Native waits run unhosted too
-    /// (batch select/sleep), so this is optional; a hosted session keeps it
-    /// available across the wait so a worker's service turn can be served.
-    host: Option<&'native mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+    /// Main's display registry. Native waits run unhosted too (batch
+    /// select/sleep), where it holds no display; a hosted session keeps it
+    /// available across the wait so a worker's service turn can be served,
+    /// each request on the display it names.
+    host: Option<&'native mut crate::emacs_core::eval::DisplayTerminals>,
 }
 
 impl NativeWaitHandoff for MainNativeHandoff<'_> {
@@ -628,6 +682,8 @@ impl Context {
     /// main owner and decode its settlement. The request is already converted
     /// (arity, nil/string/other, result and error construction stay on this
     /// caller); no Lisp value crosses and the published root batch is empty.
+    /// It carries this owner's selected-frame terminal, the World half of GNU
+    /// `check_x_display_info (Qnil)`; main completes it in its display registry.
     ///
     /// GNU raises a pending `thread-signal` when the global lock is
     /// reacquired (`post_acquire_global_lock`, src/thread.c:141-154); this
@@ -639,6 +695,7 @@ impl Context {
         &mut self,
         request: SelectionRequest,
     ) -> Result<SelectionReply, Flow> {
+        let selected_terminal = self.selected_frame_terminal();
         // SAFETY: no Lisp value crosses; this original owner holds the Baton
         // and the sole mutator, and the extent publishes no roots (capacity
         // 0). No Lisp, collection or ownership handoff runs here.
@@ -654,23 +711,74 @@ impl Context {
         };
         let turn = self.green_host_call_turn(
             call,
-            OwnedNativeData::SelectionRequest(request),
+            OwnedNativeData::SelectionRequest {
+                selected_terminal,
+                request,
+            },
             decode_selection_settlement,
         )?;
+        self.finish_routed_host_turn(turn, RoutedFamily::Selection)
+    }
+
+    /// Route one text-terminal device request from a non-main owner to main,
+    /// which owns every terminal's device (`DisplayTerminals`), and decode
+    /// its settlement. The caller already decided the effect (the terminal,
+    /// its liveness and suspension, the bytes); only the typed request
+    /// crosses, and the published root batch is empty. The reply and its
+    /// interruptions follow [`Self::green_host_selection`].
+    #[cold]
+    pub(crate) fn green_host_terminal_device(
+        &mut self,
+        terminal: TerminalNumber,
+        request: TerminalDeviceRequest,
+    ) -> Result<TerminalDeviceReply, Flow> {
+        // SAFETY: no Lisp value crosses; this original owner holds the Baton
+        // and the sole mutator, and the extent publishes no roots (capacity
+        // 0). No Lisp, collection or ownership handoff runs here.
+        let call = match unsafe { self.green_prepare_host_call(&[]) } {
+            Ok(call) => call,
+            Err(error) => {
+                tracing::error!(?error, "terminal device request was not prepared");
+                return Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string(error.to_string())],
+                ));
+            }
+        };
+        let turn = self.green_host_call_turn(
+            call,
+            OwnedNativeData::TerminalDeviceRequest { terminal, request },
+            decode_terminal_device_settlement,
+        )?;
+        self.finish_routed_host_turn(turn, RoutedFamily::TerminalDevice)
+    }
+
+    /// The requester's end of one routed request: the reply, or the signal
+    /// its interruption delivers.
+    ///
+    /// GNU raises a pending `thread-signal` when the global lock is
+    /// reacquired (`post_acquire_global_lock`, src/thread.c:141-154). A
+    /// signal that the cancellation reported but that is no longer pending
+    /// is an internal invariant violation, never a Lisp error.
+    fn finish_routed_host_turn<T>(
+        &mut self,
+        turn: HostOwnerTurn<RoutedTerminal<T>>,
+        family: RoutedFamily,
+    ) -> Result<T, Flow> {
         match turn {
-            HostOwnerTurn::Final(SelectionTerminal::Reply(reply)) => Ok(reply),
-            HostOwnerTurn::Final(SelectionTerminal::HostClosed) => Err(signal(
+            HostOwnerTurn::Final(RoutedTerminal::Reply(reply)) => Ok(reply),
+            HostOwnerTurn::Final(RoutedTerminal::HostClosed) => Err(signal(
                 LispCondition::Error,
-                vec![Value::string("Display host is closed")],
+                vec![Value::string(family.closed_message())],
             )),
-            HostOwnerTurn::Final(SelectionTerminal::Interrupted(reason)) => match reason {
+            HostOwnerTurn::Final(RoutedTerminal::Interrupted(reason)) => match reason {
                 CancelReason::TargetSignal => {
                     let key = self.green_key().expect("a routed owner is seated");
                     self.green_raise_pending_signal(key)?;
                     // A cancellation that reports a target signal while no
                     // signal is pending is an internal inconsistency; a Lisp
                     // error here would be mistaken for GNU behavior.
-                    Err(selection_internal_error(
+                    Err(routed_internal_error(
                         "target signal vanished before its delivery point",
                     ))
                 }
@@ -689,7 +797,8 @@ impl Context {
             },
             HostOwnerTurn::NeedOwner(_) => {
                 tracing::error!(
-                    "selection host request produced an owner step, but its direct body runs no Lisp"
+                    ?family,
+                    "routed host request produced an owner step, but its direct body runs no Lisp"
                 );
                 std::process::abort()
             }
@@ -838,9 +947,9 @@ impl Context {
                     receiver: &mut receiver,
                     wait_end,
                     authority: MainWaitAuthority::Held(baton),
-                    host: self.display_host.as_mut().map(|host| {
-                        &mut **host as &mut dyn crate::emacs_core::eval::protocol::DisplayHost
-                    }),
+                    // A served request names its display. Main resolves it in
+                    // its own registry, never in the World it lent out.
+                    host: Some(&mut self.display_terminals),
                 };
                 let result = wait.wait_with(&mut handoff);
                 (Ok(Wake::Resume(handoff.into_baton())), None, Some(result))
@@ -877,10 +986,7 @@ impl Context {
         };
         // A service turn must not restore main's Lisp continuation, JIT pins,
         // bindings or TLS, or consume its original semantic Wait.
-        let mut host = self
-            .display_host
-            .as_mut()
-            .map(|host| &mut **host as &mut dyn crate::emacs_core::eval::protocol::DisplayHost);
+        let mut host = Some(&mut self.display_terminals);
         let RestoringTurn { baton, disposition } =
             receive_owner_turn(key, wake, &control, &mut receiver, &mut host);
         // Only the returning continuation refreshes its private dispatch
@@ -1614,7 +1720,7 @@ fn receive_owner_turn(
     mut wake: Wake,
     control: &Control,
     receiver: &mut OwnerReceive,
-    host: &mut Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+    host: &mut Option<&mut crate::emacs_core::eval::DisplayTerminals>,
 ) -> RestoringTurn {
     let _abort_on_panic = AbortOnPanic;
     loop {
@@ -1759,8 +1865,7 @@ pub(super) fn run_carrier_job(
         neovm_value::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
         "carrier job starts with a stale TAGGED_HEAP TLS pointer"
     );
-    let mut no_host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)> =
-        None;
+    let mut no_host: Option<&mut crate::emacs_core::eval::DisplayTerminals> = None;
     let mut baton =
         receive_owner_turn(key, wake, &control, &mut receiver, &mut no_host).into_ordinary_baton();
     baton.enter();

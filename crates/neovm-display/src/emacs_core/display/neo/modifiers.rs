@@ -29,7 +29,7 @@ use neomacs_display_protocol::{
     EmacsModifierKey, ModifierAssignment, ModifierPolicy, ModifierPolicyParts, PhysicalModifierKey,
     SideAssignment,
 };
-use neovm_eval::emacs_core::eval::Context;
+use neovm_eval::emacs_core::eval::{BroadcastSetting, Context};
 use neovm_value::error::{EvalResult, Flow, expect_args, signal};
 use neovm_value::value::{Value, list_to_vec};
 
@@ -176,9 +176,8 @@ fn set_modifier_policy(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("neomacs-set-modifier-policy", &args, 0)?;
     let policy = modifier_policy_from_vars(eval)
         .map_err(|message| policy_error("neomacs-set-modifier-policy", message))?;
-    if let Some(host) = eval.display_host.as_mut() {
-        host.set_modifier_policy(policy)
-            .map_err(|message| policy_error("neomacs-set-modifier-policy", message))?;
-    }
+    eval.display_terminals
+        .broadcast(BroadcastSetting::ModifierPolicy(policy))
+        .map_err(|message| policy_error("neomacs-set-modifier-policy", message))?;
     Ok(Value::NIL)
 }

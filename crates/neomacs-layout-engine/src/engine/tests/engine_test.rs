@@ -222,9 +222,9 @@ use neovm_core::buffer::{
     BufferId, BufferTextBackendKind, CharPos0, EmacsBytePos, EmacsByteRange, LispCharPos1,
 };
 use neovm_core::emacs_core::eval::{
-    DisplayHost, GuiFrameHostRequest, ResolvedSurface, ResolvedVideo, ResolvedWebKit,
-    SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest, VideoResolveSource,
-    WebKitResolveRequest,
+    DisplayConnection, DisplayHost, DisplayServices, GuiFrameHostRequest, ResolvedSurface,
+    ResolvedVideo, ResolvedWebKit, SurfaceChannelKind, SurfaceResolveRequest, TerminalBacking,
+    TerminalNumber, VideoResolveRequest, VideoResolveSource, WebKitResolveRequest,
 };
 use neovm_core::emacs_core::image_catalog::{
     AxisSize, ImageCatalog, ImageLookup, ImageResolveRequest, ImageSizeLimit, ImageSizeSpec,
@@ -2084,25 +2084,13 @@ struct RecordingImageDisplayHost {
     surface_requests: Arc<Mutex<Vec<SurfaceResolveRequest>>>,
 }
 
-impl DisplayHost for RecordingImageDisplayHost {
+impl DisplayConnection for RecordingImageDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
 
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
-    }
-
-    fn resolve_image_sync(
-        &self,
-        _request: ImageResolveRequest,
-        _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
-    ) -> Result<Option<ReadyImage>, String> {
-        panic!("layout must not use synchronous image resolution");
-    }
-
-    fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
-        Some(self)
     }
 
     fn request_video(&self, request: VideoResolveRequest) -> Result<Option<ResolvedVideo>, String> {
@@ -2137,6 +2125,20 @@ impl DisplayHost for RecordingImageDisplayHost {
             .expect("surface requests lock")
             .push(request);
         Ok(Some(ResolvedSurface { surface_id: 4343 }))
+    }
+}
+
+impl DisplayServices for RecordingImageDisplayHost {
+    fn resolve_image_sync(
+        &self,
+        _request: ImageResolveRequest,
+        _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
+    ) -> Result<Option<ReadyImage>, String> {
+        panic!("layout must not use synchronous image resolution");
+    }
+
+    fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
+        Some(self)
     }
 }
 
@@ -15499,7 +15501,7 @@ fn layout_frame_rust_honors_display_replacement_string_face_properties() {
 /// nearly full row of text, narrow enough to fit a row of its own.
 struct MidRowImageHost;
 
-impl DisplayHost for MidRowImageHost {
+impl DisplayConnection for MidRowImageHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -15507,7 +15509,9 @@ impl DisplayHost for MidRowImageHost {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for MidRowImageHost {
     fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
         Some(self)
     }
@@ -16443,6 +16447,113 @@ fn layout_frame_rust_emits_inline_video_glyphs_for_display_video_specs() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].loop_count, -1);
     assert!(requests[0].autoplay);
+}
+
+fn inline_video_display_spec() -> Value {
+    Value::list(vec![
+        Value::symbol("video"),
+        Value::keyword("file"),
+        Value::string("/tmp/neomacs-second-terminal.mp4"),
+        Value::keyword("width"),
+        Value::fixnum(80),
+        Value::keyword("height"),
+        Value::fixnum(45),
+    ])
+}
+
+/// Lay out a frame on display terminal 1 while the selected frame is on the
+/// initial terminal's display, after PREPARE fills the shared buffer. Returns
+/// how many video requests reached the selected frame's display and the laid
+/// out frame's display.
+///
+/// Media sessions belong to the display that shows them: GNU reaches images
+/// and xwidgets through the iterator's frame (`it->f`), whose face cache
+/// points back at that frame (`struct face_cache`, src/dispextern.h:1983-1984
+/// at a360712c, UNATTESTED).
+fn video_requests_laying_out_a_second_terminal_frame(
+    prepare: impl FnOnce(&mut Context, BufferId),
+) -> (usize, usize) {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let selected_display = RecordingImageDisplayHost::default();
+    let laid_out_display = RecordingImageDisplayHost::default();
+    let selected_display_videos = Arc::clone(&selected_display.video_requests);
+    let laid_out_display_videos = Arc::clone(&laid_out_display.video_requests);
+    eval.set_display_host(Box::new(selected_display));
+    eval.register_display_terminal(
+        TerminalNumber::new(1),
+        TerminalBacking::window_system(Box::new(laid_out_display)),
+    );
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    prepare(&mut eval, buf_id);
+    let selected = eval
+        .frame_manager_mut()
+        .create_frame("on-initial-terminal", 320, 120, buf_id);
+    let laid_out =
+        eval.frame_manager_mut()
+            .create_frame_on_terminal("on-terminal-1", 1, 320, 120, buf_id);
+    for frame_id in [selected, laid_out] {
+        bind_minibuffer_buffer(&mut eval, frame_id);
+        // Media replacement is meaningful only on a graphical frame.
+        eval.frame_manager_mut()
+            .get_mut(frame_id)
+            .expect("frame")
+            .set_window_system(Some(Value::symbol("neo")));
+    }
+    assert!(eval.frame_manager_mut().select_frame(selected));
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, laid_out);
+
+    let presentation = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("frame display state")
+        .materialize();
+    assert!(
+        presentation
+            .glyphs
+            .iter()
+            .any(|glyph| matches!(glyph, FrameGlyph::Video { .. })),
+        "the laid-out frame shows its video"
+    );
+    let selected_count = selected_display_videos.lock().expect("lock").len();
+    let laid_out_count = laid_out_display_videos.lock().expect("lock").len();
+    (selected_count, laid_out_count)
+}
+
+#[test]
+fn layout_resolves_inline_media_through_the_laid_out_frames_terminal() {
+    let (selected, laid_out) = video_requests_laying_out_a_second_terminal_frame(|eval, buf_id| {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("aVb");
+        buf.goto_emacs_byte_pos(neovm_core::buffer::EmacsBytePos::new(1));
+        buf.put_text_property(1, 2, Value::symbol("display"), inline_video_display_spec());
+    });
+    assert_eq!(selected, 0, "the selected frame's display opened the video");
+    assert_eq!(laid_out, 1, "the laid-out frame's display opens its video");
+}
+
+#[test]
+fn layout_resolves_mode_line_media_through_the_laid_out_frames_terminal() {
+    let (selected, laid_out) = video_requests_laying_out_a_second_terminal_frame(|eval, buf_id| {
+        let mode_line = Value::string_with_text_properties(
+            "mV",
+            vec![StringTextPropertyRun {
+                start: 1,
+                end: 2,
+                plist: Value::list(vec![Value::symbol("display"), inline_video_display_spec()]),
+            }],
+        );
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("text");
+        buf.set_buffer_local("mode-line-format", mode_line);
+    });
+    assert_eq!(selected, 0, "the selected frame's display opened the video");
+    assert!(laid_out > 0, "the laid-out frame's display opens its video");
 }
 
 #[test]

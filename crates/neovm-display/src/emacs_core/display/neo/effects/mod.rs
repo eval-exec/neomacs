@@ -30,10 +30,18 @@ fn publish_visual_config(
     function: &str,
     updated: VisualConfig,
 ) -> EvalResult {
-    if let Some(host) = eval.display_host.as_mut() {
-        host.set_visual_config(updated.clone())
-            .map_err(|error| effect_error(function, error))?;
+    // Class 4: every connection mirrors the configuration; registration
+    // replays `eval.visual_config`. The first error is reported.
+    let mut result = Ok(());
+    for terminal in eval.display_terminals.connected_terminals() {
+        if let Some(host) = eval.display_terminals.connection_mut(terminal) {
+            let applied = host.set_visual_config(updated.clone());
+            if result.is_ok() {
+                result = applied;
+            }
+        }
     }
+    result.map_err(|error| effect_error(function, error))?;
     eval.visual_config = updated;
     Ok(Value::NIL)
 }

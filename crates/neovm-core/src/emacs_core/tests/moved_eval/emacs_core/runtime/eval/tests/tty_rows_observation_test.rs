@@ -1,7 +1,9 @@
 //! Core-only partial TTY receipts. Actual Layout callback/coverage seals remain
 //! separate; these tests never manufacture a reusable geometry certificate.
 use crate::emacs_core::eval::data::face::BasicFace;
-use crate::emacs_core::eval::protocol::{DisplayHost, InertRowsHostAuthority};
+use crate::emacs_core::eval::protocol::{
+    DisplayConnection, DisplayServices, InertRowsHostAuthority,
+};
 use crate::emacs_core::eval::{Context, RowsObservationRefusal};
 use crate::emacs_core::terminal::pure::{self, TerminalRuntimeConfig};
 use crate::emacs_core::xfaces::realization::XfacesRealizationContextExt;
@@ -15,7 +17,6 @@ use neovm_value::value::Value;
 struct RestoreTerminal;
 impl Drop for RestoreTerminal {
     fn drop(&mut self) {
-        pure::reset_terminal_host();
         pure::reset_terminal_runtime();
     }
 }
@@ -77,7 +78,7 @@ fn ready() -> (Context, FrameId, RestoreTerminal) {
 // Every state has the same inherited absent image/font services. Only the
 // non-geometry popup/frame methods below are overridden.
 struct InertHost(u8);
-impl DisplayHost for InertHost {
+impl DisplayConnection for InertHost {
     fn realize_gui_frame(
         &mut self,
         _: crate::emacs_core::eval::GuiFrameHostRequest,
@@ -92,8 +93,10 @@ impl DisplayHost for InertHost {
     }
 }
 
+impl DisplayServices for InertHost {}
+
 struct UnknownHost;
-impl DisplayHost for UnknownHost {
+impl DisplayConnection for UnknownHost {
     fn realize_gui_frame(
         &mut self,
         _: crate::emacs_core::eval::GuiFrameHostRequest,
@@ -106,6 +109,9 @@ impl DisplayHost for UnknownHost {
     ) -> Result<(), String> {
         Ok(())
     }
+}
+
+impl DisplayServices for UnknownHost {
     fn image_catalog(
         &self,
     ) -> Option<&dyn crate::emacs_core::eval::protocol::image_catalog::ImageCatalog> {
@@ -158,7 +164,7 @@ fn tty_rows_observation_legacy_constructor_keeps_real_tty_refusal() {
         context.begin_static_rows_observation(frame),
         Err(RowsObservationRefusal::TtyOrUnknownFrame)
     ));
-    context.display_host = Some(Box::new(InertHost(0)));
+    context.set_display_host(Box::new(InertHost(0)));
     assert!(matches!(
         context.begin_static_rows_observation(frame),
         Err(RowsObservationRefusal::DisplayHostInstalled)
@@ -168,20 +174,20 @@ fn tty_rows_observation_legacy_constructor_keeps_real_tty_refusal() {
 #[test]
 fn tty_rows_observation_approved_actual_type_needs_no_host_virtual_probe() {
     let (mut context, frame, _restore) = ready();
-    context.display_host = Some(Box::new(InertHost(0)));
+    context.set_display_host(Box::new(InertHost(0)));
     let authority = inert_authority();
     let epoch = context
         .begin_tty_rows_observation(frame, Some(&authority))
         .unwrap();
     assert!(context.static_rows_observation_current(&epoch).is_ok());
     // The sealed default must identify the implementor, not Box<dyn DisplayHost>.
-    assert!(authority.accepts(context.display_host.as_deref().unwrap()));
+    assert!(authority.accepts(context.display_terminals.services().unwrap()));
 }
 
 #[test]
 fn tty_rows_observation_unknown_host_refuses_without_service_entry() {
     let (mut context, frame, _restore) = ready();
-    context.display_host = Some(Box::new(UnknownHost));
+    context.set_display_host(Box::new(UnknownHost));
     assert!(matches!(
         context.begin_tty_rows_observation(frame, None),
         Err(RowsObservationRefusal::DisplayHostInstalled)
@@ -191,7 +197,7 @@ fn tty_rows_observation_unknown_host_refuses_without_service_entry() {
 #[test]
 fn tty_rows_observation_forwarded_other_type_authority_refuses() {
     let (mut context, frame, _restore) = ready();
-    context.display_host = Some(Box::new(UnknownHost));
+    context.set_display_host(Box::new(UnknownHost));
     let authority = inert_authority();
     assert!(matches!(
         context.begin_tty_rows_observation(frame, Some(&authority)),
@@ -202,11 +208,11 @@ fn tty_rows_observation_forwarded_other_type_authority_refuses() {
 #[test]
 fn tty_rows_observation_replaced_unknown_host_refuses_before_saved_keys() {
     let (mut context, frame, _restore) = ready();
-    context.display_host = Some(Box::new(InertHost(0)));
+    context.set_display_host(Box::new(InertHost(0)));
     let epoch = context
         .begin_tty_rows_observation(frame, Some(&inert_authority()))
         .unwrap();
-    context.display_host = Some(Box::new(UnknownHost));
+    context.set_display_host(Box::new(UnknownHost));
     assert_eq!(
         context.static_rows_observation_current(&epoch),
         Err(RowsObservationRefusal::HostTypeChanged)
@@ -217,7 +223,7 @@ fn tty_rows_observation_replaced_unknown_host_refuses_before_saved_keys() {
 fn tty_rows_observation_removed_or_newly_installed_host_refuses() {
     let (mut context, frame, _restore) = ready();
     let absent = context.begin_tty_rows_observation(frame, None).unwrap();
-    context.display_host = Some(Box::new(InertHost(0)));
+    context.set_display_host(Box::new(InertHost(0)));
     assert_eq!(
         context.static_rows_observation_current(&absent),
         Err(RowsObservationRefusal::HostTypeChanged)
@@ -225,7 +231,7 @@ fn tty_rows_observation_removed_or_newly_installed_host_refuses() {
     let installed = context
         .begin_tty_rows_observation(frame, Some(&inert_authority()))
         .unwrap();
-    context.display_host = None;
+    context.display_terminals.uninstall_display();
     assert_eq!(
         context.static_rows_observation_current(&installed),
         Err(RowsObservationRefusal::HostTypeChanged)
@@ -235,7 +241,7 @@ fn tty_rows_observation_removed_or_newly_installed_host_refuses() {
 #[test]
 fn tty_rows_observation_same_approved_type_all_states_contract_is_explicit() {
     let (mut context, frame, _restore) = ready();
-    context.display_host = Some(Box::new(InertHost(0)));
+    context.set_display_host(Box::new(InertHost(0)));
     let epoch = context
         .begin_tty_rows_observation(frame, Some(&inert_authority()))
         .unwrap();
@@ -243,7 +249,7 @@ fn tty_rows_observation_same_approved_type_all_states_contract_is_explicit() {
     // service contract. No pointer/vtable/allocator-reuse assumption is used.
     let replacement = InertHost(u8::MAX);
     assert_eq!(replacement.0, u8::MAX);
-    context.display_host = Some(Box::new(replacement));
+    context.set_display_host(Box::new(replacement));
     assert!(context.static_rows_observation_current(&epoch).is_ok());
 }
 

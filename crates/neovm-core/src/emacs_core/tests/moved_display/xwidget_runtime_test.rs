@@ -4,7 +4,7 @@ use neovm_eval::emacs_core::eval::keyboard::{
     FrontendLoadPhase, FrontendWebProcessFailure, FrontendWebValue, FrontendWebViewEvent,
 };
 use neovm_eval::emacs_core::eval::{
-    Context, DisplayHost, GuiFrameHostRequest, XwidgetScriptRequestId,
+    Context, DisplayConnection, DisplayServices, GuiFrameHostRequest, XwidgetScriptRequestId,
 };
 use neovm_value::heap_types::LispString;
 use neovm_value::intern::resolve_sym;
@@ -42,7 +42,7 @@ struct RecordingXwidgetDisplayHost {
     events: Arc<Mutex<Vec<XwidgetHostEvent>>>,
 }
 
-impl DisplayHost for RecordingXwidgetDisplayHost {
+impl DisplayConnection for RecordingXwidgetDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -111,6 +111,8 @@ impl DisplayHost for RecordingXwidgetDisplayHost {
         Ok(())
     }
 }
+
+impl DisplayServices for RecordingXwidgetDisplayHost {}
 
 fn eval(ctx: &mut Context, source: &str) -> Value {
     ctx.eval_str(source).expect("xwidget form should evaluate")

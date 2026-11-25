@@ -1188,7 +1188,7 @@ struct Publication {
 fn projection_expression(expression: &syn::Expr) -> bool {
     match expression {
         syn::Expr::Field(field) => {
-            matches!(&field.member, syn::Member::Named(name) if name == "display_host")
+            matches!(&field.member, syn::Member::Named(name) if name == "display_terminals")
                 && matches!(field.base.as_ref(), syn::Expr::Path(path) if path.path.is_ident("self"))
         }
         syn::Expr::MethodCall(call) => projection_expression(&call.receiver),
@@ -1294,7 +1294,7 @@ fn binding_publication_uses_existing_context_projection() {
     publication.visit_block(&method.block);
     assert!(
         publication.projected_calls > 0 && publication.unprojected_calls == 0,
-        "binding publication must invoke the setter on the alias bound from self.display_host; a void setter may use FIFO one-way publication, result/error operations remain synchronous"
+        "binding publication must invoke the setter on the alias bound from self.display_terminals; a void setter may use FIFO one-way publication, result/error operations remain synchronous"
     );
     assert!(
         scan("neovm-core/src/emacs_core/runtime/eval/mod.rs", &source).is_empty(),
@@ -1622,15 +1622,15 @@ fn module_edges_follow_production_test_shaped_paths() {
 
 #[test]
 fn binding_receiver_control_rejects_unrelated_read_and_shadow() {
-    let unrelated: syn::ImplItemFn = syn::parse_str("fn publish(&mut self) { if let Some(host) = self.display_host.as_mut() { observe(host); } other.set_gui_frame_alpha_lower_limit(1.0); }").expect("control");
+    let unrelated: syn::ImplItemFn = syn::parse_str("fn publish(&mut self) { if let Some(host) = self.display_terminals.connection_mut(terminal) { observe(host); } other.set_gui_frame_alpha_lower_limit(1.0); }").expect("control");
     let mut survey = Publication::default();
     survey.visit_block(&unrelated.block);
     assert_eq!((survey.projected_calls, survey.unprojected_calls), (0, 1));
-    let shadow: syn::ImplItemFn = syn::parse_str("fn publish(&mut self) { if let Some(host) = self.display_host.as_mut() { let host = other; host.set_gui_frame_alpha_lower_limit(1.0); } }").expect("shadow control");
+    let shadow: syn::ImplItemFn = syn::parse_str("fn publish(&mut self) { if let Some(host) = self.display_terminals.connection_mut(terminal) { let host = other; host.set_gui_frame_alpha_lower_limit(1.0); } }").expect("shadow control");
     let mut survey = Publication::default();
     survey.visit_block(&shadow.block);
     assert_eq!((survey.projected_calls, survey.unprojected_calls), (0, 1));
-    let legitimate: syn::ImplItemFn = syn::parse_str("fn publish(&mut self) { if let Some(host) = self.display_host.as_mut() { host.set_gui_frame_alpha_lower_limit(1.0); } }").expect("positive");
+    let legitimate: syn::ImplItemFn = syn::parse_str("fn publish(&mut self) { if let Some(host) = self.display_terminals.connection_mut(terminal) { host.set_gui_frame_alpha_lower_limit(1.0); } }").expect("positive");
     let mut survey = Publication::default();
     survey.visit_block(&legitimate.block);
     assert_eq!((survey.projected_calls, survey.unprojected_calls), (1, 0));

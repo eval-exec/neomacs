@@ -1,7 +1,7 @@
 //! Tests for the GNU value grammar and the elisp-to-policy transport.
 
 use super::*;
-use crate::emacs_core::display_host::DisplayHost;
+use crate::emacs_core::display_host::{DisplayConnection, DisplayServices};
 use neomacs_display_protocol::{EmacsModifierKey, ModifierEventKind, PhysicalModifierKey};
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::value::Value;
@@ -171,7 +171,7 @@ fn subr_compiles_the_seven_variables_and_ships_the_policy() {
     struct CapturingHost {
         policies: Arc<Mutex<Vec<neomacs_display_protocol::ModifierPolicy>>>,
     }
-    impl DisplayHost for CapturingHost {
+    impl DisplayConnection for CapturingHost {
         fn realize_gui_frame(
             &mut self,
             _request: neovm_eval::emacs_core::eval::GuiFrameHostRequest,
@@ -192,6 +192,8 @@ fn subr_compiles_the_seven_variables_and_ships_the_policy() {
             Ok(())
         }
     }
+
+    impl DisplayServices for CapturingHost {}
 
     let host = CapturingHost::default();
     let mut eval = Context::new(crate::test_utils::unit_runtime());

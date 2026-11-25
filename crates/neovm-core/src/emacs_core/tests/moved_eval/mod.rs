@@ -601,6 +601,16 @@ mod emacs_core_runtime_jit_tests_tail_calls_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/green/host_service/tests/late_host_input_test.rs"]
 mod emacs_core_runtime_eval_green_host_service_tests_late_host_input_test_rs;
+// M3 routed selection. `select-frame` is display's; the request carries the
+// requester's selected terminal across to main's display registry.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/green/host_service/tests/selection_terminal_test.rs"]
+mod emacs_core_runtime_eval_green_host_service_tests_selection_terminal_test_rs;
+// M3 fix round 1: a Green worker's text-terminal device effects cross to the
+// device main's display registry owns. The primitives are display's.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/green/host_service/tests/terminal_device_test.rs"]
+mod emacs_core_runtime_eval_green_host_service_tests_terminal_device_test_rs;
 #[cfg(all(test, feature = "jit"))]
 #[path = "emacs_core/runtime/jit/tests/green_inline_throw_on_input_test.rs"]
 mod emacs_core_runtime_jit_tests_green_inline_throw_on_input_test_rs;

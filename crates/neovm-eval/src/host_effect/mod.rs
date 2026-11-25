@@ -10,6 +10,9 @@ pub mod contracts;
 pub mod selection;
 
 #[doc(hidden)]
+pub mod terminal_device;
+
+#[doc(hidden)]
 pub mod wake;
 
 pub(crate) mod native_outcome;

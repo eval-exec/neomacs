@@ -660,11 +660,11 @@ impl<'receive> MainServiceTurn<'receive> {
     /// The owned path returns a pending native record, never a borrowed scope.
     pub(crate) fn serve_step(
         self,
-        host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+        host: Option<&mut crate::emacs_core::eval::DisplayTerminals>,
         start: impl FnOnce(
             HostRequestKey,
             OwnedNativeData,
-            Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+            Option<&mut crate::emacs_core::eval::DisplayTerminals>,
         ) -> NativeAdapterStep<StepKey>,
     ) -> ServiceStep {
         let Self {
@@ -1198,7 +1198,7 @@ pub(in crate::emacs_core::eval::green) fn serve_main_wake(
     control: &Control,
     receiver: &Receiver<Wake>,
     pump: &mut super::pump::MainNativePump,
-    host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
+    host: Option<&mut crate::emacs_core::eval::DisplayTerminals>,
 ) -> ServiceReturn {
     baton.enter();
     #[cfg(test)]

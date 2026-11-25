@@ -2695,7 +2695,8 @@ impl Context {
         if ids.is_empty() {
             return;
         }
-        let Some(host) = self.display_host.as_ref() else {
+        // Surfaces are created through the frame-less default display (class 2).
+        let Some(host) = self.default_display_connection() else {
             return;
         };
         for id in ids {
@@ -2715,7 +2716,8 @@ impl Context {
         if ids.is_empty() {
             return;
         }
-        let Some(host) = self.display_host.as_ref() else {
+        // Video sessions are created through the frame-less default display.
+        let Some(host) = self.default_display_connection() else {
             return;
         };
         for id in ids {

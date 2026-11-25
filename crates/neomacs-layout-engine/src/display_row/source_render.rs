@@ -71,7 +71,6 @@ use neomacs_display_protocol::types::Color;
 use neomacs_display_protocol::types::FaceId;
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::Value;
-use neovm_core::emacs_core::eval::DisplayHost;
 use neovm_core::window::DisplayRowSnapshot;
 
 /// Preserve the source boundary independently of fringe decoration.
@@ -571,7 +570,10 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
         let (display_host, evaluator) = if self.face_resolver.resolver().has_tty_realization() {
             (None, Some(&mut *self.evaluator))
         } else {
-            (self.evaluator.display_host.as_deref(), None)
+            (
+                self.face_resolver.resolver().frame_display(self.evaluator),
+                None,
+            )
         };
         let evaluator = std::cell::RefCell::new(evaluator);
         let realize = |face: &mut ResolvedFace| {
@@ -628,7 +630,10 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
         let (display_host, evaluator) = if self.face_resolver.resolver().has_tty_realization() {
             (None, Some(&mut *self.evaluator))
         } else {
-            (self.evaluator.display_host.as_deref(), None)
+            (
+                self.face_resolver.resolver().frame_display(self.evaluator),
+                None,
+            )
         };
         let evaluator = std::cell::RefCell::new(evaluator);
         let realize = |face: &mut ResolvedFace| {
@@ -705,7 +710,10 @@ impl<'face, 'emit, FS: crate::neovm_bridge::FaceServices>
         let (display_host, evaluator) = if self.face_resolver.resolver().has_tty_realization() {
             (None, Some(&mut *self.evaluator))
         } else {
-            (self.evaluator.display_host.as_deref(), None)
+            (
+                self.face_resolver.resolver().frame_display(self.evaluator),
+                None,
+            )
         };
         let evaluator = std::cell::RefCell::new(evaluator);
         let realize = |face: &mut ResolvedFace| {
@@ -866,10 +874,6 @@ impl<'a> TextRowOutputRenderState<'a> {
     fn install_resolved_measured_face(&mut self, face: &DisplayRowResolvedMeasuredFace) {
         self.output
             .install_resolved_face(face.binding(), face.font_metrics());
-    }
-
-    fn display_host(&self) -> Option<&dyn DisplayHost> {
-        self.evaluator.display_host.as_deref()
     }
 
     fn evaluator(&self) -> &Context {
@@ -1885,7 +1889,9 @@ impl<'a, FS: crate::neovm_bridge::FaceServices> TextRowSourceRenderState<'a, FS>
             current_x,
             content_x,
             params,
-            self.output_render.display_host(),
+            self.faces
+                .pipeline_resolver()
+                .frame_display(self.output_render.evaluator()),
             glyph_y_offset,
             fallback_metrics,
             start_position,
@@ -2118,7 +2124,7 @@ impl<'a> TextRowSourceMeasureState<'a> {
             source_state: &mut source_state,
             context: DisplayRowRenderContext::new(
                 self.face_resolver,
-                self.evaluator.display_host.as_deref(),
+                self.face_resolver.frame_display(self.evaluator),
                 face_ids,
                 crate::string_property_snapshot::StringSourceRootScope::Rooted(
                     self.evaluator.owned_root_retainer(),

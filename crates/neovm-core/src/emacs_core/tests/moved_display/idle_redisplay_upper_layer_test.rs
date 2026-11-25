@@ -39,9 +39,14 @@ fn resumed_tty_invalidates_idle_redisplay() {
     eval.frame_manager_mut()
         .create_frame("resume-idle-tty", 640, 384, buffer);
     let log = Rc::new(RefCell::new(Vec::new()));
-    set_terminal_host(Box::new(
-        neovm_display::test_support::authority::recording_terminal_host_for_test(Rc::clone(&log)),
-    ));
+    set_terminal_host(
+        &mut eval,
+        Box::new(
+            neovm_display::test_support::authority::recording_terminal_host_for_test(Rc::clone(
+                &log,
+            )),
+        ),
+    );
     let layouts = Rc::new(Cell::new(0));
     let observed = Rc::clone(&layouts);
     eval.redisplay_fn = Some(Box::new(move |eval| {

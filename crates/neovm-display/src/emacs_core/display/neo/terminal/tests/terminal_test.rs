@@ -1,4 +1,4 @@
-use crate::emacs_core::display_host::{DisplayHost, TerminalCreateRequest};
+use crate::emacs_core::display_host::{DisplayConnection, DisplayServices, TerminalCreateRequest};
 use neomacs_display_protocol::TerminalDisplayTarget;
 use neomacs_display_protocol::TerminalFloatPlacement;
 use neomacs_display_protocol::TerminalGridSize;
@@ -32,7 +32,7 @@ struct RecordingTerminalDisplayHost {
     events: Arc<Mutex<Vec<TerminalHostEvent>>>,
 }
 
-impl DisplayHost for RecordingTerminalDisplayHost {
+impl DisplayConnection for RecordingTerminalDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -93,6 +93,8 @@ impl DisplayHost for RecordingTerminalDisplayHost {
         }
     }
 }
+
+impl DisplayServices for RecordingTerminalDisplayHost {}
 
 #[test]
 fn public_terminal_builtins_route_typed_requests_through_the_display_host() {

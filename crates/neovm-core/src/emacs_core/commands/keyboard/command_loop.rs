@@ -335,9 +335,9 @@ impl CommandLoopHost for Context {
             Err(FlowKind::Signal(sig)) => {
                 let rendered = crate::emacs_core::print::format_signal_data_with_eval(self, &sig);
                 tracing::warn!("command_loop_top_level_1: top-level SIGNALED: {}", rendered);
+                // The pending GUI startup is the frame-less default display's.
                 if self
-                    .display_host
-                    .as_mut()
+                    .default_display_connection_mut()
                     .is_some_and(|host| host.fail_pending_gui_startup(rendered.clone()))
                 {
                     eprintln!("Error during GUI startup: {rendered}");

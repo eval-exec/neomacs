@@ -28,7 +28,6 @@ fn pin_gc_mode(context: &mut Context, generational: bool) {
 struct RestoreTerminal;
 impl Drop for RestoreTerminal {
     fn drop(&mut self) {
-        neovm_core::emacs_core::terminal::pure::reset_terminal_host();
         neovm_core::emacs_core::terminal::pure::reset_terminal_runtime();
     }
 }
@@ -38,7 +37,6 @@ impl Drop for RestoreTerminal {
 fn begin_actual_tty_rows_observation(
     context: &mut Context,
 ) -> Result<RowsObservationEpoch, RowsObservationRefusal> {
-    use neovm_core::emacs_core::DisplayHost;
     use neovm_core::emacs_core::terminal::pure::{self, TerminalRuntimeConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
 

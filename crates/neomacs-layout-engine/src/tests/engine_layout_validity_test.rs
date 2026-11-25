@@ -6,7 +6,7 @@ use super::*;
 #[derive(Clone, Default)]
 struct ReloadingImageHost(std::rc::Rc<std::cell::Cell<bool>>);
 
-impl DisplayHost for ReloadingImageHost {
+impl neovm_core::emacs_core::DisplayConnection for ReloadingImageHost {
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -14,7 +14,9 @@ impl DisplayHost for ReloadingImageHost {
     fn resize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl neovm_core::emacs_core::DisplayServices for ReloadingImageHost {
     fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
         Some(self)
     }
@@ -55,7 +57,7 @@ impl ImageCatalog for ReloadingImageHost {
 /// extent. Pixel arithmetic and ordinary layout receive the same catalog.
 struct ExplicitExtentImageHost;
 
-impl DisplayHost for ExplicitExtentImageHost {
+impl neovm_core::emacs_core::DisplayConnection for ExplicitExtentImageHost {
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -63,7 +65,9 @@ impl DisplayHost for ExplicitExtentImageHost {
     fn resize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl neovm_core::emacs_core::DisplayServices for ExplicitExtentImageHost {
     fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
         Some(self)
     }

@@ -8,9 +8,9 @@ use crate::window::FrameId;
 use neomacs_display_protocol::FrameFontSize;
 use neovm_edit::buffer::{Buffer, CharPos0};
 use neovm_eval::emacs_core::eval::{
-    Context, DisplayHost, FontEntityMetricsRequest, FontOtfCapability, FontPxProbeResult,
-    FontSpecResolveRequest, GuiFrameHostRequest, ResolvedFontEntityMetrics, ResolvedFontMatch,
-    ResolvedFontSpecMatch,
+    Context, DisplayConnection, DisplayServices, FontEntityMetricsRequest, FontOtfCapability,
+    FontPxProbeResult, FontSpecResolveRequest, GuiFrameHostRequest, ResolvedFontEntityMetrics,
+    ResolvedFontMatch, ResolvedFontSpecMatch,
 };
 use neovm_value::heap_types::LispString;
 use neovm_value::value::ValueKind;
@@ -370,7 +370,7 @@ struct FontAtDisplayHost {
     capability: Option<FontOtfCapability>,
 }
 
-impl DisplayHost for FontAtDisplayHost {
+impl DisplayConnection for FontAtDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -378,7 +378,9 @@ impl DisplayHost for FontAtDisplayHost {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for FontAtDisplayHost {
     fn resolve_font_for_char(
         &mut self,
         request: FontResolveRequest,
@@ -413,7 +415,7 @@ struct CapturingFontAtDisplayHost {
     last_request: Rc<RefCell<Option<FontResolveRequest>>>,
 }
 
-impl DisplayHost for CapturingFontAtDisplayHost {
+impl DisplayConnection for CapturingFontAtDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -421,7 +423,9 @@ impl DisplayHost for CapturingFontAtDisplayHost {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for CapturingFontAtDisplayHost {
     fn resolve_font_for_char(
         &mut self,
         request: FontResolveRequest,
@@ -435,7 +439,7 @@ struct SymbolPolicyCapturingHost {
     published: Rc<RefCell<Vec<(bool, Option<Value>)>>>,
 }
 
-impl DisplayHost for SymbolPolicyCapturingHost {
+impl DisplayConnection for SymbolPolicyCapturingHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -443,7 +447,9 @@ impl DisplayHost for SymbolPolicyCapturingHost {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for SymbolPolicyCapturingHost {
     fn synchronize_symbol_font_policy(
         &mut self,
         use_primary_font: bool,
@@ -470,7 +476,7 @@ struct CapturingFindFontDisplayHost {
 /// A Thin-only catalog: listing respects styles, opening may substitute.
 struct ThinOnlyDisplayHost(CapturingFindFontDisplayHost);
 
-impl DisplayHost for ThinOnlyDisplayHost {
+impl DisplayConnection for ThinOnlyDisplayHost {
     fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
         self.0.realize_gui_frame(request)
     }
@@ -478,7 +484,9 @@ impl DisplayHost for ThinOnlyDisplayHost {
     fn resize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
         self.0.resize_gui_frame(request)
     }
+}
 
+impl DisplayServices for ThinOnlyDisplayHost {
     fn resolve_font_for_spec(
         &mut self,
         request: FontSpecResolveRequest,
@@ -548,7 +556,7 @@ struct FontFamilyListDisplayHost {
     families: Vec<AvailableFontFamilyName>,
 }
 
-impl DisplayHost for FontFamilyListDisplayHost {
+impl DisplayConnection for FontFamilyListDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -556,7 +564,9 @@ impl DisplayHost for FontFamilyListDisplayHost {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for FontFamilyListDisplayHost {
     fn list_font_families(
         &mut self,
         frame_id: FrameId,
@@ -566,7 +576,7 @@ impl DisplayHost for FontFamilyListDisplayHost {
     }
 }
 
-impl DisplayHost for CapturingFindFontDisplayHost {
+impl DisplayConnection for CapturingFindFontDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -574,7 +584,9 @@ impl DisplayHost for CapturingFindFontDisplayHost {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for CapturingFindFontDisplayHost {
     fn resolve_font_for_spec(
         &mut self,
         request: FontSpecResolveRequest,
@@ -609,7 +621,7 @@ impl DisplayHost for CapturingFindFontDisplayHost {
     }
 }
 
-impl DisplayHost for NativeFontEntityDisplayHost {
+impl DisplayConnection for NativeFontEntityDisplayHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -617,7 +629,9 @@ impl DisplayHost for NativeFontEntityDisplayHost {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for NativeFontEntityDisplayHost {
     fn probe_font_entity_metrics(
         &mut self,
         request: FontEntityMetricsRequest,
@@ -2916,13 +2930,16 @@ struct ListingFontDisplayHost {
     fonts: Vec<neovm_eval::emacs_core::eval::ListedFontEntity>,
 }
 
-impl DisplayHost for ListingFontDisplayHost {
+impl DisplayConnection for ListingFontDisplayHost {
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
     fn resize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
+
+impl DisplayServices for ListingFontDisplayHost {
     fn list_fonts_for_spec(
         &mut self,
         query: neovm_eval::emacs_core::eval::FontSpecListQuery,
@@ -3196,13 +3213,16 @@ fn listing_xlfd_replacement_clears_overwritten_slots_like_gnu() {
 fn listing_passes_ignored_policy_to_host_before_registration() {
     crate::test_utils::init_test_tracing();
     struct AcceptanceHost;
-    impl DisplayHost for AcceptanceHost {
+    impl DisplayConnection for AcceptanceHost {
         fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
         fn resize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
+    }
+
+    impl DisplayServices for AcceptanceHost {
         fn list_fonts_for_spec(
             &mut self,
             _: neovm_eval::emacs_core::eval::FontSpecListQuery,

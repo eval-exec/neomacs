@@ -12,7 +12,7 @@ pub use subrs::register_subrs;
 #[path = "tests/chrome_test.rs"]
 mod tests;
 
-use neovm_eval::emacs_core::eval::Context;
+use neovm_eval::emacs_core::eval::{BroadcastSetting, Context};
 use neovm_value::error::{EvalResult, Flow, expect_args, signal};
 use neovm_value::value::Value;
 
@@ -36,10 +36,9 @@ fn number_argument(value: Value) -> Result<f32, Flow> {
 fn set_scroll_indicators(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("neomacs-set-scroll-indicators", &args, 1)?;
     let enabled = !args[0].is_nil();
-    if let Some(host) = eval.display_host.as_mut() {
-        host.set_scroll_indicators(enabled)
-            .map_err(|message| chrome_error("neomacs-set-scroll-indicators", message))?;
-    }
+    eval.display_terminals
+        .broadcast(BroadcastSetting::ScrollIndicators(enabled))
+        .map_err(|message| chrome_error("neomacs-set-scroll-indicators", message))?;
     Ok(Value::NIL)
 }
 
@@ -49,9 +48,11 @@ fn set_extra_spacing(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("neomacs-set-extra-spacing", &args, 2)?;
     let line_spacing = number_argument(args[0])?;
     let letter_spacing = number_argument(args[1])?;
-    if let Some(host) = eval.display_host.as_mut() {
-        host.set_extra_spacing(line_spacing, letter_spacing)
-            .map_err(|message| chrome_error("neomacs-set-extra-spacing", message))?;
-    }
+    eval.display_terminals
+        .broadcast(BroadcastSetting::ExtraSpacing {
+            line: line_spacing,
+            letter: letter_spacing,
+        })
+        .map_err(|message| chrome_error("neomacs-set-extra-spacing", message))?;
     Ok(Value::NIL)
 }

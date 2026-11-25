@@ -220,7 +220,7 @@ mod tests {
         assert!(ctx.take_activation_authority().is_none());
         assert_eq!(ctx.activate_host_session(), Ok(()));
         assert_eq!(ctx.selection_phase(), SelectionPhase::Local);
-        ctx.display_host = None;
+        ctx.display_terminals.uninstall_display();
         assert_eq!(ctx.activate_host_session(), Ok(()));
         assert_eq!(ctx.selection_phase(), SelectionPhase::Local);
     }

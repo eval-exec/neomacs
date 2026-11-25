@@ -45,6 +45,7 @@ pub mod image_catalog;
 mod rows_authority;
 pub use rows_authority::InertRowsHostAuthority;
 pub(crate) use rows_authority::actual_rows_host_type;
+pub mod terminals;
 pub mod tty_host;
 
 /// Validated terminal creation request owned by the evaluator/display-host
@@ -152,29 +153,12 @@ pub struct FontResolveRequest {
     pub face: Face,
 }
 
-pub trait DisplayHost {
-    /// Concrete host identity for the closed numeric Rows authority check.
-    ///
-    /// The return type is public only to make this provided method a valid
-    /// public interface. Its module is private and it is not re-exported, so
-    /// external host implementations cannot name the return type to override
-    /// this method or forward another host's identity. They inherit this
-    /// default, whose `Self` is their actual concrete implementor even when
-    /// called through a stored `dyn DisplayHost`.
-    ///
-    /// Keep the return type and its constructor sealed. Implementations in
-    /// this trusted module subtree must preserve the same concrete-`Self`
-    /// identity invariant. This identity grants no geometry, lifetime or
-    /// cache authority by itself; Rows still requires the audited host-type
-    /// contract and every producer, owner and freshness check.
-    #[doc(hidden)]
-    fn __rows_host_identity(&self) -> rows_authority::ActualHostType
-    where
-        Self: 'static,
-    {
-        rows_authority::ActualHostType::of::<Self>()
-    }
-
+/// The per-connection half of a display (DESIGN §7.1; u4 §2.1 groups G1–G5 and G8–G10):
+/// connection identity and resources, the opening-frame protocol, native frame lifecycle and
+/// attributes, menus and tooltips, selections, renderer-hosted media, neo-term and renderer
+/// configuration. A terminal's backing owns its connection; frame-addressed calls reach it
+/// through the frame's terminal ([`terminals::DisplayTerminals`]).
+pub trait DisplayConnection {
     #[cfg(target_os = "macos")]
     fn ns_resource(&self, _name: &str) -> Option<String> {
         None
@@ -376,158 +360,6 @@ pub trait DisplayHost {
     fn current_primary_window_size(&self) -> Option<GuiFrameHostSize> {
         None
     }
-    fn list_font_families(
-        &mut self,
-        _frame_id: FrameId,
-    ) -> Result<Vec<AvailableFontFamilyName>, String> {
-        Ok(Vec::new())
-    }
-    /// Publish the live inputs of GNU's symbol-font reuse rule so host-side
-    /// character font selection applies it before fontset fallback.
-    ///
-    /// GNU `face_for_char` reads `use-default-font-for-symbols` and
-    /// `char-script-table` on every character lookup (src/fontset.c:930-948
-    /// at a360712c9d272d950d8d8255ef74570f7e90b7d9) and keeps the ASCII
-    /// face's font when the rule fires, opening nothing. The evaluator owns
-    /// those globals and the host owns font selection, so the evaluator
-    /// publishes them at the same point GNU reads them. Steady state inside
-    /// the host is an identity/generation check, as with the layout engine's
-    /// copy of the same policy. `None` marks an unreadable table.
-    fn synchronize_symbol_font_policy(
-        &mut self,
-        _use_primary_font: bool,
-        _char_script_table: Option<neovm_value::value::Value>,
-    ) {
-    }
-    fn resolve_font_for_char(
-        &mut self,
-        _request: FontResolveRequest,
-    ) -> Result<Option<ResolvedFontMatch>, String> {
-        Ok(None)
-    }
-    fn resolve_frame_font(
-        &mut self,
-        _frame_id: FrameId,
-        _request: FrameFontRequest,
-    ) -> Result<Option<ResolvedFrameFont>, String> {
-        Ok(None)
-    }
-    fn resolve_font_for_spec(
-        &mut self,
-        _request: FontSpecResolveRequest,
-    ) -> Result<Option<ResolvedFontSpecMatch>, String> {
-        Ok(None)
-    }
-    fn list_fonts_for_spec(
-        &mut self,
-        _query: FontSpecListQuery,
-        _prefer: Option<FontSpecListQuery>,
-        _maximum: Option<usize>,
-        _filter: Option<&mut FontListFilter<'_>>,
-    ) -> Result<Vec<ListedFontEntity>, FontListError> {
-        Ok(Vec::new())
-    }
-    fn font_character_coverage(
-        &mut self,
-        _request: FontCoverageRequest,
-    ) -> Result<FontCoverage, String> {
-        Ok(FontCoverage::NeedsOpening)
-    }
-    /// GNU `font_pixel_size` for a point size on the selected frame: the
-    /// frame's resolution converts points to pixels. `None` when the host has
-    /// no window frame (GNU returns 1 for a non-window frame).
-    fn font_opening_pixel_size(&mut self, _size: FontOpeningSize) -> Result<Option<u32>, String> {
-        Ok(None)
-    }
-    /// GNU `font_open_entity`: open the exact entity published by the font
-    /// catalog at `request.size` and return its opaque font-object Value.
-    /// `None` when the host is not graphical, the handle is stale, or the
-    /// driver cannot open that face.
-    fn open_font_entity(
-        &mut self,
-        _request: FontOpenEntityRequest,
-    ) -> Result<Option<neovm_value::value::Value>, String> {
-        Ok(None)
-    }
-    /// GNU `POINT_TO_PIXEL` for `open-font`'s float size argument: the frame
-    /// resolution turns points into an `intmax_t` pixel operand *before* the
-    /// zero-to-120 rule.  `None` when the host has no frame resolution.
-    fn font_open_point_pixels(&mut self, _points: f64) -> Result<Option<i64>, String> {
-        Ok(None)
-    }
-    fn probe_font_px_metrics(
-        &mut self,
-        _file: &str,
-        _face_index: u32,
-        _pixel_size: u32,
-        _wght: Option<f32>,
-    ) -> Result<Option<FontPxProbeResult>, String> {
-        Ok(None)
-    }
-    fn probe_font_entity_metrics(
-        &mut self,
-        request: FontEntityMetricsRequest,
-    ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
-        let Some(file) = request.file.as_ref().and_then(LispString::as_utf8_str) else {
-            return Ok(None);
-        };
-        let weight = request.weight.map(|weight| f32::from(weight.css_weight()));
-        let pixel_size = match request.size {
-            FontOpeningSize::SmallestUsable => 0,
-            FontOpeningSize::Pixels(size) => size.get(),
-            // A file-only adapter has no display resolution. Native hosts
-            // must resolve point requests using their own font-sizing policy.
-            FontOpeningSize::Points { .. } | FontOpeningSize::NamedDefault { .. } => {
-                return Ok(None);
-            }
-        };
-        let metrics = self.probe_font_px_metrics(file, 0, pixel_size, weight)?;
-        Ok(metrics.map(|metrics| ResolvedFontEntityMetrics {
-            metrics,
-            file: request.file,
-            capability: None,
-        }))
-    }
-    fn font_otf_capability(
-        &mut self,
-        _file: &str,
-        _face_index: u32,
-    ) -> Result<Option<FontOtfCapability>, String> {
-        Ok(None)
-    }
-    /// GNU-compatible synchronous image query used by explicit Lisp
-    /// primitives such as `image-size`. This may wait for metadata and must
-    /// never be called from redisplay.
-    ///
-    /// `limit` is the querying frame's resolved `max-image-size`, for the same
-    /// reason [`image_catalog::ImageCatalog::lookup`] takes it: GNU
-    /// checks the bound in the loader, so a synchronous query must refuse the
-    /// same images redisplay refuses.
-    fn resolve_image_sync(
-        &self,
-        _request: image_catalog::ImageResolveRequest,
-        _limit: ImageSizeLimit,
-    ) -> Result<Option<image_catalog::ReadyImage>, String> {
-        Ok(None)
-    }
-    /// Nonblocking image catalog used by redisplay. Synchronous Lisp image
-    /// queries use `resolve_image_sync`; redisplay must use this catalog instead.
-    fn image_catalog(&self) -> Option<&dyn image_catalog::ImageCatalog> {
-        None
-    }
-    /// The same catalog as [`Self::image_catalog`], as a shared handle.
-    ///
-    /// Layout needs to resolve `(image …)` operands inside `(space :align-to …)`
-    /// expressions (GNU does this inline with `lookup_image`), but the layout
-    /// engine's pixel arithmetic must not hold a borrow of the host. Hosts with
-    /// a catalog should return it here as well.
-    fn image_catalog_shared(&self) -> Option<std::rc::Rc<dyn image_catalog::ImageCatalog>> {
-        None
-    }
-    /// Called when renderer image-cache state changes, before retained layout
-    /// matrices are invalidated. Hosts reconcile decode completion and lost
-    /// residency so the rebuild observes one authoritative catalog state.
-    fn reconcile_image_catalog_for_media_rebuild(&self, _event: ImageStateEvent) {}
     fn request_video(
         &self,
         _request: VideoResolveRequest,
@@ -703,6 +535,194 @@ pub trait DisplayHost {
     /// recovery path can be exercised against a healthy device.
     fn debug_lose_device(&self) {}
 }
+
+/// The per-process half of a display (G6 fonts, G7 images and the sealed Rows identity): the
+/// services layout and font Lisp read on the evaluator host. They never name a connection, so
+/// one instance serves every terminal ([`terminals::DisplayTerminals::services`]).
+pub trait DisplayServices {
+    /// Concrete host identity for the closed numeric Rows authority check.
+    ///
+    /// The return type is public only to make this provided method a valid
+    /// public interface. Its module is private and it is not re-exported, so
+    /// external host implementations cannot name the return type to override
+    /// this method or forward another host's identity. They inherit this
+    /// default, whose `Self` is their actual concrete implementor even when
+    /// called through a stored `dyn DisplayServices`.
+    ///
+    /// Keep the return type and its constructor sealed. Implementations in
+    /// this trusted module subtree must preserve the same concrete-`Self`
+    /// identity invariant. This identity grants no geometry, lifetime or
+    /// cache authority by itself; Rows still requires the audited host-type
+    /// contract and every producer, owner and freshness check.
+    #[doc(hidden)]
+    fn __rows_host_identity(&self) -> rows_authority::ActualHostType
+    where
+        Self: 'static,
+    {
+        rows_authority::ActualHostType::of::<Self>()
+    }
+    fn list_font_families(
+        &mut self,
+        _frame_id: FrameId,
+    ) -> Result<Vec<AvailableFontFamilyName>, String> {
+        Ok(Vec::new())
+    }
+    /// Publish the live inputs of GNU's symbol-font reuse rule so host-side
+    /// character font selection applies it before fontset fallback.
+    ///
+    /// GNU `face_for_char` reads `use-default-font-for-symbols` and
+    /// `char-script-table` on every character lookup (src/fontset.c:930-948
+    /// at a360712c9d272d950d8d8255ef74570f7e90b7d9) and keeps the ASCII
+    /// face's font when the rule fires, opening nothing. The evaluator owns
+    /// those globals and the host owns font selection, so the evaluator
+    /// publishes them at the same point GNU reads them. Steady state inside
+    /// the host is an identity/generation check, as with the layout engine's
+    /// copy of the same policy. `None` marks an unreadable table.
+    fn synchronize_symbol_font_policy(
+        &mut self,
+        _use_primary_font: bool,
+        _char_script_table: Option<neovm_value::value::Value>,
+    ) {
+    }
+    fn resolve_font_for_char(
+        &mut self,
+        _request: FontResolveRequest,
+    ) -> Result<Option<ResolvedFontMatch>, String> {
+        Ok(None)
+    }
+    fn resolve_frame_font(
+        &mut self,
+        _frame_id: FrameId,
+        _request: FrameFontRequest,
+    ) -> Result<Option<ResolvedFrameFont>, String> {
+        Ok(None)
+    }
+    fn resolve_font_for_spec(
+        &mut self,
+        _request: FontSpecResolveRequest,
+    ) -> Result<Option<ResolvedFontSpecMatch>, String> {
+        Ok(None)
+    }
+    fn list_fonts_for_spec(
+        &mut self,
+        _query: FontSpecListQuery,
+        _prefer: Option<FontSpecListQuery>,
+        _maximum: Option<usize>,
+        _filter: Option<&mut FontListFilter<'_>>,
+    ) -> Result<Vec<ListedFontEntity>, FontListError> {
+        Ok(Vec::new())
+    }
+    fn font_character_coverage(
+        &mut self,
+        _request: FontCoverageRequest,
+    ) -> Result<FontCoverage, String> {
+        Ok(FontCoverage::NeedsOpening)
+    }
+    /// GNU `font_pixel_size` for a point size on the selected frame: the
+    /// frame's resolution converts points to pixels. `None` when the host has
+    /// no window frame (GNU returns 1 for a non-window frame).
+    fn font_opening_pixel_size(&mut self, _size: FontOpeningSize) -> Result<Option<u32>, String> {
+        Ok(None)
+    }
+    /// GNU `font_open_entity`: open the exact entity published by the font
+    /// catalog at `request.size` and return its opaque font-object Value.
+    /// `None` when the host is not graphical, the handle is stale, or the
+    /// driver cannot open that face.
+    fn open_font_entity(
+        &mut self,
+        _request: FontOpenEntityRequest,
+    ) -> Result<Option<neovm_value::value::Value>, String> {
+        Ok(None)
+    }
+    /// GNU `POINT_TO_PIXEL` for `open-font`'s float size argument: the frame
+    /// resolution turns points into an `intmax_t` pixel operand *before* the
+    /// zero-to-120 rule.  `None` when the host has no frame resolution.
+    fn font_open_point_pixels(&mut self, _points: f64) -> Result<Option<i64>, String> {
+        Ok(None)
+    }
+    fn probe_font_px_metrics(
+        &mut self,
+        _file: &str,
+        _face_index: u32,
+        _pixel_size: u32,
+        _wght: Option<f32>,
+    ) -> Result<Option<FontPxProbeResult>, String> {
+        Ok(None)
+    }
+    fn probe_font_entity_metrics(
+        &mut self,
+        request: FontEntityMetricsRequest,
+    ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
+        let Some(file) = request.file.as_ref().and_then(LispString::as_utf8_str) else {
+            return Ok(None);
+        };
+        let weight = request.weight.map(|weight| f32::from(weight.css_weight()));
+        let pixel_size = match request.size {
+            FontOpeningSize::SmallestUsable => 0,
+            FontOpeningSize::Pixels(size) => size.get(),
+            // A file-only adapter has no display resolution. Native hosts
+            // must resolve point requests using their own font-sizing policy.
+            FontOpeningSize::Points { .. } | FontOpeningSize::NamedDefault { .. } => {
+                return Ok(None);
+            }
+        };
+        let metrics = self.probe_font_px_metrics(file, 0, pixel_size, weight)?;
+        Ok(metrics.map(|metrics| ResolvedFontEntityMetrics {
+            metrics,
+            file: request.file,
+            capability: None,
+        }))
+    }
+    fn font_otf_capability(
+        &mut self,
+        _file: &str,
+        _face_index: u32,
+    ) -> Result<Option<FontOtfCapability>, String> {
+        Ok(None)
+    }
+    /// GNU-compatible synchronous image query used by explicit Lisp
+    /// primitives such as `image-size`. This may wait for metadata and must
+    /// never be called from redisplay.
+    ///
+    /// `limit` is the querying frame's resolved `max-image-size`, for the same
+    /// reason [`image_catalog::ImageCatalog::lookup`] takes it: GNU
+    /// checks the bound in the loader, so a synchronous query must refuse the
+    /// same images redisplay refuses.
+    fn resolve_image_sync(
+        &self,
+        _request: image_catalog::ImageResolveRequest,
+        _limit: ImageSizeLimit,
+    ) -> Result<Option<image_catalog::ReadyImage>, String> {
+        Ok(None)
+    }
+    /// Nonblocking image catalog used by redisplay. Synchronous Lisp image
+    /// queries use `resolve_image_sync`; redisplay must use this catalog instead.
+    fn image_catalog(&self) -> Option<&dyn image_catalog::ImageCatalog> {
+        None
+    }
+    /// The same catalog as [`Self::image_catalog`], as a shared handle.
+    ///
+    /// Layout needs to resolve `(image …)` operands inside `(space :align-to …)`
+    /// expressions (GNU does this inline with `lookup_image`), but the layout
+    /// engine's pixel arithmetic must not hold a borrow of the host. Hosts with
+    /// a catalog should return it here as well.
+    fn image_catalog_shared(&self) -> Option<std::rc::Rc<dyn image_catalog::ImageCatalog>> {
+        None
+    }
+    /// Called when renderer image-cache state changes, before retained layout
+    /// matrices are invalidated. Hosts reconcile decode completion and lost
+    /// residency so the rebuild observes one authoritative catalog state.
+    fn reconcile_image_catalog_for_media_rebuild(&self, _event: ImageStateEvent) {}
+}
+
+/// One object that provides both halves: the process services and one terminal's connection.
+///
+/// `PrimaryWindowDisplayHost` (the in-process GUI), the primary TTY's popup host and the test
+/// hosts are such objects. The registry stores the object once, on its terminal, and answers
+/// [`terminals::DisplayTerminals::services`] from it.
+pub trait DisplayHost: DisplayConnection + DisplayServices {}
+
+impl<T: DisplayConnection + DisplayServices + ?Sized> DisplayHost for T {}
 
 /// Typed request crossing from frame-local face state into native font
 /// selection. The embedded face carries style; `size` is its sole sizing

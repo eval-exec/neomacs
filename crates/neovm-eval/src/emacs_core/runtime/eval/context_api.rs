@@ -1119,13 +1119,13 @@ impl Context {
         (&mut self.processes, &self.threads)
     }
 
-    /// Split borrow: the frame manager and the display host, both mutably.
+    /// Split borrow: the frame manager and the display registry, both mutably.
     #[doc(hidden)]
     #[inline]
-    pub fn frame_manager_and_display_host_mut(
+    pub fn frame_manager_and_display_terminals_mut(
         &mut self,
-    ) -> (&mut FrameManager, &mut Option<Box<dyn DisplayHost>>) {
-        (&mut self.frames, &mut self.display_host)
+    ) -> (&mut FrameManager, &mut DisplayTerminals) {
+        (&mut self.frames, &mut self.display_terminals)
     }
 
     #[doc(hidden)]
@@ -1357,30 +1357,27 @@ impl Context {
     }
 
     /// Split borrow: the frame manager by shared reference and the display
-    /// host mutably (font resolution reads frames, publishes through the host).
+    /// registry mutably (font resolution reads frames, publishes through the
+    /// display services).
     #[doc(hidden)]
     #[inline]
-    pub fn frame_manager_read_and_display_host_mut(
+    pub fn frame_manager_read_and_display_terminals_mut(
         &mut self,
-    ) -> (&FrameManager, &mut Option<Box<dyn DisplayHost>>) {
-        (&self.frames, &mut self.display_host)
+    ) -> (&FrameManager, &mut DisplayTerminals) {
+        (&self.frames, &mut self.display_terminals)
     }
 
-    /// Split borrow: the frame manager, buffer manager and display host, all
-    /// mutably.
+    /// Split borrow: the frame manager, buffer manager and display registry,
+    /// all mutably.
     #[doc(hidden)]
     #[inline]
-    pub fn frame_manager_buffers_and_display_host_mut(
+    pub fn frame_manager_buffers_and_display_terminals_mut(
         &mut self,
-    ) -> (
-        &mut FrameManager,
-        &mut BufferManager,
-        &mut Option<Box<dyn DisplayHost>>,
-    ) {
+    ) -> (&mut FrameManager, &mut BufferManager, &mut DisplayTerminals) {
         (
             &mut self.frames,
             &mut self.edit.buffers,
-            &mut self.display_host,
+            &mut self.display_terminals,
         )
     }
 

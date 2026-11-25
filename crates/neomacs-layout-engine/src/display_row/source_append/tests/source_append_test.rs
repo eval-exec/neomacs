@@ -134,7 +134,9 @@ use neomacs_display_protocol::types::DisplayWindowId;
 use neomacs_display_protocol::types::FaceId;
 use neomacs_display_protocol::types::{Color, Rect};
 use neovm_core::buffer::{Buffer, BufferId, CharPos0, EmacsBytePos, EmacsByteRange, LispCharPos1};
-use neovm_core::emacs_core::eval::{DisplayHost, GuiFrameHostRequest};
+use neovm_core::emacs_core::eval::{
+    DisplayConnection, DisplayHost, DisplayServices, FrameDisplay, GuiFrameHostRequest,
+};
 use neovm_core::emacs_core::image_catalog::{
     ImageCatalog, ImageLookup, ImageResolveRequest, ImageSizeLimit, PendingImage, ReadyImage,
 };
@@ -467,7 +469,7 @@ fn buffer_line_number_text_prefix_renders_blank_field_on_continuation_row() {
     assert!(!line_numbers.should_render());
 }
 
-impl DisplayHost for RecordingAppendImageHost {
+impl DisplayConnection for RecordingAppendImageHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -475,7 +477,9 @@ impl DisplayHost for RecordingAppendImageHost {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
 
+impl DisplayServices for RecordingAppendImageHost {
     fn resolve_image_sync(
         &self,
         _request: ImageResolveRequest,
@@ -10873,7 +10877,7 @@ fn display_property_media_replacement_carries_the_frame_foreground() {
         0.0,
         0.0,
         &params,
-        Some(&host),
+        Some(FrameDisplay::of_host(&host)),
     )
     .resolve()
     .expect("media replacement append item");
@@ -10931,7 +10935,7 @@ fn margin_media_replacement_carries_the_frame_foreground() {
         0.0,
         0.0,
         &params,
-        Some(&host),
+        Some(FrameDisplay::of_host(&host)),
     )
     .resolve()
     .expect("margin media replacement append item");
@@ -13268,7 +13272,7 @@ impl<S: crate::display_source::DisplayItemSource> DisplayRowSourceWalker<S> {
             &mut self.source,
             crate::display_source_resolver::DisplaySourceResolveParams::new(
                 face_basis,
-                display_host,
+                display_host.map(FrameDisplay::of_host),
                 neovm_core::emacs_core::image_catalog::ImageScaleEnvironment::default(),
             ),
             face_ids,

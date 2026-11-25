@@ -3057,7 +3057,7 @@ pub fn builtin_open_font(eval: &mut super::eval::Context, args: Vec<Value>) -> E
         .and_then(|value| value.as_int())
         .and_then(|value| u32::try_from(value).ok())
         .and_then(FontEntityHandle::new);
-    let Some(host) = eval.display_host.as_mut() else {
+    let Some(host) = eval.display_terminals.services_mut() else {
         return Ok(Value::NIL);
     };
     if let SizeRequest::Float(points) = request {

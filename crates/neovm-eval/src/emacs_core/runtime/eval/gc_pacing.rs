@@ -1099,28 +1099,6 @@ impl Context {
         crate::emacs_core::eval::process_hooks::wait_notifier(self)
     }
 
-    pub fn set_display_host(&mut self, mut host: Box<dyn DisplayHost>) {
-        let _ = host.set_visual_config(self.visual_config.clone());
-        // A dump or an earlier init form can set the variable before the
-        // native host exists. Reattachment must inherit its current value.
-        host.set_ns_confirm_quit(
-            self.builtin_var_value_by_name("ns-confirm-quit")
-                .unwrap_or(Value::NIL)
-                .is_truthy(),
-        );
-        self.display_host = Some(host);
-        // Cut-4 flip. Only a Green World activates, so the default GUI/TTY
-        // path stays on the serial installer until S3. A re-attach keeps the
-        // installed arm and uses the current host; a worker is refused.
-        match self.activate_host_session() {
-            Ok(()) => {}
-            Err(super::activation_owner::HostSessionActivationError::NotGreen) => {}
-            Err(error) => {
-                tracing::warn!(?error, "host session activation refused");
-            }
-        }
-    }
-
     pub fn set_tty_frame_host_factory(&mut self, factory: Box<dyn TtyFrameHostFactory>) {
         self.tty_frame_host_factory = Some(factory);
     }

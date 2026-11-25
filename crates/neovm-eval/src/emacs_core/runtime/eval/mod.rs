@@ -17,8 +17,14 @@ use self::data::register::RegisterManager;
 use self::data::xwidget;
 use self::interactive_registry::InteractiveRegistry;
 use self::keymap_lookup::{list_keymap_define, list_keymap_set_parent, make_sparse_list_keymap};
+pub use self::protocol::terminals::{
+    BroadcastSetting, DisplayHostPlacement, DisplayTerminals, FrameDisplay, TerminalBacking,
+    TerminalDisplay, TerminalNumber, TtyHost,
+};
 use self::protocol::tty_host::TtyFrameHostFactory;
-pub use self::protocol::{DisplayHost, FrameFontRequest, FrameFontSelection};
+pub use self::protocol::{
+    DisplayConnection, DisplayHost, DisplayServices, FrameFontRequest, FrameFontSelection,
+};
 pub use self::protocol::{FontOpeningSize, TerminalCreateRequest};
 use super::advice::VariableWatcherList;
 use super::autoload::AutoloadManager;
@@ -38,6 +44,9 @@ use crate::emacs_core::eval::data::window_layout_query::{
 use crate::emacs_core::eval::data::window_state::{
     BodyRedisplayRevision, BufferRedisplayRevisions, ForcedBodyRedisplay, FrameManager,
     RedisplayOptimizationsRevision,
+};
+pub use crate::host_effect::terminal_device::{
+    TerminalDeviceEffect, TerminalDeviceReply, TerminalDeviceRequest,
 };
 pub use neomacs_display_protocol::GraphicalFaceAttribute;
 use neovm_edit::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};
@@ -3769,8 +3778,10 @@ pub struct Context {
             ) -> Result<String, String>,
         >,
     >,
-    /// Host-display bridge for GUI frame realization.
-    pub display_host: Option<Box<dyn DisplayHost>>,
+    /// Every terminal's native display backing and the process display
+    /// services (remote-display M3). This slot held the single
+    /// `Option<Box<dyn DisplayHost>>`; the registry occupies it, on main.
+    pub display_terminals: DisplayTerminals,
     /// Frontend-owned opener for additional text terminals requested by
     /// `make-terminal-frame`. The VM owns identities; platform code owns the
     /// device, raw-mode, input, renderer, and lifecycle resources.
@@ -5106,15 +5117,26 @@ impl Context {
             self.print_symbols_bare = value.is_truthy();
         } else if sym_id == frame_alpha_lower_limit_symbol() {
             let limit = self::data::frame_alpha::lower_limit(value);
-            if let Some(host) = self.display_host.as_mut() {
-                host.set_gui_frame_alpha_lower_limit(limit);
+            // Class 4: every connection mirrors the limit; one registered
+            // later receives the recorded value on registration.
+            self.display_terminals.record_published(
+                protocol::terminals::BroadcastSetting::AlphaLowerLimit(limit),
+            );
+            for terminal in self.display_terminals.connected_terminals() {
+                if let Some(host) = self.display_terminals.connection_mut(terminal) {
+                    host.set_gui_frame_alpha_lower_limit(limit);
+                }
             }
         } else if sym_id == ns_confirm_quit_symbol() {
             // AppKit cannot read evaluator-owned Lisp. Publish only the
             // completed store's scalar truth value, including let/unlet;
             // pre-store watcher failures never reach this boundary.
-            if let Some(host) = self.display_host.as_mut() {
-                host.set_ns_confirm_quit(value.is_truthy());
+            // Class 4; registration replays the variable's current value.
+            let enabled = value.is_truthy();
+            for terminal in self.display_terminals.connected_terminals() {
+                if let Some(connection) = self.display_terminals.connection_mut(terminal) {
+                    connection.set_ns_confirm_quit(enabled);
+                }
             }
         } else if sym_id == max_lisp_eval_depth_symbol()
             && let Some(depth) = value.as_fixnum()
@@ -7542,6 +7564,7 @@ pub mod call_interactively;
 pub mod case_table_adapter;
 pub mod case_tables;
 pub mod display_query_hooks;
+mod display_terminals;
 pub mod font_shape;
 mod gc_pacing;
 mod green_select;

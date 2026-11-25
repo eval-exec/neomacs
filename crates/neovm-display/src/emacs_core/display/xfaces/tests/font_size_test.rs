@@ -8,7 +8,8 @@ use crate::test_utils::xfaces_upper_layer_helpers::{
 use crate::window::FrameId;
 use neomacs_display_protocol::FrameFontSize;
 use neovm_eval::emacs_core::eval::{
-    Context, DisplayHost, FontPxProbeResult, GuiFrameHostRequest, ResolvedFrameFont,
+    Context, DisplayConnection, DisplayServices, FontPxProbeResult, GuiFrameHostRequest,
+    ResolvedFrameFont,
 };
 use neovm_value::value::Value;
 use std::cell::{Cell, RefCell};
@@ -174,13 +175,16 @@ fn unavailable_numeric_font_name_retries_the_literal_family() {
         calls: Rc<RefCell<Vec<(String, FrameFontSize)>>>,
         resolved: ResolvedFrameFont,
     }
-    impl DisplayHost for LiteralFamilyHost {
+    impl DisplayConnection for LiteralFamilyHost {
         fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
         fn resize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
+    }
+
+    impl DisplayServices for LiteralFamilyHost {
         fn resolve_frame_font(
             &mut self,
             _: FrameId,

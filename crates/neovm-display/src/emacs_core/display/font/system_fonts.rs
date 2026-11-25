@@ -5,8 +5,8 @@ use neomacs_display_protocol::SystemFontRole;
 use neovm_eval::emacs_core::eval::Context;
 
 fn system_font(eval: &Context, role: SystemFontRole) -> Value {
-    eval.display_host
-        .as_ref()
+    // The desktop's font preferences are a frame-less display query (class 2).
+    eval.default_display_connection()
         .and_then(|host| host.system_font(role))
         .map_or(Value::NIL, |font| Value::string(font.as_str()))
 }

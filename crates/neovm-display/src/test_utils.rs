@@ -16,7 +16,6 @@ pub mod window_cmds_host {
 
     use crate::face::{FontSlant, FontWeight, FontWidth};
     use crate::window::FrameFullscreen;
-    use neovm_eval::emacs_core::eval::DisplayHost;
     use neovm_eval::emacs_core::eval::GuiFrameHostRequest;
     use neovm_eval::emacs_core::eval::{FontPxProbeResult, GuiFrameHostSize, ResolvedFrameFont};
     use neovm_value::value::Value;
@@ -110,7 +109,7 @@ pub mod window_cmds_host {
         }
     }
 
-    impl DisplayHost for RecordingDisplayHost {
+    impl crate::emacs_core::display_host::DisplayConnection for RecordingDisplayHost {
         fn prepare_initial_gui_frame(
             &mut self,
         ) -> Result<Option<crate::emacs_core::display_host::InitialGuiFrameDefaults>, String>
@@ -243,7 +242,9 @@ pub mod window_cmds_host {
             self.removed_child_frames.borrow_mut().push(frame_id);
             Ok(())
         }
+    }
 
+    impl crate::emacs_core::display_host::DisplayServices for RecordingDisplayHost {
         fn resolve_frame_font(
             &mut self,
             frame_id: crate::window::FrameId,
@@ -1728,7 +1729,7 @@ pub mod window_cmds_upper_layer_helpers {
 pub mod xfaces_upper_layer_helpers {
     pub(crate) struct PointSizeFontHost;
 
-    impl DisplayHost for PointSizeFontHost {
+    impl crate::emacs_core::display_host::DisplayConnection for PointSizeFontHost {
         fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
@@ -1736,7 +1737,9 @@ pub mod xfaces_upper_layer_helpers {
         fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
+    }
 
+    impl crate::emacs_core::display_host::DisplayServices for PointSizeFontHost {
         fn resolve_font_for_char(
             &mut self,
             request: FontResolveRequest,
@@ -1774,7 +1777,7 @@ pub mod xfaces_upper_layer_helpers {
 
     use crate::emacs_core::display_host::{FontResolveRequest, FrameFontRequest};
     use neomacs_display_protocol::FrameFontSize;
-    use neovm_eval::emacs_core::eval::{DisplayHost, GuiFrameHostRequest, ResolvedFontMatch};
+    use neovm_eval::emacs_core::eval::{GuiFrameHostRequest, ResolvedFontMatch};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     pub fn frame_font_at_height(height_tenths: i32) -> ResolvedFrameFont {
@@ -1819,7 +1822,7 @@ pub mod xfaces_upper_layer_helpers {
         pub(crate) requests: Rc<RefCell<Vec<FrameId>>>,
     }
 
-    impl DisplayHost for FrameSpecificFontDisplayHost {
+    impl crate::emacs_core::display_host::DisplayConnection for FrameSpecificFontDisplayHost {
         fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
@@ -1827,7 +1830,9 @@ pub mod xfaces_upper_layer_helpers {
         fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
+    }
 
+    impl crate::emacs_core::display_host::DisplayServices for FrameSpecificFontDisplayHost {
         fn resolve_frame_font(
             &mut self,
             frame_id: FrameId,
@@ -1849,7 +1854,7 @@ pub mod xfaces_upper_layer_helpers {
         }
     }
 
-    impl DisplayHost for CapturingFrameFontDisplayHost {
+    impl crate::emacs_core::display_host::DisplayConnection for CapturingFrameFontDisplayHost {
         fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
@@ -1857,7 +1862,9 @@ pub mod xfaces_upper_layer_helpers {
         fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
+    }
 
+    impl crate::emacs_core::display_host::DisplayServices for CapturingFrameFontDisplayHost {
         fn resolve_frame_font(
             &mut self,
             _frame_id: FrameId,
@@ -1872,7 +1879,7 @@ pub mod xfaces_upper_layer_helpers {
         pub(crate) realized: Option<ResolvedFrameFont>,
     }
 
-    impl DisplayHost for LiveFrameFontDisplayHost {
+    impl crate::emacs_core::display_host::DisplayConnection for LiveFrameFontDisplayHost {
         fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
@@ -1880,7 +1887,9 @@ pub mod xfaces_upper_layer_helpers {
         fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
+    }
 
+    impl crate::emacs_core::display_host::DisplayServices for LiveFrameFontDisplayHost {
         fn resolve_frame_font(
             &mut self,
             _frame_id: crate::window::FrameId,
@@ -2800,7 +2809,6 @@ pub mod xdisp_test_upper_layer_helpers {
     use neovm_edit::buffer::buffer::BUFFER_SLOT_BUFFER_FILE_CODING_SYSTEM;
     use neovm_edit::buffer::{BufferTextBackendKind, CharPos0, LispCharPos1};
     use neovm_eval::emacs_core::eval::Context;
-    use neovm_eval::emacs_core::eval::DisplayHost;
     use neovm_eval::emacs_core::eval::VariableView;
     use neovm_eval::emacs_core::eval::data::display_spec::display_prop_replacing_p;
     use neovm_value::error::FlowKind;
@@ -2912,9 +2920,7 @@ pub mod system_font_test_upper_layer_helpers {
     use neomacs_display_protocol::SystemFontRole;
     use neomacs_display_protocol::SystemFonts;
     use neovm_eval::emacs_core::eval::ResolvedFrameFont;
-    use neovm_eval::emacs_core::eval::{
-        Context, DisplayHost, FontPxProbeResult, GuiFrameHostRequest,
-    };
+    use neovm_eval::emacs_core::eval::{Context, FontPxProbeResult, GuiFrameHostRequest};
     pub(crate) fn desktop_context(
         make_context: impl FnOnce() -> neovm_eval::emacs_core::eval::Context,
     ) -> Context {
@@ -2930,7 +2936,7 @@ pub mod system_font_test_upper_layer_helpers {
     /// parsing and default-face queries go through the real public interface.
     struct DesktopFontHost(SystemFonts);
 
-    impl DisplayHost for DesktopFontHost {
+    impl crate::emacs_core::display_host::DisplayConnection for DesktopFontHost {
         fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
             Ok(())
         }
@@ -2941,7 +2947,9 @@ pub mod system_font_test_upper_layer_helpers {
         fn system_font(&self, role: SystemFontRole) -> Option<&SystemFontName> {
             self.0.get(role)
         }
+    }
 
+    impl crate::emacs_core::display_host::DisplayServices for DesktopFontHost {
         fn resolve_frame_font(
             &mut self,
             _: FrameId,

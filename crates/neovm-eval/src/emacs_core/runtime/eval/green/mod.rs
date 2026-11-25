@@ -188,7 +188,7 @@ impl Context {
         if self.threading_mode() != ThreadingMode::Green {
             return Err(GreenStartError::NotGreen);
         }
-        if self.display_host.is_some() || self.input_rx.as_ref().is_some() {
+        if self.display_terminals.hosts_display() || self.input_rx.as_ref().is_some() {
             return Err(GreenStartError::ThreadAffineHost);
         }
         if self.gc_inhibit_depth != 0 {

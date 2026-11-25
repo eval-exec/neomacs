@@ -30,7 +30,7 @@ fn frame_font_selection_prefers_explicit_then_default_alist_then_resource() {
     assert_eq!(queries.lock().unwrap().last().unwrap().class, "Emacs.Font");
 }
 
-impl DisplayHost for ResourceHost {
+impl crate::emacs_core::display_host::DisplayConnection for ResourceHost {
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -49,6 +49,8 @@ impl DisplayHost for ResourceHost {
         )
     }
 }
+
+impl crate::emacs_core::display_host::DisplayServices for ResourceHost {}
 
 #[test]
 fn resource_lookup_uses_dynamic_keys_and_normalizes_empty_native_values() {

@@ -76,8 +76,7 @@ pub(super) fn menu_tooltips(
     frame: FrameId,
 ) -> Option<neomacs_display_protocol::tooltip::MenuTooltips> {
     if !ctx
-        .display_host
-        .as_ref()
+        .popup_display_connection(frame)
         .is_some_and(|h| h.owns_native_menu_tooltips())
         || ctx.visible_variable_value_or_nil("tooltip-mode").is_nil()
     {
@@ -209,9 +208,9 @@ pub fn builtin_x_show_tip_eval(ctx: &mut Context, args: Vec<Value>) -> EvalResul
         );
     }
     request.runs = text_runs(ctx, frame, args[0], &request)?;
+    // Menus and tooltips (G4) follow the popup rule.
     let host = ctx
-        .display_host
-        .as_mut()
+        .popup_display_connection_mut(frame)
         .ok_or_else(x_window_system_frame_error)?;
     host.show_tooltip(frame, request)
         .map_err(|e| signal("error", vec![Value::string(e)]))?;
@@ -290,7 +289,7 @@ fn text_runs(
             FaceAttributes::STRIKE_THROUGH,
             face.strike_through == Some(true),
         );
-        let font = if let Some(host) = ctx.display_host.as_mut() {
+        let font = if let Some(host) = ctx.display_terminals.services_mut() {
             host.resolve_frame_font(
                 frame,
                 crate::emacs_core::display_host::FrameFontRequest::from_face(face),
@@ -319,7 +318,8 @@ fn text_runs(
 #[doc(hidden)]
 pub fn builtin_x_hide_tip_eval(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("x-hide-tip", &args, 0)?;
-    let Some(host) = ctx.display_host.as_mut() else {
+    // `x-hide-tip` names no frame (class 2).
+    let Some(host) = ctx.default_display_connection_mut() else {
         return Ok(Value::NIL);
     };
     let hidden = host

@@ -124,8 +124,8 @@ fn wrong_type(predicate: &'static str, value: Value) -> Flow {
 fn display_host<'eval>(
     eval: &'eval Context,
     operation: &str,
-) -> Result<&'eval dyn neovm_eval::emacs_core::eval::DisplayHost, Flow> {
-    eval.display_host.as_deref().ok_or_else(|| {
+) -> Result<&'eval dyn neovm_eval::emacs_core::eval::DisplayConnection, Flow> {
+    eval.default_display_connection().ok_or_else(|| {
         video_error(format!(
             "{operation}: no GUI video display host in this session"
         ))

@@ -16,7 +16,7 @@ pub use subrs::register_subrs;
 #[path = "tests/terminal_test.rs"]
 mod tests;
 
-use crate::emacs_core::display_host::{DisplayHost, TerminalCreateRequest};
+use crate::emacs_core::display_host::{DisplayConnection, TerminalCreateRequest};
 use neomacs_display_protocol::TerminalDisplayTarget;
 use neomacs_display_protocol::TerminalFloatPlacement;
 use neomacs_display_protocol::TerminalGridSize;
@@ -93,9 +93,12 @@ fn number(value: Value, operation: TerminalOperation, argument: &str) -> Result<
     }
 }
 
-fn display_host(eval: &Context, operation: TerminalOperation) -> Result<&dyn DisplayHost, Flow> {
-    eval.display_host
-        .as_deref()
+/// neo-term requests are frame-less (class 2): the default display's renderer.
+fn display_host(
+    eval: &Context,
+    operation: TerminalOperation,
+) -> Result<&dyn DisplayConnection, Flow> {
+    eval.default_display_connection()
         .ok_or_else(|| terminal_error(format!("{operation}: no GUI display host in this session")))
 }
 

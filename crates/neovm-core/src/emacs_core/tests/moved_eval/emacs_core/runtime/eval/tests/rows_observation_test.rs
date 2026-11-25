@@ -233,7 +233,7 @@ fn rows_observation_cold_faces_and_test_only_gen0_switch_refuse() {
 }
 
 struct RefusingHost;
-impl crate::emacs_core::display_host::DisplayHost for RefusingHost {
+impl crate::emacs_core::display_host::DisplayConnection for RefusingHost {
     fn realize_gui_frame(
         &mut self,
         _: crate::emacs_core::eval::GuiFrameHostRequest,
@@ -248,11 +248,13 @@ impl crate::emacs_core::display_host::DisplayHost for RefusingHost {
     }
 }
 
+impl crate::emacs_core::display_host::DisplayServices for RefusingHost {}
+
 #[test]
 fn rows_observation_any_display_host_refuses_without_host_entry() {
     let (mut context, frame) = ready();
     let epoch = context.begin_static_rows_observation(frame).unwrap();
-    context.display_host = Some(Box::new(RefusingHost));
+    context.set_display_host(Box::new(RefusingHost));
     assert!(matches!(
         context.begin_static_rows_observation(frame),
         Err(RowsObservationRefusal::DisplayHostInstalled)

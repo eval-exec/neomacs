@@ -6,9 +6,14 @@
 pub use neomacs_display_protocol::{GraphicalFaceAttribute, SelectionOwner};
 pub use neovm_eval::emacs_core::eval::protocol::{FontOpeningSize, TerminalCreateRequest};
 
+pub use neovm_eval::emacs_core::eval::protocol::terminals::{
+    BroadcastSetting, DisplayHostPlacement, DisplayTerminals, TerminalBacking, TerminalDisplay,
+    TerminalNumber, TtyHost,
+};
 pub use neovm_eval::emacs_core::eval::protocol::{
-    AvailableFontFamilyName, DisplayHost, FontCoverage, FontCoverageRequest, FontCoverageTarget,
-    FontResolveRequest, FrameFontRequest, InertRowsHostAuthority, InitialGuiFrameDefaults,
+    AvailableFontFamilyName, DisplayConnection, DisplayHost, DisplayServices, FontCoverage,
+    FontCoverageRequest, FontCoverageTarget, FontResolveRequest, FrameFontRequest,
+    InertRowsHostAuthority, InitialGuiFrameDefaults,
 };
 
 /// Parse native/Fontconfig/XLFD names through the shared Lisp font parser.

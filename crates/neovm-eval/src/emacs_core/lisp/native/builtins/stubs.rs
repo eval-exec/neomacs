@@ -273,7 +273,7 @@ fn direct_neomacs_clipboard_set(
             .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes())),
         _ => Some(format!("{}", args[0])),
     };
-    if let Some(host) = ctx.display_host.as_mut() {
+    if let Some(host) = ctx.default_display_connection_mut() {
         host.set_clipboard_text(text.as_deref())
             .map_err(|err| signal("error", vec![Value::string(err)]))?;
     } else {
@@ -295,7 +295,7 @@ fn direct_neomacs_clipboard_get(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("neomacs-clipboard-get", &args, 0)?;
-    let text = if let Some(host) = ctx.display_host.as_mut() {
+    let text = if let Some(host) = ctx.default_display_connection_mut() {
         host.clipboard_text()
             .map_err(|err| signal("error", vec![Value::string(err)]))?
     } else {
@@ -324,7 +324,7 @@ fn direct_neomacs_primary_selection_set(
             .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes())),
         _ => Some(format!("{}", args[0])),
     };
-    if let Some(host) = ctx.display_host.as_mut() {
+    if let Some(host) = ctx.default_display_connection_mut() {
         host.set_primary_selection_text(text.as_deref())
             .map_err(|err| signal("error", vec![Value::string(err)]))?;
     } else {
@@ -346,7 +346,7 @@ fn direct_neomacs_primary_selection_get(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("neomacs-primary-selection-get", &args, 0)?;
-    let text = if let Some(host) = ctx.display_host.as_mut() {
+    let text = if let Some(host) = ctx.default_display_connection_mut() {
         host.primary_selection_text()
             .map_err(|err| signal("error", vec![Value::string(err)]))?
     } else {
@@ -368,7 +368,7 @@ fn direct_neomacs_primary_selection_owner(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("neomacs-primary-selection-owner", &args, 0)?;
-    let owner = if let Some(host) = ctx.display_host.as_mut() {
+    let owner = if let Some(host) = ctx.default_display_connection_mut() {
         host.primary_selection_owner()
             .map_err(|err| signal("error", vec![Value::string(err)]))?
     } else if cached_primary_selection_text().is_some() {

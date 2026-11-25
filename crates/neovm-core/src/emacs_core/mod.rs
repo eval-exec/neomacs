@@ -424,7 +424,10 @@ pub(crate) use neovm_eval::emacs_core::MenuBarPopupAnchor;
 
 // Re-export the main public API
 pub use bytecode::{ByteCodeFunction, Vm as ByteVm};
-pub use display_host::{DisplayHost, GraphicalFaceAttribute, SelectionOwner};
+pub use display_host::{
+    DisplayConnection, DisplayHost, DisplayServices, DisplayTerminals, GraphicalFaceAttribute,
+    SelectionOwner, TerminalBacking, TerminalNumber,
+};
 pub use edit_host::EditHost;
 pub use error::EvalError;
 pub use eval::{

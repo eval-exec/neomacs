@@ -3,8 +3,10 @@
 //! Host endpoints carry metadata only. Every live root publication remains in
 //! the World's existing root owner, including when no Lisp owner is parked.
 //! The only installed adapter is the selection family (C4b): main borrows its
-//! display host and executes a typed request. The other families and hosted
-//! admission remain later cuts (C4c).
+//! display host and executes a typed request. Text-terminal device effects
+//! are served in every session, because main owns those devices whether or
+//! not a display host is attached. The other families and hosted admission
+//! remain later cuts (C4c).
 
 use super::super::world::{Baton, WorldLease};
 use super::scheduler::ThreadKey;
@@ -31,6 +33,7 @@ mod owner_steps;
 mod pending;
 mod registered_payload;
 mod selection;
+mod terminal_device;
 pub(super) use owner_steps::StepKey;
 use registered_payload::RegisteredPayload;
 mod pump;

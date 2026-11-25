@@ -18,7 +18,7 @@ pub use neovm_eval::emacs_core::eval::{FontPxProbeResult, GuiFrameHostSize, Reso
 pub use neovm_system::emacs_core::timer::TimerContextExt;
 
 pub use neovm_eval::emacs_core::eval::{
-    Context, DisplayHost, GuiFrameHostRequest, PopupMenuEntry, PopupMenuRequest,
+    Context, GuiFrameHostRequest, PopupMenuEntry, PopupMenuRequest,
 };
 pub use neovm_value::error::{EvalError, EvalResult, Flow, FlowKind, FlowRef, FlowResultExt as _};
 pub use neovm_value::intern::intern;
@@ -31,7 +31,7 @@ pub struct RecordingPopupHost {
     hidden: Arc<Mutex<usize>>,
 }
 
-impl DisplayHost for RecordingPopupHost {
+impl neovm_core::emacs_core::DisplayConnection for RecordingPopupHost {
     fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
@@ -53,6 +53,8 @@ impl DisplayHost for RecordingPopupHost {
         Ok(())
     }
 }
+
+impl neovm_core::emacs_core::DisplayServices for RecordingPopupHost {}
 
 /// The display fixture entry: the public x-popup-menu entry, which takes the
 /// interactive dispatch when a display host and input receiver are installed

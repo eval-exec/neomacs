@@ -1778,8 +1778,8 @@ fn image_element_extent(
         eval.face_table().default_face_colors(),
     )?;
     let placement = eval
-        .display_host
-        .as_ref()?
+        .display_terminals
+        .services()?
         .image_catalog()?
         .lookup(request, environment.size_limit())
         .placement();
@@ -11088,7 +11088,7 @@ pub fn builtin_neomacs_debug_lose_device(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     _args: Vec<Value>,
 ) -> EvalResult {
-    let Some(host) = eval.display_host.as_deref() else {
+    let Some(host) = eval.default_display_connection() else {
         return Ok(Value::NIL);
     };
     host.debug_lose_device();

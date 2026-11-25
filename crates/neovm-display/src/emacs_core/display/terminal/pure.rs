@@ -10,6 +10,9 @@ use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 pub(crate) use neovm_eval::emacs_core::eval::data::terminal_state::{
     TerminalLispRegistry, TerminalRegistryHandle, collect_terminal_registry_gc_roots,
 };
+use neovm_eval::emacs_core::eval::{
+    TerminalDeviceEffect, TerminalDeviceReply, TerminalDeviceRequest,
+};
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_args_range, expect_max_args};
@@ -246,7 +249,9 @@ struct TerminalRecord {
     /// terminal currently has no frame, which a frame-only derivation cannot.
     window_system: Option<neovm_value::display_vocab::WindowSystemKind>,
     deleted: bool,
-    host: Option<Box<dyn TerminalHost>>,
+    // The terminal's native device lives in the main-owned display registry
+    // (`Context.display_terminals`), not in this World-carried record
+    // (docs/design/host-effect-projections.md: native backing stays on main).
     /// This terminal's own winsize, installed once. `(0, 0)` is a failed
     /// ioctl or a successful 0×0, which GNU `get_tty_size` stores either way
     /// (`src/sysdep.c:1403-1408`). A different function is refused.
@@ -267,7 +272,6 @@ impl TerminalRecord {
             output_method: TerminalOutputMethod::Initial,
             window_system: None,
             deleted: false,
-            host: None,
             winsize_query: None,
             opened_cells: None,
         }
@@ -280,7 +284,6 @@ impl TerminalRecord {
     fn mark_deleted(&mut self) {
         self.deleted = true;
         self.runtime = TerminalRuntime::inactive();
-        self.host = None;
     }
 
     fn is_active(&self) -> bool {
@@ -339,7 +342,6 @@ impl TerminalManager {
                 // Re-created from nothing is re-created as GNU's
                 // `init_initial_terminal` terminal, whatever it drove before.
                 self.terminals[idx].output_method = TerminalOutputMethod::Initial;
-                self.terminals[idx].host = None;
             }
             return &mut self.terminals[idx];
         }
@@ -399,7 +401,6 @@ impl TerminalManager {
             output_method,
             window_system,
             deleted: false,
-            host: None,
             winsize_query: None,
             opened_cells: None,
         });
@@ -469,38 +470,61 @@ pub fn set_initial_terminal_winsize_query(
 /// Order: the query installed on this record, then the host's fd, then the
 /// size stored when the terminal was opened. `None` means this terminal has
 /// none of those. `(0, 0)` is a real answer and is not turned into `None`.
-pub(crate) fn terminal_winsize_cells(terminal_id: u64) -> Option<(u32, u32)> {
-    let stored = with_terminal_manager(|slot| {
+pub(crate) fn terminal_winsize_cells(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    terminal_id: u64,
+) -> Result<Option<(u32, u32)>, Flow> {
+    let Some((winsize_query, opened_cells)) = with_terminal_manager(|slot| {
         let manager = slot.borrow();
         let terminal = manager.get(terminal_id)?;
         if !terminal.is_live() {
             return None;
         }
-        Some((
-            terminal.winsize_query,
-            terminal.opened_cells,
-            terminal.host.is_some(),
-        ))
-    })?;
-    if let Some(query) = stored.0 {
-        return Some(query());
+        Some((terminal.winsize_query, terminal.opened_cells))
+    }) else {
+        return Ok(None);
+    };
+    if let Some(query) = winsize_query {
+        return Ok(Some(query()));
     }
-    if stored.2
-        && let Some(cells) = terminal_host_winsize_cells(terminal_id)
-    {
-        return Some(cells);
+    match terminal_device_request(eval, terminal_id, TerminalDeviceEffect::Winsize)? {
+        TerminalDeviceReply::Winsize(Some(cells)) => Ok(Some(cells)),
+        // A device with no input, or no device: the size stored at open.
+        TerminalDeviceReply::Winsize(None) | TerminalDeviceReply::NoDevice => Ok(opened_cells),
+        reply @ (TerminalDeviceReply::Done | TerminalDeviceReply::HostError(_)) => {
+            Err(terminal_device_reply_mismatch(&reply))
+        }
     }
-    stored.1
 }
 
-fn terminal_host_winsize_cells(terminal_id: u64) -> Option<(u32, u32)> {
-    with_terminal_manager(|slot| {
-        let mut manager = slot.borrow_mut();
-        manager
-            .get_mut(terminal_id)
-            .and_then(|terminal| terminal.host.as_deref_mut())
-            .and_then(|host| host.tty_winsize_cells())
-    })
+/// One effect on terminal ID's text-terminal device. The devices live in
+/// main's display registry; a Green worker's request is performed there.
+fn terminal_device_request(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    id: u64,
+    effect: TerminalDeviceEffect,
+) -> Result<TerminalDeviceReply, Flow> {
+    eval.tty_device_request(
+        neovm_eval::emacs_core::eval::TerminalNumber::new(id),
+        TerminalDeviceRequest::Effect(effect),
+    )
+}
+
+/// A reply of the wrong kind for its effect is a device-service invariant
+/// violation, never a Lisp-visible answer.
+#[cold]
+fn terminal_device_reply_mismatch(reply: &TerminalDeviceReply) -> Flow {
+    debug_assert!(
+        false,
+        "terminal device reply does not match its effect: {reply:?}"
+    );
+    tracing::error!(?reply, "terminal device reply does not match its effect");
+    signal(
+        "error",
+        vec![Value::string(
+            "neovm internal error: terminal device reply does not match its effect",
+        )],
+    )
 }
 
 /// GNU `struct terminal.type` for a graphical backend. The backend symbols
@@ -622,19 +646,25 @@ pub(crate) fn active_tty_terminal_id_by_name(device: &str) -> Option<u64> {
 }
 
 pub(crate) fn install_opened_tty(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     request: &TtyFrameOpenRequest,
     opened: OpenedTtyFrameHost,
 ) -> TtyFrameSize {
     let size = opened.size;
+    let OpenedTtyFrameHost {
+        attribute_capabilities,
+        host,
+        ..
+    } = opened;
     with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         let runtime = TerminalRuntime {
             active: true,
             tty_type: Some(request.terminal_type.clone()),
-            color_cells: opened.attribute_capabilities.color_cells().max(0),
+            color_cells: attribute_capabilities.color_cells().max(0),
             controlling_tty: true,
             suspended: false,
-            attribute_capabilities: opened.attribute_capabilities,
+            attribute_capabilities,
         };
         let terminal = manager.ensure_terminal(
             request.terminal_id,
@@ -643,9 +673,15 @@ pub(crate) fn install_opened_tty(
             TerminalOutputMethod::Termcap,
             None,
         );
-        terminal.host = Some(opened.host);
         terminal.opened_cells = Some((size.columns(), size.rows()));
     });
+    // The device belongs to the main-owned registry (M3e).
+    eval.register_display_terminal(
+        neovm_eval::emacs_core::eval::TerminalNumber::new(request.terminal_id),
+        neovm_eval::emacs_core::eval::TerminalBacking::Termcap(
+            neovm_eval::emacs_core::eval::TtyHost::new(host, None),
+        ),
+    );
     if crate::face::realization::enabled() {
         // Color callbacks can reactivate the Context. Publish the opened
         // terminal before registry reconciliation can treat it as absent.
@@ -665,18 +701,17 @@ pub fn reset_terminal_runtime() {
     });
 }
 
-pub fn set_terminal_host(host: Box<dyn TerminalHost>) {
+/// Give the initial terminal (a `-nw` session's own TTY) its device. A
+/// display half already on that terminal stays (`Context::install_display_host`).
+pub fn set_terminal_host(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    host: Box<dyn TerminalHost>,
+) {
     with_terminal_manager(|slot| {
-        let mut manager = slot.borrow_mut();
-        manager.ensure_initial_terminal().host = Some(host);
+        slot.borrow_mut().ensure_initial_terminal();
     });
-}
-
-pub fn reset_terminal_host() {
-    with_terminal_manager(|slot| {
-        let mut manager = slot.borrow_mut();
-        manager.ensure_initial_terminal().host = None;
-    });
+    eval.display_terminals
+        .set_tty_device(neovm_eval::emacs_core::eval::TerminalNumber::INITIAL, host);
 }
 
 fn terminal_runtime() -> TerminalRuntime {
@@ -1063,7 +1098,11 @@ pub(crate) fn live_terminal_output_method_for_id(id: u64) -> Option<TerminalOutp
 /// (src/dispnew.c:6819-6843): route STRING's bytes to the terminal's output
 /// stream, unaltered.  The Lisp-visible argument decoding lives with the
 /// builtin; everything that reads the terminal record lives here.
-pub(crate) fn write_bytes_to_terminal(terminal_id: u64, bytes: &[u8]) -> Result<(), Flow> {
+pub(crate) fn write_bytes_to_terminal(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    terminal_id: u64,
+    bytes: &[u8],
+) -> Result<(), Flow> {
     match terminal_output_method_for_id(terminal_id) {
         // GNU: `out = stdout' for `output_initial' -- what batch, daemon and
         // pre-tty sessions run on (src/dispnew.c:6823-6824).
@@ -1093,7 +1132,11 @@ pub(crate) fn write_bytes_to_terminal(terminal_id: u64, bytes: &[u8]) -> Result<
                     vec![Value::string("Terminal is currently suspended")],
                 ));
             }
-            with_terminal_host_for_id(terminal_id, |host| host.write_bytes(bytes))
+            terminal_device_effect_for_id(
+                eval,
+                terminal_id,
+                TerminalDeviceEffect::Write(bytes.to_vec()),
+            )
         }
     }
 }
@@ -1165,23 +1208,37 @@ fn update_terminal_param(id: u64, key: Value, value: Value) -> Value {
     })
 }
 
-fn with_terminal_host_for_id<R>(
+/// Whether terminal ID's record exists and was not deleted. A deleted
+/// terminal has no device to reach, whatever the registry still holds.
+fn terminal_record_is_live(id: u64) -> bool {
+    with_terminal_manager(|slot| slot.borrow().get(id).is_some_and(TerminalRecord::is_live))
+}
+
+/// Run EFFECT on live terminal ID's device; a terminal without one signals
+/// `(error "TTY terminal host unavailable")`, and a device error signals its
+/// message.
+fn terminal_device_effect_for_id(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     id: u64,
-    f: impl FnOnce(&mut dyn TerminalHost) -> Result<R, String>,
-) -> Result<R, Flow> {
-    with_terminal_manager(|slot| {
-        let mut manager = slot.borrow_mut();
-        let Some(host) = manager
-            .get_mut(id)
-            .and_then(|terminal| terminal.host.as_deref_mut())
-        else {
-            return Err(signal(
-                "error",
-                vec![Value::string("TTY terminal host unavailable")],
-            ));
-        };
-        f(host).map_err(|message| signal("error", vec![Value::string(message)]))
-    })
+    effect: TerminalDeviceEffect,
+) -> Result<(), Flow> {
+    let unavailable = || {
+        signal(
+            "error",
+            vec![Value::string("TTY terminal host unavailable")],
+        )
+    };
+    if !terminal_record_is_live(id) {
+        return Err(unavailable());
+    }
+    match terminal_device_request(eval, id, effect)? {
+        TerminalDeviceReply::Done => Ok(()),
+        TerminalDeviceReply::NoDevice => Err(unavailable()),
+        TerminalDeviceReply::HostError(message) => {
+            Err(signal("error", vec![Value::string(message)]))
+        }
+        reply @ TerminalDeviceReply::Winsize(_) => Err(terminal_device_reply_mismatch(&reply)),
+    }
 }
 
 fn delete_terminal_record(id: u64) {
@@ -1636,7 +1693,7 @@ pub fn builtin_suspend_tty(
     let hook_sym =
         neovm_eval::emacs_core::hook_runtime::hook_symbol_by_name(eval, "suspend-tty-functions");
     let _ = neovm_eval::emacs_core::hook_runtime::run_named_hook(eval, hook_sym, &[terminal])?;
-    with_terminal_host_for_id(terminal_id, |host| host.suspend_tty())?;
+    terminal_device_effect_for_id(eval, terminal_id, TerminalDeviceEffect::Suspend)?;
     with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         if let Some(terminal) = manager.get_mut(terminal_id) {
@@ -1675,7 +1732,7 @@ pub fn builtin_resume_tty(
         return Ok(Value::NIL);
     }
 
-    with_terminal_host_for_id(terminal_id, |host| host.resume_tty())?;
+    terminal_device_effect_for_id(eval, terminal_id, TerminalDeviceEffect::Resume)?;
     with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         if let Some(terminal) = manager.get_mut(terminal_id) {
@@ -1723,16 +1780,19 @@ pub(crate) fn delete_terminal_owned(
     } else {
         eval.queue_pending_safe_hook("delete-terminal-functions", &[terminal]);
     }
-    let host_delete = with_terminal_manager(|slot| {
-        let mut manager = slot.borrow_mut();
-        let Some(host) = manager
-            .get_mut(terminal_id)
-            .and_then(|terminal| terminal.host.as_deref_mut())
-        else {
-            return Ok(());
-        };
-        host.delete_terminal()
-    });
+    // GNU `delete_terminal_hook`: a terminal without a device (window-system,
+    // initial, or already deleted) has no device teardown to run.
+    let host_delete = if terminal_record_is_live(terminal_id) {
+        match terminal_device_request(eval, terminal_id, TerminalDeviceEffect::Delete)? {
+            TerminalDeviceReply::Done | TerminalDeviceReply::NoDevice => Ok(()),
+            TerminalDeviceReply::HostError(message) => Err(message),
+            reply @ TerminalDeviceReply::Winsize(_) => {
+                return Err(terminal_device_reply_mismatch(&reply));
+            }
+        }
+    } else {
+        Ok(())
+    };
     if let Err(message) = host_delete {
         if mode.ignore_host_delete_errors() {
             tracing::warn!(
@@ -1772,6 +1832,13 @@ pub(crate) fn delete_terminal_owned(
         let _ = eval.frame_manager_mut().select_frame(next_selected);
     }
     eval.sync_keyboard_terminal_owner();
+    // GNU `delete_terminal` frees the terminal's device with the record. Last,
+    // because a Green worker's release is a routed request: a signal it
+    // delivers (a quit or `thread-signal`) arrives after the deletion is
+    // complete, and leaves only an already torn-down device registered.
+    eval.remove_display_terminal(neovm_eval::emacs_core::eval::TerminalNumber::new(
+        terminal_id,
+    ))?;
     Ok(Value::NIL)
 }
 

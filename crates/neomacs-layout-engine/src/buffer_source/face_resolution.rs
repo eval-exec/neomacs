@@ -25,7 +25,7 @@ use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::{FaceResolver, LayoutBufferView, ResolvedFace};
 use crate::types::NobreakDisplayMode;
 use neomacs_display_protocol::types::FaceId;
-use neovm_core::emacs_core::eval::DisplayHost;
+use neovm_core::emacs_core::eval::FrameDisplay;
 use neovm_core::emacs_core::image_catalog::ImageScaleEnvironment;
 
 pub(crate) struct BufferSourceFaceResolutionContext<'a, B: LayoutBufferView> {
@@ -266,7 +266,7 @@ impl<'a, B: LayoutBufferView> BufferSourceFaceResolutionContext<'a, B> {
 
     pub(crate) fn source_resolve_params(
         self,
-        display_host: Option<&'a dyn DisplayHost>,
+        display_host: Option<FrameDisplay<'a>>,
     ) -> DisplaySourceResolveParams<'a> {
         DisplaySourceResolveParams::new(
             DisplaySourceFaceBasis::new(

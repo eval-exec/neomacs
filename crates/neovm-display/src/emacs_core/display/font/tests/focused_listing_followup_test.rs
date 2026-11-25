@@ -111,13 +111,16 @@ fn focused_listing_unknown_width_does_not_leave_a_synthetic_legacy_zero() {
 }
 
 struct ListingFaceMetricsHost(Rc<RefCell<Vec<FrameFontSize>>>);
-impl DisplayHost for ListingFaceMetricsHost {
+impl crate::emacs_core::display_host::DisplayConnection for ListingFaceMetricsHost {
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
     fn resize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         Ok(())
     }
+}
+
+impl crate::emacs_core::display_host::DisplayServices for ListingFaceMetricsHost {
     fn resolve_frame_font(
         &mut self,
         _: FrameId,

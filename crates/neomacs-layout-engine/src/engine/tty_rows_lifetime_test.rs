@@ -4,7 +4,7 @@ use super::*;
 use crate::engine::{RowsQueryAdmission, RowsQueryPolicy};
 use neovm_core::emacs_core::xfaces::realization::XfacesRealizationContextExt;
 use neovm_core::emacs_core::{
-    display_host::{DisplayHost, InertRowsHostAuthority},
+    display_host::{DisplayConnection, DisplayServices, InertRowsHostAuthority},
     eval::GuiFrameHostRequest,
     terminal::pure,
 };
@@ -44,7 +44,6 @@ impl GcMode {
 struct RestoreTerminal;
 impl Drop for RestoreTerminal {
     fn drop(&mut self) {
-        pure::reset_terminal_host();
         pure::reset_terminal_runtime();
     }
 }
@@ -52,7 +51,7 @@ impl Drop for RestoreTerminal {
 // All closed-query image/font accessors inherit their constant absent default.
 // Frame operations are outside this numeric query and must never be probed.
 struct InertTtyRowsHost;
-impl DisplayHost for InertTtyRowsHost {
+impl DisplayConnection for InertTtyRowsHost {
     fn realize_gui_frame(&mut self, _: GuiFrameHostRequest) -> Result<(), String> {
         panic!("a TTY numeric query must not realize a GUI frame")
     }
@@ -60,6 +59,8 @@ impl DisplayHost for InertTtyRowsHost {
         panic!("a TTY numeric query must not resize a GUI frame")
     }
 }
+
+impl DisplayServices for InertTtyRowsHost {}
 
 fn terminal_policy() -> RowsQueryPolicy {
     // SAFETY: InertTtyRowsHost is a stateless concrete type whose image/font
@@ -130,7 +131,7 @@ fn fixture_with_mode(
       (goto-char 1) (set-window-start nil 1 t)"#,
         )
         .unwrap();
-    context.display_host = Some(Box::new(InertTtyRowsHost));
+    context.set_display_host(Box::new(InertTtyRowsHost));
     context.sync_runtime_faces_for_frame(frame);
     context.setup_thread_locals();
     let policy = terminal_policy();
@@ -270,7 +271,7 @@ fn tty_rows_lifetime_default_disabled_entry_keeps_legacy_tty_refusal() {
     let (mut context, frame, window, _, _restore) = fixture();
     // Remove the inert host only to expose the legacy frame-class refusal;
     // otherwise legacy begin correctly refuses the host first.
-    context.display_host = None;
+    context.display_terminals.uninstall_display();
     let mut engine = LayoutEngine::new_without_font_metrics();
     let (_, reports) = query(
         &mut context,

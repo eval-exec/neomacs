@@ -36,9 +36,12 @@ fn terminal_gc_handle_refreshes_when_the_active_heap_changes() {
             256,
         ),
     ));
-    set_terminal_host(Box::new(RecordingTerminalHost {
-        log: Rc::clone(&lifecycle),
-    }));
+    set_terminal_host(
+        &mut first,
+        Box::new(RecordingTerminalHost {
+            log: Rc::clone(&lifecycle),
+        }),
+    );
     let _other = Context::new(crate::test_utils::unit_runtime());
     first.setup_thread_locals();
 
