@@ -132,6 +132,27 @@ fn main() {
             "        self.serial_ring.push_back(RingEntry {",
         ),
     );
+    // N-L17 (F2): a collecting owner's re-request is refused by the ring.
+    write(
+        &out,
+        "control_requeue_owner_fail.rs",
+        &mutate(
+            &control,
+            "        self.push_at_head(RingClient::Owner {\n            key: owner,\n            generation,\n        })",
+            "        Err(RendezvousError::Capacity)",
+        ),
+    );
+    // N-L17 (F2, negative): the driver drops the held collect reply instead
+    // of answering it Poisoned on the failed re-commit.
+    write(
+        &out,
+        "driver_core_drop_hold.rs",
+        &mutate(
+            &core,
+            "                hold.refuse();\n",
+            "                let _ = hold;\n",
+        ),
+    );
     // N-L1: the ring commits at the head, so it grants newest first.
     write(
         &out,

@@ -123,6 +123,34 @@ mod unheld_head {
     include!("model.rs");
 }
 
+/// N-L17 (F2): a collecting owner's re-request is refused, so the held
+/// collect reply must be answered Poisoned.
+#[allow(dead_code, unused)]
+mod requeue_owner_fail {
+    use crate::sync;
+    mod control {
+        include!(concat!(env!("OUT_DIR"), "/control_requeue_owner_fail.rs"));
+    }
+    mod driver_core {
+        include!(concat!(env!("OUT_DIR"), "/driver_core.rs"));
+    }
+    include!("model.rs");
+}
+
+/// N-L17 (F2, negative): the driver drops the held reply on the failed
+/// re-commit.
+#[allow(dead_code, unused)]
+mod drop_hold {
+    use crate::sync;
+    mod control {
+        include!(concat!(env!("OUT_DIR"), "/control_requeue_owner_fail.rs"));
+    }
+    mod driver_core {
+        include!(concat!(env!("OUT_DIR"), "/driver_core_drop_hold.rs"));
+    }
+    include!("model.rs");
+}
+
 /// N-L7: the grant goes to another enrolled owner.
 #[allow(dead_code, unused)]
 mod misrouted_grant {
@@ -248,6 +276,18 @@ fn a_collecting_group_resumes_before_any_other_turn() {
 #[should_panic(expected = "the collecting group resumes next")]
 fn negative_a_tail_requeue_lets_the_owner_in_first() {
     requeue_tail::a_collecting_group_resumes_before_any_other_turn();
+}
+
+/// L17 (L6.7c (c) F2).
+#[test]
+fn a_failed_owner_requeue_answers_the_collect_reply() {
+    requeue_owner_fail::a_failed_owner_requeue_answers_the_collect_reply();
+}
+
+#[test]
+#[should_panic(expected = "the collect reply must be answered Poisoned")]
+fn negative_a_dropped_hold_leaves_the_collect_reply_unanswered() {
+    drop_hold::a_failed_owner_requeue_answers_the_collect_reply();
 }
 
 /// L14 (L6.7b b4.1).

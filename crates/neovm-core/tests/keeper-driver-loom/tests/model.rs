@@ -4,8 +4,9 @@
 
 use self::control::{Mode, Request, RequestId, RingClient, SerialClient, State as Ring};
 use self::driver_core::{
-    Attempt, Batch, BatchVisitor, Breach, BreachOf, CustodyRefused, Driver, DriverEnd, GrantMsg,
-    GroupMsg, Head, IntervalEnd, KeeperMsg, KeeperOps, LendDrop, Refusal, Settle,
+    Attempt, Batch, BatchVisitor, Breach, BreachOf, CollectRefusal, CustodyRefused, Driver,
+    DriverEnd, GrantMsg, GroupMsg, Head, IntervalEnd, KeeperMsg, KeeperOps, LendDrop, Refusal,
+    Settle,
 };
 use crate::sync::{Signal, mpsc};
 use crate::{MutatorKey, RendezvousError};
@@ -1200,6 +1201,60 @@ pub fn a_collecting_owner_that_exits_gives_up_the_head() {
             clients,
             [1, COLLECTION, 2],
             "the collection still runs, before owner 2's turn"
+        );
+    });
+}
+
+/// L17 (L6.7c (c) F2). A collecting owner whose re-request is refused by the
+/// ring must still get its held collect reply answered `Poisoned`, not
+/// silently dropped: `Driver::commit` takes the head_hold, and when
+/// `requeue_owner_at_head` fails it answers the reply before the breach.
+pub fn a_failed_owner_requeue_answers_the_collect_reply() {
+    model(|| {
+        let era = ModelEra::new(&[(1, Mode::NativeStopped)]);
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(Era(&era), inbox_rx);
+        let (grants_tx, grants) = mpsc::sync_channel(1);
+        driver.enroll(1, key(1), grants_tx);
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        let owner_inbox = inbox.clone();
+        let owner = loom::thread::spawn(move || {
+            let _ = owner_inbox.send(KeeperMsg::Request {
+                owner: 1,
+                receipt: Receipt { owner: 1, generation: generation() },
+            });
+            let Ok(GrantMsg::Grant { ticket, .. }) = grants.recv() else {
+                panic!("owner 1 is granted");
+            };
+            // Collect carrying the reply, then re-request. The re-request's
+            // HEAD commit is refused by the ring (N-L17), so the driver must
+            // answer the reply Poisoned.
+            let _ = owner_inbox.send(KeeperMsg::GiveBack {
+                owner: 1,
+                returned: ticket,
+                end: IntervalEnd::Collect { reply: Some(reply_tx) },
+            });
+            let _ = owner_inbox.send(KeeperMsg::Request {
+                owner: 1,
+                receipt: Receipt { owner: 1, generation: NonZeroU64::new(2).unwrap() },
+            });
+            let seen = match reply_rx.recv() {
+                Ok(Err(CollectRefusal::Poisoned)) => Seen::Poisoned,
+                other => panic!("the collect reply must be answered Poisoned: {other:?}"),
+            };
+            let _ = owner_inbox.send(KeeperMsg::Exit { owner: 1 });
+            seen
+        });
+        drop(inbox);
+        let end = driver.run();
+        assert_eq!(
+            owner.join().unwrap(),
+            Seen::Poisoned,
+            "the collect reply reaches the owner as Poisoned"
+        );
+        assert!(
+            matches!(end, DriverEnd::Poisoned(Breach::Rendezvous(RendezvousError::Capacity))),
+            "a refused re-commit poisons the era: {end:?}"
         );
     });
 }
