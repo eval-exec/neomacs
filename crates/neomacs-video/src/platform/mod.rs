@@ -10,6 +10,7 @@ std::cfg_select! {
         #[cfg(test)]
         pub(crate) use linux::{
             create_test_foreign_surface_release, open_test_vulkan_foreign_device,
+            require_gpu_video_tests,
         };
     }
     target_os = "macos" => {

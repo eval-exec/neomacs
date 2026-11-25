@@ -195,6 +195,24 @@ fn retirement_gate_defers_replaced_frames_until_draw_submission() {
     drop(flushed_after_abandon);
     assert_eq!(drops.load(Ordering::Relaxed), 4);
 
+    // VideoSystem teardown (`take_all_on_drop`) must drain pending frames even
+    // while an encoder token is still live.
+    let _still_live = gate.issue_token();
+    assert!(
+        gate.stage_or_retire(vec![NativeLease {
+            id: 5,
+            drops: Arc::clone(&drops),
+        }])
+        .is_empty()
+    );
+    assert_eq!(gate.pending_len(), 1);
+    let flushed_on_drop = gate.take_all_on_drop();
+    assert_eq!(flushed_on_drop.len(), 1);
+    assert_eq!(flushed_on_drop[0].id, 5);
+    assert_eq!(gate.pending_len(), 0);
+    drop(flushed_on_drop);
+    assert_eq!(drops.load(Ordering::Relaxed), 5);
+
     // A token from another VideoSystem is rejected.
     let other_gate: DrawRetirementGate<NativeLease> = DrawRetirementGate::new();
     let foreign_token = other_gate.issue_token();
@@ -224,6 +242,10 @@ fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() 
     let Some((_instance, _adapter, device, queue)) =
         crate::platform::open_test_vulkan_foreign_device("video-b8-submit-test")
     else {
+        assert!(
+            !crate::platform::require_gpu_video_tests(),
+            "NEOMACS_REQUIRE_GPU_VIDEO_TESTS is set, but no headless Vulkan adapter with VK_EXT_queue_family_foreign is available"
+        );
         eprintln!(
             "skipping B8 GPU submit test: no headless Vulkan adapter with VK_EXT_queue_family_foreign"
         );
@@ -465,4 +487,5 @@ fn submit_buffer_with_retirements_handles_render_pass_plus_raw_vulkan_release() 
         rejected_submit.is_err(),
         "VideoSystem::submit_command_encoder must reject another system's VideoCommandEncoder"
     );
+    eprintln!("GPU_TEST_RAN: b8_video_system_submit_and_foreign_release");
 }

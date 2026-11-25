@@ -401,6 +401,10 @@ impl VideoSystem {
             "VideoCommandEncoder belongs to a different VideoSystem"
         );
         let (buffer, token) = encoder.into_buffer_and_token();
+        // Invariant: `retired` must pass directly into `submit_buffer_with_retirements`
+        // in this same call; nothing may interleave between token release and
+        // queue submission, and `SubmittedWorkRetirement` holds the frames until
+        // GPU completion.
         let retired = self.retirement_gate.finish_encoder_token(token);
         self.gpu.submit_buffer_with_retirements(buffer, retired)
     }

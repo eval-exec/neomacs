@@ -435,6 +435,7 @@ impl<T> DrawRetirementGate<T> {
         }
     }
 
+    #[must_use = "retired frames must be passed directly into submit_buffer_with_retirements or retire_after_submitted_work"]
     pub(crate) fn finish_encoder_token(&mut self, token: Option<VideoSubmissionToken>) -> Vec<T> {
         let all_submitted = match token {
             Some(mut token) => {

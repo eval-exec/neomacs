@@ -921,10 +921,20 @@ fn block_on_test<F: std::future::Future>(future: F) -> F::Output {
     }
 }
 
+/// Whether the environment requires headless Vulkan GPU video rows to execute
+/// rather than silently returning when `VK_EXT_queue_family_foreign` is absent.
+#[cfg(test)]
+pub(crate) fn require_gpu_video_tests() -> bool {
+    matches!(
+        std::env::var("NEOMACS_REQUIRE_GPU_VIDEO_TESTS").as_deref(),
+        Ok("1" | "true" | "TRUE")
+    )
+}
+
 /// Open a headless Vulkan `wgpu::Device` with `VK_EXT_queue_family_foreign`
 /// enabled (matching the production renderer's interop device setup) so tests
 /// can execute real `ImportedDmaBufSurface::acquire()` and
-/// `ForeignRelease::record()` barriers.
+/// `ForeignRelease::record()` barriers under wgpu-core validation.
 #[cfg(test)]
 pub(crate) fn open_test_vulkan_foreign_device(
     label: &'static str,

@@ -355,6 +355,15 @@ impl FrameCommandEncoder {
     }
 }
 
+/// How a native video frame is materialized for the legacy single-texture
+/// shader-surface `:channel0` consumer.
+///
+/// Both variants copy into renderer-owned `channel_targets` inside a
+/// `VideoCommandEncoder` rather than handing out a cloneable native
+/// `TextureView`. `CopyPacked` intentionally trades one full-frame GPU copy on
+/// this non-hot shader-surface path (preserving sRGB color 1:1) to keep native
+/// video textures unescapeable; ordinary inline video stays zero-copy on the
+/// fused final-composition pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VideoChannelPreparation {
     CopyPacked,

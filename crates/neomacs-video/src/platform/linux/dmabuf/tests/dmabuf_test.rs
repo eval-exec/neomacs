@@ -157,6 +157,15 @@ fn imported_dmabuf_resources_bind_to_owning_device_and_acquire_completion() {
     );
 }
 
+/// Lifetime and teardown plumbing coverage for B7 under wgpu-core validation:
+/// exercises `ImportedDmaBufSurface::acquire()` completion-callback retention
+/// and proves `ImportedResources.wgpu_device` is load-bearing when every
+/// external handle drops before `Drop::drop`'s `vkDestroyImage`/`vkFreeMemory`.
+///
+/// Note: this row uses a local memory-backed `vk::Image` (`UNDEFINED` initial
+/// layout, no DMA-BUF export) without `VK_LAYER_KHRONOS_validation`, so it
+/// verifies lifetime/teardown plumbing rather than Vulkan VUID barrier/layout
+/// transitions (which belong to the hardware `native-validation-fixtures` tier).
 #[test]
 fn imported_resources_outlive_external_device_drop_and_wait_for_queue_completion() {
     use std::sync::Arc;
@@ -164,6 +173,10 @@ fn imported_resources_outlive_external_device_drop_and_wait_for_queue_completion
     let Some((instance, adapter, device, queue)) =
         super::open_test_vulkan_foreign_device("dmabuf-b7-ownership-test")
     else {
+        assert!(
+            !super::require_gpu_video_tests(),
+            "NEOMACS_REQUIRE_GPU_VIDEO_TESTS is set, but no headless Vulkan adapter with VK_EXT_queue_family_foreign is available"
+        );
         eprintln!(
             "skipping B7 Vulkan behavioral test: no headless Vulkan adapter with VK_EXT_queue_family_foreign"
         );
@@ -203,4 +216,5 @@ fn imported_resources_outlive_external_device_drop_and_wait_for_queue_completion
     drop(adapter);
     drop(instance);
     drop(sole_owner);
+    eprintln!("GPU_TEST_RAN: b7_dmabuf_acquire_and_sole_owner_device_drop");
 }
