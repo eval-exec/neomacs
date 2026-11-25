@@ -786,6 +786,10 @@ mod unit_runtime {
         Ok(())
     }
 
+    fn unit_try_controlling_tty_emergency_escape(_ctx: &mut Context) -> bool {
+        false
+    }
+
     static INPUT: InputHooks = InputHooks::new(
         s::input_interrupt_for_input_event_if_requested,
         unit_os_signal_pending,
@@ -795,6 +799,7 @@ mod unit_runtime {
             read_fd: s::input_signal_wake_pipe_read_fd,
             drain: s::input_drain_signal_wake_pipe,
         },
+        unit_try_controlling_tty_emergency_escape,
     );
 
     static CALL_INTERACTIVELY: CallInteractivelyHooks =

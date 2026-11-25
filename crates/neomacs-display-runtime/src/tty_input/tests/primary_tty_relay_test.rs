@@ -622,3 +622,63 @@ fn direct_reader_delivers_with_unused_legacy_receiver_dropped_then_stops() {
         "a disconnected unused display queue must not close the direct publisher"
     );
 }
+
+#[test]
+fn direct_reader_pause_releases_input_fd_until_guard_drops() {
+    use std::io::Read as _;
+
+    let hooks = Hooks::new();
+    let pty = NativePty::new();
+    let (emacs, render) = ThreadComms::new().split();
+    drop(emacs.input_rx);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let publisher = TestPublisher {
+        output: tx,
+        attempts,
+    };
+    let pause = TtyInputPause::new();
+    let reader = TtyInputReader::spawn_primary_with_test_source_and_pause(
+        render,
+        pty.slave.try_clone().expect("direct reader slave lease"),
+        pty.size_query(),
+        publisher,
+        pause.clone(),
+        Some(hooks.callback()),
+    )
+    .expect("spawn direct reader with pause handle");
+
+    let mut master = pty.master;
+    master.write_all(b"A").expect("write before pause");
+    let first = rx
+        .recv_timeout(DEADLOCK_CAP)
+        .expect("deliver input before pause");
+    assert_eq!(first, Fact::Bytes(b"A".to_vec()));
+
+    // Pause synchronously parks tty-input-raw outside poll/read on the slave fd.
+    let guard = pause.pause();
+    master.write_all(b"yn\n").expect("write during pause");
+    let mut direct_slave = File::from(pty.slave.try_clone().expect("direct slave read"));
+    let mut direct_buf = [0u8; 3];
+    direct_slave
+        .read_exact(&mut direct_buf)
+        .expect("caller must read all bytes written while reader is paused");
+    assert_eq!(&direct_buf, b"yn\n");
+    assert!(
+        rx.try_recv().is_err(),
+        "paused reader must not publish bytes consumed by emergency escape"
+    );
+
+    // Dropping the guard resumes normal acquisition.
+    drop(guard);
+    master.write_all(b"Z").expect("write after resume");
+    let after = rx
+        .recv_timeout(DEADLOCK_CAP)
+        .expect("deliver input after resume");
+    assert_eq!(after, Fact::Bytes(b"Z".to_vec()));
+
+    let _ = emacs
+        .cmd_tx
+        .send(RenderCommand::Lifecycle(LifecycleCommand::Shutdown));
+    reader.join();
+}

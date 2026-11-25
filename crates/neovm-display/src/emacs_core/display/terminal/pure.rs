@@ -1187,6 +1187,74 @@ fn with_terminal_host_for_id<R>(
     })
 }
 
+fn is_active_controlling_tty_for_emergency_escape(terminal: &TerminalRecord) -> bool {
+    !terminal.deleted
+        && terminal.output_method == TerminalOutputMethod::Termcap
+        && terminal.runtime.active
+        && terminal.runtime.controlling_tty
+        && !terminal.runtime.suspended
+        && terminal.host.is_some()
+}
+
+/// GNU `handle_interrupt` controlling-TTY emergency escape
+/// (`src/keyboard.c:12622-12711`, `src/terminal.c:263-277`).
+///
+/// Looks up an active, live, non-suspended controlling termcap terminal,
+/// temporarily takes its host so `TERMINAL_MANAGER` is not borrowed across
+/// Lisp `auto-save-hook`, runs [`TerminalHost::run_emergency_escape`],
+/// restores the host via RAII drop guard, and invalidates redisplay when
+/// handled.
+pub fn try_run_controlling_tty_emergency_escape(
+    ctx: &mut neovm_eval::emacs_core::eval::Context,
+) -> bool {
+    let taken = with_terminal_manager(|slot| {
+        let mut manager = slot.borrow_mut();
+        let terminal = manager
+            .terminals
+            .iter_mut()
+            .find(|terminal| is_active_controlling_tty_for_emergency_escape(terminal))?;
+        let id = terminal.id;
+        let host = terminal.host.take()?;
+        Some((id, host))
+    });
+    let Some((id, host)) = taken else {
+        return false;
+    };
+
+    struct RestoreHost {
+        id: u64,
+        host: Option<Box<dyn TerminalHost>>,
+    }
+    impl Drop for RestoreHost {
+        fn drop(&mut self) {
+            if let Some(host) = self.host.take() {
+                with_terminal_manager(|slot| {
+                    let mut manager = slot.borrow_mut();
+                    if let Some(terminal) = manager.get_mut(self.id)
+                        && terminal.host.is_none()
+                    {
+                        terminal.host = Some(host);
+                    }
+                });
+            }
+        }
+    }
+
+    let mut guard = RestoreHost {
+        id,
+        host: Some(host),
+    };
+    let handled = guard
+        .host
+        .as_deref_mut()
+        .is_some_and(|host| host.run_emergency_escape(&mut || ctx.run_emergency_auto_save()));
+    drop(guard);
+    if handled {
+        ctx.invalidate_redisplay();
+    }
+    handled
+}
+
 fn delete_terminal_record(id: u64) {
     // Deletion is Context-owned too: otherwise reinstall would recreate this
     // terminal and retain its parameters as roots on every destination thread.

@@ -3113,19 +3113,42 @@ impl Context {
         self.store_variable(self.inhibit_quit_symbol, value);
     }
 
+    /// Run GNU `Fdo_auto_save (Qt, Qnil)` during controlling-TTY emergency
+    /// escape (`src/keyboard.c:12671`, `src/fileio.c:6355-6356,6512`).
+    ///
+    /// Temporarily clears `quit-flag` across auto-save so the pending quit
+    /// does not abort saving, then restores `quit-flag` on return.
+    #[doc(hidden)]
+    pub fn run_emergency_auto_save(&mut self) {
+        let saved_quit_flag = self.quit_flag;
+        self.set_quit_flag_value(Value::NIL);
+        let _ = crate::emacs_core::eval::auto_save_hooks::do_auto_save(self, Value::T, Value::NIL);
+        self.set_quit_flag_value(saved_quit_flag);
+    }
+
     /// Apply `presses` quit-character interrupts following GNU Emacs
-    /// `handle_interrupt` (`src/keyboard.c:12714-12720`):
+    /// `handle_interrupt` (`src/keyboard.c:12622-12720`):
     ///
     /// ```c
-    /// int count = NILP (Vquit_flag) ? 1 : force_quit_count + 1;
-    /// force_quit_count = count;
-    /// if (count == 3)
-    ///   Vinhibit_quit = Qnil;
-    /// Vquit_flag = Qt;
+    /// if (!NILP (Vquit_flag) && get_named_terminal (dev_tty))
+    ///   { /* reset_all_sys_modes, sys_suspend, resume prompts, init_all_sys_modes */ }
+    /// else
+    ///   {
+    ///     int count = NILP (Vquit_flag) ? 1 : force_quit_count + 1;
+    ///     force_quit_count = count;
+    ///     if (count == 3)
+    ///       Vinhibit_quit = Qnil;
+    ///     Vquit_flag = Qt;
+    ///   }
     /// ```
     #[doc(hidden)]
     pub fn record_quit_interrupts(&mut self, presses: u32) {
         for _ in 0..presses {
+            if !self.quit_flag.is_nil()
+                && crate::emacs_core::eval::input_hooks::try_controlling_tty_emergency_escape(self)
+            {
+                break;
+            }
             let count = self
                 .quit_requested
                 .record_force_quit_press(self.quit_flag.is_nil());

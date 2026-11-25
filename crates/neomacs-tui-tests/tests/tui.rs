@@ -28,6 +28,7 @@ mod pixel_measurement;
 mod process_plist_isolation;
 mod process_send_encoding;
 mod stalled_tls;
+mod tty_emergency_escape;
 
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_oracle.rs"]

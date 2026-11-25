@@ -1431,5 +1431,126 @@ fn made_frame(eval: &Context, made: Value) -> &crate::window::Frame {
     eval.frame_manager().get(id).expect("new frame is live")
 }
 
+struct EmergencyEscapeProbeHost {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    trigger_auto_save: bool,
+}
+
+impl TerminalHost for EmergencyEscapeProbeHost {
+    fn suspend_tty(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resume_tty(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn run_emergency_escape(&mut self, auto_save: &mut dyn FnMut()) -> bool {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.trigger_auto_save {
+            auto_save();
+        }
+        true
+    }
+}
+
+fn interactive_controlling_tty_context() -> Context {
+    let eval = tty_root_frame_context();
+    configure_terminal_runtime(
+        TerminalRuntimeConfig::interactive(
+            Some("xterm-256color".to_string()),
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+                256,
+            ),
+        )
+        .with_name("/dev/tty"),
+    );
+    eval
+}
+
+#[test]
+fn controlling_tty_second_quit_interrupt_triggers_emergency_escape() {
+    let mut eval = interactive_controlling_tty_context();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    set_terminal_host(Box::new(EmergencyEscapeProbeHost {
+        calls: std::sync::Arc::clone(&calls),
+        trigger_auto_save: true,
+    }));
+    eval.set_variable("inhibit-quit", Value::T);
+
+    // 1st C-g sets quit-flag without entering emergency escape.
+    eval.record_quit_interrupts(1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(eval.quit_flag_value().is_truthy());
+    assert!(eval.inhibit_quit.is_truthy());
+
+    // 2nd C-g while quit-flag is non-nil enters controlling-TTY emergency escape
+    // instead of incrementing force_quit_count or clearing inhibit-quit.
+    eval.record_quit_interrupts(1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(eval.quit_flag_value().is_truthy());
+    assert!(eval.inhibit_quit.is_truthy());
+
+    // A 3rd C-g still enters emergency escape rather than clearing inhibit-quit.
+    eval.record_quit_interrupts(1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert!(eval.quit_flag_value().is_truthy());
+    assert!(eval.inhibit_quit.is_truthy());
+
+    reset_terminal_host();
+}
+
+#[test]
+fn suspended_or_non_tty_terminal_falls_back_to_force_quit_count() {
+    let mut eval = interactive_controlling_tty_context();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    set_terminal_host(Box::new(EmergencyEscapeProbeHost {
+        calls: std::sync::Arc::clone(&calls),
+        trigger_auto_save: false,
+    }));
+    // GNU get_named_terminal(dev_tty) returns NULL when the controlling tty
+    // is suspended (src/terminal.c:274 TERMINAL_ACTIVE_P).
+    builtin_suspend_tty(&mut eval, vec![]).expect("suspend controlling tty");
+    eval.set_variable("inhibit-quit", Value::T);
+
+    eval.record_quit_interrupts(1);
+    eval.record_quit_interrupts(1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(eval.inhibit_quit.is_truthy());
+
+    // 3rd C-g clears inhibit-quit via force_quit_count == 3.
+    eval.record_quit_interrupts(1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(eval.inhibit_quit.is_nil());
+
+    // Window-system terminal falls back to force_quit_count == 3.
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::X11,
+            ":0",
+        )
+        .expect("X11 display identity"),
+    ));
+    eval.set_quit_flag_value(Value::NIL);
+    eval.set_variable("inhibit-quit", Value::T);
+    eval.record_quit_interrupts(3);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(eval.inhibit_quit.is_nil());
+
+    // Inactive/batch (non-termcap) initial terminal also falls back.
+    reset_terminal_thread_locals();
+    let mut batch_eval = Context::new(crate::test_utils::unit_runtime());
+    set_terminal_host(Box::new(EmergencyEscapeProbeHost {
+        calls: std::sync::Arc::clone(&calls),
+        trigger_auto_save: false,
+    }));
+    batch_eval.set_variable("inhibit-quit", Value::T);
+    batch_eval.record_quit_interrupts(3);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(batch_eval.inhibit_quit.is_nil());
+
+    reset_terminal_host();
+}
+
 #[path = "gc_heap_ownership_test.rs"]
 mod gc_heap_ownership;

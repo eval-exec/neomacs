@@ -1332,6 +1332,7 @@ mod unit_runtime {
             read_fd: s::input_signal_wake_pipe_read_fd,
             drain: s::input_drain_signal_wake_pipe,
         },
+        crate::emacs_core::terminal::pure::try_run_controlling_tty_emergency_escape,
     );
 
     static CALL_INTERACTIVELY: CallInteractivelyHooks =

@@ -1,26 +1,50 @@
 use std::io;
 use std::io::Write;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use neomacs_display_protocol::SelectionOwner;
 use neomacs_display_runtime::thread_comm::{LifecycleCommand, RenderCommand, RenderCommandSender};
 use neovm_core::emacs_core::{DisplayHost, GuiFrameHostRequest, PopupMenuRequest};
 
-// Re-export the cross-platform TTY input reader from display-runtime.
-pub use neomacs_display_runtime::tty_input::TtyInputReader;
+// Re-export the cross-platform TTY input reader and pause handle from display-runtime.
+pub use neomacs_display_runtime::tty_input::{TtyInputPause, TtyInputReader};
 
-// ── TTY terminal host (suspend/resume/delete) ────────────────────────────
+// ── TTY terminal host (suspend/resume/delete/emergency-escape) ───────────
 
 /// Implements `TerminalHost` for the TTY frontend so the Lisp-level
 /// `suspend-tty`, `resume-tty`, and `delete-terminal` functions can
-/// send commands to the render thread.
+/// send commands to the render thread, and so controlling-TTY 2nd-`C-g`
+/// emergency escape can pause raw input, suspend via `SIGTSTP`, run the
+/// GNU resume prompts, and re-enter raw mode.
 pub struct TtyTerminalHost {
     cmd_tx: RenderCommandSender,
+    input_pause: TtyInputPause,
+    force_full_redraw: Arc<AtomicBool>,
 }
 
 impl TtyTerminalHost {
+    #[cfg_attr(not(test), allow(dead_code))]
     #[inline(always)]
     pub(crate) fn new(cmd_tx: RenderCommandSender) -> Self {
-        Self { cmd_tx }
+        Self::with_emergency_escape(
+            cmd_tx,
+            TtyInputPause::new(),
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) fn with_emergency_escape(
+        cmd_tx: RenderCommandSender,
+        input_pause: TtyInputPause,
+        force_full_redraw: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            cmd_tx,
+            input_pause,
+            force_full_redraw,
+        }
     }
 }
 
@@ -205,5 +229,289 @@ impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
             .write_all(bytes)
             .and_then(|()| stdout.flush())
             .map_err(|err| format!("failed to write to the terminal: {err}"))
+    }
+
+    fn run_emergency_escape(&mut self, auto_save: &mut dyn FnMut()) -> bool {
+        let _pause_guard = self.input_pause.pause();
+        #[cfg(unix)]
+        let _sigint_guard = SigintBlockGuard::block();
+
+        let _ = io::stdout().flush();
+        super::tty_init::tty_shutdown_terminal();
+        let _ = io::stdout().flush();
+
+        #[cfg(unix)]
+        let mut suspend = sys_suspend_process_group;
+        run_emergency_escape_session(
+            read_stdin_unbuffered_byte,
+            write_stdout_unbuffered,
+            #[cfg(unix)]
+            Some(&mut suspend),
+            #[cfg(not(unix))]
+            None,
+            auto_save,
+            || std::process::abort(),
+        );
+
+        if let Err(err) = super::tty_init::tty_init_terminal() {
+            tracing::warn!(%err, "emergency escape failed to reinitialize TTY");
+        }
+        self.force_full_redraw.store(true, Ordering::Release);
+        true
+    }
+}
+
+/// GNU `handle_interrupt` emergency escape prompt sequence
+/// (`src/keyboard.c:12638-12710`).
+fn run_emergency_escape_session(
+    mut read_byte: impl FnMut() -> Option<u8>,
+    mut write_bytes: impl FnMut(&[u8]),
+    suspend: Option<&mut dyn FnMut()>,
+    auto_save: &mut dyn FnMut(),
+    mut abort_process: impl FnMut(),
+) {
+    if let Some(suspend_fn) = suspend {
+        suspend_fn();
+    } else {
+        write_bytes(
+            b"No support for stopping a process on this operating system;\nyou can continue or abort.\n",
+        );
+    }
+
+    write_bytes(b"Emacs is resuming after an emergency escape.\n");
+
+    write_bytes(b"Auto-save? (y or n) ");
+    let first = read_byte();
+    if matches!(first, Some(b'y' | b'Y')) {
+        auto_save();
+        write_bytes(b"Auto-save done\n");
+    }
+    drain_to_newline(first, &mut read_byte);
+
+    write_bytes(b"Abort (and dump core)? (y or n) ");
+    let first = read_byte();
+    if matches!(first, Some(b'y' | b'Y')) {
+        abort_process();
+    }
+    drain_to_newline(first, &mut read_byte);
+
+    write_bytes(b"Continuing...\n");
+}
+
+fn drain_to_newline(mut last: Option<u8>, read_byte: &mut impl FnMut() -> Option<u8>) {
+    while !matches!(last, None | Some(b'\n')) {
+        last = read_byte();
+    }
+}
+
+#[cfg(unix)]
+struct SigintBlockGuard {
+    old_mask: libc::sigset_t,
+    restored: bool,
+}
+
+#[cfg(unix)]
+impl SigintBlockGuard {
+    fn block() -> Self {
+        let mut blocked = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        let mut old_mask = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        // SAFETY: `blocked` and `old_mask` are valid writable `sigset_t`
+        // pointers; `pthread_sigmask` only modifies this thread's signal mask.
+        let ok = unsafe {
+            libc::sigemptyset(blocked.as_mut_ptr()) == 0
+                && libc::sigaddset(blocked.as_mut_ptr(), libc::SIGINT) == 0
+                && libc::pthread_sigmask(libc::SIG_BLOCK, blocked.as_ptr(), old_mask.as_mut_ptr())
+                    == 0
+        };
+        if ok {
+            Self {
+                // SAFETY: `pthread_sigmask` returned 0 and initialized `old_mask`.
+                old_mask: unsafe { old_mask.assume_init() },
+                restored: false,
+            }
+        } else {
+            Self {
+                // SAFETY: `sigset_t` is plain C data; unused when `restored == true`.
+                old_mask: unsafe { std::mem::zeroed() },
+                restored: true,
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SigintBlockGuard {
+    fn drop(&mut self) {
+        if !self.restored {
+            // SAFETY: `old_mask` was initialized by `pthread_sigmask`.
+            unsafe {
+                libc::pthread_sigmask(libc::SIG_SETMASK, &self.old_mask, std::ptr::null_mut());
+            }
+            self.restored = true;
+        }
+    }
+}
+
+#[cfg(unix)]
+fn sys_suspend_process_group() {
+    // GNU `sys_suspend` (`src/sysdep.c:632`): `kill (0, SIGTSTP);`.
+    // SAFETY: sending `SIGTSTP` to the current process group is a standard
+    // POSIX job-control suspend; `SIGTSTP` disposition is `SIG_DFL`.
+    unsafe {
+        libc::kill(0, libc::SIGTSTP);
+    }
+}
+
+#[cfg(unix)]
+fn write_stdout_unbuffered(bytes: &[u8]) {
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        // SAFETY: `remaining` points to valid readable memory of `remaining.len()`.
+        let written = unsafe {
+            libc::write(
+                libc::STDOUT_FILENO,
+                remaining.as_ptr().cast(),
+                remaining.len(),
+            )
+        };
+        if written > 0 {
+            remaining = &remaining[written as usize..];
+        } else if written < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+            continue;
+        } else {
+            break;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn write_stdout_unbuffered(bytes: &[u8]) {
+    let mut stdout = io::stdout();
+    let _ = stdout.write_all(bytes);
+    let _ = stdout.flush();
+}
+
+#[cfg(unix)]
+fn read_stdin_unbuffered_byte() -> Option<u8> {
+    let mut byte = 0u8;
+    loop {
+        // SAFETY: `&mut byte` is valid writable memory of 1 byte.
+        let count = unsafe { libc::read(libc::STDIN_FILENO, (&mut byte as *mut u8).cast(), 1) };
+        if count == 1 {
+            return Some(byte);
+        }
+        if count == 0 {
+            return None;
+        }
+        let err = io::Error::last_os_error();
+        match err.kind() {
+            io::ErrorKind::Interrupted => continue,
+            io::ErrorKind::WouldBlock => {
+                let mut pfd = libc::pollfd {
+                    fd: libc::STDIN_FILENO,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: `pfd` is a valid initialized `pollfd` entry.
+                let _ = unsafe { libc::poll(&mut pfd, 1, -1) };
+            }
+            _ => return None,
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn read_stdin_unbuffered_byte() -> Option<u8> {
+    use std::io::Read as _;
+    let mut byte = [0u8; 1];
+    match io::stdin().read(&mut byte) {
+        Ok(1) => Some(byte[0]),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    fn run_scripted(input: &[u8], supports_suspend: bool) -> (String, usize, usize, usize) {
+        let mut bytes: VecDeque<u8> = input.iter().copied().collect();
+        let mut output = Vec::new();
+        let mut suspends = 0usize;
+        let mut auto_saves = 0usize;
+        let mut aborts = 0usize;
+        let mut record_suspend = || suspends += 1;
+        run_emergency_escape_session(
+            || bytes.pop_front(),
+            |chunk| output.extend_from_slice(chunk),
+            supports_suspend.then_some(&mut record_suspend as &mut dyn FnMut()),
+            &mut || auto_saves += 1,
+            || aborts += 1,
+        );
+        (
+            String::from_utf8(output).expect("ASCII prompts"),
+            suspends,
+            auto_saves,
+            aborts,
+        )
+    }
+
+    #[test]
+    fn emergency_escape_autosave_yes_abort_no_matches_gnu_prompts() {
+        let (out, suspends, auto_saves, aborts) = run_scripted(b"y\nn\n", true);
+        assert_eq!(suspends, 1);
+        assert_eq!(auto_saves, 1);
+        assert_eq!(aborts, 0);
+        assert_eq!(
+            out,
+            concat!(
+                "Emacs is resuming after an emergency escape.\n",
+                "Auto-save? (y or n) ",
+                "Auto-save done\n",
+                "Abort (and dump core)? (y or n) ",
+                "Continuing...\n",
+            )
+        );
+    }
+
+    #[test]
+    fn emergency_escape_uppercase_y_drains_rest_of_line() {
+        let (out, suspends, auto_saves, aborts) = run_scripted(b"Yes please\nno thanks\n", true);
+        assert_eq!(suspends, 1);
+        assert_eq!(auto_saves, 1);
+        assert_eq!(aborts, 0);
+        assert!(out.contains("Auto-save done\n"));
+        assert!(out.ends_with("Continuing...\n"));
+    }
+
+    #[test]
+    fn emergency_escape_abort_yes_invokes_abort_without_autosave() {
+        let (out, suspends, auto_saves, aborts) = run_scripted(b"n\nY\n", true);
+        assert_eq!(suspends, 1);
+        assert_eq!(auto_saves, 0);
+        assert_eq!(aborts, 1);
+        assert!(!out.contains("Auto-save done"));
+        assert!(out.contains("Abort (and dump core)? (y or n) "));
+    }
+
+    #[test]
+    fn emergency_escape_without_suspend_prints_gnu_no_sigtstp_notice() {
+        let (out, suspends, auto_saves, aborts) = run_scripted(b"n\nn\n", false);
+        assert_eq!(suspends, 0);
+        assert_eq!(auto_saves, 0);
+        assert_eq!(aborts, 0);
+        assert!(out.starts_with(
+            "No support for stopping a process on this operating system;\nyou can continue or abort.\nEmacs is resuming after an emergency escape.\n"
+        ));
+    }
+
+    #[test]
+    fn emergency_escape_eof_mid_prompt_does_not_spin() {
+        let (out, suspends, auto_saves, aborts) = run_scripted(b"n", true);
+        assert_eq!(suspends, 1);
+        assert_eq!(auto_saves, 0);
+        assert_eq!(aborts, 0);
+        assert!(out.ends_with("Continuing...\n"));
     }
 }

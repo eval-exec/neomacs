@@ -1008,6 +1008,31 @@ impl TuiSession {
         &self.terminal.recent_output
     }
 
+    /// Drain raw PTY output until `needle` appears in [`Self::recent_output`]
+    /// or `timeout` elapses.
+    pub fn wait_for_raw_output(&mut self, needle: &[u8], timeout: Duration) -> bool {
+        const SLICE: Duration = Duration::from_millis(20);
+        if needle.is_empty() {
+            return true;
+        }
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self
+                .terminal
+                .recent_output
+                .windows(needle.len())
+                .any(|window| window == needle)
+            {
+                return true;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            self.read(remaining.min(SLICE));
+        }
+    }
+
     /// Return the asciicast artifact path when recording is enabled.
     pub fn recording_path(&self) -> Option<&Path> {
         self.terminal.recording.path()

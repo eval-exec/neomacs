@@ -43,6 +43,19 @@ pub trait TerminalHost {
     fn tty_winsize_cells(&mut self) -> Option<(u32, u32)> {
         None
     }
+
+    /// GNU `handle_interrupt` controlling-TTY emergency escape
+    /// (`src/keyboard.c:12622-12711`): restore terminal modes, suspend with
+    /// `SIGTSTP`, and on resume prompt for auto-save / abort / continue before
+    /// re-entering raw mode.
+    ///
+    /// Returns `true` when this host owns the interactive controlling TTY and
+    /// handled the emergency escape; returns `false` when the host does not
+    /// support emergency escape so the evaluator falls back to GNU's
+    /// `force_quit_count` path (`src/keyboard.c:12712-12720`).
+    fn run_emergency_escape(&mut self, _auto_save: &mut dyn FnMut()) -> bool {
+        false
+    }
 }
 /// Validated identity of a text terminal a frontend must open for one frame.
 ///

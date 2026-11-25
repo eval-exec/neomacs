@@ -6,8 +6,8 @@ use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -85,6 +85,124 @@ impl TtyInputCapacityNotifier {
                 Err(_) if self.wake.closed.load(Ordering::Acquire) => return Ok(()),
                 Err(error) => return Err(error),
             }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PausePhase {
+    Running,
+    PauseRequested,
+    Paused,
+    Stopped,
+}
+
+#[derive(Debug)]
+struct PauseState {
+    phase: PausePhase,
+    wake: Option<TtyInputCapacityNotifier>,
+}
+
+/// Synchronously pauses the Unix `tty-input-raw` reader thread so the
+/// evaluator thread can take exclusive ownership of `STDIN_FILENO` during
+/// controlling-TTY emergency escape (`SIGTSTP` + cooked-mode prompts).
+#[derive(Clone, Debug)]
+pub struct TtyInputPause {
+    inner: Arc<(Mutex<PauseState>, Condvar)>,
+}
+
+/// RAII guard that keeps `tty-input-raw` parked outside `poll`/`read` on
+/// `STDIN_FILENO` until dropped.
+#[derive(Debug)]
+pub struct TtyInputPauseGuard {
+    pause: Option<TtyInputPause>,
+}
+
+impl Default for TtyInputPause {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TtyInputPause {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new((
+                Mutex::new(PauseState {
+                    phase: PausePhase::Running,
+                    wake: None,
+                }),
+                Condvar::new(),
+            )),
+        }
+    }
+
+    fn attach_wake(&self, notifier: TtyInputCapacityNotifier) {
+        let (lock, _) = &*self.inner;
+        let should_wake = {
+            let mut state = lock.lock().unwrap_or_else(|err| err.into_inner());
+            if state.phase == PausePhase::Stopped {
+                return;
+            }
+            state.wake = Some(notifier.clone());
+            state.phase == PausePhase::PauseRequested
+        };
+        if should_wake {
+            let _ = notifier.notify_owner_stop();
+        }
+    }
+
+    fn mark_stopped(&self) {
+        let (lock, cvar) = &*self.inner;
+        let mut state = lock.lock().unwrap_or_else(|err| err.into_inner());
+        state.phase = PausePhase::Stopped;
+        state.wake = None;
+        cvar.notify_all();
+    }
+
+    /// Synchronously pause the reader thread and wait until it is parked
+    /// outside `poll(stdin)`/`read(stdin)`.
+    pub fn pause(&self) -> TtyInputPauseGuard {
+        let (lock, cvar) = &*self.inner;
+        let wake = {
+            let mut state = lock.lock().unwrap_or_else(|err| err.into_inner());
+            match state.phase {
+                PausePhase::Stopped => return TtyInputPauseGuard { pause: None },
+                PausePhase::Running | PausePhase::PauseRequested | PausePhase::Paused => {
+                    let Some(wake) = state.wake.clone() else {
+                        return TtyInputPauseGuard { pause: None };
+                    };
+                    if state.phase == PausePhase::Running {
+                        state.phase = PausePhase::PauseRequested;
+                    }
+                    wake
+                }
+            }
+        };
+        let _ = wake.notify_owner_stop();
+        let mut state = lock.lock().unwrap_or_else(|err| err.into_inner());
+        while state.phase == PausePhase::PauseRequested {
+            state = cvar.wait(state).unwrap_or_else(|err| err.into_inner());
+        }
+        TtyInputPauseGuard {
+            pause: Some(self.clone()),
+        }
+    }
+
+    fn resume(&self) {
+        let (lock, cvar) = &*self.inner;
+        let mut state = lock.lock().unwrap_or_else(|err| err.into_inner());
+        if matches!(state.phase, PausePhase::PauseRequested | PausePhase::Paused) {
+            state.phase = PausePhase::Running;
+            cvar.notify_all();
+        }
+    }
+}
+
+impl Drop for TtyInputPauseGuard {
+    fn drop(&mut self) {
+        if let Some(pause) = self.pause.take() {
+            pause.resume();
         }
     }
 }
@@ -289,6 +407,7 @@ struct Reader<S: InputDelivery> {
     input: OwnedFd,
     wake_reader: UnixStream,
     notifier: TtyInputCapacityNotifier,
+    pause: TtyInputPause,
     stop: Arc<AtomicBool>,
     comms: RenderComms,
     pending: VecDeque<S::Pending>,
@@ -599,9 +718,40 @@ impl<S: InputDelivery> Reader<S> {
         }
     }
 
+    fn maybe_wait_while_paused(&mut self) {
+        let (lock, cvar) = &*self.pause.inner;
+        let mut state = lock.lock().unwrap_or_else(|err| err.into_inner());
+        if state.phase != PausePhase::PauseRequested {
+            return;
+        }
+        state.phase = PausePhase::Paused;
+        cvar.notify_all();
+        while state.phase == PausePhase::Paused {
+            state = cvar.wait(state).unwrap_or_else(|err| err.into_inner());
+        }
+        // While paused, another caller owned STDIN_FILENO (e.g. emergency
+        // escape prompts) and the terminal may have resized while suspended.
+        // Drop any stale PollInput/ReadReady state so we re-query size and
+        // re-poll before calling blocking read(2).
+        if matches!(
+            self.read_state,
+            ReadState::ReadReady | ReadState::PollInput { .. }
+        ) {
+            self.read_state = ReadState::QuerySize;
+        }
+    }
+
     fn run(mut self) {
+        struct StopPauseOnExit(TtyInputPause);
+        impl Drop for StopPauseOnExit {
+            fn drop(&mut self) {
+                self.0.mark_stopped();
+            }
+        }
+        let _pause_stop_guard = StopPauseOnExit(self.pause.clone());
         self.last_size = self.size_query.query().ok();
         loop {
+            self.maybe_wait_while_paused();
             self.observe_owner_stop();
             let delivery_progress = self.progress_delivery();
             let acquisition_progress = self.progress_acquisition();
@@ -640,19 +790,21 @@ impl<S: InputDelivery> Reader<S> {
 }
 
 pub(super) fn spawn_default(comms: RenderComms) -> io::Result<TtyInputReader> {
-    spawn_default_delivery(comms, ChannelDelivery)
+    spawn_default_delivery(comms, ChannelDelivery, TtyInputPause::new())
 }
 
 pub(super) fn spawn_primary<P: PrimaryTtyPublisher>(
     comms: RenderComms,
     publisher: P,
+    pause: TtyInputPause,
 ) -> io::Result<TtyInputReader> {
-    spawn_default_delivery(comms, PrimaryDelivery::Connected(publisher))
+    spawn_default_delivery(comms, PrimaryDelivery::Connected(publisher), pause)
 }
 
 fn spawn_default_delivery<S: InputDelivery>(
     comms: RenderComms,
     delivery: S,
+    pause: TtyInputPause,
 ) -> io::Result<TtyInputReader> {
     // dup owns a CLOEXEC reference to the slave without changing the shared
     // open-file description's flags or closing the process's stdin.
@@ -667,11 +819,11 @@ fn spawn_default_delivery<S: InputDelivery>(
     let query = TerminalSizeQuery::new();
     #[cfg(test)]
     {
-        spawn_with_delivery(comms, input, query, delivery, None)
+        spawn_with_delivery(comms, input, query, delivery, pause, None)
     }
     #[cfg(not(test))]
     {
-        spawn_with_delivery(comms, input, query, delivery)
+        spawn_with_delivery(comms, input, query, delivery, pause)
     }
 }
 
@@ -682,7 +834,14 @@ pub(super) fn spawn_with_source(
     size_query: TerminalSizeQuery,
     hook: TestHook,
 ) -> io::Result<TtyInputReader> {
-    spawn_with_delivery(comms, input, size_query, ChannelDelivery, hook)
+    spawn_with_delivery(
+        comms,
+        input,
+        size_query,
+        ChannelDelivery,
+        TtyInputPause::new(),
+        hook,
+    )
 }
 
 #[cfg(test)]
@@ -693,11 +852,31 @@ pub(super) fn spawn_primary_with_source<P: PrimaryTtyPublisher>(
     publisher: P,
     hook: TestHook,
 ) -> io::Result<TtyInputReader> {
+    spawn_primary_with_source_and_pause(
+        comms,
+        input,
+        size_query,
+        publisher,
+        TtyInputPause::new(),
+        hook,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn spawn_primary_with_source_and_pause<P: PrimaryTtyPublisher>(
+    comms: RenderComms,
+    input: OwnedFd,
+    size_query: TerminalSizeQuery,
+    publisher: P,
+    pause: TtyInputPause,
+    hook: TestHook,
+) -> io::Result<TtyInputReader> {
     spawn_with_delivery(
         comms,
         input,
         size_query,
         PrimaryDelivery::Connected(publisher),
+        pause,
         hook,
     )
 }
@@ -707,6 +886,7 @@ fn spawn_with_delivery<S: InputDelivery>(
     input: OwnedFd,
     size_query: TerminalSizeQuery,
     delivery: S,
+    pause: TtyInputPause,
     #[cfg(test)] hook: TestHook,
 ) -> io::Result<TtyInputReader> {
     let (wake_reader, writer) = UnixStream::pair()?;
@@ -719,11 +899,13 @@ fn spawn_with_delivery<S: InputDelivery>(
             closed: AtomicBool::new(false),
         }),
     };
+    pause.attach_wake(notifier.clone());
     let stop = Arc::new(AtomicBool::new(false));
     let worker = Reader {
         input,
         wake_reader,
         notifier: notifier.clone(),
+        pause,
         stop: Arc::clone(&stop),
         comms,
         delivery,

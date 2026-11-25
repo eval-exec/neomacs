@@ -57,12 +57,17 @@ const fn canonical_signal_wake() -> SignalWakeSource {
     }
 }
 
+fn try_controlling_tty_emergency_escape(ctx: &mut crate::emacs_core::eval::Context) -> bool {
+    crate::emacs_core::terminal::pure::try_run_controlling_tty_emergency_escape(ctx)
+}
+
 static CANONICAL_INPUT_HOOKS: InputHooks = InputHooks::new(
     interrupt_for_input_event_if_requested,
     os_signal_pending,
     take_termination_signal,
     drain_pending_os_signals,
     canonical_signal_wake(),
+    try_controlling_tty_emergency_escape,
 );
 
 /// The one canonical input-wait descriptor (published only by the one core

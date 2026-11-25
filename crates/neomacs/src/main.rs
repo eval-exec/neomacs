@@ -5505,11 +5505,16 @@ pub unsafe fn run(mode: RuntimeMode) {
     let primary_window_size: SharedPrimaryWindowSize =
         Arc::new(Mutex::new(PrimaryWindowSize { width, height }));
     let tty_popup_force_full_redraw = Arc::new(AtomicBool::new(false));
+    let tty_input_pause = tty_frontend::TtyInputPause::new();
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
     if tty_init::should_enable_live_tty_io(&startup) {
-        set_terminal_host(Box::new(tty_frontend::TtyTerminalHost::new(
-            emacs_comms.cmd_tx.clone(),
-        )));
+        set_terminal_host(Box::new(
+            tty_frontend::TtyTerminalHost::with_emergency_escape(
+                emacs_comms.cmd_tx.clone(),
+                tty_input_pause.clone(),
+                tty_popup_force_full_redraw.clone(),
+            ),
+        ));
         evaluator.set_display_host(Box::new(tty_frontend::TtyPopupDisplayHost::new(
             tty_popup_force_full_redraw.clone(),
         )));
@@ -5552,7 +5557,11 @@ pub unsafe fn run(mode: RuntimeMode) {
                 // No bridge owns this unused bounded receiver. RenderComms
                 // still owns the original command and native resource lives.
                 drop(emacs_comms.input_rx);
-                tty_frontend::TtyInputReader::spawn_primary(render_comms, input_publisher)
+                tty_frontend::TtyInputReader::spawn_primary_with_pause(
+                    render_comms,
+                    input_publisher,
+                    tty_input_pause,
+                )
             };
             #[cfg(not(unix))]
             let reader_result = {

@@ -36,6 +36,9 @@ pub(crate) type DrainPendingOsSignals = fn(&mut Context) -> Result<(), Flow>;
 pub(crate) type SignalWakePipeReadFd = fn() -> Option<i32>;
 /// Drain one wake byte from the signal self-pipe.
 pub(crate) type DrainSignalWakePipe = fn(i32);
+/// Run GNU's controlling-TTY 2nd-`C-g` emergency escape when an active
+/// controlling terminal is present (`src/keyboard.c:12622-12711`).
+pub(crate) type TryControllingTtyEmergencyEscape = fn(&mut Context) -> bool;
 
 /// How an OS signal wakes an evaluator wait.
 ///
@@ -64,6 +67,7 @@ pub struct InputHooks {
     take_termination_signal: TakeTerminationSignal,
     drain_pending_os_signals: DrainPendingOsSignals,
     signal_wake: SignalWakeSource,
+    try_controlling_tty_emergency_escape: TryControllingTtyEmergencyEscape,
 }
 
 impl InputHooks {
@@ -74,6 +78,7 @@ impl InputHooks {
         take_termination_signal: TakeTerminationSignal,
         drain_pending_os_signals: DrainPendingOsSignals,
         signal_wake: SignalWakeSource,
+        try_controlling_tty_emergency_escape: TryControllingTtyEmergencyEscape,
     ) -> Self {
         Self {
             interrupt_for_input_event_if_requested,
@@ -81,6 +86,7 @@ impl InputHooks {
             take_termination_signal,
             drain_pending_os_signals,
             signal_wake,
+            try_controlling_tty_emergency_escape,
         }
     }
 }
@@ -151,4 +157,10 @@ pub(crate) fn drain_signal_wake_pipe(fd: i32) {
     if let SignalWakeSource::SelfPipe { drain, .. } = input_hooks().signal_wake {
         drain(fd);
     }
+}
+
+/// Run GNU's controlling-TTY 2nd-`C-g` emergency escape when an active
+/// controlling TTY terminal is present (`src/keyboard.c:12622-12711`).
+pub(crate) fn try_controlling_tty_emergency_escape(ctx: &mut Context) -> bool {
+    (input_hooks().try_controlling_tty_emergency_escape)(ctx)
 }
