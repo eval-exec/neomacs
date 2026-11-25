@@ -4070,27 +4070,98 @@ impl Buffer {
         self.text.put_syntax_safe_positions(index)
     }
 
-    /// See [`crate::buffer::buffer_text::BufferText::syntax_byte_run_memo_lookup`].
-    pub fn syntax_byte_run_memo_lookup(
+    fn syntax_run_memo_eligible(
+        &self,
+        resolver: &crate::emacs_core::textprop::CharPropertyResolver<'_>,
+    ) -> bool {
+        static CATEGORY_SYM: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+        let category = Value::from_sym_id(*CATEGORY_SYM.get_or_init(|| intern("category")));
+        resolver.supports_presence_coalescing()
+            && self.text_props_property_name_presence(category)
+                == crate::buffer::text_props::PropertyNamePresence::DefinitelyAbsent
+    }
+
+    fn coalesced_syntax_run_end(
+        &self,
+        char_pos: CharPos0,
+        resolver: &crate::emacs_core::textprop::CharPropertyResolver<'_>,
+    ) -> CharPos0 {
+        const COALESCE_LOOKAHEAD_CHARS: usize = 4096;
+        let total = self.accessible_char_region().end();
+        let cap = CharPos0::new(
+            char_pos
+                .get()
+                .saturating_add(COALESCE_LOOKAHEAD_CHARS)
+                .min(total.get()),
+        );
+        let end = if resolver.supports_presence_coalescing() {
+            self.syntax_prop_free_run_end_at_char_pos(char_pos, cap)
+        } else {
+            let (_, _, end) = self.interval_plist_run_at_char_pos(char_pos);
+            end
+        };
+        if end <= char_pos {
+            CharPos0::new(char_pos.get() + 1)
+        } else {
+            end
+        }
+    }
+
+    /// Resolve the `syntax-table` property run covering `byte_pos`, consulting
+    /// and populating the per-buffer byte-run memo only when resolution cannot
+    /// depend on unobserved Lisp structures (`category` symbol plists,
+    /// `char-property-alias-alist`, or `default-text-properties`).
+    pub fn resolve_syntax_byte_run(
         &self,
         byte_pos: EmacsBytePos,
-    ) -> Option<(u64, u64, Option<Value>)> {
-        self.text.syntax_byte_run_memo_lookup(byte_pos)
+        resolver: &crate::emacs_core::textprop::CharPropertyResolver<'_>,
+    ) -> (usize, usize, Option<Value>) {
+        let memo_ok = self.syntax_run_memo_eligible(resolver);
+        if memo_ok
+            && let Some((start, end, value)) = self.text.syntax_byte_run_memo_lookup(byte_pos)
+        {
+            return (start as usize, end as usize, value);
+        }
+        let char_pos = self.emacs_byte_pos_to_char_pos_clamped(byte_pos);
+        let (plist, start, _end) = self.interval_plist_run_at_char_pos(char_pos);
+        let value = plist.and_then(|plist| resolver.resolve_interval_plist(plist));
+        let end = self.coalesced_syntax_run_end(char_pos, resolver);
+        let end_byte = self.char_pos_to_emacs_byte_pos_clamped(end).get();
+        let start_byte = if start < char_pos {
+            self.char_pos_to_emacs_byte_pos_clamped(start).get()
+        } else {
+            byte_pos.get()
+        };
+        if memo_ok {
+            self.text
+                .syntax_byte_run_memo_store(start_byte as u64, end_byte as u64, value);
+        }
+        (start_byte, end_byte, value)
     }
 
-    /// See [`crate::buffer::buffer_text::BufferText::syntax_byte_run_memo_store`].
-    pub fn syntax_byte_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
-        self.text.syntax_byte_run_memo_store(start, end, value);
-    }
-
-    /// See [`crate::buffer::buffer_text::BufferText::syntax_char_run_memo_lookup`].
-    pub fn syntax_char_run_memo_lookup(&self, pos: usize) -> Option<(u64, u64, Option<Value>)> {
-        self.text.syntax_char_run_memo_lookup(pos)
-    }
-
-    /// See [`crate::buffer::buffer_text::BufferText::syntax_char_run_memo_store`].
-    pub fn syntax_char_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
-        self.text.syntax_char_run_memo_store(start, end, value);
+    /// Resolve the `syntax-table` property run covering zero-based char `pos`,
+    /// consulting and populating the per-buffer char-run memo only when
+    /// resolution cannot depend on unobserved Lisp structures (`category`
+    /// symbol plists, `char-property-alias-alist`, or
+    /// `default-text-properties`).
+    pub fn resolve_syntax_char_run(
+        &self,
+        pos: usize,
+        resolver: &crate::emacs_core::textprop::CharPropertyResolver<'_>,
+    ) -> (usize, usize, Option<Value>) {
+        let memo_ok = self.syntax_run_memo_eligible(resolver);
+        if memo_ok && let Some((start, end, value)) = self.text.syntax_char_run_memo_lookup(pos) {
+            return (start as usize, end as usize, value);
+        }
+        let char_pos = CharPos0::new(pos);
+        let (plist, start, _end) = self.interval_plist_run_at_char_pos(char_pos);
+        let value = plist.and_then(|plist| resolver.resolve_interval_plist(plist));
+        let end = self.coalesced_syntax_run_end(char_pos, resolver);
+        if memo_ok {
+            self.text
+                .syntax_char_run_memo_store(start.get() as u64, end.get() as u64, value);
+        }
+        (start.get(), end.get(), value)
     }
 
     /// Whether any property in `keys` is non-nil inside the bounded character

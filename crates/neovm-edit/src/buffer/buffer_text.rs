@@ -120,32 +120,31 @@ struct SyntaxRunMemoEntry {
 
 /// Byte-coordinate twin of [`SyntaxRunMemoEntry`], carrying the RESOLVED
 /// `syntax-table` value for the run so the byte-addressed scanners' refill
-/// needs no byte<->char conversions and no interval lookup on a hit. The
-/// value bits are only handed out while (epoch, tick) match, and a live
-/// value is rooted by the interval plist it came from.
+/// needs no byte<->char conversions and no interval lookup on a hit. Live
+/// entries (matching `(epoch, tick)`) are traced as GC roots by
+/// `BufferText::trace_text_prop_roots_with` and only populated when the
+/// buffer resolves syntax properties directly without `category` / alias /
+/// default fallbacks.
 #[derive(Clone, Copy, Default)]
 struct SyntaxByteRunMemoEntry {
     epoch: u64,
     tick: u64,
     start: u64,
     end: u64,
-    value_bits: u64,
-    value_present: bool,
+    value: Option<Value>,
 }
 
 /// Char-coordinate twin of [`SyntaxByteRunMemoEntry`], for the char-indexed
 /// parse loop's `SyntaxPropRange`: a hit hands the resolved run to a fresh
-/// scan with no interval descent and no coalescing walk. Same soundness
-/// contract: value bits only leave while (epoch, tick) match, and a live
-/// value is rooted by the interval plist it came from.
+/// scan with no interval descent and no coalescing walk. Same GC-rooting and
+/// direct-property memoization contract as [`SyntaxByteRunMemoEntry`].
 #[derive(Clone, Copy, Default)]
 struct SyntaxCharRunMemoEntry {
     epoch: u64,
     tick: u64,
     start: u64,
     end: u64,
-    value_bits: u64,
-    value_present: bool,
+    value: Option<Value>,
 }
 
 /// One content mutation, in the terms the char<->byte position anchors need to
@@ -664,10 +663,12 @@ impl Clone for BufferTextStorage {
             anchor_cache_cursor: Cell::new(anchor_cache_cursor),
             syntax_run_memo: self.syntax_run_memo.clone(),
             syntax_run_memo_cursor: self.syntax_run_memo_cursor.clone(),
-            syntax_byte_run_memo: self.syntax_byte_run_memo.clone(),
-            syntax_byte_run_memo_cursor: self.syntax_byte_run_memo_cursor.clone(),
-            syntax_char_run_memo: self.syntax_char_run_memo.clone(),
-            syntax_char_run_memo_cursor: self.syntax_char_run_memo_cursor.clone(),
+            // Snapshots do not trace syntax-run memos as GC roots; start empty
+            // so no snapshot can retain untraced `Value`s.
+            syntax_byte_run_memo: RefCell::new([SyntaxByteRunMemoEntry::default(); 4]),
+            syntax_byte_run_memo_cursor: Cell::new(0),
+            syntax_char_run_memo: RefCell::new([SyntaxCharRunMemoEntry::default(); 4]),
+            syntax_char_run_memo_cursor: Cell::new(0),
             // A snapshot starts without the index; it is rebuilt on demand.
             syntax_safe_positions: RefCell::new(SyntaxSafePositions::default()),
             text_index,
@@ -2302,10 +2303,10 @@ impl BufferText {
         end
     }
 
-    /// Byte-run memo lookup for the byte-addressed syntax scanners: on a hit
+    /// Byte-run memo lookup for `Buffer::resolve_syntax_byte_run`: on a hit
     /// the refill needs no conversion and no interval lookup. Returns
     /// `(start_byte, end_byte, resolved_value)`.
-    pub fn syntax_byte_run_memo_lookup(
+    pub(crate) fn syntax_byte_run_memo_lookup(
         &self,
         byte_pos: EmacsBytePos,
     ) -> Option<(u64, u64, Option<Value>)> {
@@ -2315,18 +2316,17 @@ impl BufferText {
         let pos = byte_pos.get() as u64;
         for entry in storage.syntax_byte_run_memo.borrow().iter() {
             if entry.epoch == epoch && entry.tick == tick && pos >= entry.start && pos < entry.end {
-                let value = entry.value_present.then(|| unsafe {
-                    /* SAFETY: buffer text word */
-                    Value::from_bits(entry.value_bits as usize)
-                });
-                return Some((entry.start, entry.end, value));
+                return Some((entry.start, entry.end, entry.value));
             }
         }
         None
     }
 
     /// Store a computed byte run (see `syntax_byte_run_memo_lookup`).
-    pub fn syntax_byte_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
+    /// Crate-private: external callers must go through
+    /// `Buffer::resolve_syntax_byte_run`, which enforces direct-property
+    /// memoization preconditions.
+    pub(crate) fn syntax_byte_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
         if end <= start {
             return;
         }
@@ -2340,34 +2340,34 @@ impl BufferText {
             tick,
             start,
             end,
-            value_bits: value.map_or(0, |v| v.bits() as u64),
-            value_present: value.is_some(),
+            value,
         };
         storage.syntax_byte_run_memo_cursor.set(slot + 1);
     }
 
-    /// Char-run memo lookup for the char-indexed parse loop (see
+    /// Char-run memo lookup for `Buffer::resolve_syntax_char_run` (see
     /// [`Self::syntax_byte_run_memo_lookup`] — same contract in char
     /// coordinates). Returns `(start_char, end_char, resolved_value)`.
-    pub fn syntax_char_run_memo_lookup(&self, pos: usize) -> Option<(u64, u64, Option<Value>)> {
+    pub(crate) fn syntax_char_run_memo_lookup(
+        &self,
+        pos: usize,
+    ) -> Option<(u64, u64, Option<Value>)> {
         let storage = self.storage.borrow();
         let epoch = storage.content_epoch;
         let tick = storage.text_props.syntax_prop_tick();
         let pos = pos as u64;
         for entry in storage.syntax_char_run_memo.borrow().iter() {
             if entry.epoch == epoch && entry.tick == tick && pos >= entry.start && pos < entry.end {
-                let value = entry.value_present.then(|| unsafe {
-                    /* SAFETY: buffer text word */
-                    Value::from_bits(entry.value_bits as usize)
-                });
-                return Some((entry.start, entry.end, value));
+                return Some((entry.start, entry.end, entry.value));
             }
         }
         None
     }
 
     /// Store a computed char run (see [`Self::syntax_char_run_memo_lookup`]).
-    pub fn syntax_char_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
+    /// Crate-private: external callers must go through
+    /// `Buffer::resolve_syntax_char_run`.
+    pub(crate) fn syntax_char_run_memo_store(&self, start: u64, end: u64, value: Option<Value>) {
         if end <= start {
             return;
         }
@@ -2381,8 +2381,7 @@ impl BufferText {
             tick,
             start,
             end,
-            value_bits: value.map_or(0, |v| v.bits() as u64),
-            value_present: value.is_some(),
+            value,
         };
         storage.syntax_char_run_memo_cursor.set(slot + 1);
     }
@@ -2911,7 +2910,28 @@ impl BufferText {
     }
 
     pub(crate) fn trace_text_prop_roots_with(&self, visit: &mut dyn FnMut(Value)) {
-        self.storage.borrow().text_props.for_each_root(visit);
+        let storage = self.storage.borrow();
+        storage.text_props.for_each_root(&mut *visit);
+        let epoch = storage.content_epoch;
+        let tick = storage.text_props.syntax_prop_tick();
+        for entry in storage.syntax_byte_run_memo.borrow_mut().iter_mut() {
+            if entry.epoch == epoch && entry.tick == tick {
+                if let Some(value) = entry.value {
+                    visit(value);
+                }
+            } else {
+                *entry = SyntaxByteRunMemoEntry::default();
+            }
+        }
+        for entry in storage.syntax_char_run_memo.borrow_mut().iter_mut() {
+            if entry.epoch == epoch && entry.tick == tick {
+                if let Some(value) = entry.value {
+                    visit(value);
+                }
+            } else {
+                *entry = SyntaxCharRunMemoEntry::default();
+            }
+        }
     }
 
     /// Register a marker in this buffer. Updates `LispMarker` fields
