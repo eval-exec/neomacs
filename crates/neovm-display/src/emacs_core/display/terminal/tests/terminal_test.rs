@@ -1898,5 +1898,30 @@ fn suspend_emacs_resizes_selected_frame_before_resume_hook_when_tty_resized() {
     );
 }
 
+#[test]
+fn tty_mode_strings_circular_list_terminates_without_hanging() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let cyclic = eval
+        .eval_str(r#"(let ((x (list "<A>" "<B>"))) (setcdr (cdr x) x) x)"#)
+        .expect("build circular list");
+    builtin_set_terminal_parameter(
+        &mut eval,
+        vec![Value::NIL, Value::symbol("tty-mode-reset-strings"), cyclic],
+    )
+    .expect("set circular tty-mode-reset-strings");
+
+    // Deliberate safety divergence from GNU `tty_send_additional_strings`
+    // (which has no cycle guard and loops indefinitely): collection must
+    // terminate cleanly via Floyd's cycle detector while emitting the elements.
+    let bytes = terminal_mode_strings_bytes(TERMINAL_ID, "tty-mode-reset-strings");
+    assert!(
+        bytes.starts_with(b"<A><B>"),
+        "expected cyclic prefix bytes, got {bytes:?}"
+    );
+}
+
 #[path = "gc_heap_ownership_test.rs"]
 mod gc_heap_ownership;

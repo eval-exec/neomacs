@@ -376,3 +376,35 @@ fn subshell_signal_guard_ignores_and_restores_sigint_sigquit_sigterm_sigio() {
         );
     }
 }
+
+#[test]
+fn windows_vt_mode_helpers_deduplicate_bracketed_paste_when_mode_strings_present() {
+    let concat = |chunks: [&[u8]; 3]| -> Vec<u8> { chunks.concat() };
+    let count = |haystack: &[u8], needle: &[u8]| -> usize {
+        haystack
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
+    };
+
+    // Without mode strings, the default VT sequences keep bracketed paste.
+    let plain_enter = concat(super::tty_vt_enter_chunks(&[]));
+    assert_eq!(plain_enter, tty_enter_sequence());
+    assert_eq!(count(&plain_enter, b"\x1b[?2004h"), 1);
+
+    let plain_leave = concat(super::tty_vt_leave_chunks(&[]));
+    assert_eq!(plain_leave, tty_leave_sequence());
+    assert_eq!(count(&plain_leave, b"\x1b[?2004l"), 1);
+
+    // When `xterm.el` already provides bracketed paste in mode strings, each
+    // escape is emitted only once, with set strings last and reset strings first.
+    let set = b"<SET>\x1b[?2004h<END>";
+    let dedup_enter = concat(super::tty_vt_enter_chunks(set));
+    assert!(dedup_enter.ends_with(set));
+    assert_eq!(count(&dedup_enter, b"\x1b[?2004h"), 1);
+
+    let reset = b"<RESET>\x1b[?2004l<END>";
+    let dedup_leave = concat(super::tty_vt_leave_chunks(reset));
+    assert!(dedup_leave.starts_with(reset));
+    assert_eq!(count(&dedup_leave, b"\x1b[?2004l"), 1);
+}

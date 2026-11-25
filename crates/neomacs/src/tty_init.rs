@@ -497,6 +497,46 @@ pub(crate) fn tty_leave_sequence() -> &'static [u8] {
     b"\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1l\x1b>\x1b[?1049l"
 }
 
+/// Ordered byte chunks for entering Windows VT mode with `tty-mode-set-strings`
+/// emitted last, suppressing the hardcoded `\x1b[?2004h` when `set_strings`
+/// already enables bracketed paste (e.g. via `lisp/term/xterm.el`).
+#[cfg(any(windows, test))]
+pub(crate) fn tty_vt_enter_chunks<'a>(set_strings: &'a [u8]) -> [&'a [u8]; 3] {
+    let enter = tty_enter_sequence();
+    let bp_enable = b"\x1b[?2004h";
+    if set_strings.windows(bp_enable.len()).any(|w| w == bp_enable)
+        && let Some(pos) = enter.windows(bp_enable.len()).position(|w| w == bp_enable)
+    {
+        [&enter[..pos], &enter[pos + bp_enable.len()..], set_strings]
+    } else {
+        [enter, b"", set_strings]
+    }
+}
+
+/// Ordered byte chunks for leaving Windows VT mode with `tty-mode-reset-strings`
+/// emitted first, suppressing the hardcoded `\x1b[?2004l` when `reset_strings`
+/// already disables bracketed paste (e.g. via `lisp/term/xterm.el`).
+#[cfg(any(windows, test))]
+pub(crate) fn tty_vt_leave_chunks<'a>(reset_strings: &'a [u8]) -> [&'a [u8]; 3] {
+    let leave = tty_leave_sequence();
+    let bp_disable = b"\x1b[?2004l";
+    if reset_strings
+        .windows(bp_disable.len())
+        .any(|w| w == bp_disable)
+        && let Some(pos) = leave
+            .windows(bp_disable.len())
+            .position(|w| w == bp_disable)
+    {
+        [
+            reset_strings,
+            &leave[..pos],
+            &leave[pos + bp_disable.len()..],
+        ]
+    } else {
+        [reset_strings, leave, b""]
+    }
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PrimaryTtyState {

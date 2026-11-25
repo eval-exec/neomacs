@@ -90,21 +90,10 @@ impl Session {
                     | DISABLE_NEWLINE_AUTO_RETURN,
             )?;
             self.active = true;
-            let enter = super::super::tty_init::tty_enter_sequence();
-            // Avoid double-emitting bracketed-paste enable when `term/xterm.el`
-            // already supplies it via `tty-mode-set-strings`.
-            let bp_enable = b"\x1b[?2004h";
-            if set_strings.windows(bp_enable.len()).any(|w| w == bp_enable)
-                && let Some(pos) = enter.windows(bp_enable.len()).position(|w| w == bp_enable)
-            {
-                self.console().write_char_buffer(&enter[..pos])?;
-                self.console()
-                    .write_char_buffer(&enter[pos + bp_enable.len()..])?;
-            } else {
-                self.console().write_char_buffer(enter)?;
-            }
-            if !set_strings.is_empty() {
-                self.console().write_char_buffer(set_strings)?;
+            for chunk in super::super::tty_init::tty_vt_enter_chunks(set_strings) {
+                if !chunk.is_empty() {
+                    self.console().write_char_buffer(chunk)?;
+                }
             }
         } else {
             let alternate = ScreenBuffer::create()?;
@@ -122,25 +111,10 @@ impl Session {
         let output = (|| {
             if self.active {
                 if self.vt {
-                    if !reset_strings.is_empty() {
-                        self.console().write_char_buffer(reset_strings)?;
-                    }
-                    let leave = super::super::tty_init::tty_leave_sequence();
-                    // Avoid double-emitting bracketed-paste disable when
-                    // `term/xterm.el` already supplies it via `tty-mode-reset-strings`.
-                    let bp_disable = b"\x1b[?2004l";
-                    if reset_strings
-                        .windows(bp_disable.len())
-                        .any(|w| w == bp_disable)
-                        && let Some(pos) = leave
-                            .windows(bp_disable.len())
-                            .position(|w| w == bp_disable)
-                    {
-                        self.console().write_char_buffer(&leave[..pos])?;
-                        self.console()
-                            .write_char_buffer(&leave[pos + bp_disable.len()..])?;
-                    } else {
-                        self.console().write_char_buffer(leave)?;
+                    for chunk in super::super::tty_init::tty_vt_leave_chunks(reset_strings) {
+                        if !chunk.is_empty() {
+                            self.console().write_char_buffer(chunk)?;
+                        }
                     }
                 } else {
                     self.original.show()?;
