@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Prepare image pins for archive tests without building a Rust executable."""
 
+from __future__ import annotations
+
 import argparse
 import contextlib
 from dataclasses import dataclass
@@ -213,7 +215,7 @@ def fetch_bytes(url: str) -> bytes:
         except (OSError, IncompleteRead) as error:
             if not transient_fetch_error(error):
                 raise
-            if isinstance(error, HTTPError):
+            if isinstance(error, HTTPError) and error.fp is not None:
                 error.close()
             failures.append(f"attempt {attempt}: {error}")
             if delay is None:

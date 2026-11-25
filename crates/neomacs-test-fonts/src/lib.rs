@@ -1315,6 +1315,7 @@ pub fn prefetch_all_fixtures() {
     std::hint::black_box(noto_sans_arabic_variable());
     std::hint::black_box(noto_sans_hebrew_variable());
     std::hint::black_box(noto_serif_variable());
+    std::hint::black_box(free_serif());
     std::hint::black_box(desktop_fonts());
     std::hint::black_box(lxgw_wenkai_nerd_regular_1_522());
     std::hint::black_box(noto_sans_variable());
