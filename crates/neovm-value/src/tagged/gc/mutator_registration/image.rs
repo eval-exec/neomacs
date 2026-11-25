@@ -33,6 +33,8 @@ pub(in crate::tagged::gc) enum ImageError {
     Capacity,
     #[error("allocation regions must be closed before publication")]
     RegionsOpen,
+    #[error("active user-test hold blocks publication")]
+    OutstandingLoan,
     #[error("proof-one publication refuses residual SATB words")]
     SatbResidual,
     #[error("image destination still owns GC facts")]
@@ -69,6 +71,11 @@ pub(in crate::tagged::gc) struct OwnerGcState {
     /// stopped picture must see one coherent catalog.
     pub(super) cons_tails: Vec<super::super::cons_storage::OwnedConsTail>,
     pub(super) numeric: super::numeric_allocation::NumericOwnerBook,
+    /// Active [`super::table_authority::UserTestHold`] guards minted against
+    /// this owner's root bank. While nonzero, root clearing and owner
+    /// publication/finish refuse with `OutstandingLoan` so every hold's raw
+    /// table pointer remains rooted until drop.
+    pub(super) user_test_holds: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl std::fmt::Debug for OwnerGcState {
@@ -371,6 +378,7 @@ impl OwnerGcState {
             catalog_region: None,
             cons_tails: Vec::new(),
             numeric: super::numeric_allocation::NumericOwnerBook::new(),
+            user_test_holds: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
 
@@ -386,6 +394,13 @@ impl OwnerGcState {
         &self,
         owner: &OwnerAllocRegion,
     ) -> Result<(), ImageError> {
+        if self
+            .user_test_holds
+            .load(std::sync::atomic::Ordering::Relaxed)
+            != 0
+        {
+            return Err(ImageError::OutstandingLoan);
+        }
         if self.catalog_region.is_some() || !self.cons_tails.is_empty() || !self.numeric.is_closed()
         {
             return Err(ImageError::RegionsOpen);

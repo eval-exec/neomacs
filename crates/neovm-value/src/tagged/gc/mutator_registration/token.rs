@@ -8,6 +8,7 @@ impl From<ImageError> for RegistrationError {
         match error {
             ImageError::Capacity => Self::Capacity,
             ImageError::RegionsOpen => Self::OpenRegion,
+            ImageError::OutstandingLoan => Self::OutstandingLoan,
             ImageError::SatbResidual => Self::ResidualSatb,
             ImageError::NonemptyYoung => Self::PendingYoung,
             ImageError::ExecutionRoots => Self::PendingRoots,
@@ -359,7 +360,7 @@ impl<'era> Mutator<'era> {
     /// distinguishes poison.
     pub fn run_access(&mut self) -> Result<RunAccess<'_, 'era>, RegistrationError> {
         self.check_thread()?;
-        if self.finished || self.published.is_some() {
+        if self.finished || self.published.is_some() || self.protocol.stopped {
             return Err(RegistrationError::Busy);
         }
         if self.run_admitted || self.young_loan {
@@ -429,7 +430,13 @@ impl<'era> Mutator<'era> {
         if state.phase != EntryPhase::Running || self.published.is_some() {
             return Err(RegistrationError::Busy);
         }
-        if state.worker_loan || state.run_loan {
+        if state.worker_loan
+            || state.run_loan
+            || self
+                .local
+                .as_ref()
+                .is_some_and(|local| local.user_test_holds.load(Ordering::Relaxed) > 0)
+        {
             return Err(RegistrationError::OutstandingLoan);
         }
         if epoch.get() <= state.epoch {
@@ -497,6 +504,13 @@ impl<'era> Mutator<'era> {
     pub fn finish(mut self, epoch: NonZeroU64) -> Result<(), MutatorFinishFailure<'era>> {
         let result = (|| {
             self.check_thread()?;
+            if self
+                .local
+                .as_ref()
+                .is_some_and(|local| local.user_test_holds.load(Ordering::Relaxed) > 0)
+            {
+                return Err(RegistrationError::OutstandingLoan);
+            }
             if self.published.is_none() {
                 self.publish(epoch)?;
             }

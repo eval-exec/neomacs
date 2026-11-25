@@ -16,9 +16,11 @@
 use std::marker::PhantomData;
 use std::ptr::addr_of_mut;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use super::super::mutator_gc::MutatorGcState;
+use super::root_slot::OwnerRootSlot;
 use super::token::Mutator;
 use super::{AllStopped, RegistrationError, RunAccess};
 use crate::tagged::header::HashTableObj;
@@ -62,51 +64,84 @@ pub(crate) struct TableDescription {
 
 /// The §3.1 nesting count taken around one user test/hash callback.
 ///
-/// Minted from a lease (the table is proved rooted), but owns no authority:
-/// the callback runs with READER_COUNT and WRITER both released — the
-/// accepted protocol — while the table-level count keeps any owner's
-/// same-table mutation refusing, exactly GNU's `check_mutable_hash_table`.
-/// The count enter is a direct atomic RMW on the shared byte, never routed
-/// through the serial edit body, so it flips no Lisp-visible contents and
-/// leaves `switch_epoch` untouched. RAII Drop counts back down; `!Send`.
-pub(crate) struct UserTestHold {
+/// Minted from a live [`TableRef`] paired with an [`OwnerRootSlot`] that
+/// currently holds this hash table, borrowing that root handle for `'root`
+/// (which also bounds `'root` within `'era`) and incrementing the owning
+/// mutator's `user_test_holds` counter so root clearing, rendezvous
+/// publication (`enter_native`/`acknowledge`), `retire_rooted`, `publish`,
+/// and `finish` all refuse while the hold lives. Because every GC
+/// publication/collection/retirement boundary on this era is excluded while
+/// `user_test_holds != 0` and `'root` bounds the hold within `'era`, no
+/// collection can reclaim the `HashTableObj` before `Drop` runs — even if a
+/// caller overwrites `root_scratch[root.index]` through `&OwnerRootSlot`.
+/// (Enabling GC safepoints during user-test callbacks in the future will
+/// require pinning the table root independently of mutable `root_scratch`
+/// slots.)
+///
+/// The hold owns no authority word: the callback runs with READER_COUNT and
+/// WRITER both released — the accepted protocol — while the table-level count
+/// keeps any owner's same-table mutation refusing, matching GNU's
+/// `check_mutable_hash_table`. RAII Drop counts both `test_depth` and the
+/// owner hold counter back down; `!Send`.
+pub(crate) struct UserTestHold<'root> {
     table: *mut HashTableObj,
+    owner_holds: Arc<AtomicUsize>,
+    _root: PhantomData<&'root ()>,
     _thread: PhantomData<Rc<()>>,
 }
 
-impl UserTestHold {
+impl<'root> UserTestHold<'root> {
     /// # Safety
-    /// `table` must point to a live, rooted [`HashTableObj`] that outlives the
-    /// returned [`UserTestHold`].
-    unsafe fn take(table: *mut HashTableObj) -> Result<Self, RegistrationError> {
+    /// `table` must point to a live [`HashTableObj`] belonging to the active
+    /// era bounded by `'root`, and `owner_holds` must be the minting owner's
+    /// `user_test_holds` counter so that every GC publication, collection
+    /// rendezvous, and retirement on that era is refused until this
+    /// [`UserTestHold`] drops.
+    unsafe fn take(
+        table: *mut HashTableObj,
+        owner_holds: Arc<AtomicUsize>,
+    ) -> Result<Self, RegistrationError> {
+        let next_holds = owner_holds
+            .load(Ordering::Relaxed)
+            .checked_add(1)
+            .ok_or(RegistrationError::Exhausted)?;
         // SAFETY: the pointer came from a lease mint, which validated the
         // object; the byte is table-level metadata, not storage contents.
+        // CAS prevents a transient `255 -> 0` wrap that a concurrent writer
+        // could observe as `test_depth == 0`.
         let depth = unsafe { &(*table).test_depth };
-        let was = depth.fetch_add(1, Ordering::AcqRel);
-        if was == u8::MAX {
-            // Design §3.1: the count saturates defensively and a saturating
-            // enter refuses a new nested test rather than wrapping.
-            depth.fetch_sub(1, Ordering::Release);
-            return Err(RegistrationError::Exhausted);
-        }
+        depth
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |was| {
+                was.checked_add(1)
+            })
+            .map_err(|_| RegistrationError::Exhausted)?;
+        owner_holds.store(next_holds, Ordering::Relaxed);
         Ok(Self {
             table,
+            owner_holds,
+            _root: PhantomData,
             _thread: PhantomData,
         })
     }
 }
 
-impl Drop for UserTestHold {
+impl Drop for UserTestHold<'_> {
     #[inline]
     fn drop(&mut self) {
-        // SAFETY: pairs with the enter at mint; unwind-safe by being the Drop.
+        // SAFETY: `'root` bounds this hold within `'era`, and `owner_holds > 0`
+        // excluded every GC publication/collection/retirement on this era until
+        // this drop runs; pairs with `take`.
         unsafe {
             (*self.table).test_depth.fetch_sub(1, Ordering::Release);
         }
+        let current = self.owner_holds.load(Ordering::Relaxed);
+        debug_assert!(current > 0, "user_test_holds underflow");
+        self.owner_holds
+            .store(current.saturating_sub(1), Ordering::Relaxed);
     }
 }
 
-static_assertions::assert_not_impl_any!(UserTestHold: Send, Sync, Clone, Copy);
+static_assertions::assert_not_impl_any!(UserTestHold<'static>: Send, Sync, Clone, Copy);
 
 /// The seal. No type outside this module can name it, so no out-of-module
 /// `impl SealedTableAccess` can extend the capability surface (fixture (f)).
@@ -337,13 +372,41 @@ impl TableRef<'_> {
         unsafe { (*self.table).test_depth.load(Ordering::Acquire) }
     }
 
-    /// Take the §3.1 nesting count for one callback window. The hold owns
-    /// no authority: drop the minting lease (and every other lease on this
-    /// table) before running the callback, then let this Drop release the
-    /// count when the window closes.
-    pub(crate) fn hold_user_test(&self) -> Result<UserTestHold, RegistrationError> {
-        // SAFETY: `self` is a live lease over a rooted `HashTableObj`.
-        unsafe { UserTestHold::take(self.table) }
+    /// Take the §3.1 nesting count for one callback window.
+    ///
+    /// `root` must be a live [`OwnerRootSlot`] of `run`'s owner that currently
+    /// roots this exact hash table. The returned [`UserTestHold`] borrows
+    /// `root` (and thus cannot outlive the root handle or its era) and holds
+    /// an owner loan blocking root clearing and owner finish until dropped.
+    /// Drop the minting lease (and every other lease on this table) before
+    /// running the callback, then let this Drop release the count when the
+    /// window closes.
+    pub(crate) fn hold_user_test<'root, 'era>(
+        &self,
+        run: &RunAccess<'_, 'era>,
+        root: &'root OwnerRootSlot<'era>,
+    ) -> Result<UserTestHold<'root>, RegistrationError> {
+        root.check(run)?;
+        let local = run
+            .owner
+            .local
+            .as_ref()
+            .ok_or(RegistrationError::StaleRegistration)?;
+        let slot_bits = local
+            .root_scratch
+            .get(root.index)
+            .ok_or(RegistrationError::StaleRegistration)?
+            .value()
+            .bits();
+        if slot_bits != self.value.bits() {
+            return Err(RegistrationError::Publication);
+        }
+        // SAFETY: `self` validated `self.table`, `root.check(run)` verified
+        // `root` belongs to this owner's active era (and `'root` bounds the
+        // hold within `'era`), `slot_bits == self.value.bits()` verified
+        // `self.table` is rooted at mint, and `owner_holds` excludes every GC
+        // publication, rendezvous, and retirement on the era until drop.
+        unsafe { UserTestHold::take(self.table, Arc::clone(&local.user_test_holds)) }
     }
 }
 

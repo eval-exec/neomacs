@@ -114,6 +114,14 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
         if self.symbol_loan {
             return Err(RegistrationError::OutstandingLoan);
         }
+        if self
+            .owner
+            .local
+            .as_ref()
+            .is_some_and(|local| local.user_test_holds.load(Ordering::Relaxed) > 0)
+        {
+            return Err(RegistrationError::OutstandingLoan);
+        }
         symbol_authority::check_owner_home_for_test(self, home)?;
         let destination = self
             .owner
@@ -146,6 +154,9 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
             .local
             .as_mut()
             .ok_or(RegistrationError::StaleRegistration)?;
+        if local.user_test_holds.load(Ordering::Relaxed) > 0 {
+            return Err(RegistrationError::OutstandingLoan);
+        }
         let next = local
             .root_slot_generation
             .checked_add(1)
@@ -227,6 +238,9 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     pub(crate) fn clear_root_slots(&mut self) -> Result<(), RegistrationError> {
         self.owner.check_thread()?;
         let local = self.owner.local.as_mut().expect("resident owner roots");
+        if local.user_test_holds.load(Ordering::Relaxed) > 0 {
+            return Err(RegistrationError::OutstandingLoan);
+        }
         let next = local
             .root_slot_generation
             .checked_add(1)

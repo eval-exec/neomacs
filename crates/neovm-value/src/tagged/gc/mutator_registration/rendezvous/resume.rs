@@ -277,6 +277,7 @@ impl<'owner, 'era> ResumeGcImage<'owner, 'era> {
             .finish_restore(self.owner.entry.key, &mut state.rendezvous);
         if completion.is_ok() {
             state.phase = EntryPhase::Running;
+            self.owner.protocol.stopped = false;
             #[cfg(any(test, feature = "test-support"))]
             a8_probes::mark(
                 a8_probes::OWNER_RUNNING,

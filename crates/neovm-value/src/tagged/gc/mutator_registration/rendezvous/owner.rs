@@ -306,6 +306,13 @@ impl<'era> Mutator<'era> {
         roots: &[SharedRoot],
     ) -> Result<(), RootedRetireFailure<'era>> {
         let result = (|| {
+            if self
+                .local
+                .as_ref()
+                .is_some_and(|local| local.user_test_holds.load(Ordering::Relaxed) > 0)
+            {
+                return Err(RendezvousError::Loan);
+            }
             // Refuse before transitioning mode if this registration still
             // holds an open owner-cons run.
             self.registry
@@ -356,6 +363,13 @@ impl<'era> Mutator<'era> {
         roots: &[SharedRoot],
     ) -> Result<(), RendezvousError> {
         self.check_thread()?;
+        if self
+            .local
+            .as_ref()
+            .is_some_and(|local| local.user_test_holds.load(Ordering::Relaxed) > 0)
+        {
+            return Err(RendezvousError::Loan);
+        }
         #[cfg(any(test, feature = "test-support"))]
         a8_probes::mark(
             a8_probes::PUBLISH_ENTERED,
@@ -533,6 +547,7 @@ impl<'era> Mutator<'era> {
             Mode::Stopped
         };
         self.protocol.participating = true;
+        self.protocol.stopped = true;
         #[cfg(any(test, feature = "test-support"))]
         a8_probes::mark(
             if native {

@@ -151,6 +151,10 @@ shell!(a6_ht_gc_old_tables_remember_young_values);
 shell!(a6_ht_b7_make_copy_collect_resume_and_reclaim);
 shell!(a6_ht_b7_copy_while_another_owner_mutates);
 shell!(a6_ht_b7_copy_active_test_starts_quiescent_and_bad_home_is_atomic);
+shell!(c9_user_test_hold_refuses_clear_and_finish_while_held);
+shell!(c9_user_test_hold_drop_releases_clear_and_finish);
+shell!(c9_user_test_hold_refuses_retire_rooted_and_native_run_access);
+shell!(c9_user_test_hold_drop_releases_retire_rooted);
 
 #[cfg(feature = "perf-probes")]
 #[test]
