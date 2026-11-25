@@ -378,6 +378,8 @@ pub(super) enum ReaderTestCheckpoint {
     InputDisconnected,
     OwnerStopObserved,
     ShutdownObserved,
+    SuspendedObserved,
+    ResumedObserved,
     AcquisitionStopped,
     BeforePoll,
     AfterPoll {
@@ -494,6 +496,8 @@ impl<S: InputDelivery> Reader<S> {
                     if self.lifecycle == Lifecycle::Running {
                         self.lifecycle = Lifecycle::Suspended;
                         self.read_state = ReadState::Paused;
+                        #[cfg(test)]
+                        self.checkpoint(ReaderTestCheckpoint::SuspendedObserved);
                     }
                     progressed = true;
                 }
@@ -501,6 +505,8 @@ impl<S: InputDelivery> Reader<S> {
                     if self.lifecycle == Lifecycle::Suspended {
                         self.lifecycle = Lifecycle::Running;
                         self.read_state = ReadState::QuerySize;
+                        #[cfg(test)]
+                        self.checkpoint(ReaderTestCheckpoint::ResumedObserved);
                     }
                     progressed = true;
                 }

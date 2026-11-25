@@ -16,12 +16,22 @@ use neomacs_tui_tests::{
     QUIET_MX_SUGGESTION_EVAL, QUIET_NATIVE_COMP_EVAL, TuiLaunch, TuiProcessOutcome, TuiSession,
     TuiTerminalConfig,
 };
-use std::path::Path;
+use std::ffi::CStr;
+use std::fs::File;
+use std::io::Read as _;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const TERM_TYPE: &str = "xterm-256color";
 const MOUSE_ENABLE: &[u8] = b"\x1b[?1000h\x1b[?1003h\x1b[?1006h";
 const MOUSE_DISABLE: &[u8] = b"\x1b[?1006l\x1b[?1003l\x1b[?1000l";
+const BRACKETED_PASTE_ENABLE: &[u8] = b"\x1b[?2004h";
+const BRACKETED_PASTE_DISABLE: &[u8] = b"\x1b[?2004l";
 const TERM_TI: &[u8] = b"\x1b[?1049h";
 const TERM_TE: &[u8] = b"\x1b[?1049l";
 const TERM_KS: &[u8] = b"\x1b[?1h\x1b=";
@@ -47,7 +57,170 @@ fn find_subslice_from(haystack: &[u8], start: usize, needle: &[u8]) -> Option<us
     find_subslice(&haystack[start..], needle).map(|offset| start + offset)
 }
 
-fn spawn_editor(program: &Path, label: &str, is_gnu: bool) -> TuiSession {
+fn count_subslice(haystack: &[u8], needle: &[u8]) -> usize {
+    haystack
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
+}
+
+fn resolve_true_program() -> PathBuf {
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let candidate = dir.join("true");
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    for candidate in ["/usr/bin/true", "/bin/true"] {
+        let path = PathBuf::from(candidate);
+        if path.is_file() {
+            return path;
+        }
+    }
+    panic!("cannot locate `true` binary on PATH, /usr/bin/true, or /bin/true");
+}
+
+struct SecondaryPty {
+    _slave: File,
+    path: String,
+    buffer: Arc<(Mutex<Vec<u8>>, Condvar)>,
+    stop: Arc<AtomicBool>,
+    reader: Option<JoinHandle<()>>,
+}
+
+impl SecondaryPty {
+    fn open() -> Self {
+        let mut master: libc::c_int = -1;
+        let mut slave: libc::c_int = -1;
+        let mut name = [0 as libc::c_char; 256];
+        let mut size = libc::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: initialized output slots, fixed name buffer, and winsize.
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    name.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    &mut size,
+                )
+            },
+            0,
+            "open secondary test PTY: {}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: openpty returned two live owned descriptors and a NUL-terminated path.
+        let mut master = unsafe { File::from_raw_fd(master) };
+        let slave = unsafe { File::from_raw_fd(slave) };
+        let path = unsafe { CStr::from_ptr(name.as_ptr()) }
+            .to_str()
+            .expect("UTF-8 PTY slave path")
+            .to_owned();
+        // SAFETY: master is a live descriptor; set nonblocking for the drain thread.
+        let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
+        // Drain the master asynchronously so `tcdrain(slave)` during
+        // `suspend-tty` / `delete-terminal` never blocks on macOS (XNU waits
+        // for the master to consume queued output before `tcdrain` returns).
+        let buffer = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_buf = Arc::clone(&buffer);
+        let thread_stop = Arc::clone(&stop);
+        let reader = std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            while !thread_stop.load(Ordering::Acquire) {
+                let mut pfd = libc::pollfd {
+                    fd: master.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: single initialized pollfd for owned master fd.
+                let rc = unsafe { libc::poll(&mut pfd, 1, 20) };
+                if rc <= 0 || (pfd.revents & libc::POLLIN) == 0 {
+                    continue;
+                }
+                loop {
+                    match master.read(&mut chunk) {
+                        Ok(0) => return,
+                        Ok(n) => {
+                            let (lock, cvar) = &*thread_buf;
+                            lock.lock().unwrap().extend_from_slice(&chunk[..n]);
+                            cvar.notify_all();
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => return,
+                    }
+                }
+            }
+        });
+        Self {
+            _slave: slave,
+            path,
+            buffer,
+            stop,
+            reader: Some(reader),
+        }
+    }
+
+    fn drain(&mut self, idle_timeout_ms: i32) -> Vec<u8> {
+        let idle = Duration::from_millis(idle_timeout_ms.max(1) as u64);
+        let (lock, cvar) = &*self.buffer;
+        let mut guard = lock.lock().unwrap();
+        loop {
+            let before = guard.len();
+            let (next, _) = cvar.wait_timeout(guard, idle).unwrap();
+            guard = next;
+            if guard.len() == before {
+                return std::mem::take(&mut *guard);
+            }
+        }
+    }
+
+    fn wait_for(&mut self, needle: &[u8], timeout: Duration) -> Vec<u8> {
+        let deadline = Instant::now() + timeout;
+        let (lock, cvar) = &*self.buffer;
+        let mut guard = lock.lock().unwrap();
+        while find_subslice(&guard, needle).is_none() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let (next, _) = cvar.wait_timeout(guard, remaining).unwrap();
+            guard = next;
+        }
+        drop(guard);
+        self.drain(150)
+    }
+}
+
+impl Drop for SecondaryPty {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
+
+fn spawn_editor_with(
+    program: &Path,
+    label: &str,
+    is_gnu: bool,
+    eval_expr: Option<&str>,
+    extra_env: &[(&str, &Path)],
+) -> TuiSession {
     let mut launch = TuiLaunch::new(program.as_os_str())
         .with_uncertified_startup()
         .arg("-nw")
@@ -60,7 +233,12 @@ fn spawn_editor(program: &Path, label: &str, is_gnu: bool) -> TuiSession {
     } else {
         launch = launch.arg(QUIET_MX_SUGGESTION_EVAL);
     }
-    launch = launch.arg("--eval").arg(SETUP_EL);
+    if let Some(expr) = eval_expr {
+        launch = launch.arg("--eval").arg(expr);
+    }
+    for (key, value) in extra_env {
+        launch = launch.env(key, value.as_os_str());
+    }
     let mut session = TuiSession::spawn_launch_on_terminal(
         launch,
         label,
@@ -80,6 +258,10 @@ fn spawn_editor(program: &Path, label: &str, is_gnu: bool) -> TuiSession {
     );
     settle_session(&mut session);
     session
+}
+
+fn spawn_editor(program: &Path, label: &str, is_gnu: bool) -> TuiSession {
+    spawn_editor_with(program, label, is_gnu, Some(SETUP_EL), &[])
 }
 
 fn assert_reset_order(output: &[u8], label: &str, phase: &str) -> usize {
@@ -124,7 +306,16 @@ fn assert_reset_order(output: &[u8], label: &str, phase: &str) -> usize {
             String::from_utf8_lossy(output)
         )
     });
-    te + TERM_TE.len()
+    let reset_end = te + TERM_TE.len();
+    // `lisp/term/xterm.el` manages bracketed paste via `tty-mode-reset-strings`;
+    // Rust must not emit a duplicate `\e[?2004l`.
+    assert_eq!(
+        count_subslice(&output[reset2..reset_end], BRACKETED_PASTE_DISABLE),
+        1,
+        "{label} ({phase}): expected exactly one bracketed-paste disable sequence in reset burst: {:?}",
+        String::from_utf8_lossy(&output[reset2..reset_end])
+    );
+    reset_end
 }
 
 fn assert_set_order(output: &[u8], after: usize, label: &str, phase: &str) {
@@ -153,12 +344,20 @@ fn assert_set_order(output: &[u8], after: usize, label: &str, phase: &str) {
             String::from_utf8_lossy(&output[after..])
         )
     });
-    let _mouse_enable = find_subslice_from(output, set1 + 1, MOUSE_ENABLE).unwrap_or_else(|| {
+    let mouse_enable = find_subslice_from(output, set1 + 1, MOUSE_ENABLE).unwrap_or_else(|| {
         panic!(
             "{label} ({phase}): missing xterm mouse enable sequence after set markers in PTY output: {:?}",
             String::from_utf8_lossy(&output[after..])
         )
     });
+    // `lisp/term/xterm.el` manages bracketed paste via `tty-mode-set-strings`;
+    // Rust must not emit a duplicate `\e[?2004h`.
+    assert_eq!(
+        count_subslice(&output[ti..], BRACKETED_PASTE_ENABLE),
+        1,
+        "{label} ({phase}): expected exactly one bracketed-paste enable sequence in resume burst: {:?}",
+        String::from_utf8_lossy(&output[ti..mouse_enable + MOUSE_ENABLE.len()])
+    );
 }
 
 fn wait_for_bytes(session: &mut TuiSession, needle: &[u8], timeout: Duration) {
@@ -171,6 +370,260 @@ fn wait_for_bytes(session: &mut TuiSession, needle: &[u8], timeout: Duration) {
         }
         session.read(Duration::from_millis(80));
     }
+}
+
+fn wait_for_file(path: &Path, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Ok(content) = std::fs::read_to_string(path)
+            && !content.is_empty()
+        {
+            return content;
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    panic!("timed out waiting for result file {}", path.display());
+}
+
+fn decode_hex(hex: &str) -> Vec<u8> {
+    let hex = hex.trim();
+    assert_eq!(hex.len() % 2, 0, "odd-length hex output: {hex:?}");
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("valid hex byte"))
+        .collect()
+}
+
+fn run_real_sigtstp_stop_and_sigcont(program: &Path, label: &str, is_gnu: bool) {
+    // Spawn a session-leader wrapper that places the editor in a non-orphaned
+    // foreground process group (`setpgid` + `tcsetpgrp`) and waits with
+    // `WUNTRACED`. Unlike an orphaned `setsid` PTY child, Linux and macOS
+    // genuinely deliver `SIGTSTP` and stop the editor until `SIGCONT`.
+    const DRIVER: &str = r#"
+import fcntl, os, pty, select, signal, struct, sys, termios, time
+
+argv = sys.argv[1:]
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+ctrl_r, ctrl_w = os.pipe()
+res_r, res_w = os.pipe()
+
+shell_pid = os.fork()
+if shell_pid == 0:
+    os.close(master)
+    os.close(ctrl_w)
+    os.close(res_r)
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+    signal.signal(signal.SIGTTIN, signal.SIG_IGN)
+    signal.signal(signal.SIGTSTP, signal.SIG_IGN)
+    editor_pid = os.fork()
+    if editor_pid == 0:
+        os.close(ctrl_r)
+        os.close(res_w)
+        os.setpgid(0, 0)
+        os.dup2(slave, 0)
+        os.dup2(slave, 1)
+        os.dup2(slave, 2)
+        if slave > 2:
+            os.close(slave)
+        for sig in (signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU):
+            signal.signal(sig, signal.SIG_DFL)
+        os.execv(argv[0], argv)
+        os._exit(127)
+    try:
+        os.setpgid(editor_pid, editor_pid)
+    except PermissionError:
+        pass
+    os.tcsetpgrp(slave, editor_pid)
+    while True:
+        _, status = os.waitpid(editor_pid, os.WUNTRACED)
+        if os.WIFSTOPPED(status):
+            sig = os.WSTOPSIG(status)
+            os.write(res_w, f"STOPPED:{sig}\n".encode())
+            line = b""
+            while not line.endswith(b"\n"):
+                chunk = os.read(ctrl_r, 64)
+                if not chunk:
+                    os._exit(2)
+                line += chunk
+            os.tcsetpgrp(slave, editor_pid)
+            os.killpg(editor_pid, signal.SIGCONT)
+        elif os.WIFEXITED(status):
+            os.write(res_w, f"EXITED:{os.WEXITSTATUS(status)}\n".encode())
+            os._exit(0)
+        elif os.WIFSIGNALED(status):
+            os.write(res_w, f"SIGNALED:{os.WTERMSIG(status)}\n".encode())
+            os._exit(1)
+
+os.close(slave)
+os.close(ctrl_r)
+os.close(res_w)
+
+def drain_master(idle_sec):
+    out = bytearray()
+    while True:
+        r, _, _ = select.select([master], [], [], idle_sec)
+        if not r:
+            break
+        try:
+            chunk = os.read(master, 65536)
+        except OSError:
+            break
+        if not chunk:
+            break
+        out.extend(chunk)
+    return bytes(out)
+
+# Wait for *scratch* readiness.
+boot = bytearray()
+deadline = time.monotonic() + 20.0
+while time.monotonic() < deadline:
+    r, _, _ = select.select([master], [], [], 0.2)
+    if r:
+        chunk = os.read(master, 65536)
+        if not chunk:
+            break
+        boot.extend(chunk)
+        if b"*scratch*" in boot and b"This buffer is for text that is not saved" in boot:
+            break
+else:
+    sys.stderr.write("editor did not reach *scratch*\n")
+    sys.exit(3)
+
+drain_master(0.3)
+
+# Send C-z and collect all PTY output produced BEFORE SIGCONT.
+os.write(master, b"\x1a")
+before_cont = bytearray()
+res_buf = b""
+deadline = time.monotonic() + 15.0
+while time.monotonic() < deadline:
+    r, _, _ = select.select([master, res_r], [], [], 0.2)
+    if master in r:
+        try:
+            chunk = os.read(master, 65536)
+            if chunk:
+                before_cont.extend(chunk)
+        except OSError:
+            pass
+    if res_r in r:
+        chunk = os.read(res_r, 1024)
+        if chunk:
+            res_buf += chunk
+            if b"\n" in res_buf:
+                break
+else:
+    sys.stderr.write(f"editor did not stop on SIGTSTP; res={res_buf!r}\n")
+    sys.exit(4)
+
+stop_line, res_buf = res_buf.split(b"\n", 1)
+if stop_line != f"STOPPED:{int(signal.SIGTSTP)}".encode():
+    sys.stderr.write(f"unexpected stop event: {stop_line!r}\n")
+    sys.exit(5)
+
+before_cont.extend(drain_master(0.25))
+
+# Now resume the stopped process group with SIGCONT and collect resume bytes.
+os.write(ctrl_w, b"CONT\n")
+after_cont = bytearray()
+needle = b"\x1b[?1000h\x1b[?1003h\x1b[?1006h"
+deadline = time.monotonic() + 15.0
+while time.monotonic() < deadline:
+    r, _, _ = select.select([master], [], [], 0.2)
+    if r:
+        try:
+            chunk = os.read(master, 65536)
+            if chunk:
+                after_cont.extend(chunk)
+                if needle in after_cont:
+                    break
+        except OSError:
+            break
+after_cont.extend(drain_master(0.2))
+
+# Exit cleanly with C-x C-c.
+os.write(master, b"\x18\x03")
+deadline = time.monotonic() + 15.0
+while time.monotonic() < deadline:
+    r, _, _ = select.select([master, res_r], [], [], 0.2)
+    if master in r:
+        try:
+            os.read(master, 65536)
+        except OSError:
+            pass
+    if res_r in r:
+        chunk = os.read(res_r, 1024)
+        if chunk:
+            res_buf += chunk
+            if b"\n" in res_buf:
+                break
+else:
+    sys.stderr.write("editor did not exit after SIGCONT + C-x C-c\n")
+    sys.exit(6)
+
+exit_line, _ = res_buf.split(b"\n", 1)
+os.waitpid(shell_pid, 0)
+if exit_line != b"EXITED:0":
+    sys.stderr.write(f"unexpected exit line: {exit_line!r}\n")
+    sys.exit(7)
+
+print(before_cont.hex())
+print(after_cont.hex())
+"#;
+
+    let temp = tempfile::tempdir().expect("tempdir for real SIGTSTP test");
+    let home = temp.path().join("home");
+    let tmp = temp.path().join("tmp");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let mut cmd = Command::new("python3");
+    cmd.arg("-c").arg(DRIVER).arg(program).arg("-nw").arg("-Q");
+    if is_gnu {
+        cmd.arg("-no-comp-spawn")
+            .arg(QUIET_NATIVE_COMP_EVAL)
+            .arg(QUIET_MX_SUGGESTION_EVAL);
+    } else {
+        cmd.arg(QUIET_MX_SUGGESTION_EVAL);
+    }
+    cmd.arg("--eval")
+        .arg(SETUP_EL)
+        .env("TERM", TERM_TYPE)
+        .env("HOME", &home)
+        .env("TMPDIR", &tmp)
+        .env_remove("LANGUAGE")
+        .env_remove("LC_CTYPE")
+        .env_remove("EMACSLOADPATH");
+
+    let output = cmd.output().expect("spawn python3 job-control driver");
+    assert!(
+        output.status.success(),
+        "{label}: real SIGTSTP driver failed (status {:?}):\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 hex lines");
+    let mut lines = stdout.lines();
+    let before_cont = decode_hex(lines.next().expect("before_cont hex line"));
+    let after_cont = decode_hex(lines.next().expect("after_cont hex line"));
+
+    // Reset strings must arrive BEFORE SIGCONT while stopped on SIGTSTP,
+    // and set strings must NOT appear until AFTER SIGCONT.
+    assert_reset_order(&before_cont, label, "real SIGTSTP before SIGCONT");
+    assert!(
+        find_subslice(&before_cont, MOUSE_ENABLE).is_none(),
+        "{label}: mouse enable arrived before SIGCONT: {:?}",
+        String::from_utf8_lossy(&before_cont)
+    );
+    assert!(
+        find_subslice(&before_cont, b"<TTY-MODE-SET-2>").is_none(),
+        "{label}: tty-mode-set-strings arrived before SIGCONT: {:?}",
+        String::from_utf8_lossy(&before_cont)
+    );
+    assert_set_order(&after_cont, 0, label, "real SIGCONT resume");
 }
 
 fn check_exit(program: &Path, label: &str, is_gnu: bool) {
@@ -220,6 +673,174 @@ fn check_suspend_tty_and_resume_tty(program: &Path, label: &str, is_gnu: bool) {
     );
 }
 
+fn check_suspend_emacs_hooks_cannot_suspend_and_bad_arg(
+    program: &Path,
+    label: &str,
+    is_gnu: bool,
+    true_program: &Path,
+) -> String {
+    let temp = tempfile::tempdir().expect("tempdir for suspend-emacs parity test");
+    let result_path = temp.path().join("result.sexp");
+    let mut session = spawn_editor_with(
+        program,
+        label,
+        is_gnu,
+        Some(SETUP_EL),
+        &[("SHELL", true_program)],
+    );
+    session.clear_recent_output();
+    let expr = format!(
+        "(let ((events nil) (suspend-hook nil) (suspend-resume-hook nil) (cannot-suspend t)) \
+           (add-hook 'suspend-hook (lambda () (push 'suspend events))) \
+           (add-hook 'suspend-resume-hook (lambda () (push 'resume events))) \
+           (let* ((bad (condition-case err (suspend-emacs 123) (error err))) \
+                  (after-bad (copy-sequence events)) \
+                  (ret (suspend-emacs)) \
+                  (after-subshell (nreverse events))) \
+             (with-temp-file {:?} \
+               (insert (prin1-to-string (list bad after-bad ret after-subshell))))))",
+        result_path.to_str().expect("UTF-8 result path")
+    );
+    eval_expression_one(&mut session, &expr);
+    let recorded = wait_for_file(&result_path, Duration::from_secs(10));
+    wait_for_bytes(&mut session, MOUSE_ENABLE, Duration::from_secs(10));
+    let output = session.recent_output().to_vec();
+    let after_te = assert_reset_order(&output, label, "cannot-suspend subshell");
+    assert_set_order(&output, after_te, label, "cannot-suspend resume");
+
+    session.send_keys("C-x C-c");
+    assert_eq!(
+        session.run_to_completion(Duration::from_secs(15)),
+        TuiProcessOutcome::Exited,
+        "{label}: did not exit cleanly after cannot-suspend subshell"
+    );
+    recorded
+}
+
+fn check_suspend_emacs_with_suspended_second_tty(
+    program: &Path,
+    label: &str,
+    is_gnu: bool,
+) -> String {
+    let temp = tempfile::tempdir().expect("tempdir for second-tty suspend-emacs test");
+    let result_path = temp.path().join("result.sexp");
+    let mut secondary = SecondaryPty::open();
+    let mut session = spawn_editor_with(program, label, is_gnu, None, &[]);
+    let expr = format!(
+        "(let* ((f1 (selected-frame)) \
+                (f2 (make-terminal-frame '((tty . {:?}) (tty-type . {:?})))) \
+                (t2 (frame-terminal f2))) \
+           (suspend-tty t2) \
+           (select-frame f1) \
+           (let ((res (condition-case err (suspend-emacs) (error err)))) \
+             (delete-terminal t2) \
+             (with-temp-file {:?} (insert (prin1-to-string res)))))",
+        secondary.path,
+        TERM_TYPE,
+        result_path.to_str().expect("UTF-8 result path")
+    );
+    eval_expression_one(&mut session, &expr);
+    let recorded = wait_for_file(&result_path, Duration::from_secs(10));
+    let _ = secondary.drain(50);
+
+    session.send_keys("C-x C-c");
+    assert_eq!(
+        session.run_to_completion(Duration::from_secs(15)),
+        TuiProcessOutcome::Exited,
+        "{label}: did not exit cleanly after second-tty suspend-emacs check"
+    );
+    recorded
+}
+
+fn check_secondary_tty_delete_and_exit_isolation(program: &Path, label: &str, is_gnu: bool) {
+    let mut secondary = SecondaryPty::open();
+    let mut session = spawn_editor_with(program, label, is_gnu, None, &[]);
+
+    let setup_expr = format!(
+        "(progn \
+           (setq test-primary-frame (selected-frame)) \
+           (push \"<PRIMARY-RESET>\" (terminal-parameter nil 'tty-mode-reset-strings)) \
+           (setq test-secondary-frame \
+                 (make-terminal-frame '((tty . {:?}) (tty-type . {:?})))) \
+           (push \"<SECONDARY-RESET>\" \
+                 (terminal-parameter (frame-terminal test-secondary-frame) \
+                                     'tty-mode-reset-strings)) \
+           (select-frame test-primary-frame))",
+        secondary.path, TERM_TYPE
+    );
+    eval_expression_one(&mut session, &setup_expr);
+    // Drain initial secondary TTY startup bytes before deleting it.
+    let _ = secondary.wait_for(TERM_TI, Duration::from_secs(10));
+    let _ = secondary.drain(150);
+    session.clear_recent_output();
+
+    eval_expression_one(
+        &mut session,
+        "(delete-terminal (frame-terminal test-secondary-frame))",
+    );
+    let sec_delete = secondary.wait_for(TERM_TE, Duration::from_secs(10));
+    let sec_reset = find_subslice(&sec_delete, b"<SECONDARY-RESET>").unwrap_or_else(|| {
+        panic!(
+            "{label}: secondary PTY missing <SECONDARY-RESET> on delete-terminal: {:?}",
+            String::from_utf8_lossy(&sec_delete)
+        )
+    });
+    let sec_ke = find_subslice_from(&sec_delete, sec_reset + 1, TERM_KE).unwrap_or_else(|| {
+        panic!(
+            "{label}: secondary PTY missing ke after <SECONDARY-RESET>: {:?}",
+            String::from_utf8_lossy(&sec_delete)
+        )
+    });
+    let sec_te =
+        find_subslice_from(&sec_delete, sec_ke + TERM_KE.len(), TERM_TE).unwrap_or_else(|| {
+            panic!(
+                "{label}: secondary PTY missing te after ke: {:?}",
+                String::from_utf8_lossy(&sec_delete)
+            )
+        });
+    assert!(sec_reset < sec_te);
+    assert!(
+        find_subslice(&sec_delete, b"<PRIMARY-RESET>").is_none(),
+        "{label}: secondary PTY must not receive primary reset string"
+    );
+    session.read(Duration::from_millis(150));
+    let pri_during_delete = session.recent_output().to_vec();
+    assert!(
+        find_subslice(&pri_during_delete, b"<SECONDARY-RESET>").is_none(),
+        "{label}: primary PTY must not receive secondary reset string"
+    );
+    assert!(
+        find_subslice(&pri_during_delete, b"<PRIMARY-RESET>").is_none(),
+        "{label}: primary PTY must not reset when deleting secondary terminal"
+    );
+
+    session.clear_recent_output();
+    session.send_keys("C-x C-c");
+    assert_eq!(
+        session.run_to_completion(Duration::from_secs(15)),
+        TuiProcessOutcome::Exited,
+        "{label}: did not exit after secondary delete-terminal"
+    );
+    let pri_exit = session.recent_output();
+    let pri_reset = find_subslice(pri_exit, b"<PRIMARY-RESET>").unwrap_or_else(|| {
+        panic!(
+            "{label}: primary PTY missing <PRIMARY-RESET> on exit: {:?}",
+            String::from_utf8_lossy(pri_exit)
+        )
+    });
+    let pri_te = find_subslice_from(pri_exit, pri_reset + 1, TERM_TE).unwrap_or_else(|| {
+        panic!(
+            "{label}: primary PTY missing te after <PRIMARY-RESET> on exit: {:?}",
+            String::from_utf8_lossy(pri_exit)
+        )
+    });
+    assert!(pri_reset < pri_te);
+    assert!(
+        find_subslice(pri_exit, b"<SECONDARY-RESET>").is_none(),
+        "{label}: primary PTY exit must not contain secondary reset string"
+    );
+}
+
 #[test]
 fn tty_mode_reset_strings_emitted_on_exit_like_gnu() {
     let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
@@ -242,4 +863,55 @@ fn tty_mode_strings_emitted_on_suspend_tty_and_resume_tty_like_gnu() {
     let neo = neomacs_tui_tests::neomacs_binary();
     check_suspend_tty_and_resume_tty(&gnu, "GNU", true);
     check_suspend_tty_and_resume_tty(&neo, "Neomacs", false);
+}
+
+#[test]
+fn tty_mode_strings_real_sigtstp_stop_and_sigcont_resume_like_gnu() {
+    let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
+    let neo = neomacs_tui_tests::neomacs_binary();
+    run_real_sigtstp_stop_and_sigcont(&gnu, "GNU", true);
+    run_real_sigtstp_stop_and_sigcont(&neo, "Neomacs", false);
+}
+
+#[test]
+fn suspend_emacs_hooks_cannot_suspend_and_bad_arg_match_gnu() {
+    let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
+    let neo = neomacs_tui_tests::neomacs_binary();
+    let true_program = resolve_true_program();
+    let gnu_res =
+        check_suspend_emacs_hooks_cannot_suspend_and_bad_arg(&gnu, "GNU", true, &true_program);
+    let neo_res =
+        check_suspend_emacs_hooks_cannot_suspend_and_bad_arg(&neo, "Neomacs", false, &true_program);
+    assert_eq!(
+        neo_res, gnu_res,
+        "suspend-emacs hooks / cannot-suspend / bad-arg mismatch vs GNU"
+    );
+    assert_eq!(
+        gnu_res,
+        "((wrong-type-argument stringp 123) nil nil (suspend resume))"
+    );
+}
+
+#[test]
+fn suspend_emacs_errors_with_suspended_second_tty_like_gnu() {
+    let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
+    let neo = neomacs_tui_tests::neomacs_binary();
+    let gnu_res = check_suspend_emacs_with_suspended_second_tty(&gnu, "GNU", true);
+    let neo_res = check_suspend_emacs_with_suspended_second_tty(&neo, "Neomacs", false);
+    assert_eq!(
+        neo_res, gnu_res,
+        "suspend-emacs error with suspended second TTY mismatch vs GNU"
+    );
+    assert_eq!(
+        gnu_res,
+        "(error \"There are other tty frames open; close them before suspending Emacs\")"
+    );
+}
+
+#[test]
+fn secondary_tty_delete_terminal_and_exit_isolate_reset_strings_like_gnu() {
+    let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
+    let neo = neomacs_tui_tests::neomacs_binary();
+    check_secondary_tty_delete_and_exit_isolation(&gnu, "GNU", true);
+    check_secondary_tty_delete_and_exit_isolation(&neo, "Neomacs", false);
 }
