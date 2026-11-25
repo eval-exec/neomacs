@@ -168,6 +168,7 @@ fn retry_load_file_request(
         animation: neomacs_display_protocol::ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     }
 }
 

@@ -480,7 +480,7 @@ impl DisplayHost for RecordingAppendImageHost {
         &self,
         _request: ImageResolveRequest,
         _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
-    ) -> Result<neovm_core::emacs_core::image_catalog::ImageSyncResolution, String> {
+    ) -> neovm_core::emacs_core::image_catalog::ImageSyncResolution {
         panic!("append display source rendering must not use synchronous image resolution");
     }
 
@@ -11870,6 +11870,7 @@ fn display_replacement_media_append_item_names_display_and_cursor_extents() {
         horizontal_margin: 0.0,
         vertical_margin: 0.0,
         opaque_background: None,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
 
     let ordinary = DisplayReplacementMediaSourceItem::new(
@@ -11893,6 +11894,7 @@ fn display_replacement_media_append_item_names_display_and_cursor_extents() {
         horizontal_margin: 0.0,
         vertical_margin: 0.0,
         opaque_background: None,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
     let xwidget_cursor = DisplayReplacementMediaSourceItem::new(
         xwidget_media,
@@ -11915,6 +11917,7 @@ fn positive_image_box_width_expands_layout_and_insets_content() {
         horizontal_margin: 0.0,
         vertical_margin: 0.0,
         opaque_background: None,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     })
     .with_positive_box_line_width(2.0)
     .apply_positive_box_expansion(neomacs_display_protocol::face::BoxVerticalEdges::Both);
@@ -11946,6 +11949,7 @@ fn positive_image_box_width_respects_slice_and_terminal_boundaries() {
         horizontal_margin: 0.0,
         vertical_margin: 0.0,
         opaque_background: None,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     })
     .with_positive_box_line_width(2.0)
     .apply_positive_box_expansion(neomacs_display_protocol::face::BoxVerticalEdges::Both);
@@ -12039,6 +12043,7 @@ fn display_replacement_media_append_item_names_row_extent_policy() {
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
             opaque_background: None,
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         }),
         active_face.metrics().row_height(),
         active_face.metrics().ascent(),
@@ -12704,6 +12709,7 @@ fn display_replacement_append_context_installs_image_replacements() {
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
             opaque_background: None,
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         }),
         active_face.metrics().row_height(),
         active_face.metrics().ascent(),
@@ -12868,6 +12874,7 @@ fn display_replacement_append_context_crops_an_image_wider_than_the_text_area() 
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
             opaque_background: None,
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         }),
         active_face.metrics().row_height(),
         active_face.metrics().ascent(),
@@ -13030,6 +13037,7 @@ fn display_replacement_row_render_reports_an_image_the_row_refuses() {
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
             opaque_background: None,
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         }),
         active_face.metrics().row_height(),
         active_face.metrics().ascent(),
@@ -13105,6 +13113,7 @@ fn display_replacement_row_render_reports_an_image_the_row_refuses() {
                     horizontal_margin: 0.0,
                     vertical_margin: 0.0,
                     opaque_background: None,
+                    presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
                 }),
                 active_face.metrics().row_height(),
                 active_face.metrics().ascent(),

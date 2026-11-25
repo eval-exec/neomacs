@@ -1573,6 +1573,105 @@ impl ImageRealization {
     }
 }
 
+/// GNU `lookup_image` failed-load geometry (`src/image.c:3573-3583`,
+/// `src/dispextern.h:3295-3296`): the first fixnum `:width` / `:height` in the
+/// image spec if present, else `DEFAULT_IMAGE_WIDTH` × `DEFAULT_IMAGE_HEIGHT`
+/// (`30 × 30`). Computed once when constructing an image resolve request and
+/// carried on `FailedImage` so `image-size`, `image_element_extent`, redisplay,
+/// and the hollow-box renderer all read one authoritative size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FailedImageExtent {
+    width: i32,
+    height: i32,
+}
+
+impl FailedImageExtent {
+    /// GNU `DEFAULT_IMAGE_WIDTH` (`src/dispextern.h:3295`).
+    pub const DEFAULT_WIDTH: i32 = 30;
+    /// GNU `DEFAULT_IMAGE_HEIGHT` (`src/dispextern.h:3296`).
+    pub const DEFAULT_HEIGHT: i32 = 30;
+
+    #[must_use]
+    pub const fn new(width: i32, height: i32) -> Self {
+        Self { width, height }
+    }
+
+    #[must_use]
+    pub const fn width(self) -> i32 {
+        self.width
+    }
+
+    #[must_use]
+    pub const fn height(self) -> i32 {
+        self.height
+    }
+
+    /// Positive pixel box to lay out and draw as a hollow box, or `None` when
+    /// either axis is `<= 0`.
+    ///
+    /// GNU's `produce_image_glyph` (`src/xdisp.c:32444`) early-returns only on
+    /// `slice.width == 0 || slice.height == 0` and passes negative axes through
+    /// to `clip_to_bounds (-1, it->pixel_width, SHRT_MAX)` (`src/xdisp.c:32529`)
+    /// and `x_draw_rectangle`. Because `ImageLayoutExtent` uses unsigned `u32`
+    /// dimensions, Neomacs deliberately emits no display glyph for negative
+    /// failed axes as well (an explicit divergence for degenerate negative
+    /// `:width`/`:height`, while `image-size` still returns GNU's exact
+    /// negative fixnums).
+    #[must_use]
+    pub const fn drawable_extent(self) -> Option<ImageLayoutExtent> {
+        if self.width <= 0 || self.height <= 0 {
+            None
+        } else {
+            Some(ImageLayoutExtent::new(
+                self.width as u32,
+                self.height as u32,
+            ))
+        }
+    }
+
+    /// Non-zero slot extent for [`ImagePlacement`] when storing a failed image.
+    #[must_use]
+    pub const fn placement_extent(self) -> ImageLayoutExtent {
+        match self.drawable_extent() {
+            Some(extent) => extent,
+            None => ImageLayoutExtent::new(1, 1),
+        }
+    }
+}
+
+impl Default for FailedImageExtent {
+    fn default() -> Self {
+        Self {
+            width: Self::DEFAULT_WIDTH,
+            height: Self::DEFAULT_HEIGHT,
+        }
+    }
+}
+
+/// Visual presentation of an inline image glyph.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum ImageGlyphPresentation {
+    /// Sample the image's GPU texture when resident.
+    #[default]
+    Texture,
+    /// GNU `x_draw_image_foreground` (`src/xterm.c:10283-10286`): the image
+    /// failed to load (`img->load_failed_p`), so draw a 1px hollow rectangle
+    /// in the glyph's face foreground around its placeholder box.
+    FailedPlaceholder,
+}
+
+impl ImageGlyphPresentation {
+    #[must_use]
+    pub const fn packed(self) -> u8 {
+        match self {
+            Self::Texture => 0,
+            Self::FailedPlaceholder => 1,
+        }
+    }
+}
+
 /// An extent resolved while the native size is still unknown.
 ///
 /// Layout may reserve with it — that is what it is for — but it must not be

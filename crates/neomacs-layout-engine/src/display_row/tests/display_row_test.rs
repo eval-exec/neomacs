@@ -521,7 +521,7 @@ impl DisplayHost for RecordingDisplayRowMediaHost {
         &self,
         _request: ImageResolveRequest,
         _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
-    ) -> Result<neovm_core::emacs_core::image_catalog::ImageSyncResolution, String> {
+    ) -> neovm_core::emacs_core::image_catalog::ImageSyncResolution {
         panic!("display row rendering must not use synchronous image resolution");
     }
 
@@ -4650,6 +4650,7 @@ fn measured_display_row_content_policy_ignores_allocated_row_height() {
         width_cols: 4,
         margins: image_margins,
         opaque_background: neomacs_display_protocol::ImageOpaqueBackground::default(),
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     };
     row.glyphs[GlyphArea::Text.index()].push(image);
     let measured = MeasuredDisplayRow::new(

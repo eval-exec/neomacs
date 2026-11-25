@@ -2282,6 +2282,7 @@ fn partial_invalidation_read_on_renderer_exit_is_a_named_invariant_7_exception()
             frame: ImageFrameIndex::new(3),
             animation: ImageAnimationPolicy::disabled(),
             realization: Default::default(),
+            failed_extent: Default::default(),
         };
         let _ = unbounded_lookup(&catalog, request);
         let _ = catalog.invalidate_animation(ImageAnimationInvalidation::All);
@@ -2342,6 +2343,7 @@ fn clear_then_failed_load_then_renderer_exit_is_zero() {
             frame: ImageFrameIndex::new(3),
             animation: ImageAnimationPolicy::disabled(),
             realization: Default::default(),
+            failed_extent: Default::default(),
         };
         let _ = unbounded_lookup(&catalog, request);
         let _ = queued_tx.send(());
@@ -2440,6 +2442,7 @@ fn post_clear_ready_load_invalidates_the_known_zero() {
         frame: ImageFrameIndex::new(3),
         animation: ImageAnimationPolicy::disabled(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
     let ImageLookup::Pending(pending) = unbounded_lookup(&catalog, request.clone()) else {
         panic!("headerless source lookup should be pending");
@@ -3732,6 +3735,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         frame: ImageFrameIndex::new(3),
         animation: ImageAnimationPolicy::disabled(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
 
     let started = Instant::now();
@@ -3796,6 +3800,7 @@ fn primary_image_catalog_pending_layout_updates_when_the_decode_completes() {
         frame: ImageFrameIndex::new(3),
         animation: ImageAnimationPolicy::disabled(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
 
     let lookup = unbounded_lookup(&catalog, request.clone());
@@ -3861,6 +3866,7 @@ fn animation_frames_share_sequence_identity_and_retirement_advances_generation()
         frame: ImageFrameIndex::new(0),
         animation: ImageAnimationPolicy::disabled(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
 
     unbounded_lookup(&catalog, request.clone());
@@ -3914,6 +3920,7 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
         animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
     let (done_tx, done_rx) = crossbeam_channel::bounded(1);
     let worker_cmd_tx = cmd_tx.clone();
@@ -4021,6 +4028,7 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
         animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
     let ImageLookup::Pending(expected) = unbounded_lookup(&host.image_catalog, request.clone())
     else {
@@ -4089,6 +4097,7 @@ fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
         animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
 
     assert!(matches!(
@@ -4117,14 +4126,22 @@ fn failed_image_decode_wakes_waiter_and_is_negative_cached() {
         std::thread::sleep(Duration::from_millis(10));
         publisher.publish_terminal(
             load,
-            ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize),
+            ImageDecodeTerminal::Failed(
+                neomacs_display_protocol::image_diagnostic::ImageDecodeFailure::new(
+                    ImageDiagnostic::InvalidSize,
+                ),
+            ),
         );
     });
 
     let started = Instant::now();
     assert_eq!(
         wait_for_image_metadata(&shared, load, Duration::from_secs(1)),
-        Some(ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize))
+        Some(ImageDecodeTerminal::Failed(
+            neomacs_display_protocol::image_diagnostic::ImageDecodeFailure::new(
+                ImageDiagnostic::InvalidSize,
+            ),
+        ))
     );
     assert!(
         started.elapsed() < Duration::from_millis(250),
@@ -4135,7 +4152,11 @@ fn failed_image_decode_wakes_waiter_and_is_negative_cached() {
     let cached = Instant::now();
     assert_eq!(
         wait_for_image_metadata(&shared, load, Duration::from_secs(1)),
-        Some(ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize))
+        Some(ImageDecodeTerminal::Failed(
+            neomacs_display_protocol::image_diagnostic::ImageDecodeFailure::new(
+                ImageDiagnostic::InvalidSize,
+            ),
+        ))
     );
     assert!(
         cached.elapsed() < Duration::from_millis(250),
@@ -4185,16 +4206,21 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
         animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     };
     let ImageLookup::Pending(image) = unbounded_lookup(&host.image_catalog, request.clone()) else {
         panic!("new image should be pending");
     };
     image_metadata.publish_terminal(
         image.load(),
-        ImageDecodeTerminal::Failed(ImageDiagnostic::FormatError {
-            format: ImageFormatName::Png,
-            detail: "Read error".to_owned(),
-        }),
+        ImageDecodeTerminal::Failed(
+            neomacs_display_protocol::image_diagnostic::ImageDecodeFailure::new(
+                ImageDiagnostic::FormatError {
+                    format: ImageFormatName::Png,
+                    detail: "Read error".to_owned(),
+                },
+            ),
+        ),
     );
 
     let mut reported = Vec::new();
@@ -4204,7 +4230,8 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
         else {
             panic!("failed decode should be negative-cached");
         };
-        assert_eq!(failed.placement(), image.placement());
+        assert_eq!(failed.placement().image_id(), image.placement().image_id());
+        assert_eq!(failed.placement().dimensions(), (30, 30));
         assert_eq!(failed.error.message(), "PNG error: Read error");
         reported.push(host.image_catalog.take_pending_diagnostics());
         assert!(
@@ -4225,20 +4252,25 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
 
     for _ in 0..2 {
         let started = Instant::now();
-        assert_eq!(
+        let neovm_core::emacs_core::image_catalog::ImageSyncResolution::LoadFailed(failed) =
             neovm_core::emacs_core::DisplayHost::resolve_image_sync(
                 &host,
                 request.clone(),
                 ImageSizeLimit::UNLIMITED,
-            ),
-            Ok(
-                neovm_core::emacs_core::image_catalog::ImageSyncResolution::LoadFailed(
-                    ImageDiagnostic::FormatError {
-                        format: ImageFormatName::Png,
-                        detail: "Read error".to_owned(),
-                    },
-                )
             )
+        else {
+            panic!("cached decode failure must return LoadFailed");
+        };
+        assert_eq!(
+            failed.error,
+            ImageDiagnostic::FormatError {
+                format: ImageFormatName::Png,
+                detail: "Read error".to_owned(),
+            }
+        );
+        assert_eq!(
+            failed.failed_extent(),
+            neomacs_display_protocol::FailedImageExtent::default()
         );
         assert_eq!(
             host.image_catalog.take_pending_diagnostics(),

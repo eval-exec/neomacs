@@ -581,6 +581,7 @@ fn tab_bar_image_relief_styles_resolve_color_source_per_image_slot() {
             opaque_background: neomacs_display_protocol::ImageOpaqueBackground::new(
                 opaque_background,
             ),
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         };
         glyph
     };
@@ -642,6 +643,7 @@ fn tab_bar_image_relief_uses_glyph_at_visual_column_after_wide_stretch() {
         width_cols: 1,
         margins: image_margins,
         opaque_background: neomacs_display_protocol::ImageOpaqueBackground::default(),
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     };
     row.glyphs[GlyphArea::Text.index()] = vec![Glyph::stretch(3, fallback_face), image_glyph];
 
@@ -727,6 +729,7 @@ fn tab_pointer_test_frame(highlight_face: FaceId) -> FrameGlyphBuffer {
         height: 16.0,
         face_id: FaceId::new(0),
         box_vertical_edges: Default::default(),
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
     frame
 }

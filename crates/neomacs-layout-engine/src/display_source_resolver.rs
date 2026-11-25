@@ -1221,12 +1221,55 @@ fn resolve_image_display_property(
         .display_host
         .image_catalog()?
         .lookup(request, params.image_scale_environment.size_limit());
-    let placement = lookup.placement();
-    let opaque_background = lookup
-        .ready_metadata()
-        .and_then(|metadata| (!metadata.background_transparent).then_some(metadata.background));
-    let full_width = placement.width().max(1) as f32;
-    let full_height = placement.height().max(1) as f32;
+    let (
+        image_id,
+        full_width,
+        full_height,
+        effective_ascent,
+        effective_margin,
+        opaque_background,
+        presentation,
+        truncate_ascent,
+    ) = match lookup {
+        neovm_core::emacs_core::image_catalog::ImageLookup::Failed(failed) => {
+            // GNU `lookup_image` (`src/image.c:3573-3614`) uses fixnum
+            // `:width`/`:height` or 30x30, skips `:margin`/`:relief`/`:ascent`,
+            // and draws a hollow rectangle (`src/xterm.c:10283-10286`).
+            // `produce_image_glyph` (`src/xdisp.c:32444`) guards `== 0` and
+            // clamps negative widths to -1 (`src/xdisp.c:32529`); Neomacs's
+            // unsigned `ImageLayoutExtent` intentionally omits a display glyph
+            // for `<= 0` (explicit divergence for negative `:width`/`:height`).
+            let Some(extent) = failed.failed_extent().drawable_extent() else {
+                return Some(DisplayMediaReplacement::empty_image_slice());
+            };
+            (
+                failed.placement().image_id(),
+                extent.width() as f32,
+                extent.height() as f32,
+                crate::display_spec::DisplayImageAscentPolicy::default(),
+                crate::display_spec::DisplayImageMargin::default(),
+                None,
+                neomacs_display_protocol::ImageGlyphPresentation::FailedPlaceholder,
+                true,
+            )
+        }
+        other => {
+            let placement = other.placement();
+            let opaque_background = other.ready_metadata().and_then(|metadata| {
+                (!metadata.background_transparent).then_some(metadata.background)
+            });
+            (
+                placement.image_id(),
+                placement.width().max(1) as f32,
+                placement.height().max(1) as f32,
+                ascent,
+                margin,
+                opaque_background,
+                neomacs_display_protocol::ImageGlyphPresentation::Texture,
+                false,
+            )
+        }
+    };
     let (source_rect, width, height) = match params.image_slice {
         Some(slice) => {
             let Some(resolved) = slice.resolve(full_width, full_height) else {
@@ -1240,19 +1283,28 @@ fn resolve_image_display_property(
             full_height,
         ),
     };
+    let resolved_ascent = effective_ascent.resolve(
+        height,
+        params.fallback_metrics.row_height(),
+        params.fallback_metrics.ascent(),
+    );
+    // GNU `image_ascent` (`src/image.c:1921`) truncates `height * (50 / 100.0)`
+    // to `int` (e.g. 31 -> ascent 15, descent 16).
+    let resolved_ascent = if truncate_ascent {
+        resolved_ascent.trunc()
+    } else {
+        resolved_ascent
+    };
     Some(DisplayMediaReplacement::image(DisplayImageItem {
-        image_id: display_media_id(placement.image_id().get()),
+        image_id: display_media_id(image_id.get()),
         source_rect,
         width,
         height,
-        ascent: ascent.resolve(
-            height,
-            params.fallback_metrics.row_height(),
-            params.fallback_metrics.ascent(),
-        ),
-        horizontal_margin: margin.horizontal,
-        vertical_margin: margin.vertical,
+        ascent: resolved_ascent,
+        horizontal_margin: effective_margin.horizontal,
+        vertical_margin: effective_margin.vertical,
         opaque_background,
+        presentation,
     }))
 }
 

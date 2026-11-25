@@ -108,6 +108,7 @@ pub enum GlyphType {
         source_rect: ImageSourceRect,
         margins: GlyphImageMarginsId,
         opaque_background: ImageOpaqueBackground,
+        presentation: crate::image::ImageGlyphPresentation,
     },
     /// Inline video, represented by the same row primitive that reserves its
     /// layout slot.
@@ -1438,6 +1439,7 @@ impl GlyphRow {
                         source_rect,
                         margins: margins_id,
                         opaque_background,
+                        presentation,
                     } => {
                         0x4000_0000
                             ^ (*image_id as u64)
@@ -1453,6 +1455,7 @@ impl GlyphRow {
                                 .packed()
                                 .rotate_left(7)
                             ^ u64::from(opaque_background.packed()).rotate_left(19)
+                            ^ u64::from(presentation.packed()).rotate_left(27)
                     }
                     GlyphType::Video {
                         video_id,
@@ -3662,6 +3665,7 @@ impl FrameDisplayState {
                         image_id,
                         source_rect,
                         margins: margins_id,
+                        presentation,
                         ..
                     } => {
                         let margins = glyph_row
@@ -3704,6 +3708,7 @@ impl FrameDisplayState {
                                 height: (layout_height - top_margin - bottom_margin).max(0.0),
                                 face_id: glyph.face_id,
                                 box_vertical_edges: glyph.box_vertical_edges,
+                                presentation: *presentation,
                             },
                             glyph,
                             glyph_row,

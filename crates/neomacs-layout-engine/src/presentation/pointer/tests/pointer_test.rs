@@ -105,6 +105,7 @@ fn pointer_projection_preserves_image_primitive_kind_in_window_chrome() {
         source_rect: ImageSourceRect::FULL,
         margins: image_margins,
         opaque_background: ImageOpaqueBackground::default(),
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     };
     image.pointer_appearance = Some(token);
     row.glyphs[GlyphArea::Text.index()].push(image);

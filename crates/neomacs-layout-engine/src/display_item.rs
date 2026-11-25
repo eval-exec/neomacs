@@ -1204,6 +1204,7 @@ pub(crate) struct DisplayImageItem {
     pub(crate) horizontal_margin: f32,
     pub(crate) vertical_margin: f32,
     pub(crate) opaque_background: Option<u32>,
+    pub(crate) presentation: neomacs_display_protocol::ImageGlyphPresentation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1248,6 +1249,7 @@ pub(crate) enum DisplayMediaReplacementKind {
         margin_top: f32,
         margin_bottom: f32,
         opaque_background: Option<u32>,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation,
     },
     /// A valid image replacement whose GNU slice resolves to no pixels. The
     /// source text is still consumed, but no placeholder or drawable glyph is
@@ -1357,6 +1359,7 @@ impl DisplayImageReplacement {
             margin_top,
             margin_bottom,
             opaque_background,
+            presentation,
         } = self.0.kind
         else {
             return None;
@@ -1378,6 +1381,7 @@ impl DisplayImageReplacement {
                 margin_top,
                 margin_bottom,
                 opaque_background,
+                presentation,
             },
             width: visible_px,
             ..self.0
@@ -1410,6 +1414,7 @@ impl DisplayMediaReplacement {
                 margin_top: vertical_margin,
                 margin_bottom: vertical_margin,
                 opaque_background: image.opaque_background,
+                presentation: image.presentation,
             },
             width: display_replacement_dimension(image.width) + 2.0 * horizontal_margin,
             height: display_replacement_dimension(image.height) + 2.0 * vertical_margin,

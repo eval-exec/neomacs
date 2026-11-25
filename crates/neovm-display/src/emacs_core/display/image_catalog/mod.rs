@@ -292,6 +292,7 @@ pub fn numeric_image_scale(value: Value) -> Option<ImageScaleFactor> {
         .flatten()
 }
 
+pub use neomacs_display_protocol::{FailedImageExtent, ImageGlyphPresentation};
 pub use neovm_eval::emacs_core::eval::protocol::image_catalog::{
     FailedImage, ImageAnimationInvalidation, ImageBaseUri, ImageCatalog, ImageDataSource,
     ImageFileName, ImageInvalidation, ImageInvalidationResult, ImageLookup, ImagePlacement,

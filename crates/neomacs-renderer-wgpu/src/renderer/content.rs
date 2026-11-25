@@ -1606,10 +1606,36 @@ impl WgpuRenderer {
                     width,
                     height,
                     clip_rect,
+                    face_id,
+                    presentation,
                     ..
                 } = glyph
-                    && let Some(cached) = self.caches.image.get(*image_id)
                 {
+                    if matches!(
+                        presentation,
+                        neomacs_display_protocol::ImageGlyphPresentation::FailedPlaceholder
+                    ) {
+                        let rf = frame.resolved_face(*face_id);
+                        let shifted_clip = clip_rect.map(|clip| Rect {
+                            x: clip.x + offset_x,
+                            y: clip.y + offset_y,
+                            width: clip.width,
+                            height: clip.height,
+                        });
+                        super::layer_media::append_clipped_hollow_box(
+                            &mut relief_vertices,
+                            *x + offset_x,
+                            *y + offset_y,
+                            *width,
+                            *height,
+                            rf.fg,
+                            shifted_clip.as_ref(),
+                        );
+                        continue;
+                    }
+                    let Some(cached) = self.caches.image.get(*image_id) else {
+                        continue;
+                    };
                     let effective_clip = *clip_rect;
                     let Some(clipped) =
                         clipped_media_rect(*x, *y, *width, *height, effective_clip.as_ref())

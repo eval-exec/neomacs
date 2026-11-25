@@ -3489,6 +3489,7 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
                 margin_top,
                 margin_bottom,
                 opaque_background,
+                presentation,
             } => {
                 let margins = neomacs_display_protocol::ImageMargins::asymmetric(
                     margin_left,
@@ -3507,6 +3508,7 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
                     opaque_background: neomacs_display_protocol::ImageOpaqueBackground::new(
                         opaque_background,
                     ),
+                    presentation,
                 }
             }
             DisplayMediaReplacementKind::EmptyImageSlice => {

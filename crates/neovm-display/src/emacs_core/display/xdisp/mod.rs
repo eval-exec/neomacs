@@ -2808,12 +2808,40 @@ fn image_element_extent(
         environment,
         eval.face_table().default_face_colors(),
     )?;
-    let placement = eval
+    let lookup = eval
         .display_host
         .as_ref()?
         .image_catalog()?
-        .lookup(request, environment.size_limit())
-        .placement();
+        .lookup(request, environment.size_limit());
+
+    if let super::image_catalog::ImageLookup::Failed(failed) = lookup {
+        // GNU `lookup_image` (`src/image.c:3573-3614`) sets width/height to the
+        // failed placeholder (fixnum :width/:height or 30x30) and skips :margin,
+        // :relief, and :ascent (keeping DEFAULT_IMAGE_ASCENT = 50).
+        // `produce_image_glyph` (`src/xdisp.c:32444`) guards `== 0` and clamps
+        // negative widths to -1 (`src/xdisp.c:32529`); Neomacs's unsigned
+        // `ImageLayoutExtent` intentionally returns zero extent for `<= 0`
+        // (explicit divergence for negative `:width`/`:height`).
+        let Some(extent) = failed.failed_extent().drawable_extent() else {
+            return Some(ElementExtent {
+                advance: 0.0,
+                ascent: 0.0,
+                descent: 0.0,
+            });
+        };
+        let width = extent.width() as f32;
+        let height = extent.height() as f32;
+        // GNU `image_ascent` (`src/image.c:1921`) truncates `height * (50 / 100.0)`
+        // to `int` (e.g. 31 -> ascent 15, descent 16).
+        let ascent = (extent.height() / 2) as f32;
+        return Some(ElementExtent {
+            advance: width,
+            ascent,
+            descent: (height - ascent).max(0.0),
+        });
+    }
+
+    let placement = lookup.placement();
 
     // GNU's glyph arithmetic, for a whole (unsliced) image:
     //   it->pixel_width = img->width + 2 * img->hmargin

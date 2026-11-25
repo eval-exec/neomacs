@@ -97,9 +97,9 @@ fn publish_image_cache_event(
                 Some(super::ImageDecodeTerminal::Ready(metadata)),
             )
         }
-        neomacs_renderer_wgpu::ImageCacheEvent::Failed { load, error } => (
+        neomacs_renderer_wgpu::ImageCacheEvent::Failed { load, failure } => (
             crate::thread_comm::ImageStateEvent::DecodeCompleted(load),
-            Some(super::ImageDecodeTerminal::Failed(error)),
+            Some(super::ImageDecodeTerminal::Failed(failure)),
         ),
         neomacs_renderer_wgpu::ImageCacheEvent::Evicted { image } => {
             (crate::thread_comm::ImageStateEvent::Evicted(image), None)

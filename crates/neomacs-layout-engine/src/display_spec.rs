@@ -93,6 +93,7 @@ struct UnresolvedDisplayImageRequest {
     /// parses the same specification the evaluator does and must not name it
     /// differently, so both ask [`neovm_core::emacs_core::image::image_load_identity`].
     identity: ImageLoadIdentity,
+    failed_extent: neomacs_display_protocol::FailedImageExtent,
 }
 
 /// Active-face metrics used by GNU image dimensions `(N . em/ch/cw)`.
@@ -354,6 +355,7 @@ impl DisplayImageLayout {
             frame: self.request.frame,
             realization: environment.resolve(self.scale),
             identity: self.request.identity,
+            failed_extent: self.request.failed_extent,
         }
     }
 }
@@ -595,6 +597,7 @@ pub(crate) fn parse_display_image_layout(
             animation,
             frame,
             identity,
+            failed_extent: neovm_core::emacs_core::image::failed_image_extent_from_items(&items),
         },
         scale,
         ascent,

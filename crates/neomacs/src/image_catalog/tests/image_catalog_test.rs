@@ -51,6 +51,7 @@ fn file_request_on_active_heap(path: &str) -> ImageResolveRequest {
         animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
+        failed_extent: Default::default(),
     }
 }
 
@@ -750,7 +751,11 @@ fn a_refused_load_is_a_failed_lookup_carrying_gnus_diagnostic() {
 
     metadata.publish_terminal(
         load,
-        ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize),
+        ImageDecodeTerminal::Failed(
+            neomacs_display_protocol::image_diagnostic::ImageDecodeFailure::new(
+                ImageDiagnostic::InvalidSize,
+            ),
+        ),
     );
 
     let ImageLookup::Failed(failed) = catalog.lookup(request, ImageSizeLimit::UNLIMITED) else {
@@ -759,10 +764,11 @@ fn a_refused_load_is_a_failed_lookup_carrying_gnus_diagnostic() {
     assert_eq!(failed.load(), load);
     assert_eq!(failed.error, ImageDiagnostic::InvalidSize);
     assert_eq!(failed.error.message(), OversizedImage::MESSAGE);
+    assert_eq!(failed.placement().image_id(), slot.image_id());
     assert_eq!(
         failed.placement().dimensions(),
-        slot.dimensions(),
-        "the reserved slot survives the refusal, so the frame does not move"
+        (30, 30),
+        "a failed image adopts GNU's 30x30 placeholder geometry"
     );
 }
 
@@ -783,9 +789,8 @@ fn public_catalog_invalidation_retires_cpu_metadata_before_gpu_admission() {
     let mut request = file_request(path.to_str().expect("UTF-8 image fixture"));
     request.size = ImageSizeSpec::default();
 
-    let ImageSyncResolution::Ready(queried) = catalog
-        .resolve_sync(request.clone(), ImageSizeLimit::UNLIMITED)
-        .expect("CPU metadata query must finish without a GPU")
+    let ImageSyncResolution::Ready(queried) =
+        catalog.resolve_sync(request.clone(), ImageSizeLimit::UNLIMITED)
     else {
         panic!("valid PNG must resolve as Ready");
     };
@@ -885,6 +890,7 @@ fn animation_bookkeeping_mutations_hit_existing_catalog_entry_for_file_and_data(
             animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::new(0),
             realization: Default::default(),
+            failed_extent: Default::default(),
         }
     };
 
@@ -928,10 +934,15 @@ fn resolve_sync_records_diagnostics_and_returns_load_failed_on_repeated_queries(
     };
 
     for attempt in 1..=2 {
+        let ImageSyncResolution::LoadFailed(failed) =
+            catalog.resolve_sync(request.clone(), ImageSizeLimit::UNLIMITED)
+        else {
+            panic!("attempt {attempt} must return LoadFailed without signalling an error");
+        };
+        assert_eq!(failed.error, expected);
         assert_eq!(
-            catalog.resolve_sync(request.clone(), ImageSizeLimit::UNLIMITED),
-            Ok(ImageSyncResolution::LoadFailed(expected.clone())),
-            "attempt {attempt} must return LoadFailed without signalling an error"
+            failed.failed_extent(),
+            neomacs_display_protocol::FailedImageExtent::default()
         );
         assert_eq!(
             catalog.take_pending_diagnostics(),

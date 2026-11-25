@@ -1000,6 +1000,7 @@ impl DisplayItemFaceResolver for ResolvedDisplayPropertyResolver {
                 horizontal_margin: 0.0,
                 vertical_margin: 0.0,
                 opaque_background: None,
+                presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
             }))
         } else {
             None

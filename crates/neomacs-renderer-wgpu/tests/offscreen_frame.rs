@@ -690,6 +690,7 @@ fn primary_frame_inline_image_samples_only_its_source_slice() {
         height: 8.0,
         face_id: image_face_id,
         box_vertical_edges: BoxVerticalEdges::Both,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
 
     h.renderer.render_frame_glyphs(
@@ -787,6 +788,7 @@ fn unboxed_image_face_background_fills_the_glyph_box_extent() {
         height: 8.0,
         face_id: image_face_id,
         box_vertical_edges: BoxVerticalEdges::Both,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
 
     h.renderer.render_frame_glyphs(
@@ -2640,6 +2642,7 @@ fn a_frame_drawn_mid_decode_shows_only_the_rows_that_have_arrived() {
         height: H as f32,
         face_id: image_face_id,
         box_vertical_edges: BoxVerticalEdges::Unboxed,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
 
     h.renderer.render_frame_glyphs(

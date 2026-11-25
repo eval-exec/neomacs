@@ -1128,3 +1128,7 @@ pub(crate) fn probe_tiff_frame(
 ) -> Option<neomacs_display_protocol::ImageNativeExtent> {
     tiff_pages::probe(data, frame)
 }
+
+pub(crate) fn failed_tiff_metadata(data: &[u8], frame: ImageFrameIndex) -> ImageEmbeddedMetadata {
+    tiff_pages::failed_page_metadata(data, frame)
+}

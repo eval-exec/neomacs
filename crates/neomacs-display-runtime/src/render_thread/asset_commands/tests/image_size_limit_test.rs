@@ -65,6 +65,7 @@ fn decode(source: ImageProbeSource<'_>, limit: ImageSizeLimit) -> Result<(), Ima
         .wait_for_terminal(load, Duration::from_secs(5))
         .expect("CPU decoder must publish a terminal result")
         .map(|_| ())
+        .map_err(|failure| failure.diagnostic)
 }
 
 fn refused(result: Result<(), ImageDiagnostic>) -> String {

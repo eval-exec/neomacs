@@ -249,7 +249,32 @@
        (cons 'invalid-meta (funcall call (lambda () (image-metadata '(image :type nonexistent-type-837 :data "x")))))
        (cons 'nosrc-size (funcall call (lambda () (image-size '(image :type png) t))))
        (cons 'nosrc-mask (funcall call (lambda () (image-mask-p '(image :type png)))))
-       (cons 'nosrc-meta (funcall call (lambda () (image-metadata '(image :type png)))))))))
+       (cons 'nosrc-meta (funcall call (lambda () (image-metadata '(image :type png)))))
+       ;; Multi-page TIFF whose selected page fails TIFFReadRGBAImage sets
+       ;; `(count N)` on img->lisp_data before returning 0 (GNU image.c:9570-9580),
+       ;; while a 1-page failing TIFF leaves metadata nil and page 1 still decodes.
+       (let* ((tiff2 (copy-sequence
+                      (base64-decode-string
+                       "SUkqAAgAAAAKAAABBAABAAAAAgAAAAEBBAABAAAAAQAAAAIBAwADAAAAhgAAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAABEBBAABAAAAjAAAABUBAwABAAAAAwAAABYBBAABAAAAAQAAABcBBAABAAAABgAAABwBAwABAAAAAQAAAJIAAAAIAAgACAD/AAD/AAAKAAABBAABAAAAAwAAAAEBBAABAAAAAgAAAAIBAwADAAAAEAEAAAMBAwABAAAAAQAAAAYBAwABAAAAAgAAABEBBAABAAAAFgEAABUBAwABAAAAAwAAABYBBAABAAAAAgAAABcBBAABAAAAEgAAABwBAwABAAAAAQAAAAAAAAAIAAgACAAA/wAA/wAA/wAA/wAA/wAA/wA="))))
+         ;; Corrupt IFD0 compression (entry 3, offset 54) -> 5 (LZW) and
+         ;; StripByteCounts (entry 8, offset 114) -> 99999 so page 0 fails decode.
+         (aset tiff2 54 5)
+         (aset tiff2 55 0)
+         (aset tiff2 114 #x9f)
+         (aset tiff2 115 #x86)
+         (aset tiff2 116 #x01)
+         (aset tiff2 117 0)
+         (let* ((tiff1 (copy-sequence tiff2))
+                (_ (progn (aset tiff1 130 0) (aset tiff1 131 0)
+                          (aset tiff1 132 0) (aset tiff1 133 0)))
+                (img2-p0 (create-image tiff2 'tiff t :index 0))
+                (img1-p0 (create-image tiff1 'tiff t :index 0))
+                (img2-p1 (create-image tiff2 'tiff t :index 1)))
+           (cons 'failed-tiff
+                 (list
+                  (list (image-size img2-p0 t) (image-metadata img2-p0))
+                  (list (image-size img1-p0 t) (image-metadata img1-p0))
+                  (list (image-size img2-p1 t) (image-metadata img2-p1))))))))))
 
 (defun image-api-write (value)
   (with-temp-file (getenv "NEOMACS_GUI_IMAGE_RESULT")

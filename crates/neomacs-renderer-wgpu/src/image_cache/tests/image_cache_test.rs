@@ -137,7 +137,7 @@ fn ready_and_failed_terminals_consume_their_active_generations() {
     assert!(matches!(
         loads.take_current(WorkerDecodeOutcome::Failed {
             load: failed,
-            diagnostic: test_diagnostic()
+            failure: ImageDecodeFailure::new(test_diagnostic())
         }),
         Some(WorkerDecodeOutcome::Failed { .. })
     ));
@@ -147,7 +147,7 @@ fn ready_and_failed_terminals_consume_their_active_generations() {
         loads
             .take_current(WorkerDecodeOutcome::Failed {
                 load: failed,
-                diagnostic: test_diagnostic()
+                failure: ImageDecodeFailure::new(test_diagnostic())
             })
             .is_none()
     );

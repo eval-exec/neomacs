@@ -130,7 +130,7 @@ impl DisplayHost for RecordingImageDisplayHost {
         &self,
         request: ImageResolveRequest,
         _limit: ImageSizeLimit,
-    ) -> Result<ImageSyncResolution, String> {
+    ) -> ImageSyncResolution {
         let (width, height) = self.fixed_size.unwrap_or((40, 30));
         let metadata = ResolvedImageMetadata::from_layout(
             ImageLayoutExtent::new(width, height),
@@ -144,10 +144,10 @@ impl DisplayHost for RecordingImageDisplayHost {
             .lock()
             .expect("image requests lock")
             .push(request);
-        Ok(ImageSyncResolution::Ready(ReadyImage {
+        ImageSyncResolution::Ready(ReadyImage {
             load: test_image_load(9),
             metadata,
-        }))
+        })
     }
 
     fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
@@ -2383,21 +2383,46 @@ fn gif_metadata_keeps_reverse_block_order_and_unibyte_payloads() {
 }
 
 struct SyncOutcomeImageDisplayHost {
-    outcome: Result<ImageSyncResolution, String>,
+    mode: SyncOutcomeMode,
     pending: Mutex<Vec<ImageDiagnostic>>,
+}
+
+#[derive(Clone)]
+enum SyncOutcomeMode {
+    LoadFailed {
+        diagnostic: ImageDiagnostic,
+        embedded: ImageEmbeddedMetadata,
+    },
+    TimedOut,
 }
 
 impl SyncOutcomeImageDisplayHost {
     fn load_failed(diagnostic: ImageDiagnostic) -> Self {
         Self {
-            outcome: Ok(ImageSyncResolution::LoadFailed(diagnostic)),
+            mode: SyncOutcomeMode::LoadFailed {
+                diagnostic,
+                embedded: ImageEmbeddedMetadata::EMPTY,
+            },
             pending: Mutex::new(Vec::new()),
         }
     }
 
-    fn error(message: impl Into<String>) -> Self {
+    fn load_failed_with_metadata(
+        diagnostic: ImageDiagnostic,
+        embedded: ImageEmbeddedMetadata,
+    ) -> Self {
         Self {
-            outcome: Err(message.into()),
+            mode: SyncOutcomeMode::LoadFailed {
+                diagnostic,
+                embedded,
+            },
+            pending: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn timed_out() -> Self {
+        Self {
+            mode: SyncOutcomeMode::TimedOut,
             pending: Mutex::new(Vec::new()),
         }
     }
@@ -2414,16 +2439,27 @@ impl DisplayHost for SyncOutcomeImageDisplayHost {
 
     fn resolve_image_sync(
         &self,
-        _request: ImageResolveRequest,
+        request: ImageResolveRequest,
         _limit: ImageSizeLimit,
-    ) -> Result<ImageSyncResolution, String> {
-        if let Ok(ImageSyncResolution::LoadFailed(diagnostic)) = &self.outcome {
-            self.pending
-                .lock()
-                .expect("pending diagnostics")
-                .push(diagnostic.clone());
+    ) -> ImageSyncResolution {
+        match &self.mode {
+            SyncOutcomeMode::LoadFailed {
+                diagnostic,
+                embedded,
+            } => {
+                self.pending
+                    .lock()
+                    .expect("pending diagnostics")
+                    .push(diagnostic.clone());
+                ImageSyncResolution::LoadFailed(
+                    PendingImage::new(test_image_load(9), ImageLayoutExtent::new(1, 1))
+                        .failed_with(diagnostic.clone(), request.failed_extent, embedded.clone()),
+                )
+            }
+            SyncOutcomeMode::TimedOut => ImageSyncResolution::TimedOut {
+                image_id: ImageId::new(1),
+            },
         }
-        self.outcome.clone()
     }
 
     fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
@@ -2432,10 +2468,22 @@ impl DisplayHost for SyncOutcomeImageDisplayHost {
 }
 
 impl ImageCatalog for SyncOutcomeImageDisplayHost {
-    fn lookup(&self, _request: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
+    fn lookup(&self, request: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
+        let (diagnostic, embedded) = match &self.mode {
+            SyncOutcomeMode::LoadFailed {
+                diagnostic,
+                embedded,
+            } => (diagnostic.clone(), embedded.clone()),
+            SyncOutcomeMode::TimedOut => {
+                (ImageDiagnostic::NotDrawable, ImageEmbeddedMetadata::EMPTY)
+            }
+        };
         ImageLookup::Failed(
-            PendingImage::new(test_image_load(9), ImageLayoutExtent::new(30, 30))
-                .failed(ImageDiagnostic::NotDrawable),
+            PendingImage::new(test_image_load(9), ImageLayoutExtent::new(1, 1)).failed_with(
+                diagnostic,
+                request.failed_extent,
+                embedded,
+            ),
         )
     }
 
@@ -2601,10 +2649,22 @@ fn failed_image_queries_return_gnu_placeholder_and_log_diagnostics() {
         (Value::fixnum(30), Value::fixnum(30))
     );
 
-    // A host timeout / transport Err still signals rather than pretending 30x30.
-    eval.set_display_host(Box::new(SyncOutcomeImageDisplayHost::error(
-        "Timed out waiting for image decode (id 1)",
-    )));
+    // Partial metadata captured before failure (GNU multi-page TIFF `(count N)`,
+    // `src/image.c:9570-9580`) surfaces through `image-metadata`.
+    eval.set_display_host(Box::new(
+        SyncOutcomeImageDisplayHost::load_failed_with_metadata(
+            ImageDiagnostic::NotDrawable,
+            ImageEmbeddedMetadata::pages(3),
+        ),
+    ));
+    let meta = builtin_image_metadata_in_context(&mut eval, vec![base]).unwrap();
+    assert_eq!(
+        list_to_vec(&meta).unwrap(),
+        vec![Value::symbol("count"), Value::fixnum(3)]
+    );
+
+    // A typed TimedOut still signals rather than pretending 30x30.
+    eval.set_display_host(Box::new(SyncOutcomeImageDisplayHost::timed_out()));
     assert!(builtin_image_size_in_context(&mut eval, vec![base, Value::T]).is_err());
     assert!(builtin_image_mask_p_in_context(&mut eval, vec![base]).is_err());
     assert!(builtin_image_metadata_in_context(&mut eval, vec![base]).is_err());

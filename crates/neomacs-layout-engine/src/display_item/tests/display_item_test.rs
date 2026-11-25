@@ -73,6 +73,7 @@ fn display_item_inline_media_slots_are_source_neutral() {
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
             opaque_background: None,
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         })),
     );
     let video = DisplayItem::new(
@@ -107,6 +108,7 @@ fn display_item_inline_media_slots_are_source_neutral() {
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
             opaque_background: None,
+            presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
         }))
     );
     assert_eq!(
@@ -394,6 +396,7 @@ fn cropping_an_image_crops_its_advance_and_its_source_slice_together() {
         horizontal_margin: 0.0,
         vertical_margin: 0.0,
         opaque_background: None,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
     let source_rect = |media: DisplayMediaReplacement| match media.kind {
         DisplayMediaReplacementKind::Image { source_rect, .. } => source_rect,
@@ -431,6 +434,7 @@ fn cropping_an_image_crops_its_advance_and_its_source_slice_together() {
         horizontal_margin: 10.0,
         vertical_margin: 0.0,
         opaque_background: None,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     });
     assert_eq!(margined.width, 320.0);
     let cropped_margined = margined

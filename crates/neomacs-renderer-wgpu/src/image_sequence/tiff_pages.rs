@@ -32,6 +32,19 @@ pub(super) fn probe(data: &[u8], frame: ImageFrameIndex) -> Option<ImageNativeEx
     Some(ImageNativeExtent::new(width, height))
 }
 
+/// GNU `tiff_load` (`src/image.c:9564-9581`) counts the TIFF IFD chain and
+/// populates `img->lisp_data` with `(count N)` before checking the
+/// `TIFFReadRGBAImage` return code. Take the count directly from
+/// `selected_directory` (codec-independent) so even a selected page that the
+/// Rust TIFF codec rejects at `TiffDecoder::new` construction still exposes
+/// `(count N)` on `image-metadata`.
+pub(super) fn failed_page_metadata(data: &[u8], frame: ImageFrameIndex) -> ImageEmbeddedMetadata {
+    let Some((_header, _directory, count)) = selected_directory(data, frame.get()) else {
+        return ImageEmbeddedMetadata::EMPTY;
+    };
+    ImageEmbeddedMetadata::pages(count)
+}
+
 type PageDecoder<'a> = image::codecs::tiff::TiffDecoder<BufReader<HeaderOverlay<'a>>>;
 
 fn page_decoder(data: &[u8], frame: ImageFrameIndex) -> Option<(PageDecoder<'_>, u32)> {
@@ -571,5 +584,50 @@ mod tests {
         assert_eq!(&bytes[..2], &data[next_pointer - 2..next_pointer]);
         assert_eq!(&bytes[2..6], &[0; 4]);
         assert_eq!(&bytes[6..], &data[next_pointer + 4..next_pointer + 6]);
+    }
+
+    #[test]
+    fn tiff_failed_page_metadata_counts_pages_even_when_codec_rejects_selected_ifd() {
+        let mut data = fixture(ByteOrder::Little, Layout::Classic);
+        // Set IFD0's PhotometricInterpretation tag (tag 262) to an unsupported
+        // value (9999) so `TiffDecoder::new` (`page_decoder`) rejects page 0 at
+        // construction, while the IFD chain still has 2 valid directories.
+        let num_entries = u16::from_le_bytes([data[8], data[9]]) as usize;
+        let mut found_photometric = false;
+        for i in 0..num_entries {
+            let off = 10 + i * 12;
+            let tag = u16::from_le_bytes([data[off], data[off + 1]]);
+            if tag == 262 {
+                data[off + 8..off + 10].copy_from_slice(&9999u16.to_le_bytes());
+                found_photometric = true;
+            }
+        }
+        assert!(
+            found_photometric,
+            "fixture IFD0 must contain PhotometricInterpretation tag"
+        );
+        assert!(
+            page_decoder(&data, ImageFrameIndex::new(0)).is_none(),
+            "codec must reject unsupported photometric interpretation at construction"
+        );
+        assert_eq!(
+            failed_page_metadata(&data, ImageFrameIndex::new(0)),
+            ImageEmbeddedMetadata::pages(2),
+            "multi-page TIFF still reports (count 2) when selected IFD exists"
+        );
+        assert_eq!(
+            failed_page_metadata(&data, ImageFrameIndex::new(2)),
+            ImageEmbeddedMetadata::EMPTY,
+            "out-of-range :index reports empty metadata"
+        );
+
+        // Truncate the chain to 1 directory: single-page failing TIFF reports nil.
+        let first = Layout::Classic.header_len() as u64;
+        set_next_directory(&mut data, first, 0, ByteOrder::Little, Layout::Classic);
+        assert_eq!(
+            failed_page_metadata(&data, ImageFrameIndex::new(0)),
+            ImageEmbeddedMetadata::EMPTY,
+            "single-page failing TIFF reports empty metadata"
+        );
     }
 }

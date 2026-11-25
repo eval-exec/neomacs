@@ -80,7 +80,7 @@ struct DecodeEntry {
 
 enum DecodeStatus {
     Pending,
-    Complete(Result<ImageMetadata, ImageDiagnostic>),
+    Complete(Result<ImageMetadata, ImageDecodeFailure>),
     Retired,
 }
 
@@ -127,7 +127,7 @@ impl DecodeOutputSink {
                 let terminal = match &outcome {
                     WorkerDecodeOutcome::Band { .. } => None,
                     WorkerDecodeOutcome::Ready(decoded) => Some(Ok(decoded.metadata.clone())),
-                    WorkerDecodeOutcome::Failed { diagnostic, .. } => Some(Err(diagnostic.clone())),
+                    WorkerDecodeOutcome::Failed { failure, .. } => Some(Err(failure.clone())),
                 };
                 if let Some(terminal) = terminal {
                     state
@@ -274,7 +274,7 @@ impl ImageDecodeClient {
             DecodeOutputSink::Shared(Arc::clone(&self.shared)).publish(
                 WorkerDecodeOutcome::Failed {
                     load,
-                    diagnostic: ImageDiagnostic::NotDrawable,
+                    failure: ImageDecodeFailure::new(ImageDiagnostic::NotDrawable),
                 },
             );
         }
@@ -357,7 +357,7 @@ impl ImageDecodeClient {
         &self,
         load: ImageLoadToken,
         timeout: Duration,
-    ) -> Option<Result<ImageMetadata, ImageDiagnostic>> {
+    ) -> Option<Result<ImageMetadata, ImageDecodeFailure>> {
         let started = Instant::now();
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         loop {

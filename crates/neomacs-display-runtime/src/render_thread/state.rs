@@ -40,10 +40,10 @@ pub enum ImageDecodeTerminal {
     /// coordinates.
     Band(RowRange),
     Ready(ResolvedImageMetadata),
-    /// The decode ended without pixels.  It carries GNU's diagnostic rather
-    /// than a bare string, because the consumer that shows it to a user is the
-    /// same one that has to word it.
-    Failed(neomacs_display_protocol::image_diagnostic::ImageDiagnostic),
+    /// The decode ended without pixels.  Carries GNU's diagnostic together with
+    /// any partial loader metadata captured before failure (such as multi-page
+    /// TIFF `(count N)`).
+    Failed(neomacs_display_protocol::image_diagnostic::ImageDecodeFailure),
 }
 
 impl ImageDecodeTerminal {

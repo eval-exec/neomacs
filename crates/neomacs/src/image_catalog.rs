@@ -344,7 +344,11 @@ impl AsyncImageCatalog {
                         %error,
                         "failed to re-queue image decode after display reset"
                     );
-                    CatalogEntry::Failed(pending.failed(ImageDiagnostic::NotDrawable))
+                    CatalogEntry::Failed(pending.failed_with(
+                        ImageDiagnostic::NotDrawable,
+                        request.failed_extent,
+                        neomacs_display_protocol::ImageEmbeddedMetadata::EMPTY,
+                    ))
                 }
             };
         }
@@ -354,16 +358,18 @@ impl AsyncImageCatalog {
         &self,
         request: ImageResolveRequest,
         limit: ImageSizeLimit,
-    ) -> Result<ImageSyncResolution, String> {
+    ) -> ImageSyncResolution {
+        let failed_extent = request.failed_extent;
+        let lookup_key = request.clone();
         let pending = match self.lookup_inner(request, limit) {
-            ImageLookup::Ready(image) => return Ok(ImageSyncResolution::Ready(image)),
+            ImageLookup::Ready(image) => return ImageSyncResolution::Ready(image),
             ImageLookup::Pending(image) => image,
             ImageLookup::Failed(failed) => {
                 // Synchronous queries (`image-size`, `image-mask-p`,
                 // `image-metadata`) invoke `lookup_image` in GNU, which logs
                 // on every query even if the display path already reported it.
                 self.record_failure_always(&failed);
-                return Ok(ImageSyncResolution::LoadFailed(failed.error));
+                return ImageSyncResolution::LoadFailed(failed);
             }
         };
         let placement = pending.placement();
@@ -372,18 +378,19 @@ impl AsyncImageCatalog {
             .image_decode_client
             .wait_for_terminal(pending.load(), Duration::from_secs(1))
         else {
-            // Bounded wait: do not invent dimensions. Callers (image-size, etc.)
-            // surface this as a failed resolve rather than a wrong pixel size.
-            return Err(format!(
-                "Timed out waiting for image decode (id {})",
-                placement.image_id()
-            ));
+            // Bounded wait: do not invent dimensions. Callers surface a typed
+            // timeout rather than fabricating a placeholder size.
+            return ImageSyncResolution::TimedOut {
+                image_id: placement.image_id(),
+            };
         };
         // CPU decoding answers Lisp metadata queries independently of texture
-        // upload. Leave the catalog's residency pending until the renderer's
-        // normal completion event reconciles it.
+        // upload. Leave Ready residency pending until the renderer's normal
+        // completion event reconciles it; a Failed load will never gain a GPU
+        // texture, so publish Failed immediately so redisplay and measurement
+        // observe GNU's failed geometry right away.
         match terminal {
-            Ok(metadata) => Ok(ImageSyncResolution::Ready(ReadyImage {
+            Ok(metadata) => ImageSyncResolution::Ready(ReadyImage {
                 load: pending.load(),
                 metadata: neovm_core::emacs_core::image_catalog::ResolvedImageMetadata {
                     layout: metadata.layout,
@@ -393,11 +400,18 @@ impl AsyncImageCatalog {
                     mask: metadata.mask,
                     embedded: metadata.embedded,
                 },
-            })),
-            Err(error) => {
-                let failed = pending.failed(error.clone());
+            }),
+            Err(failure) => {
+                let failed =
+                    pending.failed_with(failure.diagnostic, failed_extent, failure.embedded);
+                let (classified_key, _) = self.classify_request(lookup_key);
+                if let Some(entry) = self.entries.borrow_mut().get_mut(&classified_key)
+                    && matches!(entry, CatalogEntry::Pending(current) if current.load() == failed.load())
+                {
+                    *entry = CatalogEntry::Failed(failed.clone());
+                }
                 self.record_failure_always(&failed);
-                Ok(ImageSyncResolution::LoadFailed(error))
+                ImageSyncResolution::LoadFailed(failed)
             }
         }
     }
@@ -1029,7 +1043,8 @@ impl ImageCatalog for AsyncImageCatalog {
                     return;
                 };
                 self.note_terminal_after_clear(load, &terminal);
-                let resolved = image_lookup_from_terminal(pending.clone(), terminal);
+                let resolved =
+                    image_lookup_from_terminal(pending.clone(), request.failed_extent, terminal);
                 self.report_header_disagreement(request, &resolved);
                 *state = CatalogEntry::from_lookup(resolved);
             }
@@ -1116,7 +1131,11 @@ impl AsyncImageCatalog {
                     // handed the job at all. GNU has no sentence for this,
                     // because it has no second thread to lose.
                     tracing::warn!(%error, "image load command could not be scheduled");
-                    CatalogEntry::Failed(pending.failed(ImageDiagnostic::NotDrawable))
+                    CatalogEntry::Failed(pending.failed_with(
+                        ImageDiagnostic::NotDrawable,
+                        request.failed_extent,
+                        neomacs_display_protocol::ImageEmbeddedMetadata::EMPTY,
+                    ))
                 }
             };
             entries.insert(request.clone(), state);
@@ -1140,7 +1159,11 @@ impl AsyncImageCatalog {
                     // handed the job at all. GNU has no sentence for this,
                     // because it has no second thread to lose.
                     tracing::warn!(%error, "image load command could not be scheduled");
-                    CatalogEntry::Failed(pending.failed(ImageDiagnostic::NotDrawable))
+                    CatalogEntry::Failed(pending.failed_with(
+                        ImageDiagnostic::NotDrawable,
+                        request.failed_extent,
+                        neomacs_display_protocol::ImageEmbeddedMetadata::EMPTY,
+                    ))
                 }
             };
             self.schedule_header_probe(&request, resolution.as_ref(), load);
@@ -1179,7 +1202,7 @@ impl AsyncImageCatalog {
             return state.as_lookup().expect("pending state is observable");
         };
         self.note_terminal_after_clear(load, &terminal);
-        let resolved = image_lookup_from_terminal(pending.clone(), terminal);
+        let resolved = image_lookup_from_terminal(pending.clone(), request.failed_extent, terminal);
         self.report_header_disagreement(&request, &resolved);
         *state = CatalogEntry::from_lookup(resolved);
         state
@@ -1354,14 +1377,22 @@ impl AsyncImageCatalog {
     }
 }
 
-fn image_lookup_from_terminal(pending: PendingImage, terminal: ImageDecodeTerminal) -> ImageLookup {
+fn image_lookup_from_terminal(
+    pending: PendingImage,
+    failed_extent: neomacs_display_protocol::FailedImageExtent,
+    terminal: ImageDecodeTerminal,
+) -> ImageLookup {
     let load = pending.load();
     match terminal {
         // Intermediate: the decode is still running, so the slot keeps the
         // geometry the header gave it and stays pending until `Ready` lands.
         ImageDecodeTerminal::Band(_) => ImageLookup::Pending(pending),
         ImageDecodeTerminal::Ready(metadata) => ImageLookup::Ready(ReadyImage { load, metadata }),
-        ImageDecodeTerminal::Failed(error) => ImageLookup::Failed(pending.failed(error)),
+        ImageDecodeTerminal::Failed(failure) => ImageLookup::Failed(pending.failed_with(
+            failure.diagnostic,
+            failed_extent,
+            failure.embedded,
+        )),
     }
 }
 

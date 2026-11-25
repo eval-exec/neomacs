@@ -101,6 +101,7 @@ fn rich_rendered(role: GlyphRowRole, faces: Vec<RealizedFrameFace>) -> RenderedD
         source_rect: ImageSourceRect::new(0.25, 0.0, 0.5, 1.0).expect("source rectangle"),
         margins,
         opaque_background: ImageOpaqueBackground::new(Some(0x12_34_56)),
+        presentation: neomacs_display_protocol::ImageGlyphPresentation::Texture,
     };
     row.glyphs[GlyphArea::Text.index()].push(image);
     let mut widget = Glyph::stretch(2, face).with_pixel_geometry(16.0, 24.0, 18.0);

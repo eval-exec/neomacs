@@ -11,7 +11,9 @@ use decoder::DecodeOutputSink;
 pub use decoder::{ImageDecodeClient, ImageDecoder};
 
 use neomacs_display_protocol::image::EncodedBytes;
-use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageLoadIdentity};
+use neomacs_display_protocol::image_diagnostic::{
+    ImageDecodeFailure, ImageDiagnostic, ImageLoadIdentity,
+};
 use neomacs_display_protocol::{
     ImageAnimationPolicy, ImageCacheUsage, ImageColorContext, ImageEmbeddedMetadata,
     ImageFrameIndex, ImageHeuristicMask, ImageId, ImageIntrinsicExtent, ImageLayoutExtent,
@@ -480,7 +482,7 @@ enum WorkerDecodeOutcome {
     Ready(DecodedImage),
     Failed {
         load: ImageLoadToken,
-        diagnostic: ImageDiagnostic,
+        failure: ImageDecodeFailure,
     },
 }
 
@@ -515,7 +517,7 @@ pub enum ImageCacheEvent {
     },
     Failed {
         load: ImageLoadToken,
-        error: ImageDiagnostic,
+        failure: ImageDecodeFailure,
     },
     Evicted {
         image: ImageId,
@@ -784,6 +786,21 @@ impl DecodeFailureSource {
             },
             Self::Bytes { data } => Self::from_bytes(identity, data.as_slice()),
             Self::Raw => ImageDiagnostic::NotDrawable,
+        }
+    }
+
+    fn failed_metadata(&self, frame: ImageFrameIndex) -> ImageEmbeddedMetadata {
+        match self {
+            Self::File { path } => match std::fs::read(path) {
+                Ok(bytes) if crate::image_probe::has_tiff_signature(&bytes) => {
+                    crate::image_sequence::failed_tiff_metadata(&bytes, frame)
+                }
+                _ => ImageEmbeddedMetadata::EMPTY,
+            },
+            Self::Bytes { data } if crate::image_probe::has_tiff_signature(data.as_slice()) => {
+                crate::image_sequence::failed_tiff_metadata(data.as_slice(), frame)
+            }
+            Self::Bytes { .. } | Self::Raw => ImageEmbeddedMetadata::EMPTY,
         }
     }
 
@@ -1087,9 +1104,15 @@ impl ImageCache {
                         }
                         Ok(Ok(None)) => WorkerDecodeOutcome::Failed {
                             load,
-                            diagnostic: failure_source.diagnostic(&identity),
+                            failure: ImageDecodeFailure::with_embedded(
+                                failure_source.diagnostic(&identity),
+                                failure_source.failed_metadata(frame),
+                            ),
                         },
-                        Ok(Err(diagnostic)) => WorkerDecodeOutcome::Failed { load, diagnostic },
+                        Ok(Err(diagnostic)) => WorkerDecodeOutcome::Failed {
+                            load,
+                            failure: ImageDecodeFailure::new(diagnostic),
+                        },
                         Err(_) => {
                             tracing::warn!(
                                 "Decoder thread {} recovered from a panic while decoding image {}",
@@ -1098,7 +1121,9 @@ impl ImageCache {
                             );
                             WorkerDecodeOutcome::Failed {
                                 load,
-                                diagnostic: failure_source.diagnostic(&identity),
+                                failure: ImageDecodeFailure::new(
+                                    failure_source.diagnostic(&identity),
+                                ),
                             }
                         }
                     };
@@ -2357,18 +2382,17 @@ impl ImageCache {
                     });
                     self.upload_texture(device, queue, decoded);
                 }
-                WorkerDecodeOutcome::Failed { load, diagnostic } => {
+                WorkerDecodeOutcome::Failed { load, failure } => {
                     // A failed decode keeps no texture: a band may already have
                     // created one, and it holds rows of an image that will never
                     // arrive. Leaving it would draw them forever.
                     self.release(load.image());
-                    self.states
-                        .insert(load.image(), ImageState::Failed(diagnostic.message()));
+                    self.states.insert(
+                        load.image(),
+                        ImageState::Failed(failure.diagnostic.message()),
+                    );
                     self.pending_dimensions.remove(&load.image());
-                    events.push(ImageCacheEvent::Failed {
-                        load,
-                        error: diagnostic,
-                    });
+                    events.push(ImageCacheEvent::Failed { load, failure });
                 }
             }
         }

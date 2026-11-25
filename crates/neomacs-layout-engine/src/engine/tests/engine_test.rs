@@ -2111,7 +2111,7 @@ impl DisplayHost for RecordingImageDisplayHost {
         &self,
         _request: ImageResolveRequest,
         _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
-    ) -> Result<neovm_core::emacs_core::image_catalog::ImageSyncResolution, String> {
+    ) -> neovm_core::emacs_core::image_catalog::ImageSyncResolution {
         panic!("layout must not use synchronous image resolution");
     }
 

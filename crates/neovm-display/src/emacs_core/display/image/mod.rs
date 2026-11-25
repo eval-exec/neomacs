@@ -13,11 +13,12 @@
 //! Image specs are property lists: (:type png :file "foo.png" :width 100 ...)
 
 use crate::emacs_core::image_catalog::{
-    AxisSize, EncodedBytes, ImageAnimationInvalidation, ImageAnimationPolicy, ImageBaseUri,
-    ImageColorContext, ImageDataSource, ImageFileName, ImageFrameIndex, ImageHeuristicMask,
-    ImageInvalidation, ImageLoadIdentity, ImageMaskKind, ImageMaskPolicy, ImageResolveRequest,
-    ImageResolveSource, ImageRotation, ImageScaleEnvironment, ImageScalePolicy, ImageSizeSpec,
-    ImageSpecIdentity, ImageSyncResolution, image_scale_environment, numeric_image_scale,
+    AxisSize, EncodedBytes, FailedImageExtent, ImageAnimationInvalidation, ImageAnimationPolicy,
+    ImageBaseUri, ImageColorContext, ImageDataSource, ImageFileName, ImageFrameIndex,
+    ImageHeuristicMask, ImageInvalidation, ImageLoadIdentity, ImageMaskKind, ImageMaskPolicy,
+    ImageResolveRequest, ImageResolveSource, ImageRotation, ImageScaleEnvironment,
+    ImageScalePolicy, ImageSizeSpec, ImageSpecIdentity, ImageSyncResolution,
+    image_scale_environment, numeric_image_scale,
 };
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
@@ -464,6 +465,38 @@ pub(crate) fn image_spec_ascent(spec: &Value) -> ImageAscentPolicy {
     ImageAscentPolicy::Percent(50.0)
 }
 
+/// Compute GNU `lookup_image`'s failed-load geometry (`src/image.c:3573-3583`,
+/// `src/dispextern.h:3295-3296`) once from a parsed image specification: the
+/// first fixnum `:width` / `:height` value (matching `image_spec_value`,
+/// `src/image.c:1629-1652`), falling back to 30×30. Shared by the evaluator's
+/// `image_resolve_request_from_spec` and the layout engine's
+/// `parse_display_image_layout`.
+#[must_use]
+pub fn failed_image_extent_from_items(items: &[Value]) -> FailedImageExtent {
+    let mut width_val: Option<Value> = None;
+    let mut height_val: Option<Value> = None;
+    let mut index = 1;
+    while index + 1 < items.len() {
+        match ImageSpecKey::from_lisp_value(items[index]) {
+            Some(ImageSpecKey::Width) if width_val.is_none() => {
+                width_val = Some(items[index + 1]);
+            }
+            Some(ImageSpecKey::Height) if height_val.is_none() => {
+                height_val = Some(items[index + 1]);
+            }
+            _ => {}
+        }
+        index += 2;
+    }
+    let width = width_val
+        .and_then(|value| value.as_fixnum())
+        .map_or(FailedImageExtent::DEFAULT_WIDTH, |n| n as i32);
+    let height = height_val
+        .and_then(|value| value.as_fixnum())
+        .map_or(FailedImageExtent::DEFAULT_HEIGHT, |n| n as i32);
+    FailedImageExtent::new(width, height)
+}
+
 pub(crate) fn image_resolve_request_from_spec(
     spec: &Value,
     environment: ImageScaleEnvironment,
@@ -588,6 +621,7 @@ pub(crate) fn image_resolve_request_from_spec(
         frame,
         realization: environment.resolve(scale),
         identity,
+        failed_extent: failed_image_extent_from_items(&items),
     })
 }
 
@@ -901,44 +935,6 @@ pub(crate) fn builtin_image_size(args: Vec<Value>) -> EvalResult {
     ))
 }
 
-/// GNU `DEFAULT_IMAGE_WIDTH` / `DEFAULT_IMAGE_HEIGHT` (`src/dispextern.h:3295-3296`).
-const DEFAULT_IMAGE_WIDTH: i64 = 30;
-const DEFAULT_IMAGE_HEIGHT: i64 = 30;
-
-/// GNU `lookup_image` fallback geometry when `img->load_failed_p` is true
-/// (`src/image.c:3573-3583`): uses the first fixnum `:width` / `:height` in
-/// `spec` if present (matching `image_spec_value`, `src/image.c:1629-1652`),
-/// otherwise `DEFAULT_IMAGE_WIDTH` / `DEFAULT_IMAGE_HEIGHT` (30×30). Margins,
-/// relief, `:scale`, and `:max-width`/`:max-height` are not applied because
-/// GNU skips the post-load attribute block when `load_failed_p` is set
-/// (`src/image.c:3584-3614`).
-fn failed_image_placeholder_size(spec: &Value) -> (i64, i64) {
-    let mut width_val: Option<Value> = None;
-    let mut height_val: Option<Value> = None;
-    if let Some(items) = list_to_vec(spec) {
-        let mut index = 1;
-        while index + 1 < items.len() {
-            match ImageSpecKey::from_lisp_value(items[index]) {
-                Some(ImageSpecKey::Width) if width_val.is_none() => {
-                    width_val = Some(items[index + 1]);
-                }
-                Some(ImageSpecKey::Height) if height_val.is_none() => {
-                    height_val = Some(items[index + 1]);
-                }
-                _ => {}
-            }
-            index += 2;
-        }
-    }
-    let width = width_val
-        .and_then(|value| value.as_fixnum())
-        .map_or(DEFAULT_IMAGE_WIDTH, |n| i64::from(n as i32));
-    let height = height_val
-        .and_then(|value| value.as_fixnum())
-        .map_or(DEFAULT_IMAGE_HEIGHT, |n| i64::from(n as i32));
-    (width, height)
-}
-
 /// `(image-size SPEC &optional PIXELS FRAME)` → `(WIDTH . HEIGHT)`.
 ///
 /// Mirrors GNU `Fimage_size` (`src/image.c:1655-1689`): after resolving the
@@ -946,7 +942,7 @@ fn failed_image_placeholder_size(spec: &Value) -> (i64, i64) {
 /// otherwise return size in canonical character units as floats
 /// (`width / FRAME_COLUMN_WIDTH`, `height / FRAME_LINE_HEIGHT`). When loading
 /// fails (`img->load_failed_p`, `src/image.c:3573-3583`), logs the diagnostic
-/// and returns the placeholder size without signalling.
+/// and reads GNU's failed geometry from `FailedImage` without signalling.
 #[doc(hidden)]
 pub fn builtin_image_size_in_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("image-size", &args, 1)?;
@@ -984,12 +980,7 @@ pub fn builtin_image_size_in_context(eval: &mut Context, args: Vec<Value>) -> Ev
         ));
     };
 
-    let resolved = display_host
-        .resolve_image_sync(request, environment.size_limit())
-        .map_err(|message| {
-            eval.log_pending_image_diagnostics();
-            signal("error", vec![Value::string(message)])
-        })?;
+    let resolved = display_host.resolve_image_sync(request, environment.size_limit());
     eval.log_pending_image_diagnostics();
 
     let pixels = args.get(1).copied().unwrap_or(Value::NIL);
@@ -1029,8 +1020,10 @@ pub fn builtin_image_size_in_context(eval: &mut Context, args: Vec<Value>) -> Ev
                 Value::make_float(layout_h as f64 / line_height),
             ))
         }
-        ImageSyncResolution::LoadFailed(_) => {
-            let (width_px, height_px) = failed_image_placeholder_size(&args[0]);
+        ImageSyncResolution::LoadFailed(failed) => {
+            let extent = failed.failed_extent();
+            let width_px = i64::from(extent.width());
+            let height_px = i64::from(extent.height());
             if !pixels.is_nil() {
                 return Ok(Value::cons(
                     Value::fixnum(width_px),
@@ -1049,6 +1042,12 @@ pub fn builtin_image_size_in_context(eval: &mut Context, args: Vec<Value>) -> Ev
                 Value::make_float(height_px as f64 / line_height),
             ))
         }
+        ImageSyncResolution::TimedOut { image_id } => Err(signal(
+            "error",
+            vec![Value::string(format!(
+                "Timed out waiting for image decode (id {image_id})"
+            ))],
+        )),
         ImageSyncResolution::Unsupported => Err(signal(
             "error",
             vec![Value::string("Invalid image specification")],
@@ -1165,18 +1164,19 @@ pub fn builtin_image_mask_p_in_context(eval: &mut Context, args: Vec<Value>) -> 
     // pending catalog probe. GNU inspects `img->mask` after `lookup_image`
     // (`src/image.c:1704-1708`), returning nil on failed loads without
     // signalling.
-    let resolved = display_host
-        .resolve_image_sync(request, environment.size_limit())
-        .map_err(|message| {
-            eval.log_pending_image_diagnostics();
-            signal("error", vec![Value::string(message)])
-        })?;
+    let resolved = display_host.resolve_image_sync(request, environment.size_limit());
     eval.log_pending_image_diagnostics();
     match resolved {
         ImageSyncResolution::Ready(image) => {
             Ok(Value::bool_val(image.metadata.mask.has_clipping_mask()))
         }
         ImageSyncResolution::LoadFailed(_) | ImageSyncResolution::Unsupported => Ok(Value::NIL),
+        ImageSyncResolution::TimedOut { image_id } => Err(signal(
+            "error",
+            vec![Value::string(format!(
+                "Timed out waiting for image decode (id {image_id})"
+            ))],
+        )),
     }
 }
 
@@ -1650,18 +1650,22 @@ pub fn builtin_image_metadata_in_context(eval: &mut Context, args: Vec<Value>) -
             vec![Value::string("Window system frame should be used")],
         )
     })?;
-    let resolved = display_host
-        .resolve_image_sync(request, environment.size_limit())
-        .map_err(|message| {
-            eval.log_pending_image_diagnostics();
-            signal("error", vec![Value::string(message)])
-        })?;
+    let resolved = display_host.resolve_image_sync(request, environment.size_limit());
     eval.log_pending_image_diagnostics();
     match resolved {
         ImageSyncResolution::Ready(image) => {
             Ok(image_embedded_metadata_to_lisp(&image.metadata.embedded))
         }
-        ImageSyncResolution::LoadFailed(_) | ImageSyncResolution::Unsupported => Ok(Value::NIL),
+        ImageSyncResolution::LoadFailed(failed) => {
+            Ok(image_embedded_metadata_to_lisp(&failed.embedded))
+        }
+        ImageSyncResolution::Unsupported => Ok(Value::NIL),
+        ImageSyncResolution::TimedOut { image_id } => Err(signal(
+            "error",
+            vec![Value::string(format!(
+                "Timed out waiting for image decode (id {image_id})"
+            ))],
+        )),
     }
 }
 
@@ -1697,15 +1701,21 @@ pub fn builtin_neomacs_image_extent_in_context(eval: &mut Context, args: Vec<Val
         return Ok(Value::NIL);
     };
     let display_host = eval.display_host.as_ref().expect("checked host");
-    let resolved = display_host
-        .resolve_image_sync(request, environment.size_limit())
-        .map_err(|message| {
-            eval.log_pending_image_diagnostics();
-            signal("error", vec![Value::string(message)])
-        })?;
+    let resolved = display_host.resolve_image_sync(request, environment.size_limit());
     eval.log_pending_image_diagnostics();
-    let ImageSyncResolution::Ready(image) = resolved else {
-        return Ok(Value::NIL);
+    let image = match resolved {
+        ImageSyncResolution::Ready(image) => image,
+        ImageSyncResolution::LoadFailed(_) | ImageSyncResolution::Unsupported => {
+            return Ok(Value::NIL);
+        }
+        ImageSyncResolution::TimedOut { image_id } => {
+            return Err(signal(
+                "error",
+                vec![Value::string(format!(
+                    "Timed out waiting for image decode (id {image_id})"
+                ))],
+            ));
+        }
     };
 
     // Surface dual extents: layout for redisplay, pixel-* for GNU Fimage_size

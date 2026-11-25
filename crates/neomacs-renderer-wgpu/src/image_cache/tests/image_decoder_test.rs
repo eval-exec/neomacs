@@ -113,7 +113,7 @@ fn newer_decode_and_retirement_reject_delayed_generations_and_release_pixels() {
     // An in-flight worker completing after retirement cannot resurrect metadata.
     DecodeOutputSink::Shared(Arc::clone(&client.shared)).publish(WorkerDecodeOutcome::Failed {
         load: current,
-        diagnostic: ImageDiagnostic::NotDrawable,
+        failure: ImageDecodeFailure::new(ImageDiagnostic::NotDrawable),
     });
     assert!(client.wait_for_terminal(current, Duration::ZERO).is_none());
     submit(&client, current, png(), ImageSizeLimit::UNLIMITED);
@@ -161,7 +161,10 @@ fn cpu_metadata_requires_full_decode_and_preserves_size_admission() {
     );
     assert!(matches!(
         client.wait_for_terminal(oversized, Duration::from_secs(5)),
-        Some(Err(ImageDiagnostic::InvalidSize))
+        Some(Err(ImageDecodeFailure {
+            diagnostic: ImageDiagnostic::InvalidSize,
+            ..
+        }))
     ));
 }
 

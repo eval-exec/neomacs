@@ -253,6 +253,7 @@ pub enum FrameGlyph {
         height: f32,
         face_id: FaceId,
         box_vertical_edges: BoxVerticalEdges,
+        presentation: crate::image::ImageGlyphPresentation,
     },
 
     /// Video glyph (inline in buffer)
@@ -2104,6 +2105,7 @@ impl FrameGlyphBuffer {
             height,
             face_id: self.current_face_id,
             box_vertical_edges: BoxVerticalEdges::Both,
+            presentation: crate::image::ImageGlyphPresentation::Texture,
         });
     }
 

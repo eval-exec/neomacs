@@ -658,8 +658,8 @@ pub trait DisplayHost {
         &self,
         _request: image_catalog::ImageResolveRequest,
         _limit: ImageSizeLimit,
-    ) -> Result<image_catalog::ImageSyncResolution, String> {
-        Ok(image_catalog::ImageSyncResolution::Unsupported)
+    ) -> image_catalog::ImageSyncResolution {
+        image_catalog::ImageSyncResolution::Unsupported
     }
     /// Nonblocking image catalog used by redisplay. Synchronous Lisp image
     /// queries use `resolve_image_sync`; redisplay must use this catalog instead.

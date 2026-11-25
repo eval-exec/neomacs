@@ -175,6 +175,7 @@ fn image_margin_tokens_hash_and_compare_by_row_local_geometry() {
             source_rect: crate::ImageSourceRect::FULL,
             margins,
             opaque_background: crate::ImageOpaqueBackground::default(),
+            presentation: crate::ImageGlyphPresentation::Texture,
         };
         row.glyphs[GlyphArea::Text.index()].push(glyph);
         row
@@ -209,6 +210,7 @@ fn display_state_reports_image_dependencies_without_materializing() {
             source_rect: crate::ImageSourceRect::FULL,
             margins,
             opaque_background: crate::ImageOpaqueBackground::default(),
+            presentation: crate::ImageGlyphPresentation::Texture,
         };
         row.glyphs[GlyphArea::Text.index()].push(glyph);
     }
@@ -780,6 +782,7 @@ fn glyph_type_kind_codes_match_gnu_glyph_type() {
             width_cols: 1,
             margins: image_margins,
             opaque_background: crate::ImageOpaqueBackground::default(),
+            presentation: crate::ImageGlyphPresentation::Texture,
         }
         .gnu_kind(),
         GlyphTypeKind::Image
@@ -2583,6 +2586,7 @@ fn frame_chrome_materializes_nonzero_tab_origin_once() {
         width_cols: 2,
         margins: image_margins,
         opaque_background: crate::ImageOpaqueBackground::default(),
+        presentation: crate::ImageGlyphPresentation::Texture,
     };
     image.box_vertical_edges = crate::face::BoxVerticalEdges::Left;
     tab_row.glyphs[GlyphArea::Text.index()].push(image.with_pixel_geometry(16.0, 16.0, 14.0));
