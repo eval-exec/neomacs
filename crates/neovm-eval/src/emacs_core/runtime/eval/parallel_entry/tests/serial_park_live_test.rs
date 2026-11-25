@@ -211,6 +211,63 @@ fn driver_turn<'t>(
     turn
 }
 
+/// What an owner sent through its port, in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PortCall {
+    /// A request, granted in the stop of this epoch.
+    Granted(NonZeroU64),
+    GiveBack,
+    Refuse,
+}
+
+/// The product port, recording every call and the stop each grant was cut
+/// in, so a row can see where a resume ran and that a parked owner sends
+/// nothing (C3, lead #14072).
+struct EpochPort<'p, 'era> {
+    port: &'p mut ChannelPort<'era>,
+    calls: Vec<PortCall>,
+}
+
+impl<'p, 'era> EpochPort<'p, 'era> {
+    fn new(port: &'p mut ChannelPort<'era>) -> Self {
+        Self {
+            port,
+            calls: Vec::new(),
+        }
+    }
+
+    /// The stop epoch of each grant, in order.
+    fn grants(&self) -> Vec<NonZeroU64> {
+        self.calls
+            .iter()
+            .filter_map(|call| match call {
+                PortCall::Granted(epoch) => Some(*epoch),
+                PortCall::GiveBack | PortCall::Refuse => None,
+            })
+            .collect()
+    }
+}
+
+impl KeeperPort for EpochPort<'_, '_> {
+    type LendGuard = ChannelLend;
+
+    fn give_back(&mut self, returned: ReturnedSerialTicket) {
+        self.calls.push(PortCall::GiveBack);
+        self.port.give_back(returned);
+    }
+
+    fn request_turn(&mut self) -> Result<(Grant, ChannelLend), PortRefusal> {
+        let granted = self.port.request_turn()?;
+        self.calls.push(PortCall::Granted(granted.0.epoch));
+        Ok(granted)
+    }
+
+    fn refuse(&mut self, ticket: StoppedSerialTicket, reason: ReceiveReason) {
+        self.calls.push(PortCall::Refuse);
+        self.port.refuse(ticket, reason);
+    }
+}
+
 /// C3 + D-1. Two owners, one turn each: the driver lends both through its
 /// own stops and drains when both have exited.
 #[test]
@@ -246,7 +303,7 @@ fn l67a_driver_lends_each_owner_a_turn_and_drains() {
     });
 }
 
-/// C3 (R1/R4 on the product port). O parks and its ticket goes back; it
+/// C3 (R4 on the product port). O parks and its ticket goes back; it
 /// re-requests at once and resumes in a later stop with its state intact.
 #[test]
 fn l67a_driver_resumes_a_parked_turn_in_a_later_stop() {
@@ -259,19 +316,30 @@ fn l67a_driver_resumes_a_parked_turn_in_a_later_stop() {
             let _panic_guard = KeeperPanicGuard { keeper: era };
             let owner = scope.spawn(move || {
                 o.run(|state, home, port| {
-                    let turn = driver_turn(state, home, port, "(setq sp-live 33)");
-                    let parked = turn.park(Wake("fired"), port).ok().expect("parks");
+                    let mut port = EpochPort::new(port);
+                    let granted = port.request_turn().ok().expect("O is granted");
+                    let mut turn = begin_turn(state, home, granted, &mut port, standalone)
+                        .ok()
+                        .expect("the grant begins");
+                    turn.with_world(|ev| eval(ev, "(setq sp-live 33)"));
+                    let parked = turn.park(Wake("fired"), &mut port).ok().expect("parks");
                     let mut turn = parked
-                        .resume(port, standalone)
+                        .resume(&mut port, standalone)
                         .ok()
                         .expect("the next grant resumes");
                     let seen = turn.with_world(|ev| eval(ev, "sp-live"));
-                    turn.end(port).ok().expect("the host detaches");
-                    seen
+                    turn.end(&mut port).ok().expect("the host detaches");
+                    (seen, port.grants())
                 })
             });
             assert_eq!(driver.run(), DriverEnd::Drained);
-            assert_eq!(owner.join().expect("O"), "33");
+            let (seen, grants) = owner.join().expect("O");
+            assert_eq!(seen, "33");
+            assert_eq!(grants.len(), 2);
+            assert!(
+                grants[1] > grants[0],
+                "O resumes in a later stop than the one it parked in: {grants:?}"
+            );
         });
     });
 }
@@ -318,6 +386,7 @@ fn l67a_c3_a_parked_turn_gives_its_stop_back_and_resumes_in_a_later_one() {
             let peer = scope.spawn(move || run_peer(activate(peer, heap, P), progress, done));
             let parked_owner = scope.spawn(move || {
                 o.run(|state, home, port| {
+                    let mut port = EpochPort::new(port);
                     // B and P are running members before O's request starts
                     // the stop: a mutator activated during a stop is not in
                     // its frozen set and waits for it to end.
@@ -329,7 +398,7 @@ fn l67a_c3_a_parked_turn_gives_its_stop_back_and_resumes_in_a_later_one() {
                     }
                     let (grant, lend) = port.request_turn().ok().expect("O is granted");
                     let s1 = grant.epoch;
-                    let mut turn = begin_turn(state, home, (grant, lend), port, standalone)
+                    let mut turn = begin_turn(state, home, (grant, lend), &mut port, standalone)
                         .ok()
                         .expect("O's grant begins");
                     turn.with_world(|ev| {
@@ -344,11 +413,14 @@ fn l67a_c3_a_parked_turn_gives_its_stop_back_and_resumes_in_a_later_one() {
                             .expect("bind sp-bound");
                         count
                     });
-                    let parked_turn = turn.park(Wake("mutex"), port).ok().expect("O parks");
+                    let parked_turn = turn.park(Wake("mutex"), &mut port).ok().expect("O parks");
                     parked_tx.send(s1).expect("tell the conductor");
                     wake.recv_timeout(BOUND).expect("woken");
+                    // Parked, O held nothing and asked for nothing: its port
+                    // sent one request and the park's give-back, no more.
+                    let while_parked = port.calls.clone();
                     let mut turn = parked_turn
-                        .resume(port, standalone)
+                        .resume(&mut port, standalone)
                         .ok()
                         .expect("the later grant resumes");
                     let seen = turn.with_world(|ev| {
@@ -356,8 +428,8 @@ fn l67a_c3_a_parked_turn_gives_its_stop_back_and_resumes_in_a_later_one() {
                         ev.unbind_to(count);
                         (seen, eval(ev, "sp-bound"))
                     });
-                    turn.end(port).ok().expect("O's host detaches");
-                    (s1, seen)
+                    turn.end(&mut port).ok().expect("O's host detaches");
+                    (s1, seen, while_parked, port.grants())
                 })
             });
             let other = scope.spawn(move || {
@@ -406,10 +478,17 @@ fn l67a_c3_a_parked_turn_gives_its_stop_back_and_resumes_in_a_later_one() {
             done.store(true, Ordering::Release);
             let s1 = conductor.join().expect("the conductor");
             let l_epoch = lagging.join().expect("L");
-            let (o_epoch, seen) = parked_owner.join().expect("O");
+            let (o_epoch, seen, while_parked, grants) = parked_owner.join().expect("O");
             let (b_epoch, b_seen) = other.join().expect("B");
             peer.join().expect("P");
             assert_eq!(o_epoch, s1);
+            assert_eq!(
+                while_parked,
+                [PortCall::Granted(s1), PortCall::GiveBack],
+                "the parked owner holds nothing and asks for nothing"
+            );
+            assert_eq!(grants.len(), 2);
+            assert!(grants[1] > s1, "O resumed in a later stop: {grants:?}");
             assert_eq!(l_epoch, s1, "S1 is the stop L met");
             assert_eq!(b_epoch, s1, "B was lent in the stop O parked in");
             assert_eq!(b_seen, "20");
@@ -441,22 +520,23 @@ fn l67a_c3_a_stop_while_parked_needs_no_ack_from_the_parked_owner() {
             let _panic_guard = KeeperPanicGuard { keeper: era };
             let owner = scope.spawn(move || {
                 o.run(|state, home, port| {
+                    let mut port = EpochPort::new(port);
                     let (grant, lend) = port.request_turn().ok().expect("O is granted");
                     let s1 = grant.epoch;
-                    let mut turn = begin_turn(state, home, (grant, lend), port, standalone)
+                    let mut turn = begin_turn(state, home, (grant, lend), &mut port, standalone)
                         .ok()
                         .expect("O's grant begins");
                     turn.with_world(|ev| eval(ev, "(setq sp-live 5)"));
-                    let parked_turn = turn.park(Wake("condvar"), port).ok().expect("O parks");
+                    let parked_turn = turn.park(Wake("condvar"), &mut port).ok().expect("O parks");
                     parked_tx.send(s1).expect("tell B");
                     let s2 = b_done.recv_timeout(BOUND).expect("B's stop completed");
                     let mut turn = parked_turn
-                        .resume(port, standalone)
+                        .resume(&mut port, standalone)
                         .ok()
                         .expect("the next grant resumes");
                     let seen = turn.with_world(|ev| eval(ev, "sp-live"));
-                    turn.end(port).ok().expect("O's host detaches");
-                    (s1, s2, seen)
+                    turn.end(&mut port).ok().expect("O's host detaches");
+                    (s1, s2, seen, port.grants())
                 })
             });
             let other = scope.spawn(move || {
@@ -477,7 +557,7 @@ fn l67a_c3_a_stop_while_parked_needs_no_ack_from_the_parked_owner() {
                 })
             });
             assert_eq!(driver.run(), DriverEnd::Drained);
-            let (o_s1, s2, seen) = owner.join().expect("O");
+            let (o_s1, s2, seen, grants) = owner.join().expect("O");
             let (b_s1, b_s2, b_seen) = other.join().expect("B");
             assert_eq!(o_s1, b_s1);
             assert_eq!(s2, b_s2);
@@ -485,6 +565,8 @@ fn l67a_c3_a_stop_while_parked_needs_no_ack_from_the_parked_owner() {
                 s2 > o_s1,
                 "B's stop came after the one O parked in, and completed without O"
             );
+            assert_eq!(grants.len(), 2);
+            assert!(grants[1] > s2, "O resumes after B's stop: {grants:?}");
             assert_eq!((seen.as_str(), b_seen.as_str()), ("5", "50"));
         });
     });
