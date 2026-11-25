@@ -126,7 +126,10 @@ pub(crate) trait KeeperOps: Copy {
     ) -> Result<V::Output, BreachOf<Self>>;
 }
 
-/// The keeper between two lends of one stop: nothing is out.
+/// The keeper between two lends of one stop: nothing is out. `lend` and
+/// `lend_world` move the batch and only `settle`/`settle_world` give the next
+/// one, so an implementation must not be `Copy`: a copy could lend again
+/// before the turn came back.
 pub(crate) trait Batch<O: KeeperOps>: Sized {
     /// A request validated against its owner's current publication.
     type Ready;

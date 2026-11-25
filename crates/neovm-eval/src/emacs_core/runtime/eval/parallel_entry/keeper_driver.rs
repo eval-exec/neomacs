@@ -172,6 +172,11 @@ enum Between<'s, 'era> {
     Restored(RestoredKeeper<'s, 'era>),
 }
 
+// A `Batch` lends once because `lend`/`lend_world` move it; the
+// custody_batch_* compile-fail fixtures pin that only for a batch that is not
+// Copy, so the product batch must stay neither Copy nor Clone (lead #14111).
+static_assertions::assert_not_impl_any!(Between<'static, 'static>: Copy, Clone);
+
 /// The keeper while the Baton group's World turn is out: the stop stays
 /// here (nothing is exported), with the identity of the one turn it cut.
 struct WorldLendHeld<'s, 'era> {
