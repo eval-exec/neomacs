@@ -438,6 +438,11 @@ impl CallDepth {
         debug_assert!(self.current > 0, "call depth underflow");
         self.current = self.current.saturating_sub(1);
     }
+
+    #[doc(hidden)]
+    pub fn set_limit(&mut self, limit: u32) {
+        self.limit = limit;
+    }
 }
 
 /// A frame's poll budget: how many operations may pass before the next
@@ -740,7 +745,18 @@ impl HandlerStack {
     /// changes and the caller has applied nothing.
     #[doc(hidden)]
     pub fn pop_serial_run(&mut self, tokens: &[SerialHandlerToken]) -> Result<usize, ()> {
-        if !self.serial_run_matches(tokens) {
+        self.pop_serial_run_above(HandlerMark::EMPTY, tokens)
+    }
+
+    /// Remove `tokens` (innermost first) strictly above `mark` (V7 F6).
+    /// Checks the base bound structurally at the mutation site before truncating.
+    #[doc(hidden)]
+    pub fn pop_serial_run_above(
+        &mut self,
+        mark: HandlerMark,
+        tokens: &[SerialHandlerToken],
+    ) -> Result<usize, ()> {
+        if !self.serial_run_matches_above(mark, tokens) {
             return Err(());
         }
         self.records.truncate(self.records.len() - tokens.len());
@@ -856,7 +872,18 @@ impl BindStack {
     /// [`HandlerStack::pop_serial_run`].
     #[doc(hidden)]
     pub fn pop_serial_run(&mut self, tokens: &[SerialRecordToken]) -> Result<usize, ()> {
-        if !self.serial_run_matches(tokens) {
+        self.pop_serial_run_above(OwnerRecordMark::EMPTY, tokens)
+    }
+
+    /// Remove `tokens` (innermost first) strictly above `mark` (V7 F6).
+    /// Checks the base bound structurally at the mutation site before truncating.
+    #[doc(hidden)]
+    pub fn pop_serial_run_above(
+        &mut self,
+        mark: OwnerRecordMark,
+        tokens: &[SerialRecordToken],
+    ) -> Result<usize, ()> {
+        if !self.serial_run_matches_above(mark, tokens) {
             return Err(());
         }
         self.records.truncate(self.records.len() - tokens.len());
@@ -976,6 +1003,19 @@ impl ExitFlags {
     }
 }
 
+/// Where a VM frame delivers its `Return` value (V7 C6).
+/// Bottom versus child is a type, not a depth test.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ReturnTo {
+    /// Bottom frame of the run: `Return` publishes the `Done` root.
+    #[default]
+    Owner,
+    /// Child frame pushed by `Op::Call(n)`: `Return` drops `consumed`
+    /// (`n + 1`: callee designator + arguments) from the caller's segment
+    /// and pushes the returned value into the designator slot.
+    Caller { consumed: u32 },
+}
+
 /// The parallel VM's owned frame. The operand segment lives in the arena's
 /// operand stack; the arena publishes it in the same group.
 #[derive(Clone, Copy, Debug)]
@@ -988,6 +1028,8 @@ pub(crate) struct VmFrame {
     pub(crate) handler_base: HandlerMark,
     pub(crate) poll_budget: PollBudget,
     pub(crate) exit_flags: ExitFlags,
+    pub(crate) return_to: ReturnTo,
+    pub(crate) frame_bytes: usize,
 }
 
 impl VmFrame {
@@ -1010,6 +1052,8 @@ impl VmFrame {
             handler_base,
             poll_budget,
             exit_flags: ExitFlags::EMPTY,
+            return_to: ReturnTo::Owner,
+            frame_bytes: 0,
         }
     }
 
@@ -1019,6 +1063,20 @@ impl VmFrame {
     #[doc(hidden)]
     pub const fn with_exit_flags(mut self, flags: ExitFlags) -> Self {
         self.exit_flags = self.exit_flags.set(flags);
+        self
+    }
+
+    /// Set the frame's return target (V7 C6).
+    #[doc(hidden)]
+    pub const fn with_return_to(mut self, return_to: ReturnTo) -> Self {
+        self.return_to = return_to;
+        self
+    }
+
+    /// Set the frame's charged bytecode stack bytes (V7 §4 item 6).
+    #[doc(hidden)]
+    pub const fn with_frame_bytes(mut self, frame_bytes: usize) -> Self {
+        self.frame_bytes = frame_bytes;
         self
     }
 }
@@ -1036,6 +1094,8 @@ impl FrameRoots for VmFrame {
             handler_base: _,
             poll_budget: _,
             exit_flags: _,
+            return_to: _,
+            frame_bytes: _,
         } = self;
         visit(RootGroup::VmFrames, *function);
         visit(RootGroup::VmFrames, *code);
@@ -1122,6 +1182,10 @@ pub(crate) struct FrameArena {
     /// `TaggedHeap`'s JIT window.
     region: OwnerAllocRegion,
     depth: CallDepth,
+    /// Charged bytecode stack bytes across live VM frames (V7 §4 item 6),
+    /// mirroring the serial driver's `bc_position` against
+    /// `charge_frame_position`.
+    bc_position: usize,
     next_generation: NonZeroU64,
     /// The next [`OwnerScanJoin::publish_scan`] fails before it reserves.
     #[cfg(test)]
@@ -1141,6 +1205,7 @@ impl FrameArena {
             roots: RootRegistry::new(),
             region: OwnerAllocRegion::new(),
             depth: CallDepth::new(depth_limit),
+            bc_position: 0,
             next_generation: NonZeroU64::MIN,
             #[cfg(test)]
             fail_scan_reserve: Cell::new(false),
@@ -1293,6 +1358,45 @@ impl FrameArena {
         self.depth.current()
     }
 
+    /// Update the arena's `CallDepth` limit to match a refreshed `CallEnv`
+    /// (V7 §4 item 5).
+    pub(crate) fn set_depth_limit(&mut self, limit: u32) {
+        self.depth.set_limit(limit);
+    }
+
+    /// The `FrameId` of the live top frame when it is a `VmFrame` (V7 Q2:
+    /// one source of truth instead of a cached `FrameId` mirror in `VmExec`).
+    pub(crate) fn top_vm_id(&self) -> Option<FrameId> {
+        let slot = self.frames.last()?;
+        matches!(slot.frame, OwnedFrame::Vm(_)).then(|| {
+            let depth = u32::try_from(self.frames.len())
+                .ok()
+                .and_then(NonZeroU32::new)
+                .expect("a frame arena deeper than u32");
+            FrameId {
+                depth,
+                generation: slot.generation,
+            }
+        })
+    }
+
+    /// Current charged bytecode stack bytes across live VM frames (V7 §4).
+    pub(crate) fn bc_position(&self) -> usize {
+        self.bc_position
+    }
+
+    pub(crate) fn charge_bc_position(&mut self, frame_bytes: usize) {
+        self.bc_position = self.bc_position.saturating_add(frame_bytes);
+    }
+
+    pub(crate) fn refund_bc_position(&mut self, frame_bytes: usize) {
+        self.bc_position = self.bc_position.saturating_sub(frame_bytes);
+    }
+
+    pub(crate) fn reset_bc_position(&mut self) {
+        self.bc_position = 0;
+    }
+
     /// Live published roots. Revoked slots are not counted.
     #[doc(hidden)]
     pub fn root_len(&self) -> usize {
@@ -1364,6 +1468,31 @@ impl FrameArena {
         let (cursor, operands) = self.top_vm_parts(id)?;
         operands.push(value);
         *cursor = OperandCursor::new(cursor.base(), cursor.len() + 1);
+        Some(())
+    }
+
+    /// Copy `nargs` call arguments directly within `self.operands` from
+    /// `src_start..src_start + nargs` into the top child frame `id`, then pad
+    /// `nonrest - nargs` missing optionals with `Value::NIL` (V7 §6 step 4.4;
+    /// zero heap allocation per owner-local call).
+    pub(crate) fn vm_copy_args_and_pad(
+        &mut self,
+        id: FrameId,
+        src_start: usize,
+        nargs: usize,
+        nonrest: usize,
+    ) -> Option<()> {
+        if nonrest < nargs {
+            return None;
+        }
+        let src_end = src_start.checked_add(nargs)?;
+        let (cursor, operands) = self.top_vm_parts(id)?;
+        if src_end > operands.len() {
+            return None;
+        }
+        operands.extend_from_within(src_start..src_end);
+        operands.resize(operands.len() + (nonrest - nargs), Value::NIL);
+        *cursor = OperandCursor::new(cursor.base(), cursor.len() + nonrest);
         Some(())
     }
 
@@ -1644,6 +1773,7 @@ impl FrameArena {
             roots,
             region: _,
             depth: _,
+            bc_position: _,
             next_generation: _,
             #[cfg(test)]
                 fail_scan_reserve: _,

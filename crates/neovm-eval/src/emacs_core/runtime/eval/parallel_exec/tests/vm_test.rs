@@ -25,9 +25,11 @@ use super::poll_tests::{
     OWNER, activate, collect, end_epoch, finish, lend, recv, request_stop, retire, retry,
 };
 use super::vm::{
-    ArithOps, ArithRefusal, EscapeCompletion, EscapeStack, EscapeWhy, HandlerDelta, NumericClass,
-    RecordDelta, VmEscape, VmEscapeRequest, VmExec, VmOutcome, VmPlain, VmPoll, VmProgram,
-    VmSealed, static_stack_effect,
+    ArithOps, ArithRefusal, CallClass, CallEnv, CallEscape, CodeRefusal, EscapeCompletion,
+    EscapeStack, EscapeWhy, HandlerDelta, NumericClass, RecordDelta, SymbolCallLookup, VmCode,
+    VmEntry, VmEscape, VmEscapeRequest, VmExec, VmOutcome, VmPlain, VmPoll, VmProgram, VmSealed,
+    classify_bytecode_function, classify_call_with_symbols, program_from_bytecode,
+    static_stack_effect,
 };
 use crate::emacs_core::builtins::{
     builtin_car_1, builtin_car_safe_1, builtin_cdr_1, builtin_cdr_safe_1, builtin_div, builtin_mul,
@@ -35,12 +37,17 @@ use crate::emacs_core::builtins::{
 };
 use crate::emacs_core::bytecode::decode::verify_stack_effects;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-use crate::emacs_core::bytecode::{ArithGenericKind, ByteCodeFunction, Op, StackDepth, Vm};
-use crate::emacs_core::eval::Context;
+use crate::emacs_core::bytecode::vm::{
+    BC_STACK_POSITION_LIMIT, bytecode_frame_bytes, charge_frame_position,
+};
+use crate::emacs_core::bytecode::{
+    ArithGenericKind, ByteCodeFunction, ByteCodeFunctionExt, FunctionParams, Op, StackDepth, Vm,
+};
 use crate::emacs_core::eval::world::poll::{
     PollOutcome, poll_region_refill, poll_serial_request, poll_vm_back_edge, poll_vm_call,
 };
 use crate::emacs_core::eval::world::serial_gate::stop_for_test;
+use crate::emacs_core::eval::{Context, INTERNAL_COMPILER_FUNCTION_OVERRIDES};
 use crate::emacs_core::format_eval_result;
 use crate::emacs_core::subr::effect_schema::{
     ArithOperands, ParallelArm, PlainVarAccess, ReturnDisposition, SealedAuthority, WorldSplit,
@@ -49,7 +56,7 @@ use crate::test_utils::unit_runtime;
 use neovm_edit::emacs_core::marker::make_marker_value;
 use neovm_value::error::{EvalResult, Flow, LispCondition, expect_args, signal};
 use neovm_value::forward::TlsIndex;
-use neovm_value::intern::{NIL_SYM_ID, SymId};
+use neovm_value::intern::{NIL_SYM_ID, SymId, intern};
 use neovm_value::tagged::SymbolMode;
 use neovm_value::tagged::gc::{
     Mutator, NumericAllocError, RegistrationError, Rendezvous, RendezvousError, TaggedHeap,
@@ -82,6 +89,9 @@ struct RecordingPoll {
     refill_classes: Vec<NumericClass>,
     /// The published top segment at each poll, in order.
     segments: Vec<Vec<Value>>,
+    /// Every live frame's published `(function, code, pc, operands)` snapshot
+    /// innermost-first at each poll (V7 §11 R1).
+    published_frames: Vec<Vec<(Value, Value, Option<Pc>, Vec<Value>)>>,
     /// A one-shot refusal at one edge.
     refusal: Option<(PollEdge, RendezvousError)>,
     /// The stopped grant's stand-in (V5): the arith double's reserve, and
@@ -96,6 +106,7 @@ impl RecordingPoll {
             edges: Vec::new(),
             refill_classes: Vec::new(),
             segments: Vec::new(),
+            published_frames: Vec::new(),
             refusal: None,
             grant: None,
         }
@@ -118,6 +129,16 @@ impl RecordingPoll {
         self.edges.push(edge);
         self.segments
             .push(arena.top_vm_segment().unwrap_or(&[]).to_vec());
+        let mut frames = Vec::new();
+        arena.for_each_frame_innermost_first(|_id, frame, operands| match frame {
+            super::frames::OwnedFrame::Vm(vm) => {
+                frames.push((vm.function, vm.code, Some(vm.pc), operands.to_vec()));
+            }
+            super::frames::OwnedFrame::Interp(interp) => {
+                frames.push((interp.function, interp.body, None, Vec::new()));
+            }
+        });
+        self.published_frames.push(frames);
         if self.refusal.is_some_and(|(expected, _)| expected == edge) {
             let (_, error) = self.refusal.take().expect("checked just above");
             return Err(error);
@@ -232,6 +253,9 @@ struct RecordingEscape {
     takes_top_record_on_escape: bool,
     /// Where each request is logged, when a row shares the log.
     log: Option<EffectLog>,
+    /// Optional `CallEnv` snapshots returned by `refresh_call_env` (V7 §4):
+    /// consumed in order at run start and after each checked escape completion.
+    env_refreshes: Vec<Option<CallEnv>>,
 }
 
 impl RecordingEscape {
@@ -246,7 +270,13 @@ impl RecordingEscape {
             pushes_foreign_record: false,
             takes_top_record_on_escape: false,
             log: None,
+            env_refreshes: Vec::new(),
         }
+    }
+
+    fn with_env_refreshes(mut self, env_refreshes: Vec<Option<CallEnv>>) -> Self {
+        self.env_refreshes = env_refreshes;
+        self
     }
 
     fn with_script(script: Vec<Option<EscapeCompletion>>) -> Self {
@@ -418,6 +448,14 @@ impl VmEscape for RecordingEscape {
             }
         }
         completion
+    }
+
+    fn refresh_call_env(&mut self) -> Option<CallEnv> {
+        if self.env_refreshes.is_empty() {
+            None
+        } else {
+            self.env_refreshes.remove(0)
+        }
     }
 }
 
@@ -6223,6 +6261,7 @@ struct VmEraPoll<'era> {
     edges: Vec<PollEdge>,
     refill_classes: Vec<NumericClass>,
     published_batches: Vec<Vec<usize>>,
+    published_depths: Vec<u32>,
     build_calls: usize,
     back_edge_builds: usize,
     call_builds: usize,
@@ -6243,6 +6282,7 @@ impl<'era> VmEraPoll<'era> {
             edges: Vec::new(),
             refill_classes: Vec::new(),
             published_batches: Vec::new(),
+            published_depths: Vec::new(),
             build_calls: 0,
             back_edge_builds: 0,
             call_builds: 0,
@@ -6319,11 +6359,13 @@ impl<'era> VmEraPoll<'era> {
         arena: &FrameArena,
         heap: usize,
         published_batches: &mut Vec<Vec<usize>>,
+        published_depths: &mut Vec<u32>,
         build_calls: &mut usize,
         edge_builds: &mut usize,
     ) -> Result<Vec<SharedRoot>, RendezvousError> {
         *build_calls += 1;
         *edge_builds += 1;
+        published_depths.push(arena.depth());
         // SAFETY: `heap` is the era provenance root captured before
         // admission. `publish_scan` only reads the arena, and the keeper
         // cannot sweep while this owner is inside `Mutator::poll`.
@@ -6340,13 +6382,14 @@ impl VmPoll for VmEraPoll<'_> {
         self.edges.push(PollEdge::VmBackEdge);
         let heap = self.heap;
         let published = &mut self.published_batches;
+        let depths = &mut self.published_depths;
         let builds = &mut self.build_calls;
         let edge_builds = &mut self.back_edge_builds;
         let outcome = {
             let mut guard = self.owner.borrow_mut();
             let owner = guard.as_mut().expect("owner resident");
             poll_vm_back_edge(owner, || {
-                Self::publish_arena(arena, heap, published, builds, edge_builds)
+                Self::publish_arena(arena, heap, published, depths, builds, edge_builds)
             })
         };
         self.run_gate(PollEdge::VmBackEdge);
@@ -6357,13 +6400,14 @@ impl VmPoll for VmEraPoll<'_> {
         self.edges.push(PollEdge::VmCall);
         let heap = self.heap;
         let published = &mut self.published_batches;
+        let depths = &mut self.published_depths;
         let builds = &mut self.build_calls;
         let edge_builds = &mut self.call_builds;
         let outcome = {
             let mut guard = self.owner.borrow_mut();
             let owner = guard.as_mut().expect("owner resident");
             poll_vm_call(owner, || {
-                Self::publish_arena(arena, heap, published, builds, edge_builds)
+                Self::publish_arena(arena, heap, published, depths, builds, edge_builds)
             })
         };
         self.run_gate(PollEdge::VmCall);
@@ -6374,13 +6418,14 @@ impl VmPoll for VmEraPoll<'_> {
         self.edges.push(PollEdge::SerialRequest);
         let heap = self.heap;
         let published = &mut self.published_batches;
+        let depths = &mut self.published_depths;
         let builds = &mut self.build_calls;
         let edge_builds = &mut self.serial_builds;
         let outcome = {
             let mut guard = self.owner.borrow_mut();
             let owner = guard.as_mut().expect("owner resident");
             poll_serial_request(owner, || {
-                Self::publish_arena(arena, heap, published, builds, edge_builds)
+                Self::publish_arena(arena, heap, published, depths, builds, edge_builds)
             })
         };
         self.run_gate(PollEdge::SerialRequest);
@@ -6400,6 +6445,7 @@ impl VmPoll for VmEraPoll<'_> {
         let heap = self.heap;
         let rendezvous = self.rendezvous;
         let published = &mut self.published_batches;
+        let depths = &mut self.published_depths;
         let builds = &mut self.build_calls;
         let edge_builds = &mut self.refill_builds;
         let mut publish_hook = self.refill_publish_hook.take();
@@ -6410,7 +6456,7 @@ impl VmPoll for VmEraPoll<'_> {
                 if let Some(hook) = publish_hook.take() {
                     hook();
                 }
-                Self::publish_arena(arena, heap, published, builds, edge_builds)
+                Self::publish_arena(arena, heap, published, depths, builds, edge_builds)
             })
         };
         if let Some(hook) = self.post_refill_hook.take() {
@@ -9065,6 +9111,39 @@ fn vm_a_callee_signal_settles_to_idle_until_v8() {
         "callee shadow x=20 undone back to 10 before caller x=10 undone to none (strict LIFO)"
     );
     assert!(engine.plain_handler().live_records().is_empty());
+    assert_eq!(
+        engine.arena().bc_position(),
+        0,
+        "bc_position resets to 0 on settle-to-Idle"
+    );
+    assert_clear(&engine);
+
+    // Depth-3 callee signal (entry -> mid -> leaf) settles all 3 frames to Idle.
+    let leaf_sig = make_v7_bytecode(
+        0,
+        0,
+        vec![Op::Constant(0), Op::Constant(1), Op::Div, Op::Return],
+        vec![Value::fixnum(1), Value::fixnum(0)],
+        4,
+    );
+    let mid_sig = make_v7_bytecode(
+        0,
+        0,
+        vec![Op::Constant(0), Op::Call(0), Op::Return],
+        vec![leaf_sig],
+        4,
+    );
+    let depth3_constants = [mid_sig];
+    let depth3_ops = [Op::Constant(0), Op::Call(0), Op::Return];
+    let depth3_out = engine.run(&mut ctx, program_with(&depth3_ops, &depth3_constants));
+    let VmOutcome::Signaled(depth3_flow) = depth3_out else {
+        panic!("expected Signaled at depth 3, got {depth3_out:?}");
+    };
+    assert_eq!(signal_key(&depth3_flow).0, "arith-error");
+    assert_eq!(engine.max_depth(), 3, "reached depth 3 before signaling");
+    assert_eq!(engine.arena_depth(), 0);
+    assert_eq!(engine.arena().bc_position(), 0);
+    assert_eq!(engine.live_root_count(), 0);
     assert_clear(&engine);
 
     // Subsequent run on the same engine succeeds cleanly after settle-to-Idle.
@@ -9296,6 +9375,192 @@ fn vm_child_return_cleanup_cannot_pop_caller_serial_markers_f6() {
     let outcome = good_engine.run(&mut ctx, program_with(&ops, &constants));
     assert_eq!(done_value(&mut good_engine, outcome), Value::fixnum(9));
     assert_clear(&good_engine);
+
+    // 3. F6 HANDLER HALF (HIGH-2): a child frame's escape / Return cleanup
+    //    may ONLY pop serial handler markers strictly above its OWN
+    //    `handler_base` (`HandlerStack::serial_run_matches_above` /
+    //    `pop_serial_run_above`).
+    let caller_h = SerialHandlerToken(301);
+    let child_h = SerialHandlerToken(402);
+    let child_handler_fn = make_v7_bytecode(
+        0,
+        0,
+        vec![Op::PushConditionCase(2), Op::Constant(0), Op::Return],
+        vec![Value::fixnum(14)],
+        8,
+    );
+    let h_constants = [child_handler_fn];
+    let h_ops = [
+        Op::PushConditionCase(4), // pushes caller_h
+        Op::Constant(0),
+        Op::Call(0),
+        Op::PopHandler, // pops caller_h
+        Op::Return,
+    ];
+    let push_handler = |op: &Op, tok: SerialHandlerToken| EscapeCompletion {
+        stack: EscapeStack::Completed {
+            consumed: static_stack_effect(op).consumed,
+            produced: vec![],
+            jump: None,
+        },
+        records: RecordDelta::default(),
+        handlers: HandlerDelta {
+            popped: vec![],
+            pushed: vec![tok],
+        },
+    };
+    let pop_handler = |op: &Op, toks: &[SerialHandlerToken]| EscapeCompletion {
+        stack: EscapeStack::Completed {
+            consumed: static_stack_effect(op).consumed,
+            produced: vec![],
+            jump: None,
+        },
+        records: RecordDelta::default(),
+        handlers: HandlerDelta {
+            popped: toks.to_vec(),
+            pushed: vec![],
+        },
+    };
+
+    // 3a. Bad child Return completion tries to pop BOTH `child_h` AND
+    //     `caller_h` (crossing below child's `handler_base`) -> faults with
+    //     `EscapeRecordContract(RecordStack::Handlers)` leaving both frames
+    //     and both handler markers intact!
+    let bad_h_script = vec![
+        Some(push_handler(&Op::PushConditionCase(4), caller_h)),
+        Some(push_handler(&Op::PushConditionCase(2), child_h)),
+        Some(EscapeCompletion {
+            stack: EscapeStack::Completed {
+                consumed: 1,
+                produced: vec![Value::fixnum(14)],
+                jump: None,
+            },
+            records: RecordDelta::default(),
+            handlers: HandlerDelta {
+                popped: vec![child_h, caller_h],
+                pushed: vec![],
+            },
+        }),
+    ];
+    let mut bad_h_engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(bad_h_script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let h_fault = fault_of(bad_h_engine.run(&mut ctx, program_with(&h_ops, &h_constants)));
+    assert!(
+        matches!(
+            h_fault,
+            EngineFault::EscapeRecordContract(RecordStack::Handlers)
+        ),
+        "child Return cleanup popping caller's handler marker below handler_base must fault, got {h_fault:?}"
+    );
+    assert_eq!(
+        bad_h_engine.arena_depth(),
+        2,
+        "handler contract fault preserves both caller and child frames"
+    );
+    assert_eq!(
+        bad_h_engine.arena().handlers().len(),
+        2,
+        "neither handler marker was popped on contract fault"
+    );
+
+    // 3b. Good child Return completion pops ONLY `child_h`; `caller_h`
+    //     survives for caller's `PopHandler`.
+    let good_h_script = vec![
+        Some(push_handler(&Op::PushConditionCase(4), caller_h)),
+        Some(push_handler(&Op::PushConditionCase(2), child_h)),
+        Some(EscapeCompletion {
+            stack: EscapeStack::Completed {
+                consumed: 1,
+                produced: vec![Value::fixnum(14)],
+                jump: None,
+            },
+            records: RecordDelta::default(),
+            handlers: HandlerDelta {
+                popped: vec![child_h],
+                pushed: vec![],
+            },
+        }),
+        Some(pop_handler(&Op::PopHandler, &[caller_h])),
+    ];
+    let mut good_h_engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(good_h_script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let h_out = good_h_engine.run(&mut ctx, program_with(&h_ops, &h_constants));
+    assert_eq!(done_value(&mut good_h_engine, h_out), Value::fixnum(14));
+    assert_clear(&good_h_engine);
+
+    // 4. F6 `RecordingEscape` Plain take bound (HIGH-2): caller holds a live
+    //    owner `Plain` binding (`x = 55`) while child takes a
+    //    `NeedsSerialCleanup` `Return` (binding `x = 88` + pushing `child_rec`);
+    //    child's serial Return cleanup stops at child's `bind_base` so caller's
+    //    owner `Plain` binding (`x = 55`) survives for caller's `VarRef(x)`!
+    let px = plain_sym("pvm-v7-f6-caller-plain");
+    let child_plain_fn = make_v7_bytecode(
+        0,
+        0,
+        vec![
+            Op::Constant(0), // 88
+            Op::VarBind(1),  // child binds x = 88 on owner slab
+            Op::SaveExcursion,
+            Op::VarRef(1), // returns 88 (NeedsSerialCleanup because child_rec is live)
+            Op::Return,
+        ],
+        vec![Value::fixnum(88), Value::from_sym_id(px)],
+        8,
+    );
+    let p_constants = [Value::fixnum(55), Value::from_sym_id(px), child_plain_fn];
+    let p_ops = [
+        Op::Constant(0), // 55
+        Op::VarBind(1),  // caller binds x = 55 on owner slab
+        Op::Constant(2), // child_plain_fn
+        Op::Call(0),     // child returns 88 via NeedsSerialCleanup (must NOT pop caller's x=55!)
+        Op::VarRef(1),   // caller reads x -> must STILL be 55!
+        Op::Add,         // 88 + 55 = 143
+        Op::Unbind(1),   // caller unbinds its own x = 55
+        Op::Return,
+    ];
+    let p_script = vec![
+        Some(completion_pushing(&Op::SaveExcursion, child_rec)),
+        Some(EscapeCompletion {
+            stack: EscapeStack::Completed {
+                consumed: 1,
+                produced: vec![Value::fixnum(88)],
+                jump: None,
+            },
+            records: RecordDelta {
+                popped: vec![child_rec],
+                pushed: vec![],
+            },
+            handlers: HandlerDelta::default(),
+        }),
+    ];
+    let mut p_engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(p_script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new().admit(px),
+        RecordingPoll::new(),
+    );
+    let p_out = p_engine.run(&mut ctx, program_with(&p_ops, &p_constants));
+    assert_eq!(
+        done_value(&mut p_engine, p_out),
+        Value::fixnum(143),
+        "caller's Plain binding x=55 must survive child's NeedsSerialCleanup Return (88 + 55 = 143)"
+    );
+    assert!(p_engine.plain_handler().live_records().is_empty());
+    assert_clear(&p_engine);
 }
 
 #[test]
@@ -9336,8 +9601,8 @@ fn vm_owner_local_call_preserves_caller_and_child_operands_across_real_gc() {
             let heap_addr = fixture.heap;
             let words = fixture.words.clone();
             let (cons_a_bits, cons_b_bits, child_bits) = (words[0], words[1], words[2]);
-            let (ready_tx, ready_rx) = mpsc::channel();
-            let (go_tx, go_rx) = mpsc::channel();
+            let (gate_reached_tx, gate_reached_rx) = mpsc::channel();
+            let (gate_go_tx, gate_go_rx) = mpsc::channel();
             let (done_tx, done_rx) = mpsc::channel();
             thread::scope(|scope| {
                 scope.spawn(move || {
@@ -9363,10 +9628,13 @@ fn vm_owner_local_call_preserves_caller_and_child_operands_across_real_gc() {
                         HarnessVmSealed,
                         HarnessArith::new(),
                         HarnessPlain::new(),
-                        VmEraPoll::new(owner, heap_addr, rendezvous),
+                        VmEraPoll::new(owner, heap_addr, rendezvous).with_gate(
+                            PollEdge::VmCall,
+                            0,
+                            gate_reached_tx,
+                            gate_go_rx,
+                        ),
                     );
-                    ready_tx.send(()).expect("ready");
-                    recv(&go_rx);
                     let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
                     let done = done_value(&mut engine, outcome);
                     let escapes = engine.escape_handler().requests.len();
@@ -9376,14 +9644,22 @@ fn vm_owner_local_call_preserves_caller_and_child_operands_across_real_gc() {
                             done.as_fixnum(),
                             escapes,
                             poll.edges.clone(),
+                            poll.call_builds,
+                            poll.back_edge_builds,
+                            poll.published_depths.clone(),
                             poll.published_batches.clone(),
                         ))
                         .expect("done");
                     retire(poll.take_owner());
                 });
-                recv(&ready_rx);
+                // Wait until `VmCall` finishes on the uncontested fast path
+                // (`call_builds == 0`), then arm the stop so `step_call` pushes
+                // the child frame (`depth == 2`) and the child deterministically
+                // parks and publishes at `PollEdge::VmBackEdge` with both
+                // frames live.
+                recv(&gate_reached_rx);
                 request_stop(rendezvous);
-                go_tx.send(()).expect("go");
+                gate_go_tx.send(()).expect("go");
                 let stopped = retry("v7 call gc stop", || stop_for_test(&era));
                 fixture.roots.clear();
                 let mut ticket = lend(&era, stopped);
@@ -9392,10 +9668,24 @@ fn vm_owner_local_call_preserves_caller_and_child_operands_across_real_gc() {
                 assert!(era_owns(&era, ticket.stopped_proof(), cons_b_bits));
                 assert!(era_owns(&era, ticket.stopped_proof(), child_bits));
                 end_epoch(ticket);
-                let (sum, escapes, edges, batches) = recv(&done_rx);
+                let (sum, escapes, edges, call_builds, back_edge_builds, depths, batches) =
+                    recv(&done_rx);
                 assert_eq!(sum, Some(42));
                 assert_eq!(escapes, 0, "owner-local child Call took zero escapes");
                 assert_eq!(edges, vec![PollEdge::VmCall, PollEdge::VmBackEdge]);
+                assert_eq!(
+                    call_builds, 0,
+                    "VmCall must take the uncontested fast path before stop"
+                );
+                assert_eq!(
+                    back_edge_builds, 1,
+                    "GC must stop and publish inside the child at VmBackEdge"
+                );
+                assert_eq!(
+                    depths,
+                    vec![2],
+                    "GC publication must happen with BOTH caller and child frames live (depth 2)"
+                );
                 assert!(!batches.is_empty());
                 assert!(batches[0].contains(&cons_a_bits));
                 assert!(batches[0].contains(&cons_b_bits));
@@ -9405,4 +9695,1397 @@ fn vm_owner_local_call_preserves_caller_and_child_operands_across_real_gc() {
             finish(era);
         },
     );
+}
+
+// ---------------------------------------------------------------- V7-b harness & §11 rows
+
+struct OwnedEntryProgram {
+    ops: Vec<Op>,
+    constants: Vec<Value>,
+    function: Value,
+    code: Value,
+}
+
+/// Harness `VmCode` port supporting an optional entry fixture program plus a
+/// live bare-symbol function table and world `function_epoch` (V7 §4/§5).
+struct HarnessVmCode {
+    entry: Option<OwnedEntryProgram>,
+    symbols: Rc<RefCell<HashMap<SymId, Value>>>,
+    world_epoch: Rc<Cell<u64>>,
+    not_materialized_sentinel: Option<Value>,
+}
+
+impl HarnessVmCode {
+    fn new(entry: OwnedEntryProgram) -> Self {
+        Self {
+            entry: Some(entry),
+            symbols: Rc::new(RefCell::new(HashMap::new())),
+            world_epoch: Rc::new(Cell::new(0)),
+            not_materialized_sentinel: None,
+        }
+    }
+
+    fn bind_symbol(&self, sym: SymId, value: Value) {
+        self.symbols.borrow_mut().insert(sym, value);
+    }
+
+    fn fset(&self, sym: SymId, value: Value) -> u64 {
+        self.symbols.borrow_mut().insert(sym, value);
+        let next = self.world_epoch.get() + 1;
+        self.world_epoch.set(next);
+        next
+    }
+
+    fn with_not_materialized(mut self, sentinel: Value) -> Self {
+        self.not_materialized_sentinel = Some(sentinel);
+        self
+    }
+}
+
+impl VmCode for HarnessVmCode {
+    fn program(&self, code: Value) -> Result<VmProgram<'_>, CodeRefusal> {
+        if let Some(entry) = &self.entry
+            && entry.code == code
+        {
+            return Ok(VmProgram {
+                ops: &entry.ops,
+                constants: &entry.constants,
+                function: entry.function,
+                code: entry.code,
+            });
+        }
+        program_from_bytecode(code)
+    }
+
+    fn classify_call(
+        &self,
+        designator: Value,
+        nargs: u16,
+        env: &CallEnv,
+        arena: &FrameArena,
+    ) -> CallClass {
+        if env.debug_on_next_call {
+            return CallClass::Escape(CallEscape::DebugOnNextCall);
+        }
+        if self.not_materialized_sentinel == Some(designator) {
+            return CallClass::Escape(CallEscape::NotMaterialized);
+        }
+        classify_call_with_symbols(designator, nargs, env, arena, |sym| {
+            if self.world_epoch.get() != env.function_epoch {
+                SymbolCallLookup::EpochChanged
+            } else if let Some(&val) = self.symbols.borrow().get(&sym) {
+                SymbolCallLookup::Bound(val)
+            } else {
+                SymbolCallLookup::Unbound
+            }
+        })
+    }
+}
+
+fn make_lazy_v7_bytecode(
+    argdesc: i64,
+    max_stack: usize,
+    bytes: Vec<u8>,
+    constants: Vec<Value>,
+) -> ByteCodeFunction {
+    let params = FunctionParams::try_from(Value::fixnum(argdesc)).unwrap();
+    let mut func = ByteCodeFunction::new(params);
+    func.set_max_stack(StackDepth::for_test(max_stack));
+    func.set_constants(constants.into());
+    func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(bytes)));
+    func.defer_gnu_decode();
+    assert!(func.lazy_gnu_code().is_some());
+    func
+}
+
+fn make_fib_bytecode(fib_sym: Value) -> Value {
+    // (lambda (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+    make_v7_bytecode(
+        1,
+        0,
+        vec![
+            Op::StackRef(0),  // 0: [n, n]
+            Op::Constant(1),  // 1: [n, n, 2]
+            Op::Lss,          // 2: [n, n<2]
+            Op::GotoIfNil(6), // 3: [n]
+            Op::StackRef(0),  // 4: [n, n]
+            Op::Return,       // 5: return n
+            Op::Constant(0),  // 6: [n, fib]
+            Op::StackRef(1),  // 7: [n, fib, n]
+            Op::Constant(2),  // 8: [n, fib, n, 1]
+            Op::Sub,          // 9: [n, fib, n-1]
+            Op::Call(1),      // 10: [n, fib(n-1)]
+            Op::Constant(0),  // 11: [n, fib(n-1), fib]
+            Op::StackRef(2),  // 12: [n, fib(n-1), fib, n]
+            Op::Constant(1),  // 13: [n, fib(n-1), fib, n, 2]
+            Op::Sub,          // 14: [n, fib(n-1), fib, n-2]
+            Op::Call(1),      // 15: [n, fib(n-1), fib(n-2)]
+            Op::Add,          // 16: [n, sum]
+            Op::Return,       // 17: return sum
+        ],
+        vec![fib_sym, Value::fixnum(2), Value::fixnum(1)],
+        8,
+    )
+}
+
+#[test]
+fn vm_owner_local_call_polls_vm_call_once_and_requests_no_serial_turn() {
+    // V7 §11: exact edge counts — owner-local Call is 1 VmCall / 0 SerialRequest;
+    // escaped Call is 1 VmCall / 1 SerialRequest.
+    let mut ctx = context();
+    let callee = make_v7_bytecode(1, 0, vec![Op::StackRef(0), Op::Add1, Op::Return], vec![], 4);
+    let constants = [callee, Value::fixnum(41)];
+    let ops = [Op::Constant(0), Op::Constant(1), Op::Call(1), Op::Return];
+    let mut local_engine = VmExec::new(
+        &(),
+        RecordingEscape::new(),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = local_engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut local_engine, outcome), Value::fixnum(42));
+    assert_eq!(
+        local_engine
+            .poll_handler()
+            .edges
+            .iter()
+            .filter(|e| **e == PollEdge::VmCall)
+            .count(),
+        1
+    );
+    assert_eq!(
+        local_engine
+            .poll_handler()
+            .edges
+            .iter()
+            .filter(|e| **e == PollEdge::SerialRequest)
+            .count(),
+        0
+    );
+    assert_eq!(local_engine.escape_handler().requests.len(), 0);
+    assert_clear(&local_engine);
+
+    let sym_callee = Value::symbol("pvm-v7-escaped-edge-count");
+    let esc_constants = [sym_callee, Value::fixnum(41)];
+    let mut esc_engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(vec![Some(completion(
+            &Op::Call(1),
+            vec![Value::fixnum(42)],
+        ))]),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = esc_engine.run(&mut ctx, program_with(&ops, &esc_constants));
+    assert_eq!(done_value(&mut esc_engine, outcome), Value::fixnum(42));
+    assert_eq!(
+        esc_engine
+            .poll_handler()
+            .edges
+            .iter()
+            .filter(|e| **e == PollEdge::VmCall)
+            .count(),
+        1
+    );
+    assert_eq!(
+        esc_engine
+            .poll_handler()
+            .edges
+            .iter()
+            .filter(|e| **e == PollEdge::SerialRequest)
+            .count(),
+        1
+    );
+    assert_eq!(esc_engine.escape_handler().requests.len(), 1);
+    assert_eq!(esc_engine.call_escapes(), &[CallEscape::NotByteCode]);
+    assert_clear(&esc_engine);
+}
+
+#[test]
+fn vm_nested_owner_local_calls_match_the_serial_vm() {
+    // V7 §11 (CRITICAL differential row): recursive `fib(15)` run through BOTH
+    // the serial VM and `VmExec` returns the exact same value (610), with zero
+    // escapes on `VmExec` and `max_depth` equal to the recursion depth (16:
+    // 1 entry wrapper + 15 recursive frames down to `fib(1)`).
+    let mut ctx = context();
+    let fib_sym_id = plain_sym("pvm-v7-fib");
+    let fib_sym = Value::from_sym_id(fib_sym_id);
+    let fib_bc = make_fib_bytecode(fib_sym);
+
+    // 1. Run through the real serial VM.
+    ctx.obarray.set_symbol_function_id(fib_sym_id, fib_bc);
+    let serial_result = ctx
+        .apply(fib_bc, vec![Value::fixnum(15)])
+        .expect("serial VM fib(15)");
+    assert_eq!(serial_result, Value::fixnum(610));
+
+    // 2. Run the exact same ByteCodeFunction through `VmExec` via `VmCode`.
+    let entry_code = Value::symbol("pvm-v7-fib-entry");
+    let code = HarnessVmCode::new(OwnedEntryProgram {
+        ops: vec![Op::Constant(0), Op::Constant(1), Op::Call(1), Op::Return],
+        constants: vec![fib_sym, Value::fixnum(15)],
+        function: entry_code,
+        code: entry_code,
+    });
+    code.bind_symbol(fib_sym_id, fib_bc);
+
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::new(),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run_with_code(
+        &mut ctx,
+        &code,
+        VmEntry {
+            function: entry_code,
+            code: entry_code,
+            frame_bytes: bytecode_frame_bytes(4),
+        },
+    );
+    let parallel_result = done_value(&mut engine, outcome);
+    assert_eq!(
+        parallel_result, serial_result,
+        "parallel VmExec fib(15) must match serial VM"
+    );
+    assert_eq!(
+        engine.escape_handler().requests.len(),
+        0,
+        "all recursive fib(15) calls must stay owner-local"
+    );
+    assert_eq!(
+        engine.max_depth(),
+        16,
+        "1 entry frame + 15 recursive fib frames (fib 15 -> ... -> fib 1)"
+    );
+    assert_eq!(engine.arena().bc_position(), 0);
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_ineligible_callees_escape_with_the_caller_untouched() {
+    // V7 §11: one table row per every `CallEscape` variant (all 10 variants).
+    // Asserts: exact `CallEscape` reason recorded, escape request `pc` equals
+    // the `Op::Call` pc, and caller's segment, pc, and both LIFOs at the escape
+    // equal the published pre-call state (caller completely untouched).
+    let mut ctx = context();
+
+    let admitted_fn = make_v7_bytecode(1, 0, vec![Op::StackRef(0), Op::Return], vec![], 4);
+    let rest_fn = {
+        let mut f = ByteCodeFunction::new(LambdaParams {
+            required: vec![],
+            optional: vec![],
+            rest: Some(plain_sym("pvm-v7-tbl-rest")),
+        });
+        f.set_lexical(true);
+        f.set_ops(vec![Op::Nil, Op::Return]);
+        f.set_max_stack(StackDepth::for_test(4));
+        Value::make_bytecode(f)
+    };
+    let cold_lazy_fn = Value::make_bytecode(make_lazy_v7_bytecode(
+        (1 << 8) | 1,
+        4,
+        vec![192, 135],
+        vec![Value::fixnum(7)],
+    ));
+    let not_materialized = Value::symbol("pvm-v7-not-materialized-stub");
+    let sym_ok_id = plain_sym("pvm-v7-tbl-sym");
+    let sym_ok = Value::from_sym_id(sym_ok_id);
+    let caller_rec = token(501);
+
+    struct Case {
+        name: &'static str,
+        designator: Value,
+        nargs: u16,
+        env: CallEnv,
+        entry_frame_bytes: usize,
+        bump_world_epoch: bool,
+        expected: CallEscape,
+    }
+
+    let cases = [
+        Case {
+            name: "NotByteCode",
+            designator: Value::fixnum(123),
+            nargs: 1,
+            env: CallEnv::default(),
+            entry_frame_bytes: 0,
+            bump_world_epoch: false,
+            expected: CallEscape::NotByteCode,
+        },
+        Case {
+            name: "NotMaterialized",
+            designator: not_materialized,
+            nargs: 1,
+            env: CallEnv::default(),
+            entry_frame_bytes: 0,
+            bump_world_epoch: false,
+            expected: CallEscape::NotMaterialized,
+        },
+        Case {
+            name: "ColdAdmission",
+            designator: cold_lazy_fn,
+            nargs: 1,
+            env: CallEnv::default(),
+            entry_frame_bytes: 0,
+            bump_world_epoch: false,
+            expected: CallEscape::ColdAdmission,
+        },
+        Case {
+            name: "Ineligible",
+            designator: rest_fn,
+            nargs: 1,
+            env: CallEnv::default(),
+            entry_frame_bytes: 0,
+            bump_world_epoch: false,
+            expected: CallEscape::Ineligible,
+        },
+        Case {
+            name: "WrongNargs",
+            designator: admitted_fn,
+            nargs: 0,
+            env: CallEnv::default(),
+            entry_frame_bytes: 0,
+            bump_world_epoch: false,
+            expected: CallEscape::WrongNargs,
+        },
+        Case {
+            name: "Depth",
+            designator: admitted_fn,
+            nargs: 1,
+            env: CallEnv {
+                depth_limit: 1,
+                ..CallEnv::default()
+            },
+            entry_frame_bytes: 0,
+            bump_world_epoch: false,
+            expected: CallEscape::Depth,
+        },
+        Case {
+            name: "StackBudget",
+            designator: admitted_fn,
+            nargs: 1,
+            env: CallEnv::default(),
+            entry_frame_bytes: BC_STACK_POSITION_LIMIT,
+            bump_world_epoch: false,
+            expected: CallEscape::StackBudget,
+        },
+        Case {
+            name: "DebugOnNextCall",
+            designator: admitted_fn,
+            nargs: 1,
+            env: CallEnv {
+                debug_on_next_call: true,
+                ..CallEnv::default()
+            },
+            entry_frame_bytes: 0,
+            bump_world_epoch: false,
+            expected: CallEscape::DebugOnNextCall,
+        },
+        Case {
+            name: "CompilerOverrides",
+            designator: sym_ok,
+            nargs: 1,
+            env: CallEnv {
+                compiler_overrides: true,
+                ..CallEnv::default()
+            },
+            entry_frame_bytes: 0,
+            bump_world_epoch: false,
+            expected: CallEscape::CompilerOverrides,
+        },
+        Case {
+            name: "FunctionEpoch",
+            designator: sym_ok,
+            nargs: 1,
+            env: CallEnv {
+                function_epoch: 0,
+                ..CallEnv::default()
+            },
+            entry_frame_bytes: 0,
+            bump_world_epoch: true,
+            expected: CallEscape::FunctionEpoch,
+        },
+    ];
+
+    for case in cases {
+        let entry_code = Value::symbol("pvm-v7-tbl-entry");
+        let preserved = Value::fixnum(900);
+        let arg0 = Value::fixnum(11);
+        let mut ops = vec![
+            Op::SaveExcursion, // 0: pushes caller_rec onto bind LIFO
+            Op::Constant(0),   // 1: preserved caller operand
+            Op::Constant(1),   // 2: designator
+        ];
+        if case.nargs == 1 {
+            ops.push(Op::Constant(2)); // 3: arg0
+        }
+        let call_pc = ops.len();
+        ops.push(Op::Call(case.nargs));
+        ops.push(Op::Add);
+        ops.push(Op::Unbind(1));
+        ops.push(Op::Return);
+
+        let code = HarnessVmCode::new(OwnedEntryProgram {
+            ops,
+            constants: vec![preserved, case.designator, arg0],
+            function: entry_code,
+            code: entry_code,
+        })
+        .with_not_materialized(not_materialized);
+        code.bind_symbol(sym_ok_id, admitted_fn);
+        if case.bump_world_epoch {
+            code.fset(sym_ok_id, admitted_fn);
+        }
+
+        let mut expected_seg = vec![preserved, case.designator];
+        if case.nargs == 1 {
+            expected_seg.push(arg0);
+        }
+
+        let script = vec![
+            Some(completion_pushing(&Op::SaveExcursion, caller_rec)),
+            Some(completion(&Op::Call(case.nargs), vec![Value::fixnum(77)])),
+            Some(completion_popping(&Op::Unbind(1), &[caller_rec])),
+        ];
+        let mut engine = VmExec::new(
+            &(),
+            RecordingEscape::with_script(script),
+            HarnessVmSealed,
+            HarnessArith::new(),
+            HarnessPlain::new(),
+            RecordingPoll::new(),
+        );
+        engine.set_call_env(case.env);
+        let outcome = engine.run_with_code(
+            &mut ctx,
+            &code,
+            VmEntry {
+                function: entry_code,
+                code: entry_code,
+                frame_bytes: case.entry_frame_bytes,
+            },
+        );
+        assert_eq!(
+            done_value(&mut engine, outcome),
+            Value::fixnum(977),
+            "{}: run finishes after escaped Call",
+            case.name
+        );
+        assert_eq!(
+            engine.call_escapes(),
+            &[case.expected],
+            "{}: exact CallEscape reason",
+            case.name
+        );
+        let esc = engine.escape_handler();
+        assert_eq!(esc.requests[1].op, Op::Call(case.nargs), "{}", case.name);
+        assert_eq!(esc.requests[1].pc, Pc::new(call_pc), "{}", case.name);
+        assert_eq!(
+            esc.segments[1], expected_seg,
+            "{}: caller segment untouched at escape",
+            case.name
+        );
+        assert_eq!(
+            esc.lifos[1],
+            (vec![Some(caller_rec.0)], vec![]),
+            "{}: caller LIFOs untouched at escape",
+            case.name
+        );
+        assert_eq!(
+            engine.arena().bc_position(),
+            0,
+            "{}: bc_position refunded",
+            case.name
+        );
+        assert_clear(&engine);
+    }
+}
+
+#[test]
+fn vm_a_symbol_callee_reads_its_live_cell_and_an_epoch_change_escapes_once() {
+    // V7 §11: bare symbol resolves through its live cell when epoch matches;
+    // `fset` bumps the epoch -> ONE escape (`CallEscape::FunctionEpoch`) whose
+    // completion refreshes `CallEnv.function_epoch` -> subsequent call runs
+    // owner-local against the new definition with zero escapes.
+    let mut ctx = context();
+    let sym_id = plain_sym("pvm-v7-live-sym");
+    let sym_val = Value::from_sym_id(sym_id);
+
+    let f1 = make_v7_bytecode(
+        1,
+        0,
+        vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return],
+        vec![Value::fixnum(1)],
+        4,
+    );
+    let f2 = make_v7_bytecode(
+        1,
+        0,
+        vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return],
+        vec![Value::fixnum(100)],
+        4,
+    );
+    let entry_code = Value::symbol("pvm-v7-sym-entry");
+    let code = HarnessVmCode::new(OwnedEntryProgram {
+        ops: vec![Op::Constant(0), Op::Constant(1), Op::Call(1), Op::Return],
+        constants: vec![sym_val, Value::fixnum(10)],
+        function: entry_code,
+        code: entry_code,
+    });
+    code.bind_symbol(sym_id, f1);
+
+    // Run 1: epoch matches (0 == 0) -> owner-local against f1 -> 11, 0 escapes.
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::new(),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let out1 = engine.run_with_code(
+        &mut ctx,
+        &code,
+        VmEntry {
+            function: entry_code,
+            code: entry_code,
+            frame_bytes: 0,
+        },
+    );
+    assert_eq!(done_value(&mut engine, out1), Value::fixnum(11));
+    assert_eq!(engine.escape_handler().requests.len(), 0);
+    assert!(engine.call_escapes().is_empty());
+    assert_clear(&engine);
+
+    // `fset` updates symbol to f2 and bumps world epoch to 1.
+    let new_epoch = code.fset(sym_id, f2);
+    assert_eq!(new_epoch, 1);
+
+    // Run 2 & 3 in one two-call program:
+    //   call #1 sees stale epoch 0 != 1 -> escapes ONCE with FunctionEpoch,
+    //           escape refreshes CallEnv.function_epoch = 1;
+    //   call #2 sees fresh epoch 1 == 1 -> owner-local against f2 -> 110!
+    let two_call_code = Value::symbol("pvm-v7-sym-two-calls");
+    let code2 = HarnessVmCode::new(OwnedEntryProgram {
+        ops: vec![
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::Call(1), // stale epoch -> escapes once -> 110 & refreshes CallEnv
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::Call(1), // fresh epoch -> owner-local against f2 -> 110
+            Op::Add,     // 220
+            Op::Return,
+        ],
+        constants: vec![sym_val, Value::fixnum(10)],
+        function: two_call_code,
+        code: two_call_code,
+    });
+    code2.fset(sym_id, f2); // world_epoch = 1, sym -> f2
+
+    let refreshed_env = CallEnv {
+        function_epoch: 1,
+        ..CallEnv::default()
+    };
+    let mut engine2 = VmExec::new(
+        &(),
+        RecordingEscape::with_script(vec![Some(completion(
+            &Op::Call(1),
+            vec![Value::fixnum(110)],
+        ))])
+        .with_env_refreshes(vec![
+            None,                // run start keeps stale function_epoch = 0
+            Some(refreshed_env), // escape completion refreshes to epoch 1
+        ]),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let out2 = engine2.run_with_code(
+        &mut ctx,
+        &code2,
+        VmEntry {
+            function: two_call_code,
+            code: two_call_code,
+            frame_bytes: 0,
+        },
+    );
+    assert_eq!(done_value(&mut engine2, out2), Value::fixnum(220));
+    assert_eq!(
+        engine2.escape_handler().requests.len(),
+        1,
+        "epoch change escapes once; second call is owner-local against f2"
+    );
+    assert_eq!(engine2.call_escapes(), &[CallEscape::FunctionEpoch]);
+    assert_eq!(engine2.call_env().function_epoch, 1);
+    assert_clear(&engine2);
+}
+
+#[test]
+fn vm_the_depth_limit_escapes_the_call_instead_of_faulting() {
+    // V7 §11: at `CallEnv.depth_limit`, the call escapes with `CallEscape::Depth`
+    // instead of faulting with `EngineFault::Frame(Depth)`.
+    let mut ctx = context();
+    let leaf = make_v7_bytecode(
+        0,
+        0,
+        vec![Op::Constant(0), Op::Return],
+        vec![Value::fixnum(1)],
+        4,
+    );
+    let mid = make_v7_bytecode(
+        0,
+        0,
+        vec![Op::Constant(0), Op::Call(0), Op::Return],
+        vec![leaf],
+        4,
+    );
+    let constants = [mid];
+    let ops = [Op::Constant(0), Op::Call(0), Op::Return];
+
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(vec![Some(completion(
+            &Op::Call(0),
+            vec![Value::fixnum(99)],
+        ))]),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    // Depth 1 = entry, depth 2 = mid (allowed), depth 3 = leaf (exceeds 2 -> escapes).
+    engine.set_call_env(CallEnv {
+        depth_limit: 2,
+        ..CallEnv::default()
+    });
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(99));
+    assert_eq!(engine.escape_handler().requests.len(), 1);
+    assert_eq!(engine.call_escapes(), &[CallEscape::Depth]);
+    assert_eq!(engine.max_depth(), 2);
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_the_bytecode_stack_budget_escapes_like_the_serial_charge() {
+    // V7 §11: a callee whose `max_stack` `charge_frame_position` refuses escapes
+    // with `CallEscape::StackBudget`; sequential calls that fit refund their
+    // `frame_bytes` on return so they never exhaust the budget.
+    let mut ctx = context();
+    let callee = make_v7_bytecode(
+        0,
+        0,
+        vec![Op::Constant(0), Op::Return],
+        vec![Value::fixnum(5)],
+        8,
+    );
+    let callee_bytes = bytecode_frame_bytes(8);
+    assert!(charge_frame_position(BC_STACK_POSITION_LIMIT - callee_bytes, 8).is_some());
+    assert!(charge_frame_position(BC_STACK_POSITION_LIMIT - callee_bytes + 1, 8).is_none());
+
+    let entry_code = Value::symbol("pvm-v7-budget-entry");
+    let code = HarnessVmCode::new(OwnedEntryProgram {
+        ops: vec![
+            Op::Constant(0),
+            Op::Call(0),
+            Op::Constant(0),
+            Op::Call(0),
+            Op::Add,
+            Op::Return,
+        ],
+        constants: vec![callee],
+        function: entry_code,
+        code: entry_code,
+    });
+
+    // 1. Exact fit: two sequential calls both succeed owner-locally because the
+    //    first call refunds its `frame_bytes` on Return.
+    let mut fit_engine = VmExec::new(
+        &(),
+        RecordingEscape::new(),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let fit_out = fit_engine.run_with_code(
+        &mut ctx,
+        &code,
+        VmEntry {
+            function: entry_code,
+            code: entry_code,
+            frame_bytes: BC_STACK_POSITION_LIMIT - callee_bytes,
+        },
+    );
+    assert_eq!(done_value(&mut fit_engine, fit_out), Value::fixnum(10));
+    assert_eq!(fit_engine.escape_handler().requests.len(), 0);
+    assert_eq!(fit_engine.arena().bc_position(), 0);
+    assert_clear(&fit_engine);
+
+    // 2. One byte over the serial `charge_frame_position` limit: escapes as
+    //    `CallEscape::StackBudget` without faulting.
+    let mut over_engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(vec![
+            Some(completion(&Op::Call(0), vec![Value::fixnum(5)])),
+            Some(completion(&Op::Call(0), vec![Value::fixnum(5)])),
+        ]),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let over_out = over_engine.run_with_code(
+        &mut ctx,
+        &code,
+        VmEntry {
+            function: entry_code,
+            code: entry_code,
+            frame_bytes: BC_STACK_POSITION_LIMIT - callee_bytes + 1,
+        },
+    );
+    assert_eq!(done_value(&mut over_engine, over_out), Value::fixnum(10));
+    assert_eq!(
+        over_engine.call_escapes(),
+        &[CallEscape::StackBudget, CallEscape::StackBudget]
+    );
+    assert_eq!(over_engine.arena().bc_position(), 0);
+    assert_clear(&over_engine);
+}
+
+#[test]
+fn vm_debug_on_next_call_armed_escapes_every_call() {
+    // V7 §11: `debug-on-next-call` is checked FIRST before resolving, so an
+    // admitted direct bytecode callee AND an unbound symbol both report
+    // `CallEscape::DebugOnNextCall`.
+    let mut ctx = context();
+    let admitted = make_v7_bytecode(
+        0,
+        0,
+        vec![Op::Constant(0), Op::Return],
+        vec![Value::fixnum(1)],
+        4,
+    );
+    let unbound_sym = Value::symbol("pvm-v7-debug-unbound");
+    let constants = [admitted, unbound_sym];
+    let ops = [
+        Op::Constant(0),
+        Op::Call(0),
+        Op::Constant(1),
+        Op::Call(0),
+        Op::Add,
+        Op::Return,
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(vec![
+            Some(completion(&Op::Call(0), vec![Value::fixnum(10)])),
+            Some(completion(&Op::Call(0), vec![Value::fixnum(20)])),
+        ]),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    engine.set_call_env(CallEnv {
+        debug_on_next_call: true,
+        ..CallEnv::default()
+    });
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(30));
+    assert_eq!(
+        engine.call_escapes(),
+        &[CallEscape::DebugOnNextCall, CallEscape::DebugOnNextCall],
+        "debug-on-next-call must win before target resolution"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_poll_inside_a_callee_publishes_every_frame_and_its_segment() {
+    // V7 §11: R1 — a recording poll inside an owner-local callee sees EVERY
+    // live frame's `function`/`code` and BOTH segments (including the caller's
+    // preserved locals AND its callee designator + arguments kept in C5 layout).
+    let mut ctx = context();
+    let callee_sym_id = plain_sym("pvm-v7-poll-callee-sym");
+    let callee_sym = Value::from_sym_id(callee_sym_id);
+
+    // Callee takes 2 args (a, b), loops once to trigger `vm_back_edge`, returns a + b.
+    let callee_bc = make_v7_bytecode(
+        2,
+        0,
+        vec![
+            Op::True,         // 0: [a, b, t]
+            Op::GotoIfNil(4), // 1: [a, b]
+            Op::Nil,          // 2: [a, b, nil]
+            Op::Goto(1),      // 3: backward branch -> vm_back_edge poll
+            Op::Add,          // 4: [a + b]
+            Op::Return,       // 5
+        ],
+        vec![],
+        6,
+    );
+
+    let caller_fn = Value::symbol("pvm-v7-poll-caller-fn");
+    let caller_local = Value::fixnum(100);
+    let arg_a = Value::fixnum(20);
+    let arg_b = Value::fixnum(3);
+    let code = HarnessVmCode::new(OwnedEntryProgram {
+        ops: vec![
+            Op::Constant(0), // 0: caller_local (100)
+            Op::Constant(1), // 1: callee_sym
+            Op::Constant(2), // 2: arg_a (20)
+            Op::Constant(3), // 3: arg_b (3)
+            Op::Call(2),     // 4: owner-local call via bare symbol
+            Op::Add,         // 5: 100 + 23 = 123
+            Op::Return,      // 6
+        ],
+        constants: vec![caller_local, callee_sym, arg_a, arg_b],
+        function: caller_fn,
+        code: caller_fn,
+    });
+    code.bind_symbol(callee_sym_id, callee_bc);
+
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::new(),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run_with_code(
+        &mut ctx,
+        &code,
+        VmEntry {
+            function: caller_fn,
+            code: caller_fn,
+            frame_bytes: bytecode_frame_bytes(6),
+        },
+    );
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(123));
+    let poll = engine.poll_handler();
+    assert_eq!(poll.edges, vec![PollEdge::VmCall, PollEdge::VmBackEdge]);
+    // At index 1 (`VmBackEdge` inside callee), both frames are live!
+    let snapshot = &poll.published_frames[1];
+    assert_eq!(snapshot.len(), 2, "child (level 0) and caller (level 1)");
+    let (child_fn, child_code, _child_pc, child_operands) = &snapshot[0];
+    let (caller_seen_fn, caller_seen_code, caller_pc, caller_operands) = &snapshot[1];
+    assert_eq!(
+        *child_fn, callee_sym,
+        "GNU backtrace records the symbol designator in child VmFrame.function"
+    );
+    assert_eq!(
+        *child_code, callee_bc,
+        "child VmFrame.code roots the resolved bytecode closure"
+    );
+    assert_eq!(
+        *child_operands,
+        vec![arg_a, arg_b, Value::NIL],
+        "child segment holds its copied arguments plus loop flag"
+    );
+    assert_eq!(*caller_seen_fn, caller_fn);
+    assert_eq!(*caller_seen_code, caller_fn);
+    assert_eq!(
+        *caller_pc,
+        Some(Pc::new(5)),
+        "caller saved_pc already points past Call(2)"
+    );
+    assert_eq!(
+        *caller_operands,
+        vec![caller_local, callee_sym, arg_a, arg_b],
+        "C5: caller keeps preserved local, designator, and arguments until child returns"
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_a_child_return_with_a_serial_marker_above_its_bind_base_takes_needs_serial_cleanup() {
+    // V7 §11 (V4 interplay): a child frame with a serial marker above its own
+    // `bind_base` takes a `Return` escape (`NeedsSerialCleanup`), and the
+    // completion's (possibly debugger-replaced) value is delivered into the
+    // caller's segment.
+    let mut ctx = context();
+    let child_marker = token(707);
+    let child = make_v7_bytecode(
+        0,
+        0,
+        vec![Op::SaveExcursion, Op::Constant(0), Op::Return],
+        vec![Value::fixnum(9)],
+        4,
+    );
+    let constants = [Value::fixnum(100), child];
+    let ops = [
+        Op::Constant(0), // 100
+        Op::Constant(1), // child
+        Op::Call(0),     // child returns 9, debugger replaces with 99
+        Op::Add,         // 100 + 99 = 199
+        Op::Return,
+    ];
+    let script = vec![
+        Some(completion_pushing(&Op::SaveExcursion, child_marker)),
+        Some(EscapeCompletion {
+            stack: EscapeStack::Completed {
+                consumed: 1,
+                produced: vec![Value::fixnum(99)],
+                jump: None,
+            },
+            records: RecordDelta {
+                popped: vec![child_marker],
+                pushed: vec![],
+            },
+            handlers: HandlerDelta::default(),
+        }),
+    ];
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(script),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(199));
+    let esc = engine.escape_handler();
+    assert_eq!(esc.requests.len(), 2, "child SaveExcursion + child Return");
+    assert_eq!(esc.requests[1].op, Op::Return);
+    assert_eq!(
+        esc.requests[1].why,
+        EscapeWhy::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup))
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_parallel_and_serial_call_classifiers_agree_on_the_shape_table() {
+    // V7 §11 (CRITICAL) & §14 r1: compare the production parallel classifier
+    // (`classify_bytecode_function`) against serial
+    // `Vm::can_enter_eager_interpreter_frame_iteratively` /
+    // `Vm::iterative_admission_if_known` across real `ByteCodeFunction`s:
+    // valid required, optional, env, &rest, dynamic, wrong nargs both ways,
+    // max_stack > ITERATIVE_FRAME_LIMIT, nonrest > max_stack, unverified,
+    // unsealed, AND lazy unset `OnceLock` -> `None` / `ColdAdmission`.
+    let _ctx = context();
+    let arena = FrameArena::new(32);
+    let env = CallEnv::default();
+
+    // 1. Valid required-only (1 arg)
+    let req1 = make_v7_bytecode(1, 0, vec![Op::StackRef(0), Op::Return], vec![], 4);
+    // 2. Valid required + optional (1 req, 2 opt -> accepts 1..=3)
+    let opt12 = make_v7_bytecode(1, 2, vec![Op::StackRef(0), Op::Return], vec![], 6);
+    // 3. Captured env
+    let with_env = {
+        let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![plain_sym("pvm-v7-env-a")]));
+        f.set_lexical(true);
+        f.set_env(Some(Value::NIL));
+        f.set_ops(vec![Op::Nil, Op::Return]);
+        f.set_max_stack(StackDepth::for_test(4));
+        Value::make_bytecode(f)
+    };
+    // 4. &rest parameter
+    let with_rest = {
+        let mut f = ByteCodeFunction::new(LambdaParams {
+            required: vec![plain_sym("pvm-v7-rest-a")],
+            optional: vec![],
+            rest: Some(plain_sym("pvm-v7-rest-r")),
+        });
+        f.set_lexical(true);
+        f.set_ops(vec![Op::Nil, Op::Return]);
+        f.set_max_stack(StackDepth::for_test(4));
+        Value::make_bytecode(f)
+    };
+    // 5. Dynamic params (lexical = false with named param)
+    let dynamic = {
+        let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![plain_sym("pvm-v7-dyn-a")]));
+        f.set_lexical(false);
+        f.set_ops(vec![Op::Nil, Op::Return]);
+        f.set_max_stack(StackDepth::for_test(4));
+        Value::make_bytecode(f)
+    };
+    // 6. max_stack > StackDepth::ITERATIVE_FRAME_LIMIT
+    let oversized_stack = make_v7_bytecode(
+        0,
+        0,
+        vec![Op::Nil, Op::Return],
+        vec![],
+        StackDepth::ITERATIVE_FRAME_LIMIT.get() + 1,
+    );
+    // 7. nonrest > max_stack
+    let nonrest_over_stack = make_v7_bytecode(2, 0, vec![Op::Nil, Op::Return], vec![], 1);
+    // 8. Unverified ops (Pop at empty stack)
+    let unverified = make_v7_bytecode(0, 0, vec![Op::Pop, Op::Return], vec![], 4);
+
+    let eager_cases: Vec<(&str, Value, u16, Option<CallEscape>)> = vec![
+        ("req1 valid", req1, 1, None),
+        ("req1 too few", req1, 0, Some(CallEscape::WrongNargs)),
+        ("req1 too many", req1, 2, Some(CallEscape::WrongNargs)),
+        ("opt12 min", opt12, 1, None),
+        ("opt12 mid", opt12, 2, None),
+        ("opt12 max", opt12, 3, None),
+        ("opt12 too few", opt12, 0, Some(CallEscape::WrongNargs)),
+        ("opt12 too many", opt12, 4, Some(CallEscape::WrongNargs)),
+        ("captured env", with_env, 1, Some(CallEscape::Ineligible)),
+        ("&rest", with_rest, 1, Some(CallEscape::Ineligible)),
+        ("dynamic params", dynamic, 1, Some(CallEscape::Ineligible)),
+        (
+            "oversized max_stack",
+            oversized_stack,
+            0,
+            Some(CallEscape::Ineligible),
+        ),
+        (
+            "nonrest > max_stack",
+            nonrest_over_stack,
+            2,
+            Some(CallEscape::Ineligible),
+        ),
+        (
+            "unverified ops",
+            unverified,
+            0,
+            Some(CallEscape::Ineligible),
+        ),
+    ];
+
+    for (label, val, nargs, expected_escape) in eager_cases {
+        let bc = val.bytecode_data_if_materialized().expect("materialized");
+        let serial_admitted =
+            Vm::can_enter_eager_interpreter_frame_iteratively(bc, usize::from(nargs));
+        let parallel_class = classify_bytecode_function(val, bc, nargs, &env, &arena);
+        match expected_escape {
+            None => {
+                assert!(serial_admitted, "{label}: serial must admit");
+                assert!(
+                    matches!(parallel_class, CallClass::OwnerLocal { .. }),
+                    "{label}: parallel must admit, got {parallel_class:?}"
+                );
+            }
+            Some(reason) => {
+                assert!(!serial_admitted, "{label}: serial must refuse");
+                assert_eq!(
+                    parallel_class,
+                    CallClass::Escape(reason),
+                    "{label}: parallel escape reason mismatch"
+                );
+            }
+        }
+    }
+
+    // 9. Unsealed hand-constructed ByteCodeFunction (direct struct, not sealed):
+    let mut unsealed = ByteCodeFunction::new(LambdaParams::simple(vec![]));
+    unsealed.set_lexical(true);
+    unsealed.set_ops(vec![Op::Nil, Op::Return]);
+    unsealed.set_max_stack(StackDepth::for_test(4));
+    assert!(!unsealed.executes_sealed_ops());
+    assert!(!Vm::can_enter_eager_interpreter_frame_iteratively(
+        &unsealed, 0
+    ));
+    assert_eq!(
+        classify_bytecode_function(Value::NIL, &unsealed, 0, &env, &arena),
+        CallClass::Escape(CallEscape::Ineligible),
+        "unsealed function must be refused by both serial and parallel classifiers"
+    );
+
+    // 10. Lazy GNU ByteCodeFunction with unset OnceLock (§14 r1 :278):
+    //     peek returns `None` -> `ColdAdmission`, and OnceLock stays unset!
+    //     Wrong nargs on cold lazy returns `Some(false)` -> `WrongNargs` without
+    //     initializing the OnceLock!
+    //     After serial warms it, both agree on admission.
+    let lazy_val = Value::make_bytecode(make_lazy_v7_bytecode(
+        (2 << 8) | 1, // 1 req, 2 nonrest
+        4,
+        vec![192, 135], // Constant(0), Return
+        vec![Value::fixnum(42)],
+    ));
+    let lazy_bc = lazy_val
+        .bytecode_data_if_materialized()
+        .expect("materialized");
+    assert!(
+        lazy_bc
+            .lazy_gnu_code()
+            .as_ref()
+            .unwrap()
+            .iterative_admission()
+            .is_none()
+    );
+    assert_eq!(Vm::iterative_admission_if_known(lazy_bc, 1), None);
+    assert_eq!(
+        classify_bytecode_function(lazy_val, lazy_bc, 1, &env, &arena),
+        CallClass::Escape(CallEscape::ColdAdmission)
+    );
+    assert!(
+        lazy_bc
+            .lazy_gnu_code()
+            .as_ref()
+            .unwrap()
+            .iterative_admission()
+            .is_none(),
+        "ColdAdmission peek must leave lazy OnceLock unset"
+    );
+    assert_eq!(
+        classify_bytecode_function(lazy_val, lazy_bc, 0, &env, &arena),
+        CallClass::Escape(CallEscape::WrongNargs)
+    );
+    assert_eq!(
+        classify_bytecode_function(lazy_val, lazy_bc, 3, &env, &arena),
+        CallClass::Escape(CallEscape::WrongNargs)
+    );
+    assert!(
+        lazy_bc
+            .lazy_gnu_code()
+            .as_ref()
+            .unwrap()
+            .iterative_admission()
+            .is_none(),
+        "WrongNargs on cold lazy function must keep OnceLock unset"
+    );
+    // Warm via serial lazy admission:
+    assert_eq!(lazy_bc.lazy_iterative_admission(1), Some(true));
+    assert_eq!(Vm::iterative_admission_if_known(lazy_bc, 1), Some(true));
+    assert!(matches!(
+        classify_bytecode_function(lazy_val, lazy_bc, 1, &env, &arena),
+        CallClass::OwnerLocal { nonrest: 2, .. }
+    ));
+    assert_eq!(
+        classify_bytecode_function(lazy_val, lazy_bc, 0, &env, &arena),
+        CallClass::Escape(CallEscape::WrongNargs)
+    );
+}
+
+#[test]
+fn vm_a_setq_of_a_call_env_variable_escapes() {
+    // V7 §4 (:135-138) & §11:
+    // Part A: verify on a REAL `Context` via `era.admit_plain_symbol` (which
+    // invokes the real `SymbolBacking::classify`) that ALL THREE `CallEnv`
+    // variables (`max-lisp-eval-depth`, `debug-on-next-call`, and
+    // `internal--compiler-function-overrides`) are refused!
+    let depth_sym = intern("max-lisp-eval-depth");
+    let debug_sym = intern("debug-on-next-call");
+    let overrides_sym = intern(INTERNAL_COMPILER_FUNCTION_OVERRIDES);
+
+    Context::with_test_mutator_era(|era| {
+        for (name, sym) in [
+            ("max-lisp-eval-depth", depth_sym),
+            ("debug-on-next-call", debug_sym),
+            (INTERNAL_COMPILER_FUNCTION_OVERRIDES, overrides_sym),
+        ] {
+            let result = era.admit_plain_symbol(sym);
+            assert_eq!(
+                result,
+                Err(RegistrationError::Publication),
+                "{name}: real SymbolBacking::classify must refuse every CallEnv variable"
+            );
+        }
+        finish(era);
+    });
+
+    // Part B: `VarSet` and `VarBind` of all three symbols escape through
+    // `PlainRefused { refusal: NotPlain }` and the completion refreshes
+    // `CallEnv` so the very next `Op::Call` sees the updated `CallEnv`!
+    let mut ctx = context();
+    let admitted_callee = make_v7_bytecode(
+        0,
+        0,
+        vec![Op::Constant(0), Op::Return],
+        vec![Value::fixnum(1)],
+        4,
+    );
+    let sym_callee_id = plain_sym("pvm-v7-env-var-callee");
+    let sym_callee = Value::from_sym_id(sym_callee_id);
+    let bind_rec = token(901);
+
+    let plain = HarnessPlain::new()
+        .refuse(depth_sym, PlainRefusal::NotPlain)
+        .refuse(debug_sym, PlainRefusal::NotPlain)
+        .refuse(overrides_sym, PlainRefusal::NotPlain);
+
+    let entry_code = Value::symbol("pvm-v7-env-vars-entry");
+    let code = HarnessVmCode::new(OwnedEntryProgram {
+        ops: vec![
+            Op::Constant(3), // 1 -> setq max-lisp-eval-depth
+            Op::VarSet(0),   // escapes -> refreshes depth_limit = 1
+            Op::Constant(4), // admitted_callee
+            Op::Call(0),     // escapes with Depth!
+            Op::Pop,
+            Op::True,        // t -> setq debug-on-next-call
+            Op::VarSet(1),   // escapes -> refreshes debug_on_next_call = true
+            Op::Constant(4), // admitted_callee
+            Op::Call(0),     // escapes with DebugOnNextCall!
+            Op::Pop,
+            Op::True,        // t -> let-bind internal--compiler-function-overrides
+            Op::VarBind(2),  // escapes -> pushes bind_rec & refreshes compiler_overrides = true
+            Op::Constant(5), // sym_callee
+            Op::Call(0),     // escapes with CompilerOverrides!
+            Op::Unbind(1),
+            Op::Return,
+        ],
+        constants: vec![
+            Value::from_sym_id(depth_sym),
+            Value::from_sym_id(debug_sym),
+            Value::from_sym_id(overrides_sym),
+            Value::fixnum(1),
+            admitted_callee,
+            sym_callee,
+        ],
+        function: entry_code,
+        code: entry_code,
+    });
+    code.bind_symbol(sym_callee_id, admitted_callee);
+
+    let script = vec![
+        Some(completion(&Op::VarSet(0), vec![])),
+        Some(completion(&Op::Call(0), vec![Value::fixnum(10)])),
+        Some(completion(&Op::VarSet(1), vec![])),
+        Some(completion(&Op::Call(0), vec![Value::fixnum(20)])),
+        Some(completion_pushing(&Op::VarBind(2), bind_rec)),
+        Some(completion(&Op::Call(0), vec![Value::fixnum(30)])),
+        Some(completion_popping(&Op::Unbind(1), &[bind_rec])),
+    ];
+    let env_refreshes = vec![
+        None, // run start
+        Some(CallEnv {
+            depth_limit: 1,
+            ..CallEnv::default()
+        }), // after VarSet(max-lisp-eval-depth)
+        None, // after Call(Depth)
+        Some(CallEnv {
+            debug_on_next_call: true,
+            ..CallEnv::default()
+        }), // after VarSet(debug-on-next-call)
+        None, // after Call(DebugOnNextCall)
+        Some(CallEnv {
+            compiler_overrides: true,
+            ..CallEnv::default()
+        }), // after VarBind(internal--compiler-function-overrides)
+        None, // after Call(CompilerOverrides)
+        Some(CallEnv::default()), // after Unbind(1)
+    ];
+
+    let mut engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(script).with_env_refreshes(env_refreshes),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        plain,
+        RecordingPoll::new(),
+    );
+    let outcome = engine.run_with_code(
+        &mut ctx,
+        &code,
+        VmEntry {
+            function: entry_code,
+            code: entry_code,
+            frame_bytes: 0,
+        },
+    );
+    assert_eq!(done_value(&mut engine, outcome), Value::fixnum(30));
+    assert_eq!(
+        engine.call_escapes(),
+        &[
+            CallEscape::Depth,
+            CallEscape::DebugOnNextCall,
+            CallEscape::CompilerOverrides,
+        ],
+        "each refreshed CallEnv immediately governed the subsequent Call"
+    );
+    let esc = engine.escape_handler();
+    assert_eq!(
+        esc.requests[0].why,
+        EscapeWhy::PlainRefused {
+            access: PlainVarAccess::Set,
+            refusal: PlainRefusal::NotPlain,
+        }
+    );
+    assert_eq!(
+        esc.requests[2].why,
+        EscapeWhy::PlainRefused {
+            access: PlainVarAccess::Set,
+            refusal: PlainRefusal::NotPlain,
+        }
+    );
+    assert_eq!(
+        esc.requests[4].why,
+        EscapeWhy::PlainRefused {
+            access: PlainVarAccess::Bind,
+            refusal: PlainRefusal::NotPlain,
+        }
+    );
+    assert_clear(&engine);
+}
+
+#[test]
+fn vm_an_owner_local_call_reads_no_cold_admission() {
+    // V7 §11 & §14 S1: a lazy GNU `ByteCodeFunction` whose admission `OnceLock`
+    // is unset classifies as `ColdAdmission` (escapes), and BOTH its `decoded`
+    // and `iterative_admission` cells stay unset after the call. Once the
+    // serial side warms the cell, a subsequent call runs owner-local with zero
+    // escapes.
+    let mut ctx = context();
+    let lazy_val = Value::make_bytecode(make_lazy_v7_bytecode(
+        0,
+        4,
+        vec![192, 135], // Constant(0), Return
+        vec![Value::fixnum(42)],
+    ));
+    let lazy_bc = lazy_val
+        .bytecode_data_if_materialized()
+        .expect("materialized");
+    let lazy_cell = lazy_bc.lazy_gnu_code().as_ref().expect("lazy cell");
+    assert!(lazy_cell.decoded().is_none());
+    assert!(lazy_cell.iterative_admission().is_none());
+
+    let constants = [lazy_val];
+    let ops = [Op::Constant(0), Op::Call(0), Op::Return];
+
+    // 1. Cold call: escapes with ColdAdmission, and cell remains completely cold.
+    let mut cold_engine = VmExec::new(
+        &(),
+        RecordingEscape::with_script(vec![Some(completion(
+            &Op::Call(0),
+            vec![Value::fixnum(42)],
+        ))]),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let cold_out = cold_engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut cold_engine, cold_out), Value::fixnum(42));
+    assert_eq!(cold_engine.call_escapes(), &[CallEscape::ColdAdmission]);
+    assert!(
+        lazy_cell.decoded().is_none(),
+        "parallel call must not initialize lazy decoded cell"
+    );
+    assert!(
+        lazy_cell.iterative_admission().is_none(),
+        "parallel call must not initialize lazy iterative_admission cell"
+    );
+    assert_clear(&cold_engine);
+
+    // 2. Warm through serial lazy admission, then parallel call runs owner-local!
+    assert_eq!(lazy_bc.lazy_iterative_admission(0), Some(true));
+    let mut warm_engine = VmExec::new(
+        &(),
+        RecordingEscape::new(),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    let warm_out = warm_engine.run(&mut ctx, program_with(&ops, &constants));
+    assert_eq!(done_value(&mut warm_engine, warm_out), Value::fixnum(42));
+    assert_eq!(warm_engine.escape_handler().requests.len(), 0);
+    assert!(warm_engine.call_escapes().is_empty());
+    assert_clear(&warm_engine);
 }
