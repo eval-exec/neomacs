@@ -485,7 +485,7 @@ fn symbol_with_pos_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     }
     assert_eq!(heap.symbol_with_pos_arena.pages.len(), 2);
     assert_eq!(
-        heap.symbol_with_pos_arena.pages[0].allocated,
+        heap.symbol_with_pos_arena.pages[0].allocated(),
         SYMBOL_WITH_POS_PAGE_SLOTS
     );
     // Loader-reconstructed image rows: permanent, full page retires.
@@ -499,10 +499,10 @@ fn symbol_with_pos_survivors_tenure_and_full_pages_retire_body(verify: bool) {
         assert!(unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured });
     }
     assert!(
-        heap.symbol_with_pos_arena.pages[0].retired,
+        heap.symbol_with_pos_arena.pages[0].is_retired(),
         "full page must retire"
     );
-    assert!(!heap.symbol_with_pos_arena.pages[1].retired);
+    assert!(!heap.symbol_with_pos_arena.pages[1].is_retired());
     assert!(heap.owns_non_cons_object(swp_ptr(objs[0])));
     heap.assert_object_arenas_coherent();
 
@@ -525,7 +525,7 @@ fn symbol_with_pos_survivors_tenure_and_full_pages_retire_body(verify: bool) {
             assert_eq!(swp_pos(*b).as_fixnum(), Some(i as i64));
         }
         assert_eq!(
-            heap.symbol_with_pos_arena.pages[0].allocated,
+            heap.symbol_with_pos_arena.pages[0].allocated(),
             SYMBOL_WITH_POS_PAGE_SLOTS
         );
         heap.assert_object_arenas_coherent();
@@ -559,7 +559,7 @@ fn symbol_with_pos_mixed_page_tenured_survive_alternating_parities_body(verify: 
     }
     heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
-    assert!(!heap.symbol_with_pos_arena.pages[0].retired);
+    assert!(!heap.symbol_with_pos_arena.pages[0].is_retired());
 
     for cycle in 0..2 {
         for i in 0..5 {

@@ -371,7 +371,7 @@ impl TaggedHeap {
                 })
                 .count();
             let page_vector_count: usize =
-                self.vector_arena.pages.iter().map(|p| p.allocated).sum();
+                self.vector_arena.pages.iter().map(|p| p.allocated()).sum();
             assert_eq!(
                 self.vector_object_addrs.len(),
                 box_filter_count + page_vector_count,
@@ -1103,31 +1103,37 @@ impl TaggedHeap {
     /// `note_heap_write(VectorBulk)` SATB barrier the caller fires first; this hook
     /// only preserves the snapshot pointer's buffer for the concurrent READ.
     ///
-    /// Safety: `owner` must be a live `VecLikeType::Vector` value on this heap.
+    /// Ignores non-vector values safely.
     pub(crate) fn concurrent_clone_on_write_vector(&mut self, owner: TaggedValue) {
         // No snapshot to protect under the F-G deferral measurement.
         if self.vec_scan == knobs::VecScanMode::Defer {
             return;
         }
+        if owner.veclike_type() != Some(VecLikeType::Vector) {
+            return;
+        }
+        let Some(header) = owner.gc_veclike_ptr() else {
+            return;
+        };
         // First mutation of this owner this cycle? `insert` returns false if already
         // present, so later mutations of the same owner skip the clone (they touch the
         // already-cloned live backing the snapshot does not point at).
         if !self.concurrent_cloned_vectors.insert(owner.bits()) {
             return;
         }
-        let Some(header) = owner.gc_veclike_ptr() else {
-            return;
-        };
-        let obj = unsafe { &mut *(header as *mut VectorObj) };
+        // SAFETY: `veclike_type() == Some(VecLikeType::Vector)` established a live
+        // `VectorObj`; projecting only `data` avoids retagging `header` while a
+        // concurrent marker may atomically claim it.
+        let data = unsafe { &mut *std::ptr::addr_of_mut!((*(header as *mut VectorObj)).data) };
         // Only OWNED backings need cloning: a MAPPED backing reads the immutable dump
         // span the snapshot captured; `ensure_owned` (run by the caller next) promotes
         // it to a brand-new OWNED buffer the snapshot never addresses.
-        if !obj.data.is_owned() {
+        if !data.is_owned() {
             return;
         }
         // Replace the backing with a clone; retire the original so the GC's snapshot
         // pointer keeps addressing it (immutable + alive) until the join free point.
-        if let Some(original) = obj.data.clone_owned_backing() {
+        if let Some(original) = data.clone_owned_backing() {
             self.retired_vector_buffers.push(original);
         }
     }
@@ -1181,6 +1187,20 @@ pub(crate) fn prepare_concurrent_hash_write(
     owner: TaggedValue,
     guard: &mut concurrent_hash::HashTableMutationGuard<'_>,
 ) {
+    assert_eq!(
+        owner.veclike_type(),
+        Some(VecLikeType::HashTable),
+        "prepare_concurrent_hash_write requires a HashTable owner"
+    );
+    let object = owner
+        .gc_veclike_ptr()
+        .expect("HashTable value must have a veclike pointer")
+        as *mut HashTableObj;
+    assert_eq!(
+        object as usize,
+        guard.owner(),
+        "prepare_concurrent_hash_write owner does not match HashTableMutationGuard"
+    );
     // The descriptor lease serializes this election with first-write COW and
     // the caller's mutation. Only its winner needs a per-mutator log lease;
     // the existing owner retrace covers every later inserted child. A panic
@@ -1195,10 +1215,9 @@ pub(crate) fn prepare_concurrent_hash_write(
         // The entry guard covers this payload access, barrier enumeration and
         // the caller's subsequent &mut. It either preserves unread storage,
         // defers admission, or waits until the admitted reader has completed.
-        let object = owner.gc_veclike_ptr().unwrap() as *mut HashTableObj;
-        // SAFETY: `owner` is a live HashTableObj and `guard` serializes this
-        // first-write COW against any admitted concurrent reader before the
-        // caller takes exclusive access to the table payload.
+        // SAFETY: `owner` was verified above to be a live `HashTableObj` matching
+        // `guard.owner()`, and `guard` serializes this first-write COW against any
+        // admitted concurrent reader before the caller takes exclusive payload access.
         guard.clone_on_first_write(
             unsafe { &mut (*object).table.data },
             &mut state.retired_hash_buffers,
@@ -1361,5 +1380,63 @@ impl TaggedHeap {
         let result = update(&mut object.payload);
         self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
         Some(result)
+    }
+}
+
+#[cfg(test)]
+mod concurrent_cow_soundness_tests {
+    use super::*;
+    use crate::value::{HashTableTest, LispHashTable};
+
+    /// GC B8: `concurrent_clone_on_write_vector` must ignore non-vector values
+    /// before touching `concurrent_cloned_vectors` or casting to `VectorObj`.
+    #[test]
+    fn concurrent_clone_on_write_vector_ignores_non_vectors() {
+        let mut heap = TaggedHeap::new();
+        heap.vec_scan = knobs::VecScanMode::Snapshot;
+        let table = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
+        heap.concurrent_clone_on_write_vector(TaggedValue::fixnum(7));
+        heap.concurrent_clone_on_write_vector(table);
+        assert!(
+            heap.concurrent_cloned_vectors.is_empty(),
+            "concurrent_clone_on_write_vector must reject non-vectors before recording or casting"
+        );
+    }
+
+    /// GC B9: `prepare_concurrent_hash_write` must verify `owner` is a
+    /// `HashTable` matching `guard`'s locked owner address before proceeding.
+    #[test]
+    fn prepare_concurrent_hash_write_rejects_wrong_type_or_mismatched_guard() {
+        let mut heap = TaggedHeap::new();
+        let table_a = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
+        let table_b = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
+        let ptr_a = table_a.gc_veclike_ptr().expect("table_a ptr") as usize;
+
+        let mut snapshot = concurrent_hash::HashTableScanSnapshot::new();
+        // SAFETY: `ptr_a` is a live `HashTableObj` owned by `heap`.
+        assert!(unsafe { snapshot.capture_owned(ptr_a, CollectionScope::Full) });
+
+        let mut guard = snapshot
+            .lock_mutation(ptr_a)
+            .expect("captured table_a must lock");
+        // Mark dirty first so pre-fix code returns early without dereferencing
+        // a mismatched value, while post-fix code rejects the mismatch upfront.
+        assert!(guard.claim_dirty());
+
+        let wrong_table = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prepare_concurrent_hash_write(table_b, &mut guard);
+        }));
+        assert!(
+            wrong_table.is_err(),
+            "prepare_concurrent_hash_write must reject a guard locked for a different table"
+        );
+
+        let wrong_type = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prepare_concurrent_hash_write(TaggedValue::fixnum(7), &mut guard);
+        }));
+        assert!(
+            wrong_type.is_err(),
+            "prepare_concurrent_hash_write must reject a non-HashTable owner"
+        );
     }
 }

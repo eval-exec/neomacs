@@ -968,7 +968,10 @@ fn bytecode_survivors_tenure_and_full_pages_retire_body(verify: bool) {
         root = heap.alloc_cons(b, root);
     }
     assert_eq!(heap.bytecode_arena.pages.len(), 2);
-    assert_eq!(heap.bytecode_arena.pages[0].allocated, BYTECODE_PAGE_SLOTS);
+    assert_eq!(
+        heap.bytecode_arena.pages[0].allocated(),
+        BYTECODE_PAGE_SLOTS
+    );
     // Loader-reconstructed image rows: permanent, full page retires.
     for &b in &bytecodes {
         assert_eq!(heap.note_image_object(b), ImageStamp::Stamped);
@@ -986,15 +989,16 @@ fn bytecode_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     }
     // The FULL page retired; the partial overflow page did not.
     assert!(
-        heap.bytecode_arena.pages[0].retired,
+        heap.bytecode_arena.pages[0].is_retired(),
         "full page must retire"
     );
     assert!(
-        !heap.bytecode_arena.pages[1].retired,
+        !heap.bytecode_arena.pages[1].is_retired(),
         "partial page retired"
     );
     assert_eq!(
-        heap.bytecode_arena.pages[0].allocated, BYTECODE_PAGE_SLOTS,
+        heap.bytecode_arena.pages[0].allocated(),
+        BYTECODE_PAGE_SLOTS,
         "retired page must stay full",
     );
     // C1: retired-page slots STAY owned via the page oracle.
@@ -1046,7 +1050,10 @@ fn bytecode_survivors_tenure_and_full_pages_retire_body(verify: bool) {
             Some(777_777),
             "retired-page owner's young cons child lost on cycle {cycle} (C1)",
         );
-        assert_eq!(heap.bytecode_arena.pages[0].allocated, BYTECODE_PAGE_SLOTS);
+        assert_eq!(
+            heap.bytecode_arena.pages[0].allocated(),
+            BYTECODE_PAGE_SLOTS
+        );
         heap.assert_object_arenas_coherent();
     }
 }
@@ -1091,7 +1098,7 @@ fn bytecode_mixed_page_tenured_survive_alternating_parities_body(verify: bool) {
     // ⇒ a MIXED page.
     heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
-    assert!(!heap.bytecode_arena.pages[0].retired);
+    assert!(!heap.bytecode_arena.pages[0].is_retired());
 
     // Refill freed slots with YOUNG garbage, one cycle per parity.
     for cycle in 0..2 {

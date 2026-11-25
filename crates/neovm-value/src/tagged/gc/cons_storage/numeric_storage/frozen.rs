@@ -184,11 +184,12 @@ unsafe fn mint_raw_page<T: PagedObject>(base: *mut ObjectPage<T>, index: usize) 
     // SAFETY: the caller proves this index is in the final descriptor buffer.
     unsafe {
         let descriptor = base.add(index);
+        let (payload, bits, occupancy) = ObjectPage::raw_frozen_parts(descriptor);
         RawPage {
             page: index,
-            payload: std::ptr::addr_of!((*descriptor).storage).read(),
-            bits: std::ptr::addr_of_mut!((*descriptor).alloc_bits).cast::<usize>(),
-            occupancy: std::ptr::addr_of_mut!((*descriptor).allocated),
+            payload,
+            bits,
+            occupancy,
             slots: ObjectPage::<T>::SLOTS,
         }
     }

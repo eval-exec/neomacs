@@ -465,12 +465,26 @@ impl TaggedHeap {
     fn refill_float_region(&mut self) -> *mut FloatObj {
         self.close_float_region();
         let want = self.region_budget(size_of::<FloatObj>(), FLOAT_REGION_MAX_SLOTS);
-        let run = self.float_arena.reserve_run(want);
+        // SAFETY: the loop immediately below writes a full initialized `FloatObj`
+        // header and payload into every slot in `0..run.count` before yielding.
+        let run = unsafe { self.float_arena.reserve_run(want) };
         debug_assert!(run.count >= 1 && run.count <= want);
         let parity = self.mark_parity;
         let page = &self.float_arena.pages[run.page];
+        assert!(
+            run.first
+                .checked_add(run.count)
+                .is_some_and(|end| end <= ObjectPage::<FloatObj>::SLOTS),
+            "reserved float run {}..+{} exceeds page SLOTS {}",
+            run.first,
+            run.count,
+            ObjectPage::<FloatObj>::SLOTS
+        );
+        let first = page.slot_ptr(run.first);
         for i in 0..run.count {
-            let slot = page.slot_ptr(run.first + i);
+            // SAFETY: `run.first + run.count <= SLOTS` was verified once above,
+            // so `first + i * FLOAT_SLOT` stays within the 64KB page storage.
+            let slot = unsafe { (first as *mut u8).add(i * FLOAT_SLOT).cast::<FloatObj>() };
             // SAFETY: a reserved slot of an owned page. FULL-HEADER WRITE:
             // never partially reuse prior slot bytes (see `alloc_float`).
             unsafe {
@@ -483,7 +497,6 @@ impl TaggedHeap {
                 );
             }
         }
-        let first = page.slot_ptr(run.first);
         if self.generational.enabled {
             self.note_black_float_region_start(first);
         }

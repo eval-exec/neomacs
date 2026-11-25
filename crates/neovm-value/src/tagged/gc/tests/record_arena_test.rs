@@ -551,7 +551,7 @@ fn record_survivors_tenure_and_full_pages_retire_body(verify: bool) {
         root = heap.alloc_cons(b, root);
     }
     assert_eq!(heap.record_arena.pages.len(), 2);
-    assert_eq!(heap.record_arena.pages[0].allocated, RECORD_PAGE_SLOTS);
+    assert_eq!(heap.record_arena.pages[0].allocated(), RECORD_PAGE_SLOTS);
     // Loader-reconstructed image rows: permanent, full page retires.
     for &b in &records {
         assert_eq!(heap.note_image_object(b), ImageStamp::Stamped);
@@ -562,8 +562,11 @@ fn record_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     for b in &records {
         assert!(unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured });
     }
-    assert!(heap.record_arena.pages[0].retired, "full page must retire");
-    assert!(!heap.record_arena.pages[1].retired);
+    assert!(
+        heap.record_arena.pages[0].is_retired(),
+        "full page must retire"
+    );
+    assert!(!heap.record_arena.pages[1].is_retired());
     assert!(heap.owns_non_cons_object(rec_ptr(records[0])));
     heap.assert_object_arenas_coherent();
 
@@ -585,7 +588,7 @@ fn record_survivors_tenure_and_full_pages_retire_body(verify: bool) {
             );
             assert_eq!(rec_slot(*b, 0).as_fixnum(), Some(i as i64));
         }
-        assert_eq!(heap.record_arena.pages[0].allocated, RECORD_PAGE_SLOTS);
+        assert_eq!(heap.record_arena.pages[0].allocated(), RECORD_PAGE_SLOTS);
         heap.assert_object_arenas_coherent();
     }
 }
@@ -617,7 +620,7 @@ fn record_mixed_page_tenured_survive_alternating_parities_body(verify: bool) {
     }
     heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
-    assert!(!heap.record_arena.pages[0].retired);
+    assert!(!heap.record_arena.pages[0].is_retired());
 
     for cycle in 0..2 {
         for i in 0..5 {

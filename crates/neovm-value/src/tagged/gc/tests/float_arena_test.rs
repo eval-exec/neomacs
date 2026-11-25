@@ -971,7 +971,8 @@ fn numeric_owner_reconcile_returns_older_page_suffix_to_serial_allocation() {
     // All uninitialized capacity of BOTH pages must be allocatable without
     // collecting. This exercises actual alloc_slot, not a duplicate allocator.
     for offset in 0..(2 * slots - 1) {
-        let slot = arena.alloc_slot();
+        // SAFETY: the loop immediately initializes `slot` with a full `FloatObj`.
+        let slot = unsafe { arena.alloc_slot() };
         // SAFETY: alloc_slot grants this fixture one exclusive slot and sets
         // its bit. A complete FloatObj is written immediately, before any
         // assertion or possible unwind can let ObjectPage::Drop see the bit.
@@ -999,8 +1000,8 @@ fn numeric_owner_reconcile_returns_older_page_suffix_to_serial_allocation() {
         }),
         "every serial result must lie in one of the two original pages"
     );
-    assert_eq!(arena.pages[older].allocated, slots);
-    assert_eq!(arena.pages[newest].allocated, slots);
+    assert_eq!(arena.pages[older].allocated(), slots);
+    assert_eq!(arena.pages[newest].allocated(), slots);
     // All set bits now have valid complete FloatObjs, including on failure.
 }
 
@@ -1029,15 +1030,15 @@ fn numeric_owner_remint_claims_two_distinct_empty_reconciled_pages() {
     for index in [first, second] {
         let page = &arena.pages[index];
         assert!(original_bases.contains(&page.base_addr()));
-        assert_eq!(page.allocated, 0);
-        assert!(page.alloc_bits.iter().all(|&word| word == 0));
-        assert_eq!(page.next_index, slots);
+        assert_eq!(page.allocated(), 0);
+        assert!(page.alloc_bits().iter().all(|&word| word == 0));
+        assert_eq!(page.next_index(), slots);
         assert!(
-            !page.on_partial,
+            !page.on_partial(),
             "a minted page is no longer serial-allocatable"
         );
-        assert_eq!(page.free_head, PAGE_NONE);
-        assert_eq!(page.next_partial, PAGE_NONE);
+        assert_eq!(page.free_head(), PAGE_NONE);
+        assert_eq!(page.next_partial(), PAGE_NONE);
     }
     // Both pages remain entirely Uninit with clear bits, so Drop reads no
     // slot payload. The test creates no fake initialized float or bitmap bit.
@@ -1076,8 +1077,8 @@ fn numeric_owner_uninitialized_suffix_never_becomes_a_dropped_payload() {
     // must not make unwinding inspect uninitialized Arc payloads.
     let mut arena = ManuallyDrop::new(ObjectArena::<Counted>::new(None));
     let page = arena.mint_uninit_numeric_owner_page(0);
-    assert_eq!(arena.pages[page].allocated, 0);
-    assert!(arena.pages[page].alloc_bits.iter().all(|&word| word == 0));
+    assert_eq!(arena.pages[page].allocated(), 0);
+    assert!(arena.pages[page].alloc_bits().iter().all(|&word| word == 0));
     for index in 0..2 {
         // SAFETY: this fixture exclusively owns the clear-bit page. Write the
         // complete counted object before marking its slot initialized.
@@ -1091,10 +1092,10 @@ fn numeric_owner_uninitialized_suffix_never_becomes_a_dropped_payload() {
     }
     arena.reconcile_numeric_owner_page(page, 2);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
-    assert_eq!(arena.pages[page].allocated, 2);
-    assert_eq!(arena.pages[page].alloc_bits[0], 3);
+    assert_eq!(arena.pages[page].allocated(), 2);
+    assert_eq!(arena.pages[page].alloc_bits()[0], 3);
     assert!(
-        arena.pages[page].alloc_bits[1..]
+        arena.pages[page].alloc_bits()[1..]
             .iter()
             .all(|&word| word == 0)
     );
@@ -1126,8 +1127,8 @@ fn numeric_owner_recovery_never_reuses_an_already_recovered_descriptor() {
     assert_ne!(base, arena.pages[second].base_addr());
     assert_eq!(arena.pages.len(), 2);
     for page in &arena.pages {
-        assert_eq!(page.allocated, 0);
-        assert!(page.alloc_bits.iter().all(|&bits| bits == 0));
+        assert_eq!(page.allocated(), 0);
+        assert!(page.alloc_bits().iter().all(|&bits| bits == 0));
     }
     arena.reconcile_numeric_owner_page(first, 0);
     arena.reconcile_numeric_owner_page(second, 0);

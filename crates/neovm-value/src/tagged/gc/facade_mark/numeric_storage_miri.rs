@@ -31,9 +31,9 @@ fn shape<T: PagedObject>(arena: &ObjectArena<T>) -> OwnedShape {
             .map(|page| {
                 (
                     page.base_addr(),
-                    page.next_index,
-                    page.allocated,
-                    page.alloc_bits.to_vec(),
+                    page.next_index(),
+                    page.allocated(),
+                    page.alloc_bits().to_vec(),
                 )
             })
             .collect(),

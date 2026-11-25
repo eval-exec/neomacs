@@ -91,7 +91,8 @@ impl TaggedHeap {
 
         self.add_memory_use_count(MemoryUseCountSlot::Strings, 1);
         self.add_memory_use_count(MemoryUseCountSlot::StringChars, s.sbytes() as u64);
-        let ptr = self.string_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.string_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -191,7 +192,8 @@ impl TaggedHeap {
     /// `alloc_vector` and by strict-provenance Miri tests.
     pub(crate) fn alloc_vector_raw(&mut self, items: Vec<TaggedValue>) -> *mut VectorObj {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, items.len() as u64);
-        let ptr = self.vector_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.vector_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -346,7 +348,8 @@ impl TaggedHeap {
     /// defers every lambda to the STW termination drain (concurrent claiming
     /// is a future task); `mark_value`'s owned veclike arm traces it as before.
     pub fn alloc_lambda(&mut self, slots: Vec<TaggedValue>) -> TaggedValue {
-        let ptr = self.lambda_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.lambda_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -383,7 +386,8 @@ impl TaggedHeap {
     /// 03/3b — same discipline as `alloc_lambda`, own arena at the shared
     /// 128B stride; `drop_in_place` frees the slot `Vec` + cached params).
     pub fn alloc_macro(&mut self, slots: Vec<TaggedValue>) -> TaggedValue {
-        let ptr = self.macro_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.macro_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -711,7 +715,8 @@ impl TaggedHeap {
         &mut self,
         data: crate::tagged::bytecode::chunk::ByteCodeFunction,
     ) -> TaggedValue {
-        let ptr = self.bytecode_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.bytecode_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -766,7 +771,8 @@ impl TaggedHeap {
         // The image copies the execution certificate; it does not clear it.
         let image = proto.instance_image();
 
-        let ptr = self.bytecode_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.bytecode_arena.alloc_slot() };
         // SAFETY: `ptr` is a claimed, correctly aligned slot of this heap's
         // bytecode arena. Every field is written exactly once through a raw
         // field pointer (never through a reference to the uninitialized
@@ -859,7 +865,8 @@ impl TaggedHeap {
             tag,
             VecLikeType::Record | VecLikeType::WindowConfiguration | VecLikeType::TsNode
         ));
-        let ptr = self.record_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.record_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -925,7 +932,8 @@ impl TaggedHeap {
         // class free list, so `save-excursion`'s make/free churn cycles
         // through a few cache-warm slots instead of scattering `Box`es
         // across the general heap.
-        let ptr = self.marker_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.marker_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -981,7 +989,8 @@ impl TaggedHeap {
     /// escapes (the `alloc_float_inline` pattern).
     #[inline(always)]
     pub(crate) fn alloc_bignum_inline(&mut self, value: Integer) -> TaggedValue {
-        let ptr = self.bignum_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.bignum_arena.alloc_slot() };
         unsafe {
             std::ptr::write(
                 ptr,
@@ -1019,7 +1028,8 @@ impl TaggedHeap {
     /// entry (owned via the page-span oracle, routed by owns_veclike_object;
     /// free_gc_object's SymbolWithPos arm stays the residual-Box seam).
     pub fn alloc_symbol_with_pos(&mut self, sym: TaggedValue, pos: TaggedValue) -> TaggedValue {
-        let ptr = self.symbol_with_pos_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.symbol_with_pos_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(

@@ -2709,15 +2709,19 @@ impl TaggedHeap {
             );
             let page = &arena.pages[cursor];
             assert!(
-                page.on_partial,
+                page.on_partial(),
                 "chained page {cursor} not flagged on_partial"
             );
-            assert!(!page.retired, "retired page {cursor} on the partial chain");
+            assert!(
+                !page.is_retired(),
+                "retired page {cursor} on the partial chain"
+            );
             assert_ne!(
-                page.free_head, PAGE_NONE,
+                page.free_head(),
+                PAGE_NONE,
                 "chained page {cursor} has an empty free list",
             );
-            cursor = page.next_partial;
+            cursor = page.next_partial();
         }
         for (page_index, page) in arena.pages.iter().enumerate() {
             assert_eq!(
@@ -2728,34 +2732,34 @@ impl TaggedHeap {
                 T::CLASS,
             );
             assert_eq!(
-                page.on_partial,
+                page.on_partial(),
                 on_chain.contains(&page_index),
                 "page {page_index} on_partial flag disagrees with the chain",
             );
-            if page.retired {
+            if page.is_retired() {
                 // Retirement invariants: full, no free slots, off the chain.
                 assert_eq!(
-                    page.allocated,
+                    page.allocated(),
                     ObjectPage::<T>::SLOTS,
                     "retired {} page {page_index} is not full",
                     T::CLASS,
                 );
-                assert_eq!(page.free_head, PAGE_NONE, "retired page with free slots");
-                assert!(!page.on_partial, "retired page on the partial chain");
+                assert_eq!(page.free_head(), PAGE_NONE, "retired page with free slots");
+                assert!(!page.on_partial(), "retired page on the partial chain");
             }
             // Occupancy == bitmap popcount; every allocated slot is
             // bump-reached, answers OWNED via the page-span oracle, and is
             // NOT in the residual addr-set.
             let mut popcount = 0usize;
             for word_index in 0..ObjectPage::<T>::ALLOC_WORDS {
-                let mut bits = page.alloc_bits[word_index];
+                let mut bits = page.alloc_bits()[word_index];
                 popcount += bits.count_ones() as usize;
                 while bits != 0 {
                     let bit = bits.trailing_zeros() as usize;
                     bits &= bits - 1;
                     let index = word_index * usize::BITS as usize + bit;
                     assert!(
-                        index < page.next_index,
+                        index < page.next_index(),
                         "allocated bit beyond the bump cursor",
                     );
                     let addr = page.slot_ptr(index) as usize;
@@ -2772,17 +2776,18 @@ impl TaggedHeap {
                 }
             }
             assert_eq!(
-                page.allocated, popcount,
+                page.allocated(),
+                popcount,
                 "page {page_index} occupancy != bitmap popcount",
             );
             // Free list: entries bump-reached, bit-clear, duplicate-free,
             // NOT owned per the oracle, and together with the allocated
             // slots exactly cover the bumped span.
             let mut free_seen: HashSet<usize> = HashSet::new();
-            let mut fcursor = page.free_head;
+            let mut fcursor = page.free_head();
             while fcursor != PAGE_NONE {
                 assert!(
-                    fcursor < page.next_index,
+                    fcursor < page.next_index(),
                     "free slot beyond the bump cursor"
                 );
                 assert!(
@@ -2800,13 +2805,13 @@ impl TaggedHeap {
                 fcursor = unsafe { page.free_link_ptr(fcursor).read() };
             }
             assert_eq!(
-                page.allocated + free_seen.len(),
-                page.next_index,
+                page.allocated() + free_seen.len(),
+                page.next_index(),
                 "page {page_index}: occupancy + free-list length != bump cursor",
             );
-            if page.free_head != PAGE_NONE {
+            if page.free_head() != PAGE_NONE {
                 assert!(
-                    page.on_partial,
+                    page.on_partial(),
                     "page {page_index} has free slots but is off the partial chain",
                 );
             }

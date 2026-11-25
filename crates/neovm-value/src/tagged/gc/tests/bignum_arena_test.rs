@@ -497,7 +497,7 @@ fn bignum_survivors_tenure_and_full_pages_retire_body(verify: bool) {
         root = heap.alloc_cons(b, root);
     }
     assert_eq!(heap.bignum_arena.pages.len(), 2);
-    assert_eq!(heap.bignum_arena.pages[0].allocated, BIGNUM_PAGE_SLOTS);
+    assert_eq!(heap.bignum_arena.pages[0].allocated(), BIGNUM_PAGE_SLOTS);
     // Loader-reconstructed image rows: permanent, full page retires.
     for &b in &bigs {
         assert_eq!(heap.note_image_object(b), ImageStamp::Stamped);
@@ -508,8 +508,11 @@ fn bignum_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     for b in &bigs {
         assert!(unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured });
     }
-    assert!(heap.bignum_arena.pages[0].retired, "full page must retire");
-    assert!(!heap.bignum_arena.pages[1].retired);
+    assert!(
+        heap.bignum_arena.pages[0].is_retired(),
+        "full page must retire"
+    );
+    assert!(!heap.bignum_arena.pages[1].is_retired());
     assert!(heap.owns_non_cons_object(big_ptr(bigs[0])));
     heap.assert_object_arenas_coherent();
 
@@ -531,7 +534,7 @@ fn bignum_survivors_tenure_and_full_pages_retire_body(verify: bool) {
             );
             assert_big(*b, i as i64);
         }
-        assert_eq!(heap.bignum_arena.pages[0].allocated, BIGNUM_PAGE_SLOTS);
+        assert_eq!(heap.bignum_arena.pages[0].allocated(), BIGNUM_PAGE_SLOTS);
         heap.assert_object_arenas_coherent();
     }
 }

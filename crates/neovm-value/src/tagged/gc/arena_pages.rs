@@ -382,29 +382,29 @@ pub(super) const BIGNUM_PAGE_SLOTS: usize =
 /// its bit clears, replacing float-v1's explicit addr-set evict-before-free.
 pub(super) struct ObjectPage<T: PagedObject> {
     /// 64KB of raw slot storage, aligned to 64KB (`OBJECT_PAGE_ALIGN`).
-    pub(super) storage: *mut u8,
+    storage: *mut u8,
     /// Bump cursor: index of the first never-allocated slot.
-    pub(super) next_index: usize,
+    next_index: usize,
     /// Per-slot allocation bitmap (bit set ⇔ slot holds a live `T`). Sized
     /// for the smallest stride; this class uses the first `ALLOC_WORDS`.
-    pub(super) alloc_bits: [usize; OBJECT_PAGE_MAX_ALLOC_WORDS],
+    alloc_bits: [usize; OBJECT_PAGE_MAX_ALLOC_WORDS],
     /// Occupancy: number of set bits in `alloc_bits`.
-    pub(super) allocated: usize,
+    allocated: usize,
     /// Page-local free list: head slot index, linked through each free slot's
     /// trailing link word (`FREE_LINK_OFFSET`). `PAGE_NONE` = empty.
-    pub(super) free_head: usize,
+    free_head: usize,
     /// Class free list ("pages with free slots") chain: index of the next
     /// such page in the arena, `PAGE_NONE` at the tail.
-    pub(super) next_partial: usize,
+    next_partial: usize,
     /// Whether this page is currently linked on the arena's partial chain.
-    pub(super) on_partial: bool,
+    on_partial: bool,
     /// RETIRED (promotion, stage-3 commit 4): the page was full of tenured
     /// slots at the one-time promotion. Never swept, never allocated into
     /// (it has no free slots and never gains any), freed at heap teardown —
     /// but it STAYS in the page-base registry so the ownership oracle keeps
     /// answering "owned" for its slots (see the C1 note in the module doc).
-    pub(super) retired: bool,
-    pub(super) _class: std::marker::PhantomData<*mut T>,
+    retired: bool,
+    _class: std::marker::PhantomData<*mut T>,
 }
 
 impl<T: PagedObject> ObjectPage<T> {
@@ -440,17 +440,27 @@ impl<T: PagedObject> ObjectPage<T> {
 
     /// A fresh page over newly allocated storage.
     pub(super) fn new() -> Self {
-        Self::over_storage(Self::alloc_storage())
+        // SAFETY: `alloc_storage` returns a fresh, uniquely owned 64KB-aligned block.
+        unsafe { Self::over_storage(Self::alloc_storage()) }
     }
 
     /// A fresh page over `storage`, 64KB-aligned slot memory from
     /// `alloc_storage` that no page owns (a released page's, or new). Its
     /// bytes are garbage either way: every slot is full-header-written when
     /// allocated.
-    pub(super) fn over_storage(storage: *mut u8) -> Self {
+    ///
+    /// # Safety
+    /// `storage` must be a non-null, uniquely owned allocation produced by
+    /// `Self::alloc_storage()` (matching `Self::layout()`) that no other
+    /// `ObjectPage` owns; `Drop` will deallocate it with `Self::layout()`.
+    pub(super) unsafe fn over_storage(storage: *mut u8) -> Self {
         // Force the per-class layout proofs (compile-time).
         #[allow(clippy::let_unit_value)]
         let () = Self::LAYOUT_OK;
+        assert!(
+            !storage.is_null() && (storage as usize).is_multiple_of(OBJECT_PAGE_ALIGN),
+            "ObjectPage::over_storage requires 64KB-aligned non-null storage"
+        );
         Self {
             storage,
             next_index: 0,
@@ -488,8 +498,8 @@ impl<T: PagedObject> ObjectPage<T> {
 
     /// Dissolve an EMPTY page, keeping its storage for a later page.
     pub(super) fn into_storage(self) -> *mut u8 {
-        debug_assert_eq!(self.allocated, 0, "only an empty page gives up its storage");
-        debug_assert!(!self.retired, "a retired page is never released");
+        assert_eq!(self.allocated, 0, "only an empty page gives up its storage");
+        assert!(!self.retired, "a retired page is never released");
         let storage = self.storage;
         // No slot is allocated, so there is no payload to drop; forgetting
         // the page skips only the storage free.
@@ -503,8 +513,89 @@ impl<T: PagedObject> ObjectPage<T> {
     }
 
     #[inline]
+    pub(super) fn next_index(&self) -> usize {
+        self.next_index
+    }
+
+    #[inline]
+    pub(super) fn alloc_bits(&self) -> &[usize; OBJECT_PAGE_MAX_ALLOC_WORDS] {
+        &self.alloc_bits
+    }
+
+    #[inline]
+    pub(super) fn allocated(&self) -> usize {
+        self.allocated
+    }
+
+    #[inline]
+    pub(super) fn free_head(&self) -> usize {
+        self.free_head
+    }
+
+    #[inline]
+    pub(super) fn next_partial(&self) -> usize {
+        self.next_partial
+    }
+
+    #[inline]
+    pub(super) fn on_partial(&self) -> bool {
+        self.on_partial
+    }
+
+    #[inline]
+    pub(super) fn is_retired(&self) -> bool {
+        self.retired
+    }
+
+    /// Mark a full, off-partial-chain page as retired (all slots permanent).
+    pub(super) fn retire_full(&mut self) {
+        assert_eq!(self.allocated, Self::SLOTS, "only a full page may retire");
+        assert!(!self.on_partial, "full page on the partial chain");
+        assert_eq!(self.free_head, PAGE_NONE, "full page has free slots");
+        self.retired = true;
+    }
+
+    /// Derive raw pointers to `(storage, alloc_bits, allocated)` directly from
+    /// a raw page descriptor without forming `&ObjectPage<T>`.
+    ///
+    /// # Safety
+    /// `descriptor` must point to a valid, stable `ObjectPage<T>` inside a
+    /// frozen numeric descriptor buffer with no conflicting references while
+    /// the returned pointers are used.
+    pub(super) unsafe fn raw_frozen_parts(
+        descriptor: *mut Self,
+    ) -> (*mut u8, *mut usize, *mut usize) {
+        // SAFETY: caller guarantees `descriptor` addresses a valid `ObjectPage<T>`.
+        unsafe {
+            (
+                std::ptr::addr_of!((*descriptor).storage).read(),
+                std::ptr::addr_of_mut!((*descriptor).alloc_bits).cast::<usize>(),
+                std::ptr::addr_of_mut!((*descriptor).allocated),
+            )
+        }
+    }
+
+    #[inline]
     pub(super) fn slot_ptr(&self, index: usize) -> *mut T {
+        assert!(
+            index < Self::SLOTS,
+            "ObjectPage::slot_ptr index {index} >= SLOTS {}",
+            Self::SLOTS
+        );
+        // SAFETY: `index < Self::SLOTS` verified above.
+        unsafe { self.slot_ptr_unchecked(index) }
+    }
+
+    /// Module-private zero-overhead slot pointer for arena hot paths whose
+    /// invariants already guarantee `index < Self::SLOTS`.
+    ///
+    /// # Safety
+    /// `index` must be strictly less than `Self::SLOTS`.
+    #[inline(always)]
+    unsafe fn slot_ptr_unchecked(&self, index: usize) -> *mut T {
         debug_assert!(index < Self::SLOTS);
+        // SAFETY: caller guarantees `index < Self::SLOTS` and `LAYOUT_OK` proved
+        // `SLOTS * SLOT_BYTES <= OBJECT_PAGE_BYTES`.
         unsafe { self.storage.add(index * T::SLOT_BYTES).cast() }
     }
 
@@ -518,6 +609,9 @@ impl<T: PagedObject> ObjectPage<T> {
 
     #[inline]
     pub(super) fn is_allocated(&self, index: usize) -> bool {
+        if index >= Self::SLOTS {
+            return false;
+        }
         let word = index / usize::BITS as usize;
         let mask = 1usize << (index % usize::BITS as usize);
         (self.alloc_bits[word] & mask) != 0
@@ -526,17 +620,45 @@ impl<T: PagedObject> ObjectPage<T> {
     /// Set slot `index`'s alloc bit (it must be clear) and bump occupancy.
     #[inline]
     pub(super) fn set_allocated(&mut self, index: usize) {
+        assert!(
+            index < Self::SLOTS,
+            "ObjectPage::set_allocated index {index} >= SLOTS {}",
+            Self::SLOTS
+        );
+        // SAFETY: `index < Self::SLOTS` verified above.
+        unsafe { self.set_allocated_unchecked(index) };
+    }
+
+    /// Module-private zero-overhead `set_allocated` for arena hot paths whose
+    /// invariants already guarantee `index < Self::SLOTS`.
+    ///
+    /// # Safety
+    /// `index` must be strictly less than `Self::SLOTS` and currently unallocated.
+    #[inline(always)]
+    unsafe fn set_allocated_unchecked(&mut self, index: usize) {
+        debug_assert!(index < Self::SLOTS);
         debug_assert!(!self.is_allocated(index), "arena slot double-allocated");
-        self.alloc_bits[index / usize::BITS as usize] |= 1usize << (index % usize::BITS as usize);
+        let word = index / usize::BITS as usize;
+        // SAFETY: `index < Self::SLOTS` and `LAYOUT_OK` proved
+        // `ALLOC_WORDS <= OBJECT_PAGE_MAX_ALLOC_WORDS`, so `word < alloc_bits.len()`.
+        unsafe {
+            *self.alloc_bits.get_unchecked_mut(word) |= 1usize << (index % usize::BITS as usize);
+        }
         self.allocated += 1;
     }
 
     /// Set the alloc bits of slots `[start, start + n)` (all clear: fresh
     /// bump-tail slots) and add `n` to occupancy, a word at a time.
     pub(super) fn set_allocated_range(&mut self, start: usize, n: usize) {
-        debug_assert!(start + n <= Self::SLOTS);
+        let end = start
+            .checked_add(n)
+            .expect("ObjectPage::set_allocated_range overflow");
+        assert!(
+            end <= Self::SLOTS,
+            "ObjectPage::set_allocated_range end {end} > SLOTS {}",
+            Self::SLOTS
+        );
         let mut i = start;
-        let end = start + n;
         while i < end {
             let bit = i % usize::BITS as usize;
             let span = (usize::BITS as usize - bit).min(end - i);
@@ -557,9 +679,15 @@ impl<T: PagedObject> ObjectPage<T> {
     /// allocation region's unhanded tail going back to the bump cursor) and
     /// subtract `n` from occupancy.
     pub(super) fn clear_allocated_range(&mut self, start: usize, n: usize) {
-        debug_assert!(start + n <= Self::SLOTS);
+        let end = start
+            .checked_add(n)
+            .expect("ObjectPage::clear_allocated_range overflow");
+        assert!(
+            end <= Self::SLOTS,
+            "ObjectPage::clear_allocated_range end {end} > SLOTS {}",
+            Self::SLOTS
+        );
         let mut i = start;
-        let end = start + n;
         while i < end {
             let bit = i % usize::BITS as usize;
             let span = (usize::BITS as usize - bit).min(end - i);
@@ -579,7 +707,25 @@ impl<T: PagedObject> ObjectPage<T> {
     /// The free-list link word of slot `index` (meaningful only while free).
     #[inline]
     pub(super) fn free_link_ptr(&self, index: usize) -> *mut usize {
+        assert!(
+            index < Self::SLOTS,
+            "ObjectPage::free_link_ptr index {index} >= SLOTS {}",
+            Self::SLOTS
+        );
+        // SAFETY: `index < Self::SLOTS` verified above.
+        unsafe { self.free_link_ptr_unchecked(index) }
+    }
+
+    /// Module-private zero-overhead free-list link pointer for arena hot paths
+    /// whose invariants already guarantee `index < Self::SLOTS`.
+    ///
+    /// # Safety
+    /// `index` must be strictly less than `Self::SLOTS`.
+    #[inline(always)]
+    unsafe fn free_link_ptr_unchecked(&self, index: usize) -> *mut usize {
         debug_assert!(index < Self::SLOTS);
+        // SAFETY: caller guarantees `index < Self::SLOTS` and `LAYOUT_OK` proved
+        // `FREE_LINK_OFFSET + size_of::<usize>() <= SLOT_BYTES`.
         unsafe {
             self.storage
                 .add(index * T::SLOT_BYTES + Self::FREE_LINK_OFFSET)
@@ -599,7 +745,9 @@ impl<T: PagedObject> ObjectPage<T> {
             !self.is_allocated(index),
             "free-listed arena slot has its alloc bit set",
         );
-        self.free_head = unsafe { self.free_link_ptr(index).read() };
+        // SAFETY: `free_head` is private to `ObjectPage`/`ObjectArena` and only
+        // ever holds `PAGE_NONE` or a previously freed slot index `< Self::SLOTS`.
+        self.free_head = unsafe { self.free_link_ptr_unchecked(index).read() };
         Some(index)
     }
 
@@ -613,12 +761,37 @@ impl<T: PagedObject> ObjectPage<T> {
     /// in place and must never be read again (allocated-bit-first).
     #[inline]
     pub(super) fn free_slot(&mut self, index: usize) {
+        assert!(
+            index < Self::SLOTS,
+            "ObjectPage::free_slot index {index} >= SLOTS {}",
+            Self::SLOTS
+        );
+        assert!(self.is_allocated(index), "arena slot double-freed");
+        assert!(!self.retired, "freed a slot in a retired page");
+        // SAFETY: bounds, live allocation bit, and non-retired state verified above.
+        unsafe { self.free_slot_unchecked(index) };
+    }
+
+    /// Module-private zero-overhead `free_slot` for sweep hot loops where
+    /// `!self.retired` and `index` popped from `self.alloc_bits` are already
+    /// established.
+    ///
+    /// # Safety
+    /// `index < Self::SLOTS`, slot `index` must currently be allocated in
+    /// `self.alloc_bits`, and `!self.retired` must hold.
+    #[inline(always)]
+    unsafe fn free_slot_unchecked(&mut self, index: usize) {
+        debug_assert!(index < Self::SLOTS);
         debug_assert!(self.is_allocated(index), "arena slot double-freed");
         debug_assert!(!self.retired, "freed a slot in a retired page");
-        self.alloc_bits[index / usize::BITS as usize] &=
-            !(1usize << (index % usize::BITS as usize));
+        let word = index / usize::BITS as usize;
+        // SAFETY: `index < Self::SLOTS` and `LAYOUT_OK` proved `word < alloc_bits.len()`.
+        unsafe {
+            *self.alloc_bits.get_unchecked_mut(word) &= !(1usize << (index % usize::BITS as usize));
+        }
         self.allocated -= 1;
-        unsafe { self.free_link_ptr(index).write(self.free_head) };
+        // SAFETY: `index < Self::SLOTS` guaranteed by caller; slot is now free.
+        unsafe { self.free_link_ptr_unchecked(index).write(self.free_head) };
         self.free_head = index;
     }
 
@@ -667,7 +840,8 @@ impl<T: PagedObject> ObjectPage<T> {
                     let bit = bits.trailing_zeros() as usize;
                     bits &= bits - 1;
                     let index = word_index * usize::BITS as usize + bit;
-                    let slot = self.slot_ptr(index);
+                    // SAFETY: `alloc_bits` is private and only ever has bits set for `index < Self::SLOTS`.
+                    let slot = unsafe { self.slot_ptr_unchecked(index) };
                     if OBSERVED {
                         unsafe { &*(slot as *const GcHeader) }.clear_collection_observed();
                     }
@@ -769,7 +943,8 @@ impl<T: PagedObject> ObjectArena<T> {
         let mut page = match self.spare_storage.pop() {
             Some(storage) => {
                 self.spare_unused_floor = self.spare_unused_floor.min(self.spare_storage.len());
-                ObjectPage::<T>::over_storage(storage)
+                // SAFETY: `storage` came from `into_storage()` of a released `ObjectPage<T>`.
+                unsafe { ObjectPage::<T>::over_storage(storage) }
             }
             None => ObjectPage::<T>::new(),
         };
@@ -868,7 +1043,8 @@ impl<T: PagedObject> ObjectArena<T> {
             if let Some(index) = self.spare_storage.iter().position(|&p| p as usize == base) {
                 let storage = self.spare_storage.swap_remove(index);
                 self.spare_unused_floor = self.spare_unused_floor.min(self.spare_storage.len());
-                ObjectPage::<T>::over_storage(storage)
+                // SAFETY: `storage` came from `into_storage()` of a released `ObjectPage<T>`.
+                unsafe { ObjectPage::<T>::over_storage(storage) }
             } else {
                 // Do not consume an arbitrary spare: it may be another retained
                 // key that this same stopped transition has not recovered yet.
@@ -1056,9 +1232,14 @@ impl<T: PagedObject> ObjectArena<T> {
     /// full-header-write the slot (its bytes are garbage until then, and the
     /// sweep may legally visit it as soon as the mutator next yields —
     /// allocated-bit ⇒ readable header is the sweep's contract).
+    ///
+    /// # Safety
+    /// The slot's allocation bit is marked set over uninitialized memory. The
+    /// caller must initialize a valid `T` (header and payload) at the returned
+    /// pointer before any GC, sweep, or heap drop can observe this arena.
     #[inline(always)]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(super) fn alloc_slot(&mut self) -> *mut T {
+    pub(super) unsafe fn alloc_slot(&mut self) -> *mut T {
         // 1. Class free list: pop from the first page with freed slots.
         //    Retired pages are never on this chain (they never gain free
         //    slots: full at retirement and never swept).
@@ -1066,14 +1247,17 @@ impl<T: PagedObject> ObjectArena<T> {
             let page_index = self.partial_head;
             let page = &mut self.pages[page_index];
             let index = page.pop_free().expect("partial page must have free slots");
-            page.set_allocated(index);
+            // SAFETY: `pop_free` only yields a free slot index `< Self::SLOTS`
+            // from the private page-local free list.
+            unsafe { page.set_allocated_unchecked(index) };
             if page.free_head == PAGE_NONE {
                 // Drained: unlink from the partial chain (head pop — O(1)).
                 self.partial_head = page.next_partial;
                 page.next_partial = PAGE_NONE;
                 page.on_partial = false;
             }
-            return page.slot_ptr(index);
+            // SAFETY: `index < Self::SLOTS` as established by `pop_free`.
+            return unsafe { page.slot_ptr_unchecked(index) };
         }
         // 2. Current-page bump: only the NEWEST page can have never-used
         //    slots (older pages were bump-exhausted before it was created).
@@ -1082,8 +1266,11 @@ impl<T: PagedObject> ObjectArena<T> {
         if let Some(page) = self.pages.last_mut()
             && let Some(index) = page.bump()
         {
-            page.set_allocated(index);
-            return page.slot_ptr(index);
+            // SAFETY: `bump` checks `next_index < Self::SLOTS` and returns an unallocated slot.
+            unsafe {
+                page.set_allocated_unchecked(index);
+                return page.slot_ptr_unchecked(index);
+            }
         }
         self.alloc_slot_new_page()
     }
@@ -1099,7 +1286,8 @@ impl<T: PagedObject> ObjectArena<T> {
         let mut page = match self.spare_storage.pop() {
             Some(storage) => {
                 self.spare_unused_floor = self.spare_unused_floor.min(self.spare_storage.len());
-                ObjectPage::<T>::over_storage(storage)
+                // SAFETY: `storage` came from `into_storage()` of a released `ObjectPage<T>`.
+                unsafe { ObjectPage::<T>::over_storage(storage) }
             }
             None => ObjectPage::<T>::new(),
         };
@@ -1122,17 +1310,25 @@ impl<T: PagedObject> ObjectArena<T> {
     /// indices, ascending in address from its last pop), else the newest
     /// page's bump tail, else a new page. The caller must full-header-write
     /// every slot of the run before the mutator next yields.
-    pub(super) fn reserve_run(&mut self, want: usize) -> ArenaRun {
+    ///
+    /// # Safety
+    /// The returned run's allocation bits are marked set over uninitialized
+    /// slots. The caller must initialize every slot in `[first..first+count)`
+    /// (or return any unused tail via `give_back_run`) before any GC, sweep,
+    /// or heap drop can observe this arena.
+    pub(super) unsafe fn reserve_run(&mut self, want: usize) -> ArenaRun {
         debug_assert!(want >= 1);
         if self.partial_head != PAGE_NONE {
             let page_index = self.partial_head;
             let page = &mut self.pages[page_index];
             let mut first = page.pop_free().expect("partial page must have free slots");
-            page.set_allocated(first);
+            // SAFETY: `pop_free` only yields a free slot index `< Self::SLOTS`.
+            unsafe { page.set_allocated_unchecked(first) };
             let mut count = 1;
             while count < want && page.free_head != PAGE_NONE && page.free_head + 1 == first {
                 first = page.pop_free().expect("the free head was just read");
-                page.set_allocated(first);
+                // SAFETY: `pop_free` only yields a free slot index `< Self::SLOTS`.
+                unsafe { page.set_allocated_unchecked(first) };
                 count += 1;
             }
             if page.free_head == PAGE_NONE {
@@ -1176,7 +1372,8 @@ impl<T: PagedObject> ObjectArena<T> {
         let mut page = match self.spare_storage.pop() {
             Some(storage) => {
                 self.spare_unused_floor = self.spare_unused_floor.min(self.spare_storage.len());
-                ObjectPage::<T>::over_storage(storage)
+                // SAFETY: `storage` came from `into_storage()` of a released `ObjectPage<T>`.
+                unsafe { ObjectPage::<T>::over_storage(storage) }
             }
             None => ObjectPage::<T>::new(),
         };
@@ -1326,7 +1523,8 @@ impl<T: PagedObject> ObjectArena<T> {
                     let bit = bits.trailing_zeros() as usize;
                     bits &= bits - 1;
                     let index = word_index * usize::BITS as usize + bit;
-                    let slot = page.slot_ptr(index);
+                    // SAFETY: `alloc_bits` is private and only sets bits for `index < Self::SLOTS`.
+                    let slot = unsafe { page.slot_ptr_unchecked(index) };
                     // Alloc bit set ⇒ the slot holds a fully written live
                     // object — reading its header is sound.
                     let header = unsafe { &*(slot as *const GcHeader) };
@@ -1371,7 +1569,8 @@ impl<T: PagedObject> ObjectArena<T> {
                             header.clear_collection_observed();
                         }
                         unsafe { std::ptr::drop_in_place(slot) };
-                        page.free_slot(index);
+                        // SAFETY: `!page.retired` was checked above and `index` was just popped from `page.alloc_bits`.
+                        unsafe { page.free_slot_unchecked(index) };
                         freed += 1;
                         freed_any = true;
                     }
@@ -2363,3 +2562,92 @@ impl HandshakeStats {
 mod storage_snapshot;
 #[cfg(any(test, feature = "test-support"))]
 pub(in crate::tagged::gc) use storage_snapshot::ArenaStorageSnapshot;
+
+#[cfg(test)]
+mod arena_pages_soundness_tests {
+    use super::*;
+
+    /// GC B10: `ObjectPage` slot helpers must bounds-check against `Self::SLOTS`
+    /// even when `index` falls within the oversized `OBJECT_PAGE_MAX_ALLOC_WORDS`
+    /// bitmap array (e.g. on large-stride classes such as `ByteCodeObj`).
+    #[test]
+    fn object_page_rejects_out_of_bounds_slot_indices() {
+        let mut page = ObjectPage::<ByteCodeObj>::new();
+        let oob = ObjectPage::<ByteCodeObj>::ALLOC_WORDS * (usize::BITS as usize);
+        assert!(oob >= ObjectPage::<ByteCodeObj>::SLOTS);
+        assert!(oob < OBJECT_PAGE_MAX_ALLOC_WORDS * (usize::BITS as usize));
+
+        let set_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            page.set_allocated(oob);
+        }));
+        assert!(
+            set_res.is_err(),
+            "set_allocated must reject index >= Self::SLOTS (oob={oob}, SLOTS={})",
+            ObjectPage::<ByteCodeObj>::SLOTS
+        );
+
+        let slot_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = page.slot_ptr(ObjectPage::<ByteCodeObj>::SLOTS);
+        }));
+        assert!(
+            slot_res.is_err(),
+            "slot_ptr must reject index >= Self::SLOTS"
+        );
+
+        let link_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = page.free_link_ptr(ObjectPage::<ByteCodeObj>::SLOTS);
+        }));
+        assert!(
+            link_res.is_err(),
+            "free_link_ptr must reject index >= Self::SLOTS"
+        );
+
+        let free_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            page.free_slot(oob);
+        }));
+        assert!(
+            free_res.is_err(),
+            "free_slot must reject index >= Self::SLOTS"
+        );
+    }
+
+    /// GC B10/B11: `ObjectPage::over_storage`, `ObjectArena::alloc_slot`, and
+    /// `ObjectArena::reserve_run` carry raw-storage / uninitialized-slot
+    /// contracts and must remain `unsafe fn`.
+    #[test]
+    #[deny(unused_unsafe)]
+    fn object_page_over_storage_and_arena_alloc_require_unsafe() {
+        let storage = ObjectPage::<FloatObj>::new().into_storage();
+        // SAFETY: `storage` is a uniquely owned allocation from `alloc_storage`.
+        let page = unsafe { ObjectPage::<FloatObj>::over_storage(storage) };
+        drop(page);
+
+        let mut arena = ObjectArena::<FloatObj>::new(None);
+        // SAFETY: we initialize the slot header/payload immediately before drop.
+        let ptr = unsafe { arena.alloc_slot() };
+        // SAFETY: `ptr` is uniquely owned and aligned for `FloatObj`.
+        unsafe {
+            std::ptr::write(
+                ptr,
+                FloatObj {
+                    header: GcHeader::new(HeapObjectKind::Float),
+                    value: 1.0,
+                },
+            );
+        }
+
+        // SAFETY: we initialize the reserved run's sole slot immediately before drop.
+        let run = unsafe { arena.reserve_run(1) };
+        let run_ptr = arena.pages[run.page].slot_ptr(run.first);
+        // SAFETY: `run_ptr` is uniquely owned and aligned for `FloatObj`.
+        unsafe {
+            std::ptr::write(
+                run_ptr,
+                FloatObj {
+                    header: GcHeader::new(HeapObjectKind::Float),
+                    value: 2.0,
+                },
+            );
+        }
+    }
+}

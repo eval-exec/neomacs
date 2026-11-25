@@ -79,11 +79,21 @@ fn paged_survivors_tenure_and_full_pages_retire_body(verify: bool) {
 
     // The full float page RETIRED; the partial string/vector pages did
     // not. Retired ⇒ still registered + owned (C1), full, no free list.
-    assert!(heap.float_arena.pages[0].retired, "full page must retire");
-    assert!(!heap.string_arena.pages[0].retired, "partial page retired");
-    assert!(!heap.vector_arena.pages[0].retired, "partial page retired");
+    assert!(
+        heap.float_arena.pages[0].is_retired(),
+        "full page must retire"
+    );
+    assert!(
+        !heap.string_arena.pages[0].is_retired(),
+        "partial page retired"
+    );
+    assert!(
+        !heap.vector_arena.pages[0].is_retired(),
+        "partial page retired"
+    );
     assert_eq!(
-        heap.float_arena.pages[0].allocated, FLOAT_PAGE_SLOTS,
+        heap.float_arena.pages[0].allocated(),
+        FLOAT_PAGE_SLOTS,
         "retired page must stay full",
     );
     heap.assert_object_arenas_coherent();
@@ -113,7 +123,7 @@ fn paged_survivors_tenure_and_full_pages_retire_body(verify: bool) {
             4,
             "tenured vector payload lost on cycle {cycle}",
         );
-        assert_eq!(heap.float_arena.pages[0].allocated, FLOAT_PAGE_SLOTS);
+        assert_eq!(heap.float_arena.pages[0].allocated(), FLOAT_PAGE_SLOTS);
         heap.assert_object_arenas_coherent();
     }
 }
@@ -165,9 +175,9 @@ fn mixed_page_tenured_slots_survive_alternating_parities_body(verify: bool) {
     // free at promotion), then the survivors tenure ⇒ MIXED pages.
     heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
-    assert!(!heap.float_arena.pages[0].retired);
-    assert!(!heap.string_arena.pages[0].retired);
-    assert!(!heap.vector_arena.pages[0].retired);
+    assert!(!heap.float_arena.pages[0].is_retired());
+    assert!(!heap.string_arena.pages[0].is_retired());
+    assert!(!heap.vector_arena.pages[0].is_retired());
 
     // Refill the freed slots with YOUNG garbage (free-list reuse puts it
     // in the same mixed pages), then run one cycle per parity.

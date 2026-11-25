@@ -476,8 +476,8 @@ fn float_regions_bump_a_page_tail_with_headers_written_at_grant() {
     assert_eq!(lim - float_addr(first), FLOAT_REGION_MAX_SLOTS * 32);
     assert_eq!(first.xfloat(), 1.5);
     let page = &heap.float_arena.pages[0];
-    assert_eq!(page.next_index, FLOAT_REGION_MAX_SLOTS);
-    assert_eq!(page.allocated, FLOAT_REGION_MAX_SLOTS);
+    assert_eq!(page.next_index(), FLOAT_REGION_MAX_SLOTS);
+    assert_eq!(page.allocated(), FLOAT_REGION_MAX_SLOTS);
     for index in 0..FLOAT_REGION_MAX_SLOTS {
         assert!(page.is_allocated(index));
         let header = unsafe { &*(page.slot_ptr(index) as *const GcHeader) };
@@ -507,8 +507,8 @@ fn closing_a_float_region_gives_its_tail_back() {
     heap.alloc_float(2.0);
     heap.close_alloc_regions();
     let page = &heap.float_arena.pages[0];
-    assert_eq!(page.next_index, 2, "the bump tail rewound");
-    assert_eq!(page.allocated, 2);
+    assert_eq!(page.next_index(), 2, "the bump tail rewound");
+    assert_eq!(page.allocated(), 2);
     assert!(!page.is_allocated(2));
     let c = heap.alloc_float(3.0);
     assert_eq!(float_addr(c), float_addr(a) + 64);
@@ -524,7 +524,7 @@ fn closing_a_float_region_gives_its_tail_back() {
         .collect();
     heap.collect_rooted(kept.iter().copied());
     let page = &heap.float_arena.pages[0];
-    assert_eq!(page.free_head, 9, "the page list descends from its top");
+    assert_eq!(page.free_head(), 9, "the page list descends from its top");
     let got = heap.alloc_float(99.0);
     assert_eq!(
         float_addr(got),
@@ -537,9 +537,9 @@ fn closing_a_float_region_gives_its_tail_back() {
     assert_eq!(heap.float_arena.partial_head, PAGE_NONE, "the page drained");
     heap.close_alloc_regions();
     let page = &heap.float_arena.pages[0];
-    assert!(page.on_partial, "the page is back on the partial chain");
+    assert!(page.on_partial(), "the page is back on the partial chain");
     let mut list = Vec::new();
-    let mut slot = page.free_head;
+    let mut slot = page.free_head();
     while slot != PAGE_NONE {
         list.push(slot);
         slot = unsafe { page.free_link_ptr(slot).read() };
@@ -636,8 +636,8 @@ fn promotion_does_not_tenure_a_regions_reserved_slots() {
     heap.promote_and_blacken();
     assert!(!heap.alloc_regions_open());
     let page = &heap.float_arena.pages[0];
-    assert_eq!(page.allocated, 3, "only the handed-out floats remain");
-    assert!(!page.retired);
+    assert_eq!(page.allocated(), 3, "only the handed-out floats remain");
+    assert!(!page.is_retired());
     for f in &kept {
         // Runtime survivors: tenured old in GEN1, still young in GEN0.
         assert_eq!(

@@ -432,19 +432,20 @@ fn arena_inventory<T: PagedObject>(
         ..ArenaInventory::default()
     };
     for page in &arena.pages {
-        out.occupied_slots += page.allocated;
-        out.reclaimed_slot_bytes += page.next_index.saturating_sub(page.allocated) * T::SLOT_BYTES;
-        out.never_bumped_slot_bytes += (ObjectPage::<T>::SLOTS - page.next_index) * T::SLOT_BYTES;
-        out.retired_pages += usize::from(page.retired);
-        if page.allocated == 0 {
+        out.occupied_slots += page.allocated();
+        out.reclaimed_slot_bytes +=
+            page.next_index().saturating_sub(page.allocated()) * T::SLOT_BYTES;
+        out.never_bumped_slot_bytes += (ObjectPage::<T>::SLOTS - page.next_index()) * T::SLOT_BYTES;
+        out.retired_pages += usize::from(page.is_retired());
+        if page.allocated() == 0 {
             out.empty_pages += 1;
-        } else if page.allocated == ObjectPage::<T>::SLOTS {
+        } else if page.allocated() == ObjectPage::<T>::SLOTS {
             out.full_pages += 1;
         } else {
             out.partial_pages += 1;
         }
         for word in 0..ObjectPage::<T>::ALLOC_WORDS {
-            let mut bits = page.alloc_bits[word];
+            let mut bits = page.alloc_bits()[word];
             while bits != 0 {
                 let bit = bits.trailing_zeros() as usize;
                 bits &= bits - 1;

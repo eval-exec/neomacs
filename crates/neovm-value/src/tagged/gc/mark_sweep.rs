@@ -507,7 +507,7 @@ impl TaggedHeap {
             for page in &mut arena.pages {
                 let mut all_resident = true;
                 for word_index in 0..ObjectPage::<T>::ALLOC_WORDS {
-                    let mut bits = page.alloc_bits[word_index];
+                    let mut bits = page.alloc_bits()[word_index];
                     while bits != 0 {
                         let bit = bits.trailing_zeros() as usize;
                         bits &= bits - 1;
@@ -533,10 +533,8 @@ impl TaggedHeap {
                 // any page with a runtime survivor stays sweepable so its
                 // dead slots are reclaimed. A full page has an empty free
                 // list and is off the partial chain by construction.
-                if all_resident && page.allocated == ObjectPage::<T>::SLOTS {
-                    debug_assert!(!page.on_partial, "full page on the partial chain");
-                    debug_assert_eq!(page.free_head, PAGE_NONE);
-                    page.retired = true;
+                if all_resident && page.allocated() == ObjectPage::<T>::SLOTS {
+                    page.retire_full();
                 }
             }
         }

@@ -17,7 +17,7 @@ fn arena_free_slots<T: PagedObject>(arena: &ObjectArena<T>) -> usize {
         .pages
         .len()
         .saturating_mul(ObjectPage::<T>::SLOTS)
-        .saturating_sub(arena.pages.iter().map(|page| page.allocated).sum())
+        .saturating_sub(arena.pages.iter().map(|page| page.allocated()).sum())
 }
 
 fn visit_arena<T: PagedObject>(arena: &ObjectArena<T>, visit: &mut impl FnMut(*const GcHeader)) {
@@ -25,7 +25,7 @@ fn visit_arena<T: PagedObject>(arena: &ObjectArena<T>, visit: &mut impl FnMut(*c
     // whether an allocated object belongs to the logical image.
     for page in &arena.pages {
         for word_index in 0..ObjectPage::<T>::ALLOC_WORDS {
-            let mut bits = page.alloc_bits[word_index];
+            let mut bits = page.alloc_bits()[word_index];
             while bits != 0 {
                 let bit = bits.trailing_zeros() as usize;
                 bits &= bits - 1;

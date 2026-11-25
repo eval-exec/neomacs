@@ -249,7 +249,8 @@ fn partial_regions_log_only_used_cells_and_float_headers() {
         "floats log by region"
     );
     assert_eq!(
-        phase.float_arena.pages[0].allocated, 3,
+        phase.float_arena.pages[0].allocated(),
+        3,
         "unused tail refunded"
     );
 }

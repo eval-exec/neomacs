@@ -187,7 +187,7 @@ impl HashTableScanSnapshot {
     pub(crate) fn lock_mutation(&self, owner: usize) -> Option<HashTableMutationGuard<'_>> {
         let entry = self.get(owner)?;
         assert!(!self.is_poisoned(), "Tier-H snapshot poisoned");
-        Some(entry.lock_mutation(&self.poisoned, self.policy))
+        Some(entry.lock_mutation(owner, &self.poisoned, self.policy))
     }
 
     /// Elect a reader before claiming its header, retaining the same mutex
@@ -286,6 +286,7 @@ impl HashTableScanEntry {
     #[inline(never)]
     fn lock_mutation<'a>(
         &'a self,
+        owner: usize,
         poisoned: &'a AtomicBool,
         policy: HashTableScanPolicy,
     ) -> HashTableMutationGuard<'a> {
@@ -308,6 +309,7 @@ impl HashTableScanEntry {
             }
         }
         HashTableMutationGuard {
+            owner,
             entry: self,
             poisoned,
             policy,
@@ -386,6 +388,7 @@ impl Drop for HashTableReadGuard<'_> {
 }
 
 pub(crate) struct HashTableMutationGuard<'a> {
+    owner: usize,
     entry: &'a HashTableScanEntry,
     poisoned: &'a AtomicBool,
     policy: HashTableScanPolicy,
@@ -403,6 +406,11 @@ impl Drop for HashTableMutationGuard<'_> {
 }
 
 impl HashTableMutationGuard<'_> {
+    #[inline]
+    pub(crate) fn owner(&self) -> usize {
+        self.owner
+    }
+
     /// Detach on the cycle's first write and transfer ownership before READY.
     /// The returned original must remain in this mutator's log until the
     /// coordinator completes termination after joining all snapshot readers.

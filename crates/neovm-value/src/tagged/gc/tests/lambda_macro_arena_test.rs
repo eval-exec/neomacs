@@ -557,7 +557,7 @@ fn lambda_survivors_tenure_and_full_pages_retire_body(verify: bool) {
         root = heap.alloc_cons(b, root);
     }
     assert_eq!(heap.lambda_arena.pages.len(), 2);
-    assert_eq!(heap.lambda_arena.pages[0].allocated, LAMBDA_PAGE_SLOTS);
+    assert_eq!(heap.lambda_arena.pages[0].allocated(), LAMBDA_PAGE_SLOTS);
     // Stand-ins for loader-reconstructed image rows: only they become
     // permanent and retire full pages.
     for &b in &lambdas {
@@ -571,9 +571,15 @@ fn lambda_survivors_tenure_and_full_pages_retire_body(verify: bool) {
         let ptr = b.as_veclike_ptr().unwrap();
         assert!(unsafe { (*ptr).gc.tenured }, "page lambda not tenured");
     }
-    assert!(heap.lambda_arena.pages[0].retired, "full page must retire");
-    assert!(!heap.lambda_arena.pages[1].retired, "partial page retired");
-    assert_eq!(heap.lambda_arena.pages[0].allocated, LAMBDA_PAGE_SLOTS);
+    assert!(
+        heap.lambda_arena.pages[0].is_retired(),
+        "full page must retire"
+    );
+    assert!(
+        !heap.lambda_arena.pages[1].is_retired(),
+        "partial page retired"
+    );
+    assert_eq!(heap.lambda_arena.pages[0].allocated(), LAMBDA_PAGE_SLOTS);
     // C1: retired-page slots STAY owned.
     assert!(heap.owns_non_cons_object(lam_ptr(lambdas[0])));
     assert!(heap.lambda_arena.owns(lam_ptr(lambdas[0])));
@@ -599,7 +605,7 @@ fn lambda_survivors_tenure_and_full_pages_retire_body(verify: bool) {
             );
             assert_eq!(lam_slot(*b, 0).as_fixnum(), Some(i as i64));
         }
-        assert_eq!(heap.lambda_arena.pages[0].allocated, LAMBDA_PAGE_SLOTS);
+        assert_eq!(heap.lambda_arena.pages[0].allocated(), LAMBDA_PAGE_SLOTS);
         heap.assert_object_arenas_coherent();
     }
 }
@@ -638,7 +644,7 @@ fn lambda_mixed_page_tenured_survive_alternating_parities_body(verify: bool) {
     }
     heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
-    assert!(!heap.lambda_arena.pages[0].retired);
+    assert!(!heap.lambda_arena.pages[0].is_retired());
 
     for cycle in 0..2 {
         for i in 0..5 {
@@ -824,10 +830,10 @@ fn macro_tenure_retire_and_teardown_body(verify: bool) {
         heap.collect_rooted(std::iter::once(root));
         assert!(heap.dump_blackened);
         assert!(
-            heap.macro_arena.pages[0].retired,
+            heap.macro_arena.pages[0].is_retired(),
             "full macro page must retire"
         );
-        assert!(!heap.macro_arena.pages[1].retired);
+        assert!(!heap.macro_arena.pages[1].is_retired());
         // C1: retired-page macro slots stay owned across both parities.
         for cycle in 0..2 {
             heap.collect_rooted(std::iter::once(root));
