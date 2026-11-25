@@ -15,8 +15,19 @@ Usage:
         | python3 -I scripts/ci/check-test-targets.py
 """
 
+import argparse
+import io
 import json
+import os
+import selectors
+import stat
 import sys
+
+USAGE = (
+    "cargo metadata --no-deps --format-version 1 "
+    "| python3 -I scripts/ci/check-test-targets.py"
+)
+DEFAULT_STDIN_TIMEOUT_SECONDS = 30.0
 
 # Targets that must stay separate. Keep every entry justified:
 # - harness = false needs its own binary
@@ -48,8 +59,67 @@ ALLOWED_EXTRA_TARGETS = {
 }
 
 
-def main() -> int:
-    metadata = json.load(sys.stdin)
+class InputError(ValueError):
+    """Stdin was not fed with valid cargo metadata JSON."""
+
+
+def _wait_for_first_byte(stream, timeout: float) -> bool:
+    """Wait up to `timeout` seconds for a pipe/socket stdin to become readable.
+
+    Returns True when reading can proceed (or when the stream is not a
+    pollable pipe/socket, such as a regular file or in-memory StringIO), and
+    False when a pipe/socket yielded neither data nor EOF before `timeout`.
+    """
+    if os.name != "posix":
+        return True
+    try:
+        fd = stream.fileno()
+    except (AttributeError, io.UnsupportedOperation, ValueError, OSError):
+        return True
+    try:
+        mode = os.fstat(fd).st_mode
+    except OSError:
+        return True
+    if not (stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)):
+        return True
+    with selectors.DefaultSelector() as selector:
+        try:
+            selector.register(fd, selectors.EVENT_READ)
+        except (OSError, ValueError):
+            return True
+        return bool(selector.select(timeout=timeout))
+
+
+def read_metadata(
+    stream, *, first_byte_timeout: float = DEFAULT_STDIN_TIMEOUT_SECONDS
+) -> dict:
+    try:
+        is_tty = stream.isatty()
+    except (AttributeError, ValueError, OSError):
+        is_tty = False
+    if is_tty:
+        raise InputError(
+            "expected cargo metadata JSON on stdin, but stdin is a TTY"
+        )
+    if not _wait_for_first_byte(stream, first_byte_timeout):
+        raise InputError(
+            f"timed out after {first_byte_timeout:g}s waiting for cargo metadata JSON on stdin"
+        )
+    raw = stream.read()
+    if not raw.strip():
+        raise InputError("stdin was empty; expected cargo metadata JSON")
+    try:
+        metadata = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise InputError(f"invalid cargo metadata JSON on stdin: {error}") from error
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("packages"), list):
+        raise InputError(
+            "expected cargo metadata JSON object with a 'packages' list on stdin"
+        )
+    return metadata
+
+
+def check_metadata(metadata: dict) -> list[tuple[str, list[str]]]:
     failures = []
     for package in metadata["packages"]:
         name = package["name"]
@@ -58,12 +128,50 @@ def main() -> int:
             for target in package["targets"]
             if "test" in target["kind"] and target.get("test", False)
         )
-        unmerged = [target for target in targets if (name, target) not in ALLOWED_EXTRA_TARGETS]
+        unmerged = [
+            target for target in targets if (name, target) not in ALLOWED_EXTRA_TARGETS
+        ]
         if len(unmerged) > 1:
             failures.append((name, unmerged))
+    return failures
 
+
+def parse_args(argv=None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Enforce one integration test binary per crate from cargo metadata JSON on stdin.",
+        epilog=f"Usage: {USAGE}",
+    )
+    parser.add_argument(
+        "--stdin-timeout",
+        type=float,
+        default=DEFAULT_STDIN_TIMEOUT_SECONDS,
+        help=(
+            "seconds to wait for the first byte on an unfed pipe stdin before "
+            f"failing fast (default: {DEFAULT_STDIN_TIMEOUT_SECONDS:g})"
+        ),
+    )
+    args = parser.parse_args(argv)
+    if args.stdin_timeout < 0:
+        parser.error("--stdin-timeout must be non-negative")
+    return args
+
+
+def main(argv=None, stdin=None) -> int:
+    args = parse_args(argv)
+    stream = sys.stdin if stdin is None else stdin
+    try:
+        metadata = read_metadata(stream, first_byte_timeout=args.stdin_timeout)
+    except InputError as error:
+        print(f"error: {error}", file=sys.stderr)
+        print(f"usage: {USAGE}", file=sys.stderr)
+        return 2
+
+    failures = check_metadata(metadata)
     if failures:
-        print("error: crates with more than one integration test binary:", file=sys.stderr)
+        print(
+            "error: crates with more than one integration test binary:",
+            file=sys.stderr,
+        )
         for name, targets in failures:
             print(f"  {name}: {', '.join(targets)}", file=sys.stderr)
         print(
