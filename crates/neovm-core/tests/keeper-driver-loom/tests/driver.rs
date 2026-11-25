@@ -97,10 +97,35 @@ mod pending_poisons {
     include!("model.rs");
 }
 
+/// N-L7: the grant goes to another enrolled owner.
+#[allow(dead_code, unused)]
+mod misrouted_grant {
+    use crate::sync;
+    mod control {
+        include!(concat!(env!("OUT_DIR"), "/control.rs"));
+    }
+    mod driver_core {
+        include!(concat!(env!("OUT_DIR"), "/driver_core_misrouted_grant.rs"));
+    }
+    include!("model.rs");
+}
+
 /// L1 + L3/L4/L5 + L7.
 #[test]
 fn two_owners_one_turn_each_in_commit_order() {
     real::two_owners_one_turn_each_in_commit_order();
+}
+
+#[test]
+#[should_panic(expected = "a grant woke an owner it was not cut for")]
+fn negative_a_misrouted_grant_wakes_the_wrong_owner() {
+    misrouted_grant::two_owners_one_turn_each_in_commit_order();
+}
+
+#[test]
+#[should_panic(expected = "two serial turns at once")]
+fn negative_an_early_give_back_overlaps_two_turns() {
+    real::an_early_give_back_overlaps_two_turns();
 }
 
 #[test]
@@ -155,6 +180,12 @@ fn a_group_and_an_owner_alternate_in_commit_order() {
 #[should_panic(expected = "grants follow commit order")]
 fn negative_a_lifo_ring_breaks_commit_order_across_kinds() {
     lifo::a_group_and_an_owner_alternate_in_commit_order();
+}
+
+#[test]
+#[should_panic(expected = "two serial turns at once")]
+fn negative_an_early_world_return_overlaps_the_owner() {
+    real::an_early_world_return_overlaps_the_owner();
 }
 
 /// L11.

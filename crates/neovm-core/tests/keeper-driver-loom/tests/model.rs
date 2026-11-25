@@ -427,6 +427,12 @@ enum OnGrant {
     GiveBack,
     /// Its lend guard drops armed (K7).
     Abandon,
+    /// The probe's own negative: the ticket goes back while the owner is
+    /// still in its turn, the earliest a next lend could start. No driver
+    /// copy can lend before the return (a `Batch` lends once; see the
+    /// `custody_batch_*` fixtures), so this is how the one-turn-out probe is
+    /// shown to fail.
+    GiveBackEarly,
 }
 
 /// A requester, the shape of `ChannelPort::request_turn` plus a turn: request
@@ -448,6 +454,11 @@ fn requester(
     });
     let seen = match grants.recv() {
         Ok(GrantMsg::Grant { ticket, epoch }) => {
+            // L7: the grant reaches the owner its ticket was cut for.
+            assert_eq!(
+                ticket.owner, owner,
+                "a grant woke an owner it was not cut for"
+            );
             // L3/L4/L5: one ticket out, no lend before the last came back.
             assert_eq!(
                 in_turn.fetch_add(1, Ordering::SeqCst),
@@ -457,20 +468,23 @@ fn requester(
             if let Some(holding) = &holding {
                 let _ = holding.send(());
             }
-            in_turn.fetch_sub(1, Ordering::SeqCst);
-            match on_grant {
-                OnGrant::GiveBack => {
-                    let _ = inbox.send(KeeperMsg::GiveBack {
-                        owner,
-                        returned: ticket,
-                    });
-                }
-                OnGrant::Abandon => {
-                    let _ = inbox.send(KeeperMsg::Abandon {
-                        owner,
-                        cause: LendDrop::Unwound,
-                    });
-                }
+            let early = matches!(on_grant, OnGrant::GiveBackEarly);
+            if !early {
+                in_turn.fetch_sub(1, Ordering::SeqCst);
+            }
+            let message = match on_grant {
+                OnGrant::GiveBack | OnGrant::GiveBackEarly => KeeperMsg::GiveBack {
+                    owner,
+                    returned: ticket,
+                },
+                OnGrant::Abandon => KeeperMsg::Abandon {
+                    owner,
+                    cause: LendDrop::Unwound,
+                },
+            };
+            let _ = inbox.send(message);
+            if early {
+                in_turn.fetch_sub(1, Ordering::SeqCst);
             }
             Seen::Granted(epoch)
         }
@@ -492,6 +506,9 @@ enum OnWorld {
     /// and the group waits, without asking again, for the World the keeper
     /// lends it next; then it gives that interval back.
     Collect,
+    /// The probe's own negative, as [`OnGrant::GiveBackEarly`]: the World
+    /// goes back while the group still holds it.
+    GiveBackEarly,
 }
 
 /// One interval: hold the World alone, then end it as ON_WORLD says.
@@ -511,9 +528,12 @@ fn group_interval(
     if let Some(holding) = holding {
         let _ = holding.send(());
     }
-    in_turn.fetch_sub(1, Ordering::SeqCst);
+    let early = matches!(on_world, OnWorld::GiveBackEarly);
+    if !early {
+        in_turn.fetch_sub(1, Ordering::SeqCst);
+    }
     let message = match on_world {
-        OnWorld::GiveBack => KeeperMsg::WorldReturn {
+        OnWorld::GiveBack | OnWorld::GiveBackEarly => KeeperMsg::WorldReturn {
             returned: turn,
             end: IntervalEnd::Done,
         },
@@ -526,6 +546,9 @@ fn group_interval(
         },
     };
     let _ = inbox.send(message);
+    if early {
+        in_turn.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// The Baton group's runner, the shape of the seat's request: ask once,
@@ -573,7 +596,17 @@ fn model(body: impl Fn() + Sync + Send + 'static) {
 /// L1 + L3/L4/L5 + L7. Two owners request; each is woken only by its own
 /// grant, the grants follow commit order, and one ticket is out at a time.
 pub fn two_owners_one_turn_each_in_commit_order() {
-    model(|| {
+    two_owners(OnGrant::GiveBack);
+}
+
+/// The one-turn-out probe's negative (L3/L4/L5): each owner sends its ticket
+/// back while still in its turn, so the next lend can overlap it.
+pub fn an_early_give_back_overlaps_two_turns() {
+    two_owners(OnGrant::GiveBackEarly);
+}
+
+fn two_owners(on_grant: OnGrant) {
+    model(move || {
         let era = ModelEra::new(&[(1, Mode::NativeStopped), (2, Mode::NativeStopped)]);
         let (inbox, inbox_rx) = mpsc::channel();
         let mut driver = Driver::new(Era(&era), inbox_rx);
@@ -585,7 +618,7 @@ pub fn two_owners_one_turn_each_in_commit_order() {
             let inbox = inbox.clone();
             let in_turn = in_turn.clone();
             owners.push(loom::thread::spawn(move || {
-                requester(owner, inbox, grants, in_turn, OnGrant::GiveBack, None)
+                requester(owner, inbox, grants, in_turn, on_grant, None)
             }));
         }
         drop(inbox);
@@ -661,7 +694,10 @@ pub fn an_abandoned_lend_poisons_and_wakes_the_rest() {
 /// LEAK, one grant sender outlives the keeper: the one edge the row depends
 /// on. The owner checks with `try_recv` after a "keeper gone" signal, which
 /// reads the same channel state as the port's blocking `recv`, so the
-/// negative is an exact assertion rather than a Loom deadlock.
+/// negative is an exact assertion rather than a Loom deadlock. The keeper is
+/// dropped, as a panic's unwind drops it: an unwind cannot run inside a Loom
+/// model, whose threads are coroutines on one OS thread, so the real panic is
+/// the eval row `l67a_a_keeper_panic_answers_the_waiting_owner_poisoned`.
 pub fn a_dead_keeper_disconnects_every_owner(leak: bool) {
     model(move || {
         let era = ModelEra::new(&[(1, Mode::NativeStopped)]);
@@ -734,7 +770,17 @@ pub fn a_slow_owner_delays_the_turn_and_poisons_nothing() {
 /// lent its turn in commit order across the two kinds, and one turn is out
 /// at a time: the World turn excludes an owner's ticket.
 pub fn a_group_and_an_owner_alternate_in_commit_order() {
-    model(|| {
+    a_group_and_an_owner(OnWorld::GiveBack);
+}
+
+/// The plan's b3 negative: the World goes back while the group still holds
+/// it, so an owner lent next overlaps the group's interval.
+pub fn an_early_world_return_overlaps_the_owner() {
+    a_group_and_an_owner(OnWorld::GiveBackEarly);
+}
+
+fn a_group_and_an_owner(on_world: OnWorld) {
+    model(move || {
         let era = ModelEra::new(&[(1, Mode::NativeStopped)]);
         let (inbox, inbox_rx) = mpsc::channel();
         let mut driver = Driver::new(Era(&era), inbox_rx);
@@ -753,9 +799,7 @@ pub fn a_group_and_an_owner_alternate_in_commit_order() {
         let group = {
             let inbox = inbox.clone();
             let in_turn = in_turn.clone();
-            loom::thread::spawn(move || {
-                group_runner(inbox, world, in_turn, OnWorld::GiveBack, None)
-            })
+            loom::thread::spawn(move || group_runner(inbox, world, in_turn, on_world, None))
         };
         drop(inbox);
         let end = driver.run();

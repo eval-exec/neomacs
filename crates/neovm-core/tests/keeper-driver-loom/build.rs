@@ -77,6 +77,18 @@ fn main() {
         ),
     );
 
+    // N-L7: the grant goes to another enrolled owner.
+    write(
+        &out,
+        "driver_core_misrouted_grant.rs",
+        &mutate(
+            &core,
+            "        if self.send(owner, GrantMsg::Grant { ticket, epoch }).is_err() {",
+            "        let other = self.owners.keys().copied().find(|&other| other != owner);\n        \
+             if self.send(other.unwrap_or(owner), GrantMsg::Grant { ticket, epoch }).is_err() {",
+        ),
+    );
+
     let control = strip_trailing_test_mod(&strip_header(
         &fs::read_to_string(CONTROL).expect("read control.rs"),
     ))
