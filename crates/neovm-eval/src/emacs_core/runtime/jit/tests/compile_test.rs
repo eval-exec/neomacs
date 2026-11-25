@@ -6492,8 +6492,8 @@ fn jit_bench_countdown_loop() {
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let t1 = Instant::now();
     for _ in 0..calls {
-        // SAFETY: `ctx_ptr` points to the live owner-thread `Context` (`ev`)
-        // for the duration of this arithmetic leaf call.
+        // SAFETY: `ctx_ptr` points to the live owner-thread `Context` `ev` and the
+        // 1-element arg slice matches `leaf`'s compiled arity.
         assert_eq!(
             unsafe { leaf.call(ctx_ptr, &[Value::make_int(iters)]) },
             NativeRun::Ok(Value::make_int(0).bits())
@@ -6570,8 +6570,8 @@ fn jit_bench_mir_loops_against_baseline() {
                 let leaf = [&baseline, &optimized][which];
                 let start = Instant::now();
                 for _ in 0..5 {
-                    // SAFETY: `ctx` points to the live owner-thread `Context`
-                    // (`ev`) for the duration of this arithmetic leaf call.
+                    // SAFETY: `ctx` points to the live owner-thread `Context` `ev` and
+                    // `args` has length 1 matching `leaf`'s compiled arity.
                     assert_eq!(
                         unsafe { leaf.call(ctx, &args) },
                         NativeRun::Ok(Value::make_int(expected).bits())

@@ -155,13 +155,17 @@ fn n5_release_armed_raw_refuses_mint() {
         "t2 must enter a raw body, shape={shape:?}"
     );
     let args: [i64; 0] = [];
-    let returned = super::cache::run_armed_leaf(
-        std::ptr::from_mut(&mut ctx),
-        function,
-        body,
-        ptr,
-        args.as_ptr(),
-    );
+    // SAFETY: `ctx` is live on this owner thread, `ptr` is a live armed leaf from
+    // `compiled_leaf_ptr_for_test` under the current epoch, and `args` matches arity 0.
+    let returned = unsafe {
+        super::cache::run_armed_leaf(
+            std::ptr::from_mut(&mut ctx),
+            function,
+            body,
+            ptr,
+            args.as_ptr(),
+        )
+    };
     assert!(
         returned.is_ok(),
         "raw leaf should return after the probe, got {returned:?}"

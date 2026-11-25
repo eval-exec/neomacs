@@ -215,7 +215,11 @@ pub(super) fn snapshot(heap: &TaggedHeap, marks_final: bool) -> MemoryInventory 
         heap.generational.old_sweep_pending,
         heap.sweep_noncons_pending,
     ] {
-        boxed_inventory(heap, head, marks_final, full_marks, &mut out);
+        // SAFETY: each head is null or the head of a valid, null-terminated intrusive
+        // `gc_link` chain of live objects owned by `heap` while `heap` is borrowed.
+        unsafe {
+            boxed_inventory(heap, head, marks_final, full_marks, &mut out);
+        }
     }
     out.mapped = mapped_inventory(heap, marks_final);
     out.text_properties.merge(&out.ages.young.text_properties);
@@ -681,8 +685,10 @@ fn mapped_inventory(heap: &TaggedHeap, marks_final: bool) -> MappedInventory {
     }
     for object in &heap.mapped_string_objects {
         add(&mut out.image_object_bytes, object.byte_len);
+        // SAFETY: `object.ptr` points to a live mapped `StringObj` owned by `heap`'s image.
         let payload = unsafe { string_payload_with_text_properties(&(*object.ptr).data) };
-        let text_properties = text_property_storage(object.ptr.cast());
+        // SAFETY: `object.ptr` begins with a live `GcHeader` for a mapped `StringObj`.
+        let text_properties = unsafe { text_property_storage(object.ptr.cast()) };
         add(
             &mut out.known_text_property_capacity_bytes,
             text_properties.known_owned_capacity_bytes,
@@ -701,14 +707,17 @@ fn mapped_inventory(heap: &TaggedHeap, marks_final: bool) -> MappedInventory {
     for object in &heap.mapped_veclike_objects {
         add(&mut out.image_object_bytes, object.byte_len);
         let header = object.header.cast::<GcHeader>();
-        let payload = header_payload(heap, header);
-        let text_properties = text_property_storage(header);
+        // SAFETY: `header` points to a live mapped veclike `GcHeader` owned by `heap`.
+        let payload = unsafe { header_payload(heap, header) };
+        // SAFETY: `header` points to a live mapped veclike `GcHeader` owned by `heap`.
+        let text_properties = unsafe { text_property_storage(header) };
         add(
             &mut out.known_text_property_capacity_bytes,
             text_properties.known_owned_capacity_bytes,
         );
         out.text_properties.merge(&text_properties);
-        let shared = shared_bytecode_bytes(header);
+        // SAFETY: `header` points to a live mapped veclike `GcHeader` owned by `heap`.
+        let shared = unsafe { shared_bytecode_bytes(header) };
         add(
             &mut out.copied_owned_payload_capacity_bytes,
             payload.capacity_bytes.saturating_sub(shared),
