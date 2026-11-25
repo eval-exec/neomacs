@@ -3143,6 +3143,261 @@ fn idle_worker_publishes_a_closed_prefix_before_full_page_capture() {
 }
 
 #[test]
+fn idle_worker_prefix_publication_does_not_repeat_logical_redisplay() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    // Context callbacks own engine references. Remove them before dropping
+    // the engine's worker/root leases, then drop the heap-owning Context.
+    struct Fixture {
+        engine: Rc<RefCell<LayoutEngine>>,
+        eval: Context,
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            self.eval.display_idle_maintenance_fn = None;
+            self.eval.redisplay_fn = None;
+        }
+    }
+
+    let _policy = neovm_core::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
+    let line = "ordinary offscreen text\n";
+    let (mut eval, frame, _, window) = incr_editing_frame(&line.repeat(300), 800, 600);
+    assert!(eval.frame_manager_mut().select_frame(frame));
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    eval.eval_str(
+        "(progn
+           (setq worker-raise-spec (list 'raise 0.25)
+                 worker-publication-pre-count 0
+                 worker-publication-mode-line-count 0
+                 timer-list nil timer-idle-list nil
+                 mode-line-format
+                 '((:eval (progn
+                            (setq worker-publication-mode-line-count
+                                  (1+ worker-publication-mode-line-count))
+                            \"aux-mode-line\")))
+                 pre-redisplay-function
+                 (lambda (_windows)
+                   (setq worker-publication-pre-count
+                         (1+ worker-publication-pre-count))))
+           (put-text-property 1 (point-max) 'display worker-raise-spec))",
+    )
+    .unwrap();
+    let mut fixture = Fixture {
+        engine: Rc::new(RefCell::new(
+            crate::font::metrics::test_catalog::layout_engine(),
+        )),
+        eval,
+    };
+    let producer_calls = Rc::new(Cell::new(0));
+    let produced = Rc::clone(&producer_calls);
+    let producer = Rc::clone(&fixture.engine);
+    fixture.eval.redisplay_fn = Some(Box::new(move |eval| {
+        produced.set(produced.get() + 1);
+        let mut engine = producer.borrow_mut();
+        // Count the actual renderer-facing frame producer, including its
+        // accepted GNU body state and real native presentation activation.
+        engine.layout_frame_rust(eval, frame);
+        activate_last_engine_presentation(eval, &engine, frame);
+    }));
+    fixture.eval.redisplay().expect("initial logical redisplay");
+    let pre_count = |eval: &Context| {
+        eval.builtin_var_value_by_name("worker-publication-pre-count")
+            .unwrap()
+            .as_fixnum()
+            .unwrap()
+    };
+    let mode_line_count = |eval: &Context| {
+        eval.builtin_var_value_by_name("worker-publication-mode-line-count")
+            .unwrap()
+            .as_fixnum()
+            .unwrap()
+    };
+    assert_eq!(producer_calls.get(), 1, "the initial producer actually ran");
+    assert_eq!(
+        pre_count(&fixture.eval),
+        1,
+        "the initial Lisp hook actually ran"
+    );
+    assert!(
+        mode_line_count(&fixture.eval) >= 1,
+        "the initial mode-line :eval counter actually ran"
+    );
+    assert!(fixture.eval.gnu_redisplay_hooks_accepted_serial() > 0);
+    let initial_presentation = fixture
+        .eval
+        .frame_manager()
+        .get(frame)
+        .unwrap()
+        .active_presentation()
+        .expect("the initial frame was activated");
+    let before = selected_window_layout_trace(&fixture.eval, &fixture.engine.borrow(), frame);
+    let initial_producer_calls = producer_calls.get();
+    let initial_pre_count = pre_count(&fixture.eval);
+    let initial_mode_line_count = mode_line_count(&fixture.eval);
+    let initial_redisplay_generation = fixture.eval.redisplay_generation();
+    let publications = Rc::new(Cell::new(0));
+    let published = Rc::clone(&publications);
+    let delivered_updates = Rc::new(RefCell::new(Vec::new()));
+    let delivered = Rc::clone(&delivered_updates);
+    let maintenance = Rc::clone(&fixture.engine);
+    fixture.eval.display_idle_maintenance_fn = Some(Box::new(move |eval| {
+        use neovm_core::emacs_core::eval::{
+            DisplayMaintenanceOutcome, DisplayMaintenancePublication,
+        };
+        let mut engine = maintenance.borrow_mut();
+        let progress = engine.maintain_scroll_coverage(eval);
+        let publication = if engine.has_actionable_scroll_coverage_publication(eval) {
+            match engine.prepare_auxiliary_scroll_coverage(eval) {
+                AuxiliaryPreparation::Ready(prepared) => {
+                    delivered.borrow_mut().push(prepared.clone_update());
+                    engine.commit_auxiliary_scroll_coverage(prepared);
+                    published.set(published.get() + 1);
+                    DisplayMaintenancePublication::PublishedNatively
+                }
+                AuxiliaryPreparation::NoChange => DisplayMaintenancePublication::Idle,
+                AuxiliaryPreparation::Refused(refusal) => {
+                    panic!("expected eligible native auxiliary publication, got {refusal:?}")
+                }
+            }
+        } else {
+            DisplayMaintenancePublication::Idle
+        };
+        DisplayMaintenanceOutcome {
+            next_wake: progress.map(|progress| progress.next_wake()),
+            publication,
+        }
+    }));
+
+    let owner = DisplayWindowId::new(window.0 as i64);
+    let mut frontiers = Vec::new();
+    let mut extra_logical_work = Vec::new();
+    // The worker first publishes four closed rows, then an eight-row prefix.
+    // Preserve both publications before asserting the cost invariant, so a
+    // failure can establish the +2/+2 cascade rather than just the first call.
+    for expected_publications in 1_usize..=2 {
+        let target_rows = expected_publications * 4;
+        for _ in 0..target_rows {
+            let captured = fixture
+                .engine
+                .borrow()
+                .scroll_coverage
+                .active_capture_progress_for_test()
+                .map_or(0, |(_, _, rows)| rows);
+            if captured >= target_rows {
+                break;
+            }
+            assert!(
+                fixture
+                    .engine
+                    .borrow_mut()
+                    .maintain_scroll_coverage(&fixture.eval)
+                    .is_some()
+            );
+        }
+        assert_eq!(
+            fixture
+                .engine
+                .borrow()
+                .scroll_coverage
+                .active_capture_progress_for_test()
+                .expect("the source page is still being acquired")
+                .2,
+            target_rows,
+            "the actual worker publication contains the growing closed prefix"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let ready = {
+                let mut engine = fixture.engine.borrow_mut();
+                let engine = &mut *engine;
+                engine
+                    .scroll_coverage
+                    .drain(&mut engine.prepared_viewports)
+                    .unwrap()
+            };
+            if ready {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the actual growing worker prefix must complete"
+            );
+            std::thread::yield_now();
+        }
+        assert!(
+            fixture
+                .engine
+                .borrow()
+                .prepared_viewports
+                .has_computed(frame, owner)
+        );
+        // Do not consume the publication bool here: the real command-input
+        // maintenance path must own its decision to publish newly ready rows.
+        fixture
+            .eval
+            .display_idle_maintenance_deadline(true, false)
+            .unwrap();
+        assert_eq!(publications.get(), expected_publications);
+        let engine = fixture.engine.borrow();
+        let coverage = engine
+            .published_scroll_coverage(frame, owner)
+            .expect("the actual prefix was published to the engine-owned coverage record");
+        frontiers.push(coverage.content.matrix.rows.last().unwrap().end_charpos);
+        let delivered = delivered_updates.borrow();
+        let latest_update = delivered.last().expect("delivered auxiliary update");
+        assert_eq!(latest_update.base.get(), initial_presentation.get());
+        assert!(
+            latest_update
+                .surfaces
+                .iter()
+                .any(|surface| surface.coverage().content.window_id == owner
+                    && surface.coverage().publication == coverage.publication),
+            "the newly published coverage passed actual surface admission"
+        );
+        assert!(
+            engine
+                .last_frame_display_state
+                .as_ref()
+                .unwrap()
+                .scroll_coverage
+                .is_empty(),
+            "auxiliary publication must not mutate the sealed base FrameDisplayState"
+        );
+        assert_eq!(
+            before,
+            selected_window_layout_trace(&fixture.eval, &engine, frame)
+        );
+        assert_eq!(
+            mode_line_count(&fixture.eval),
+            initial_mode_line_count,
+            "auxiliary coverage publication must not re-evaluate mode-line :eval forms"
+        );
+        assert_eq!(
+            fixture.eval.redisplay_generation(),
+            initial_redisplay_generation,
+            "auxiliary coverage publication must not bump redisplay_generation"
+        );
+        extra_logical_work.push((
+            pre_count(&fixture.eval) - initial_pre_count,
+            producer_calls.get() - initial_producer_calls,
+        ));
+    }
+    assert!(
+        frontiers[1] > frontiers[0],
+        "the second prefix genuinely grew"
+    );
+    assert_eq!(
+        extra_logical_work,
+        vec![(0, 0), (0, 0)],
+        "fresh worker coverage publication must not rerun Lisp or the full frame producer"
+    );
+}
+
+#[test]
 fn rich_visible_rows_do_not_clone_the_active_face_per_glyph() {
     let line = format!("{}\n", "ordinary characters ".repeat(10));
     let (mut eval, frame, _, _) = incr_editing_frame(&line.repeat(30), 800, 600);

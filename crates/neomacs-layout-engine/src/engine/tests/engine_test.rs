@@ -39263,6 +39263,8 @@ fn hscroll_cursor_publication_preserves_clipping_visible_text_and_eol() {
 #[path = "prepared_viewport_test.rs"]
 mod prepared_viewport_test;
 
+#[path = "auxiliary_coverage_test.rs"]
+mod auxiliary_coverage_test;
 #[path = "offscreen_row_test.rs"]
 mod offscreen_row_test;
 
