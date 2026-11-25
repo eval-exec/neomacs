@@ -189,6 +189,7 @@ shells! {
     stopped_summaries_rejects_zero_epoch_outside_pre_stop_native => StoppedSummariesRejectsZeroEpochOutsidePreStopNative,
     collect_requested_after_trace_refuses_early_without_world_walk => CollectRequestedAfterTraceRefusesEarlyWithoutWorldWalk,
     should_collect_stopped_counts_keeper_heap_serial_debt => ShouldCollectStoppedCountsKeeperHeapSerialDebt,
+    prepare_finish_folds_serial_facts_and_young_shell_without_collection => PrepareFinishFoldsSerialFactsAndYoungShellWithoutCollection,
 }
 
 #[test]

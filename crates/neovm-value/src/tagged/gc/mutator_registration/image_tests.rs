@@ -484,9 +484,10 @@ fn parallel_young_ids_are_unique_across_threads_and_heaps() {
 #[test]
 fn restore_legacy_for_collection_merges_shell_young_blocks_into_empty_frozen_log() {
     let mut heap = TaggedHeap::new();
-    if !heap.tagged_heap_generational_enabled() {
-        return;
-    }
+    assert!(
+        heap.tagged_heap_generational_enabled(),
+        "young-log merge tests require generational GC enabled (NEOVM_GC_GENERATIONAL!=0)"
+    );
     heap.close_alloc_regions();
     let legacy = PublishedGcImage::from_legacy(&mut heap).unwrap();
     assert!(legacy.young().blocks().is_empty());
@@ -513,21 +514,24 @@ fn restore_legacy_for_collection_merges_shell_young_blocks_into_empty_frozen_log
         .blocks()
         .to_vec();
     legacy
-        .restore_legacy_for_collection(&mut heap, |moved_id, _| {
-            panic!("unexpected peer pending repair: {moved_id:?}");
+        .restore_legacy_for_collection(&mut heap, |moved_id| {
+            panic!("unexpected peer pending lookup: {moved_id:?}");
         })
         .expect("restore_legacy_for_collection must fold resident shell young blocks");
     let restored = heap.current_mutator_satb().young.resident().unwrap();
     assert_eq!(restored.blocks(), expected_blocks.as_slice());
     assert!(restored.pending_index().is_some());
+    heap.cons_allocator
+        .verify_young_registry_with_extra(restored, &[]);
 }
 
 #[test]
 fn restore_legacy_for_collection_merges_nonempty_frozen_and_shell_young_blocks() {
     let mut heap = TaggedHeap::new();
-    if !heap.tagged_heap_generational_enabled() {
-        return;
-    }
+    assert!(
+        heap.tagged_heap_generational_enabled(),
+        "young-log merge tests require generational GC enabled (NEOVM_GC_GENERATIONAL!=0)"
+    );
     // Allocate a cons so the frozen legacy image already owns a non-empty young
     // block and a pending entry.
     let _pre = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
@@ -559,8 +563,8 @@ fn restore_legacy_for_collection_merges_nonempty_frozen_and_shell_young_blocks()
     );
 
     legacy
-        .restore_legacy_for_collection(&mut heap, |moved_id, _| {
-            panic!("unexpected peer pending repair: {moved_id:?}");
+        .restore_legacy_for_collection(&mut heap, |moved_id| {
+            panic!("unexpected peer pending lookup: {moved_id:?}");
         })
         .expect("restore_legacy_for_collection must merge nonempty frozen + shell young logs");
     let restored = heap.current_mutator_satb().young.resident().unwrap();
@@ -568,14 +572,17 @@ fn restore_legacy_for_collection_merges_nonempty_frozen_and_shell_young_blocks()
     expected.extend_from_slice(&shell_blocks);
     assert_eq!(restored.blocks(), expected.as_slice());
     assert!(restored.pending_index().is_some());
+    heap.cons_allocator
+        .verify_young_registry_with_extra(restored, &[]);
 }
 
 #[test]
 fn restore_legacy_for_collection_repairs_swapped_peer_pending_index() {
     let mut heap = TaggedHeap::new();
-    if !heap.tagged_heap_generational_enabled() {
-        return;
-    }
+    assert!(
+        heap.tagged_heap_generational_enabled(),
+        "young-log merge tests require generational GC enabled (NEOVM_GC_GENERATIONAL!=0)"
+    );
     // 1. Pre-freeze cons -> legacy id_0 sits at pending_mutators[0].
     let _pre = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
     heap.close_alloc_regions();
@@ -625,20 +632,19 @@ fn restore_legacy_for_collection_repairs_swapped_peer_pending_index() {
     );
 
     // 4. Merging shell into frozen removes `shell_pending` via swap_remove and
-    //    must report `(peer_id, shell_pending)` so the peer log repairs its index.
-    let mut repaired = None;
+    //    must preflight and repair the swapped peer log's pending index.
+    let mut looked_up = None;
+    let peer_log = peer_slot.resident_mut().unwrap();
+    let mut peer_opt = Some(peer_log);
     legacy
-        .restore_legacy_for_collection(&mut heap, |moved_id, new_index| {
-            assert!(repaired.is_none(), "at most one peer index moves");
-            repaired = Some((moved_id, new_index));
+        .restore_legacy_for_collection(&mut heap, |moved_id| {
+            assert!(looked_up.is_none(), "at most one peer lookup occurs");
+            looked_up = Some(moved_id);
             assert_eq!(moved_id, peer_id);
-            peer_slot
-                .resident_mut()
-                .unwrap()
-                .repair_pending_index(new_index);
+            peer_opt.take()
         })
         .expect("restore_legacy_for_collection repairs swapped peer pending index");
-    assert_eq!(repaired, Some((peer_id, shell_pending)));
+    assert_eq!(looked_up, Some(peer_id));
     assert_eq!(
         peer_slot.resident().unwrap().pending_index(),
         Some(shell_pending)
@@ -647,4 +653,99 @@ fn restore_legacy_for_collection_repairs_swapped_peer_pending_index() {
     let mut expected = frozen_blocks;
     expected.extend_from_slice(&shell_blocks);
     assert_eq!(restored.blocks(), expected.as_slice());
+    heap.cons_allocator
+        .verify_young_registry_with_extra(restored, &[peer_slot.resident().unwrap()]);
+}
+
+#[test]
+fn restore_legacy_for_collection_refuses_missing_swapped_peer_without_mutating() {
+    let mut heap = TaggedHeap::new();
+    assert!(
+        heap.tagged_heap_generational_enabled(),
+        "young-log merge tests require generational GC enabled (NEOVM_GC_GENERATIONAL!=0)"
+    );
+    let _pre = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
+    heap.close_alloc_regions();
+    let legacy = PublishedGcImage::from_legacy(&mut heap).unwrap();
+    let frozen_blocks = legacy.young().blocks().to_vec();
+    let frozen_pending = legacy.young().pending_index();
+
+    for i in 0..=CONS_BLOCK_SIZE {
+        let _ = heap.alloc_cons(TaggedValue::fixnum(i as i64), TaggedValue::NIL);
+    }
+    heap.close_alloc_regions();
+    let shell_blocks = heap
+        .current_mutator_satb()
+        .young
+        .resident()
+        .unwrap()
+        .blocks()
+        .to_vec();
+    let shell_pending = heap
+        .current_mutator_satb()
+        .young
+        .resident()
+        .unwrap()
+        .pending_index();
+
+    let peer_id = YoungRegistrationId::issue_parallel(heap.heap_identity()).unwrap();
+    let mut peer_slot = YoungLogSlot::new_parallel(peer_id);
+    let peer_block = ConsBlock::new();
+    let peer_base = ConsBlockBase::of(&peer_block);
+    heap.cons_allocator.register(&peer_block);
+    heap.cons_blocks.push(peer_block);
+    heap.cons_allocator
+        .note_carve(peer_base, peer_slot.resident_mut().unwrap())
+        .unwrap();
+    let peer_pending = peer_slot.resident().unwrap().pending_index();
+
+    let failure = legacy
+        .restore_legacy_for_collection(&mut heap, |_moved_id| None)
+        .expect_err("unresolvable swapped peer must refuse before any mutation");
+    assert!(
+        matches!(
+            failure.error,
+            ImageError::Young(YoungRegistryError::UnknownRegistration)
+        ),
+        "expected UnknownRegistration, got {:?}",
+        failure.error
+    );
+    assert_eq!(
+        failure.image.young().blocks(),
+        frozen_blocks.as_slice(),
+        "refusal must leave frozen young blocks untouched"
+    );
+    assert_eq!(
+        failure.image.young().pending_index(),
+        frozen_pending,
+        "refusal must leave frozen pending index untouched"
+    );
+    let shell = heap.current_mutator_satb().young.resident().unwrap();
+    assert_eq!(
+        shell.blocks(),
+        shell_blocks.as_slice(),
+        "refusal must leave resident shell young blocks untouched"
+    );
+    assert_eq!(
+        shell.pending_index(),
+        shell_pending,
+        "refusal must leave resident shell pending index untouched"
+    );
+    assert_eq!(
+        peer_slot.resident().unwrap().pending_index(),
+        peer_pending,
+        "refusal must leave peer pending index untouched"
+    );
+
+    // Providing the peer afterward must still succeed cleanly with full registry invariants.
+    let mut peer_opt = Some(peer_slot.resident_mut().unwrap());
+    failure
+        .image
+        .restore_legacy_for_collection(&mut heap, |moved_id| {
+            (moved_id == peer_id).then(|| peer_opt.take()).flatten()
+        })
+        .expect("retry with valid peer succeeds after fail-closed refusal");
+    let restored = heap.current_mutator_satb().young.resident().unwrap();
+    heap.cons_allocator
+        .verify_young_registry_with_extra(restored, &[peer_slot.resident().unwrap()]);
 }

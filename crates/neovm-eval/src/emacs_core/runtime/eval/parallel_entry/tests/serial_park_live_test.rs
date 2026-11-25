@@ -2601,11 +2601,19 @@ fn l67b_b5_world_turn_cons_survives_or_reclaims_across_group_collect() {
                             neovm_value::tagged::transport::SharedRoot::new(heap, rooted)
                         };
                         let garbage = heap.alloc_cons(Value::fixnum(7777), Value::NIL);
+                        assert!(
+                            heap.owns_heap_value_for_test(rooted),
+                            "positive control: rooted cons owned before collect"
+                        );
+                        assert!(
+                            heap.owns_heap_value_for_test(garbage),
+                            "positive control: garbage cons owned before collect"
+                        );
                         // Also fill past one ConsBlock (~2k cells) so a fresh
                         // second block enters the resident shell while entry 0's
                         // frozen log is already non-empty, exercising both
                         // backlink repair and pending_mutators deduplication in
-                        // capture_parallel_major.
+                        // merge_legacy_young_shell.
                         for i in 0..4096usize {
                             let _ = heap.alloc_cons(Value::fixnum(i as i64), Value::NIL);
                         }
@@ -2667,6 +2675,125 @@ fn l67b_b5_world_turn_cons_survives_or_reclaims_across_group_collect() {
     let outcome = rx.recv().expect("keeper outcome");
     service.join().expect("keeper service thread");
     let end = outcome.unwrap_or_else(|notice| panic!("world-turn cons era refused: {notice:?}"));
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    let returned = shell.accept_return(end).unwrap();
+    finish_fixture(returned, private);
+}
+
+/// Lead #14210 nit 4: live repeated-era `collect -> cons -> collect again` row.
+/// Collect #1 drains and re-freezes entry 0's young log empty via `from_legacy`;
+/// consing in the resumed `WorldTurn` then exercises the empty-frozen swap path
+/// end-to-end across Collect #2 before finishing the era cleanly.
+#[test]
+fn l67b_b5_world_turn_collect_cons_collect_again() {
+    let mut source = ready();
+    let private = Value::string("l67b-b5-collect-cons-collect-again");
+    source.lexenv = private;
+    source.tagged_heap.close_alloc_regions();
+    let heap_addr = source.tagged_heap.heap_root().as_ptr() as usize;
+    let (shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |era| {
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let mut group = enroll_group(&mut driver, &inbox);
+            drop(inbox);
+            let (report1_tx, report1_rx) = mpsc::sync_channel(1);
+            let (report2_tx, report2_rx) = mpsc::sync_channel(1);
+            let (rooted_word, garbage_word, rooted_handle) = std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let runner = scope.spawn(move || {
+                    let (turn1, _e1, lend1) = group
+                        .request_world()
+                        .ok()
+                        .expect("group granted WorldTurn #1");
+                    // Collect #1: leaves entry 0's re-frozen young log empty.
+                    let (turn2, _e2, lend2) = group
+                        .collect(lend1, WorldReturned::from_end(turn1), Some(report1_tx))
+                        .ok()
+                        .expect("Collect #1 succeeds");
+                    // WorldTurn #2: cons onto the resident shell while frozen log is empty.
+                    let (rooted_word, garbage_word, rooted_handle) = {
+                        // SAFETY: this thread holds active WorldTurn #2 under the
+                        // keeper's stop; `heap_addr` is `World`'s pinned `NonNull`
+                        // heap root and no other `&`/`&mut TaggedHeap` is live.
+                        let heap = unsafe {
+                            &mut *(heap_addr as *mut neovm_value::tagged::gc::TaggedHeap)
+                        };
+                        let rooted = heap.alloc_cons(Value::fixnum(5150), Value::fixnum(6260));
+                        // SAFETY: exclusive WorldTurn holder; no collection runs
+                        // between allocation and SharedRoot registration.
+                        let handle = unsafe {
+                            neovm_value::tagged::transport::SharedRoot::new(heap, rooted)
+                        };
+                        let garbage = heap.alloc_cons(Value::fixnum(8888), Value::NIL);
+                        assert!(
+                            heap.owns_heap_value_for_test(rooted),
+                            "positive control: rooted cons owned before Collect #2"
+                        );
+                        assert!(
+                            heap.owns_heap_value_for_test(garbage),
+                            "positive control: garbage cons owned before Collect #2"
+                        );
+                        heap.close_alloc_regions();
+                        (rooted.bits(), garbage.bits(), handle)
+                    };
+                    // Collect #2: merges the resident shell via the empty-frozen swap path.
+                    let (turn3, _e3, lend3) = group
+                        .collect(lend2, WorldReturned::from_end(turn2), Some(report2_tx))
+                        .ok()
+                        .expect("Collect #2 must fold resident shell onto empty frozen log");
+                    {
+                        // SAFETY: active resumed WorldTurn #3 under keeper stop.
+                        let heap = unsafe {
+                            &mut *(heap_addr as *mut neovm_value::tagged::gc::TaggedHeap)
+                        };
+                        let survived = rooted_handle
+                            .materialize(heap)
+                            .expect("rooted cons survives Collect #2")
+                            .value();
+                        assert_eq!(survived.bits(), rooted_word);
+                        assert_eq!(survived.cons_car_unobserved(), Value::fixnum(5150));
+                        assert_eq!(survived.cons_cdr_unobserved(), Value::fixnum(6260));
+                    }
+                    group.give_back(lend3, WorldReturned::from_end(turn3));
+                    group.exit();
+                    (rooted_word, garbage_word, rooted_handle)
+                });
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                runner.join().expect("group runner")
+            });
+            let r1 = report1_rx
+                .recv_timeout(BOUND)
+                .expect("report 1 sent")
+                .expect("Collect #1 ok");
+            let r2 = report2_rx
+                .recv_timeout(BOUND)
+                .expect("report 2 sent")
+                .expect("Collect #2 ok");
+            assert!(r1.major && r2.major);
+            assert!(r2.cycle > r1.cycle);
+            let stopped = stop_retrying(era);
+            assert!(
+                era.owns_heap_word_for_test(&stopped, rooted_word).unwrap(),
+                "rooted cons must survive Collect #2"
+            );
+            assert!(
+                !era.owns_heap_word_for_test(&stopped, garbage_word).unwrap(),
+                "unrooted garbage cons must be reclaimed by Collect #2"
+            );
+            complete_retrying("verify stop", stopped.complete());
+            drop(rooted_handle);
+        });
+        match outcome {
+            Ok((end, ())) => tx.send(Ok(end)).expect("send keeper end"),
+            Err(failure) => tx.send(Err(failure.notice())).expect("send keeper notice"),
+        }
+    });
+    let outcome = rx.recv().expect("keeper outcome");
+    service.join().expect("keeper service thread");
+    let end = outcome.unwrap_or_else(|notice| panic!("repeated-collect era refused: {notice:?}"));
     assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
     let returned = shell.accept_return(end).unwrap();
     finish_fixture(returned, private);

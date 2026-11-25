@@ -14,7 +14,7 @@ use super::super::mutator_gc::{MutatorGcState, SatbMutatorState};
 use super::super::owner_alloc_region::OwnerAllocRegion;
 use super::super::pacing::GenerationPacingCounters;
 use super::super::young_registry::{
-    YoungBlockLog, YoungLogSlot, YoungPendingIndex, YoungRegistrationId, YoungRegistryError,
+    YoungBlockLog, YoungLogSlot, YoungRegistrationId, YoungRegistryError,
 };
 use super::super::{HeapIdentity, MEMORY_USE_COUNT_LEN, TaggedHeap};
 use crate::intern::SymId;
@@ -721,12 +721,13 @@ impl PublishedGcImage {
     ///
     /// When both `self.young` and `heap`'s resident shell hold pending young
     /// blocks, removing the shell's duplicate `pending_mutators` entry may
-    /// swap-remove another live registration into the freed slot; `repair_moved_pending`
-    /// updates that registration's `YoungBlockLog::pending` index.
-    pub(in crate::tagged::gc) fn restore_legacy_for_collection(
+    /// swap-remove another live registration into the freed slot; `resolve_peer`
+    /// resolves that registration's `YoungBlockLog` during preflight (before
+    /// any mutation) so its pending index can be validated and repaired.
+    pub(in crate::tagged::gc) fn restore_legacy_for_collection<'a>(
         mut self,
         heap: &mut TaggedHeap,
-        repair_moved_pending: impl FnMut(YoungRegistrationId, YoungPendingIndex),
+        resolve_peer: impl FnOnce(YoungRegistrationId) -> Option<&'a mut YoungBlockLog>,
     ) -> Result<(), RestoreImageFailure> {
         let young_shell_empty = heap
             .current_mutator_satb()
@@ -760,7 +761,7 @@ impl PublishedGcImage {
                 Ok(shell) => heap.cons_allocator.merge_legacy_young_shell(
                     &mut self.young,
                     shell,
-                    repair_moved_pending,
+                    resolve_peer,
                 ),
                 Err(error) => Err(error),
             };

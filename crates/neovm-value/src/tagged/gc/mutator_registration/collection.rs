@@ -464,6 +464,25 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn alloc_serial_cons_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<usize, CollectionError> {
+        self.check_collection(stopped)?;
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        let heap = collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut();
+        let cons = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::fixnum(2));
+        heap.close_alloc_regions();
+        Ok(cons.bits())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn grant_closed_owner_cons_lease_for_test(
         &self,
         stopped: &AllStopped<'_>,
@@ -884,14 +903,13 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         // legacy collector method asks its inline registry to resolve it,
         // folding any live serial-turn GC facts accrued directly on `heap`.
         let legacy = images.images[0].1.take().expect("frozen serial image");
-        if let Err(failure) = legacy.restore_legacy_for_collection(heap, |moved_id, new_index| {
-            images.images[1..]
+        let peers = &mut images.images[1..];
+        if let Err(failure) = legacy.restore_legacy_for_collection(heap, move |moved_id| {
+            peers
                 .iter_mut()
                 .find(|(entry, _)| entry.young == moved_id)
                 .and_then(|(_, image)| image.as_mut())
-                .expect("pending young registration must belong to a live published image")
-                .young_mut()
-                .repair_pending_index(new_index);
+                .map(PublishedGcImage::young_mut)
         }) {
             images.images[0].1 = Some(failure.image);
             return Err(RegistrationError::from(failure.error).into());

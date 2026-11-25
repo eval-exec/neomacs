@@ -287,16 +287,16 @@ impl ConsAllocatorOwner {
     /// into entry 0's frozen `YoungBlockLog`, keeping block `YoungBlockIndex`
     /// backlinks and `pending_mutators` consistent.
     #[cold]
-    pub(super) fn merge_legacy_young_shell(
+    pub(super) fn merge_legacy_young_shell<'a>(
         &mut self,
         frozen: &mut YoungBlockLog,
         shell: &mut YoungBlockLog,
-        repair_moved_pending: impl FnMut(YoungRegistrationId, YoungPendingIndex),
+        resolve_peer: impl FnOnce(YoungRegistrationId) -> Option<&'a mut YoungBlockLog>,
     ) -> Result<(), YoungRegistryError> {
         self.0
             .as_deref_mut()
             .expect("allocator owner is initialized")
-            .merge_legacy_young_shell(frozen, shell, repair_moved_pending)
+            .merge_legacy_young_shell(frozen, shell, resolve_peer)
     }
 
     /// # Safety
@@ -842,13 +842,14 @@ impl AllocatorState {
     /// entry 0's frozen `YoungBlockLog`, repairing every moved block's
     /// `YoungBlockIndex` backlink and deduplicating `pending_mutators` before
     /// `restore_owner_payload` runs. Refuses before any state mutation if
-    /// either log or any block backlink fails preflight.
+    /// either log, any block backlink, or a swapped peer pending log fails
+    /// preflight.
     #[cold]
-    pub(super) fn merge_legacy_young_shell(
+    pub(super) fn merge_legacy_young_shell<'a>(
         &mut self,
         frozen: &mut YoungBlockLog,
         shell: &mut YoungBlockLog,
-        mut repair_moved_pending: impl FnMut(YoungRegistrationId, YoungPendingIndex),
+        resolve_peer: impl FnOnce(YoungRegistrationId) -> Option<&'a mut YoungBlockLog>,
     ) -> Result<(), YoungRegistryError> {
         let id = frozen.id();
         if id.heap_identity() != self.identity || shell.id().heap_identity() != self.identity {
@@ -898,6 +899,25 @@ impl AllocatorState {
             std::mem::swap(frozen, shell);
             return Ok(());
         }
+        // Preflight any peer registration that `swap_remove(shell_pending)`
+        // will move before draining blocks or modifying `pending_mutators`.
+        let last_pending = self.pending_mutators.len() - 1;
+        let moved_peer = if shell_pending.index() != last_pending {
+            let moved_id = self.pending_mutators[last_pending];
+            if moved_id == id {
+                None
+            } else {
+                let peer = resolve_peer(moved_id).ok_or(YoungRegistryError::UnknownRegistration)?;
+                if peer.id() != moved_id
+                    || peer.pending_index().map(YoungPendingIndex::index) != Some(last_pending)
+                {
+                    return Err(YoungRegistryError::UnknownRegistration);
+                }
+                Some(peer)
+            }
+        } else {
+            None
+        };
         for base in shell.drain_blocks() {
             let new_index = frozen.push(base);
             self.block_for_base_mut(base).young_log_slot = Some(YoungLogSlot {
@@ -906,10 +926,12 @@ impl AllocatorState {
             });
         }
         if let Some(moved_id) = shell.remove_pending(&mut self.pending_mutators) {
-            if moved_id == id {
-                frozen.repair_pending_index(shell_pending);
+            if let Some(peer) = moved_peer {
+                debug_assert_eq!(moved_id, peer.id());
+                peer.repair_pending_index(shell_pending);
             } else {
-                repair_moved_pending(moved_id, shell_pending);
+                debug_assert_eq!(moved_id, id);
+                frozen.repair_pending_index(shell_pending);
             }
         }
         Ok(())
@@ -1422,15 +1444,68 @@ impl ConsAllocator {
     }
 
     #[cold]
-    pub(super) fn merge_legacy_young_shell(
+    pub(super) fn merge_legacy_young_shell<'a>(
         &mut self,
         frozen: &mut YoungBlockLog,
         shell: &mut YoungBlockLog,
-        repair_moved_pending: impl FnMut(YoungRegistrationId, YoungPendingIndex),
+        resolve_peer: impl FnOnce(YoungRegistrationId) -> Option<&'a mut YoungBlockLog>,
     ) -> Result<(), YoungRegistryError> {
         self.with_state_mut(|state, _mode| {
-            state.merge_legacy_young_shell(frozen, shell, repair_moved_pending)
+            state.merge_legacy_young_shell(frozen, shell, resolve_peer)
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn verify_young_registry_with_extra(
+        &self,
+        current: &YoungBlockLog,
+        extra: &[&YoungBlockLog],
+    ) {
+        self.with_state(|state, _mode| {
+            state.verify_slots();
+            let mut listed = std::collections::HashSet::new();
+            let mut pending = std::collections::HashSet::new();
+            for registration in &state.pending_mutators {
+                assert_eq!(registration.heap_identity(), state.identity);
+                assert!(
+                    pending.insert(*registration),
+                    "duplicate pending canonical owner"
+                );
+            }
+            for log in std::iter::once(current).chain(extra.iter().copied()) {
+                assert_eq!(log.id().heap_identity(), state.identity);
+                assert_eq!(log.pending_index().is_some(), !log.blocks().is_empty());
+                if let Some(index) = log.pending_index() {
+                    assert_eq!(state.pending_mutators[index.index()], log.id());
+                    assert!(
+                        pending.remove(&log.id()),
+                        "canonical log missing pending ID"
+                    );
+                }
+                for (index, base) in log.blocks().iter().enumerate() {
+                    assert!(listed.insert(*base), "duplicate young log entry");
+                    let block = state.block_for_base(*base);
+                    let backlink = block
+                        .young_log_slot
+                        .expect("young block has canonical backlink");
+                    assert_eq!(backlink.registration, log.id());
+                    assert_eq!(backlink.index.index(), index);
+                }
+            }
+            assert!(pending.is_empty(), "pending ID has no canonical owner log");
+            for base in &state.mark_work {
+                assert!(listed.insert(*base), "duplicate captured young work");
+                assert!(state.block_for_base(*base).young_log_slot.is_none());
+            }
+            for (base, &slot) in &state.blocks {
+                let block = state.block(slot);
+                assert_eq!(
+                    block.young.load(Ordering::Relaxed),
+                    listed.contains(base),
+                    "young flag/log mismatch at {base:?}"
+                );
+            }
+        });
     }
 
     pub(super) fn mark_work_snapshot(&self) -> Vec<ConsBlockBase> {

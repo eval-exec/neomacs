@@ -1283,11 +1283,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 .as_mut()
                 .expect("live era")
                 .registration_heap_mut(),
-            |moved_id, _| {
-                unreachable!(
-                    "all retiring peer young logs were verified empty before prepare_finish: {moved_id:?}"
-                );
-            },
+            |_moved_id| None,
         ) {
             legacy.image = Some(failure.image);
             registry.poison();

@@ -156,6 +156,7 @@ pub enum CollectionCase {
     StoppedSummariesRejectsZeroEpochOutsidePreStopNative,
     CollectRequestedAfterTraceRefusesEarlyWithoutWorldWalk,
     ShouldCollectStoppedCountsKeeperHeapSerialDebt,
+    PrepareFinishFoldsSerialFactsAndYoungShellWithoutCollection,
 }
 
 impl CollectionCase {
@@ -171,6 +172,7 @@ impl CollectionCase {
         Self::StoppedSummariesRejectsZeroEpochOutsidePreStopNative,
         Self::CollectRequestedAfterTraceRefusesEarlyWithoutWorldWalk,
         Self::ShouldCollectStoppedCountsKeeperHeapSerialDebt,
+        Self::PrepareFinishFoldsSerialFactsAndYoungShellWithoutCollection,
     ];
 }
 
@@ -255,6 +257,9 @@ pub(crate) fn run_collection_test<K, W>(
         }
         CollectionCase::ShouldCollectStoppedCountsKeeperHeapSerialDebt => {
             should_collect_stopped_counts_keeper_heap_serial_debt(graph_pair_era, world_roots);
+        }
+        CollectionCase::PrepareFinishFoldsSerialFactsAndYoungShellWithoutCollection => {
+            prepare_finish_folds_serial_facts_and_young_shell_without_collection(empty_outer_era);
         }
     }
 }
@@ -1017,6 +1022,57 @@ fn should_collect_stopped_counts_keeper_heap_serial_debt<K, W>(
         owner.leave_native().unwrap();
         retire(owner);
         let (collector, keeper) = era.finish().unwrap();
+        drop(collector);
+        drop(keeper);
+    });
+}
+
+/// Lead #14210 nit 1: `EraCore::prepare_finish` folds live non-young serial
+/// facts (e.g. `bytes_since_gc`) and resident young-log shell blocks accrued
+/// directly on the keeper heap with no intervening collection, reversing
+/// 878f675854's strict `restore_legacy` refusal (`DestinationOccupied` /
+/// `LogNotLoaned`) at era finish.
+fn prepare_finish_folds_serial_facts_and_young_shell_without_collection<K>(
+    empty_outer_era: &mut dyn FnMut(i64, &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>)),
+) where
+    K: EraKeeper + std::fmt::Debug,
+{
+    // Subcase A: non-young live serial fact (`bytes_since_gc`) with no collection.
+    empty_outer_era(901, &mut |era| {
+        let mut stopped = era.stop().unwrap();
+        era.charge_serial_bytes_for_test(&stopped, 128).unwrap();
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+        let (mut collector, keeper) = era
+            .finish()
+            .expect("prepare_finish must fold non-young serial facts without DestinationOccupied");
+        assert!(
+            collector.registration_heap_mut().bytes_since_gc() >= 128,
+            "folded serial-turn debt must survive era finish"
+        );
+        drop(collector);
+        drop(keeper);
+    });
+
+    // Subcase B: resident young-log shell cons allocation with no collection.
+    empty_outer_era(902, &mut |era| {
+        let mut stopped = era.stop().unwrap();
+        let cons_word = era.alloc_serial_cons_for_test(&stopped).unwrap();
+        assert!(
+            era.owns_heap_word_for_test(&stopped, cons_word).unwrap(),
+            "positive control: allocated cons is owned by keeper heap"
+        );
+        stopped.trace(|_, _| Ok(())).unwrap();
+        complete(stopped);
+        let (mut collector, keeper) = era
+            .finish()
+            .expect("prepare_finish must fold resident shell young cons without LogNotLoaned");
+        let heap = collector.registration_heap_mut();
+        assert!(
+            // SAFETY: bit pattern from a live cons just allocated on this heap.
+            heap.owns_heap_value_for_test(unsafe { Value::from_bits(cons_word) }),
+            "cons allocated onto resident shell must remain owned after era finish"
+        );
         drop(collector);
         drop(keeper);
     });

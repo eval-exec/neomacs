@@ -507,6 +507,15 @@ macro_rules! era_operations {
 
             #[cfg(any(test, feature = "test-support"))]
             #[doc(hidden)]
+            pub fn alloc_serial_cons_for_test(
+                &self,
+                stopped: &AllStopped<'_>,
+            ) -> Result<usize, CollectionError> {
+                self.core.alloc_serial_cons_for_test(stopped)
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            #[doc(hidden)]
             pub fn set_gc_threshold_for_test(
                 &self,
                 stopped: &AllStopped<'_>,
