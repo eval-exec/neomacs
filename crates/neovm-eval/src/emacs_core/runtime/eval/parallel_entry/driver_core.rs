@@ -227,6 +227,12 @@ pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason, WorldReturned, Repo
     Collect {
         reply: Option<mpsc::SyncSender<Result<Report, CollectRefusal>>>,
     },
+    /// The Baton group found no runnable thread (L6.7b b4, lead #14147 QD2):
+    /// may it report a deadlock? REPLY gets `true` only when the keeper is
+    /// between stops with no live parallel owner, nothing queued and no
+    /// collection asked for. Any other state answers `false`: a missed
+    /// verdict is acceptable, a false one never is.
+    IdleQuery { reply: mpsc::SyncSender<bool> },
 }
 
 /// How the Baton group ended its interval (L6.7b b5).
@@ -546,6 +552,12 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
             KeeperMsg::GroupAbandon { cause } => Err(Breach::GroupAbandoned { cause }),
             KeeperMsg::Collect { reply } => {
                 self.queue_collect(reply);
+                Ok(())
+            }
+            KeeperMsg::IdleQuery { reply } => {
+                let idle =
+                    self.owners.is_empty() && self.queued_len() == 0 && !self.collect_requested;
+                let _ = reply.try_send(idle);
                 Ok(())
             }
         }
@@ -916,6 +928,10 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                     self.queue_collect(reply);
                     self.set_waiter(true);
                 }
+                // A turn is out, so the group cannot be idle (QD2).
+                KeeperMsg::IdleQuery { reply } => {
+                    let _ = reply.try_send(false);
+                }
             }
         }
     }
@@ -977,6 +993,10 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
                     return Err(Breach::GroupAbandoned { cause });
                 }
                 KeeperMsg::Collect { reply } => self.queue_collect(reply),
+                // An owner's turn is out, so the group cannot be idle (QD2).
+                KeeperMsg::IdleQuery { reply } => {
+                    let _ = reply.try_send(false);
+                }
             }
         }
     }

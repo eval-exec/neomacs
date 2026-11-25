@@ -592,6 +592,19 @@ impl GroupPort {
         self.await_world()
     }
 
+    /// Whether the group may report a deadlock (L6.7b b4, lead #14147 QD2):
+    /// asked when no Baton thread is runnable and the group holds no World.
+    /// `Ok(true)` only when the keeper, between stops, has no live parallel
+    /// owner, nothing queued and no collection asked for. Conservative: any
+    /// doubt answers `false`, and the era being gone refuses.
+    pub(crate) fn idle_for_deadlock(&self) -> Result<bool, PortRefusal> {
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.inbox
+            .send(KeeperMsg::IdleQuery { reply })
+            .map_err(|_| PortRefusal::Poisoned)?;
+        answer.recv().map_err(|_| PortRefusal::Poisoned)
+    }
+
     /// The group leaves the era.
     pub(crate) fn exit(self) {
         let _ = self.inbox.send(KeeperMsg::GroupExit);

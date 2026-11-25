@@ -1653,6 +1653,65 @@ fn l67b_a_waiting_owner_raises_the_group_waiter_word() {
     });
 }
 
+/// L6.7b b4 (lead #14147 QD2). The group's deadlock query is conservative:
+/// it answers "idle" only when the keeper is between stops with no live
+/// parallel owner and nothing queued. A live owner, which could wake a Baton
+/// waiter in its next serial turn, answers "not idle", and so does a queued
+/// request.
+#[test]
+fn l67b_the_deadlock_query_answers_idle_only_with_no_live_owner() {
+    with_live_era("l67b-idle", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let o = enroll_driver(era, &mut driver, &inbox, O);
+        let mut group = enroll_group(&mut driver, &inbox);
+        drop(inbox);
+        let (live_tx, live) = mpsc::channel::<()>();
+        let (exit_tx, exit) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            scope.spawn(move || {
+                o.run(|_state, _home, _port| {
+                    live_tx.send(()).expect("O is live");
+                    exit.recv_timeout(BOUND).expect("the group asked");
+                })
+            });
+            let runner = scope.spawn(move || {
+                live.recv_timeout(BOUND).expect("O is live");
+                let with_owner = group.idle_for_deadlock().ok().expect("the keeper answers");
+                exit_tx.send(()).expect("let O exit");
+                // O's exit reaches the keeper before a later query only if
+                // the keeper has read it, so ask until it has (bounded).
+                let start = Instant::now();
+                let alone = loop {
+                    let idle = group.idle_for_deadlock().ok().expect("the keeper answers");
+                    if idle || start.elapsed() >= BOUND {
+                        break idle;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                };
+                group.request().ok().expect("the group asks");
+                let queued = group.idle_for_deadlock().ok().expect("the keeper answers");
+                let (turn, _epoch, lend) = group
+                    .await_world()
+                    .ok()
+                    .expect("the group is lent the World");
+                group.give_back(lend, WorldReturned::from_end(turn));
+                group.exit();
+                (with_owner, alone, queued)
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            let (with_owner, alone, queued) = runner.join().expect("the group");
+            assert!(
+                !with_owner,
+                "a live parallel owner can wake a Baton waiter: not idle"
+            );
+            assert!(alone, "no owner and nothing queued: idle");
+            assert!(!queued, "a queued request is not idle");
+        });
+    });
+}
+
 /// L6.7b b3 (K7 for the group). A Baton thread unwinds while the group
 /// holds the World. The guard reports the lost turn, the driver poisons the
 /// era, and an owner's request is answered `Poisoned`.
