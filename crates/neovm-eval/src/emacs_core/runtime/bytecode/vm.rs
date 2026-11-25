@@ -44,8 +44,8 @@ use neovm_value::value::*;
 /// STATIC per-compiled-function op-mix behind `NEOVM_JIT_PROFILE`
 /// (jit/compile.rs), which counts a function's ops once at compile time.
 #[cfg(feature = "vm-profile")]
-#[doc(hidden)]
-pub mod vm_profile {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) mod vm_profile {
     use super::Op;
     use neovm_value::intern::SymId;
     use std::cell::RefCell;
@@ -250,7 +250,8 @@ pub mod vm_profile {
     }
 
     /// Clear the histograms (call before a measured workload).
-    pub fn reset() {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn reset() {
         OP_COUNTS.with(|c| c.borrow_mut().clear());
         OP_PAIR_COUNTS.with(|c| c.borrow_mut().clear());
         PREV_OP.with(|c| *c.borrow_mut() = None);
@@ -467,7 +468,8 @@ pub mod vm_profile {
     }
 
     /// Print the OP-MIX + SUBR-MIX (with entry split) to stderr.
-    pub fn dump(label: &str) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dump(label: &str) {
         eprint!("{}", report(label));
     }
 }
