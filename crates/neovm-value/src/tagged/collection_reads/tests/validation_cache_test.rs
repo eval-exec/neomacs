@@ -119,6 +119,126 @@ fn incremental_validation_scans_only_new_journal_delta_and_latches_invalidation(
 }
 
 #[test]
+fn incremental_validation_matches_full_rescan_on_randomized_journals() {
+    struct XorShift64(u64);
+    impl XorShift64 {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn next_usize(&mut self, bound: usize) -> usize {
+            (self.next() as usize) % bound
+        }
+    }
+
+    struct TrackedCert {
+        cert: CollectionReads,
+        deps: rustc_hash::FxHashSet<usize>,
+        origin_log_index: usize,
+    }
+
+    let pool: Vec<Value> = (0..24)
+        .map(|i| Value::cons(Value::fixnum(i), Value::NIL))
+        .collect();
+    let unrelated = Value::cons(Value::NIL, Value::NIL);
+
+    let mut rng = XorShift64(0x9E37_79B9_7F4A_7C15);
+    let mut write_log: Vec<usize> = Vec::new();
+    let mut certs: Vec<TrackedCert> = Vec::new();
+
+    for round in 0..160 {
+        // Capture a fresh certificate with 0..=8 random dependencies from `pool`.
+        if certs.len() < 12 || rng.next_usize(4) == 0 {
+            let dep_count = match rng.next_usize(10) {
+                0 => 0,
+                1..=3 => 1,
+                _ => 2 + rng.next_usize(7),
+            };
+            let mut chosen = Vec::with_capacity(dep_count);
+            for _ in 0..dep_count {
+                chosen.push(pool[rng.next_usize(pool.len())]);
+            }
+            let (_, captured) = capture(|| {
+                let mut acc = 0usize;
+                for &cell in &chosen {
+                    acc ^= cell.cons_car().bits();
+                }
+                acc
+            });
+            let cert = captured.expect("randomized capture");
+            let deps: rustc_hash::FxHashSet<usize> = chosen.iter().map(|v| v.bits()).collect();
+            if certs.len() >= 16 {
+                certs.swap_remove(rng.next_usize(certs.len()));
+            }
+            certs.push(TrackedCert {
+                cert,
+                deps,
+                origin_log_index: write_log.len(),
+            });
+        }
+
+        // Perform a random burst of writes (mostly unrelated so certificates stay
+        // valid long enough to exercise multi-step deltas and horizon crossings,
+        // interspersed with real mutations to `pool` entries).
+        let burst = match rng.next_usize(10) {
+            0 => 0,
+            1..=4 => 1 + rng.next_usize(5),
+            5..=7 => 16 + rng.next_usize(128),
+            8 => 1024 + rng.next_usize(2048),
+            _ => JOURNAL_SIZE / 2 + rng.next_usize(128),
+        };
+        for step in 0..burst {
+            let target = if rng.next_usize(64) == 0 {
+                pool[rng.next_usize(pool.len())]
+            } else {
+                unrelated
+            };
+            target.set_car(Value::fixnum((round * 10_000 + step) as i64));
+            write_log.push(target.bits());
+        }
+
+        // Validate every live certificate (including a duplicate same-sequence
+        // check on some) and assert exact equivalence with a naive full rescan
+        // of `(origin_log_index .. write_log.len())` enforcing `JOURNAL_SIZE`.
+        for tracked in &certs {
+            let total_writes = write_log.len() - tracked.origin_log_index;
+            let expected = if tracked.deps.is_empty() {
+                true
+            } else if total_writes > JOURNAL_SIZE {
+                false
+            } else {
+                write_log[tracked.origin_log_index..]
+                    .iter()
+                    .all(|bits| !tracked.deps.contains(bits))
+            };
+            let actual = tracked.cert.unchanged();
+            assert_eq!(
+                actual,
+                expected,
+                "round={round} total_writes={total_writes} deps={} mismatch",
+                tracked.deps.len()
+            );
+            if rng.next_usize(2) == 0 {
+                assert_eq!(
+                    tracked.cert.unchanged(),
+                    expected,
+                    "repeat same-sequence validation mismatch at round={round}"
+                );
+            }
+            assert!(
+                tracked.cert.journal_slots_scanned_for_test() <= JOURNAL_SIZE,
+                "incremental validation scanned {} slots (> JOURNAL_SIZE={JOURNAL_SIZE})",
+                tracked.cert.journal_slots_scanned_for_test()
+            );
+        }
+    }
+}
+
+#[test]
 fn warmed_validation_still_observes_dependencies_in_each_outer_capture() {
     let source = Value::cons(Value::NIL, Value::NIL);
     let unrelated = Value::cons(Value::NIL, Value::NIL);
