@@ -227,6 +227,12 @@ impl<C: SerialHost, L: TicketOwner> OwnerSerialState<C, L> {
             confined: PhantomData,
         })
     }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn is_detached_for_test(&self) -> bool {
+        self.dormant.detached.is_some()
+    }
 }
 
 #[allow(dead_code)] // Dormant E5.1; E6-P.2 builds the owner's Context.
@@ -297,6 +303,72 @@ impl<'turn, C: SerialHost, L: TicketOwner> SerialTurn<'turn, C, L> {
             confined: PhantomData,
         };
         Ok((parked, local))
+    }
+
+    /// Lend the owner's Context to BODY alongside disjoint mutable access to
+    /// the turn's ticket slot and [`TurnHostOps`], so an in-stack collection
+    /// (L6.7c (c)) can detach the host directly into `DormantContext::detached`,
+    /// return the ticket to collect, receive the re-granted ticket, and
+    /// reattach without aliasing `&mut C`.
+    #[allow(dead_code)]
+    pub(crate) fn with_world_rebind<R>(
+        &mut self,
+        body: impl for<'g> FnOnce(&'g mut C, &'g mut Option<L>, TurnHostOps<'g, C>) -> R,
+    ) -> R {
+        let state = self
+            .state
+            .as_deref_mut()
+            .expect("live turn holds its state");
+        let DormantContext {
+            context, detached, ..
+        } = &mut state.dormant;
+        let ops = TurnHostOps {
+            detached,
+            confined: PhantomData,
+        };
+        body(&mut **context, &mut self.local, ops)
+    }
+}
+
+/// Host transition capability scoped to [`SerialTurn::with_world_rebind`],
+/// holding `&mut Option<C::Detached>` from the owner's [`DormantContext`] so
+/// any mid-turn detach/reattach keeps `DormantContext::detached` consistent
+/// even on panic unwind (L6.7c (c), Catch 1).
+#[allow(dead_code)]
+pub(crate) struct TurnHostOps<'a, C: SerialHost> {
+    detached: &'a mut Option<C::Detached>,
+    confined: Confined,
+}
+
+#[allow(dead_code)]
+impl<C: SerialHost> TurnHostOps<'_, C> {
+    /// Mint a [`HostTransition`] while asserting this turn's host is currently
+    /// attached (`DormantContext::detached == None`), then store the resulting
+    /// detached proof directly inside `DormantContext::detached`.
+    pub(crate) fn detach_with<E>(
+        &mut self,
+        f: impl FnOnce(HostTransition) -> Result<C::Detached, E>,
+    ) -> Result<(), E> {
+        debug_assert!(self.detached.is_none(), "{LIVE_HOST}");
+        let proof = f(HostTransition(()))?;
+        *self.detached = Some(proof);
+        Ok(())
+    }
+
+    /// Take the detached proof out of `DormantContext::detached`, pass it with
+    /// a [`HostTransition`] to `f`, and restore it on refusal.
+    pub(crate) fn reattach_with<E>(
+        &mut self,
+        f: impl FnOnce(C::Detached, HostTransition) -> Result<(), (C::Detached, E)>,
+    ) -> Result<(), E> {
+        let proof = self.detached.take().expect(LIVE_HOST);
+        match f(proof, HostTransition(())) {
+            Ok(()) => Ok(()),
+            Err((proof, err)) => {
+                *self.detached = Some(proof);
+                Err(err)
+            }
+        }
     }
 }
 

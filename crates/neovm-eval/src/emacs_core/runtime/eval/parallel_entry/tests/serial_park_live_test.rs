@@ -293,6 +293,14 @@ impl KeeperPort for EpochPort<'_, '_> {
         self.calls.push(PortCall::Refuse);
         self.port.refuse(ticket, reason);
     }
+
+    fn abandon_head_hold(&mut self) {
+        self.port.abandon_head_hold();
+    }
+
+    fn collect_root_epoch(&self) -> Option<neovm_value::tagged::gc::FacadeEpochRetention> {
+        self.port.collect_root_epoch()
+    }
 }
 
 /// C3 + D-1. Two owners, one turn each: the driver lends both through its
@@ -3656,4 +3664,859 @@ fn l67c_a_serial_turn_gc_inhibit_guard_restores_depth_on_normal_and_unwind() {
         );
     });
     let _ = t2.end().ok().expect("turn 2 ends");
+}
+
+// ---------------------------------------------------------------------------
+// L6.7c (c): Explicit `(garbage-collect)` and `(garbage-collect-maybe FACTOR)`
+// inside a `SerialTurn` (Context side).
+// ---------------------------------------------------------------------------
+
+/// Run a live `KeeperEra` over a full `unit_runtime()` World with a stowed
+/// `GreenRuntime`, returning cleanly through `finish_fixture`.
+fn with_l67c_c_green_era(
+    label: &'static str,
+    setup_source: impl FnOnce(&mut Context),
+    body: impl for<'k, 'service, 'heap> FnOnce(&'k KeeperEra<'service, 'heap>) + Send + 'static,
+) {
+    #[cfg(feature = "jit")]
+    crate::emacs_core::jit::cache::reset_carrier_tls();
+    super::super::source_entry::install_inactive_source_module_probe_for_test();
+    let mut source = Box::new(Context::new(crate::test_utils::unit_runtime()));
+    source.setup_thread_locals();
+    setup_source(&mut source);
+    source.gc_collect_exact();
+    let private = Value::string(label);
+    source.lexenv = private;
+    source.tagged_heap.close_alloc_regions();
+    let bootstrap = source.capture_green_bootstrap_for_test();
+    let (shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |era| {
+            era.keeper_baton_for_test()
+                .install_stowed_green_runtime_for_test(bootstrap);
+            body(era);
+            era.keeper_baton_for_test()
+                .uninstall_green_runtime_for_test();
+        });
+        match outcome {
+            Ok((end, ())) => tx.send(Ok(end)).expect("send keeper outcome"),
+            Err(failure) => tx.send(Err(failure.notice())).expect("send keeper notice"),
+        }
+    });
+    let outcome = rx.recv_timeout(BOUND).expect("keeper outcome");
+    service.join().expect("keeper service thread");
+    let end = outcome.unwrap_or_else(|notice| panic!("{label} era refused: {notice:?}"));
+    assert!(!neovm_value::tagged::gc::tagged_heap_is_installed());
+    let returned = shell.accept_return(end).unwrap();
+    finish_fixture(returned, private);
+}
+
+/// Same as `with_l67c_c_green_era`, for rows that intentionally poison the era.
+fn with_l67c_c_poisoned_green_era<R: Send + 'static>(
+    label: &'static str,
+    body: impl for<'k, 'service, 'heap> FnOnce(&'k KeeperEra<'service, 'heap>) -> R + Send + 'static,
+) -> R {
+    #[cfg(feature = "jit")]
+    crate::emacs_core::jit::cache::reset_carrier_tls();
+    super::super::source_entry::install_inactive_source_module_probe_for_test();
+    let mut source = Box::new(Context::new(crate::test_utils::unit_runtime()));
+    source.setup_thread_locals();
+    source.gc_collect_exact();
+    let private = Value::string(label);
+    source.lexenv = private;
+    source.tagged_heap.close_alloc_regions();
+    let bootstrap = source.capture_green_bootstrap_for_test();
+    let (_shell, start) = close(source).prepare_era().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let service = std::thread::spawn(move || {
+        let outcome = keeper_serve(start, |era| {
+            era.keeper_baton_for_test()
+                .install_stowed_green_runtime_for_test(bootstrap);
+            tx.send(body(era)).expect("send poisoned outcome");
+        });
+        drop(outcome);
+    });
+    let result = rx.recv_timeout(BOUND).expect("keeper poisoned outcome");
+    service.join().expect("keeper service thread");
+    result
+}
+
+/// Row 1: Both subr `(garbage-collect)` and bytecode `(garbage-collect)` inside
+/// `O`'s `with_world_collectible` turn route through the keeper, hold ring HEAD
+/// so queued owner `B` does NOT run between `O`'s park-to-collect and resume,
+/// return well-formed heapsize lists, sync `gcs-done` & `gc-elapsed`, and run
+/// doomed finalizers + `post-gc-hook` on `O`'s resumed turn.
+#[test]
+fn l67c_c_serial_turn_garbage_collect_subr_and_bytecode_run_first_and_resume_at_head() {
+    with_l67c_c_green_era(
+        "l67c-c-row1",
+        |src| {
+            assert_eq!(eval(src, "(setq l67c-hook-count 0)"), "0");
+            assert_eq!(eval(src, "(setq l67c-fin-ran nil)"), "nil");
+            assert_eq!(eval(src, "(setq l67c-peer-ran nil)"), "nil");
+        },
+        |era| {
+            let before = {
+                let mut stopped = retry_native("baseline stop", || era.stop());
+                let report =
+                    retry_native("baseline collect", || era.collect_requested(&mut stopped));
+                complete_retrying("baseline stop", stopped.complete());
+                report.cycle
+            };
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let o_kit = enroll_driver(era, &mut driver, &inbox, O);
+            let b_kit = enroll_driver(era, &mut driver, &inbox, B);
+            drop(inbox);
+
+            let world_handle_o = era.keeper_baton_for_test().test_world_handle_for_test();
+            let world_handle_b = era.keeper_baton_for_test().test_world_handle_for_test();
+            let log = std::sync::Mutex::new(Vec::<&'static str>::new());
+            let peer_ran = AtomicBool::new(false);
+            let (b_idle_tx, b_idle_rx) = mpsc::channel::<()>();
+            let (o_holding_tx, o_holding_rx) = mpsc::channel::<()>();
+            let (b_sent_tx, b_sent_rx) = mpsc::channel::<()>();
+            let (retire_o_tx, retire_o_rx) = mpsc::channel::<()>();
+            let (retire_b_tx, retire_b_rx) = mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let log = &log;
+                let peer_ran = &peer_ran;
+
+                let owner_b = scope.spawn(move || {
+                    let ctx = world_handle_b.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(b_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("B detaches");
+                    let home = b_kit.home;
+                    let mut port = ChannelPort::new(
+                        home.owner,
+                        activate(b_kit.permit, home.heap, home.owner),
+                        b_kit.inbox,
+                        b_kit.grants,
+                    );
+                    let receipt = port
+                        .publish_idle_receipt_for_test()
+                        .ok()
+                        .expect("B publishes idle");
+                    b_idle_tx.send(()).expect("B idle");
+                    o_holding_rx.recv_timeout(BOUND).expect("O holds turn");
+                    // Enqueue B's request BEFORE O calls (garbage-collect).
+                    let granted_b = {
+                        b_sent_tx.send(()).expect("B sending request");
+                        port.request_turn_with_receipt_for_test(receipt)
+                            .ok()
+                            .expect("B granted after O ends")
+                    };
+                    log.lock().expect("log").push("B");
+                    let mut tb = begin_turn(&mut state, home, granted_b, &mut port, standalone)
+                        .ok()
+                        .expect("B begins");
+                    tb.with_world(|ev| {
+                        assert_eq!(eval(ev, "(setq l67c-peer-ran t)"), "t");
+                    });
+                    peer_ran.store(true, Ordering::Release);
+                    tb.end(&mut port).ok().expect("B ends");
+                    retire(port.exit());
+                    retire_b_rx.recv_timeout(BOUND).expect("B teardown");
+                    drop(state);
+                });
+
+                let owner_o = scope.spawn(move || {
+                    b_idle_rx.recv_timeout(BOUND).expect("wait for B idle");
+                    let ctx = world_handle_o.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(o_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("O detaches");
+                    let home = o_kit.home;
+                    let mut raw_port = ChannelPort::new(
+                        home.owner,
+                        activate(o_kit.permit, home.heap, home.owner),
+                        o_kit.inbox,
+                        o_kit.grants,
+                    );
+                    let mut port = EpochPort::new(&mut raw_port);
+                    let granted = port.request_turn().ok().expect("O granted");
+                    let mut turn = begin_turn(&mut state, home, granted, &mut port, standalone)
+                        .ok()
+                        .expect("O begins");
+                    log.lock().expect("log").push("O-enter");
+                    turn.with_world_collectible(&mut port, standalone, |ev| {
+                        assert_eq!(
+                            eval(
+                                ev,
+                                "(progn
+                                   (setq post-gc-hook
+                                         (list (lambda ()
+                                                 (setq l67c-hook-count (1+ l67c-hook-count)))))
+                                   (make-finalizer (lambda () (setq l67c-fin-ran t)))
+                                   nil)"
+                            ),
+                            "nil"
+                        );
+                        o_holding_tx.send(()).expect("signal B to request");
+                        b_sent_rx.recv_timeout(BOUND).expect("B about to request");
+                        // Give B a brief moment to land in the keeper inbox ahead of GiveBack.
+                        std::thread::sleep(Duration::from_millis(5));
+
+                        let gc_elapsed_0 = ev
+                            .eval_str("gc-elapsed")
+                            .expect("read gc-elapsed")
+                            .as_number_f64()
+                            .expect("gc-elapsed number");
+
+                        // 1. Subr `(garbage-collect)`.
+                        let stats1 = ev
+                            .eval_str("(garbage-collect)")
+                            .expect("subr (garbage-collect) succeeds");
+                        let buckets1 = neovm_value::value::list_to_vec(&stats1)
+                            .expect("subr (garbage-collect) must return heapsize list, not nil");
+                        assert!(!buckets1.is_empty());
+                        let conses1 = neovm_value::value::list_to_vec(&buckets1[0])
+                            .expect("first bucket (conses SIZE USED FREE)");
+                        assert_eq!(print_value(&conses1[0]), "conses");
+                        assert!(conses1[2].as_int().expect("conses USED") > 0);
+                        assert_eq!(ev.tagged_heap.gc_collections(), before + 1);
+                        assert_eq!(
+                            ev.eval_str("gcs-done").unwrap().as_int().unwrap(),
+                            (before + 1) as i64
+                        );
+                        assert_eq!(eval(ev, "l67c-fin-ran"), "t", "doomed finalizer must run");
+                        assert_eq!(eval(ev, "l67c-hook-count"), "1", "post-gc-hook count == 1");
+                        assert!(
+                            !peer_ran.load(Ordering::Acquire),
+                            "HEAD hold: B must not run during O's subr (garbage-collect)"
+                        );
+                        assert_eq!(eval(ev, "l67c-peer-ran"), "nil");
+                        log.lock().expect("log").push("O-after-subr");
+
+                        // 2. Bytecode `(garbage-collect)` (`builtin_garbage_collect_shared`).
+                        let stats2 = ev
+                            .eval_str(
+                                r#"(funcall (make-byte-code 0 "\300\040\207" [garbage-collect] 1))"#,
+                            )
+                            .expect("bytecode (garbage-collect) succeeds");
+                        let buckets2 = neovm_value::value::list_to_vec(&stats2)
+                            .expect("bytecode (garbage-collect) must return heapsize list");
+                        assert!(!buckets2.is_empty());
+                        assert_eq!(ev.tagged_heap.gc_collections(), before + 2);
+                        assert_eq!(
+                            ev.eval_str("gcs-done").unwrap().as_int().unwrap(),
+                            (before + 2) as i64
+                        );
+                        assert_eq!(eval(ev, "l67c-hook-count"), "2", "post-gc-hook count == 2");
+                        let gc_elapsed_2 = ev
+                            .eval_str("gc-elapsed")
+                            .expect("read gc-elapsed")
+                            .as_number_f64()
+                            .expect("gc-elapsed number");
+                        assert!(
+                            gc_elapsed_2 >= gc_elapsed_0,
+                            "gc-elapsed must be non-decreasing ({gc_elapsed_2} >= {gc_elapsed_0})"
+                        );
+                        assert!(
+                            !peer_ran.load(Ordering::Acquire),
+                            "HEAD hold: B must not run during O's bytecode (garbage-collect)"
+                        );
+                        assert_eq!(eval(ev, "l67c-peer-ran"), "nil");
+                        log.lock().expect("log").push("O-after-bytecode");
+                    });
+                    turn.end(&mut port).ok().expect("O ends");
+                    let grants = port.grants();
+                    let calls = port.calls.clone();
+                    retire(raw_port.exit());
+                    retire_o_rx.recv_timeout(BOUND).expect("O teardown");
+                    drop(state);
+                    (grants, calls)
+                });
+
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                retire_o_tx.send(()).expect("allow O drop");
+                retire_b_tx.send(()).expect("allow B drop");
+                let (grants, calls) = owner_o.join().expect("O joined");
+                owner_b.join().expect("B joined");
+                assert_eq!(
+                    *log.lock().expect("log"),
+                    ["O-enter", "O-after-subr", "O-after-bytecode", "B"],
+                    "O must resume at ring HEAD after both collections before B runs"
+                );
+                assert_eq!(grants.len(), 3, "initial grant + 2 collect re-grants");
+                assert!(grants[1] > grants[0] && grants[2] > grants[1]);
+                assert_eq!(
+                    calls,
+                    [
+                        PortCall::Granted(grants[0]),
+                        PortCall::GiveBackToCollect,
+                        PortCall::Granted(grants[1]),
+                        PortCall::GiveBackToCollect,
+                        PortCall::Granted(grants[2]),
+                        PortCall::GiveBack,
+                    ]
+                );
+            });
+        },
+    );
+}
+
+/// Row 2: A World cons held ONLY in a local `let` binding on the parked
+/// `SerialTurn`'s private `lexenv`/`specpdl` survives `(garbage-collect)` via
+/// the parked `RootBatchLease`, while >1 `ConsBlock` of unrooted garbage is
+/// reclaimed and the lease retires cleanly on resume.
+#[test]
+fn l67c_c_serial_turn_garbage_collect_preserves_parked_turn_only_roots_and_reclaims_garbage() {
+    with_l67c_c_green_era(
+        "l67c-c-row2",
+        |_src| {},
+        |era| {
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let o_kit = enroll_driver(era, &mut driver, &inbox, O);
+            drop(inbox);
+
+            let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
+            let (retire_tx, retire_rx) = mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let owner = scope.spawn(move || {
+                    let ctx = world_handle.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(o_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("O detaches");
+                    let home = o_kit.home;
+                    let mut port = ChannelPort::new(
+                        home.owner,
+                        activate(o_kit.permit, home.heap, home.owner),
+                        o_kit.inbox,
+                        o_kit.grants,
+                    );
+                    let granted = port.request_turn().ok().expect("O granted");
+                    let mut turn = begin_turn(&mut state, home, granted, &mut port, standalone)
+                        .ok()
+                        .expect("O begins");
+                    turn.with_world_collectible(&mut port, standalone, |ev| {
+                        // Track an unrooted vector (>1 ConsBlock of cons garbage
+                        // also allocated inside the `let` body below).
+                        let unrooted_vec = ev.tagged_heap.alloc_vector(vec![Value::fixnum(909)]);
+                        assert!(
+                            ev.tagged_heap.owns_heap_value_for_test(unrooted_vec),
+                            "unrooted vector must be live before GC"
+                        );
+                        let gc0 = ev.tagged_heap.gc_collections();
+                        let res = eval(
+                            ev,
+                            "(let ((only-here (cons 707 808)))
+                               (make-list 5000 nil)
+                               (garbage-collect)
+                               only-here)",
+                        );
+                        assert_eq!(
+                            res, "(707 . 808)",
+                            "parked-turn-only let-local cons must survive keeper collection"
+                        );
+                        assert_eq!(
+                            ev.tagged_heap.gc_collections(),
+                            gc0 + 1,
+                            "explicit (garbage-collect) inside let must run keeper collection"
+                        );
+                        assert!(
+                            !ev.tagged_heap.owns_heap_value_for_test(unrooted_vec),
+                            "unrooted garbage must be reclaimed by keeper collection"
+                        );
+                        assert!(
+                            ev.with_green_runtime(|r| r.parked_is_empty_for_test()),
+                            "parked RootBatchLease must retire cleanly on resume (Q2)"
+                        );
+                    });
+                    turn.end(&mut port).ok().expect("O ends");
+                    retire(port.exit());
+                    retire_rx.recv_timeout(BOUND).expect("teardown");
+                    drop(state);
+                });
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                retire_tx.send(()).expect("allow drop");
+                owner.join().expect("O joined");
+            });
+        },
+    );
+}
+
+/// Row 3: An inner `with_gc_inhibited` inside `with_world_collectible` raises
+/// `gc_inhibit_depth` above `inhibit_base`, suppressing subr/bytecode
+/// `(garbage-collect)` and `(garbage-collect-maybe 1)` without taking a keeper
+/// stop; leaving the inner guard restores explicit `(garbage-collect)` routing.
+#[test]
+fn l67c_c_serial_turn_inner_inhibit_suppresses_explicit_garbage_collect() {
+    with_l67c_c_green_era(
+        "l67c-c-row3",
+        |_src| {},
+        |era| {
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let o_kit = enroll_driver(era, &mut driver, &inbox, O);
+            drop(inbox);
+
+            let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
+            let (retire_tx, retire_rx) = mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let owner = scope.spawn(move || {
+                    let ctx = world_handle.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(o_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("O detaches");
+                    let home = o_kit.home;
+                    let mut raw_port = ChannelPort::new(
+                        home.owner,
+                        activate(o_kit.permit, home.heap, home.owner),
+                        o_kit.inbox,
+                        o_kit.grants,
+                    );
+                    let mut port = EpochPort::new(&mut raw_port);
+                    let granted = port.request_turn().ok().expect("O granted");
+                    let mut turn = begin_turn(&mut state, home, granted, &mut port, standalone)
+                        .ok()
+                        .expect("O begins");
+                    turn.with_world_collectible(&mut port, standalone, |ev| {
+                        let gc0 = ev.tagged_heap.gc_collections();
+                        ev.with_gc_inhibited(|inner| {
+                            assert_eq!(eval(inner, "(garbage-collect)"), "nil");
+                            assert_eq!(
+                                eval(
+                                    inner,
+                                    r#"(funcall (make-byte-code 0 "\300\040\207" [garbage-collect] 1))"#
+                                ),
+                                "nil"
+                            );
+                            let _ = eval(inner, "(garbage-collect-maybe 1)");
+                            assert_eq!(
+                                inner.tagged_heap.gc_collections(),
+                                gc0,
+                                "inner with_gc_inhibited must suppress all explicit GC without a keeper stop"
+                            );
+                        });
+                        // After leaving inner inhibit, bare (garbage-collect) must collect.
+                        let stats = ev
+                            .eval_str("(garbage-collect)")
+                            .expect("outer bare (garbage-collect) succeeds");
+                        assert!(
+                            neovm_value::value::list_to_vec(&stats).is_some_and(|b| !b.is_empty()),
+                            "leaving inner inhibit must restore explicit (garbage-collect) routing"
+                        );
+                        assert_eq!(ev.tagged_heap.gc_collections(), gc0 + 1);
+                    });
+                    turn.end(&mut port).ok().expect("O ends");
+                    let grants = port.grants();
+                    retire(raw_port.exit());
+                    retire_rx.recv_timeout(BOUND).expect("teardown");
+                    drop(state);
+                    grants
+                });
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                retire_tx.send(()).expect("allow drop");
+                let grants = owner.join().expect("O joined");
+                assert_eq!(
+                    grants.len(),
+                    2,
+                    "exactly one keeper collect stop (none during inner inhibit, one after)"
+                );
+            });
+        },
+    );
+}
+
+/// Row 4: `(garbage-collect-maybe 10)` inside `with_world_collectible` routes
+/// through the keeper when allocation exceeds `threshold / 10`, resets debt,
+/// and a subsequent `(garbage-collect-maybe 1)` returns `nil` without collecting.
+#[test]
+fn l67c_c_serial_turn_garbage_collect_maybe_routes_through_keeper_when_threshold_met() {
+    with_l67c_c_green_era(
+        "l67c-c-row4",
+        |_src| {},
+        |era| {
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let o_kit = enroll_driver(era, &mut driver, &inbox, O);
+            drop(inbox);
+
+            let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
+            let (retire_tx, retire_rx) = mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let owner = scope.spawn(move || {
+                    let ctx = world_handle.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(o_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("O detaches");
+                    let home = o_kit.home;
+                    let mut raw_port = ChannelPort::new(
+                        home.owner,
+                        activate(o_kit.permit, home.heap, home.owner),
+                        o_kit.inbox,
+                        o_kit.grants,
+                    );
+                    let mut port = EpochPort::new(&mut raw_port);
+                    let granted = port.request_turn().ok().expect("O granted");
+                    let mut turn = begin_turn(&mut state, home, granted, &mut port, standalone)
+                        .ok()
+                        .expect("O begins");
+                    turn.with_world_collectible(&mut port, standalone, |ev| {
+                        let gc0 = ev.tagged_heap.gc_collections();
+                        let threshold = ev.tagged_heap.gc_threshold();
+                        // Allocate ~25% of threshold (above threshold/10, below threshold).
+                        let n = (threshold / 64).max(4096);
+                        let form = format!("(progn (make-list {n} nil) nil)");
+                        assert_eq!(eval(ev, &form), "nil");
+                        assert_eq!(ev.tagged_heap.gc_collections(), gc0);
+                        assert_eq!(
+                            eval(ev, "(garbage-collect-maybe 10)"),
+                            "t",
+                            "(garbage-collect-maybe 10) must fire when debt > threshold/10"
+                        );
+                        assert_eq!(
+                            ev.tagged_heap.gc_collections(),
+                            gc0 + 1,
+                            "(garbage-collect-maybe 10) must route through keeper stop"
+                        );
+                        assert!(
+                            ev.tagged_heap.bytes_since_gc_exact() < threshold / 10,
+                            "keeper collection must reset era heap debt"
+                        );
+                        assert_eq!(
+                            eval(ev, "(garbage-collect-maybe 1)"),
+                            "nil",
+                            "subsequent (garbage-collect-maybe 1) must return nil without collecting"
+                        );
+                        assert_eq!(ev.tagged_heap.gc_collections(), gc0 + 1);
+                    });
+                    turn.end(&mut port).ok().expect("O ends");
+                    let grants = port.grants();
+                    retire(raw_port.exit());
+                    retire_rx.recv_timeout(BOUND).expect("teardown");
+                    drop(state);
+                    grants
+                });
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                retire_tx.send(()).expect("allow drop");
+                let grants = owner.join().expect("O joined");
+                assert_eq!(grants.len(), 2, "initial grant + 1 collect re-grant");
+            });
+        },
+    );
+}
+
+/// Row 5: When the keeper's collecting stop fails and poisons the era, explicit
+/// `(garbage-collect)` inside `with_world_collectible` fails closed cleanly
+/// without returning to Lisp or running direct `TaggedHeap` collection, leaves
+/// carrier TLS parked, and leaves `OwnerSerialState` in a valid dormant state
+/// (`is_detached_for_test() == true`, Catch 1).
+#[test]
+fn l67c_c_serial_turn_collect_poisoned_era_fails_closed_without_direct_gc() {
+    let (end, unwound_err, tls_down, dormant_detached, gc_after_eq_before) =
+        with_l67c_c_poisoned_green_era("l67c-c-row5", |era| {
+            // Drain baseline debt so Turn 1 does not trigger an automatic
+            // collection before O reaches explicit `(garbage-collect)`.
+            let before = {
+                let mut stopped = retry_native("baseline stop", || era.stop());
+                let report =
+                    retry_native("baseline collect", || era.collect_requested(&mut stopped));
+                complete_retrying("baseline stop", stopped.complete());
+                report.cycle
+            };
+            // Retire a helper owner with a closed owner-cons lease and poison
+            // the cons allocator so the NEXT `collect_requested` refuses with
+            // `RendezvousError::Publication`.
+            let lease_permit = era.register(B, 0).expect("register leased owner");
+            let lease_key = lease_permit.key();
+            let heap = era.heap_identity();
+            std::thread::scope(|scope| {
+                let (parked_tx, parked_rx) = mpsc::channel::<()>();
+                let (retire_tx, retire_rx) = mpsc::channel::<()>();
+                let leased = scope.spawn(move || {
+                    let mut owner = activate(lease_permit, heap, B);
+                    retry_native("enter native", || owner.enter_native(&[]));
+                    parked_tx.send(()).expect("leased parked");
+                    retire_rx.recv_timeout(BOUND).expect("retire leased");
+                    retire(owner);
+                });
+                parked_rx.recv_timeout(BOUND).expect("leased parked");
+                let stopped = stop_retrying(era);
+                era.grant_closed_owner_cons_lease_for_test(&stopped, lease_key)
+                    .unwrap();
+                era.poison_cons_allocator_for_test(&stopped).unwrap();
+                complete_retrying("poison-setup stop", stopped.complete());
+                retire_tx.send(()).expect("retire leased");
+                leased.join().expect("leased owner");
+            });
+
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let o_kit = enroll_driver(era, &mut driver, &inbox, O);
+            drop(inbox);
+
+            let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
+            std::thread::scope(|scope| {
+                let owner = scope.spawn(move || {
+                    let ctx = world_handle.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(o_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("O detaches");
+                    let home = o_kit.home;
+                    let mut port = ChannelPort::new(
+                        home.owner,
+                        activate(o_kit.permit, home.heap, home.owner),
+                        o_kit.inbox,
+                        o_kit.grants,
+                    );
+                    let granted = port.request_turn().ok().expect("O Turn 1 granted");
+                    let mut gc_before_call = before;
+                    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut turn = begin_turn(&mut state, home, granted, &mut port, standalone)
+                            .ok()
+                            .expect("O begins Turn 1");
+                        turn.with_world_collectible(&mut port, standalone, |ev| {
+                            gc_before_call = ev.tagged_heap.gc_collections();
+                            // Call `builtin_garbage_collect` directly so the poisoned
+                            // cons allocator is not touched by `eval_str` parsing first.
+                            let _ =
+                                crate::emacs_core::builtins::builtin_garbage_collect(ev, vec![]);
+                        });
+                        let _ = turn.end(&mut port);
+                    }));
+                    let tls_down = !neovm_value::tagged::gc::tagged_heap_is_installed();
+                    let dormant_detached = state.is_detached_for_test();
+                    drop(port.exit());
+                    drop(state);
+                    (
+                        unwound.is_err(),
+                        tls_down,
+                        dormant_detached,
+                        gc_before_call == before,
+                    )
+                });
+                let end = driver.run();
+                let (unwound_err, tls_down, dormant_detached, gc_eq) =
+                    owner.join().expect("O joined");
+                (end, unwound_err, tls_down, dormant_detached, gc_eq)
+            })
+        });
+    assert_eq!(
+        end,
+        DriverEnd::Poisoned(Breach::Rendezvous(RendezvousError::Publication)),
+        "poisoned cons allocator must poison the driver on collect_requested"
+    );
+    assert!(
+        unwound_err,
+        "poisoned era collection must fail closed (panic) instead of returning to Lisp or running direct GC"
+    );
+    assert!(
+        tls_down,
+        "fail-closed poison unwind must leave carrier TLS parked"
+    );
+    assert!(
+        dormant_detached,
+        "Catch 1: DormantContext::detached must be Some(...) after poisoned collect unwind"
+    );
+    assert!(gc_after_eq_before);
+}
+
+/// Fault-injecting wrapper over `ChannelPort` for Row 6 (D1): panics on the
+/// follow-up `request_turn()` right inside the `Driver::head_hold` window
+/// (after `give_back_to_collect` has armed `head_hold` and before `Request` is
+/// sent), proving `HeadHoldExitGuard` sends `KeeperMsg::Exit` via
+/// `abandon_head_hold()` so the era never deadlocks.
+struct PanicDuringHeadHoldPort<'p, 'era> {
+    port: &'p mut ChannelPort<'era>,
+    saw_collect_give_back: bool,
+    abandoned_head_hold: bool,
+}
+
+impl KeeperPort for PanicDuringHeadHoldPort<'_, '_> {
+    type LendGuard = ChannelLend;
+    type CollectReply = CollectReply;
+
+    fn give_back(&mut self, returned: ReturnedSerialTicket) {
+        self.port.give_back(returned);
+    }
+
+    fn give_back_to_collect(&mut self, returned: ReturnedSerialTicket, reply: CollectReply) {
+        self.saw_collect_give_back = true;
+        self.port.give_back_to_collect(returned, reply);
+    }
+
+    fn request_turn(&mut self) -> Result<(Grant, ChannelLend), PortRefusal> {
+        if self.saw_collect_give_back {
+            panic!("intentional unwind during Driver::head_hold window (D1 Row 6)");
+        }
+        self.port.request_turn()
+    }
+
+    fn refuse(&mut self, ticket: StoppedSerialTicket, reason: ReceiveReason) {
+        self.port.refuse(ticket, reason);
+    }
+
+    fn abandon_head_hold(&mut self) {
+        self.abandoned_head_hold = true;
+        self.port.abandon_head_hold();
+    }
+
+    fn collect_root_epoch(&self) -> Option<neovm_value::tagged::gc::FacadeEpochRetention> {
+        self.port.collect_root_epoch()
+    }
+}
+
+/// Row 6 (D1): If `O` unwinds during the `Driver::head_hold` window (after
+/// `give_back_to_collect` and before its follow-up `Request`), `HeadHoldExitGuard`
+/// invokes `KeeperPort::abandon_head_hold()` (`KeeperMsg::Exit`), releasing
+/// `Driver::head_hold` so the requested collection still runs, enrolled peer `B`
+/// gets its turn, and `Driver::run()` drains cleanly (`DriverEnd::Drained`)
+/// within `BOUND`.
+#[test]
+fn l67c_c_serial_turn_collect_unwind_during_head_hold_releases_head_via_exit() {
+    with_l67c_c_green_era(
+        "l67c-c-row6",
+        |src| {
+            assert_eq!(eval(src, "(setq l67c-row6-b-ran nil)"), "nil");
+        },
+        |era| {
+            let before = {
+                let mut stopped = retry_native("baseline stop", || era.stop());
+                let report =
+                    retry_native("baseline collect", || era.collect_requested(&mut stopped));
+                complete_retrying("baseline stop", stopped.complete());
+                report.cycle
+            };
+            let (inbox, inbox_rx) = mpsc::channel();
+            let mut driver = Driver::new(era, inbox_rx);
+            let o_kit = enroll_driver(era, &mut driver, &inbox, O);
+            let b_kit = enroll_driver(era, &mut driver, &inbox, B);
+            drop(inbox);
+
+            let world_handle_o = era.keeper_baton_for_test().test_world_handle_for_test();
+            let world_handle_b = era.keeper_baton_for_test().test_world_handle_for_test();
+            let (b_idle_tx, b_idle_rx) = mpsc::channel::<()>();
+            let (o_holding_tx, o_holding_rx) = mpsc::channel::<()>();
+            let (b_sent_tx, b_sent_rx) = mpsc::channel::<()>();
+            let (retire_o_tx, retire_o_rx) = mpsc::channel::<()>();
+            let (retire_b_tx, retire_b_rx) = mpsc::channel::<()>();
+
+            std::thread::scope(|scope| {
+                let _panic_guard = KeeperPanicGuard { keeper: era };
+                let owner_b = scope.spawn(move || {
+                    let ctx = world_handle_b.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(b_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("B detaches");
+                    let home = b_kit.home;
+                    let mut port = ChannelPort::new(
+                        home.owner,
+                        activate(b_kit.permit, home.heap, home.owner),
+                        b_kit.inbox,
+                        b_kit.grants,
+                    );
+                    let receipt = port
+                        .publish_idle_receipt_for_test()
+                        .ok()
+                        .expect("B publishes idle");
+                    b_idle_tx.send(()).expect("B idle");
+                    o_holding_rx.recv_timeout(BOUND).expect("O holds turn");
+                    b_sent_tx.send(()).expect("B requesting");
+                    let granted_b = port
+                        .request_turn_with_receipt_for_test(receipt)
+                        .ok()
+                        .expect("B granted after O exits head_hold");
+                    let mut tb = begin_turn(&mut state, home, granted_b, &mut port, standalone)
+                        .ok()
+                        .expect("B begins");
+                    let gc_seen_by_b = tb.with_world(|ev| {
+                        assert_eq!(eval(ev, "(setq l67c-row6-b-ran t)"), "t");
+                        ev.tagged_heap.gc_collections()
+                    });
+                    tb.end(&mut port).ok().expect("B ends");
+                    retire(port.exit());
+                    retire_b_rx.recv_timeout(BOUND).expect("B teardown");
+                    drop(state);
+                    gc_seen_by_b
+                });
+
+                let owner_o = scope.spawn(move || {
+                    b_idle_rx.recv_timeout(BOUND).expect("wait for B idle");
+                    let ctx = world_handle_o.spawn_unseated_serial_context_for_test();
+                    let mut state = OwnerSerialState::new(o_kit.home.owner, Box::new(ctx))
+                        .ok()
+                        .expect("O detaches");
+                    let home = o_kit.home;
+                    let mut raw_port = ChannelPort::new(
+                        home.owner,
+                        activate(o_kit.permit, home.heap, home.owner),
+                        o_kit.inbox,
+                        o_kit.grants,
+                    );
+                    let mut fault_port = PanicDuringHeadHoldPort {
+                        port: &mut raw_port,
+                        saw_collect_give_back: false,
+                        abandoned_head_hold: false,
+                    };
+                    let granted = fault_port.request_turn().ok().expect("O Turn 1 granted");
+                    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut turn =
+                            begin_turn(&mut state, home, granted, &mut fault_port, standalone)
+                                .ok()
+                                .expect("O begins Turn 1");
+                        turn.with_world_collectible(&mut fault_port, standalone, |ev| {
+                            o_holding_tx.send(()).expect("signal B");
+                            b_sent_rx.recv_timeout(BOUND).expect("B requesting");
+                            std::thread::sleep(Duration::from_millis(5));
+                            let _ = ev.eval_str("(garbage-collect)");
+                        });
+                        let _ = turn.end(&mut fault_port);
+                    }));
+                    let saw_gb = fault_port.saw_collect_give_back;
+                    let abandoned = fault_port.abandoned_head_hold;
+                    let tls_down = !neovm_value::tagged::gc::tagged_heap_is_installed();
+                    let dormant_detached = state.is_detached_for_test();
+                    retire(raw_port.exit());
+                    retire_o_rx.recv_timeout(BOUND).expect("O teardown");
+                    drop(state);
+                    (
+                        unwound.is_err(),
+                        saw_gb,
+                        abandoned,
+                        tls_down,
+                        dormant_detached,
+                    )
+                });
+
+                assert_eq!(driver.run(), DriverEnd::Drained);
+                retire_o_tx.send(()).expect("allow O drop");
+                retire_b_tx.send(()).expect("allow B drop");
+                let (unwound_err, saw_gb, abandoned, tls_down, dormant_detached) =
+                    owner_o.join().expect("O joined");
+                let gc_seen_by_b = owner_b.join().expect("B joined");
+                assert!(unwound_err, "Row 6 must unwind during head_hold window");
+                assert!(saw_gb, "O must have sent GiveBackToCollect");
+                assert!(
+                    abandoned,
+                    "D1: HeadHoldExitGuard must invoke abandon_head_hold() on unwind"
+                );
+                assert!(
+                    tls_down,
+                    "unwind during head_hold leaves carrier TLS parked"
+                );
+                assert!(
+                    dormant_detached,
+                    "Catch 1: DormantContext::detached stays Some(...) after unwind"
+                );
+                assert_eq!(
+                    gc_seen_by_b,
+                    before + 1,
+                    "Driver::exit (Loom L16) must still run O's requested collection before granting B"
+                );
+            });
+        },
+    );
 }

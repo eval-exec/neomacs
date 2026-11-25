@@ -1179,7 +1179,7 @@ pub fn builtin_garbage_collect_maybe(
     }
 
     let since_gc = eval.tagged_heap.bytes_since_gc_exact();
-    let inhibited = eval.gc_inhibit_depth > 0 && neovm_value::hashtab::hash_test_parity_enabled();
+    let inhibited = eval.is_explicit_gc_inhibited();
     if inhibited {
         // A callback can dynamically bind a new divisor threshold. The saved
         // allocation countdown still uses the threshold at guard entry.

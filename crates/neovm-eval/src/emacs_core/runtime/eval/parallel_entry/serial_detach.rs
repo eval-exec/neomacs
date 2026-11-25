@@ -84,14 +84,25 @@ pub(crate) enum DetachedWorldCarriers {
     Stowed,
 }
 
+/// Parked private roots published across a mid-turn keeper collection
+/// (L6.7c (c)), kept beside `DetachedOwner` so reattach restores JIT pins
+/// and retires the `RootBatchLease` under Q2 in exact reverse order.
+#[derive(Debug)]
+struct SerialParkedRoots {
+    lease: neovm_value::tagged::transport::RootBatchLease,
+    #[cfg(feature = "jit")]
+    jit: crate::emacs_core::jit::green_owner::ParkedJit,
+}
+
 /// Both proofs of one detachment, plus whether this detach stowed the World's
-/// carried state.
+/// carried state and any mid-turn collect root lease.
 #[must_use = "a detached owner returns only through `SerialHost::reattach`"]
 #[derive(Debug)]
 pub(crate) struct DetachedOwner {
     host: DetachedHostBindings,
     tls: DetachedTls,
     world: DetachedWorldCarriers,
+    parked_roots: Option<SerialParkedRoots>,
 }
 
 impl DetachedOwner {
@@ -174,7 +185,140 @@ impl Context {
                 _thread: PhantomData,
             },
             world,
+            parked_roots: None,
         })
+    }
+
+    /// Take this owner off its OS thread for a mid-turn keeper collection
+    /// (L6.7c (c)): mirrors `green_park_impl` / `park_world_seat_with_roots`
+    /// ordering under one `AbortOnPanic` so every World object held only by
+    /// this parked `SerialTurn`'s private execution state (`specpdl`,
+    /// `vm_frames`, `lexenv`, `catch_stack`, TLS scratch, JIT pins) is rooted
+    /// in the heap's `TransportRootTable` before the keeper's collecting stop.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn detach_serial_owner_for_collect(
+        &mut self,
+        epoch: neovm_value::tagged::gc::FacadeEpochRetention,
+        _: HostTransition,
+    ) -> Result<DetachedOwner, HostRefusal> {
+        if self.owner.slab().and_then(|s| s.green_seat()).is_some() {
+            return Err(HostRefusal::Seated);
+        }
+        if !neovm_value::tagged::gc::tagged_heap_is_current(&self.tagged_heap) {
+            return Err(HostRefusal::NotInstalled);
+        }
+        let _abort = AbortOnPanic("serial-collect-detach");
+        // 1. L6.7c (b): close open bump-allocation regions before the keeper's
+        //    collecting stop.
+        self.tagged_heap.close_alloc_regions();
+        // 2. Capture JIT pins before host-binding exchange.
+        #[cfg(feature = "jit")]
+        let parked_jit = crate::emacs_core::jit::green_owner::ParkedJit::prepare(self)
+            .expect("serial turn JIT root preparation must succeed before collect park");
+        // 3. Swap in-place buffer bindings out into `specpdl`/slab BEFORE
+        //    tracing private roots (Catch 2).
+        let parked = self.park_owner();
+        // 4. Collect private execution roots + thread-local roots + JIT roots.
+        let mut roots = Vec::new();
+        self.trace_private_roots(&mut roots);
+        let heap_id = self.tagged_heap.tagged_heap_identity();
+        let gc_epoch = self.tagged_heap.gc_collections();
+        let scan = neovm_value::tagged::gc::CacheRootScan::Parked;
+        super::super::for_each_thread_local_root_source(heap_id, gc_epoch, scan, |_, collect| {
+            collect(&mut roots);
+        });
+        #[cfg(feature = "jit")]
+        roots.extend_from_slice(parked_jit.roots());
+        // 5. Reserve, finalize, and publish `RootBatchLease` into the heap's
+        //    `TransportRootTable` (traced by `EraCore::collect_stopped_kind`
+        //    via `collect_shared_root_gc_roots`).
+        let prepared = neovm_value::tagged::transport::PreparedRootBatch::reserve_retained(
+            &self.tagged_heap,
+            epoch,
+            roots.len(),
+        )
+        .expect("serial turn parked root batch reservation must succeed");
+        // SAFETY: this serial turn holds exclusive World access on this OS
+        // thread after `park_owner` completed. Every root in `roots` is live
+        // on `self.tagged_heap`, and no GC, Lisp, or handoff occurs between
+        // collection, finalization, and publication.
+        let finalized = unsafe { prepared.finalize(&roots) }
+            .expect("serial turn parked root batch finalization must succeed");
+        let lease = finalized
+            .publish_finalized_root_batch()
+            .expect("serial turn parked root batch publication must succeed");
+        drop(roots);
+        // 6. Stow World carriers (if Green runtime) and take down carrier TLS.
+        let world = if self.stow_serial_world_state() {
+            DetachedWorldCarriers::Stowed
+        } else {
+            DetachedWorldCarriers::NotStowed
+        };
+        park_carrier_tls();
+        Ok(DetachedOwner {
+            host: DetachedHostBindings { parked },
+            tls: DetachedTls {
+                _thread: PhantomData,
+            },
+            world,
+            parked_roots: Some(SerialParkedRoots {
+                lease,
+                #[cfg(feature = "jit")]
+                jit: parked_jit,
+            }),
+        })
+    }
+
+    /// Q2 non-marking phase retirement for a serial-turn collect
+    /// `RootBatchLease`: fast-path `try_finish()` without `drain_to_quiescent`,
+    /// falling back to `GreenRuntime::parked.retained` (fail-closed
+    /// over-rooting), and aborting fail-closed if deferral occurs on a
+    /// non-Green Sim era with no `GreenRuntime` (Q3).
+    #[cold]
+    #[inline(never)]
+    fn retire_serial_parked_root_lease(
+        &self,
+        lease: neovm_value::tagged::transport::RootBatchLease,
+    ) {
+        let phase_safe = !self.gc_driver_active
+            && matches!(
+                self.tagged_heap.mark_phase(),
+                neovm_value::tagged::gc::MarkPhase::Idle
+                    | neovm_value::tagged::gc::MarkPhase::Sweeping
+            )
+            && !self.tagged_heap.gc_locks_poisoned();
+        let deferred = if phase_safe {
+            let mut lease = lease;
+            loop {
+                match lease.try_finish() {
+                    Ok(_) => break None,
+                    Err(failure)
+                        if matches!(
+                            failure.error(),
+                            neovm_value::tagged::transport::RootBatchError::Busy
+                        ) =>
+                    {
+                        (lease, _) = failure.into_parts();
+                        std::thread::yield_now();
+                    }
+                    Err(failure) => break Some(failure.into_parts().0),
+                }
+            }
+        } else {
+            Some(lease)
+        };
+        if let Some(lease) = deferred {
+            let runtime = self.green_runtime_ref();
+            if let Some(runtime) = runtime.as_ref() {
+                runtime.parked.borrow_mut().push_retained(lease);
+            } else {
+                tracing::error!(
+                    "cannot defer serial-turn parked RootBatchLease retirement without a GreenRuntime; aborting fail-closed (L6.7c (c) Q3)"
+                );
+                std::process::abort();
+            }
+        }
     }
 
     /// Put this owner back on the OS thread for the next serial turn: refuse
@@ -199,6 +343,7 @@ impl Context {
             host,
             tls: DetachedTls { .. },
             world,
+            parked_roots,
         } = detached;
         match world {
             DetachedWorldCarriers::Stowed => {
@@ -211,7 +356,19 @@ impl Context {
         }
         reset_carrier_tls();
         self.unstow_serial_world_state();
-        self.resume_owner(host.parked);
+        if let Some(parked_roots) = parked_roots {
+            // Restore JIT pins while `lease` still roots them, before
+            // `resume_owner` swaps host bindings back in (Catch 2).
+            #[cfg(feature = "jit")]
+            parked_roots
+                .jit
+                .resume(self)
+                .expect("the original serial owner resumes in its own heap");
+            self.resume_owner(host.parked);
+            self.retire_serial_parked_root_lease(parked_roots.lease);
+        } else {
+            self.resume_owner(host.parked);
+        }
         Ok(())
     }
 }

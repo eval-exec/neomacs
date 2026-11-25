@@ -343,6 +343,7 @@ pub(crate) struct ChannelPort<'era> {
     owner: u64,
     mutator: Mutator<'era>,
     native: bool,
+    exited: bool,
     inbox: mpsc::Sender<KeeperMsg>,
     grants: mpsc::Receiver<GrantMsg>,
 }
@@ -365,6 +366,7 @@ impl<'era> ChannelPort<'era> {
             owner,
             mutator,
             native: false,
+            exited: false,
             inbox,
             grants,
         }
@@ -372,8 +374,11 @@ impl<'era> ChannelPort<'era> {
 
     /// The owner is done: tell the keeper and hand the mutator back for its
     /// retire.
-    pub(crate) fn exit(self) -> Mutator<'era> {
-        let _ = self.inbox.send(KeeperMsg::Exit { owner: self.owner });
+    pub(crate) fn exit(mut self) -> Mutator<'era> {
+        if !self.exited {
+            self.exited = true;
+            let _ = self.inbox.send(KeeperMsg::Exit { owner: self.owner });
+        }
         self.mutator
     }
 
@@ -527,6 +532,17 @@ impl KeeperPort for ChannelPort<'_> {
             ticket,
             reason,
         });
+    }
+
+    fn abandon_head_hold(&mut self) {
+        if !self.exited {
+            self.exited = true;
+            let _ = self.inbox.send(KeeperMsg::Exit { owner: self.owner });
+        }
+    }
+
+    fn collect_root_epoch(&self) -> Option<neovm_value::tagged::gc::FacadeEpochRetention> {
+        self.mutator.parallel_epoch_retention().ok()
     }
 }
 

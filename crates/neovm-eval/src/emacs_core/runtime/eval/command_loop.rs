@@ -1627,6 +1627,12 @@ impl Context {
             }
             return self.gc_collect_era_interval(force_complete);
         }
+        if let Some(inhibit_base) = self.active_serial_collect_inhibit_base() {
+            if !force_complete || self.gc_inhibit_depth > inhibit_base {
+                return Ok(());
+            }
+            return self.gc_collect_serial_turn();
+        }
         // Inline set/restore, NOT a Drop guard (see the `gc_driver_active`
         // field doc): the body is infallible, so the trailing restore runs on
         // every normal exit (including the body's early `return`s), while a

@@ -301,6 +301,17 @@ impl<'era> Mutator<'era> {
         Arc::clone(&self.entry)
     }
 
+    /// Retain the era's facade-mark exclusion epoch so a parallel owner
+    /// parking its serial turn for a keeper collection can publish its
+    /// private roots in the heap's transport root table (L6.7c (c)).
+    #[cold]
+    #[doc(hidden)]
+    pub fn parallel_epoch_retention(
+        &self,
+    ) -> Result<super::super::FacadeEpochRetention, super::super::FacadeMarkExclusionError> {
+        self.registry.root_epoch.retain()
+    }
+
     /// Same admission word `MutatorEntry::admitted` reads. The entry stays private.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
