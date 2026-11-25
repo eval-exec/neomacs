@@ -417,6 +417,59 @@ impl EraWorldHandle {
     }
 }
 
+/// RAII guard restoring `World::baton_holder` to the era's escrowing holder
+/// (keeper OS thread) before `WorldLend` returns or abandons the turn (HIGH-1:
+/// covers both normal return and K7 unwind/drop).
+///
+/// Invariant (by induction over lends): at every lend, `World::baton_holder`
+/// holds `Some(keeper_tid)` for the era's escrowing holder (the thread that
+/// will check `Baton::held_here()` at era close or teardown). Era open starts
+/// with the escrowed `Baton` naming that holder; every subsequent lend follows
+/// either `open_era` or a `give_back`/restore from `KeeperHolderRestore`; and
+/// the only writer in between is `TurnRight::enter` on the unique active turn.
+///
+/// Declared strictly BEFORE `lend` inside [`EraTurnRight`] so field drop order
+/// restores `baton_holder` strictly before `WorldLend::drop` sends
+/// `KeeperMsg::GroupAbandon` (channel send synchronizes-with keeper recv).
+struct KeeperHolderRestore {
+    world: Arc<World>,
+    keeper_holder: Option<std::thread::ThreadId>,
+    armed: bool,
+}
+
+// SAFETY: `KeeperHolderRestore` lives solely inside the unique `EraTurnRight`
+// that owns the keeper's active `WorldTurn`; it writes `World::baton_holder`
+// only while this thread holds exclusive turn authority right before the turn
+// leaves back to the keeper.
+unsafe impl Send for KeeperHolderRestore {}
+
+impl fmt::Debug for KeeperHolderRestore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeeperHolderRestore")
+            .field("keeper_holder", &self.keeper_holder)
+            .field("armed", &self.armed)
+            .finish_non_exhaustive()
+    }
+}
+
+impl KeeperHolderRestore {
+    fn restore_now(mut self) {
+        if self.armed {
+            self.world.baton_holder.set(self.keeper_holder);
+            self.armed = false;
+        }
+    }
+}
+
+impl Drop for KeeperHolderRestore {
+    fn drop(&mut self) {
+        if self.armed {
+            self.world.baton_holder.set(self.keeper_holder);
+            self.armed = false;
+        }
+    }
+}
+
 /// The Baton group's active era turn right (L6.7b r1 §2): pairs the keeper's
 /// [`WorldTurn`](super::super::parallel_entry::world_turn::WorldTurn) and armed
 /// K7 [`WorldLend`](super::super::parallel_entry::keeper_driver::WorldLend)
@@ -425,13 +478,12 @@ impl EraWorldHandle {
 #[must_use = "an era turn right holds the keeper's WorldTurn and armed WorldLend guard"]
 pub(crate) struct EraTurnRight {
     turn: super::super::parallel_entry::world_turn::WorldTurn,
+    /// Declared strictly BEFORE `lend` so unwinding/dropping `EraTurnRight`
+    /// restores `World::baton_holder` before `WorldLend::drop` sends
+    /// `KeeperMsg::GroupAbandon` (HIGH-1).
+    restore_holder: KeeperHolderRestore,
     lend: super::super::parallel_entry::keeper_driver::WorldLend,
     world: EraWorldHandle,
-    /// `World::baton_holder` observed when the keeper lent `turn` (the keeper's
-    /// OS thread), restored strictly before `WorldReturn` is sent back so
-    /// subsequent keeper operations (`collect_parallel_world_roots`, teardown)
-    /// observe `Baton::held_here() == true`.
-    keeper_holder: Option<std::thread::ThreadId>,
     stowed: Option<super::super::parallel_entry::world_seat::StowedForReturn>,
 }
 
@@ -465,11 +517,20 @@ impl EraTurnRight {
             return Err((turn, lend, world));
         }
         let keeper_holder = world.world.baton_holder.get();
+        debug_assert!(
+            keeper_holder.is_some(),
+            "R1: at every era lend, World::baton_holder must name the era's escrowing holder"
+        );
+        let restore_holder = KeeperHolderRestore {
+            world: Arc::clone(&world.world),
+            keeper_holder,
+            armed: true,
+        };
         Ok(Self {
             turn,
+            restore_holder,
             lend,
             world,
-            keeper_holder,
             stowed: None,
         })
     }
@@ -491,13 +552,6 @@ impl EraTurnRight {
         self.stowed = None;
     }
 
-    /// Restore `World::baton_holder` to the keeper OS thread that lent this
-    /// turn. Must be called strictly before sending `KeeperMsg::WorldReturn`
-    /// (channel send synchronizes-with keeper receive).
-    pub(crate) fn restore_keeper_holder(&self) {
-        self.world.world.baton_holder.set(self.keeper_holder);
-    }
-
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -505,7 +559,7 @@ impl EraTurnRight {
         super::super::parallel_entry::keeper_driver::WorldLend,
         EraWorldHandle,
     ) {
-        self.restore_keeper_holder();
+        self.restore_holder.restore_now();
         (self.turn, self.lend, self.world)
     }
 
@@ -517,7 +571,7 @@ impl EraTurnRight {
         EraWorldHandle,
         Option<super::super::parallel_entry::world_seat::StowedForReturn>,
     ) {
-        self.restore_keeper_holder();
+        self.restore_holder.restore_now();
         (self.turn, self.lend, self.world, self.stowed)
     }
 }

@@ -3645,7 +3645,11 @@ impl Control {
             Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_) | Wait::Select { .. }) => {
                 Self::set_wait(state, key, Wait::Runnable);
                 Self::enqueue_ready(state, key);
-                Self::coalesce_request_locked(state)
+                if key == ThreadKey::Main && Self::main_excluded(state) {
+                    false
+                } else {
+                    Self::coalesce_request_locked(state)
+                }
             }
         }
     }
@@ -4184,20 +4188,68 @@ impl Control {
     }
 
     /// Coalesced re-request on wake (L6.7b r1 §3): if an era is open and
-    /// `GroupTurn` is `Idle`, transition `Idle -> Requested` and send ONE
-    /// `BatonRequest` at the ring tail. Later wakes only join the FIFO.
+    /// `GroupTurn` is `Idle`, send ONE `BatonRequest` at the ring tail and
+    /// transition `Idle -> Requested` only if the send succeeds (NIT-1). Later
+    /// wakes only join the FIFO.
     fn coalesce_request_locked(state: &mut ControlState) -> bool {
         let EraState::EraOpen(era) = &mut state.era else {
             return false;
         };
         if era.turn == GroupTurn::Idle {
             if let Some(requester) = &era.requester {
-                era.turn = GroupTurn::Requested;
-                let _ = requester.request_tail();
-                return true;
+                if requester.request_tail().is_ok() {
+                    era.turn = GroupTurn::Requested;
+                    return true;
+                }
             }
         }
         false
+    }
+
+    /// Number of `Wait::Runnable` threads currently eligible to run, excluding
+    /// `ThreadKey::Main` while `Self::main_excluded(state)` is true (HIGH-2a).
+    pub(super) fn eligible_runnable_count(state: &ControlState) -> usize {
+        let excluded_main = usize::from(
+            Self::main_excluded(state)
+                && state.waits.get(&ThreadKey::Main) == Some(&Wait::Runnable),
+        );
+        state.waits.runnable_count().saturating_sub(excluded_main)
+    }
+
+    /// Non-blocking check for whether any Baton owner or native service turn is
+    /// immediately eligible to run right now (after polling non-blocking select
+    /// readiness and expiring elapsed deadlines).
+    pub(super) fn has_eligible_owner_now(&self, state: &mut ControlState) -> bool {
+        if state.waits.select_len() > 0
+            && let Some(Some(select)) = self.select.get()
+            && crate::emacs_core::eval::process_hooks::select_wait_until(*select, Instant::now())
+        {
+            Self::wake_selects(state);
+        }
+        Self::expire_deadlines(state, Instant::now());
+        let main_receiving =
+            state.physical.get(&ThreadKey::Main) == Some(&OwnerLocation::Receiving);
+        let service_eligible = main_receiving
+            && (Self::queued_native_work(state) == NativeWork::Ready
+                || Self::pending_native(state) == NativeWork::Ready);
+        service_eligible || Self::eligible_runnable_count(state) > 0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_main_native_released_for_test(&self, wait: Wait) {
+        let mut state = self.state();
+        Self::set_wait(&mut state, ThreadKey::Main, wait);
+        if wait == Wait::Runnable {
+            Self::enqueue_ready(&mut state, ThreadKey::Main);
+        }
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::NativeReleased);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn eligible_runnable_count_for_test(&self) -> usize {
+        Self::eligible_runnable_count(&self.state())
     }
 
     /// Claim the `GroupPort` receiver if `GroupTurn::Requested` and no other
@@ -4715,74 +4767,74 @@ impl Control {
         receiver: &mpsc::Receiver<Wake>,
     ) -> Result<Wake, Handoff> {
         loop {
-            // Case (ii): check ring_waiter() (one Acquire load) BEFORE pick_next.
-            let case_ii = {
-                let mut state = self.state();
-                if self.era_ring_waiter(&state) {
-                    let EraState::EraOpen(era) = &mut state.era else {
-                        std::process::abort();
-                    };
-                    let Some(requester) = era.requester.clone() else {
-                        std::process::abort();
-                    };
-                    era.turn = GroupTurn::Requested;
-                    let port = era.port.take();
-                    Some((requester, port))
-                } else {
-                    None
-                }
-            };
-            if let Some((requester, port)) = case_ii {
-                Self::give_back_era_turn(baton);
-                if requester.request_tail().is_err() {
-                    std::process::abort();
-                }
-                let Some(port) = port else {
-                    let wake = Self::recv_wake_and_enter(receiver);
-                    if matches!(&wake, Wake::Resume(_)) {
-                        self.state().physical.insert(me, OwnerLocation::Running);
-                    }
-                    return Ok(wake);
-                };
-                baton = match self.await_era_world_with_port(port) {
-                    Ok(right) => right,
-                    Err(_) => std::process::abort(),
-                };
-            }
-
-            // Non-blocking intra-interval pick.
-            enum EraPick {
+            enum EraTransferStep {
+                CaseIi {
+                    requester: GroupRequestSender,
+                    port: Option<GroupPort>,
+                },
                 Owner(NextOwner),
                 EndIntervalToIdle,
             }
-            let pick = {
+            // Check eligibility before choosing Case (ii) vs Case (i) so when
+            // the last runnable Baton thread blocks while `ring_waiter()` is
+            // raised, we enter Case (i) directly without emitting a spurious
+            // empty `BatonRequest` round-trip (MEDIUM-2).
+            let step = {
                 let mut state = self.state();
-                if state.waits.select_len() > 0
-                    && let Some(Some(select)) = self.select.get()
-                    && crate::emacs_core::eval::process_hooks::select_wait_until(
-                        *select,
-                        Instant::now(),
-                    )
-                {
-                    Self::wake_selects(&mut state);
-                }
-                if let Some(turn) = Self::pick_service(&mut state) {
-                    EraPick::Owner(NextOwner::Native(turn))
+                let eligible_now = self.has_eligible_owner_now(&mut state);
+                if self.era_ring_waiter(&state) {
+                    if eligible_now {
+                        let EraState::EraOpen(era) = &mut state.era else {
+                            std::process::abort();
+                        };
+                        let Some(requester) = era.requester.clone() else {
+                            std::process::abort();
+                        };
+                        era.turn = GroupTurn::Requested;
+                        let port = era.port.take();
+                        EraTransferStep::CaseIi { requester, port }
+                    } else {
+                        let EraState::EraOpen(era) = &mut state.era else {
+                            std::process::abort();
+                        };
+                        era.turn = GroupTurn::Idle;
+                        EraTransferStep::EndIntervalToIdle
+                    }
+                } else if let Some(turn) = Self::pick_service(&mut state) {
+                    EraTransferStep::Owner(NextOwner::Native(turn))
                 } else {
                     match Self::pick(&mut state) {
-                        Some((key, None)) => EraPick::Owner(NextOwner::Resume(key)),
+                        Some((key, None)) => EraTransferStep::Owner(NextOwner::Resume(key)),
                         Some((_, Some(_))) | None => {
                             let EraState::EraOpen(era) = &mut state.era else {
                                 std::process::abort();
                             };
                             era.turn = GroupTurn::Idle;
-                            EraPick::EndIntervalToIdle
+                            EraTransferStep::EndIntervalToIdle
                         }
                     }
                 }
             };
-            match pick {
-                EraPick::Owner(next) => {
+            match step {
+                EraTransferStep::CaseIi { requester, port } => {
+                    Self::give_back_era_turn(baton);
+                    if requester.request_tail().is_err() {
+                        std::process::abort();
+                    }
+                    let Some(port) = port else {
+                        let wake = Self::recv_wake_and_enter(receiver);
+                        if matches!(&wake, Wake::Resume(_)) {
+                            self.state().physical.insert(me, OwnerLocation::Running);
+                        }
+                        return Ok(wake);
+                    };
+                    baton = match self.await_era_world_with_port(port) {
+                        Ok(right) => right,
+                        Err(_) => std::process::abort(),
+                    };
+                    continue;
+                }
+                EraTransferStep::Owner(next) => {
                     let (target, wake) = Self::wake_for(next, baton);
                     if target == me {
                         if matches!(&wake, Wake::Resume(_)) {
@@ -4800,7 +4852,7 @@ impl Control {
                     }
                     return Ok(wake);
                 }
-                EraPick::EndIntervalToIdle => {
+                EraTransferStep::EndIntervalToIdle => {
                     // Case (i): give back WorldTurn before blocking so parallel
                     // owners run freely while Baton threads sleep/wait.
                     Self::give_back_era_turn(baton);
@@ -4874,7 +4926,7 @@ impl Control {
                                 None => Action::BlockOnChannel,
                             }
                         } else if Self::queued_native_work(&state) == NativeWork::Ready
-                            || state.waits.runnable_count() > 0
+                            || Self::eligible_runnable_count(&state) > 0
                         {
                             Self::coalesce_request_locked(&mut state);
                             match Self::take_era_port_if_requested(&mut state) {
@@ -4965,7 +5017,7 @@ impl Control {
                                 &state.era,
                                 EraState::EraOpen(era) if era.turn == GroupTurn::Idle
                             );
-                            let any_runnable = state.waits.runnable_count() > 0
+                            let any_runnable = Self::eligible_runnable_count(&state) > 0
                                 || Self::queued_native_work(&state) == NativeWork::Ready
                                 || state.waits.select_len() > 0
                                 || state.physical.get(&ThreadKey::Main)
@@ -6861,5 +6913,141 @@ mod tests {
         // Presenting TurnRight::Solo while an era is open trips the QD1 debug assert.
         let bogus_solo = TurnRight::Solo(escrowed_baton);
         control.debug_assert_turn_authority(&bogus_solo);
+    }
+
+    /// MEDIUM-2: when the last runnable Baton thread parks on a blocking wait
+    /// while `ring_waiter()` is raised, `transfer_era` enters Case (i) (`Idle`)
+    /// directly without emitting a spurious empty `BatonRequest` round-trip.
+    #[test]
+    fn l67b_b43_ring_waiter_with_no_eligible_baton_thread_enters_idle_without_spurious_request() {
+        use crate::emacs_core::eval::parallel_entry::driver_core::{GroupMsg, IntervalEnd};
+        use crate::emacs_core::eval::parallel_entry::keeper_driver::KeeperMsg;
+        use crate::emacs_core::eval::parallel_entry::world_turn::{WorldTurn, WorldTurnIdentity};
+        use crate::emacs_core::eval::{Context, ThreadingMode};
+
+        let mut owner =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+        let baton = owner.start_green_runtime().unwrap();
+        let heap = baton.parallel_heap_identity();
+        let world_handle = baton.era_world_handle().unwrap();
+        let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
+        let main_rx = control.register_main();
+        let escrowed = control
+            .surrender_solo_for_era(TurnRight::Solo(baton))
+            .expect("surrender Solo");
+
+        let (inbox_tx, inbox_rx) = mpsc::channel();
+        let (world_tx, world_rx) = mpsc::sync_channel(1);
+        let waiter = Arc::new(RingWaiter::new_for_test());
+        let port = GroupPort::from_raw_parts_for_test(inbox_tx, world_rx, Arc::clone(&waiter));
+        control.open_era(world_handle, port).expect("open era");
+
+        let prev_holder = owner.with_green_runtime(|runtime| {
+            runtime
+                .carried_holder
+                .replace(crate::emacs_core::eval::green::CarriedHolder::Stowed)
+        });
+        let epoch1 = NonZeroU64::new(1).unwrap();
+        let epoch2 = NonZeroU64::new(2).unwrap();
+        let id1 = WorldTurnIdentity {
+            heap,
+            epoch: epoch1,
+        };
+        let id2 = WorldTurnIdentity {
+            heap,
+            epoch: epoch2,
+        };
+
+        let mx = MutexId::new(77);
+        std::thread::scope(|scope| {
+            let ctrl = Arc::clone(&control);
+            let waiter_t = Arc::clone(&waiter);
+            let main_thread = scope.spawn(move || {
+                let right = ctrl.acquire_initial_era_turn().expect("initial turn");
+                // Raise ring_waiter while holding the WorldTurn, then park on a
+                // blocking mutex with ZERO other runnable Baton threads.
+                waiter_t.set_for_test(true);
+                let wake = ctrl
+                    .transfer(ThreadKey::Main, Wait::Mutex(mx), right, &main_rx)
+                    .expect("woken after mutex unlock");
+                let Wake::Resume(right2) = wake else {
+                    panic!("expected Wake::Resume");
+                };
+                ctrl.release_era_turn_to_idle(right2);
+            });
+
+            // 1. Satisfy initial acquire_initial_era_turn.
+            assert!(matches!(
+                inbox_rx.recv_timeout(Duration::from_secs(5)),
+                Ok(KeeperMsg::BatonRequest)
+            ));
+            world_tx
+                .send(GroupMsg::World {
+                    turn: WorldTurn::cut_for_test(id1),
+                    epoch: epoch1,
+                })
+                .expect("lend initial World");
+
+            // 2. Main calls transfer(Wait::Mutex) while ring_waiter == true:
+            // must send WorldReturn { Done } and ZERO spurious BatonRequest!
+            assert!(matches!(
+                inbox_rx.recv_timeout(Duration::from_secs(5)),
+                Ok(KeeperMsg::WorldReturn {
+                    end: IntervalEnd::Done,
+                    ..
+                })
+            ));
+            // Give wait_while_era_idle a brief window; reply false to any QD2
+            // IdleQuery and assert NO BatonRequest arrives before we wake mx.
+            let deadline = Instant::now() + Duration::from_millis(25);
+            while Instant::now() < deadline {
+                match inbox_rx.recv_timeout(Duration::from_millis(5)) {
+                    Ok(KeeperMsg::IdleQuery { reply }) => {
+                        let _ = reply.try_send(false);
+                    }
+                    Ok(KeeperMsg::BatonRequest) => {
+                        panic!(
+                            "MEDIUM-2 regression: spurious BatonRequest emitted when no Baton thread is eligible"
+                        );
+                    }
+                    Ok(_) => panic!("unexpected keeper msg while idle"),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => panic!("inbox closed"),
+                }
+            }
+
+            // 3. Now wake Main -> ONE coalesced BatonRequest arrives, lend epoch2.
+            waiter.set_for_test(false);
+            assert_eq!(control.wake_waiting_for(Wait::Mutex(mx)), 1);
+            loop {
+                match inbox_rx.recv_timeout(Duration::from_secs(5)) {
+                    Ok(KeeperMsg::IdleQuery { reply }) => {
+                        let _ = reply.try_send(false);
+                    }
+                    Ok(KeeperMsg::BatonRequest) => break,
+                    Ok(_) => panic!("expected BatonRequest after wake"),
+                    Err(err) => panic!("inbox error waiting for BatonRequest: {err:?}"),
+                }
+            }
+            world_tx
+                .send(GroupMsg::World {
+                    turn: WorldTurn::cut_for_test(id2),
+                    epoch: epoch2,
+                })
+                .expect("lend second World");
+            assert!(matches!(
+                inbox_rx.recv_timeout(Duration::from_secs(5)),
+                Ok(KeeperMsg::WorldReturn {
+                    end: IntervalEnd::Done,
+                    ..
+                })
+            ));
+            main_thread.join().expect("main thread");
+        });
+
+        owner.with_green_runtime(|runtime| {
+            runtime.carried_holder.set(prev_holder);
+        });
+        let (_solo, _wh, _port) = control.close_era(escrowed).expect("close era");
     }
 }

@@ -808,3 +808,443 @@ fn l67b_b43_collect_era_interval_keeps_collecting_state_and_coalesces_sibling_wa
     });
     let (_solo, _wh, _port) = control.close_era(escrowed).expect("close era");
 }
+
+/// HIGH-1: dropping or unwinding a `TurnRight::Era` on a Baton OS thread
+/// restores `World::baton_holder` to the keeper thread strictly BEFORE
+/// `WorldLend::drop` sends `KeeperMsg::GroupAbandon`, so the keeper's escrowed
+/// `Baton::held_here()` remains `true` on abandon/teardown.
+#[test]
+fn l67b_b43_era_turn_right_drop_restores_keeper_baton_holder_before_group_abandon() {
+    use crate::emacs_core::eval::parallel_entry::keeper_driver::{LendDrop, WorldLend};
+    use crate::emacs_core::eval::parallel_entry::world_turn::{WorldTurn, WorldTurnIdentity};
+    use std::num::NonZeroU64;
+
+    let mut owner =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    let baton = owner.start_green_runtime().unwrap();
+    let heap = baton.parallel_heap_identity();
+    assert!(baton.held_here(), "keeper thread initially holds Baton");
+
+    // Case 1: ordinary drop (LendDrop::Leaked) on a different OS thread.
+    {
+        let world_handle = baton.era_world_handle().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let turn = WorldTurn::cut_for_test(WorldTurnIdentity {
+            heap,
+            epoch: NonZeroU64::new(1).unwrap(),
+        });
+        let lend = WorldLend::for_test(tx);
+        let right = TurnRight::from_era(turn, lend, world_handle).expect("build TurnRight::Era");
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                right.enter();
+                assert!(right.held_here(), "worker entered TurnRight::Era");
+                drop(right);
+            });
+            assert!(matches!(
+                rx.recv_timeout(BOUND),
+                Ok(KeeperMsg::GroupAbandon {
+                    cause: LendDrop::Leaked
+                })
+            ));
+            assert!(
+                baton.held_here(),
+                "HIGH-1: keeper Baton::held_here() must be restored strictly before GroupAbandon"
+            );
+        });
+    }
+
+    // Case 2: panic unwind (LendDrop::Unwound) on a different OS thread.
+    {
+        let world_handle = baton.era_world_handle().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let turn = WorldTurn::cut_for_test(WorldTurnIdentity {
+            heap,
+            epoch: NonZeroU64::new(2).unwrap(),
+        });
+        let lend = WorldLend::for_test(tx);
+        let right = TurnRight::from_era(turn, lend, world_handle).expect("build TurnRight::Era");
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(move || {
+                let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    right.enter();
+                    assert!(right.held_here());
+                    let _held = right;
+                    panic!("simulated K7 Baton-thread unwind");
+                }));
+                assert!(caught.is_err());
+            });
+            assert!(matches!(
+                rx.recv_timeout(BOUND),
+                Ok(KeeperMsg::GroupAbandon {
+                    cause: LendDrop::Unwound
+                })
+            ));
+            assert!(
+                baton.held_here(),
+                "HIGH-1: keeper Baton::held_here() must be restored strictly before GroupAbandon::Unwound"
+            );
+            worker.join().expect("worker joined after caught panic");
+        });
+    }
+
+    drop(baton);
+    drop(owner);
+
+    // Case 3: end-to-end live Driver + KeeperEra: a Baton thread acquires
+    // TurnRight::Era, enters it, and panics inside the era interval. The
+    // keeper ends Poisoned(GroupAbandoned { cause: LendDrop::Unwound }) and
+    // its teardown passes Baton::held_here().
+    {
+        use crate::emacs_core::eval::parallel_entry::keeper_driver::Breach;
+
+        super::source_entry::install_inactive_source_module_probe_for_test();
+        let mut source = Box::new(Context::new_with_threading(
+            ThreadingMode::Green,
+            crate::test_utils::unit_runtime(),
+        ));
+        source.setup_thread_locals();
+        source.lexenv = Value::string("b43-high1-unwind-driver");
+        source.gc_collect_exact();
+        source.tagged_heap.close_alloc_regions();
+        let bootstrap = source.capture_green_bootstrap_for_test();
+        let (_shell, start) = close(source).prepare_era().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let service = std::thread::spawn(move || {
+            let outcome = keeper_serve(start, |era| {
+                era.keeper_baton_for_test()
+                    .install_stowed_green_runtime_for_test(bootstrap);
+                let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
+                let control = world_handle.green_control_for_test();
+                let era_world_handle = world_handle.era_world_handle_for_test();
+
+                let (inbox, inbox_rx) = mpsc::channel();
+                let mut driver = Driver::new(era, inbox_rx);
+                let link = driver.enroll_group();
+                let group_port = GroupPort::new(inbox.clone(), link);
+                control
+                    .open_era_stowed_for_test(era_world_handle, group_port)
+                    .expect("open era on stowed Green Control");
+                drop(inbox);
+
+                let (end, held_after_poison) = std::thread::scope(|scope| {
+                    let baton_control = Arc::clone(&control);
+                    let baton_thread = scope.spawn(move || {
+                        let right = baton_control
+                            .acquire_initial_era_turn()
+                            .expect("acquire initial TurnRight::Era");
+                        let caught =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                                right.enter();
+                                assert!(right.held_here());
+                                let _held = right;
+                                panic!("HIGH-1 live era Baton-thread panic");
+                            }));
+                        assert!(caught.is_err());
+                        if let Some(port) = baton_control.take_era_port_for_exit() {
+                            port.exit();
+                        }
+                        drop(world_handle);
+                    });
+                    let end = driver.run();
+                    let held_after_poison = era.keeper_baton_for_test().held_here();
+                    baton_thread.join().expect("Baton thread joined");
+                    (end, held_after_poison)
+                });
+                assert!(
+                    held_after_poison,
+                    "HIGH-1: keeper Baton::held_here() must pass immediately after Poisoned(GroupAbandoned)"
+                );
+                assert!(
+                    era.keeper_baton_for_test().held_here(),
+                    "HIGH-1: keeper Baton::held_here() must pass on teardown"
+                );
+                era.keeper_baton_for_test()
+                    .uninstall_green_runtime_for_test();
+                tx.send(end).expect("send driver end");
+            });
+            drop(outcome);
+        });
+        let end = rx.recv_timeout(BOUND).expect("keeper outcome");
+        service.join().expect("keeper service thread");
+        assert_eq!(
+            end,
+            DriverEnd::Poisoned(Breach::GroupAbandoned {
+                cause: LendDrop::Unwound,
+            })
+        );
+    }
+}
+
+/// HIGH-2a: when `ThreadKey::Main` is `OwnerLocation::NativeReleased` and
+/// marked `Wait::Runnable` (`main_excluded == true`), `eligible_runnable_count`
+/// is 0 and waking Main's semantic wait emits ZERO spurious `BatonRequest`s.
+#[test]
+fn l67b_b43_main_excluded_native_released_does_not_livelock_in_era_idle() {
+    use crate::emacs_core::eval::parallel_entry::driver_core::RingWaiter;
+
+    let mut owner =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    let baton = owner.start_green_runtime().unwrap();
+    let world_handle = baton.era_world_handle().unwrap();
+    let control = owner.with_green_runtime(|runtime| Arc::clone(&runtime.control));
+    let _main_rx = control.register_main_guard_for_test();
+    let escrowed = control
+        .surrender_solo_for_era(TurnRight::Solo(baton))
+        .expect("surrender Solo");
+    let (inbox_tx, inbox_rx) = mpsc::channel();
+    let (_world_tx, world_rx) = mpsc::sync_channel(1);
+    let port = GroupPort::from_raw_parts_for_test(
+        inbox_tx,
+        world_rx,
+        Arc::new(RingWaiter::new_for_test()),
+    );
+    control.open_era(world_handle, port).expect("open era");
+
+    // Main is NativeReleased + Wait::Runnable (excluded until physical acquire).
+    control.mark_main_native_released_for_test(Wait::Runnable);
+    assert_eq!(
+        control.eligible_runnable_count_for_test(),
+        0,
+        "HIGH-2a: main_excluded Runnable Main must not count as eligible"
+    );
+
+    // Waking Main while NativeReleased must NOT emit a spurious BatonRequest.
+    let mx = MutexId::new(11);
+    control.mark_main_native_released_for_test(Wait::Mutex(mx));
+    assert_eq!(control.wake_waiting_for(Wait::Mutex(mx)), 1);
+    assert_eq!(control.eligible_runnable_count_for_test(), 0);
+    assert!(
+        inbox_rx.try_recv().is_err(),
+        "HIGH-2a: waking NativeReleased Main must not emit spurious BatonRequest"
+    );
+
+    let (_solo, _wh, _port) = control.close_era(escrowed).expect("close era");
+}
+
+/// HIGH-2b: when a worker exits via `finish_era` Case (i) while Main is the
+/// sole surviving Baton thread and is blocked on a condition variable with NO
+/// live parallel owner, `finish_era` runs QD2 `query_era_idle_for_deadlock()`,
+/// wakes Main, and returns cleanly so the parked carrier slot never wedges
+/// against `carriers.drain()`.
+#[test]
+fn l67b_b43_worker_exit_with_blocked_main_and_no_peer_reports_deadlock_and_drains_carrier() {
+    run_in_live_green_era(
+        "b43-finish-era-dl",
+        |src| {
+            assert_eq!(
+                eval(
+                    src,
+                    "(progn
+                       (setq b43-fin-mx (make-mutex \"b43-fin-mx\"))
+                       (setq b43-fin-cv (make-condition-variable b43-fin-mx \"b43-fin-cv\"))
+                       'ok)"
+                ),
+                "ok"
+            );
+        },
+        false,
+        |_state, _port, _home, _idle_receipt| {},
+        move |main, _control| {
+            // Spawn a worker that yields once and exits WITHOUT notifying
+            // b43-fin-cv, while Main locks b43-fin-mx and blocks in
+            // condition-wait. When the worker exits, finish_era enters Case (i)
+            // with Main blocked and no live parallel owner -> QD2 wakes Main
+            // and the worker's carrier returns cleanly (so retire's
+            // carriers.drain() completes instead of wedging).
+            let out = eval(
+                main,
+                "(progn
+                   (mutex-lock b43-fin-mx)
+                   (make-thread (lambda () (thread-yield) 'worker-exited))
+                   (condition-wait b43-fin-cv)
+                   (mutex-unlock b43-fin-mx)
+                   'woken-by-qd2)",
+            );
+            assert_eq!(
+                out, "woken-by-qd2",
+                "HIGH-2b: finish_era QD2 must wake blocked Main and let carrier exit cleanly"
+            );
+        },
+    );
+}
+
+/// LOW-1: `ActiveWorldSeat::from_active_green_seat` refuses a foreign-heap
+/// `FacadeEpochRetention` with `WorldSeatRefusal::WrongHeap`, and supports the
+/// full `b4.4` adopt -> `exit` -> `Control::collect_era_interval` -> `enter` ->
+/// `into_active_green_parts` round-trip.
+#[test]
+fn l67b_b43_active_world_seat_from_active_green_seat_roundtrip_and_wrong_heap_retention() {
+    use crate::emacs_core::eval::parallel_entry::driver_core::{GroupMsg, IntervalEnd, RingWaiter};
+    use crate::emacs_core::eval::parallel_entry::keeper_driver::WorldLend;
+    use crate::emacs_core::eval::parallel_entry::world_seat::{ActiveWorldSeat, WorldSeatRefusal};
+    use crate::emacs_core::eval::parallel_entry::world_turn::{
+        WorldReturned, WorldTurn, WorldTurnIdentity,
+    };
+    use std::num::NonZeroU64;
+
+    // Construct both Contexts BEFORE either calls `start_green_runtime` so
+    // `NativeTables` registration stays open during Context construction, and
+    // keep `foreign` alive on its own OS thread until `foreign_retention` drops.
+    let mut main =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    let (foreign_tx, foreign_rx) = mpsc::sync_channel(1);
+    let (foreign_done_tx, foreign_done_rx) = mpsc::sync_channel::<()>(1);
+    let foreign_thread = std::thread::spawn(move || {
+        let mut foreign =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+        let foreign_baton = foreign.start_green_runtime().expect("start foreign Green");
+        let retention = foreign_baton
+            .parallel_epoch_retention()
+            .expect("foreign FacadeEpochRetention");
+        foreign_tx.send(retention).expect("send foreign retention");
+        foreign_done_rx.recv_timeout(BOUND).expect("foreign done");
+        drop(foreign_baton);
+        drop(foreign);
+    });
+    let foreign_retention = foreign_rx
+        .recv_timeout(BOUND)
+        .expect("receive foreign retention");
+
+    let main_baton = main.start_green_runtime().expect("start main Green");
+    let real_heap = main_baton.parallel_heap_identity();
+    let world_handle = main_baton.era_world_handle().expect("era WorldHandle");
+    let real_retention = main_baton
+        .parallel_epoch_retention()
+        .expect("real FacadeEpochRetention");
+    let control = main.with_green_runtime(|runtime| Arc::clone(&runtime.control));
+    let escrowed = control
+        .surrender_solo_for_era(TurnRight::Solo(main_baton))
+        .expect("surrender Solo(Baton) before opening era");
+    main.seat_green_main_without_baton_for_test(Arc::clone(&control));
+
+    // 1. Foreign-heap FacadeEpochRetention must be refused with WrongHeap.
+    let (tx_bad, rx_bad) = mpsc::channel();
+    let bad_turn = WorldTurn::cut_for_test(WorldTurnIdentity {
+        heap: real_heap,
+        epoch: NonZeroU64::new(1).unwrap(),
+    });
+    let bad_lend = WorldLend::for_test(tx_bad);
+    let (bad_turn, bad_lend, foreign_retention, refusal) =
+        ActiveWorldSeat::from_active_green_seat(&main, bad_turn, bad_lend, foreign_retention)
+            .expect_err("LOW-1: mismatched retention heap must return WrongHeap");
+    assert_eq!(refusal, WorldSeatRefusal::WrongHeap);
+    bad_lend.give_back(WorldReturned::from_end(bad_turn));
+    assert!(matches!(
+        rx_bad.try_recv(),
+        Ok(KeeperMsg::WorldReturn { .. })
+    ));
+    drop(foreign_retention);
+    foreign_done_tx.send(()).expect("release foreign thread");
+    foreign_thread.join().expect("join foreign thread");
+
+    // 2. Matching retention exercises full b4.4 adopt -> exit -> collect_era_interval
+    // -> enter -> into_active_green_parts round-trip.
+    let (inbox_tx, inbox_rx) = mpsc::channel();
+    let (world_tx, world_rx) = mpsc::sync_channel(1);
+    let port = GroupPort::from_raw_parts_for_test(
+        inbox_tx.clone(),
+        world_rx,
+        Arc::new(RingWaiter::new_for_test()),
+    );
+    control.open_era(world_handle, port).expect("open era");
+
+    let epoch1 = NonZeroU64::new(2).unwrap();
+    let epoch2 = NonZeroU64::new(3).unwrap();
+    let id1 = WorldTurnIdentity {
+        heap: real_heap,
+        epoch: epoch1,
+    };
+    let id2 = WorldTurnIdentity {
+        heap: real_heap,
+        epoch: epoch2,
+    };
+
+    // Move EraLink into Holding via a clean scoped acquire thread while main
+    // holds a temporary seat-stowed view, then adopt into ActiveWorldSeat.
+    let prev_holder = main.with_green_runtime(|runtime| {
+        runtime
+            .carried_holder
+            .replace(crate::emacs_core::eval::green::CarriedHolder::Stowed)
+    });
+    let (init_tx, init_rx) = mpsc::sync_channel(1);
+    std::thread::scope(|scope| {
+        let ctrl = Arc::clone(&control);
+        let wtx = world_tx.clone();
+        scope.spawn(move || {
+            let right = ctrl.acquire_initial_era_turn().expect("acquire initial");
+            init_tx.send(right).expect("send initial");
+        });
+        assert!(matches!(
+            inbox_rx.recv_timeout(BOUND),
+            Ok(KeeperMsg::BatonRequest)
+        ));
+        wtx.send(GroupMsg::World {
+            turn: WorldTurn::cut_for_test(id1),
+            epoch: epoch1,
+        })
+        .expect("lend epoch1");
+    });
+    main.with_green_runtime(|runtime| runtime.carried_holder.set(prev_holder));
+    let initial_right = init_rx.recv_timeout(BOUND).expect("initial right");
+    let (turn1, lend1, _wh1) = initial_right.into_era().unwrap().into_parts();
+
+    let active = ActiveWorldSeat::from_active_green_seat(&main, turn1, lend1, real_retention)
+        .expect("matching ActiveWorldSeat adoption succeeds");
+    let (parked, lend1, returned1) = active.exit(&mut main);
+
+    let (turn2, got_epoch, lend2) = std::thread::scope(|scope| {
+        let ctrl = Arc::clone(&control);
+        let h = scope.spawn(move || ctrl.collect_era_interval(lend1, returned1, None));
+        assert!(matches!(
+            inbox_rx.recv_timeout(BOUND),
+            Ok(KeeperMsg::WorldReturn {
+                end: IntervalEnd::Collect { .. },
+                ..
+            })
+        ));
+        world_tx
+            .send(GroupMsg::World {
+                turn: WorldTurn::cut_for_test(id2),
+                epoch: epoch2,
+            })
+            .expect("re-lend epoch2 at ring HEAD");
+        h.join().expect("collect thread").expect("collect ok")
+    });
+    assert_eq!(got_epoch, epoch2);
+
+    let resumed = parked
+        .enter(&mut main, turn2, lend2)
+        .expect("re-enter seated main after collect_era_interval");
+    let (turn2, lend2, retention2) = resumed.into_active_green_parts();
+    assert_eq!(turn2.identity(), id2);
+    assert_eq!(retention2.heap_identity(), real_heap);
+    lend2.give_back(WorldReturned::from_end(turn2));
+    drop(retention2);
+
+    main.clear_cached_parked_root_batch_for_test();
+    main.green_release_seat();
+    let (solo_right, _wh, _port) = control.close_era(escrowed).expect("close era");
+    drop(solo_right);
+    drop(main);
+}
+
+/// MEDIUM-1: `prove_stowed_for_era_switch` refuses (panics) to mint
+/// `StowedForReturn` when World carriers are stowed and carrier TLS is parked
+/// but the seated Context has NOT published its parked roots in
+/// `GreenRuntime::parked`.
+#[test]
+#[should_panic(expected = "Nit 6 / P1")]
+fn l67b_b43_prove_stowed_for_era_switch_panics_without_published_parked_roots() {
+    use crate::emacs_core::eval::parallel_entry::world_seat::prove_stowed_for_era_switch;
+
+    let mut main = green_world();
+    main.tagged_heap.close_alloc_regions();
+    let _parked = main.park_owner();
+    assert!(main.stow_serial_world_state());
+    crate::emacs_core::eval::green::carrier_tls::park_carrier_tls();
+    // Deliberately skip publishing parked roots into GreenRuntime::parked:
+    // prove_stowed_for_era_switch MUST refuse rather than silently minting
+    // StowedForReturn without parked roots.
+    let _proof = prove_stowed_for_era_switch(&mut main);
+}

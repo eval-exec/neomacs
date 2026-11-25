@@ -886,16 +886,20 @@ impl Context {
                     .map(|symbol| (key, symbol)),
             );
         }
-        stow_owner_state(self, &baton);
-        stow_carried_state(&baton);
         let parked_era_tls = baton.is_era();
-        if parked_era_tls {
-            self.publish_parked_roots_retaining(&baton, key, publication);
-            super::carrier_tls::park_carrier_tls();
-            let proof = super::super::parallel_entry::world_seat::prove_stowed_for_era_switch(self);
-            baton.set_stowed_for_return(proof);
-        } else {
-            self.publish_parked_roots(&baton, key, publication);
+        {
+            let _era_stow_guard = parked_era_tls.then_some(EraTransitionAbortOnPanic("era-park"));
+            stow_owner_state(self, &baton);
+            stow_carried_state(&baton);
+            if parked_era_tls {
+                self.publish_parked_roots_retaining(&baton, key, publication);
+                super::carrier_tls::park_carrier_tls();
+                let proof =
+                    super::super::parallel_entry::world_seat::prove_stowed_for_era_switch(self);
+                baton.set_stowed_for_return(proof);
+            } else {
+                self.publish_parked_roots(&baton, key, publication);
+            }
         }
         // All World/registry borrows have ended before the unique Baton moves.
         let (outcome, host_resume, native_resume) = match request {
@@ -958,69 +962,76 @@ impl Context {
             disposition,
         } = receive_owner_turn(key, wake, &control, &mut receiver, &mut host);
         let resumed_era = parked_era_tls || baton.is_era();
-        if resumed_era {
-            baton.clear_stowed_for_return();
-            super::carrier_tls::reset_carrier_tls();
-        }
-        // Only the returning continuation refreshes its private dispatch
-        // header from canonical cells. A peer's function write updates its own
-        // header, so comparing our stale header would miss that redefinition.
-        self.obarray.refresh_admission();
-        // Invalidate shared leaf slots before dispatch or owner mirror work,
-        // and restore old-source pins while the immutable batch still roots them.
-        #[cfg(feature = "jit")]
-        {
-            let mut scratch =
-                std::mem::take(&mut self.green_seat().expect("seated above").parked_jit_scratch);
-            let resumed = parked_jit.resume_reusing(self, &mut scratch);
-            self.green_seat().expect("seated above").parked_jit_scratch = scratch;
-            resumed.expect("the original owner resumes in its own heap");
-        }
-        unstow_carried_state(&baton);
-        unstow_owner_state(self, &baton);
-        let changed_owner = self.threads.current_thread_id() != key.id();
-        let outgoing_error = baton
-            .green_runtime()
-            .as_ref()
-            .and_then(|runtime| runtime.outgoing_constant_error.take())
-            .filter(|(previous, _)| *previous != key)
-            .map(|(_, symbol)| symbol);
-        let returning_error = changed_owner
-            .then(|| self.failed_constant_owner_binding(false))
-            .flatten();
-        self.threads.enter_thread(key.id());
-        let (exit, case_table) = baton
-            .green_runtime()
-            .as_ref()
-            .map(|runtime| {
-                (
-                    runtime.exit_for(key, &control),
-                    runtime.standard_case_table.get(),
-                )
-            })
-            .unwrap_or((None, self.cached_standard_case_table));
-        let seat = self.green_seat().expect("seated above");
-        seat.receiver = Some(receiver);
-        // GNU enters this owner before unbinding the previous one. Its
-        // failure wins over this owner's own rebind, and condition-wait
-        // still retakes its mutex before either error is delivered.
-        if let Some(symbol) = outgoing_error.or(returning_error) {
-            self.green_defer_binding_resume_error(symbol);
-        }
-        // GNU `post_acquire_global_lock` sets the thread's buffer again: a
-        // thread that killed it moved this one to another, which the
-        // owner's mirrors must read from as they come back.
-        let moved = self
-            .threads
-            .thread_current_buffer(key.id())
-            .filter(|buffer| current != Some(*buffer) && self.edit.buffers.get(*buffer).is_some());
-        if let Some(buffer) = moved {
-            let _ = self.edit.buffers.switch_current_unrecorded(buffer);
-        }
-        let case_table_changed =
-            case_table.map(Value::bits) != self.cached_standard_case_table.map(Value::bits);
-        self.cached_standard_case_table = case_table;
-        self.resume_owner(parked);
+        let (exit, case_table_changed, moved, case_table) = {
+            let _era_resume_guard = resumed_era.then_some(EraTransitionAbortOnPanic("era-resume"));
+            if resumed_era {
+                baton.clear_stowed_for_return();
+                super::carrier_tls::reset_carrier_tls();
+            }
+            // Only the returning continuation refreshes its private dispatch
+            // header from canonical cells. A peer's function write updates its own
+            // header, so comparing our stale header would miss that redefinition.
+            self.obarray.refresh_admission();
+            // Invalidate shared leaf slots before dispatch or owner mirror work,
+            // and restore old-source pins while the immutable batch still roots them.
+            #[cfg(feature = "jit")]
+            {
+                let mut scratch = std::mem::take(
+                    &mut self.green_seat().expect("seated above").parked_jit_scratch,
+                );
+                let resumed = parked_jit.resume_reusing(self, &mut scratch);
+                self.green_seat().expect("seated above").parked_jit_scratch = scratch;
+                resumed.expect("the original owner resumes in its own heap");
+            }
+            unstow_carried_state(&baton);
+            unstow_owner_state(self, &baton);
+            let changed_owner = self.threads.current_thread_id() != key.id();
+            let outgoing_error = baton
+                .green_runtime()
+                .as_ref()
+                .and_then(|runtime| runtime.outgoing_constant_error.take())
+                .filter(|(previous, _)| *previous != key)
+                .map(|(_, symbol)| symbol);
+            let returning_error = changed_owner
+                .then(|| self.failed_constant_owner_binding(false))
+                .flatten();
+            self.threads.enter_thread(key.id());
+            let (exit, case_table) = baton
+                .green_runtime()
+                .as_ref()
+                .map(|runtime| {
+                    (
+                        runtime.exit_for(key, &control),
+                        runtime.standard_case_table.get(),
+                    )
+                })
+                .unwrap_or((None, self.cached_standard_case_table));
+            let seat = self.green_seat().expect("seated above");
+            seat.receiver = Some(receiver);
+            // GNU enters this owner before unbinding the previous one. Its
+            // failure wins over this owner's own rebind, and condition-wait
+            // still retakes its mutex before either error is delivered.
+            if let Some(symbol) = outgoing_error.or(returning_error) {
+                self.green_defer_binding_resume_error(symbol);
+            }
+            // GNU `post_acquire_global_lock` sets the thread's buffer again: a
+            // thread that killed it moved this one to another, which the
+            // owner's mirrors must read from as they come back.
+            let moved = self
+                .threads
+                .thread_current_buffer(key.id())
+                .filter(|buffer| {
+                    current != Some(*buffer) && self.edit.buffers.get(*buffer).is_some()
+                });
+            if let Some(buffer) = moved {
+                let _ = self.edit.buffers.switch_current_unrecorded(buffer);
+            }
+            let case_table_changed =
+                case_table.map(Value::bits) != self.cached_standard_case_table.map(Value::bits);
+            self.cached_standard_case_table = case_table;
+            self.resume_owner(parked);
+            (exit, case_table_changed, moved, case_table)
+        };
         if case_table_changed {
             neovm_text::emacs_core::casetab::activate_casetab_thread_locals(case_table);
         }
@@ -1492,6 +1503,13 @@ impl Context {
             .map(|seat| Arc::clone(&seat.control))
     }
 
+    /// Test-only: seat this main owner without a Solo Baton while an era is open.
+    #[cfg(test)]
+    pub(crate) fn seat_green_main_without_baton_for_test(&mut self, control: Arc<Control>) {
+        let (_tx, rx) = mpsc::channel();
+        self.take_green_seat_without_baton_for_test(ThreadKey::Main, control, rx);
+    }
+
     /// Test-only: drain carrier pool, retire seated era main's Context, close
     /// alloc regions, stow World carriers, park carrier TLS, and return its
     /// final `TurnRight::Era` carrying `StowedForReturn`.
@@ -1518,6 +1536,22 @@ impl Context {
             super::super::parallel_entry::world_seat::prove_retired_worker_stowed_for_era(&baton);
         baton.set_stowed_for_return(proof);
         baton
+    }
+
+    /// Whether this seated owner's `ThreadKey` currently has an active parked
+    /// `RootBatchLease` published in `GreenRuntime::parked` (MEDIUM-1 / P1).
+    pub(in crate::emacs_core::eval) fn has_published_parked_roots_for_seat(&self) -> bool {
+        let Some(key) = self
+            .owner
+            .slab()
+            .and_then(|slab| slab.green_seat())
+            .map(|seat| seat.key)
+        else {
+            return false;
+        };
+        self.green_runtime_ref()
+            .as_ref()
+            .is_some_and(|runtime| runtime.parked.borrow().contains_key(&key))
     }
 
     /// Keep ROOTS traced while KEY is parked inside an open era, preserving any
@@ -2446,6 +2480,23 @@ pub(crate) fn carrier_job_threads_for_test() -> Vec<(u64, std::thread::ThreadId)
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .clone()
+}
+
+/// Aborts the process when a panic unwinds midway through `green_park_impl`'s
+/// era stow/TLS-park or TLS-reset/unstow windows (matching `world_seat.rs`,
+/// LOW-2).
+struct EraTransitionAbortOnPanic(&'static str);
+
+impl Drop for EraTransitionAbortOnPanic {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            tracing::error!(
+                step = self.0,
+                "a seated Green era transition panicked between stow/TLS steps; aborting"
+            );
+            std::process::abort();
+        }
+    }
 }
 
 /// Aborts the process when dropped by a panic.

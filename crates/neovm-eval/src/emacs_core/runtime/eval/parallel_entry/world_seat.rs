@@ -74,6 +74,10 @@ pub(crate) fn prove_stowed_for_era_switch(ctx: &mut Context) -> StowedForReturn 
         "Nit 6: open alloc regions must be closed before returning an era WorldTurn"
     );
     assert!(
+        ctx.has_published_parked_roots_for_seat(),
+        "Nit 6 / P1: seated Context must publish parked roots in GreenRuntime::parked before returning an era WorldTurn"
+    );
+    assert!(
         ctx.serial_world_is_stowed(),
         "Nit 6 / A-1: World carriers must be Stowed before returning an era WorldTurn"
     );
@@ -94,6 +98,10 @@ pub(crate) fn prove_retired_worker_stowed_for_era(
     assert!(
         baton.is_era(),
         "Nit 6: retired worker stow proof requires TurnRight::Era"
+    );
+    assert!(
+        baton.held_here(),
+        "Nit 6: retired worker stow proof must be minted on the OS thread holding TurnRight::Era"
     );
     assert!(
         baton.serial_world_is_stowed(),
@@ -378,7 +386,9 @@ impl ActiveWorldSeat {
         if ctx.green_runtime_ref().is_none() {
             return Err((turn, lend, retention, WorldSeatRefusal::NotGreenWorld));
         }
-        if turn.identity().heap != ctx.tagged_heap.heap_identity() {
+        if turn.identity().heap != ctx.tagged_heap.heap_identity()
+            || retention.heap_identity() != turn.identity().heap
+        {
             return Err((turn, lend, retention, WorldSeatRefusal::WrongHeap));
         }
         if !neovm_value::tagged::gc::tagged_heap_is_current(&ctx.tagged_heap) {

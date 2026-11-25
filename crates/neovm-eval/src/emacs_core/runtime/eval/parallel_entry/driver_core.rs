@@ -409,6 +409,11 @@ impl RingWaiter {
     pub(crate) fn new_for_test() -> Self {
         Self::new()
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_for_test(&self, raised: bool) {
+        self.set(raised);
+    }
 }
 
 /// Called after each pending stop attempt, once the keeper has served its
