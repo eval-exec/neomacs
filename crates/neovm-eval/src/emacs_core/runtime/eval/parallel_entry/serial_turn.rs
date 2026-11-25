@@ -62,8 +62,16 @@ pub(crate) trait SerialHost {
     /// Called once a [`SerialTurn`] becomes live (after `reattach` succeeds).
     /// Paired 1:1 with [`SerialHost::leave_turn`] by `SerialTurn`'s RAII
     /// lifecycle (normal `end`/`park` or panic unwind `Drop`).
+    ///
+    /// Default no-op body is for stand-in test hosts only (the contract guard
+    /// `l64_context_is_the_only_production_serial_host` enforces that `Context`
+    /// is the sole production `SerialHost`, and `Context` overrides both hooks
+    /// to bracket per-turn threshold-GC inhibition).
     fn enter_turn(&mut self, _transition: HostTransition) {}
     /// Called when a [`SerialTurn`] ends, parks, or unwind-drops.
+    ///
+    /// Default no-op body is for stand-in test hosts only; production hosts
+    /// must override this hook paired 1:1 with [`SerialHost::enter_turn`].
     fn leave_turn(&mut self, _transition: HostTransition) {}
 }
 
