@@ -748,11 +748,11 @@ pub(super) fn parse_network_address_spec(value: &Value) -> Result<NetworkAddress
 
     match items.len() {
         5 => {
-            let a = parse_lisp_sockaddr_part(items[0], 255)?;
-            let b = parse_lisp_sockaddr_part(items[1], 255)?;
-            let c = parse_lisp_sockaddr_part(items[2], 255)?;
-            let d = parse_lisp_sockaddr_part(items[3], 255)?;
-            let port = parse_lisp_sockaddr_part(items[4], u16::MAX as i64)?;
+            let a = parse_lisp_sockaddr_part(items.at(0), 255)?;
+            let b = parse_lisp_sockaddr_part(items.at(1), 255)?;
+            let c = parse_lisp_sockaddr_part(items.at(2), 255)?;
+            let d = parse_lisp_sockaddr_part(items.at(3), 255)?;
+            let port = parse_lisp_sockaddr_part(items.at(4), u16::MAX as i64)?;
             Ok(NetworkAddressSpec::Inet(SocketAddr::new(
                 IpAddr::V4(Ipv4Addr::new(a as u8, b as u8, c as u8, d as u8)),
                 port as u16,
@@ -761,9 +761,9 @@ pub(super) fn parse_network_address_spec(value: &Value) -> Result<NetworkAddress
         9 => {
             let mut segments = [0_u16; 8];
             for (idx, segment) in segments.iter_mut().enumerate() {
-                *segment = parse_lisp_sockaddr_part(items[idx], u16::MAX as i64)? as u16;
+                *segment = parse_lisp_sockaddr_part(items.at(idx), u16::MAX as i64)? as u16;
             }
-            let port = parse_lisp_sockaddr_part(items[8], u16::MAX as i64)?;
+            let port = parse_lisp_sockaddr_part(items.at(8), u16::MAX as i64)?;
             Ok(NetworkAddressSpec::Inet(SocketAddr::new(
                 IpAddr::V6(Ipv6Addr::new(
                     segments[0],

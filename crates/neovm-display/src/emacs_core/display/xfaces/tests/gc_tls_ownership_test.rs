@@ -53,7 +53,7 @@ fn gc_tls_ownership_font_roots_exclude_another_live_heap() {
     let _parked_first = first.park_for_test();
     let mut second = parked_second.resume_for_test().expect("resume second");
     second.gc_collect_exact();
-    assert_eq!(value.as_vector_data().unwrap()[0], Value::fixnum(42));
+    assert_eq!(value.as_vector_data().unwrap().at(0), Value::fixnum(42));
 }
 
 #[test]

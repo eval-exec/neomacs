@@ -63,7 +63,7 @@ fn generational_inline_slot_immediates_leave_old_cards_and_logs_clean() {
         assert!(set_vector_slot(vector, 0, value));
         assert_eq!(cons.cons_car(), value);
         assert_eq!(cons.cons_cdr(), value);
-        assert_eq!(vector.as_vector_data().unwrap().as_slice()[0], value);
+        assert_eq!(vector.as_vector_data().unwrap().at(0), value);
         assert!(!heap.owner_card_is_dirty_for_test(cons));
         assert!(heap.current_mutator_gc().remset.is_empty());
     }

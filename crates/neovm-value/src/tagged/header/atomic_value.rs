@@ -29,6 +29,12 @@ impl AtomicTaggedValue {
         self.0.get()
     }
 
+    /// Relaxed atomic read through the interior-mutable cell.
+    #[inline(always)]
+    pub fn load_relaxed(&self) -> TaggedValue {
+        self.0.load_relaxed()
+    }
+
     /// Acquire the owner's release publication, through the actual cell.
     #[inline(always)]
     pub fn load_atomic(&self) -> TaggedValue {

@@ -1,0 +1,31 @@
+error[E0599]: no method named `as_slice` found for reference `&LispValueSlice` in the current scope
+ --> tests/heap_capability_ui/u4_lisp_value_slice_no_raw_slice.rs:6:29
+  |
+6 |     let _: &[Value] = items.as_slice();
+  |                             ^^^^^^^^ method not found in `&LispValueSlice`
+
+error[E0308]: mismatched types
+ --> tests/heap_capability_ui/u4_lisp_value_slice_no_raw_slice.rs:7:23
+  |
+7 |     let _: &[Value] = items;
+  |            --------   ^^^^^ expected `&[TaggedValue]`, found `&LispValueSlice`
+  |            |
+  |            expected due to this
+  |
+  = note: expected reference `&[TaggedValue]`
+             found reference `&LispValueSlice`
+
+error[E0277]: the type `LispValueSlice` cannot be indexed by `{integer}`
+ --> tests/heap_capability_ui/u4_lisp_value_slice_no_raw_slice.rs:8:19
+  |
+8 |     let _ = items[0];
+  |                   ^ `LispValueSlice` cannot be indexed by `{integer}`
+  |
+  = help: the trait `std::ops::Index<{integer}>` is not implemented for `LispValueSlice`
+  = help: `LispValueSlice` implements trait `std::ops::Index<Idx>`:
+            std::ops::Index<RangeFull>
+            std::ops::Index<RangeTo<usize>>
+            std::ops::Index<std::ops::Range<usize>>
+            std::ops::Index<std::ops::RangeFrom<usize>>
+            std::ops::Index<std::ops::RangeInclusive<usize>>
+            std::ops::Index<std::ops::RangeToInclusive<usize>>

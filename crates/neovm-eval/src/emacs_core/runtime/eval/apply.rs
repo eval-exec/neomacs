@@ -4668,12 +4668,8 @@ impl Context {
                 return Err(signal(LispCondition::InvalidFunction, vec![func_value]));
             };
             let (Some(arglist), Some(body)) = (
-                slots
-                    .get(neovm_value::tagged::header::CLOSURE_ARGLIST)
-                    .copied(),
-                slots
-                    .get(neovm_value::tagged::header::CLOSURE_CODE)
-                    .copied(),
+                slots.get(neovm_value::tagged::header::CLOSURE_ARGLIST),
+                slots.get(neovm_value::tagged::header::CLOSURE_CODE),
             ) else {
                 return Err(signal(LispCondition::InvalidFunction, vec![func_value]));
             };
@@ -4681,7 +4677,6 @@ impl Context {
             // invalid function (the accessor returned None there too).
             let env = slots
                 .get(neovm_value::tagged::header::CLOSURE_CONSTANTS)
-                .copied()
                 .filter(|env| !env.is_nil());
             (arglist, body, env)
         };
@@ -4754,13 +4749,10 @@ impl Context {
         // allocates (the slice must not be held across an allocation).
         let (arglist, body, env) = match func.closure_slots() {
             Some(slots) => (
-                slots.get(CLOSURE_ARGLIST).copied(),
-                slots
-                    .get(neovm_value::tagged::header::CLOSURE_CODE)
-                    .copied(),
+                slots.get(CLOSURE_ARGLIST),
+                slots.get(neovm_value::tagged::header::CLOSURE_CODE),
                 slots
                     .get(neovm_value::tagged::header::CLOSURE_CONSTANTS)
-                    .copied()
                     .filter(|env| !env.is_nil()),
             ),
             None => (None, None, None),

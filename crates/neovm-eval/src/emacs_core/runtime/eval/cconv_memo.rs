@@ -832,7 +832,7 @@ fn closures_agree(memo: Value, lisp: Value) -> bool {
         if a == b {
             continue;
         }
-        let (mut x, mut y) = (*a, *b);
+        let (mut x, mut y) = (a, b);
         while x.is_cons() && y.is_cons() {
             if x.cons_car() != y.cons_car() {
                 return false;
@@ -1210,10 +1210,10 @@ impl Context {
             return None;
         }
         let slots = closure.closure_slots()?;
-        if slots.get(CLOSURE_ARGLIST) != Some(&params) || slots.get(CLOSURE_CODE) != Some(&body) {
+        if slots.get(CLOSURE_ARGLIST) != Some(params) || slots.get(CLOSURE_CODE) != Some(body) {
             return None;
         }
-        let newenv = *slots.get(CLOSURE_CONSTANTS)?;
+        let newenv = slots.get(CLOSURE_CONSTANTS)?;
         if newenv == self.cconv_memo.trusted.empty_env() {
             return Some((Box::default(), Box::default()));
         }

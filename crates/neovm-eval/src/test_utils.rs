@@ -2888,8 +2888,8 @@ mod unit_runtime {
         let result = call(context, vec![vector, Value::fixnum(-2), Value::NIL]).unwrap();
         let elements = result.as_vector_data().expect("substring vector result");
         assert_eq!(elements.len(), 2);
-        assert_eq!(elements[0], Value::fixnum(2));
-        assert_eq!(elements[1], Value::fixnum(3));
+        assert_eq!(elements.at(0), Value::fixnum(2));
+        assert_eq!(elements.at(1), Value::fixnum(3));
         assert!(!neovm_value::value::eq_value(&result, &vector));
 
         let source = Value::string("abcd");

@@ -124,8 +124,8 @@ fn state_vector_records_frames_then_visible_buffers_then_lambda() {
     let state = builtin_symbol_value_1(&mut eval, var).unwrap();
     let slots = state.as_vector_data().expect("state vector");
     let frame = eval.frame_manager().get(frame_id).expect("selected frame");
-    assert_eq!(slots[0].bits(), Value::make_frame(frame_id.0).bits());
-    assert_eq!(slots[1].bits(), frame.name_value().bits());
+    assert_eq!(slots.at(0).bits(), Value::make_frame(frame_id.0).bits());
+    assert_eq!(slots.at(1).bits(), frame.name_value().bits());
 
     let mut index = 2;
     for buffer_id in eval.edit.buffers.buffer_list() {
@@ -134,25 +134,29 @@ fn state_vector_records_frames_then_visible_buffers_then_lambda() {
             continue;
         }
         assert_eq!(
-            slots[index].bits(),
+            slots.at(index).bits(),
             Value::make_buffer(buffer_id).bits(),
             "buffer identity at slot {index}"
         );
         assert_eq!(
-            slots[index + 1].bits(),
+            slots.at(index + 1).bits(),
             buffer.read_only_value().bits(),
             "buffer read-only at slot {}",
             index + 1
         );
         assert_eq!(
-            slots[index + 2].bits(),
+            slots.at(index + 2).bits(),
             buffer.modified_state_value().bits(),
             "buffer modified state at slot {}",
             index + 2
         );
         index += 3;
     }
-    assert_eq!(slots[index].bits(), lambda().bits(), "terminating lambda");
+    assert_eq!(
+        slots.at(index).bits(),
+        lambda().bits(),
+        "terminating lambda"
+    );
     assert!(
         slots[index..]
             .iter()

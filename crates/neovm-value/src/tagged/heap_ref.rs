@@ -27,10 +27,12 @@
 //!    and `with_*_mut` remain callable without `&mut HeapMut` until Phase 1c.1
 //!    migrates their callers and bans them. (`with_tagged_heap` is already
 //!    `unsafe fn` and guarded against minting `HeapRef`/`HeapMut`.)
-//! 3. **Single-slot atomic stores vs `LispValueSlice::as_slice` (Phase 1b)**:
-//!    token-free single-slot writes (`set_vector_slot`, etc.) still alias
-//!    `&[TaggedValue]` until Phase 1b replaces `as_slice` with atomic relaxed
-//!    reads.
+//! 3. **Single-slot atomic stores vs `LispValueSlice` (closed in Phase 1b)**:
+//!    `LispValueSlice` is `#[repr(transparent)]` over `[AtomicTaggedValue]`
+//!    and exposes only relaxed atomic loads (`get`, `at`, `iter`, `to_vec`)
+//!    with `as_slice()` and `Deref<Target = [TaggedValue]>` withdrawn, so
+//!    token-free single-slot atomic stores (`set_vector_slot`, etc.) do not
+//!    alias immutable `&[TaggedValue]` references under Stacked/Tree Borrows.
 //! 4. **Rooting discipline (out of scope for lifetimes)**: an unrooted `Copy`
 //!    `Value` word parked in a Rust local or struct across a safepoint is not
 //!    tracked by borrowck and requires explicit rooting (`InFlightRoots` /
@@ -139,7 +141,7 @@ mod tests {
         // SAFETY: `slot` is an initialized `VectorObj` allocated from the same
         // heap that minted `_heap`, and no sweep or bulk mutation occurs
         // during `'h`.
-        unsafe { LispValueSlice::from_slice((*slot).data.as_slice()) }
+        unsafe { (*slot).data.as_value_slice() }
     }
 
     #[test]
@@ -188,7 +190,7 @@ mod tests {
             let h = heap.heap_ref();
             let items = borrow_vector_slot(slot, h);
             assert_eq!(items.len(), 4);
-            assert_eq!(items[0], Value::fixnum(10));
+            assert_eq!(items.at(0), Value::fixnum(10));
 
             // 64 KiB / 64 B = 1,024 vector slots per page; 1,100 allocations
             // force at least one new vector arena page to be opened while
@@ -197,7 +199,7 @@ mod tests {
             for i in 0..1100_i64 {
                 let _v = unsafe {
                     crate::tagged::gc::with_tagged_heap(|th| {
-                        th.alloc_vector(vec![Value::fixnum(i), items[1]])
+                        th.alloc_vector(vec![Value::fixnum(i), items.at(1)])
                     })
                 };
                 allocated += 1;
@@ -213,7 +215,7 @@ mod tests {
 
             // Re-read the strict-provenance slice after page growth.
             assert_eq!(
-                items.as_slice(),
+                items,
                 &[
                     Value::fixnum(10),
                     Value::fixnum(20),
@@ -226,14 +228,60 @@ mod tests {
         drop(heap);
     }
 
-    /// Public `Value` API test for `vector_data_in`, token-free vector/cons/
-    /// string allocations (substituting for `neovm-eval`'s bytecode allocator),
-    /// and sequential `HeapMut` `replace_vector_data_in`.
+    /// Strict-provenance Phase 1b Miri SB+TB test: interleaves a live
+    /// `&'h LispValueSlice` borrow (with zero integer-to-pointer cast) with
+    /// single-slot atomic stores (`LispValueVec::store_atomic`) on the same
+    /// vector, proving `LispValueSlice([AtomicTaggedValue])` + relaxed loads
+    /// never alias immutable `&[TaggedValue]` under Stacked or Tree Borrows.
+    #[test]
+    fn miri_heap_ref_strict_provenance_interleaved_slot_store() {
+        let heap = crate::tagged::gc::AliasableBox::new(TaggedHeap::new());
+        // SAFETY: `heap.root()` is the single AliasableBox provenance root;
+        // `TaggedHeap::drop` clears the TLS slot before freeing the heap.
+        unsafe { crate::tagged::gc::set_tagged_heap_root(heap.root()) };
+
+        let slot: *mut VectorObj = unsafe {
+            crate::tagged::gc::with_tagged_heap(|h| {
+                h.alloc_vector_raw(vec![Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)])
+            })
+        };
+
+        {
+            let h = heap.heap_ref();
+            let items = borrow_vector_slot(slot, h);
+            assert_eq!(items.at(0), Value::fixnum(1));
+            assert_eq!(items.get(1), Some(Value::fixnum(2)));
+
+            // Interleave single-slot atomic stores while `items` stays live.
+            // SAFETY: `slot` is live and `store_atomic` publishes through the
+            // interior-mutable `AtomicTaggedValue` cell without replacing the
+            // backing `Vec`.
+            assert!(unsafe { (*slot).data.store_atomic(0, Value::fixnum(99)) });
+            assert!(unsafe { (*slot).data.store_atomic(2, Value::fixnum(77)) });
+
+            // Re-read through the same live `LispValueSlice` via relaxed loads.
+            assert_eq!(items.at(0), Value::fixnum(99));
+            assert_eq!(items.get(1), Some(Value::fixnum(2)));
+            assert_eq!(items.last(), Some(Value::fixnum(77)));
+            assert_eq!(
+                items.iter().collect::<Vec<_>>(),
+                vec![Value::fixnum(99), Value::fixnum(2), Value::fixnum(77)]
+            );
+        }
+
+        drop(heap);
+    }
+
+    /// Public `Value` API test for `vector_data_in`, interleaved single-slot
+    /// `set_vector_slot`, token-free vector/cons/string allocations, and
+    /// sequential `HeapMut` `replace_vector_data_in`.
     ///
     /// Note: `Value::vector_data_in` recovers the pointer from a tagged `usize`
     /// (`as_veclike_ptr`), so Miri assigns wildcard provenance on that read.
-    /// Strict non-wildcard SB/TB aliasing across page growth is tested by
-    /// [`miri_heap_ref_strict_provenance_survives_page_growth`].
+    /// Strict non-wildcard SB/TB aliasing across page growth and interleaved
+    /// slot stores is tested by
+    /// [`miri_heap_ref_strict_provenance_survives_page_growth`] and
+    /// [`miri_heap_ref_strict_provenance_interleaved_slot_store`].
     #[test]
     fn miri_heap_ref_vector_slice_survives_allocation() {
         let mut heap = crate::tagged::gc::AliasableBox::new(TaggedHeap::new());
@@ -252,25 +300,26 @@ mod tests {
             let h = heap.heap_ref();
             let items = v.vector_data_in(h).expect("vector");
             assert_eq!(items.len(), 4);
-            assert_eq!(items[0], Value::fixnum(10));
+            assert_eq!(items.at(0), Value::fixnum(10));
+
+            // Phase 1b: single-slot store while `items: &LispValueSlice` is live.
+            assert!(v.set_vector_slot(1, Value::fixnum(25)));
+            assert_eq!(items.at(1), Value::fixnum(25));
 
             let copy_vec = Value::vector(items.to_vec());
-            let pair = Value::cons(items[0], items[3]);
+            let pair = Value::cons(items.at(0), items.at(3));
             let s = Value::string("allocated while vector slice live");
 
             assert_eq!(
-                items.as_slice(),
+                items,
                 &[
                     Value::fixnum(10),
-                    Value::fixnum(20),
+                    Value::fixnum(25),
                     Value::fixnum(30),
                     Value::fixnum(40),
                 ]
             );
-            assert_eq!(
-                copy_vec.vector_data_in(h).expect("copy").as_slice(),
-                items.as_slice()
-            );
+            assert_eq!(copy_vec.vector_data_in(h).expect("copy"), items);
             assert_eq!(pair.cons_car(), Value::fixnum(10));
             assert_eq!(pair.cons_cdr(), Value::fixnum(40));
             assert_eq!(
@@ -283,7 +332,7 @@ mod tests {
             let mut hm = heap.heap_mut();
             assert!(v.replace_vector_data_in(&mut hm, vec![Value::fixnum(99)]));
             let updated = v.vector_data_in(hm.as_ref()).expect("updated vector");
-            assert_eq!(updated.as_slice(), &[Value::fixnum(99)]);
+            assert_eq!(updated, &[Value::fixnum(99)]);
         }
 
         drop(heap);

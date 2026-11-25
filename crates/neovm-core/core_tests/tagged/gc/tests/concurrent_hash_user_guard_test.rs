@@ -228,6 +228,6 @@ fn tier_h_user_test_guards_inhibit_gc_without_cow_and_restore_after_all_exits() 
         );
         let record = inserted.as_record_data().unwrap();
         assert_eq!(record.len(), 1);
-        assert_eq!(record[0], TaggedValue::fixnum(8091));
+        assert_eq!(record.at(0), TaggedValue::fixnum(8091));
     }
 }

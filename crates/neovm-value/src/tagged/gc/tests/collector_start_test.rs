@@ -92,7 +92,7 @@ fn concurrent_start_refusal(policy: ClaimPolicy) {
         assert!(heap.owns_heap_value_for_test(child));
         assert_eq!(child.as_str_owned().unwrap(), "inline worker retained");
         assert_eq!(
-            root.as_vector_data().unwrap()[0].cons_car(),
+            root.as_vector_data().unwrap().at(0).cons_car(),
             TaggedValue::fixnum(1535)
         );
     }

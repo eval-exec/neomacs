@@ -267,7 +267,7 @@ fn collect_constant_symbols(constant: Value, out: &mut Vec<SymId>, budget: &mut 
             }
             ValueKind::Veclike(VecLikeType::Vector) => {
                 if let Some(items) = value.as_vector_data() {
-                    stack.extend(items.iter().copied());
+                    stack.extend(items.iter());
                 }
             }
             _ => {}

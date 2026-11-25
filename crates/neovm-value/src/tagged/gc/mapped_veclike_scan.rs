@@ -357,7 +357,10 @@ mod tests {
 
     #[test]
     fn mapped_record_capture_survives_enum_promotion_and_bulk_replacement() {
-        let image = vec![TaggedValue::fixnum(11), TaggedValue::fixnum(12)];
+        let image = vec![
+            crate::tagged::header::AtomicTaggedValue::new(TaggedValue::fixnum(11)),
+            crate::tagged::header::AtomicTaggedValue::new(TaggedValue::fixnum(12)),
+        ];
         let mut heap = TaggedHeap::new();
         let record = heap.alloc_record(Vec::new());
         let header = record.as_veclike_ptr().unwrap();
@@ -379,7 +382,10 @@ mod tests {
         }
         // SAFETY: promotion/replacement left the captured image untouched.
         let (children, deferred) = unsafe { scan_fixture(&snapshot) };
-        assert_eq!(children, image);
+        assert_eq!(
+            children,
+            vec![TaggedValue::fixnum(11), TaggedValue::fixnum(12)]
+        );
         assert!(deferred.is_empty());
     }
 

@@ -67,7 +67,7 @@ fn minor_seeds_symbol_cells_and_buffer_local_slots() {
     assert_eq!(symbol_root.cons_car(), Value::fixnum(11));
     assert_eq!(symbol_root.cons_cdr(), Value::fixnum(22));
     assert_eq!(
-        local_root.as_vector_data().unwrap().as_slice(),
+        local_root.as_vector_data().unwrap(),
         &[Value::fixnum(33), Value::fixnum(44)]
     );
     assert!(context.tagged_heap().value_is_old_for_test(symbol_root));
@@ -85,10 +85,7 @@ fn minor_seeds_vm_and_specpdl_root_frames() {
     context.push_vm_frame_root(vm_payload);
 
     run_minor(&mut context);
-    assert_eq!(
-        vm_payload.as_vector_data().unwrap().as_slice(),
-        &[Value::fixnum(37)]
-    );
+    assert_eq!(vm_payload.as_vector_data().unwrap(), &[Value::fixnum(37)]);
     assert_eq!(spec_payload.cons_car(), Value::fixnum(41));
     assert!(context.tagged_heap().value_is_old_for_test(vm_payload));
     assert!(context.tagged_heap().value_is_old_for_test(spec_payload));

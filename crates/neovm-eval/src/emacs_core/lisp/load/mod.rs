@@ -4372,7 +4372,7 @@ fn collect_value_symbol_names(
                 return;
             }
             if let Some(items) = value.as_vector_data() {
-                for item in items.iter().copied() {
+                for item in items.iter() {
                     collect_value_symbol_names(item, symbol_names, seen);
                 }
             }
@@ -4383,7 +4383,7 @@ fn collect_value_symbol_names(
                 return;
             }
             if let Some(slots) = value.as_record_data().or_else(|| value.closure_slots()) {
-                for slot in slots.iter().copied() {
+                for slot in slots.iter() {
                     collect_value_symbol_names(slot, symbol_names, seen);
                 }
             }

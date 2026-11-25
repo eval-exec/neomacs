@@ -71,9 +71,7 @@ impl TextHost for Context {
             let font_of = gstring
                 .as_vector_data()
                 .and_then(|slots| slots.first())
-                .and_then(|header| header.as_vector_data())
-                .and_then(|header| header.first())
-                .copied();
+                .and_then(|header| header.as_vector_data()?.first());
             !font_of.is_some_and(|cached| neovm_value::value::eq_value(&cached, &font))
         });
     }

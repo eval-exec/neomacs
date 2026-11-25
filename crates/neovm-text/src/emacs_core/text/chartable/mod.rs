@@ -617,7 +617,7 @@ fn encode_uniprop_value_run_length(
         .and_then(|values| {
             values
                 .iter()
-                .position(|entry| eq_value_swp(entry, &value, mode == SymbolMode::Positioned))
+                .position(|entry| eq_value_swp(&entry, &value, mode == SymbolMode::Positioned))
         });
     match found {
         Some(index) => Ok(Value::fixnum(index as i64)),

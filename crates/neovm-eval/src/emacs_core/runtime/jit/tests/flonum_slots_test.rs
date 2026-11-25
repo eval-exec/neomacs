@@ -215,8 +215,12 @@ fn aliases_of_one_result_are_one_object() {
     );
     assert_eq!(allocated, 1);
     let slots = v.as_vector_data().expect("vector");
-    assert_eq!(slots[0].bits(), slots[1].bits(), "one object in both slots");
-    assert_eq!(float_of(slots[0]), 3.0);
+    assert_eq!(
+        slots.at(0).bits(),
+        slots.at(1).bits(),
+        "one object in both slots"
+    );
+    assert_eq!(float_of(slots.at(0)), 3.0);
 
     // (lambda (a b) (let ((x (* a b))) (eq x x)))
     let eq_self = float_fn(

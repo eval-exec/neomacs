@@ -42,7 +42,7 @@ fn gc_tls_ownership_terminal_values_survive_owner_collection_and_reactivation() 
             .bits(),
         expected[1]
     );
-    assert_eq!(payload.as_vector_data().unwrap()[0].bits(), expected[2]);
+    assert_eq!(payload.as_vector_data().unwrap().at(0).bits(), expected[2]);
     assert_eq!(
         child.as_utf8_str().unwrap(),
         "terminal payload belongs to its Context"

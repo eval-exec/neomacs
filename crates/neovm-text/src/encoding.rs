@@ -63,7 +63,7 @@ fn display_table_replacement_width(disp: Value) -> Option<usize> {
     Some(
         items
             .iter()
-            .filter_map(|item| display_glyph_character(*item))
+            .filter_map(display_glyph_character)
             .map(|character| char_width_for_code_without_display_table(i64::from(character.code())))
             .sum(),
     )
@@ -191,7 +191,7 @@ impl<'ctx, H: TextHost> CharacterWidthPolicy<'ctx, H> {
             // display glyph with CHARACTER_WIDTH, without recursive remapping.
             return glyphs
                 .iter()
-                .filter_map(|glyph| display_glyph_character(*glyph))
+                .filter_map(display_glyph_character)
                 .map(|character| self.character_width(character.code()))
                 .sum();
         }

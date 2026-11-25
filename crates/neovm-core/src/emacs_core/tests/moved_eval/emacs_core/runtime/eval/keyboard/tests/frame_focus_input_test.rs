@@ -33,9 +33,9 @@ fn native_nonkey_frame_switch_deferral_preserves_its_origin() {
     {
         let events = sequence.as_vector_data().expect("frame-switch sequence");
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].cons_car(), Value::symbol("switch-frame"));
+        assert_eq!(events.at(0).cons_car(), Value::symbol("switch-frame"));
         assert_eq!(
-            events[0].cons_cdr().cons_car(),
+            events.at(0).cons_cdr().cons_car(),
             Value::make_frame(fixture.second.0)
         );
     }
@@ -120,7 +120,7 @@ impl FocusFixture {
         {
             let events = sequence.as_vector_data().expect("symbolic input sequence");
             assert_eq!(events.len(), 1, "frame switch must precede its key");
-            let event = events[0];
+            let event = events.at(0);
             assert!(event.is_cons(), "expected a switch-frame event");
             assert_eq!(event.cons_car(), Value::symbol("switch-frame"));
             assert_eq!(event.cons_cdr().cons_car(), Value::make_frame(target.0));
@@ -154,7 +154,7 @@ impl FocusFixture {
             .eval_str("(setq issue395-input-sequence (read-key-sequence-vector nil))")
             .unwrap();
         assert_eq!(
-            key.as_vector_data().unwrap().as_slice(),
+            key.as_vector_data().unwrap(),
             &[Value::fixnum(character as i64)],
             "the original key must be delivered exactly once after selection"
         );

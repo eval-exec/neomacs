@@ -1363,10 +1363,74 @@ pub(crate) fn is_font(val: &Value) -> bool {
     is_font_spec(val) || is_font_entity(val) || is_font_object(val)
 }
 
-pub(crate) fn font_value_fields(value: &Value) -> Option<&[Value]> {
+#[derive(Clone, Copy)]
+pub(crate) enum FontValueFields<'a> {
+    Vector(&'a neovm_value::tagged::header::LispValueSlice),
+    Opened(&'a [Value]),
+}
+
+impl<'a> FontValueFields<'a> {
+    #[inline]
+    pub(crate) fn len(self) -> usize {
+        match self {
+            Self::Vector(slots) => slots.len(),
+            Self::Opened(slots) => slots.len(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn at(self, index: usize) -> Value {
+        match self {
+            Self::Vector(slots) => slots.at(index),
+            Self::Opened(slots) => slots[index],
+        }
+    }
+
+    #[inline]
+    pub(crate) fn to_vec(self) -> Vec<Value> {
+        match self {
+            Self::Vector(slots) => slots.to_vec(),
+            Self::Opened(slots) => slots.to_vec(),
+        }
+    }
+}
+
+impl<'a> From<&'a [Value]> for FontValueFields<'a> {
+    #[inline]
+    fn from(slots: &'a [Value]) -> Self {
+        Self::Opened(slots)
+    }
+}
+
+impl<'a> From<&'a Vec<Value>> for FontValueFields<'a> {
+    #[inline]
+    fn from(slots: &'a Vec<Value>) -> Self {
+        Self::Opened(slots.as_slice())
+    }
+}
+
+impl<'a> From<&'a neovm_value::tagged::header::LispValueVec> for FontValueFields<'a> {
+    #[inline]
+    fn from(slots: &'a neovm_value::tagged::header::LispValueVec) -> Self {
+        Self::Opened(slots.as_slice())
+    }
+}
+
+impl<'a> From<&'a neovm_value::tagged::header::LispValueSlice> for FontValueFields<'a> {
+    #[inline]
+    fn from(slots: &'a neovm_value::tagged::header::LispValueSlice) -> Self {
+        Self::Vector(slots)
+    }
+}
+
+pub(crate) fn font_value_fields(value: &Value) -> Option<FontValueFields<'_>> {
     match value.kind() {
-        ValueKind::Veclike(VecLikeType::Vector) => value.as_vector_data().map(|v| &v[..]),
-        ValueKind::Veclike(VecLikeType::Font) => OpenedFont::decode(value).map(OpenedFont::fields),
+        ValueKind::Veclike(VecLikeType::Vector) => {
+            value.as_vector_data().map(FontValueFields::Vector)
+        }
+        ValueKind::Veclike(VecLikeType::Font) => {
+            OpenedFont::decode(value).map(|font| FontValueFields::Opened(font.fields()))
+        }
         _ => None,
     }
 }
@@ -1380,12 +1444,13 @@ pub(crate) fn font_value_fields(value: &Value) -> Option<&[Value]> {
 ///
 /// Property lookup is strict: keys only match if they are exactly equal to
 /// `prop` (keyword vs symbol distinction is preserved).
-fn font_vector_get(vec_elems: &[Value], prop: &Value) -> Value {
+fn font_vector_get<'a>(vec_elems: impl Into<FontValueFields<'a>>, prop: &Value) -> Value {
+    let vec_elems = vec_elems.into();
     // Skip the tag at index 0; scan remaining pairs.
     let mut i = 1;
     while i + 1 < vec_elems.len() {
-        if vec_elems[i] == *prop {
-            return vec_elems[i + 1];
+        if vec_elems.at(i) == *prop {
+            return vec_elems.at(i + 1);
         }
         i += 2;
     }
@@ -1394,11 +1459,15 @@ fn font_vector_get(vec_elems: &[Value], prop: &Value) -> Value {
 
 /// Get a property from a tagged font vector while accepting both `family` and `:family`
 /// style keys, and both keyword and symbol keys.
-pub(crate) fn font_vector_get_flexible(vec_elems: &[Value], prop: &str) -> Option<Value> {
+pub(crate) fn font_vector_get_flexible<'a>(
+    vec_elems: impl Into<FontValueFields<'a>>,
+    prop: &str,
+) -> Option<Value> {
+    let vec_elems = vec_elems.into();
     let prop_norm = prop.trim_start_matches(':');
     let mut i = 1;
     while i + 1 < vec_elems.len() {
-        let key = &vec_elems[i];
+        let key = vec_elems.at(i);
         let key_text = match key.kind() {
             ValueKind::Symbol(k) => resolve_sym(k),
             _ => {
@@ -1408,7 +1477,7 @@ pub(crate) fn font_vector_get_flexible(vec_elems: &[Value], prop: &str) -> Optio
         };
         let key_norm = key_text.trim_start_matches(':');
         if key_norm == prop_norm {
-            return Some(vec_elems[i + 1]);
+            return Some(vec_elems.at(i + 1));
         }
         i += 2;
     }
@@ -1535,8 +1604,8 @@ fn xlfd_resolution_field(dpi: Option<&Value>) -> String {
     }
 }
 
-fn xlfd_fields_from_font_vector(
-    v: &[Value],
+fn xlfd_fields_from_font_vector<'a>(
+    v: impl Into<FontValueFields<'a>>,
 ) -> (
     String,
     String,
@@ -1550,6 +1619,7 @@ fn xlfd_fields_from_font_vector(
     String,
     String,
 ) {
+    let v = v.into();
     let foundry = font_vector_get_flexible(v, "foundry")
         .map(|value| font_spec_field_to_string(&value))
         .unwrap_or_else(|| "*".to_string());
@@ -4989,7 +5059,7 @@ fn font_style_gnu_code(value: Value, table: &[(i64, &[&str])]) -> Option<i64> {
 /// window sizing does the same.
 fn font_spec_pixel_size(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    spec_fields: &[Value],
+    spec_fields: FontValueFields<'_>,
 ) -> Option<i64> {
     let size = font_vector_get_flexible(spec_fields, "size").filter(|value| !value.is_nil())?;
     if let Some(pixels) = size.as_fixnum() {
@@ -5022,8 +5092,8 @@ fn font_spec_pixel_size(
 /// also rejects a different positive entity size.
 fn font_score_is_zero(
     eval: &mut neovm_eval::emacs_core::eval::Context,
-    spec_fields: &[Value],
-    font_fields: &[Value],
+    spec_fields: FontValueFields<'_>,
+    font_fields: FontValueFields<'_>,
 ) -> bool {
     for (key, table) in [
         ("weight", FONT_WEIGHT_STYLE_TABLE),
@@ -5293,30 +5363,33 @@ pub(crate) fn font_shape_gstring(
     }
     if !args[0]
         .as_vector_data()
-        .expect("validated glyph-string must be a vector")[1]
+        .expect("validated glyph-string must be a vector")
+        .at(1)
         .is_nil()
     {
         // GNU: LGSTRING_ID non-nil — already shaped (or cached).
         return Ok(args[0]);
     }
-    let header = args[0]
+    let header_value = args[0]
         .as_vector_data()
-        .expect("validated glyph-string must be a vector")[0]
+        .expect("validated glyph-string must be a vector")
+        .at(0);
+    let header = header_value
         .as_vector_data()
-        .expect("validated gstring header must be a vector")
-        .clone();
+        .expect("validated gstring header must be a vector");
     // GNU `Ffont_shape_gstring` looks the header up in the shaped-gstring
     // cache before checking that the header names a font object
     // (src/font.c:4628-4634).
-    if let Some(key) = neovm_value::display_vocab::gstring_cache_key_from_header_slots(&header)
+    if let Some(key) = neovm_value::display_vocab::gstring_cache_key_from_header_slots(header)
         && let Some(cached) = eval.gstring_shape_cache_mut().get(&key).cloned()
     {
         return Ok(cached);
     }
-    if !is_font_object(&header[0]) {
+    let header_font = header.at(0);
+    if !is_font_object(&header_font) {
         return Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol("font-object"), header[0]],
+            vec![Value::symbol("font-object"), header_font],
         ));
     }
 
@@ -5373,11 +5446,11 @@ fn shape_gstring_with_driver(
         // character long.
         let mut covered: Option<(i64, i64)> = None;
         for index in 0..glyph_slots {
-            let glyph_slot = gstring.as_vector_data().expect("g")[2 + index].clone();
+            let glyph_slot = gstring.as_vector_data().expect("g").at(2 + index);
             let Some(glyph) = glyph_slot.as_vector_data() else {
                 break;
             };
-            let (from, to) = match (glyph[0].as_int(), glyph[1].as_int()) {
+            let (from, to) = match (glyph.at(0).as_int(), glyph.at(1).as_int()) {
                 (Some(f), Some(t)) => (f, t),
                 _ => return Ok(Value::NIL),
             };
@@ -5433,10 +5506,11 @@ fn composition_gstring_adjust_zero_width(gstring: &Value) {
                 // slot 5: compose-gstring-for-graphic reads it as an
                 // integer bearing.
                 let last = index - 1;
-                let glyph_vec = slots[last].as_vector_data().expect("glyph");
-                let own_width = glyph_vec[4].as_int().unwrap_or(0);
-                let glyph_value = slots[last].clone();
-                if glyph_vec[9].is_nil() {
+                let glyph_value = slots[last];
+                let glyph_vec = glyph_value.as_vector_data().expect("glyph");
+                let own_width = glyph_vec.at(4).as_int().unwrap_or(0);
+                let adj_slot = glyph_vec.at(9);
+                if adj_slot.is_nil() {
                     glyph_value.set_vector_slot(
                         9,
                         Value::vector(vec![
@@ -5446,7 +5520,7 @@ fn composition_gstring_adjust_zero_width(gstring: &Value) {
                         ]),
                     );
                 } else {
-                    let mut adjustment = glyph_vec[9].as_vector_data().expect("adj").to_vec();
+                    let mut adjustment = adj_slot.as_vector_data().expect("adj").to_vec();
                     adjustment[2] = Value::fixnum(adjustment[2].as_int().unwrap_or(0) + 1);
                     glyph_value.set_vector_slot(9, Value::vector(adjustment));
                 }
@@ -5464,7 +5538,7 @@ fn composition_gstring_adjust_zero_width(gstring: &Value) {
         } else {
             glyph_vec[9]
                 .as_vector_data()
-                .and_then(|adj| adj[2].as_int())
+                .and_then(|adj| adj.at(2).as_int())
                 .unwrap_or(0)
         };
         index += 1;
@@ -5478,7 +5552,7 @@ fn grow_gstring_glyphs(gstring: Value) -> Value {
         return gstring;
     };
     let glyph_len = slots.len().saturating_sub(2);
-    let mut grown = slots.as_slice().to_vec();
+    let mut grown = slots.to_vec();
     grown.extend(std::iter::repeat_n(Value::NIL, glyph_len));
     Value::vector(grown)
 }

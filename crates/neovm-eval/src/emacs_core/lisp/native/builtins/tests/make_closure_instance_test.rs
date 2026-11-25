@@ -263,11 +263,11 @@ fn make_closure_rejects_more_captures_than_constants() {
 #[test]
 fn make_closure_copies_a_mapped_prototype_pool() {
     let _ctx = Context::new(crate::test_utils::unit_runtime());
-    let image: &'static [Value] = Box::leak(
+    let image: &'static [neovm_value::tagged::header::AtomicTaggedValue] = Box::leak(
         vec![
-            Value::symbol("V0"),
-            Value::symbol("mci-mapped-1"),
-            Value::symbol("mci-mapped-2"),
+            neovm_value::tagged::header::AtomicTaggedValue::new(Value::symbol("V0")),
+            neovm_value::tagged::header::AtomicTaggedValue::new(Value::symbol("mci-mapped-1")),
+            neovm_value::tagged::header::AtomicTaggedValue::new(Value::symbol("mci-mapped-2")),
         ]
         .into_boxed_slice(),
     );
@@ -299,7 +299,7 @@ fn make_closure_copies_a_mapped_prototype_pool() {
             Value::symbol("mci-mapped-2")
         ]
     );
-    assert_eq!(image[0], Value::symbol("V0"));
+    assert_eq!(image[0].get(), Value::symbol("V0"));
     assert!(!data(proto).constants().is_owned());
 }
 

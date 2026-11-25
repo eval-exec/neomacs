@@ -571,7 +571,7 @@ pub(crate) fn lookup_in_keymap_level_impl(
                 let idx = code as usize;
                 let items = entry_car.as_vector_data().unwrap();
                 if idx < items.len() {
-                    let val = items[idx];
+                    let val = items.at(idx);
                     resolution.retain_value(entry_cdr);
                     let val = resolution.resolve(val, resolve_keyelt, symbol_mode)?;
                     if val.is_nil() {
@@ -1214,7 +1214,7 @@ pub fn for_each_keymap_element<F>(
                 for (index, binding) in items.iter().enumerate() {
                     f(KeymapElement::Binding {
                         key: Value::fixnum(index as i64),
-                        value: normalized_binding_value(*binding, symbol_mode),
+                        value: normalized_binding_value(binding, symbol_mode),
                     });
                 }
             }

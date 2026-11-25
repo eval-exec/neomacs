@@ -785,7 +785,7 @@ fn the_owned_storage_probe_answers_on_this_toolchain() {
     assert!(LispValueVec::jit_slice_offsets().is_some());
     let (offset, word) = LispValueVec::jit_owned_probe().expect("the niche is found");
     assert_eq!(offset % std::mem::size_of::<usize>(), 0);
-    let backing = [Value::T; 3];
+    let backing = [const { neovm_value::tagged::header::AtomicTaggedValue::new(Value::T) }; 3];
     let mapped = unsafe { LispValueVec::mapped(backing.as_ptr(), 3) };
     let owned = LispValueVec::owned(vec![Value::NIL; 4]);
     let read = |v: &LispValueVec| unsafe {

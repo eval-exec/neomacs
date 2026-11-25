@@ -601,7 +601,7 @@ fn concurrent_major_promotes_worker_claims_black_births_before_deferred_sweep() 
             sweep_born,
         ],
     );
-    assert_eq!(target.as_vector_data().unwrap()[0], child);
+    assert_eq!(target.as_vector_data().unwrap().at(0), child);
     assert_eq!(child.cons_car(), TaggedValue::fixnum(139));
     assert!(heap.owns_heap_value_for_test(start_string));
     assert_eq!(owner.cons_cdr(), start_vector);

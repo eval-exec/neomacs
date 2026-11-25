@@ -183,7 +183,7 @@ mod tests {
             .unwrap();
         assert_eq!(retained.bits(), old_operand.bits());
         assert_eq!(
-            retained.as_vector_data().unwrap().as_slice()[0].as_utf8_str(),
+            retained.as_vector_data().unwrap().at(0).as_utf8_str(),
             Some("detached original operand")
         );
         assert_eq!(

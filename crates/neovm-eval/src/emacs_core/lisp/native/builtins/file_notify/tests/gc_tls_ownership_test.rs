@@ -58,7 +58,7 @@ fn gc_tls_ownership_file_notify_roots_exclude_another_live_heap() {
     drop(first);
     let mut second = parked_second.resume_for_test().expect("resume second");
     second.gc_collect_exact();
-    assert_eq!(callback.as_vector_data().unwrap()[0], Value::fixnum(42));
+    assert_eq!(callback.as_vector_data().unwrap().at(0), Value::fixnum(42));
 }
 
 #[test]

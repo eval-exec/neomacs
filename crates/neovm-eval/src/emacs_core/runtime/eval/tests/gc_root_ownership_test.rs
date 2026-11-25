@@ -58,10 +58,10 @@ fn gc_scratch_root_slots_preserve_each_live_heaps_roots() {
     let _parked_first = first.park_for_test();
     let mut second = parked_second.resume_for_test().expect("resume second");
     second.gc_collect_exact();
-    assert_eq!(a.as_vector_data().unwrap()[0], Value::symbol("first"));
-    assert_eq!(b.as_vector_data().unwrap()[0], Value::symbol("second"));
+    assert_eq!(a.as_vector_data().unwrap().at(0), Value::symbol("first"));
+    assert_eq!(b.as_vector_data().unwrap().at(0), Value::symbol("second"));
     assert_eq!(
-        replacement.as_vector_data().unwrap()[0],
+        replacement.as_vector_data().unwrap().at(0),
         Value::symbol("replacement")
     );
     restore_scratch_gc_roots(saved);

@@ -387,30 +387,29 @@ fn composition_components_display_text(components: Value, relative_p: bool) -> O
             .map(|components| composition_chars_display_text(components.chars())),
         ValueKind::Cons => {
             let items = list_to_vec(&components)?;
-            composition_items_display_text(&items, relative_p)
+            composition_items_display_text(items.into_iter(), relative_p)
         }
         _ if components.is_vector() => {
             let items = components.as_vector_data()?;
-            composition_items_display_text(items, relative_p)
+            composition_items_display_text(items.iter(), relative_p)
         }
         _ => None,
     }
 }
 
-fn composition_items_display_text(items: &[Value], relative_p: bool) -> Option<String> {
-    if items.is_empty() {
+fn composition_items_display_text(
+    items: impl ExactSizeIterator<Item = Value>,
+    relative_p: bool,
+) -> Option<String> {
+    if items.len() == 0 {
         return Some(String::new());
     }
-    let glyphs: Vec<Value> = if relative_p {
-        items.to_vec()
-    } else {
-        if items.len().is_multiple_of(2) {
-            return None;
-        }
-        items.iter().step_by(2).copied().collect()
-    };
+    if !relative_p && items.len().is_multiple_of(2) {
+        return None;
+    }
     let mut text = String::new();
-    for item in glyphs {
+    let step = if relative_p { 1 } else { 2 };
+    for item in items.step_by(step) {
         let code = item.as_fixnum()?;
         CompositionDisplayComponent::from_code(code)?.append_visible_text(&mut text);
     }
@@ -684,7 +683,7 @@ fn composition_get_id_width(components: Value, key: &Value) -> Option<i64> {
     // (rule/altchars vectors and lists) requires an odd-length, all-fixnum key.
     let is_glyph_string = components
         .as_vector_data()
-        .is_some_and(|c| c.len() >= 2 && c[0].is_vector());
+        .is_some_and(|c| c.len() >= 2 && c.at(0).is_vector());
     if is_glyph_string {
         // Each composed glyph element must be a vector.
         if items.iter().skip(1).any(|v| !v.is_vector()) {
@@ -1036,7 +1035,8 @@ impl AutomaticCompositionRules {
                         if fields.len() != 3 {
                             continue;
                         }
-                        let Some(lookback) = fields[1]
+                        let Some(lookback) = fields
+                            .at(1)
                             .as_fixnum()
                             .and_then(|value| usize::try_from(value).ok())
                         else {
@@ -1059,10 +1059,11 @@ impl AutomaticCompositionRules {
                         // assigns the rule function's result to *gstring even
                         // when that result is nil.
                         last = None;
-                        let match_len = if fields[0].is_nil() {
+                        let pattern_value = fields.at(0);
+                        let match_len = if pattern_value.is_nil() {
                             1
                         } else {
-                            let Some(pattern) = fields[0].as_lisp_string() else {
+                            let Some(pattern) = pattern_value.as_lisp_string() else {
                                 continue;
                             };
                             let suffix = &text[byte_offsets[start]..];
@@ -1082,7 +1083,7 @@ impl AutomaticCompositionRules {
                         // GNU passes the matched rule's FUNC to
                         // `auto-composition-function` as its first
                         // argument (`autocmp_chars`, src/composite.c).
-                        let Some(gstring) = shape(start, end, fields[2]) else {
+                        let Some(gstring) = shape(start, end, fields.at(2)) else {
                             continue;
                         };
                         last = Some((start, end, gstring));
@@ -1251,7 +1252,8 @@ fn select_automatic_composition_spans(
             if fields.len() != 3 {
                 continue;
             }
-            let Some(lookback) = fields[1]
+            let Some(lookback) = fields
+                .at(1)
                 .as_fixnum()
                 .and_then(|value| usize::try_from(value).ok())
             else {
@@ -1264,10 +1266,11 @@ fn select_automatic_composition_spans(
                 continue;
             }
 
-            let match_len = if fields[0].is_nil() {
+            let pattern_value = fields.at(0);
+            let match_len = if pattern_value.is_nil() {
                 1
             } else {
-                let Some(pattern) = fields[0].as_lisp_string() else {
+                let Some(pattern) = pattern_value.as_lisp_string() else {
                     continue;
                 };
                 let suffix = &text[byte_offsets[start]..];
@@ -1419,9 +1422,11 @@ fn has_default_combining_rule<H: TextHost>(ctx: &H, code: u32) -> bool {
             return false;
         };
         fields.len() == 3
-            && fields[0].as_utf8_str() == Some("\\c.\\c^+")
-            && fields[1].as_fixnum() == Some(1)
-            && fields[2].is_symbol_named("compose-gstring-for-graphic", symbol_mode)
+            && fields.at(0).as_utf8_str() == Some("\\c.\\c^+")
+            && fields.at(1).as_fixnum() == Some(1)
+            && fields
+                .at(2)
+                .is_symbol_named("compose-gstring-for-graphic", symbol_mode)
     })
 }
 
@@ -2120,15 +2125,17 @@ pub fn composition_gstring_p<H: TextHost>(ctx: &H, value: Value) -> bool {
     if gstring.len() < 2 {
         return false;
     }
-    let Some(header) = gstring[0].as_vector_data() else {
+    let header_value = gstring.at(0);
+    let Some(header) = header_value.as_vector_data() else {
         return false;
     };
     if header.len() < 2 {
         return false;
     }
-    let valid_header_font = header[0].is_nil()
-        || header[0].is_font_object()
-        || header[0]
+    let header_font = header.at(0);
+    let valid_header_font = header_font.is_nil()
+        || header_font.is_font_object()
+        || header_font
             .as_symbol_name(symbol_mode)
             .is_some_and(|name| ctx.coding_systems().is_known_or_derived(name));
     if !valid_header_font
@@ -2138,7 +2145,8 @@ pub fn composition_gstring_p<H: TextHost>(ctx: &H, value: Value) -> bool {
     {
         return false;
     }
-    if !(gstring[1].is_nil() || gstring[1].as_int().is_some_and(|id| id >= 0)) {
+    let gstring_id = gstring.at(1);
+    if !(gstring_id.is_nil() || gstring_id.as_int().is_some_and(|id| id >= 0)) {
         return false;
     }
     gstring[2..]

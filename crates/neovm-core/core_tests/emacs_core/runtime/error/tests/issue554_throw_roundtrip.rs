@@ -80,7 +80,10 @@ fn issue554_cloned_owned_throw_roundtrip_preserves_policy_and_roots() {
             "identical tags match with either policy"
         );
         ctx.gc_collect_exact();
-        assert_eq!(thrown.value.as_vector_data().unwrap()[0], Value::fixnum(7));
+        assert_eq!(
+            thrown.value.as_vector_data().unwrap().at(0),
+            Value::fixnum(7)
+        );
         assert_eq!(thrown.tag.as_symbol_with_pos_sym(), Some(bare_tag));
         drop(roundtrip);
         let mut roots = Vec::new();

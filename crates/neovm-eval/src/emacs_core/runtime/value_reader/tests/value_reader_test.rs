@@ -682,9 +682,9 @@ fn vector_with_elements() {
     assert!(v.is_vector());
     let data = v.as_vector_data().unwrap();
     assert_eq!(data.len(), 3);
-    assert_eq!(data[0].as_fixnum(), Some(1));
-    assert_eq!(data[1].as_fixnum(), Some(2));
-    assert_eq!(data[2].as_fixnum(), Some(3));
+    assert_eq!(data.at(0).as_fixnum(), Some(1));
+    assert_eq!(data.at(1).as_fixnum(), Some(2));
+    assert_eq!(data.at(2).as_fixnum(), Some(3));
 }
 
 // ---------------------------------------------------------------------------

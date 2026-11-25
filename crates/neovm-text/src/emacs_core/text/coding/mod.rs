@@ -701,7 +701,7 @@ fn left_single_quote_display(table: Value, mode: SymbolMode) -> LeftSingleQuoteD
     let Some(elements) = entry.as_vector_data() else {
         return LeftSingleQuoteDisplay::NotAsciiBacktick;
     };
-    if elements.len() == 1 && elements[0].as_fixnum() == Some(i64::from(b'`')) {
+    if elements.len() == 1 && elements.at(0).as_fixnum() == Some(i64::from(b'`')) {
         LeftSingleQuoteDisplay::AsciiBacktick
     } else {
         LeftSingleQuoteDisplay::NotAsciiBacktick
@@ -2843,7 +2843,7 @@ fn define_time_ascii_compat(info: &CodingSystemInfo, iso_initial: Value, mode: S
             }
             let g0_ascii = iso_initial
                 .as_vector_data()
-                .and_then(|slots| slots.first().copied())
+                .and_then(|slots| slots.first())
                 .and_then(|slot| slot.as_symbol_id(mode))
                 .is_some_and(charset_ascii);
             info.ascii_compatible_p || g0_ascii
@@ -3609,7 +3609,7 @@ fn eol_vector_ref(vector: Value, request: EolConversionRequest) -> EvalResult {
             vec![vector, Value::fixnum(index)],
         ));
     }
-    Ok(data[index as usize])
+    Ok(data.at(index as usize))
 }
 
 /// `(coding-system-change-eol-conversion CODING-SYSTEM EOL-TYPE)` -- return
@@ -4178,7 +4178,6 @@ fn capture_iso2022_initial(value: Value, mode: SymbolMode) -> Value {
     Value::vector(
         slots
             .iter()
-            .copied()
             .map(|slot| capture_charset_in_value(slot, mode))
             .collect(),
     )

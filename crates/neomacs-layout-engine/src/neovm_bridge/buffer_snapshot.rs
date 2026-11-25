@@ -1092,7 +1092,8 @@ impl LayoutBufferView for LayoutBufferSnapshot {
 /// cells, and the terminal walk keeps its own `terminal.width_cols`.
 fn gstring_pixel_advance(gstring: Value) -> Option<f32> {
     let slots = gstring.as_vector_data()?;
-    let header = slots.first()?.as_vector_data()?;
+    let header_value = slots.first()?;
+    let header = header_value.as_vector_data()?;
     if !header.first().is_some_and(|font| font.is_font_object()) {
         return None;
     }
@@ -1104,8 +1105,7 @@ fn gstring_pixel_advance(gstring: Value) -> Option<f32> {
         };
         let adjustment = glyph
             .get(9)
-            .and_then(|value| value.as_vector_data())
-            .and_then(|adjustment| adjustment.get(2))
+            .and_then(|value| value.as_vector_data()?.get(2))
             .and_then(|value| value.as_int());
         total += adjustment
             .or_else(|| glyph.get(4).and_then(|value| value.as_int()))

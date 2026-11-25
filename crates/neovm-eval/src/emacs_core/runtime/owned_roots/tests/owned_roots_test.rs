@@ -74,7 +74,7 @@ fn cloned_lease_survives_exact_gc_and_retires_with_last_owner() {
     );
     assert_eq!(value.cons_car(), Value::fixnum(17));
     assert_eq!(
-        value.cons_cdr().as_vector_data().unwrap().as_slice(),
+        value.cons_cdr().as_vector_data().unwrap(),
         &[Value::fixnum(23)]
     );
     drop(pending);

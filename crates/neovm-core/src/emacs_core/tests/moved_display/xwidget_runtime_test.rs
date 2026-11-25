@@ -156,15 +156,15 @@ fn make_xwidget_builds_gnu_model_and_info_vector() {
     assert!(eval(&mut ctx, "(xwidget-live-p (car xwidget-list))").is_t());
 
     let info = eval(&mut ctx, "(xwidget-info (car xwidget-list))");
-    let slots = info
-        .as_vector_data()
-        .expect("xwidget-info vector")
-        .as_slice();
+    let slots = info.as_vector_data().expect("xwidget-info vector");
     assert_eq!(slots.len(), 4);
-    assert_eq!(slots[0], Value::symbol("webkit"));
-    assert_eq!(slots[1].as_runtime_string_owned().as_deref(), Some("Title"));
-    assert_eq!(slots[2], Value::fixnum(320));
-    assert_eq!(slots[3], Value::fixnum(200));
+    assert_eq!(slots.at(0), Value::symbol("webkit"));
+    assert_eq!(
+        slots.at(1).as_runtime_string_owned().as_deref(),
+        Some("Title")
+    );
+    assert_eq!(slots.at(2), Value::fixnum(320));
+    assert_eq!(slots.at(3), Value::fixnum(200));
 
     let listed = eval(&mut ctx, "(car (get-buffer-xwidgets (current-buffer)))");
     assert!(eq_value(&listed, &xwidget));

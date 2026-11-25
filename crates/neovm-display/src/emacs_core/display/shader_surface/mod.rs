@@ -100,14 +100,13 @@ fn parse_uniform_entry(entry: Value) -> Result<ShaderSurfaceUniformInit, neovm_v
         components[0] = scalar;
         count = 1u8;
     } else if let Some(elements) = value.as_vector_data() {
-        let elements = elements.as_slice();
         if elements.is_empty() || elements.len() > 4 {
             return Err(surface_error(format!(
                 "neomacs-surface-create: uniform {name} must have 1..=4 components"
             )));
         }
         for (slot, element) in elements.iter().enumerate() {
-            components[slot] = number_to_f32(*element).ok_or_else(|| {
+            components[slot] = number_to_f32(element).ok_or_else(|| {
                 surface_error(format!(
                     "neomacs-surface-create: uniform {name} components must be numbers"
                 ))

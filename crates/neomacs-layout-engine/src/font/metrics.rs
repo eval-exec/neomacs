@@ -1141,7 +1141,9 @@ impl FontMetricsService {
         let Some(header) = slots.first().and_then(|header| header.as_vector_data()) else {
             return GstringShapeOutcome::NotShapable;
         };
-        let Some((family, pixel_size)) = header.first().and_then(font_object_family_and_pixel_size)
+        let Some((family, pixel_size)) = header
+            .first()
+            .and_then(|font| font_object_family_and_pixel_size(&font))
         else {
             return GstringShapeOutcome::NotShapable;
         };

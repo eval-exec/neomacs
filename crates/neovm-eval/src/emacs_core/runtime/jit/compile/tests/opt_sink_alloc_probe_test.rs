@@ -151,7 +151,8 @@ fn load_fixture(ctx: &mut Context, roots: &Roots) -> Fixture {
         .symbol_value_copied("t34-o36-fixture-objects")
         .expect("loader's graph binding");
     roots.add(&[graph]);
-    let objects = graph.as_vector_data().expect("42-node graph");
+    let objects = graph.as_vector_data().expect("42-node graph").to_vec();
+    let objects = objects.as_slice();
     assert_eq!(objects.len(), oracle::OBJECTS.len());
     for (id, &spec) in oracle::OBJECTS.iter().enumerate() {
         match spec {
@@ -164,7 +165,7 @@ fn load_fixture(ctx: &mut Context, roots: &Roots) -> Fixture {
                 assert_eq!(slots.len(), 7);
                 for (slot, &target) in edges.iter().enumerate() {
                     assert_eq!(
-                        slots[slot].bits(),
+                        slots.at(slot).bits(),
                         objects[target].bits(),
                         "graph edge {id}:{slot}"
                     );
@@ -567,7 +568,7 @@ fn assert_nbody_answer(ctx: &mut Context, fixture: Fixture, system: Value, steps
         let fields = value.as_vector_data().expect("actual seven-slot body");
         assert_eq!(fields.len(), 7);
         for field in 0..7 {
-            assert_eq!(float_bits(fields[field]), slots[7 * body + field]);
+            assert_eq!(float_bits(fields.at(field)), slots[7 * body + field]);
         }
     }
     // Outside the snapshot; energy intentionally allocates Float objects.

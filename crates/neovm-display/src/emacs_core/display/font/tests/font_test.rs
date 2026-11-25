@@ -273,10 +273,11 @@ fn context_prebinds_gnu_font_style_tables() {
         .expect("font-weight-table");
     let rows = weight_table.as_vector_data().expect("weight table vector");
     assert_eq!(rows.len(), 11);
-    let ultra_light = rows[1].as_vector_data().expect("weight row");
-    assert_eq!(ultra_light[0], Value::fixnum(40));
-    assert_eq!(ultra_light[1].as_bare_symbol_name(), Some("ultra-light"));
-    assert_eq!(ultra_light[4].as_bare_symbol_name(), Some("extralight"));
+    let ultra_light_val = rows.at(1);
+    let ultra_light = ultra_light_val.as_vector_data().expect("weight row");
+    assert_eq!(ultra_light.at(0), Value::fixnum(40));
+    assert_eq!(ultra_light.at(1).as_bare_symbol_name(), Some("ultra-light"));
+    assert_eq!(ultra_light.at(4).as_bare_symbol_name(), Some("extralight"));
 
     let slant_table = eval
         .obarray_view()
@@ -284,10 +285,11 @@ fn context_prebinds_gnu_font_style_tables() {
         .expect("font-slant-table");
     let rows = slant_table.as_vector_data().expect("slant table vector");
     assert_eq!(rows.len(), 5);
-    let normal = rows[2].as_vector_data().expect("slant row");
-    assert_eq!(normal[0], Value::fixnum(100));
-    assert_eq!(normal[1].as_bare_symbol_name(), Some("normal"));
-    assert_eq!(normal[3].as_bare_symbol_name(), Some("unspecified"));
+    let normal_val = rows.at(2);
+    let normal = normal_val.as_vector_data().expect("slant row");
+    assert_eq!(normal.at(0), Value::fixnum(100));
+    assert_eq!(normal.at(1).as_bare_symbol_name(), Some("normal"));
+    assert_eq!(normal.at(3).as_bare_symbol_name(), Some("unspecified"));
 
     let width_table = eval
         .obarray_view()
@@ -295,10 +297,11 @@ fn context_prebinds_gnu_font_style_tables() {
         .expect("font-width-table");
     let rows = width_table.as_vector_data().expect("width table vector");
     assert_eq!(rows.len(), 9);
-    let normal = rows[4].as_vector_data().expect("width row");
-    assert_eq!(normal[0], Value::fixnum(100));
-    assert_eq!(normal[1].as_bare_symbol_name(), Some("normal"));
-    assert_eq!(normal[4].as_bare_symbol_name(), Some("unspecified"));
+    let normal_val = rows.at(4);
+    let normal = normal_val.as_vector_data().expect("width row");
+    assert_eq!(normal.at(0), Value::fixnum(100));
+    assert_eq!(normal.at(1).as_bare_symbol_name(), Some("normal"));
+    assert_eq!(normal.at(4).as_bare_symbol_name(), Some("unspecified"));
 }
 
 #[test]
@@ -619,7 +622,7 @@ fn named_font_info_opens_thin_only_family_without_weakening_find_font() {
         .as_vector_data()
         .expect("named opening must substitute the available Thin face");
     assert_eq!(fields.len(), 14);
-    assert!(fields[3].as_int().is_some_and(|height| height > 0));
+    assert!(fields.at(3).as_int().is_some_and(|height| height > 0));
 }
 
 struct NativeFontEntityDisplayHost {
@@ -771,9 +774,9 @@ fn font_info_opens_a_native_entity_without_a_file() {
     let values = info
         .as_vector_data()
         .expect("native entity must produce a font-info vector");
-    assert_eq!(values[2].as_int(), Some(1));
-    assert_eq!(values[3].as_int(), Some(2));
-    assert!(values[12].is_nil());
+    assert_eq!(values.at(2).as_int(), Some(1));
+    assert_eq!(values.at(3).as_int(), Some(2));
+    assert!(values.at(12).is_nil());
 
     let request = request.borrow();
     let request = request.as_ref().expect("native entity probe request");
@@ -848,10 +851,10 @@ fn find_font_eval_requests_exact_registry_match_from_display_host() {
     );
     let info = font_info(&mut eval, vec![font]).unwrap();
     let values = info.as_vector_data().expect("font info vector");
-    assert_eq!(values[2].as_int(), Some(1));
-    assert_eq!(values[3].as_int(), Some(2));
+    assert_eq!(values.at(2).as_int(), Some(1));
+    assert_eq!(values.at(3).as_int(), Some(2));
     assert_eq!(
-        values[12].as_utf8_str(),
+        values.at(12).as_utf8_str(),
         Some("/tmp/NotoSansMonoCJKsc-Regular.otf")
     );
 
@@ -1627,7 +1630,7 @@ fn font_at_eval_prefers_backend_selected_font_match_when_available() {
     let info = font_info(&mut eval, vec![font]).unwrap();
     let values = info.as_vector_data().expect("font info vector");
     assert_eq!(
-        values[12].as_utf8_str(),
+        values.at(12).as_utf8_str(),
         Some("/tmp/NotoSansMonoCJKsc-Regular.otf")
     );
 }
@@ -2135,19 +2138,23 @@ fn query_font_uses_stored_metrics_when_file_probe_is_unavailable() {
 
     assert_eq!(values.len(), 9);
     assert!(
-        values[0]
+        values
+            .at(0)
             .as_utf8_str()
             .is_some_and(|name| name.contains("-17-"))
     );
     assert_eq!(
-        values[1].as_utf8_str(),
+        values.at(1).as_utf8_str(),
         Some("/tmp/NotoSansMonoCJKsc-Regular.otf")
     );
     for (index, expected) in [(2, 17), (3, 19), (4, 13), (5, 5), (6, 11), (7, 12)] {
-        assert_eq!(values[index].as_int(), Some(expected), "slot {index}");
+        assert_eq!(values.at(index).as_int(), Some(expected), "slot {index}");
     }
-    assert_eq!(values[8].cons_car().as_bare_symbol_name(), Some("opentype"));
-    assert!(values[8].cons_cdr().cons_car().is_cons());
+    assert_eq!(
+        values.at(8).cons_car().as_bare_symbol_name(),
+        Some("opentype")
+    );
+    assert!(values.at(8).cons_cdr().cons_car().is_cons());
 
     let err = query_font(&mut eval, vec![Value::NIL]).unwrap_err();
     match err.into_kind() {
@@ -2220,9 +2227,9 @@ fn query_font_uses_opened_object_metrics_without_a_font_file() {
     let query = query_font(&mut eval, vec![font]).unwrap();
     let values = query.as_vector_data().expect("query-font vector");
 
-    assert!(values[1].is_nil(), "a memory font may have no filename");
+    assert!(values.at(1).is_nil(), "a memory font may have no filename");
     for (index, expected) in [(2, 17), (3, 19), (4, 15), (5, 6), (6, 8), (7, 10)] {
-        assert_eq!(values[index].as_int(), Some(expected), "slot {index}");
+        assert_eq!(values.at(index).as_int(), Some(expected), "slot {index}");
     }
 }
 
@@ -2297,7 +2304,7 @@ fn opened_font_retains_exact_backend_identity_and_variations() {
         .expect("opened font payload")
         .info_vector();
     let values = info.as_vector_data().expect("font info vector");
-    assert_eq!(values[1].as_utf8_str(), Some("Variable Sans Semibold"));
+    assert_eq!(values.at(1).as_utf8_str(), Some("Variable Sans Semibold"));
     assert_eq!(
         font_get(vec![object, Value::keyword("postscript-name")])
             .unwrap()
@@ -2340,7 +2347,7 @@ fn font_info_eval_reports_font_vector_file_slot_on_live_gui_frame() {
     let values = info.as_vector_data().expect("font info vector");
 
     assert_eq!(values.len(), 14);
-    assert_eq!(values[12].as_utf8_str(), Some("/tmp/NotoSans.ttf"));
+    assert_eq!(values.at(12).as_utf8_str(), Some("/tmp/NotoSans.ttf"));
 }
 
 #[test]
@@ -2441,15 +2448,16 @@ fn font_shape_gstring_fills_slots_through_the_installed_shaper() {
     assert_ne!(shaped.bits(), gstring.bits(), "GNU returns the cached copy");
     let slots = shaped.as_vector_data().expect("gstring vector");
     assert!(
-        slots[1].as_int().is_some(),
+        slots.at(1).as_int().is_some(),
         "the cached copy carries its shape id"
     );
     assert_eq!(slots.len(), 3, "the copy holds exactly the shaped glyphs");
-    let glyph = slots[2].as_vector_data().expect("first glyph slot");
-    assert_eq!(glyph[0], Value::fixnum(0), "from");
-    assert_eq!(glyph[1], Value::fixnum(1), "to");
-    assert_eq!(glyph[3], Value::fixnum(0xF1), "the shaper's glyph code");
-    assert_eq!(glyph[4], Value::fixnum(13), "the shaper's advance");
+    let glyph_val = slots.at(2);
+    let glyph = glyph_val.as_vector_data().expect("first glyph slot");
+    assert_eq!(glyph.at(0), Value::fixnum(0), "from");
+    assert_eq!(glyph.at(1), Value::fixnum(1), "to");
+    assert_eq!(glyph.at(3), Value::fixnum(0xF1), "the shaper's glyph code");
+    assert_eq!(glyph.at(4), Value::fixnum(13), "the shaper's advance");
 }
 
 #[test]
@@ -2513,16 +2521,25 @@ fn font_shape_gstring_accepts_several_glyphs_in_one_cluster() {
         "a multi-glyph cluster whose to spans its characters must shape"
     );
     let slots = shaped.as_vector_data().expect("gstring vector");
-    let first = slots[2].as_vector_data().expect("first glyph");
-    let second = slots[3].as_vector_data().expect("second glyph");
-    let third = slots[4].as_vector_data().expect("third glyph");
-    assert_eq!((first[0].as_int(), first[1].as_int()), (Some(0), Some(1)));
+    let first_val = slots.at(2);
+    let first = first_val.as_vector_data().expect("first glyph");
+    let second_val = slots.at(3);
+    let second = second_val.as_vector_data().expect("second glyph");
+    let third_val = slots.at(4);
+    let third = third_val.as_vector_data().expect("third glyph");
     assert_eq!(
-        (second[0].as_int(), second[1].as_int()),
+        (first.at(0).as_int(), first.at(1).as_int()),
+        (Some(0), Some(1))
+    );
+    assert_eq!(
+        (second.at(0).as_int(), second.at(1).as_int()),
         (Some(0), Some(1)),
         "same cluster keeps the same from/to"
     );
-    assert_eq!((third[0].as_int(), third[1].as_int()), (Some(2), Some(2)));
+    assert_eq!(
+        (third.at(0).as_int(), third.at(1).as_int()),
+        (Some(2), Some(2))
+    );
 }
 
 #[test]
@@ -2583,16 +2600,21 @@ fn font_shape_gstring_adjusts_zero_width_clusters() {
         .expect("zero-width shaping should succeed");
     let slots = shaped.as_vector_data().expect("gstring vector");
     for index in [2usize, 3usize] {
-        let glyph = slots[index].as_vector_data().expect("glyph slot");
+        let glyph_val = slots.at(index);
+        let glyph = glyph_val.as_vector_data().expect("glyph slot");
         // GNU's LGLYPH layout (lisp/composite.el `lglyph-adjustment`) is
         // index 9; slots 5..8 are lbearing/rbearing/ascent/descent.
-        assert!(glyph[5].is_nil(), "slot 5 is LBEARING, not the adjustment");
-        let adjustment = glyph[9]
+        assert!(
+            glyph.at(5).is_nil(),
+            "slot 5 is LBEARING, not the adjustment"
+        );
+        let adj_val = glyph.at(9);
+        let adjustment = adj_val
             .as_vector_data()
             .expect("zero-width cluster must get its last glyph's ADJUSTMENT set to [0 0 width+1]");
-        assert_eq!(adjustment[0], Value::fixnum(0));
-        assert_eq!(adjustment[1], Value::fixnum(0));
-        assert_eq!(adjustment[2], Value::fixnum(1), "width + 1");
+        assert_eq!(adjustment.at(0), Value::fixnum(0));
+        assert_eq!(adjustment.at(1), Value::fixnum(0));
+        assert_eq!(adjustment.at(2), Value::fixnum(1), "width + 1");
     }
 }
 
@@ -2648,7 +2670,7 @@ fn font_shape_gstring_caches_by_header_and_returns_the_cached_gstring() {
         "the cache hit must return the cached gstring"
     );
     assert!(
-        second.as_vector_data().expect("g")[1].as_int().is_some(),
+        second.as_vector_data().expect("g").at(1).as_int().is_some(),
         "the cached gstring carries its shape id"
     );
     // The driver ran exactly once: shape both calls and count the driver
@@ -2725,14 +2747,18 @@ fn font_shape_gstring_cache_key_separates_same_family_and_pixel_weight() {
         "the face weight is part of the cache key"
     );
     let width_of = |gstring: Value| {
-        gstring.as_vector_data().expect("gstring")[2]
+        gstring
             .as_vector_data()
-            .expect("glyph")[4]
+            .expect("gstring")
+            .at(2)
+            .as_vector_data()
+            .expect("glyph")
+            .at(4)
             .as_int()
     };
     assert_eq!(width_of(regular_gstring), Some(7));
     assert_eq!(width_of(bold_gstring), Some(9));
-    let header_of = |gstring: Value| gstring.as_vector_data().expect("gstring")[0];
+    let header_of = |gstring: Value| gstring.as_vector_data().expect("gstring").at(0);
     let regular_hit = eval
         .composition_gstring_cache_lookup(header_of(regular_gstring))
         .expect("regular header must hit its own entry");
@@ -2875,11 +2901,16 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
             .as_vector_data()
             .expect("cached gstring")
             .first()
-            .and_then(|header| header.as_vector_data())
-            .expect("cached header")
-            .iter()
-            .map(|value| value.bits())
-            .collect::<Vec<_>>();
+            .and_then(|header| {
+                Some(
+                    header
+                        .as_vector_data()?
+                        .iter()
+                        .map(|value| value.bits())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .expect("cached header");
         let mut pending = vec![cached];
         let mut snapshots = Vec::new();
         while let Some(vector) = pending.pop() {
@@ -2888,7 +2919,7 @@ fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
                 identity_bits: vector.bits(),
                 slot_bits: slots.iter().map(|slot| slot.bits()).collect(),
             });
-            pending.extend(slots.iter().copied().filter(|slot| slot.is_vector()));
+            pending.extend(slots.iter().filter(|slot| slot.is_vector()));
         }
         (cached.bits(), header_bits, snapshots)
     });
@@ -3035,7 +3066,7 @@ fn font_shape_gstring_grows_the_glyph_vector_when_the_shaper_needs_room() {
     let shaped = font_shape_gstring(&mut eval, vec![gstring, Value::NIL])
         .expect("growing retry should not signal");
     let slots = shaped.as_vector_data().expect("gstring vector");
-    assert!(!slots[2].is_nil(), "shaped after growing");
+    assert!(!slots.at(2).is_nil(), "shaped after growing");
 }
 
 #[test]
@@ -3109,8 +3140,9 @@ fn assert_font_shape_driver_survives(failure: ShapeFailure) {
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     let font = build_font_object(&RuntimeFace::new("default"));
     eval.font_driver = Some(StubFontDriver::shape(move |_eval, gstring, _direction| {
-        let header = gstring.as_vector_data().expect("gstring")[0];
-        let failing = header.as_vector_data().expect("header")[1] == Value::fixnum(i64::from(b'b'));
+        let header = gstring.as_vector_data().expect("gstring").at(0);
+        let failing =
+            header.as_vector_data().expect("header").at(1) == Value::fixnum(i64::from(b'b'));
         let (from, to) = if failing {
             match failure {
                 ShapeFailure::Refused => return GstringShapeOutcome::NotShapable,
@@ -3163,11 +3195,11 @@ fn assert_font_shape_driver_survives(failure: ShapeFailure) {
     );
     let slots = following.as_vector_data().expect("shaped gstring");
     assert!(
-        slots[1].as_int().is_some(),
+        slots.at(1).as_int().is_some(),
         "the following run must enter the shape cache"
     );
     assert_eq!(
-        slots[2].as_vector_data().expect("glyph")[3],
+        slots.at(2).as_vector_data().expect("glyph").at(3),
         Value::fixnum(123)
     );
     assert!(

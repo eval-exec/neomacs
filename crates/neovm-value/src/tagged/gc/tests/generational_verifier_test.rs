@@ -188,10 +188,10 @@ fn generational_verifier_accepts_barriered_old_cons_arena_and_box_edges() {
     assert!(!heap.partition_dump);
     assert!(heap.value_is_old_for_test(cons.cons_car()));
     assert_eq!(cons.cons_cdr(), TaggedValue::fixnum(211));
-    let slots = vector.as_vector_data().unwrap().as_slice();
-    assert_eq!(slots[0], symbol);
-    assert!(heap.value_is_old_for_test(slots[1]));
-    assert_eq!(slots[1].as_symbol_with_pos().unwrap().sym, symbol);
+    let slots = vector.as_vector_data().unwrap();
+    assert_eq!(slots.at(0), symbol);
+    assert!(heap.value_is_old_for_test(slots.at(1)));
+    assert_eq!(slots.at(1).as_symbol_with_pos().unwrap().sym, symbol);
     let table = table.as_hash_table().unwrap();
     let entry = table.data.entries_in_slot_order().next().unwrap();
     assert!(heap.value_is_old_for_test(entry.value));
@@ -231,14 +231,17 @@ fn generational_verifier_accepts_mapped_and_permanent_owners() {
     // cleared. Neither young child is independently rooted by this test.
     heap.mapped_remembered.clear();
     minor(&mut heap, &[]);
-    let mapped_slots = mapped.as_vector_data().unwrap().as_slice();
-    assert!(heap.value_is_old_for_test(mapped_slots[0]));
-    assert_eq!(mapped_slots[0].cons_car(), TaggedValue::fixnum(229));
-    assert_eq!(mapped_slots[1], symbol);
-    let permanent_slots = permanent.as_vector_data().unwrap().as_slice();
-    assert!(heap.value_is_old_for_test(permanent_slots[0]));
-    assert_eq!(permanent_slots[0].as_symbol_with_pos().unwrap().sym, symbol);
-    assert_eq!(permanent_slots[1], mapped);
+    let mapped_slots = mapped.as_vector_data().unwrap();
+    assert!(heap.value_is_old_for_test(mapped_slots.at(0)));
+    assert_eq!(mapped_slots.at(0).cons_car(), TaggedValue::fixnum(229));
+    assert_eq!(mapped_slots.at(1), symbol);
+    let permanent_slots = permanent.as_vector_data().unwrap();
+    assert!(heap.value_is_old_for_test(permanent_slots.at(0)));
+    assert_eq!(
+        permanent_slots.at(0).as_symbol_with_pos().unwrap().sym,
+        symbol
+    );
+    assert_eq!(permanent_slots.at(1), mapped);
 }
 
 struct RestoreEnvironment(Vec<(&'static str, Option<OsString>)>);

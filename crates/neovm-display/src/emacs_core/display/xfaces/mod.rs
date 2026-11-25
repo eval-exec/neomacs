@@ -1848,7 +1848,7 @@ fn copy_lisp_face_vector_slots(from: Value, to: Value) {
 fn lisp_face_vector_attr(vector: Value, attr: LFaceAttr) -> Option<Value> {
     vector
         .as_vector_data()
-        .and_then(|slots| slots.get(attr as usize).copied())
+        .and_then(|slots| slots.get(attr as usize))
 }
 
 pub(crate) fn set_lisp_face_vector_attr(vector: Value, attr: LFaceAttr, value: Value) {
@@ -1892,7 +1892,6 @@ fn sync_face_overrides_from_lisp_face_vector(
     for attr in LFACE_ATTRS {
         let value = slots
             .get(attr as usize)
-            .copied()
             .unwrap_or_else(unspecified_face_symbol);
         if !face_value_is_sentinel(value, FaceSentinel::Unspecified, mode) {
             set_face_override(face_name, attr, value, defaults_frame);

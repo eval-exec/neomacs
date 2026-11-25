@@ -45,8 +45,8 @@ impl OwnerKind {
     fn read(self, owner: TaggedValue) -> TaggedValue {
         match self {
             Self::Cons => owner.cons_car(),
-            Self::Vector => owner.as_vector_data().expect("vector")[0],
-            Self::Record => owner.as_record_data().expect("record")[0],
+            Self::Vector => owner.as_vector_data().expect("vector").at(0),
+            Self::Record => owner.as_record_data().expect("record").at(0),
             Self::String => TaggedValue::make_int(i64::from(
                 owner.as_str_owned().expect("string").as_bytes()[0],
             )),

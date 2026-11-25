@@ -21,8 +21,8 @@ use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 mod atomic_value;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) use atomic_value::AtomicTaggedValue;
+#[doc(hidden)]
+pub use atomic_value::AtomicTaggedValue;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite_finalizer;
 #[cfg(all(any(test, feature = "test-support"), feature = "sqlite"))]
@@ -65,6 +65,23 @@ impl ConsWord {
         // SAFETY: reads through an UnsafeCell are always allowed; the owner
         // contract above bounds concurrent writers.
         unsafe { *self.0.get() }
+    }
+
+    /// Atomic (relaxed) read through the interior-mutable cell.
+    ///
+    /// Pairs with single-slot `store_atomic` (Release) without exposing a
+    /// non-`UnsafeCell` `&TaggedValue`, and compiles to a plain load on
+    /// x86-64 and ARM64.
+    #[inline(always)]
+    pub fn load_relaxed(&self) -> TaggedValue {
+        // SAFETY: the cell is live and aligned; `UnsafeCell` supplies interior
+        // mutability for atomic loads alongside single-slot atomic stores.
+        let word =
+            unsafe { AtomicUsize::from_ptr(self.0.get().cast::<usize>()).load(Ordering::Relaxed) };
+        unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(word)
+        }
     }
 
     /// Atomic (acquire) read for the concurrent marker. Acquire pairs with the
@@ -1150,77 +1167,339 @@ impl std::fmt::Debug for LispByteVec {
     }
 }
 
+/// Borrowed view of GC-managed vector, record, or closure slots backed by
+/// interior-mutable [`AtomicTaggedValue`] cells (or immutable mapped pdump
+/// words).
+///
+/// Phase 1b: exposes only atomic relaxed value loads (never `&[TaggedValue]`
+/// or `&TaggedValue`), so token-free single-slot atomic stores
+/// (`set_vector_slot`, `set_record_slot`, `set_closure_slot`) never alias an
+/// immutable `&[TaggedValue]` reference under Stacked Borrows or Tree Borrows.
+///
+/// Promotion semantics: on an `Owned` backing, a live `&LispValueSlice`
+/// observes subsequent single-slot atomic stores on the same mutator thread.
+/// On a `Mapped` (pdump) backing, the first single-slot store copy-promotes
+/// into a fresh `Owned` buffer without mutating the mapped image; any
+/// previously borrowed `&LispValueSlice` remains sound and immutable as a
+/// snapshot of the pre-promotion mapped slots, and callers needing post-write
+/// values must re-borrow.
 #[repr(transparent)]
-pub struct LispValueSlice([TaggedValue]);
+pub struct LispValueSlice([AtomicTaggedValue]);
+static_assertions::assert_not_impl_any!(LispValueSlice: Send, Sync);
+
+/// Iterator yielding [`TaggedValue`] elements by relaxed atomic load from a
+/// [`LispValueSlice`].
+#[derive(Clone, Debug)]
+pub struct LispValueSliceIter<'a> {
+    inner: std::slice::Iter<'a, AtomicTaggedValue>,
+}
+static_assertions::assert_not_impl_any!(LispValueSliceIter<'static>: Send, Sync);
+
+impl Iterator for LispValueSliceIter<'_> {
+    type Item = TaggedValue;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(AtomicTaggedValue::load_relaxed)
+    }
+
+    #[inline(always)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+
+    #[inline(always)]
+    fn count(self) -> usize {
+        self.inner.len()
+    }
+
+    #[inline(always)]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        self.inner.nth(n).map(AtomicTaggedValue::load_relaxed)
+    }
+
+    #[inline(always)]
+    fn last(self) -> Option<Self::Item> {
+        self.inner.last().map(AtomicTaggedValue::load_relaxed)
+    }
+}
+
+impl DoubleEndedIterator for LispValueSliceIter<'_> {
+    #[inline(always)]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back().map(AtomicTaggedValue::load_relaxed)
+    }
+
+    #[inline(always)]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        self.inner.nth_back(n).map(AtomicTaggedValue::load_relaxed)
+    }
+}
+
+impl ExactSizeIterator for LispValueSliceIter<'_> {
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl std::iter::FusedIterator for LispValueSliceIter<'_> {}
 
 impl LispValueSlice {
-    pub(crate) fn from_slice(slice: &[TaggedValue]) -> &Self {
-        unsafe { &*(slice as *const [TaggedValue] as *const Self) }
+    #[inline(always)]
+    pub(crate) fn from_atomic_slice(slice: &[AtomicTaggedValue]) -> &Self {
+        // SAFETY: `LispValueSlice` is `#[repr(transparent)]` over
+        // `[AtomicTaggedValue]`.
+        unsafe { &*(slice as *const [AtomicTaggedValue] as *const Self) }
     }
 
-    pub fn as_slice(&self) -> &[TaggedValue] {
-        &self.0
+    #[inline(always)]
+    pub(crate) fn empty() -> &'static Self {
+        Self::from_atomic_slice(&[])
     }
 
-    pub(crate) fn to_vec(&self) -> Vec<TaggedValue> {
-        self.0.to_vec()
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Relaxed atomic load of slot `index`, or `None` if out of bounds.
+    #[inline(always)]
+    pub fn get(&self, index: usize) -> Option<TaggedValue> {
+        self.0.get(index).map(AtomicTaggedValue::load_relaxed)
+    }
+
+    /// Relaxed atomic load of slot `index`, panicking if out of bounds.
+    #[inline(always)]
+    pub fn at(&self, index: usize) -> TaggedValue {
+        self.0[index].load_relaxed()
+    }
+
+    /// Relaxed atomic load of the first slot, if non-empty.
+    #[inline(always)]
+    pub fn first(&self) -> Option<TaggedValue> {
+        self.0.first().map(AtomicTaggedValue::load_relaxed)
+    }
+
+    /// Relaxed atomic load of the last slot, if non-empty.
+    #[inline(always)]
+    pub fn last(&self) -> Option<TaggedValue> {
+        self.0.last().map(AtomicTaggedValue::load_relaxed)
+    }
+
+    /// Split off the first slot by relaxed atomic load plus the remaining slice.
+    #[inline(always)]
+    pub fn split_first(&self) -> Option<(TaggedValue, &Self)> {
+        let (first, rest) = self.0.split_first()?;
+        Some((first.load_relaxed(), Self::from_atomic_slice(rest)))
+    }
+
+    /// Split off the last slot by relaxed atomic load plus the preceding slice.
+    #[inline(always)]
+    pub fn split_last(&self) -> Option<(TaggedValue, &Self)> {
+        let (last, rest) = self.0.split_last()?;
+        Some((last.load_relaxed(), Self::from_atomic_slice(rest)))
+    }
+
+    /// Borrow a sub-slice by range without exposing `&[TaggedValue]`.
+    #[inline(always)]
+    pub fn get_slice<I>(&self, index: I) -> Option<&Self>
+    where
+        I: std::slice::SliceIndex<[AtomicTaggedValue], Output = [AtomicTaggedValue]>,
+    {
+        self.0.get(index).map(Self::from_atomic_slice)
+    }
+
+    /// Iterate over all slots by relaxed atomic load.
+    #[inline(always)]
+    pub fn iter(&self) -> LispValueSliceIter<'_> {
+        LispValueSliceIter {
+            inner: self.0.iter(),
+        }
+    }
+
+    /// Return `true` if any slot equals `value` (by structural `PartialEq` / `equal_value` equality).
+    #[inline]
+    pub fn contains(&self, value: &TaggedValue) -> bool {
+        self.iter().any(|item| item == *value)
+    }
+
+    /// Materialize an owned `Vec<TaggedValue>` via relaxed atomic loads.
+    #[inline]
+    pub fn to_vec(&self) -> Vec<TaggedValue> {
+        let mut out = Vec::with_capacity(self.0.len());
+        out.extend(self.iter());
+        out
     }
 
     // This unsized slice view cannot implement `Clone`; the historical method
     // intentionally materializes an owned vector.
     #[allow(clippy::should_implement_trait)]
+    #[inline]
     pub fn clone(&self) -> Vec<TaggedValue> {
         self.to_vec()
     }
 }
 
-impl std::ops::Deref for LispValueSlice {
-    type Target = [TaggedValue];
+impl std::ops::Index<std::ops::Range<usize>> for LispValueSlice {
+    type Output = Self;
 
-    fn deref(&self) -> &Self::Target {
-        self.as_slice()
+    #[inline(always)]
+    fn index(&self, index: std::ops::Range<usize>) -> &Self::Output {
+        Self::from_atomic_slice(&self.0[index])
+    }
+}
+
+impl std::ops::Index<std::ops::RangeFrom<usize>> for LispValueSlice {
+    type Output = Self;
+
+    #[inline(always)]
+    fn index(&self, index: std::ops::RangeFrom<usize>) -> &Self::Output {
+        Self::from_atomic_slice(&self.0[index])
+    }
+}
+
+impl std::ops::Index<std::ops::RangeTo<usize>> for LispValueSlice {
+    type Output = Self;
+
+    #[inline(always)]
+    fn index(&self, index: std::ops::RangeTo<usize>) -> &Self::Output {
+        Self::from_atomic_slice(&self.0[index])
+    }
+}
+
+impl std::ops::Index<std::ops::RangeFull> for LispValueSlice {
+    type Output = Self;
+
+    #[inline(always)]
+    fn index(&self, _index: std::ops::RangeFull) -> &Self::Output {
+        self
+    }
+}
+
+impl std::ops::Index<std::ops::RangeInclusive<usize>> for LispValueSlice {
+    type Output = Self;
+
+    #[inline(always)]
+    fn index(&self, index: std::ops::RangeInclusive<usize>) -> &Self::Output {
+        Self::from_atomic_slice(&self.0[index])
+    }
+}
+
+impl std::ops::Index<std::ops::RangeToInclusive<usize>> for LispValueSlice {
+    type Output = Self;
+
+    #[inline(always)]
+    fn index(&self, index: std::ops::RangeToInclusive<usize>) -> &Self::Output {
+        Self::from_atomic_slice(&self.0[index])
     }
 }
 
 impl std::fmt::Debug for LispValueSlice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.as_slice().fmt(f)
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl PartialEq for LispValueSlice {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for LispValueSlice {}
+
+impl PartialEq<[TaggedValue]> for LispValueSlice {
+    fn eq(&self, other: &[TaggedValue]) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter().copied())
+    }
+}
+
+impl PartialEq<LispValueSlice> for [TaggedValue] {
+    fn eq(&self, other: &LispValueSlice) -> bool {
+        other == self
+    }
+}
+
+impl PartialEq<&[TaggedValue]> for LispValueSlice {
+    fn eq(&self, other: &&[TaggedValue]) -> bool {
+        self == *other
+    }
+}
+
+impl PartialEq<LispValueSlice> for &[TaggedValue] {
+    fn eq(&self, other: &LispValueSlice) -> bool {
+        other == *self
+    }
+}
+
+impl<const N: usize> PartialEq<[TaggedValue; N]> for LispValueSlice {
+    fn eq(&self, other: &[TaggedValue; N]) -> bool {
+        self == other.as_slice()
+    }
+}
+
+impl<const N: usize> PartialEq<&[TaggedValue; N]> for LispValueSlice {
+    fn eq(&self, other: &&[TaggedValue; N]) -> bool {
+        self == other.as_slice()
+    }
+}
+
+impl<const N: usize> PartialEq<LispValueSlice> for [TaggedValue; N] {
+    fn eq(&self, other: &LispValueSlice) -> bool {
+        other == self.as_slice()
+    }
+}
+
+impl<const N: usize> PartialEq<LispValueSlice> for &[TaggedValue; N] {
+    fn eq(&self, other: &LispValueSlice) -> bool {
+        other == self.as_slice()
     }
 }
 
 impl PartialEq<Vec<TaggedValue>> for LispValueSlice {
     fn eq(&self, other: &Vec<TaggedValue>) -> bool {
-        self.as_slice() == other.as_slice()
+        self == other.as_slice()
     }
 }
 
 impl PartialEq<LispValueSlice> for Vec<TaggedValue> {
     fn eq(&self, other: &LispValueSlice) -> bool {
-        self.as_slice() == other.as_slice()
+        other == self.as_slice()
     }
 }
 
 impl<'a> IntoIterator for &'a LispValueSlice {
-    type Item = &'a TaggedValue;
-    type IntoIter = std::slice::Iter<'a, TaggedValue>;
+    type Item = TaggedValue;
+    type IntoIter = LispValueSliceIter<'a>;
 
+    #[inline(always)]
     fn into_iter(self) -> Self::IntoIter {
-        self.as_slice().iter()
+        self.iter()
     }
 }
 
 impl<'a> IntoIterator for &'a &'a LispValueSlice {
-    type Item = &'a TaggedValue;
-    type IntoIter = std::slice::Iter<'a, TaggedValue>;
+    type Item = TaggedValue;
+    type IntoIter = LispValueSliceIter<'a>;
 
+    #[inline(always)]
     fn into_iter(self) -> Self::IntoIter {
-        self.as_slice().iter()
+        self.iter()
     }
 }
 
 enum LispValueVecStorage {
     Owned(Vec<AtomicTaggedValue>),
-    Mapped { ptr: *const TaggedValue, len: usize },
+    Mapped {
+        ptr: *const AtomicTaggedValue,
+        len: usize,
+    },
 }
 
 // Vector payloads hold Lisp values, so they stay on their mutator thread like
@@ -1231,7 +1510,7 @@ static_assertions::assert_not_impl_any!(LispValueVecStorage: Send, Sync);
 
 impl std::fmt::Debug for LispValueVec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.as_slice().fmt(f)
+        self.as_value_slice().fmt(f)
     }
 }
 
@@ -1247,9 +1526,12 @@ impl LispValueVec {
     /// # Safety
     /// `ptr..ptr+len` must remain mapped and immutable for the lifetime of the
     /// returned storage unless a mutation first copies the slots into owned
-    /// storage.
+    /// storage, and `ptr` must carry provenance compatible with shared
+    /// [`AtomicTaggedValue`] reads (for example a private `PROT_READ | PROT_WRITE`
+    /// pdump mapping or an `[AtomicTaggedValue]` backing, never a `SharedReadOnly`
+    /// `&[TaggedValue]` borrow).
     #[doc(hidden)]
-    pub unsafe fn mapped(ptr: *const TaggedValue, len: usize) -> Self {
+    pub unsafe fn mapped(ptr: *const AtomicTaggedValue, len: usize) -> Self {
         Self {
             storage: LispValueVecStorage::Mapped { ptr, len },
         }
@@ -1284,7 +1566,7 @@ impl LispValueVec {
             let owned_words = read(&owned);
             let owned_ptr = find(&owned_words, owned.as_slice().as_ptr() as usize)?;
             let owned_len = find(&owned_words, 3)?;
-            let backing = [TaggedValue::T; 5];
+            let backing = [const { AtomicTaggedValue::new(TaggedValue::T) }; 5];
             // SAFETY: `backing` outlives `mapped`, which is never mutated.
             let mapped = unsafe { LispValueVec::mapped(backing.as_ptr(), 5) };
             let mapped_words = read(&mapped);
@@ -1323,8 +1605,8 @@ impl LispValueVec {
                 LispValueVec::owned(vec![TaggedValue::NIL; 3]),
                 LispValueVec::owned(spare),
             ];
-            let backing_a = [TaggedValue::T; 5];
-            let backing_b = [TaggedValue::NIL; 2];
+            let backing_a = [const { AtomicTaggedValue::new(TaggedValue::T) }; 5];
+            let backing_b = [const { AtomicTaggedValue::new(TaggedValue::NIL) }; 2];
             // SAFETY: both backings outlive their views, never mutated.
             let mapped = unsafe {
                 [
@@ -1345,6 +1627,30 @@ impl LispValueVec {
         })
     }
 
+    /// Borrow these slots as an atomic-read [`LispValueSlice`].
+    ///
+    /// Preserves the `AtomicTaggedValue` cell provenance for both owned and
+    /// mapped backings without casting through `&[TaggedValue]`.
+    #[inline(always)]
+    pub(crate) fn as_value_slice(&self) -> &LispValueSlice {
+        match self.storage {
+            LispValueVecStorage::Owned(ref items) => {
+                LispValueSlice::from_atomic_slice(items.as_slice())
+            }
+            LispValueVecStorage::Mapped { ptr, len } => {
+                if len == 0 {
+                    LispValueSlice::empty()
+                } else {
+                    // SAFETY: `LispValueVec::mapped`'s contract guarantees
+                    // `ptr..ptr+len` is valid for shared `AtomicTaggedValue`
+                    // reads for `&self`, and `LispValueSlice` is
+                    // `#[repr(transparent)]` over `[AtomicTaggedValue]`.
+                    unsafe { &*(std::ptr::slice_from_raw_parts(ptr, len) as *const LispValueSlice) }
+                }
+            }
+        }
+    }
+
     pub fn as_slice(&self) -> &[TaggedValue] {
         match self.storage {
             LispValueVecStorage::Owned(ref items) => {
@@ -1358,7 +1664,10 @@ impl LispValueVec {
                 if len == 0 {
                     &[]
                 } else {
-                    unsafe { std::slice::from_raw_parts(ptr, len) }
+                    // SAFETY: mapped slots are immutable for `&self` and
+                    // `AtomicTaggedValue` is `#[repr(transparent)]` over
+                    // `TaggedValue`.
+                    unsafe { std::slice::from_raw_parts(ptr.cast::<TaggedValue>(), len) }
                 }
             }
         }
@@ -1371,13 +1680,14 @@ impl LispValueVec {
         OwnedValueVec::new(self.owned_cells())
     }
 
-    /// Promote immutable mapped words without borrowing any owned slot uniquely.
+    /// Promote immutable mapped words without borrowing any owned slot uniquely
+    /// or materializing `&[TaggedValue]` over mapped `AtomicTaggedValue` slots.
     #[inline]
     fn owned_cells(&mut self) -> &mut Vec<AtomicTaggedValue> {
         match self.storage {
             LispValueVecStorage::Owned(ref mut items) => items,
             LispValueVecStorage::Mapped { .. } => {
-                let items = value_vec::into_cells(self.as_slice().to_vec());
+                let items = value_vec::into_cells(self.as_value_slice().to_vec());
                 self.storage = LispValueVecStorage::Owned(items);
                 self.owned_cells()
             }
@@ -1399,16 +1709,30 @@ impl LispValueVec {
     pub fn load_atomic(&self, i: usize) -> Option<TaggedValue> {
         match &self.storage {
             LispValueVecStorage::Owned(items) => items.get(i).map(AtomicTaggedValue::load_atomic),
-            // Mapped image words are immutable, never published in place.
-            LispValueVecStorage::Mapped { .. } => self.as_slice().get(i).copied(),
+            // Mapped image words are immutable, never published in place; read
+            // via `as_value_slice` so no `&[TaggedValue]` view is formed.
+            LispValueVecStorage::Mapped { .. } => self.as_value_slice().get(i),
         }
     }
 
-    /// Release-publish an existing slot through its actual cell. Promotion of
-    /// an immutable image creates fresh cells; it never casts mapped words to cells.
+    /// Release-publish an existing slot through its actual cell.
+    ///
+    /// On an `Owned` backing, writes in place through `AtomicTaggedValue`
+    /// without forming `&mut Vec<AtomicTaggedValue>`, so any live
+    /// `&LispValueSlice` observes the update. On a `Mapped` backing, promotion
+    /// allocates a fresh `Owned` `Vec<AtomicTaggedValue>` without mutating the
+    /// mapped image, so any previously borrowed `&LispValueSlice` remains a
+    /// sound, immutable snapshot of the pre-promotion mapped slots.
     /// Returns false for an out-of-bounds index.
     #[inline]
     pub fn store_atomic(&mut self, i: usize, value: TaggedValue) -> bool {
+        if let LispValueVecStorage::Owned(ref items) = self.storage {
+            let Some(slot) = items.get(i) else {
+                return false;
+            };
+            slot.store_atomic(value);
+            return true;
+        }
         let Some(slot) = self.owned_cells().get(i) else {
             return false;
         };
@@ -1416,18 +1740,18 @@ impl LispValueVec {
         true
     }
 
-    /// Acquire owned cells; read immutable mapped words plainly. Both iterators
-    /// retain their actual storage's provenance.
+    /// Acquire owned cells; read immutable mapped words via `as_value_slice`.
+    /// Both iterators retain their actual storage's provenance.
     #[inline]
     pub(crate) fn iter_atomic(&self) -> impl Iterator<Item = TaggedValue> + '_ {
-        let (owned, mapped): (&[AtomicTaggedValue], &[TaggedValue]) = match &self.storage {
-            LispValueVecStorage::Owned(items) => (items, &[]),
-            LispValueVecStorage::Mapped { .. } => (&[], self.as_slice()),
+        let (owned, mapped) = match &self.storage {
+            LispValueVecStorage::Owned(items) => (items.as_slice(), None),
+            LispValueVecStorage::Mapped { .. } => (&[][..], Some(self.as_value_slice().iter())),
         };
         owned
             .iter()
             .map(AtomicTaggedValue::load_atomic)
-            .chain(mapped.iter().copied())
+            .chain(mapped.into_iter().flatten())
     }
 
     /// Stage 2 Tier B CONCURRENT VECTOR SCAN: capture this backing's base pointer,
@@ -1446,7 +1770,10 @@ impl LispValueVec {
                 base: items.as_ptr(),
                 len: items.len(),
             },
-            LispValueVecStorage::Mapped { ptr, len } => VectorScanEntry::Mapped { base: ptr, len },
+            LispValueVecStorage::Mapped { ptr, len } => VectorScanEntry::Mapped {
+                base: ptr.cast::<TaggedValue>(),
+                len,
+            },
         }
     }
 
@@ -1648,7 +1975,7 @@ impl From<Vec<TaggedValue>> for LispValueVec {
 
 impl Clone for LispValueVec {
     fn clone(&self) -> Self {
-        Self::owned(self.as_slice().to_vec())
+        Self::owned(self.as_value_slice().to_vec())
     }
 }
 

@@ -178,7 +178,7 @@ fn normalize_keyboard_macro_definition(
     let converted: Vec<Value> = items
         .iter()
         .map(
-            |item| match convert_lucid_event_type_list(item, symbol_mode) {
+            |item| match convert_lucid_event_type_list(&item, symbol_mode) {
                 Some(event) => {
                     // GNU keymap.c:1132-1139 converts each XEmacs-style
                     // keyboard-macro element with Fevent_convert_list, whose
@@ -188,7 +188,7 @@ fn normalize_keyboard_macro_definition(
                     crate::emacs_core::reader::publish_derived_symbols(eval, event);
                     event
                 }
-                None => *item,
+                None => item,
             },
         )
         .collect();
@@ -385,10 +385,10 @@ fn possibly_translate_key_sequence(eval: &mut super::eval::Context, key: Value) 
     let Some(items) = key.as_vector_data() else {
         return Ok(key);
     };
-    let [string] = items.as_slice() else {
+    if items.len() != 1 {
         return Ok(key);
-    };
-    let string = *string;
+    }
+    let string = items.at(0);
     if !string.is_string() {
         return Ok(key);
     }

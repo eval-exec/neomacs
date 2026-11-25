@@ -118,7 +118,7 @@ pub(in crate::emacs_core::value) fn fresh_copy(v: Value) -> Value {
             v.as_vector_data()
                 .expect("a vector")
                 .iter()
-                .map(|item| fresh_copy(*item))
+                .map(fresh_copy)
                 .collect(),
         ),
         _ => v,

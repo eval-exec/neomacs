@@ -70,7 +70,7 @@ fn push_value_tokens(root: Value, tokens: &mut Vec<Token>) {
                 pending.push(Work::Visit(value.cons_car()));
             } else if let Some(elements) = value.as_vector_data() {
                 tokens.push(Token::Vector(elements.len()));
-                pending.extend(elements.iter().rev().copied().map(Work::Visit));
+                pending.extend(elements.iter().rev().map(Work::Visit));
             }
         } else {
             tokens.push(Token::Other(value.to_hash_key(&HashTableTest::Equal)));

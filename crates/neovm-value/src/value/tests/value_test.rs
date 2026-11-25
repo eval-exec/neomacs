@@ -222,14 +222,14 @@ fn treesit_node_header_is_opaque_to_record_and_sequence_access() {
         assert_eq!(node.veclike_type(), Some(VecLikeType::TsNode));
         assert_eq!(node.type_name(), "treesit-node");
         assert_eq!(copied, node);
-        assert_eq!(copied.as_treesit_node_data().unwrap()[2], parser);
+        assert_eq!(copied.as_treesit_node_data().unwrap().at(2), parser);
         assert!(forged.as_treesit_node_data().is_none());
         assert!(!node.is_record());
         assert!(node.as_record_data().is_none());
         assert!(node.as_vector_data().is_none());
         assert!(!node.set_record_slot(2, Value::NIL));
         assert!(!node.replace_vectorlike_sequence_data(vec![Value::NIL]));
-        assert_eq!(node.as_treesit_node_data().unwrap()[2], parser);
+        assert_eq!(node.as_treesit_node_data().unwrap().at(2), parser);
     });
 }
 

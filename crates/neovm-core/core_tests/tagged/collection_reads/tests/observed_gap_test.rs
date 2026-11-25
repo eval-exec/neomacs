@@ -416,7 +416,7 @@ fn observed_cons_gap_retains_vector_and_string_dependencies() {
     let (_, reads) = capture(|| {
         cons.cons_car();
         right.cons_car();
-        vector.as_vector_data().expect("vector")[0];
+        vector.as_vector_data().expect("vector").at(0);
         string.as_str_owned().expect("string");
     });
     let reads = reads.expect("all three real collection dependencies");

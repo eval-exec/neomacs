@@ -49,8 +49,8 @@ fn gc_tls_ownership_in_flight_filters_two_live_heaps() {
     assert!(roots.iter().any(|root| root.bits() == a.bits()));
     assert!(roots.iter().all(|root| root.bits() != b.bits()));
     first.gc_collect_exact();
-    assert_eq!(a.as_vector_data().unwrap()[0], Value::fixnum(41));
-    assert_eq!(b.as_vector_data().unwrap()[0], Value::fixnum(42));
+    assert_eq!(a.as_vector_data().unwrap().at(0), Value::fixnum(41));
+    assert_eq!(b.as_vector_data().unwrap().at(0), Value::fixnum(42));
     drop((flow_a, flow_b));
 }
 
@@ -78,7 +78,7 @@ fn gc_tls_ownership_in_flight_clone_keeps_the_original_heap() {
             .any(|root| root.bits() == payload.bits())
     );
     first.gc_collect_exact();
-    assert_eq!(payload.as_vector_data().unwrap()[0], Value::fixnum(43));
+    assert_eq!(payload.as_vector_data().unwrap().at(0), Value::fixnum(43));
     drop(cloned);
     assert!(
         roots_for(&first)
@@ -98,7 +98,7 @@ fn gc_tls_ownership_in_flight_signal_roots_survive_same_heap_gc() {
             .any(|root| root.bits() == payload.bits())
     );
     ctx.gc_collect_exact();
-    assert_eq!(payload.as_vector_data().unwrap()[0], Value::fixnum(44));
+    assert_eq!(payload.as_vector_data().unwrap().at(0), Value::fixnum(44));
     drop(flow);
     assert!(
         roots_for(&ctx)
@@ -160,7 +160,7 @@ fn gc_tls_ownership_in_flight_shared_registry_pin_outlives_owner_local_error() {
     );
     second.gc_collect_exact();
     assert_eq!(
-        other_payload.as_vector_data().unwrap()[0],
+        other_payload.as_vector_data().unwrap().at(0),
         Value::fixnum(47)
     );
     release.send(()).unwrap();
@@ -251,7 +251,7 @@ fn gc_tls_ownership_in_flight_registry_pins_change_during_owner_gc() {
     );
     second.gc_collect_exact();
     assert_eq!(
-        other_payload.as_vector_data().unwrap()[0],
+        other_payload.as_vector_data().unwrap().at(0),
         Value::fixnum(49)
     );
     drop(other);

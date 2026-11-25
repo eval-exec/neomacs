@@ -1225,10 +1225,11 @@ impl Context {
         let Some(slots) = gstring.as_vector_data() else {
             return gstring;
         };
-        if slots.len() < 2 || !slots[1].is_nil() {
+        if slots.len() < 2 || !slots.at(1).is_nil() {
             return gstring;
         }
-        let Some(header) = slots[0].as_vector_data() else {
+        let header_value = slots.at(0);
+        let Some(header) = header_value.as_vector_data() else {
             return gstring;
         };
         let Some(key) = neovm_value::display_vocab::gstring_cache_key_from_header_slots(header)

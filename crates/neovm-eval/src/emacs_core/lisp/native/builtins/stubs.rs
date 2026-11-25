@@ -935,7 +935,7 @@ pub fn builtin_describe_vector(
                 continue;
             }
             let key = Value::fixnum(index as i64);
-            describe_vector_insert_entry(eval, formatter, key, *value, &mut first)?;
+            describe_vector_insert_entry(eval, formatter, key, value, &mut first)?;
         }
     }
 

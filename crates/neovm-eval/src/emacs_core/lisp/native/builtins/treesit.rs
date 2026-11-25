@@ -692,14 +692,14 @@ fn resolve_buffer_ids(
 fn parser_record_slot(parser: Value, index: usize) -> Result<Value, Flow> {
     parser
         .as_record_data()
-        .and_then(|items| items.get(index).copied())
+        .and_then(|items| items.get(index))
         .ok_or_else(|| parser_type_error("treesit-parser-slot", parser))
 }
 
 fn query_record_slot(query: Value, index: usize) -> Result<Value, Flow> {
     query
         .as_record_data()
-        .and_then(|items| items.get(index).copied())
+        .and_then(|items| items.get(index))
         .ok_or_else(|| compiled_query_type_error("treesit-query-slot", query))
 }
 
@@ -1089,7 +1089,7 @@ fn expand_pattern_value(pattern: Value, mode: SymbolMode) -> Result<String, Flow
     if let Some(items) = pattern.as_vector_data() {
         let mut pieces = Vec::with_capacity(items.len());
         for item in items {
-            pieces.push(expand_pattern_value(*item, mode)?);
+            pieces.push(expand_pattern_value(item, mode)?);
         }
         return Ok(format!("[{}]", pieces.join(" ")));
     }
@@ -2852,7 +2852,7 @@ pub fn builtin_treesit_node_parser(args: Vec<Value>) -> EvalResult {
     let Some(node) = args[0].as_treesit_node_data() else {
         return Err(node_type_error("treesit-node-parser", args[0]));
     };
-    Ok(node.get(NODE_SLOT_PARSER).copied().unwrap_or(Value::NIL))
+    Ok(node.get(NODE_SLOT_PARSER).unwrap_or(Value::NIL))
 }
 
 #[doc(hidden)]

@@ -99,8 +99,8 @@ fn gc_tls_ownership_module_global_refs_preserve_each_live_heap() {
     assert!(roots_for(&first).iter().any(|root| root.bits() == a.bits()));
     assert!(!roots_for(&first).iter().any(|root| root.bits() == b.bits()));
     first.gc_collect_exact();
-    assert_eq!(a.as_vector_data().unwrap()[0], Value::fixnum(1));
-    assert_eq!(b.as_vector_data().unwrap()[0], Value::fixnum(2));
+    assert_eq!(a.as_vector_data().unwrap().at(0), Value::fixnum(1));
+    assert_eq!(b.as_vector_data().unwrap().at(0), Value::fixnum(2));
     drop((a_ref, b_ref));
     assert!(roots_for(&first).is_empty());
     drop(first);
@@ -136,7 +136,7 @@ fn gc_tls_ownership_module_active_environment_excludes_another_live_heap() {
     let mut first = parked_first.resume_for_test().expect("resume first");
     first.setup_thread_locals();
     first.gc_collect_exact();
-    assert_eq!(value.as_vector_data().unwrap()[0], Value::fixnum(42));
+    assert_eq!(value.as_vector_data().unwrap().at(0), Value::fixnum(42));
     drop(active);
 }
 
@@ -160,7 +160,7 @@ fn gc_tls_ownership_module_overflow_arena_values_are_gc_roots() {
     );
     ctx.gc_collect_exact();
     assert_eq!(
-        last.as_vector_data().unwrap()[0],
+        last.as_vector_data().unwrap().at(0),
         Value::fixnum(VALUE_FRAME_SIZE as i64)
     );
     drop(active);
@@ -182,8 +182,8 @@ fn gc_tls_ownership_module_global_refs_keep_equal_but_distinct_objects() {
     assert_eq!(unsafe { value_to_lisp(a_ref.0) }.bits(), a.bits());
     assert_eq!(unsafe { value_to_lisp(b_ref.0) }.bits(), b.bits());
     ctx.gc_collect_exact();
-    assert_eq!(a.as_vector_data().unwrap()[0], Value::fixnum(42));
-    assert_eq!(b.as_vector_data().unwrap()[0], Value::fixnum(42));
+    assert_eq!(a.as_vector_data().unwrap().at(0), Value::fixnum(42));
+    assert_eq!(b.as_vector_data().unwrap().at(0), Value::fixnum(42));
     drop((a_ref, b_ref));
 }
 
@@ -207,7 +207,7 @@ fn gc_tls_ownership_module_global_refs_follow_owner_context_reactivation() {
         "module global references lost their owning Context after activation"
     );
     first.gc_collect_exact();
-    assert_eq!(value.as_vector_data().unwrap()[0], Value::fixnum(42));
+    assert_eq!(value.as_vector_data().unwrap().at(0), Value::fixnum(42));
     drop(first);
     assert!(unsafe { value_to_lisp(reference.0) }.is_nil());
     let mut second = parked_second.resume_for_test().expect("resume second");

@@ -94,7 +94,7 @@ pub(crate) fn bytecode_closure_slot(value: &Value, idx: usize) -> Option<Value> 
         value.bytecode_slot_source()
         && let Some(item) = slots.as_vector_data().and_then(|items| items.get(idx))
     {
-        return Some(*item);
+        return Some(item);
     }
     // Every byte-code object has at least the four mandatory slots, so
     // slots 1 and 2 need no bounds check.
@@ -804,7 +804,7 @@ fn builtin_append_slice_impl(args: &[Value]) -> EvalResult {
                 ValueKind::Cons => append_proper_list(&mut result, &mut last, *arg)?,
                 ValueKind::Veclike(VecLikeType::Lambda) => {
                     if let Some(slots) = arg.closure_slots() {
-                        for item in slots.as_slice().iter().copied() {
+                        for item in slots.iter() {
                             append_element(&mut result, &mut last, item);
                         }
                     }
@@ -822,7 +822,7 @@ fn builtin_append_slice_impl(args: &[Value]) -> EvalResult {
                 }
                 ValueKind::Veclike(VecLikeType::Vector) => {
                     if let Some(items) = arg.as_vector_data() {
-                        for item in items.as_slice().iter().copied() {
+                        for item in items.iter() {
                             append_element(&mut result, &mut last, item);
                         }
                     }

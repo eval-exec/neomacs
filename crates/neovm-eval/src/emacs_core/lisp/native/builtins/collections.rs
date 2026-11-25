@@ -344,7 +344,6 @@ pub(crate) fn builtin_aref_values(
                 .unwrap();
             items
                 .get(idx_fixnum as usize)
-                .copied()
                 .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index]))
         }
         // GNU `Faref`: a bool-vector's bit as t/nil; a negative index wraps

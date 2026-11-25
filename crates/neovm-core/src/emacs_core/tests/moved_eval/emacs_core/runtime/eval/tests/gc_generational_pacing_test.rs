@@ -464,7 +464,7 @@ fn scheduler_finishes_residual_major_and_skips_minor() {
             neovm_value::tagged::value::TaggedValue::fixnum(241)
         );
         assert_eq!(
-            child.as_vector_data().unwrap()[0],
+            child.as_vector_data().unwrap().at(0),
             neovm_value::tagged::value::TaggedValue::fixnum(239)
         );
     }

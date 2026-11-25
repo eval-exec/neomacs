@@ -1461,7 +1461,7 @@ fn print_preprocess(
             }
             ValueKind::Veclike(VecLikeType::Lambda) => {
                 if let Some(slots) = obj.closure_slots() {
-                    stack.extend(slots.iter().rev().copied());
+                    stack.extend(slots.iter().rev());
                 }
             }
             ValueKind::Veclike(VecLikeType::Macro) => {
@@ -1574,7 +1574,7 @@ fn print_preprocess_external_with_t_removal(
             }
             ValueKind::Veclike(VecLikeType::Lambda) => {
                 if let Some(slots) = obj.closure_slots() {
-                    stack.extend(slots.iter().rev().copied());
+                    stack.extend(slots.iter().rev());
                 }
             }
             ValueKind::Veclike(VecLikeType::Macro) => {
@@ -2199,7 +2199,7 @@ fn write_value_stateful_inner(
                 let print_length = state.options.print_length;
                 let count = value.as_vector_data().unwrap().len();
                 for idx in 0..count {
-                    let item = value.as_vector_data().unwrap()[idx];
+                    let item = value.as_vector_data().unwrap().at(idx);
                     if let Some(length) = print_length
                         && idx as i64 >= length
                     {
@@ -2228,7 +2228,7 @@ fn write_value_stateful_inner(
                 let print_length = state.options.print_length;
                 let count = value.as_record_data().unwrap().len();
                 for idx in 0..count {
-                    let item = value.as_record_data().unwrap()[idx];
+                    let item = value.as_record_data().unwrap().at(idx);
                     if let Some(length) = print_length
                         && idx as i64 >= length
                     {
@@ -2445,7 +2445,8 @@ fn with_bytecode_literal_slots<R>(value: &Value, f: impl FnOnce(&[Value]) -> R) 
         && let Some(items) = slots.as_vector_data()
     {
         crate::emacs_core::eval::push_scratch_gc_root(slots);
-        return Some(f(items));
+        let items = items.to_vec();
+        return Some(f(&items));
     }
 
     let arglist = bc.arglist();
@@ -2764,7 +2765,7 @@ impl<'value> LiteralSlots<'value> {
             LiteralSlotSource::SubCharTable(owner) => {
                 owner.as_sub_char_table_obj()?.contents.get(index).copied()
             }
-            LiteralSlotSource::Closure(owner) => owner.closure_slots()?.get(index).copied(),
+            LiteralSlotSource::Closure(owner) => owner.closure_slots()?.get(index),
         }
     }
 }
@@ -4124,7 +4125,7 @@ fn format_interpreted_closure_bytes(value: &Value, options: PrintOptions) -> Vec
             if index != 0 {
                 out.push(b' ');
             }
-            append_print_value_bytes(slot, &mut out, options);
+            append_print_value_bytes(&slot, &mut out, options);
         }
     }
     out.push(b']');

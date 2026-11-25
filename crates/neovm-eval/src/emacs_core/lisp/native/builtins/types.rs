@@ -310,11 +310,11 @@ pub fn builtin_type_of_with_ctx_1(
 #[inline]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn record_type_of(value: Value) -> Option<Value> {
-    let tag = value.as_record_data()?.first().copied();
+    let tag = value.as_record_data()?.first();
     if let Some(tv) = tag.as_ref().and_then(Value::as_record_data)
         && tv.len() > 1
     {
-        return Some(tv[1]);
+        return Some(tv.at(1));
     }
     Some(tag.unwrap_or_else(|| Value::symbol("record")))
 }

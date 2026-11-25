@@ -66,8 +66,8 @@ impl StoreKind {
         match self {
             Self::Setcar | Self::ConstantSetcar => owner.cons_car(),
             Self::Setcdr | Self::BlvDefault | Self::BlvLocal => owner.cons_cdr(),
-            Self::VectorAset => owner.as_vector_data().expect("vector")[0],
-            Self::RecordAset => owner.as_record_data().expect("record")[1],
+            Self::VectorAset => owner.as_vector_data().expect("vector").at(0),
+            Self::RecordAset => owner.as_record_data().expect("record").at(1),
             Self::UnibyteStringAset | Self::MultibyteStringAset => Value::make_int(i64::from(
                 owner.as_str_owned().expect("string").as_bytes()[0],
             )),

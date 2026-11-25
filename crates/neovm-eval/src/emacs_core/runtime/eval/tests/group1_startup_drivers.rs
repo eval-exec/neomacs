@@ -595,7 +595,7 @@ pub(crate) fn lists48_osr_aset_advice_obs_for_test(
         == Some(NativeRun::Ok(alias.bits()));
     let osr_tier = cache::osr_leaf_ptr_for_test(&source, 1).expect("installed actual OSR leaf");
     let osr_tier = unsafe { &*osr_tier }.selected_tier().name();
-    let osr_vector = vector.as_vector_data().unwrap()[0].bits() == alias.bits();
+    let osr_vector = vector.as_vector_data().unwrap().at(0).bits() == alias.bits();
     let osr_pair = pair.cons_car() == Value::make_int(3);
     let function_value = Value::make_bytecode(source.clone());
     push_scratch_gc_root(function_value);
@@ -603,7 +603,7 @@ pub(crate) fn lists48_osr_aset_advice_obs_for_test(
         == Some(alias.bits());
     let normal = unsafe { cache::resolve_compiled_leaf_ptr(ctx, &source) }.unwrap();
     let normal_tier = unsafe { &*normal }.selected_tier().name();
-    let normal_vector = vector.as_vector_data().unwrap()[0].bits() == alias.bits();
+    let normal_vector = vector.as_vector_data().unwrap().at(0).bits() == alias.bits();
     let normal_pair = pair.cons_car() == Value::make_int(3);
     let advice_native = ctx
         .obarray()

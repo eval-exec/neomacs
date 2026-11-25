@@ -1448,7 +1448,8 @@ impl Context {
             return Ok(vector);
         }
 
-        crate::emacs_core::builtins::make_byte_code_from_slots(items)
+        let items = items.to_vec();
+        crate::emacs_core::builtins::make_byte_code_from_slots(&items)
     }
 
     #[doc(hidden)]

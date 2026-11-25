@@ -255,7 +255,7 @@ impl CoreEqualityEncoder {
                     self.inner.out.push(tag::VECTOR);
                     self.inner.u64(elements.len() as u64);
                     for element in elements.iter() {
-                        self.reference_value(*element, depth + 1)?;
+                        self.reference_value(element, depth + 1)?;
                     }
                     Ok(())
                 }

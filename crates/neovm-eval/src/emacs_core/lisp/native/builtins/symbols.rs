@@ -2355,7 +2355,7 @@ pub(crate) fn check_obarray_reader(value: Value) -> Result<Value, Value> {
 
     if value.is_vector() {
         let slots = value.as_vector_data().unwrap();
-        if let Some(slot0) = slots.first().copied() {
+        if let Some(slot0) = slots.first() {
             if is_obarray_value(slot0) {
                 return Ok(slot0);
             }
@@ -2460,9 +2460,7 @@ pub fn obarray_bucket(value: Value, idx: usize) -> Option<Value> {
             .as_obarray_obj()
             .and_then(|obj| obj.buckets.get(idx).copied());
     }
-    value
-        .as_vector_data()
-        .and_then(|items| items.get(idx).copied())
+    value.as_vector_data().and_then(|items| items.get(idx))
 }
 
 #[doc(hidden)]
@@ -2960,7 +2958,7 @@ pub fn builtin_open_font(eval: &mut super::eval::Context, args: Vec<Value>) -> E
     let entity = args[0];
     let mut entity_fields: Vec<Value> = entity
         .as_vector_data()
-        .map(|fields| fields.iter().copied().collect())
+        .map(|fields| fields.to_vec())
         .unwrap_or_default();
     let is_font_entity = entity_fields
         .first()
@@ -3927,7 +3925,7 @@ fn compare_value_sequences(
     };
 
     for (left, right) in left_values.iter().zip(right_values.iter()) {
-        let cmp = compare_value_lt_inner(eval, left, right, maxdepth)?;
+        let cmp = compare_value_lt_inner(eval, &left, &right, maxdepth)?;
         if cmp != Ordering::Equal {
             return Ok(cmp);
         }
@@ -4282,7 +4280,7 @@ fn stored_interactive_spec_value(spec: Value) -> Value {
     if let Some(items) = spec.as_vector_data()
         && let Some(first) = items.first()
     {
-        return *first;
+        return first;
     }
     spec
 }
@@ -4386,7 +4384,7 @@ fn interactive_form_from_bytecode_value(function: Value) -> Option<Value> {
         if items.len() <= 5 {
             return None;
         }
-        let spec_val = stored_interactive_spec_value(items[5]);
+        let spec_val = stored_interactive_spec_value(items.at(5));
         return Some(Value::list(vec![
             Value::symbol(&INTERACTIVE_FORM_SYMBOL),
             spec_val,

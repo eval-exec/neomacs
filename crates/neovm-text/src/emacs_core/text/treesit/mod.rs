@@ -1663,7 +1663,7 @@ fn record_id_with_tag(value: Value, expected_tag: &str, id_slot: usize) -> Optio
 fn record_tag_is(value: Value, expected_tag: &str) -> bool {
     value
         .as_record_data()
-        .and_then(|items| items.first().copied())
+        .and_then(|items| items.first())
         .and_then(|tag| tag.as_bare_symbol_name())
         == Some(expected_tag)
 }

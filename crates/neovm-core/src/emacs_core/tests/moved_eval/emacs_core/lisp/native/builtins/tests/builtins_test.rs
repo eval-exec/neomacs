@@ -1639,7 +1639,7 @@ fn accessible_keymaps_lists_an_autoloaded_keymap_symbol_without_loading_it() {
     assert_eq!(items.len(), 2, "{items:?}");
     let second = &items[1];
     assert_eq!(
-        second.cons_car().as_vector_data().unwrap().as_slice(),
+        second.cons_car().as_vector_data().unwrap(),
         &[Value::fixnum(11)]
     );
     assert_eq!(

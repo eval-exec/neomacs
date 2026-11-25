@@ -811,12 +811,11 @@ fn parse_surface_uniform_entry(entry: Value) -> Option<(String, [u32; 4], u8)> {
         bits[0] = scalar.to_bits();
         count = 1u8;
     } else if let Some(elements) = value.as_vector_data() {
-        let elements = elements.as_slice();
         if elements.is_empty() || elements.len() > 4 {
             return None;
         }
         for (slot, element) in elements.iter().enumerate() {
-            bits[slot] = number(*element)?.to_bits();
+            bits[slot] = number(element)?.to_bits();
         }
         count = elements.len() as u8;
     } else {

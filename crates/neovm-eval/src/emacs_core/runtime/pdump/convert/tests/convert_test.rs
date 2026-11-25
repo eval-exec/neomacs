@@ -17,7 +17,7 @@ fn install_restored_bytecode_slot_object_rejects_a_non_bytecode_value() {
         "a fixnum is not a bytecode object"
     );
     let vector = Value::make_vector(vec![Value::fixnum(9), Value::fixnum(8)]);
-    let before = vector.as_vector_data().expect("vector slots")[0];
+    let before = vector.as_vector_data().expect("vector slots").at(0);
     // SAFETY: test exercises the non-bytecode early-return rejection path.
     assert!(
         !unsafe {
@@ -29,7 +29,7 @@ fn install_restored_bytecode_slot_object_rejects_a_non_bytecode_value() {
         },
         "a vector is not a bytecode object"
     );
-    assert_eq!(vector.as_vector_data().expect("vector slots")[0], before);
+    assert_eq!(vector.as_vector_data().expect("vector slots").at(0), before);
 }
 
 /// Same hole on the stub publish path: a non-bytecode value returns
@@ -39,9 +39,9 @@ fn materialize_and_publish_stub_refuses_a_non_bytecode_value() {
     crate::test_utils::init_test_tracing();
     materialize_and_publish_stub(Value::fixnum(3));
     let vector = Value::make_vector(vec![Value::fixnum(9), Value::fixnum(8)]);
-    let before = vector.as_vector_data().expect("vector slots")[0];
+    let before = vector.as_vector_data().expect("vector slots").at(0);
     materialize_and_publish_stub(vector);
-    assert_eq!(vector.as_vector_data().expect("vector slots")[0], before);
+    assert_eq!(vector.as_vector_data().expect("vector slots").at(0), before);
 }
 
 /// P5: `populate_bytecode_from_extras` must verify that `value` is a
@@ -495,7 +495,7 @@ fn mapped_vector_raw_slots_are_loader_source_of_truth_when_no_remap_needed() {
 
     let value = decoder.load_value(&DumpValue::Vector(DumpHeapRef { index: 0 }));
     let slots = value.as_vector_data().unwrap();
-    assert_eq!(slots.as_slice(), &[Value::fixnum(77), Value::fixnum(88)]);
+    assert_eq!(slots, &[Value::fixnum(77), Value::fixnum(88)]);
 }
 
 #[test]
@@ -534,7 +534,7 @@ fn mapped_vector_slot_count_comes_from_span_for_compact_descriptors() {
 
     let value = decoder.load_value(&DumpValue::Vector(DumpHeapRef { index: 0 }));
     let slots = value.as_vector_data().unwrap();
-    assert_eq!(slots.as_slice(), &[Value::fixnum(177), Value::fixnum(188)]);
+    assert_eq!(slots, &[Value::fixnum(177), Value::fixnum(188)]);
 }
 
 #[test]

@@ -804,8 +804,8 @@ fn parse_nested_hash_tables_during_concurrent_gen1_mark() {
     let nested = member(parsed, "nested");
     let objects = nested.as_vector_data().unwrap();
     assert_eq!(objects.len(), 2);
-    let inner = objects[0];
-    let empty = objects[1];
+    let inner = objects.at(0);
+    let empty = objects.at(1);
     let replacement = member(inner, "drop");
     let number = member(inner, "number");
     let fraction = member(inner, "fraction");

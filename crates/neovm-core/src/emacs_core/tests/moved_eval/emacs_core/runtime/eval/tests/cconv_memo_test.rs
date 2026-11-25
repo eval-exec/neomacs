@@ -551,7 +551,7 @@ fn constant_symbols(function: Value) -> Vec<Value> {
         } else if let Some(code) = value.get_bytecode_data() {
             stack.extend(code.constants().iter().copied());
         } else if let Some(items) = value.as_vector_data() {
-            stack.extend(items.iter().copied());
+            stack.extend(items.iter());
         }
     }
     out

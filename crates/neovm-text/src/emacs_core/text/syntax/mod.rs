@@ -699,7 +699,7 @@ fn syntax_code_object(code: usize) -> Option<Value> {
     }
     ensure_syntax_code_objects()
         .as_vector_data()
-        .and_then(|values| values.get(code).copied())
+        .and_then(|values| values.get(code))
 }
 
 // ===========================================================================

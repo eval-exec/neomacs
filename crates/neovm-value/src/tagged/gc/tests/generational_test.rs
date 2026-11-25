@@ -251,7 +251,7 @@ fn minor_old_vector_and_cons_keep_new_children_and_drop_overwritten_young() {
     assert!(!heap.owns_string_object(discarded.as_string_ptr().unwrap().cast()));
     assert!(heap.value_is_old_for_test(child));
     assert!(heap.value_is_old_for_test(string));
-    assert_eq!(vector.as_vector_data().unwrap().as_slice()[0], child);
+    assert_eq!(vector.as_vector_data().unwrap().at(0), child);
     assert_eq!(cons.cons_car(), string);
     assert_eq!(header(vector).raw_mark(), UNMARKED_AT_REST);
     assert_eq!(heap.remembered_log_len_for_test(), 0);

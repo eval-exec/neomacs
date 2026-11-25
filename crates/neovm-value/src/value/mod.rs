@@ -3928,11 +3928,11 @@ impl TaggedValue {
         match unsafe { (*header).type_tag } {
             VecLikeType::Lambda => {
                 let ptr = header as *const LambdaObj;
-                Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+                Some(unsafe { (*ptr).data.as_value_slice() })
             }
             VecLikeType::Macro => {
                 let ptr = header as *const MacroObj;
-                Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+                Some(unsafe { (*ptr).data.as_value_slice() })
             }
             _ => None,
         }
@@ -3959,8 +3959,7 @@ impl TaggedValue {
     }
 
     pub fn closure_slot(self, index: usize) -> Option<Value> {
-        self.closure_slots()
-            .and_then(|slots| slots.get(index).copied())
+        self.closure_slots().and_then(|slots| slots.get(index))
     }
 
     /// Parsed parameter list.
@@ -4201,7 +4200,7 @@ impl TaggedValue {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::Vector {
             let ptr = header as *const VectorObj;
-            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            Some(unsafe { (*ptr).data.as_value_slice() })
         } else {
             None
         }
@@ -4323,7 +4322,7 @@ impl TaggedValue {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::Record {
             let ptr = header as *const RecordObj;
-            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            Some(unsafe { (*ptr).data.as_value_slice() })
         } else {
             None
         }
@@ -4341,7 +4340,7 @@ impl TaggedValue {
             // SAFETY: TsNode allocations share the RecordObj storage layout,
             // selected here only after checking their intrinsic header tag.
             let ptr = header as *const RecordObj;
-            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            Some(unsafe { (*ptr).data.as_value_slice() })
         } else {
             None
         }
@@ -4370,7 +4369,7 @@ impl TaggedValue {
     pub fn as_window_configuration_data(&self) -> Option<&LispValueSlice> {
         if self.is_window_configuration() {
             let ptr = self.as_veclike_ptr().unwrap() as *const RecordObj;
-            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            Some(unsafe { (*ptr).data.as_value_slice() })
         } else {
             None
         }
@@ -4556,8 +4555,10 @@ impl TaggedValue {
     // (c) no structural/bulk payload mutation runs during `'h` — Phase 1c.0
     //     provides `*_in(&mut HeapMut)` counterparts, and Phase 1c.1 withdraws
     //     the tokenless bulk mutators;
-    // (d) for `&'h LispValueSlice` readers, concurrent single-slot stores are
-    //     addressed in Phase 1b (atomic slot reads + withdrawing `as_slice()`).
+    // (d) for `&'h LispValueSlice` readers, Phase 1b enforces interior-mutable
+    //     `[AtomicTaggedValue]` storage with relaxed atomic loads (no raw
+    //     `&[TaggedValue]`), so single-slot atomic stores never alias a live
+    //     slice view.
     // -----------------------------------------------------------------------
 
     /// Borrow the closure slot vector for a Lambda or Macro, anchored to `heap`.
@@ -4569,11 +4570,11 @@ impl TaggedValue {
         match unsafe { (*header).type_tag } {
             VecLikeType::Lambda => {
                 let ptr = header as *const LambdaObj;
-                Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+                Some(unsafe { (*ptr).data.as_value_slice() })
             }
             VecLikeType::Macro => {
                 let ptr = header as *const MacroObj;
-                Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+                Some(unsafe { (*ptr).data.as_value_slice() })
             }
             _ => None,
         }
@@ -4652,6 +4653,13 @@ impl TaggedValue {
     }
 
     /// Borrow vector elements, anchored to `heap`.
+    ///
+    /// On an `Owned` vector, a live `&'h LispValueSlice` observes subsequent
+    /// single-slot stores (`set_vector_slot`). On a `Mapped` (pdump) vector,
+    /// the first single-slot store copy-promotes to a fresh `Owned` buffer;
+    /// an earlier `&'h LispValueSlice` stays sound as an immutable snapshot of
+    /// the pre-promotion mapped slots, so callers needing post-write values
+    /// must re-borrow.
     #[inline]
     pub fn vector_data_in<'h>(self, _heap: HeapRef<'h>) -> Option<&'h LispValueSlice> {
         let header = self.as_veclike_ptr()?;
@@ -4659,7 +4667,7 @@ impl TaggedValue {
         // `VecLikeType::Vector`, `'h` is tied to `_heap` under invariant (a)–(d).
         if unsafe { (*header).type_tag } == VecLikeType::Vector {
             let ptr = header as *const VectorObj;
-            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            Some(unsafe { (*ptr).data.as_value_slice() })
         } else {
             None
         }
@@ -4714,7 +4722,7 @@ impl TaggedValue {
         // `VecLikeType::Record`, `'h` is tied to `_heap` under invariant (a)–(d).
         if unsafe { (*header).type_tag } == VecLikeType::Record {
             let ptr = header as *const RecordObj;
-            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            Some(unsafe { (*ptr).data.as_value_slice() })
         } else {
             None
         }
@@ -4729,7 +4737,7 @@ impl TaggedValue {
         // `VecLikeType::TsNode`, `'h` is tied to `_heap` under invariant (a)–(d).
         if unsafe { (*header).type_tag } == VecLikeType::TsNode {
             let ptr = header as *const RecordObj;
-            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            Some(unsafe { (*ptr).data.as_value_slice() })
         } else {
             None
         }
@@ -4759,7 +4767,7 @@ impl TaggedValue {
             let ptr = self.as_veclike_ptr().unwrap() as *const RecordObj;
             // SAFETY: `self.is_window_configuration()` verified the header tag;
             // `'h` is tied to `_heap` under invariant (a)–(d).
-            Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
+            Some(unsafe { (*ptr).data.as_value_slice() })
         } else {
             None
         }
@@ -5499,11 +5507,11 @@ impl EqualSeenPair {
 /// does not expose their slots through ordinary Lisp record or sequence APIs.
 #[derive(Clone, Copy)]
 pub(crate) enum StructuralPseudovectorView<'a> {
-    Vector(&'a [Value]),
-    Record(&'a [Value]),
+    Vector(&'a LispValueSlice),
+    Record(&'a LispValueSlice),
     // Keep the existing private wrapper slot equality/hash contract while
     // excluding nodes from ordinary record access and cross-type equality.
-    TsNode(&'a [Value]),
+    TsNode(&'a LispValueSlice),
     CharTable(&'a CharTableObj),
     SubCharTable(&'a SubCharTableObj),
 }
@@ -5511,15 +5519,9 @@ pub(crate) enum StructuralPseudovectorView<'a> {
 impl<'a> StructuralPseudovectorView<'a> {
     pub(crate) fn from_value(value: &'a Value, kind: VecLikeType) -> Option<Self> {
         match kind {
-            VecLikeType::Vector => value
-                .as_vector_data()
-                .map(|slots| Self::Vector(slots.as_slice())),
-            VecLikeType::Record => value
-                .as_record_data()
-                .map(|slots| Self::Record(slots.as_slice())),
-            VecLikeType::TsNode => value
-                .as_treesit_node_data()
-                .map(|slots| Self::TsNode(slots.as_slice())),
+            VecLikeType::Vector => value.as_vector_data().map(Self::Vector),
+            VecLikeType::Record => value.as_record_data().map(Self::Record),
+            VecLikeType::TsNode => value.as_treesit_node_data().map(Self::TsNode),
             VecLikeType::CharTable => value.as_char_table_obj().map(Self::CharTable),
             VecLikeType::SubCharTable => value.as_sub_char_table_obj().map(Self::SubCharTable),
             _ => None,
@@ -5553,7 +5555,7 @@ impl<'a> StructuralPseudovectorView<'a> {
 
     pub(crate) fn slot(self, index: usize) -> Value {
         match self {
-            Self::Vector(slots) | Self::Record(slots) | Self::TsNode(slots) => slots[index],
+            Self::Vector(slots) | Self::Record(slots) | Self::TsNode(slots) => slots.at(index),
             Self::CharTable(table) => match index {
                 0 => table.defalt.get(),
                 1 => table.parent.get(),

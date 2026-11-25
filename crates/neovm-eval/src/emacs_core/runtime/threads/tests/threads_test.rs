@@ -2542,7 +2542,7 @@ fn p15_gc_thread_payload_fields_have_only_object_edges() {
         // Check membership for every vector before decoding any payload.
         for (index, probe) in probes.into_iter().enumerate() {
             assert_eq!(
-                probe.as_vector_data().unwrap().as_slice(),
+                probe.as_vector_data().unwrap(),
                 &[Value::fixnum(index as i64)]
             );
         }
@@ -2631,10 +2631,7 @@ fn p15_gc_old_thread_payload_remembers_young_children() {
         );
         // Membership precedes both the payload projection and vector decoding.
         assert_eq!(eval.threads.thread_result(native).bits(), child.bits());
-        assert_eq!(
-            child.as_vector_data().unwrap().as_slice(),
-            &[Value::fixnum(1515)]
-        );
+        assert_eq!(child.as_vector_data().unwrap(), &[Value::fixnum(1515)]);
     };
 
     let completed = eval.gc_count;

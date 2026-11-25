@@ -414,7 +414,7 @@ fn automatic_composition_spans_use_loadup_tai_tham_rule() {
         .expect("Tai Tham composition rules");
     let fields = rules[0].as_vector_data().expect("composition rule vector");
     assert!(
-        fields[0].as_utf8_str().is_none(),
+        fields.at(0).as_utf8_str().is_none(),
         "the loadup rule must exercise a valid Lisp regexp that is not UTF-8"
     );
 

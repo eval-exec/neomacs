@@ -1667,7 +1667,7 @@ unsafe extern "C" fn module_vec_get(
             let idx = index as usize;
             if idx < slice.len() {
                 // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
-                return unsafe { lisp_to_value(env, slice[idx]) };
+                return unsafe { lisp_to_value(env, slice.at(idx)) };
             }
             unsafe {
                 let priv_ = &mut *(*env).private_members;
@@ -1831,15 +1831,15 @@ unsafe extern "C" fn module_extract_time(env: *mut emacs_env, arg: emacs_value) 
         if let Some(items) = val.as_vector_data()
             && items.len() >= 2
         {
-            let sec_high = items[0].as_fixnum().unwrap_or(0);
-            let sec_low = items[1].as_fixnum().unwrap_or(0);
+            let sec_high = items.at(0).as_fixnum().unwrap_or(0);
+            let sec_low = items.at(1).as_fixnum().unwrap_or(0);
             let micros = if items.len() >= 3 {
-                items[2].as_fixnum().unwrap_or(0)
+                items.at(2).as_fixnum().unwrap_or(0)
             } else {
                 0
             };
             let picos = if items.len() >= 4 {
-                items[3].as_fixnum().unwrap_or(0)
+                items.at(3).as_fixnum().unwrap_or(0)
             } else {
                 0
             };

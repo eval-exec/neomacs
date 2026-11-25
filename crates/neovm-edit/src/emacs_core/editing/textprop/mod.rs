@@ -4237,10 +4237,7 @@ fn find_display_property(disp: Value, spec: Value) -> Value {
         return Value::NIL;
     }
     if let Some(items) = disp.as_vector_data() {
-        return items
-            .iter()
-            .find_map(|&elem| spec_value(elem))
-            .unwrap_or(Value::NIL);
+        return items.iter().find_map(spec_value).unwrap_or(Value::NIL);
     }
     if disp.is_cons() && disp.cons_car().is_cons() {
         let mut cursor = disp;

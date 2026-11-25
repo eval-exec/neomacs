@@ -2497,11 +2497,14 @@ fn vm_string_alias_assert_graph(eval: &Context, fixture: &VmStringAliasFixture) 
         Some(&fixture.vector)
     );
     assert_eq!(
-        fixture.vector.as_vector_data().unwrap()[0],
+        fixture.vector.as_vector_data().unwrap().at(0),
         fixture.original
     );
-    assert_eq!(fixture.vector.as_vector_data().unwrap()[1], fixture.cell);
-    assert_eq!(fixture.vector.as_vector_data().unwrap()[2], fixture.table);
+    assert_eq!(fixture.vector.as_vector_data().unwrap().at(1), fixture.cell);
+    assert_eq!(
+        fixture.vector.as_vector_data().unwrap().at(2),
+        fixture.table
+    );
     assert_eq!(fixture.cell.cons_car(), fixture.original);
     assert_eq!(fixture.cell.cons_cdr(), fixture.cell);
     assert_eq!(fixture.binding.cons_cdr(), fixture.original);
@@ -2616,11 +2619,11 @@ fn vm_redefined_fillarray_preserves_pending_structural_key_table() {
     );
     let snapshot = *hydrated.key_snapshots().next().unwrap();
     let parts = snapshot.as_vector_data().unwrap();
-    assert_eq!(parts[0].cons_car().as_utf8_str(), Some("parked"));
-    assert!(parts[0].cons_cdr().is_nil());
-    assert_eq!(parts[1].as_bool_vector_obj().unwrap().nbits, 1);
-    assert_eq!(parts[2].as_window_id(), Some(71));
-    assert_eq!(parts[3].as_frame_id(), Some(72));
+    assert_eq!(parts.at(0).cons_car().as_utf8_str(), Some("parked"));
+    assert!(parts.at(0).cons_cdr().is_nil());
+    assert_eq!(parts.at(1).as_bool_vector_obj().unwrap().nbits, 1);
+    assert_eq!(parts.at(2).as_window_id(), Some(71));
+    assert_eq!(parts.at(3).as_frame_id(), Some(72));
     eval.gc_collect_exact();
     let hydrated = table.as_hash_table().unwrap();
     assert_eq!(

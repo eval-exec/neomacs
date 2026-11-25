@@ -1539,7 +1539,7 @@ pub(crate) fn buffer_invisible_ellipsis_text<B: LayoutBufferView>(buffer: &B) ->
     if glyphs.is_empty() {
         return None;
     }
-    let text: String = glyphs.iter().filter_map(|g| glyph_code_char(*g)).collect();
+    let text: String = glyphs.iter().filter_map(glyph_code_char).collect();
     (!text.is_empty()).then_some(text)
 }
 
@@ -1569,10 +1569,7 @@ pub(crate) fn buffer_display_table_glyphs<B: LayoutBufferView + ?Sized>(
     let table = active_buffer_display_table(buffer)?;
     let entry = neovm_core::emacs_core::chartable::ct_ref(&table, i64::from(character.code()));
     let glyphs = entry.as_vector_data()?;
-    let decoded: Vec<_> = glyphs
-        .iter()
-        .filter_map(|glyph| glyph_code_parts(*glyph))
-        .collect();
+    let decoded: Vec<_> = glyphs.iter().filter_map(glyph_code_parts).collect();
     let text = decoded.iter().map(|(ch, _)| *ch).collect();
     let mut face_runs: Vec<DisplaySourceMappedFaceRun> = Vec::new();
     for (_, lisp_face_id) in decoded {

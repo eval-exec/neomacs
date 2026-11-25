@@ -366,7 +366,7 @@ fn concat_arg_makes_multibyte(value: Value) -> Result<bool, Flow> {
         ValueKind::Veclike(VecLikeType::Vector) => {
             let mut multibyte = false;
             if let Some(items) = value.as_vector_data() {
-                for item in items.iter().copied() {
+                for item in items.iter() {
                     multibyte |= concat_character_makes_multibyte(item)?;
                 }
             }

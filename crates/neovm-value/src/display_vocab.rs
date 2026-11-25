@@ -318,8 +318,10 @@ pub fn gstring_cache_key_from_header(header: &Value) -> Option<GstringShapeCache
 
 /// [`gstring_cache_key_from_header`] over an already-borrowed glyph-string
 /// header slot slice, for callers that hold the header vector's elements.
-pub fn gstring_cache_key_from_header_slots(slots: &[Value]) -> Option<GstringShapeCacheKey> {
-    let font = *slots.first()?;
+pub fn gstring_cache_key_from_header_slots(
+    slots: &crate::tagged::header::LispValueSlice,
+) -> Option<GstringShapeCacheKey> {
+    let font = slots.first()?;
     let data = font.as_font_data()?;
     let fields = data.fields.as_slice();
     if fields.is_empty() {
@@ -382,7 +384,7 @@ fn font_value_fingerprint(value: Value, depth: u8) -> Option<String> {
         ValueKind::Veclike(VecLikeType::Vector) => {
             let mut out = String::from("[");
             for item in value.as_vector_data()? {
-                out.push_str(&font_value_fingerprint(*item, depth + 1)?);
+                out.push_str(&font_value_fingerprint(item, depth + 1)?);
                 out.push(',');
             }
             out.push(']');
@@ -391,7 +393,7 @@ fn font_value_fingerprint(value: Value, depth: u8) -> Option<String> {
         ValueKind::Veclike(VecLikeType::Record) => {
             let mut out = String::from("{");
             for item in value.as_record_data()? {
-                out.push_str(&font_value_fingerprint(*item, depth + 1)?);
+                out.push_str(&font_value_fingerprint(item, depth + 1)?);
                 out.push(',');
             }
             out.push('}');

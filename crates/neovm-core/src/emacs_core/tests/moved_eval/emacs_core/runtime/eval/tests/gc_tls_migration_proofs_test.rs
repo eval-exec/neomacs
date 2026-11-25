@@ -38,7 +38,12 @@ fn gc_tls_ownership_canonical_tables_survive_owner_collection_and_reactivation()
         ctx.standard_category_table_copied().bits(),
         case.bits(),
     ];
-    let descriptor_bits = ctx.syntax_code_objects_copied().as_vector_data().unwrap()[0].bits();
+    let descriptor_bits = ctx
+        .syntax_code_objects_copied()
+        .as_vector_data()
+        .unwrap()
+        .at(0)
+        .bits();
 
     let mut ctx = collect_on_owner_and_reactivate(ctx);
     let restored = [
@@ -54,7 +59,11 @@ fn gc_tls_ownership_canonical_tables_survive_owner_collection_and_reactivation()
             "owner collection swept a Context-owned canonical object"
         );
     }
-    let descriptor = ctx.syntax_code_objects_copied().as_vector_data().unwrap()[0];
+    let descriptor = ctx
+        .syntax_code_objects_copied()
+        .as_vector_data()
+        .unwrap()
+        .at(0);
     assert_eq!(descriptor.bits(), descriptor_bits);
     // The heap ownership probe only accepts non-cons objects. The stable
     // descriptor and its contents prove that the rooted vector traced it.
@@ -145,7 +154,7 @@ fn gc_tls_ownership_context_registries_survive_owner_collection_and_reactivation
             .is_t()
     );
     assert_eq!(
-        charset_payload.as_vector_data().unwrap()[0],
+        charset_payload.as_vector_data().unwrap().at(0),
         Value::fixnum(72)
     );
     assert_eq!(
@@ -174,7 +183,7 @@ fn gc_tls_ownership_context_registries_survive_owner_collection_and_reactivation
         Value::fixnum(74)
     );
     assert_eq!(
-        error_payload.as_vector_data().unwrap()[0],
+        error_payload.as_vector_data().unwrap().at(0),
         Value::fixnum(73)
     );
     drop(error);

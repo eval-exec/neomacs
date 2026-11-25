@@ -192,13 +192,13 @@ fn heapborrow_r8_vector_and_string_scans_do_not_observe_lisp_reads() {
     }
     heap.complete_collection_for_test();
     assert_eq!(
-        root.as_vector_data().unwrap()[0].as_str_owned().unwrap(),
+        root.as_vector_data().unwrap().at(0).as_str_owned().unwrap(),
         "gc retained"
     );
 
     // Real Lisp projections must still create dependencies after GC.
     let (_, reads) = crate::tagged::collection_reads::capture(|| {
-        root.as_vector_data().unwrap()[0].as_str_owned().unwrap()
+        root.as_vector_data().unwrap().at(0).as_str_owned().unwrap()
     });
     assert!(reads.is_some());
     assert!(crate::tagged::collection_reads::is_observed(root.bits()));

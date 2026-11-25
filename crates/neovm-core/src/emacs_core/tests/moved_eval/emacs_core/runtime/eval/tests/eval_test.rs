@@ -8139,10 +8139,10 @@ fn recent_keys_include_cmds_reports_command_markers() {
         .as_vector_data()
         .expect("recent-keys include commands vector");
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0], Value::fixnum('x' as i64));
-    assert!(items[1].is_cons());
-    assert!(items[1].cons_car().is_nil());
-    assert_eq!(items[1].cons_cdr(), Value::symbol("forward-char"));
+    assert_eq!(items.at(0), Value::fixnum('x' as i64));
+    assert!(items.at(1).is_cons());
+    assert!(items.at(1).cons_car().is_nil());
+    assert_eq!(items.at(1).cons_cdr(), Value::symbol("forward-char"));
 }
 
 #[test]
@@ -16316,10 +16316,7 @@ fn specpdl_roots_are_traced_across_exact_gc() {
         Some(SpecBinding::GcRoot { value }) => *value,
         other => panic!("expected specpdl gc root entry, got {other:?}"),
     };
-    assert_eq!(
-        rooted.as_vector_data().unwrap().as_slice(),
-        &[Value::fixnum(29)]
-    );
+    assert_eq!(rooted.as_vector_data().unwrap(), &[Value::fixnum(29)]);
 
     ev.restore_specpdl_roots(scope);
     assert!(ev.specpdl().is_empty());
@@ -16386,10 +16383,7 @@ fn specpdl_backtrace_frame_args_survive_exact_gc() {
                 .and_then(|(_, args, _, _)| args.first().copied())
         })
         .expect("backtrace frame should remain present");
-    assert_eq!(
-        rooted.as_vector_data().unwrap().as_slice(),
-        &[Value::fixnum(17)]
-    );
+    assert_eq!(rooted.as_vector_data().unwrap(), &[Value::fixnum(17)]);
 
     ev.unbind_to(bt_count);
 }
@@ -16414,10 +16408,7 @@ fn specpdl_gc_root_survives_exact_gc() {
                 .and_then(|(_, args, _, _)| args.first().copied())
         })
         .expect("backtrace frame should remain present");
-    assert_eq!(
-        rooted.as_vector_data().unwrap().as_slice(),
-        &[Value::fixnum(13)]
-    );
+    assert_eq!(rooted.as_vector_data().unwrap(), &[Value::fixnum(13)]);
 
     ev.unbind_to(bt_count);
 }
@@ -16436,10 +16427,7 @@ fn specpdl_gc_root_entries_are_traced_across_exact_gc() {
         Some(SpecBinding::GcRoot { value }) => *value,
         other => panic!("expected specpdl gc root entry, got {other:?}"),
     };
-    assert_eq!(
-        rooted.as_vector_data().unwrap().as_slice(),
-        &[Value::fixnum(17)]
-    );
+    assert_eq!(rooted.as_vector_data().unwrap(), &[Value::fixnum(17)]);
     ev.restore_specpdl_roots(scope);
 }
 
@@ -16457,10 +16445,7 @@ fn vm_root_frames_are_traced_across_exact_gc() {
     let rooted = ev
         .vm_root_frames_last_first_root_for_test()
         .expect("vm root frame should remain present");
-    assert_eq!(
-        rooted.as_vector_data().unwrap().as_slice(),
-        &[Value::fixnum(37)]
-    );
+    assert_eq!(rooted.as_vector_data().unwrap(), &[Value::fixnum(37)]);
 
     ev.pop_vm_root_frame();
 }
@@ -16534,10 +16519,7 @@ fn extra_gc_roots_use_specpdl_when_no_runtime_frame_owns_them() {
     };
     ev.restore_specpdl_roots(scope);
 
-    assert_eq!(
-        rooted.as_vector_data().unwrap().as_slice(),
-        &[Value::fixnum(43)]
-    );
+    assert_eq!(rooted.as_vector_data().unwrap(), &[Value::fixnum(43)]);
     assert!(ev.specpdl().is_empty());
 }
 
@@ -16561,10 +16543,7 @@ fn push_specpdl_root_creates_gc_root_entry_and_restore_removes_it() {
     };
     ev.restore_specpdl_roots(scope);
 
-    assert_eq!(
-        rooted.as_vector_data().unwrap().as_slice(),
-        &[Value::fixnum(44)]
-    );
+    assert_eq!(rooted.as_vector_data().unwrap(), &[Value::fixnum(44)]);
     assert!(ev.specpdl().is_empty());
 }
 
@@ -16581,8 +16560,7 @@ fn lexical_binding_rooting_uses_specpdl() {
         ev.lexenv_lookup_cached_in(ev.lexenv_for_test(), sym)
             .expect("lexical binding should exist")
             .as_vector_data()
-            .unwrap()
-            .as_slice(),
+            .unwrap(),
         &[Value::fixnum(47)]
     );
     // bind_lexical_value_rooted uses a temporary specpdl root that is
@@ -16607,8 +16585,7 @@ fn lexical_binding_fallback_uses_specpdl_when_no_frame_is_available() {
         ev.lexenv_lookup_cached_in(ev.lexenv_for_test(), sym)
             .expect("lexical binding should exist")
             .as_vector_data()
-            .unwrap()
-            .as_slice(),
+            .unwrap(),
         &[Value::fixnum(48)]
     );
     assert!(

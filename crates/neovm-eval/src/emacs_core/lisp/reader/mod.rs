@@ -1122,7 +1122,7 @@ pub(crate) fn walk_member_symbols(value: Value, mut on_symbol: impl FnMut(Value)
                     .or_else(|| value.as_record_data())
                     .or_else(|| value.closure_slots())
                 {
-                    stack.extend(slots.iter().rev().copied());
+                    stack.extend(slots.iter().rev());
                 }
             }
             ValueKind::Veclike(VecLikeType::CharTable) => {

@@ -279,7 +279,8 @@ fn concurrent_mapped_chartable_scan_and_builtin_range_writes_are_atomic() {
 fn concurrent_subchartable_snapshot_retains_mapped_span_after_builtin_cow() {
     // This simulates a pdump slot span without a pdump dependency. Declaring
     // the image first also keeps it alive beyond the heap's ordinary teardown.
-    let original = vec![TaggedValue::fixnum(70); 128];
+    let original =
+        vec![crate::tagged::header::AtomicTaggedValue::new(TaggedValue::fixnum(70)); 128];
     let mut heap = TestHeap::new();
     heap.install();
     let table = TaggedValue::make_char_table(TaggedValue::NIL, TaggedValue::fixnum(-1), 0);
@@ -354,7 +355,7 @@ fn concurrent_subchartable_snapshot_retains_mapped_span_after_builtin_cow() {
         observed,
         original
             .iter()
-            .map(|value| value.bits())
+            .map(|value| value.get().bits())
             .collect::<Vec<_>>()
     );
     // SAFETY: the only reader has explicitly joined. The owner can now inspect
@@ -364,7 +365,7 @@ fn concurrent_subchartable_snapshot_retains_mapped_span_after_builtin_cow() {
         (chartable_host().range)(vec![table, TaggedValue::fixnum(0)]).unwrap(),
         TaggedValue::fixnum(100 + (REPEATS - 1) as i64),
     );
-    assert_eq!(original[0], TaggedValue::fixnum(70));
+    assert_eq!(original[0].get(), TaggedValue::fixnum(70));
     let leaf_bits = leaf as usize | crate::tagged::value::TAG_VECLIKE;
     assert!(
         heap.current_mutator_satb()

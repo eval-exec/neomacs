@@ -362,7 +362,7 @@ impl DisplayPropertySpecs {
     {
         if let Some(items) = self.value.as_vector_data() {
             for item in items.iter() {
-                if visit(*item).is_break() {
+                if visit(item).is_break() {
                     return;
                 }
             }

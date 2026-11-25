@@ -1429,7 +1429,11 @@ impl<'a> LoadDecoder<'a> {
             }
         }
         Ok(Some(unsafe {
-            LispValueVec::mapped(ptr.cast_const(), slots.len())
+            LispValueVec::mapped(
+                ptr.cast::<neovm_value::tagged::header::AtomicTaggedValue>()
+                    .cast_const(),
+                slots.len(),
+            )
         }))
     }
 
@@ -1443,7 +1447,11 @@ impl<'a> LoadDecoder<'a> {
             return Ok(None);
         };
         Ok(Some(unsafe {
-            LispValueVec::mapped(ptr.cast_const(), expected_len)
+            LispValueVec::mapped(
+                ptr.cast::<neovm_value::tagged::header::AtomicTaggedValue>()
+                    .cast_const(),
+                expected_len,
+            )
         }))
     }
 
@@ -3054,7 +3062,7 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
 
     let constants = if header.const_count > 0 {
         let slots_ptr = unsafe { base.offset(header.const_rel as isize) }
-            .cast::<neovm_value::tagged::value::TaggedValue>();
+            .cast::<neovm_value::tagged::header::AtomicTaggedValue>();
         unsafe {
             neovm_value::tagged::header::LispValueVec::mapped(
                 slots_ptr,
@@ -3481,7 +3489,7 @@ pub(crate) fn dump_hash_table(encoder: &mut DumpEncoder, ht: &LispHashTable) -> 
 fn dump_closure_slots(encoder: &mut DumpEncoder, value: Value) -> Vec<DumpValue> {
     value
         .closure_slots()
-        .map(|slots| slots.iter().map(|slot| encoder.dump_value(slot)).collect())
+        .map(|slots| slots.iter().map(|slot| encoder.dump_value(&slot)).collect())
         .unwrap_or_default()
 }
 
@@ -3525,7 +3533,7 @@ fn dump_heap_object_from_value(encoder: &mut DumpEncoder, value: Value) -> DumpH
                 .as_vector_data()
                 .expect("vector")
                 .iter()
-                .map(|item| encoder.dump_value(item))
+                .map(|item| encoder.dump_value(&item))
                 .collect(),
         ),
         ValueKind::Veclike(VecLikeType::CharTable) => {
@@ -3606,7 +3614,7 @@ fn dump_heap_object_from_value(encoder: &mut DumpEncoder, value: Value) -> DumpH
                 .as_record_data()
                 .expect("record")
                 .iter()
-                .map(|item| encoder.dump_value(item))
+                .map(|item| encoder.dump_value(&item))
                 .collect(),
         ),
         // A window-configuration is structurally a record; serialize its slots
@@ -3617,7 +3625,7 @@ fn dump_heap_object_from_value(encoder: &mut DumpEncoder, value: Value) -> DumpH
                 .as_window_configuration_data()
                 .expect("window-configuration")
                 .iter()
-                .map(|item| encoder.dump_value(item))
+                .map(|item| encoder.dump_value(&item))
                 .collect(),
         ),
         ValueKind::Veclike(VecLikeType::TsNode) => {

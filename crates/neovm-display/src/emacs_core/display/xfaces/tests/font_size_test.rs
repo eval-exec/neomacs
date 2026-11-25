@@ -66,7 +66,7 @@ fn unavailable_explicit_font_preserves_face_and_frame_state() {
         FrameFaceInitial::SelectedBase,
     )
     .unwrap();
-    let before_attrs = before.as_vector_data().unwrap().as_slice().to_vec();
+    let before_attrs = before.as_vector_data().unwrap().to_vec();
     let before_font = eval
         .frame_manager()
         .get(frame)
@@ -90,10 +90,7 @@ fn unavailable_explicit_font_preserves_face_and_frame_state() {
     assert_eq!(signal.symbol_name(), "error");
     assert_eq!(signal.data[0].as_utf8_str(), Some("Font not available"));
     assert_eq!(signal.data[1], spec);
-    assert_eq!(
-        before.as_vector_data().unwrap().as_slice().to_vec(),
-        before_attrs
-    );
+    assert_eq!(before.as_vector_data().unwrap().to_vec(), before_attrs);
     assert_eq!(
         eval.frame_manager()
             .get(frame)
@@ -115,7 +112,7 @@ fn frame_t_font_on_selected_tty_validates_without_changing_defaults() {
             .is_none()
     );
     let defaults = ensure_global_lisp_face_vector(&mut eval, "default").unwrap();
-    let before = defaults.as_vector_data().unwrap().as_slice().to_vec();
+    let before = defaults.as_vector_data().unwrap().to_vec();
     for font in [Value::string("Monospace-12"), integer_font_spec()] {
         builtin_internal_set_lisp_face_attribute(
             &mut eval,
@@ -127,10 +124,7 @@ fn frame_t_font_on_selected_tty_validates_without_changing_defaults() {
             ],
         )
         .expect("a valid font is ignored for TTY new-frame defaults");
-        assert_eq!(
-            defaults.as_vector_data().unwrap().as_slice(),
-            before.as_slice()
-        );
+        assert_eq!(defaults.as_vector_data().unwrap(), before.as_slice());
     }
     for font in [Value::fixnum(42), Value::NIL] {
         assert!(
@@ -146,10 +140,7 @@ fn frame_t_font_on_selected_tty_validates_without_changing_defaults() {
             .is_err(),
             "validation must precede the TTY no-store gate"
         );
-        assert_eq!(
-            defaults.as_vector_data().unwrap().as_slice(),
-            before.as_slice()
-        );
+        assert_eq!(defaults.as_vector_data().unwrap(), before.as_slice());
     }
     builtin_internal_set_lisp_face_attribute(
         &mut eval,

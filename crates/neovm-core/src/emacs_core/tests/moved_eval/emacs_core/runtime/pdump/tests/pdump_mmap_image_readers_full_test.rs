@@ -260,10 +260,11 @@ fn file_pdump_loads_vector_slots_from_mmap_image() {
         .expect("restored vector symbol");
     let slots = value.as_vector_data().expect("restored vector");
 
-    assert_eq!(slots.as_slice()[0], Value::fixnum(1));
-    assert_eq!(slots.as_slice()[1], Value::fixnum(2));
+    assert_eq!(slots.at(0), Value::fixnum(1));
+    assert_eq!(slots.at(1), Value::fixnum(2));
     assert_eq!(
-        slots.as_slice()[2]
+        slots
+            .at(2)
             .as_lisp_string()
             .expect("vector child string")
             .as_bytes(),
@@ -274,7 +275,9 @@ fn file_pdump_loads_vector_slots_from_mmap_image() {
         "loaded vector object must be a tagged pointer into the retained mmap image"
     );
     assert!(
-        loaded.pdump_image_contains_ptr(slots.as_slice().as_ptr().cast::<u8>()),
+        loaded.pdump_image_contains_ptr(
+            (slots as *const neovm_value::tagged::header::LispValueSlice).cast::<u8>()
+        ),
         "loaded vector slots must be borrowed from the retained mmap image"
     );
 
@@ -284,7 +287,10 @@ fn file_pdump_loads_vector_slots_from_mmap_image() {
         .symbol_value_copied("test-pdump-mapped-vector")
         .expect("restored vector symbol after GC");
     assert_eq!(
-        value_after_gc.as_vector_data().unwrap().as_slice()[2]
+        value_after_gc
+            .as_vector_data()
+            .unwrap()
+            .at(2)
             .as_lisp_string()
             .expect("vector child string after GC")
             .as_bytes(),
@@ -322,11 +328,14 @@ fn file_pdump_loads_record_object_from_mmap_image() {
         "loaded record object must be a tagged pointer into the retained mmap image"
     );
     assert!(
-        loaded.pdump_image_contains_ptr(slots.as_slice().as_ptr().cast::<u8>()),
+        loaded.pdump_image_contains_ptr(
+            (slots as *const neovm_value::tagged::header::LispValueSlice).cast::<u8>()
+        ),
         "loaded record slots must be borrowed from the retained mmap image"
     );
     assert_eq!(
-        slots.as_slice()[1]
+        slots
+            .at(1)
             .as_lisp_string()
             .expect("record child string")
             .as_bytes(),
@@ -339,7 +348,10 @@ fn file_pdump_loads_record_object_from_mmap_image() {
         .symbol_value_copied("test-pdump-mapped-record")
         .expect("restored record symbol after GC");
     assert_eq!(
-        value_after_gc.as_record_data().unwrap().as_slice()[1]
+        value_after_gc
+            .as_record_data()
+            .unwrap()
+            .at(1)
             .as_lisp_string()
             .expect("record child string after GC")
             .as_bytes(),
@@ -376,11 +388,14 @@ fn file_pdump_loads_lambda_object_from_mmap_image() {
         "loaded lambda object must be a tagged pointer into the retained mmap image"
     );
     assert!(
-        loaded.pdump_image_contains_ptr(slots.as_slice().as_ptr().cast::<u8>()),
+        loaded.pdump_image_contains_ptr(
+            (slots as *const neovm_value::tagged::header::LispValueSlice).cast::<u8>()
+        ),
         "loaded lambda slots must be borrowed from the retained mmap image"
     );
     assert_eq!(
-        slots.as_slice()[1]
+        slots
+            .at(1)
             .as_lisp_string()
             .expect("lambda child string")
             .as_bytes(),
@@ -393,7 +408,10 @@ fn file_pdump_loads_lambda_object_from_mmap_image() {
         .symbol_value_copied("test-pdump-mapped-lambda")
         .expect("restored lambda symbol after GC");
     assert_eq!(
-        value_after_gc.closure_slots().unwrap().as_slice()[1]
+        value_after_gc
+            .closure_slots()
+            .unwrap()
+            .at(1)
             .as_lisp_string()
             .expect("lambda child string after GC")
             .as_bytes(),
@@ -439,7 +457,7 @@ fn file_pdump_loads_cons_cells_from_mmap_image() {
         b"mapped-cons-car"
     );
     assert_eq!(
-        value.cons_cdr().as_vector_data().unwrap().as_slice(),
+        value.cons_cdr().as_vector_data().unwrap(),
         &[Value::fixnum(9)]
     );
 

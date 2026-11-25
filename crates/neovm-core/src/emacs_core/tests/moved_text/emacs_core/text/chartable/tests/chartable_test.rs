@@ -2011,7 +2011,7 @@ fn find_char_table(value: Value) -> Option<Value> {
     }
     if let Some(items) = value.as_vector_data() {
         for item in items {
-            if let Some(table) = find_char_table(*item) {
+            if let Some(table) = find_char_table(item) {
                 return Some(table);
             }
         }

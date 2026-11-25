@@ -57,7 +57,7 @@ fn native_parser_tag_survives(first: FirstCollection) {
     // Parser does not need a grammar until it parses input.
     assert!(record.set_record_slot(PARSER_SLOT_TAG, Value::NIL));
     assert_eq!(
-        record.as_record_data().unwrap()[PARSER_SLOT_TAG],
+        record.as_record_data().unwrap().at(PARSER_SLOT_TAG),
         Value::NIL
     );
     assert_eq!(manager.parser(id).unwrap().tag(), tag);

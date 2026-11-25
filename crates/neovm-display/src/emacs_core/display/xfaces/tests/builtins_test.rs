@@ -750,16 +750,22 @@ fn copy_to_defaults_keeps_ignore_defface_stored_and_get_returns_unspecified() {
     let stored = builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol(target)]).unwrap();
     let slots = stored.as_vector_data().unwrap();
     assert_eq!(
-        slots[crate::face::LFaceAttr::Underline as usize].as_bare_symbol_name(),
+        slots
+            .at(crate::face::LFaceAttr::Underline as usize)
+            .as_bare_symbol_name(),
         Some(":ignore-defface"),
         "the defaults vector keeps the sentinel GNU stores"
     );
     assert_eq!(
-        slots[crate::face::LFaceAttr::Inherit as usize].as_bare_symbol_name(),
+        slots
+            .at(crate::face::LFaceAttr::Inherit as usize)
+            .as_bare_symbol_name(),
         Some(":ignore-defface")
     );
     assert_eq!(
-        slots[crate::face::LFaceAttr::Weight as usize].as_bare_symbol_name(),
+        slots
+            .at(crate::face::LFaceAttr::Weight as usize)
+            .as_bare_symbol_name(),
         Some("normal")
     );
 
@@ -802,7 +808,10 @@ fn copy_to_defaults_keeps_ignore_defface_stored_and_get_returns_unspecified() {
     let frame_stored =
         builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol(frame_target), frame]).unwrap();
     assert_eq!(
-        frame_stored.as_vector_data().unwrap()[crate::face::LFaceAttr::Underline as usize]
+        frame_stored
+            .as_vector_data()
+            .unwrap()
+            .at(crate::face::LFaceAttr::Underline as usize)
             .as_bare_symbol_name(),
         Some("unspecified"),
         "a live frame does not gain :ignore-defface from an unspecified copy"
@@ -845,11 +854,19 @@ fn internal_copy_lisp_face_keeps_global_and_frame_domains_separate() {
     let global_vector =
         builtin_internal_lisp_face_p(&mut eval, vec![Value::symbol(face_name)]).unwrap();
     assert_eq!(
-        frame_vector.as_vector_data().unwrap()[5].as_bare_symbol_name(),
+        frame_vector
+            .as_vector_data()
+            .unwrap()
+            .at(5)
+            .as_bare_symbol_name(),
         Some("bold")
     );
     assert_eq!(
-        global_vector.as_vector_data().unwrap()[5].as_bare_symbol_name(),
+        global_vector
+            .as_vector_data()
+            .unwrap()
+            .at(5)
+            .as_bare_symbol_name(),
         Some("unspecified")
     );
 }
@@ -1431,7 +1448,7 @@ fn unresolved_live_default_font_request_preserves_opened_font_and_geometry() {
         FrameFaceInitial::SelectedBase,
     )
     .expect("default face vector");
-    let before = vector.as_vector_data().unwrap().as_slice().to_vec();
+    let before = vector.as_vector_data().unwrap().to_vec();
     eval.set_display_host(Box::new(LiveFrameFontDisplayHost { realized: None }));
 
     // Attested GNU31.1 linux-gtk3: font_load_for_lface retries this string as
@@ -1470,10 +1487,7 @@ fn unresolved_live_default_font_request_preserves_opened_font_and_geometry() {
             .as_utf8_str(),
         Some("Missing Font-17")
     );
-    assert_eq!(
-        vector.as_vector_data().unwrap().as_slice(),
-        before.as_slice()
-    );
+    assert_eq!(vector.as_vector_data().unwrap(), before.as_slice());
 
     let frame = eval.frame_manager().get(frame_id).expect("selected frame");
     assert_eq!(frame.parameter("font-parameter"), Some(old_font));

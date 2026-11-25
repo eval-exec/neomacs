@@ -85,8 +85,8 @@ fn storefast_vm_and_tls_stores_do_not_borrow_the_inactive_capture_recorder() {
     );
     assert!(cons.cons_car().is_nil());
     assert!(cons.cons_cdr().is_t());
-    assert!(vector.as_vector_data().unwrap()[0].is_nil());
-    assert!(record.as_record_data().unwrap()[0].is_t());
+    assert!(vector.as_vector_data().unwrap().at(0).is_nil());
+    assert!(record.as_record_data().unwrap().at(0).is_t());
 }
 
 #[test]
@@ -127,8 +127,8 @@ fn storefast_null_heap_stores_keep_journal_and_captures_without_installing_a_hea
         3
     );
     assert_eq!(cons.cons_car(), Value::T);
-    assert_eq!(vector.as_vector_data().unwrap()[0], Value::T);
-    assert_eq!(record.as_record_data().unwrap()[0], Value::T);
+    assert_eq!(vector.as_vector_data().unwrap().at(0), Value::T);
+    assert_eq!(record.as_record_data().unwrap().at(0), Value::T);
 
     let (_, unfinished) = capture(|| {
         cons.cons_cdr();
@@ -215,8 +215,8 @@ fn storefast_shared_stores_with_active_capture_and_full_barrier() {
     }
     assert_eq!(cons.cons_car(), Value::T);
     assert_eq!(cons.cons_cdr(), Value::T);
-    assert_eq!(vector.as_vector_data().unwrap()[0], Value::NIL);
-    assert_eq!(record.as_record_data().unwrap()[0], Value::NIL);
+    assert_eq!(vector.as_vector_data().unwrap().at(0), Value::NIL);
+    assert_eq!(record.as_record_data().unwrap().at(0), Value::NIL);
     assert_eq!(string.as_lisp_string().unwrap().as_bytes(), b"xy");
 }
 

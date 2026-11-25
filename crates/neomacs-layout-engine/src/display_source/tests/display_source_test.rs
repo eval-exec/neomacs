@@ -4168,9 +4168,9 @@ fn rooted_lisp_string_frame_keeps_detached_face_operands_through_callback_gc() {
             let payload = face_value
                 .as_vector_data()
                 .expect("original managed face vector");
-            assert_eq!(payload.as_slice().len(), 1);
+            assert_eq!(payload.len(), 1);
             assert_eq!(
-                payload.as_slice()[0].as_utf8_str(),
+                payload.at(0).as_utf8_str(),
                 Some(["captured left face", "captured right face"][index]),
                 "the detached original operand must remain readable after callback GC"
             );

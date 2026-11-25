@@ -1755,12 +1755,12 @@ fn window_cursor_info_returns_last_redisplay_cursor_geometry() {
     let out = super::builtin_window_cursor_info(&mut ev, vec![]).expect("window-cursor-info");
     let items = out.as_vector_data().expect("cursor-info vector");
     assert_eq!(items.len(), 6);
-    assert_eq!(items[0], Value::symbol("bar"));
-    assert_eq!(items[1], Value::fixnum(11));
-    assert_eq!(items[2], Value::fixnum(29));
-    assert_eq!(items[3], Value::fixnum(3));
-    assert_eq!(items[4], Value::fixnum(16));
-    assert_eq!(items[5], Value::fixnum(12));
+    assert_eq!(items.at(0), Value::symbol("bar"));
+    assert_eq!(items.at(1), Value::fixnum(11));
+    assert_eq!(items.at(2), Value::fixnum(29));
+    assert_eq!(items.at(3), Value::fixnum(3));
+    assert_eq!(items.at(4), Value::fixnum(16));
+    assert_eq!(items.at(5), Value::fixnum(12));
 }
 
 #[test]
@@ -1810,12 +1810,12 @@ fn window_cursor_info_hides_and_restores_live_cursor_geometry() {
     .expect("show cursor");
     let out = super::builtin_window_cursor_info(&mut ev, vec![]).expect("window-cursor-info");
     let items = out.as_vector_data().expect("cursor-info vector");
-    assert_eq!(items[0], Value::symbol("bar"));
-    assert_eq!(items[1], Value::fixnum(11));
-    assert_eq!(items[2], Value::fixnum(29));
-    assert_eq!(items[3], Value::fixnum(3));
-    assert_eq!(items[4], Value::fixnum(16));
-    assert_eq!(items[5], Value::fixnum(12));
+    assert_eq!(items.at(0), Value::symbol("bar"));
+    assert_eq!(items.at(1), Value::fixnum(11));
+    assert_eq!(items.at(2), Value::fixnum(29));
+    assert_eq!(items.at(3), Value::fixnum(3));
+    assert_eq!(items.at(4), Value::fixnum(16));
+    assert_eq!(items.at(5), Value::fixnum(12));
 }
 
 #[test]

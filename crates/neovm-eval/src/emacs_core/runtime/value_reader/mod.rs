@@ -1321,7 +1321,7 @@ impl SubstituteWalk {
                 while let Some(item) = subtree
                     .as_vector_data()
                     .or_else(|| subtree.as_record_data())
-                    .and_then(|items| items.get(index).copied())
+                    .and_then(|items| items.get(index))
                 {
                     let new_item = self.substitute(item)?;
                     if !eq_value(&new_item, &item) {
@@ -1335,10 +1335,7 @@ impl SubstituteWalk {
             }
             VecLikeType::Lambda | VecLikeType::Macro => {
                 let mut index = 0;
-                while let Some(slot) = subtree
-                    .closure_slots()
-                    .and_then(|slots| slots.get(index).copied())
-                {
+                while let Some(slot) = subtree.closure_slots().and_then(|slots| slots.get(index)) {
                     let new_slot = self.substitute(slot)?;
                     if !eq_value(&new_slot, &slot)
                         && let Some(slots) = subtree.closure_slots()

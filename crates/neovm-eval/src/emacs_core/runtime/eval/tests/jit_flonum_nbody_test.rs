@@ -117,7 +117,7 @@ fn system() -> Vec<Value> {
 }
 
 fn slot(body: Value, i: usize) -> f64 {
-    let v = body.as_vector_data().expect("a body vector")[i];
+    let v = body.as_vector_data().expect("a body vector").at(i);
     assert!(matches!(v.kind(), ValueKind::Float), "slot {i}: {v:?}");
     v.xfloat()
 }

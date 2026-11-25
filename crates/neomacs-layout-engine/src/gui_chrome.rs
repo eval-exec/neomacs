@@ -676,7 +676,7 @@ fn collect_image_file_candidates(value: &Value, files: &mut Vec<String>) {
         collect_image_file_candidates(&value.cons_cdr(), files);
     } else if let Some(values) = value.as_vector_data() {
         for item in values.iter() {
-            collect_image_file_candidates(item, files);
+            collect_image_file_candidates(&item, files);
         }
     }
 }

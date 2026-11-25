@@ -275,9 +275,10 @@ pub fn window_configuration_parts_from_value(value: &Value) -> Option<(Value, i6
     if items.len() != 4 {
         return None;
     }
-    match (items[1].kind(), items[2].kind()) {
+    let frame = items.at(1);
+    match (frame.kind(), items.at(2).kind()) {
         (ValueKind::Veclike(VecLikeType::Frame), ValueKind::Fixnum(serial)) => {
-            Some((items[1], serial))
+            Some((frame, serial))
         }
         _ => None,
     }

@@ -2591,7 +2591,7 @@ fn advance_column_glyphs(
     let glyphs = entry.as_vector_data()?;
     let mut column = column.get();
     for glyph in glyphs.iter() {
-        let code = super::display_metrics::display_glyph_character(*glyph)
+        let code = super::display_metrics::display_glyph_character(glyph)
             .map(|character| character.code())
             .unwrap_or(u32::from(b' '));
         if line_end.is_line_end(code) {
@@ -2633,7 +2633,7 @@ fn simple_backward_column(
         let count = glyphs.as_ref().map_or(1, |glyphs| glyphs.len());
         for index in (0..count).rev() {
             let code = match glyphs.as_ref() {
-                Some(glyphs) => super::display_metrics::display_glyph_character(glyphs[index])
+                Some(glyphs) => super::display_metrics::display_glyph_character(glyphs.at(index))
                     .map(|character| character.code())
                     .unwrap_or(u32::from(b' ')),
                 None => u32::from(byte),

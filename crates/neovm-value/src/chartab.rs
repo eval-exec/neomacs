@@ -1795,7 +1795,7 @@ pub fn decode_uniprop_run_length(table: Value, value: Value) -> Value {
     }
     value_table
         .as_vector_data()
-        .and_then(|values| values.get(index as usize).copied())
+        .and_then(|values| values.get(index as usize))
         .unwrap_or(value)
 }
 fn decode_unicode_property_map_value(table: Value, value: Value, mode: SymbolMode) -> Value {
