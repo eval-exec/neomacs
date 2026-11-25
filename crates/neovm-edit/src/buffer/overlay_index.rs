@@ -272,6 +272,7 @@ impl OrderedFilteredRecord for EndpointRecord {
 
 /// Numeric pre-write keys, consumed by the same index after a plist write.
 /// No Lisp values or old plist roots escape the exclusive owner operation.
+#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Debug)]
 pub(super) struct OverlayPropertyKeys {
@@ -500,7 +501,7 @@ enum EndpointScanDirection {
 /// a short `core.read()` guard, checks the generation stamp, copies up to
 /// `ENDPOINT_CHUNK_SIZE` matching endpoints, and releases the guard before
 /// yielding. No `RwLockReadGuard` ever outlives a call.
-pub(super) struct LiveEndpointRecords<'a> {
+struct LiveEndpointRecords<'a> {
     intervals: &'a Arc<RwLock<IntervalBPlusTree>>,
     core: &'a Arc<RwLock<OverlayIndexCore>>,
     stale: &'a Cell<bool>,
@@ -630,7 +631,9 @@ impl<'a> LiveEndpointRecords<'a> {
 /// Endpoint cursor shared by `OverlayList` (single-pass direct B+ tree
 /// traversal under one mapped `core.read()` guard) and `LiveOverlayView`
 /// (guard-free chunked stream with per-chunk generation checks).
-pub(super) enum OverlayEndpointRecords<'a> {
+pub(super) struct OverlayEndpointRecords<'a>(OverlayEndpointRecordsInner<'a>);
+
+enum OverlayEndpointRecordsInner<'a> {
     Direct(
         OrderedTreeMatches<
             MappedRwLockReadGuard<'a, OrderedShiftTree<EndpointRecord>>,
@@ -645,7 +648,7 @@ pub(super) enum OverlayEndpointRecords<'a> {
 impl OverlayEndpointRecords<'_> {
     #[inline]
     pub(super) fn empty() -> Self {
-        Self::Empty
+        Self(OverlayEndpointRecordsInner::Empty)
     }
 }
 
@@ -654,14 +657,16 @@ impl Iterator for OverlayEndpointRecords<'_> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Direct(records) => records.next().map(|record| OverlayEndpoint {
-                position: record.key.position,
-                overlay: record.overlay,
-                kind: record.kind,
-            }),
-            Self::Live(live) => live.next_item(),
-            Self::Empty => None,
+        match &mut self.0 {
+            OverlayEndpointRecordsInner::Direct(records) => {
+                records.next().map(|record| OverlayEndpoint {
+                    position: record.key.position,
+                    overlay: record.overlay,
+                    kind: record.kind,
+                })
+            }
+            OverlayEndpointRecordsInner::Live(live) => live.next_item(),
+            OverlayEndpointRecordsInner::Empty => None,
         }
     }
 }
@@ -716,6 +721,7 @@ impl EndpointBPlusTree {
             .map(|record| record.key.position)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn refresh_overlay_property_mask(&mut self, overlay: Value) {
         let property_mask = overlay_indexed_property_mask(overlay);
         for kind in [EndpointKind::Start, EndpointKind::End] {
@@ -788,22 +794,34 @@ fn materialize_overlay_position(overlay: Value, range: EmacsByteRange) {
 /// generation.
 ///
 /// Lock order: whenever both locks are held, acquire `intervals` before
-/// `core`. Never hold `core` while acquiring `intervals`.
+/// `core`. Never hold `core` while acquiring `intervals` on any writer or
+/// `LiveOverlayIndex` path.
 ///
 /// Every core writer updates endpoints/keys and advances `generation` inside
 /// one `write_core_lock` critical section, after any `intervals` edit has
 /// finished, so a reader cannot pair a new generation with pre-edit state.
 ///
-/// Parallel-VM / E-spine precondition: `write_core_lock` is atomic for `core`
-/// only; interval-tree edits in `attach`, `remap`, `adjust_for_insert`, and
-/// `adjust_for_delete` run in separate `intervals.write()` sections before the
-/// core bump. Today `Value` is thread-confined (`!Send + !Sync`) and
-/// `LiveOverlayView` holds `Cell<bool>`, so reader and writer are strictly
-/// serialized on the evaluator thread and cannot observe a mid-edit interval
-/// tree under the old stamp. Before any cross-thread reader of
-/// `LiveOverlayIndex` is introduced, writers must either hold
-/// `intervals.write()` across the core bump (as `move_to` already does) or
-/// protect interval+core edits with an odd/even seqlock generation.
+/// Parallel-VM / E-spine preconditions:
+/// 1. `write_core_lock` is atomic for `core` only; interval-tree edits in
+///    `attach`, `remap`, `adjust_for_insert`, and `adjust_for_delete` run in
+///    separate `intervals.write()` sections before the core bump. Today
+///    `Value` is thread-confined (`!Send + !Sync`) and `LiveOverlayView` holds
+///    `Cell<bool>`, so reader and writer are strictly serialized on the
+///    evaluator thread and cannot observe a mid-edit interval tree under the
+///    old stamp. Before any cross-thread reader of `LiveOverlayIndex` is
+///    introduced, writers must either hold `intervals.write()` across the core
+///    bump (as `move_to` already does) or protect interval+core edits with an
+///    odd/even seqlock generation.
+/// 2. `OverlayEndpointRecords::Direct` (used only by the default `&OverlayList`
+///    path, never by `LiveOverlayView`) holds a mapped `core.read()` guard for
+///    the lifetime of the endpoint iterator while the consumer's
+///    `apply_endpoint -> overlay_range` takes `intervals.read()` (read-read
+///    `core -> intervals` nesting). Today this is single-threaded and borrowck
+///    forbids same-thread writers while `&OverlayList` is borrowed; before any
+///    cross-thread writer can contend on `intervals.write()` during a `Direct`
+///    sweep, `Direct` must either stop holding `core.read()` across yields
+///    (like `LiveEndpointRecords`) or store the overlay range on
+///    `EndpointRecord` so `apply_endpoint` does not acquire `intervals.read()`.
 #[derive(Debug)]
 struct OverlayIndexCore {
     /// Published lazily. The property masks consulted by
@@ -1122,14 +1140,16 @@ impl LiveOverlayIndex {
         property_filter: OverlayPropertyFilter,
         stale: &'a Cell<bool>,
     ) -> OverlayEndpointRecords<'a> {
-        OverlayEndpointRecords::Live(Box::new(LiveEndpointRecords::new(
-            &self.intervals,
-            &self.core,
-            stale,
-            self.stamp,
-            bounds,
-            property_filter,
-            EndpointScanDirection::Forward,
+        OverlayEndpointRecords(OverlayEndpointRecordsInner::Live(Box::new(
+            LiveEndpointRecords::new(
+                &self.intervals,
+                &self.core,
+                stale,
+                self.stamp,
+                bounds,
+                property_filter,
+                EndpointScanDirection::Forward,
+            ),
         )))
     }
 
@@ -1139,14 +1159,16 @@ impl LiveOverlayIndex {
         property_filter: OverlayPropertyFilter,
         stale: &'a Cell<bool>,
     ) -> OverlayEndpointRecords<'a> {
-        OverlayEndpointRecords::Live(Box::new(LiveEndpointRecords::new(
-            &self.intervals,
-            &self.core,
-            stale,
-            self.stamp,
-            bounds,
-            property_filter,
-            EndpointScanDirection::Reverse,
+        OverlayEndpointRecords(OverlayEndpointRecordsInner::Live(Box::new(
+            LiveEndpointRecords::new(
+                &self.intervals,
+                &self.core,
+                stale,
+                self.stamp,
+                bounds,
+                property_filter,
+                EndpointScanDirection::Reverse,
+            ),
         )))
     }
 }
@@ -1285,6 +1307,7 @@ impl OverlayIndex {
     }
 
     /// Capture numeric old keys before any plist-head replacement or write.
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn property_keys_before_write(&self, overlay: Value) -> Option<OverlayPropertyKeys> {
         let data = overlay.as_overlay_data()?;
@@ -2260,12 +2283,14 @@ impl OverlayIndex {
                 .expect("overlay endpoints published before direct scan")
                 .records
         });
-        OverlayEndpointRecords::Direct(OrderedShiftTree::matches_owned(
-            records,
-            DirectEndpointRangeQuery {
-                bounds,
-                property_filter,
-            },
+        OverlayEndpointRecords(OverlayEndpointRecordsInner::Direct(
+            OrderedShiftTree::matches_owned(
+                records,
+                DirectEndpointRangeQuery {
+                    bounds,
+                    property_filter,
+                },
+            ),
         ))
     }
 
@@ -2282,15 +2307,18 @@ impl OverlayIndex {
                 .expect("overlay endpoints published before reverse direct scan")
                 .records
         });
-        OverlayEndpointRecords::Direct(OrderedShiftTree::matches_owned_reverse(
-            records,
-            DirectEndpointRangeQuery {
-                bounds,
-                property_filter,
-            },
+        OverlayEndpointRecords(OverlayEndpointRecordsInner::Direct(
+            OrderedShiftTree::matches_owned_reverse(
+                records,
+                DirectEndpointRangeQuery {
+                    bounds,
+                    property_filter,
+                },
+            ),
         ))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn overlay_properties_changed(
         &mut self,
