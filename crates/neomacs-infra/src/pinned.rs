@@ -198,13 +198,7 @@ pub fn cached_pinned_file(name: &str, sha256: &str) -> Result<PathBuf, PinnedErr
 
 fn cached_pinned_file_in(root: &Path, name: &str, sha256: &str) -> Result<PathBuf, PinnedError> {
     validate_pin(name, sha256)?;
-    let destination = entry_path(root, name, sha256);
-    match verify(&destination, sha256) {
-        Err(PinnedError::Read { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
-            Err(PinnedError::CacheMiss { path: destination })
-        }
-        result => result.map(|()| destination),
-    }
+    verify_cache_entry(root, name, sha256)
 }
 
 /// [`pinned_file`] with the fetch's size cap named by the caller: a font
@@ -232,9 +226,8 @@ where
     F: FnOnce() -> Result<Vec<u8>, PinnedError>,
 {
     validate_pin(name, sha256)?;
-    let destination = entry_path(root, name, sha256);
-    if destination.exists() && verify(&destination, sha256).is_ok() {
-        return Ok(destination);
+    if let Ok(path) = verify_cache_entry(root, name, sha256) {
+        return Ok(path);
     }
     fs::create_dir_all(root).map_err(|source| PinnedError::CacheRoot {
         path: root.to_path_buf(),
@@ -299,9 +292,8 @@ fn ensure_pinned_in<F>(
 where
     F: FnOnce() -> Result<Vec<u8>, PinnedError>,
 {
-    let destination = entry_path(root, name, sha256);
-    if destination.exists() && verify(&destination, sha256).is_ok() {
-        return Ok(destination);
+    if let Ok(path) = verify_cache_entry(root, name, sha256) {
+        return Ok(path);
     }
     let bytes = fetch()?;
     if bytes.len() as u64 > max_bytes {
@@ -430,14 +422,18 @@ fn remove_stray_non_dir(path: &Path) -> Result<bool, std::io::Error> {
     match fs::symlink_metadata(path) {
         Ok(meta) if !meta.file_type().is_dir() => match fs::remove_file(path) {
             Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
             // On Windows, directory symlinks require `remove_dir`.
             Err(error)
                 if cfg!(windows)
                     && meta.file_type().is_symlink()
                     && error.kind() == std::io::ErrorKind::PermissionDenied =>
             {
-                fs::remove_dir(path)?;
-                Ok(true)
+                match fs::remove_dir(path) {
+                    Ok(()) => Ok(true),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(true),
+                    Err(err) => Err(err),
+                }
             }
             Err(error) => Err(error),
         },
@@ -563,8 +559,67 @@ fn hash_bytes(bytes: &[u8]) -> String {
     crate::inventory::sha256_hex(bytes)
 }
 
-/// The cached bytes are what the pin describes.
+/// Verify that `<root>/<sha256>` is a real directory, `<root>/<sha256>/<name>`
+/// is a real regular file (never following symlinks), and its SHA-256 matches
+/// `sha256`.
+fn verify_cache_entry(root: &Path, name: &str, sha256: &str) -> Result<PathBuf, PinnedError> {
+    let dir = entry_dir(root, sha256);
+    let destination = dir.join(name);
+    match fs::symlink_metadata(&dir) {
+        Ok(meta) if meta.file_type().is_dir() => {}
+        Ok(_) => {
+            return Err(PinnedError::Read {
+                path: dir,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "pinned fixture hash directory must be a real directory, not a symlink or file",
+                ),
+            });
+        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Err(PinnedError::CacheMiss { path: destination });
+        }
+        Err(source) => return Err(PinnedError::Read { path: dir, source }),
+    }
+    match fs::symlink_metadata(&destination) {
+        Ok(meta) if meta.file_type().is_file() => {}
+        Ok(_) => {
+            return Err(PinnedError::Read {
+                path: destination,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "pinned fixture cache entry must be a real file, not a symlink or directory",
+                ),
+            });
+        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Err(PinnedError::CacheMiss { path: destination });
+        }
+        Err(source) => {
+            return Err(PinnedError::Read {
+                path: destination,
+                source,
+            });
+        }
+    }
+    verify(&destination, sha256).map(|()| destination)
+}
+
+/// The cached bytes are what the pin describes. Never follows symlinks.
 fn verify(path: &Path, expected: &str) -> Result<(), PinnedError> {
+    let meta = fs::symlink_metadata(path).map_err(|source| PinnedError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !meta.file_type().is_file() {
+        return Err(PinnedError::Read {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "pinned fixture cache entry must be a real file, not a symlink or directory",
+            ),
+        });
+    }
     let bytes = fs::read(path).map_err(|source| PinnedError::Read {
         path: path.to_path_buf(),
         source,

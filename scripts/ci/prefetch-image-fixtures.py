@@ -14,6 +14,7 @@ import secrets
 import shutil
 import socket
 import ssl
+import stat
 import sys
 import time
 from urllib.request import urlopen
@@ -246,10 +247,31 @@ def entry_path(root: Path, pin: Pin) -> Path:
     return root / pin.sha256 / pin.name
 
 
+def lstat_mode(path: Path) -> int | None:
+    try:
+        return os.lstat(path).st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+
+
+def is_real_dir(path: Path) -> bool:
+    """True only when `path` is a real directory, via a single lstat."""
+    mode = lstat_mode(path)
+    return mode is not None and stat.S_ISDIR(mode)
+
+
+def is_real_file(path: Path) -> bool:
+    """True only when `path` is a real regular file, via a single lstat."""
+    mode = lstat_mode(path)
+    return mode is not None and stat.S_ISREG(mode)
+
+
 def entry_matches(destination: Path, sha256: str) -> bool:
+    if not is_real_dir(destination.parent) or not is_real_file(destination):
+        return False
     try:
         cached = destination.read_bytes()
-    except (FileNotFoundError, NotADirectoryError):
+    except OSError:
         return False
     return hashlib.sha256(cached).hexdigest() == sha256
 
@@ -269,17 +291,25 @@ def create_stage_dir(root: Path, sha256: str) -> Path:
     )
 
 
-def is_real_dir(path: Path) -> bool:
-    """True only when `path` is a real directory, without following symlinks."""
-    return not path.is_symlink() and path.is_dir()
-
-
 def remove_stray_non_dir(path: Path) -> bool:
     """Remove a stray file or symlink occupying `<cache_root>/<sha256>`."""
-    if path.is_symlink() or (path.exists() and not path.is_dir()):
-        path.unlink()
+    mode = lstat_mode(path)
+    if mode is None or stat.S_ISDIR(mode):
+        return False
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
         return True
-    return False
+    except PermissionError:
+        # On Windows, directory symlinks require rmdir() rather than unlink().
+        if os.name == "nt" and stat.S_ISLNK(mode):
+            try:
+                os.rmdir(path)
+            except FileNotFoundError:
+                return True
+        else:
+            raise
+    return True
 
 
 @contextlib.contextmanager

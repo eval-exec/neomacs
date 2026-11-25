@@ -711,6 +711,88 @@ class ImageFixtureTests(unittest.TestCase):
         self.assertFalse((external / self.pin.name).exists())
         self.assertEqual(self.cache_entries(), [self.destination.parent])
 
+    def test_read_path_refuses_symlinks_even_with_matching_bytes_or_subdir_entry(self):
+        if os.name != "posix":
+            return
+        self.cache.mkdir(parents=True, exist_ok=True)
+        external = self.workspace / "external-target"
+        external.mkdir()
+
+        # Case 1: <cache>/<sha256> -> external/ where external/<name> holds
+        # exact matching bytes. entry_matches must return False and prefetch
+        # must fetch and replace the symlink with a real directory + real file.
+        external_match = external / self.pin.name
+        external_match.write_bytes(self.data)
+        os.symlink(external, self.destination.parent)
+        self.assertFalse(provisioner.entry_matches(self.destination, self.pin.sha256))
+        fetch = mock.Mock(return_value=self.data)
+        result = provisioner.prefetch(self.workspace, self.pin, fetch)
+        fetch.assert_called_once_with(self.pin.url)
+        self.assertEqual(result, self.destination)
+        self.assertTrue(provisioner.is_real_dir(self.destination.parent))
+        self.assertTrue(provisioner.is_real_file(self.destination))
+        self.assertEqual(external_match.read_bytes(), self.data)
+
+        # Case 2: <cache>/<sha_b> -> external_sub/ where external_sub/<name> is
+        # a subdirectory. entry_matches must return False (not raise
+        # IsADirectoryError) and prefetch must replace the symlink cleanly.
+        data_b = b"fixture replacing symlink-to-subdir-entry"
+        pin_b = provisioner.Pin(
+            self.pin.name,
+            "2" * 40,
+            "https://fixtures.invalid/" + "2" * 40 + "/image.xpm",
+            hashlib.sha256(data_b).hexdigest(),
+        )
+        external_sub = self.workspace / "external-sub"
+        (external_sub / pin_b.name).mkdir(parents=True)
+        dest_b = self.cache / pin_b.sha256 / pin_b.name
+        os.symlink(external_sub, dest_b.parent)
+        self.assertFalse(provisioner.entry_matches(dest_b, pin_b.sha256))
+        result_b = provisioner.prefetch(
+            self.workspace, pin_b, mock.Mock(return_value=data_b)
+        )
+        self.assertEqual(result_b, dest_b)
+        self.assertTrue(provisioner.is_real_dir(dest_b.parent))
+        self.assertTrue(provisioner.is_real_file(dest_b))
+        self.assertTrue((external_sub / pin_b.name).is_dir())
+
+        # Case 3: <cache>/<sha_c> is a real dir, but <cache>/<sha_c>/<name> is a
+        # symlink pointing to an external file with matching bytes.
+        data_c = b"symlinked file entry payload"
+        pin_c = provisioner.Pin(
+            self.pin.name,
+            "3" * 40,
+            "https://fixtures.invalid/" + "3" * 40 + "/image.xpm",
+            hashlib.sha256(data_c).hexdigest(),
+        )
+        external_c = external / "matching-c.xpm"
+        external_c.write_bytes(data_c)
+        dest_c = self.cache / pin_c.sha256 / pin_c.name
+        dest_c.parent.mkdir(parents=True)
+        os.symlink(external_c, dest_c)
+        self.assertFalse(provisioner.entry_matches(dest_c, pin_c.sha256))
+        fetch_c = mock.Mock(return_value=data_c)
+        result_c = provisioner.prefetch(self.workspace, pin_c, fetch_c)
+        fetch_c.assert_called_once_with(pin_c.url)
+        self.assertEqual(result_c, dest_c)
+        self.assertTrue(provisioner.is_real_file(dest_c))
+        self.assertEqual(external_c.read_bytes(), data_c)
+
+    def test_remove_stray_non_dir_uses_rmdir_fallback_for_windows_dir_symlink(self):
+        fake_lstat = mock.Mock(st_mode=provisioner.stat.S_IFLNK | 0o777)
+        target = self.cache / self.pin.sha256
+        with (
+            mock.patch.object(provisioner.os, "name", "nt"),
+            mock.patch.object(provisioner.os, "lstat", return_value=fake_lstat),
+            mock.patch.object(
+                provisioner.os, "unlink", side_effect=PermissionError(errno.EACCES, "denied")
+            ) as unlink,
+            mock.patch.object(provisioner.os, "rmdir") as rmdir,
+        ):
+            self.assertTrue(provisioner.remove_stray_non_dir(target))
+        unlink.assert_called_once_with(target)
+        rmdir.assert_called_once_with(target)
+
     def test_distinct_revisions_for_same_filename_coexist_in_shared_cache(self):
         rev_b_data = b"revision b image bytes"
         pin_b = provisioner.Pin(

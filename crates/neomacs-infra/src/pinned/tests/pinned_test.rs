@@ -1,8 +1,8 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// The shared cache root follows the same precedence as `neomacs-test-fonts`:
-/// explicit env override, then XDG, then HOME, then the workspace fallback.
+/// The shared cache root prefers the explicit env override, then an absolute
+/// `XDG_CACHE_HOME`, then `HOME`, then the workspace fallback.
 #[test]
 fn pinned_fixture_cache_root_prefers_explicit_then_xdg_then_home_then_workspace() {
     let workspace = PathBuf::from("/worktree-a");
@@ -633,4 +633,115 @@ fn post_rename_retry_unlinks_raced_symlink_without_following_it() {
         .filter(|name| name.starts_with(".stage-"))
         .collect();
     assert!(leftovers.is_empty(), "leftover staging dirs: {leftovers:?}");
+}
+
+/// Cache reads never follow a symlink at `<cache_root>/<sha256>` or `<name>`,
+/// even when the symlink target contains matching bytes; mismatched external
+/// targets are refused without reading or leaking their SHA-256, and writers
+/// replace the symlink with a real cache entry while leaving external targets
+/// untouched.
+#[cfg(unix)]
+#[test]
+fn read_path_refuses_symlinks_even_when_target_bytes_match() {
+    use std::os::unix::fs::symlink;
+
+    let sandbox = tempfile::tempdir().expect("sandbox");
+    let shared = sandbox.path().join("cache");
+    let external = sandbox.path().join("external-target");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::create_dir_all(&external).unwrap();
+
+    // Case 1: <cache>/<sha256> -> external/ where external/fixture.xpm has
+    // exact matching bytes. Both cache-only reader and writer must refuse the
+    // symlink rather than accepting an external file as a cache hit.
+    let payload = b"matching external fixture bytes";
+    let sha = crate::inventory::sha256_hex(payload);
+    let external_file = external.join("fixture.xpm");
+    std::fs::write(&external_file, payload).unwrap();
+    let hash_link = entry_dir(&shared, &sha);
+    symlink(&external, &hash_link).unwrap();
+
+    assert!(
+        matches!(
+            cached_pinned_file_in(&shared, "fixture.xpm", &sha),
+            Err(PinnedError::Read { .. })
+        ),
+        "cache-only read must refuse a symlinked hash directory even when bytes match"
+    );
+
+    let fetches = AtomicUsize::new(0);
+    let published = pinned_file_in_with_fetch(
+        &shared,
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha,
+        1024,
+        || {
+            fetches.fetch_add(1, Ordering::SeqCst);
+            Ok(payload.to_vec())
+        },
+    )
+    .expect("writer replaces symlinked hash dir with real dir");
+    assert_eq!(fetches.load(Ordering::SeqCst), 1);
+    assert!(is_real_dir(&hash_link));
+    assert_eq!(std::fs::read(&published).unwrap(), payload);
+    assert_eq!(std::fs::read(&external_file).unwrap(), payload);
+
+    // Case 2: <cache>/<sha_b> -> external/ where external/fixture.xpm holds
+    // different bytes. Cache-only read must refuse without hashing or leaking
+    // the external file's digest in PinnedError::CachedHash.
+    let payload_b = b"different expected fixture bytes";
+    let sha_b = crate::inventory::sha256_hex(payload_b);
+    let hash_link_b = entry_dir(&shared, &sha_b);
+    symlink(&external, &hash_link_b).unwrap();
+    assert!(
+        matches!(
+            cached_pinned_file_in(&shared, "fixture.xpm", &sha_b),
+            Err(PinnedError::Read { .. })
+        ),
+        "cache-only read must not follow symlink or leak external file hash"
+    );
+
+    // Case 3: <cache>/<sha_c> is a real dir, but <cache>/<sha_c>/fixture.xpm is
+    // a symlink to external/fixture.xpm with matching bytes.
+    let payload_c = b"symlinked file entry bytes";
+    let sha_c = crate::inventory::sha256_hex(payload_c);
+    let external_c = external.join("external-c.xpm");
+    std::fs::write(&external_c, payload_c).unwrap();
+    let dir_c = entry_dir(&shared, &sha_c);
+    std::fs::create_dir_all(&dir_c).unwrap();
+    let file_link_c = dir_c.join("fixture.xpm");
+    symlink(&external_c, &file_link_c).unwrap();
+
+    assert!(
+        matches!(
+            cached_pinned_file_in(&shared, "fixture.xpm", &sha_c),
+            Err(PinnedError::Read { .. })
+        ),
+        "cache-only read must refuse a symlinked file entry even when bytes match"
+    );
+
+    let fetches_c = AtomicUsize::new(0);
+    let published_c = pinned_file_in_with_fetch(
+        &shared,
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha_c,
+        1024,
+        || {
+            fetches_c.fetch_add(1, Ordering::SeqCst);
+            Ok(payload_c.to_vec())
+        },
+    )
+    .expect("writer replaces symlinked file entry with real file");
+    assert_eq!(fetches_c.load(Ordering::SeqCst), 1);
+    assert!(
+        std::fs::symlink_metadata(&published_c)
+            .unwrap()
+            .file_type()
+            .is_file(),
+        "published entry must be a real file, not a symlink"
+    );
+    assert_eq!(std::fs::read(&published_c).unwrap(), payload_c);
+    assert_eq!(std::fs::read(&external_c).unwrap(), payload_c);
 }
