@@ -719,6 +719,17 @@ impl ShaderSurfaceCache {
         external: &std::collections::HashMap<SurfaceChannelSource, wgpu::TextureView>,
         sample: FrameSample,
     ) -> usize {
+        self.render_pending_with_submission(device, queue, external, sample)
+            .0
+    }
+
+    pub(crate) fn render_pending_with_submission(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        external: &std::collections::HashMap<SurfaceChannelSource, wgpu::TextureView>,
+        sample: FrameSample,
+    ) -> (usize, Option<wgpu::SubmissionIndex>) {
         // Two clocks, two questions. `iTime`, `iTimeDelta` and the `:fps`
         // cadence are a visual phase, so they are dated to when this frame
         // reaches the screen...
@@ -784,7 +795,7 @@ impl ShaderSurfaceCache {
         }
 
         if pending.is_empty() {
-            return 0;
+            return (0, None);
         }
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -852,8 +863,8 @@ impl ShaderSurfaceCache {
             }
             tracing::trace!("shader surface {id} rendered (t={:.3})", surface.elapsed);
         }
-        queue.submit(std::iter::once(encoder.finish()));
-        pending.len()
+        let submission = queue.submit(std::iter::once(encoder.finish()));
+        (pending.len(), Some(submission))
     }
 }
 

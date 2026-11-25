@@ -1,8 +1,8 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::color::VideoColorTransform;
 use crate::system::VideoWake;
@@ -74,6 +74,223 @@ where
 
     pub(crate) fn into_completion_callback(self) -> impl FnOnce() + Send + 'static {
         move || drop(self)
+    }
+}
+
+static NEXT_VIDEO_SYSTEM_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_video_system_id() -> NonZeroU64 {
+    let raw = NEXT_VIDEO_SYSTEM_ID.fetch_add(1, Ordering::Relaxed);
+    NonZeroU64::new(raw).expect("video system ID counter must not wrap to zero")
+}
+
+/// Command encoder bound by type to one [`crate::VideoSystem`] and its owning
+/// `wgpu::Device`.
+///
+/// The raw inner `wgpu::CommandEncoder` is private so safe callers cannot swap
+/// in an encoder created on a different device before submitting.
+pub struct VideoCommandEncoder {
+    system_id: NonZeroU64,
+    encoder: wgpu::CommandEncoder,
+}
+
+impl VideoCommandEncoder {
+    pub(crate) const fn new(system_id: NonZeroU64, encoder: wgpu::CommandEncoder) -> Self {
+        Self { system_id, encoder }
+    }
+
+    pub(crate) const fn system_id(&self) -> NonZeroU64 {
+        self.system_id
+    }
+
+    pub(crate) fn finish(self) -> wgpu::CommandBuffer {
+        self.encoder.finish()
+    }
+
+    pub fn begin_render_pass<'a>(
+        &'a mut self,
+        desc: &wgpu::RenderPassDescriptor<'_>,
+    ) -> wgpu::RenderPass<'a> {
+        self.encoder.begin_render_pass(desc)
+    }
+
+    pub fn resolve_query_set(
+        &mut self,
+        query_set: &wgpu::QuerySet,
+        query_range: std::ops::Range<u32>,
+        destination: &wgpu::Buffer,
+        destination_offset: wgpu::BufferAddress,
+    ) {
+        self.encoder
+            .resolve_query_set(query_set, query_range, destination, destination_offset);
+    }
+
+    pub fn copy_buffer_to_buffer(
+        &mut self,
+        source: &wgpu::Buffer,
+        source_offset: wgpu::BufferAddress,
+        destination: &wgpu::Buffer,
+        destination_offset: wgpu::BufferAddress,
+        copy_size: wgpu::BufferAddress,
+    ) {
+        self.encoder.copy_buffer_to_buffer(
+            source,
+            source_offset,
+            destination,
+            destination_offset,
+            copy_size,
+        );
+    }
+}
+
+enum SubmissionTokenState {
+    Empty,
+    Armed(u64),
+}
+
+/// Affine token representing draws prepared from a [`crate::VideoSystem`] that
+/// have not yet been submitted to its queue.
+///
+/// Dropping a token without passing it to
+/// [`crate::VideoSystem::submit_command_encoder`],
+/// [`crate::VideoSystem::finish_draw_submission`], or
+/// [`crate::VideoSystem::discard_unsubmitted_draws`] intentionally leaves the
+/// retirement hold armed until [`crate::VideoSystem`] drops, so an accidental
+/// early drop cannot emit a `FOREIGN` release barrier ahead of an unsubmitted
+/// draw.
+#[must_use = "consume a VideoSubmissionToken via submit_command_encoder, finish_draw_submission, or discard_unsubmitted_draws"]
+pub struct VideoSubmissionToken {
+    system_id: NonZeroU64,
+    state: SubmissionTokenState,
+}
+
+impl VideoSubmissionToken {
+    const fn empty(system_id: NonZeroU64) -> Self {
+        Self {
+            system_id,
+            state: SubmissionTokenState::Empty,
+        }
+    }
+
+    const fn armed(system_id: NonZeroU64, token_id: u64) -> Self {
+        Self {
+            system_id,
+            state: SubmissionTokenState::Armed(token_id),
+        }
+    }
+}
+
+impl Drop for VideoSubmissionToken {
+    fn drop(&mut self) {
+        if let SubmissionTokenState::Armed(token_id) = self.state {
+            tracing::warn!(
+                system_id = self.system_id.get(),
+                token_id,
+                "VideoSubmissionToken dropped unconsumed; keeping staged video retirements held until VideoSystem drop"
+            );
+        }
+    }
+}
+
+/// Gates replaced-frame retirement on affine [`VideoSubmissionToken`]s so a
+/// `service()`, `command()`, or `set_presentation()` call between
+/// `prepare_draws()` and queue submission cannot emit a `FOREIGN` release
+/// barrier or return native leases before every recorded draw reaches the GPU
+/// queue.
+pub(crate) struct DrawRetirementGate<T> {
+    system_id: NonZeroU64,
+    next_token_id: AtomicU64,
+    active_tokens: Mutex<Vec<u64>>,
+    pending: Vec<T>,
+}
+
+impl<T> Default for DrawRetirementGate<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> DrawRetirementGate<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            system_id: next_video_system_id(),
+            next_token_id: AtomicU64::new(1),
+            active_tokens: Mutex::new(Vec::new()),
+            pending: Vec::new(),
+        }
+    }
+
+    pub(crate) const fn system_id(&self) -> NonZeroU64 {
+        self.system_id
+    }
+
+    pub(crate) fn issue_token(&self, armed: bool) -> VideoSubmissionToken {
+        if !armed {
+            return VideoSubmissionToken::empty(self.system_id);
+        }
+        let id = self.next_token_id.fetch_add(1, Ordering::Relaxed);
+        self.active_tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(id);
+        VideoSubmissionToken::armed(self.system_id, id)
+    }
+
+    pub(crate) fn has_unsubmitted_draws(&self) -> bool {
+        !self
+            .active_tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
+    }
+
+    pub(crate) fn stage_or_retire(&mut self, retired: Vec<T>) -> Vec<T> {
+        if retired.is_empty() {
+            return Vec::new();
+        }
+        if self.has_unsubmitted_draws() {
+            self.pending.extend(retired);
+            Vec::new()
+        } else {
+            retired
+        }
+    }
+
+    pub(crate) fn consume_token(&mut self, mut token: VideoSubmissionToken) -> Vec<T> {
+        assert_eq!(
+            token.system_id, self.system_id,
+            "VideoSubmissionToken belongs to a different VideoSystem"
+        );
+        let state = std::mem::replace(&mut token.state, SubmissionTokenState::Empty);
+        let mut active = self
+            .active_tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let SubmissionTokenState::Armed(id) = state
+            && let Some(pos) = active.iter().position(|&existing| existing == id)
+        {
+            active.swap_remove(pos);
+        }
+        let all_submitted = active.is_empty();
+        drop(active);
+        if all_submitted {
+            std::mem::take(&mut self.pending)
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub(crate) fn take_all_on_drop(&mut self) -> Vec<T> {
+        self.active_tokens
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        std::mem::take(&mut self.pending)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_len(&self) -> usize {
+        self.pending.len()
     }
 }
 
@@ -308,6 +525,51 @@ impl GpuVideoContext {
         let retirement = SubmittedWorkRetirement::new(retired);
         self.queue
             .on_submitted_work_done(retirement.into_completion_callback());
+    }
+
+    /// Submit a finished draw command buffer followed by a separate raw-only
+    /// release encoder for any staged foreign-surface retirements, in one
+    /// `queue.submit` batch.
+    ///
+    /// `wgpu-core` forbids mixing wgpu passes (`EncodingApi::Wgpu`) with
+    /// `as_hal_mut` (`EncodingApi::Raw`) inside one `CommandEncoder`, and
+    /// defers wgpu pass commands until `finish()`. Recording release barriers
+    /// in a fresh encoder created from `self.device` and submitting
+    /// `[draw_buffer, release_encoder.finish()]` avoids the panic, guarantees
+    /// Vulkan executes the draws before the `FOREIGN` release barriers, and
+    /// never calls `as_hal_mut` on a caller-supplied encoder.
+    pub(crate) fn submit_buffer_with_retirements(
+        &self,
+        draw_buffer: wgpu::CommandBuffer,
+        retired: Vec<GpuVideoFrame>,
+    ) -> wgpu::SubmissionIndex {
+        let needs_release = retired.iter().any(GpuVideoFrame::needs_release);
+        let submission = if needs_release {
+            let mut release_encoder =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Neomacs video foreign-surface release"),
+                    });
+            for frame in &retired {
+                frame.record_release(&self.device, &mut release_encoder);
+            }
+            self.queue.submit([draw_buffer, release_encoder.finish()])
+        } else {
+            self.queue.submit(std::iter::once(draw_buffer))
+        };
+        if !retired.is_empty() {
+            let retirement = SubmittedWorkRetirement::new(retired);
+            self.queue
+                .on_submitted_work_done(retirement.into_completion_callback());
+        }
+        submission
+    }
+
+    pub(crate) fn submit_command_buffer(
+        &self,
+        command_buffer: wgpu::CommandBuffer,
+    ) -> wgpu::SubmissionIndex {
+        self.queue.submit(std::iter::once(command_buffer))
     }
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -755,7 +1017,7 @@ impl GpuVideoFrame {
         }
     }
 
-    const fn geometry(&self) -> VideoGeometry {
+    pub(crate) const fn geometry(&self) -> VideoGeometry {
         self.geometry
     }
 
@@ -844,21 +1106,28 @@ impl<'a> PreparedVideoDraw<'a> {
         self.frame.packed_view()
     }
 
-    pub fn bind_group(&self) -> &'a wgpu::BindGroup {
-        self.frame.bind_group()
+    /// Bind this prepared video frame's sampling resources directly into a
+    /// render pass without handing out a cloneable `wgpu::BindGroup`.
+    pub fn bind_to_pass(&self, render_pass: &mut wgpu::RenderPass<'_>, group_index: u32) {
+        render_pass.set_bind_group(group_index, self.frame.bind_group(), &[]);
     }
 }
 
 /// Stable preparation boundary for a renderer pass. It snapshots the set of
-/// generation-valid frames once, so drawing code cannot retain native frame
-/// objects or independently re-resolve video state midway through a pass.
+/// generation-valid frames once and carries an affine [`VideoSubmissionToken`]
+/// holding back frame retirement until the recorded work is submitted.
+#[must_use = "extract the VideoSubmissionToken via into_submission_token once draws are recorded"]
 pub struct PreparedVideoDraws<'a> {
     frames: HashMap<VideoId, &'a GpuVideoFrame>,
+    token: VideoSubmissionToken,
 }
 
 impl<'a> PreparedVideoDraws<'a> {
-    pub(crate) fn new(frames: HashMap<VideoId, &'a GpuVideoFrame>) -> Self {
-        Self { frames }
+    pub(crate) fn new(
+        frames: HashMap<VideoId, &'a GpuVideoFrame>,
+        token: VideoSubmissionToken,
+    ) -> Self {
+        Self { frames, token }
     }
 
     pub fn get(&self, id: VideoId) -> Option<PreparedVideoDraw<'a>> {
@@ -866,5 +1135,11 @@ impl<'a> PreparedVideoDraws<'a> {
             .get(&id)
             .copied()
             .map(|frame| PreparedVideoDraw { frame })
+    }
+
+    /// Release the borrow on [`crate::VideoSystem`] while retaining the affine
+    /// submission token that keeps staged frame retirements held until submit.
+    pub fn into_submission_token(self) -> VideoSubmissionToken {
+        self.token
     }
 }

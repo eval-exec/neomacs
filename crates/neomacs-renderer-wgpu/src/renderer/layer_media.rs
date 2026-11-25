@@ -95,12 +95,16 @@ impl PreparedInlineVideos<'_> {
                     neomacs_video::VideoSampleKind::Packed => packed_pipeline,
                     neomacs_video::VideoSampleKind::BiPlanar => bi_planar_pipeline,
                 });
-                render_pass.set_bind_group(1, frame.bind_group(), &[]);
+                frame.bind_to_pass(render_pass, 1);
                 render_pass.draw((index * 6) as u32..(index * 6 + 6) as u32, 0..1);
             }
         }
         // Later media phases intentionally inherit the canonical image path.
         render_pass.set_pipeline(packed_pipeline);
+    }
+
+    pub(super) fn into_submission_token(self) -> neomacs_video::VideoSubmissionToken {
+        self.draws.into_submission_token()
     }
 }
 
@@ -311,7 +315,7 @@ pub(super) fn prepare_inline_videos<'a>(
     });
     let draws = cache.prepare_draws(ids)?;
     let quads = collect_prepared_video_quads(glyphs, offset_x, offset_y, &draws);
-    (!quads.is_empty()).then_some(PreparedInlineVideos { draws, quads })
+    Some(PreparedInlineVideos { draws, quads })
 }
 
 impl WgpuRenderer {
@@ -504,20 +508,26 @@ impl WgpuRenderer {
     /// Draw inline videos (inherits the image pipeline set by the inline
     /// image phase).
     #[cfg(feature = "video")]
-    pub(super) fn draw_inline_videos(&mut self, ctx: &mut FramePassCtx<'_, '_>) -> Vec<VideoId> {
+    pub(super) fn draw_inline_videos(
+        &mut self,
+        ctx: &mut FramePassCtx<'_, '_>,
+    ) -> (Vec<VideoId>, Option<neomacs_video::VideoSubmissionToken>) {
         let frame_glyphs = ctx.params.frame_glyphs;
         let Some(prepared) =
             prepare_inline_videos(&self.caches.video, &frame_glyphs.glyphs, 0.0, 0.0)
         else {
-            return Vec::new();
+            return (Vec::new(), None);
         };
+        if prepared.quads.is_empty() {
+            return (Vec::new(), Some(prepared.into_submission_token()));
+        }
         self.media_budget.touch(
             crate::media_budget::MediaType::Video,
             crate::video_cache::VIDEO_GPU_POOL_ACCOUNTING_ID,
         );
         let Some(upload) = prepared.upload(&mut self.arenas.image, &self.device, &self.queue)
         else {
-            return Vec::new();
+            return (Vec::new(), Some(prepared.into_submission_token()));
         };
         let submitted = prepared.quads.iter().map(|quad| quad.id).collect();
         prepared.draw(
@@ -526,7 +536,7 @@ impl WgpuRenderer {
             &self.pipelines.image,
             &self.pipelines.bi_planar_video,
         );
-        submitted
+        (submitted, Some(prepared.into_submission_token()))
     }
 
     /// Draw inline WebKit views (opaque pipeline: DMA-BUF XRGB has alpha=0).

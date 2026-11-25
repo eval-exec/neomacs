@@ -34,7 +34,10 @@ pub use model::{
 pub(crate) use sampling::GpuVideoFrame;
 #[cfg(target_os = "linux")]
 pub use sampling::linux_render_device_numbers;
-pub use sampling::{GpuGeneration, PreparedVideoDraw, PreparedVideoDraws, VideoSamplingResources};
+pub use sampling::{
+    GpuGeneration, PreparedVideoDraw, PreparedVideoDraws, VideoCommandEncoder,
+    VideoSamplingResources, VideoSubmissionToken,
+};
 pub use system::{VideoSystem, VideoWake};
 
 /// Run the native plane-import validation fixture selected by the GUI hardware

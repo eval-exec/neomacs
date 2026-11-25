@@ -41,14 +41,18 @@ impl WgpuRenderer {
     #[cfg(feature = "video")]
     pub(super) fn submit_video_frame_content_pass(
         &mut self,
-        mut encoder: wgpu::CommandEncoder,
+        mut encoder: crate::video_cache::FrameCommandEncoder,
         timing: Option<crate::gpu_frame_timing::PendingGpuFrameTiming>,
         video_ids: Vec<VideoId>,
+        video_token: Option<neomacs_video::VideoSubmissionToken>,
     ) {
         if let Some(timing) = &timing {
-            timing.resolve(&mut encoder);
+            timing.resolve_frame_encoder(&mut encoder);
         }
-        let submission = self.queue.submit([encoder.finish()]);
+        let submission =
+            self.caches
+                .video
+                .submit_command_encoder(encoder, video_token, &self.queue);
         if let Some(timing) = timing {
             self.gpu_frame_timer
                 .submit(timing, submission, video_ids.clone());
@@ -649,7 +653,7 @@ impl WgpuRenderer {
             return;
         };
         #[cfg(feature = "video")]
-        let video_views = self.caches.video.prepare_channel_views(
+        let (video_views, video_token) = self.caches.video.prepare_channel_views(
             sources.iter().filter_map(|source| match source {
                 SurfaceChannelSource::Video(id) => {
                     Some(neomacs_display_protocol::types::VideoId::new(*id))
@@ -657,7 +661,6 @@ impl WgpuRenderer {
                 SurfaceChannelSource::Surface(_) | SurfaceChannelSource::Image(_) => None,
             }),
             &self.device,
-            &self.queue,
             &self.pipelines.bi_planar_video_copy,
             frame_params.binding(),
         );
@@ -679,9 +682,22 @@ impl WgpuRenderer {
                 external.insert(source, view);
             }
         }
-        self.caches
-            .surface
-            .render_pending(&self.device, &self.queue, &external, sample);
+        let (_rendered, submission) = self.caches.surface.render_pending_with_submission(
+            &self.device,
+            &self.queue,
+            &external,
+            sample,
+        );
+        #[cfg(feature = "video")]
+        if let Some(token) = video_token {
+            if let Some(submission) = submission {
+                self.caches.video.finish_draw_submission(token, submission);
+            } else {
+                self.caches.video.discard_unsubmitted_draws(token);
+            }
+        }
+        #[cfg(not(feature = "video"))]
+        let _ = submission;
     }
 
     /// Whether any animated shader surface was composited recently — drives

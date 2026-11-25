@@ -1659,6 +1659,8 @@ impl WgpuRenderer {
         #[cfg(feature = "video")]
         let submitted_video_ids;
         #[cfg(feature = "video")]
+        let video_submission_token;
+        #[cfg(feature = "video")]
         let gpu_timing = self.begin_video_frame_content_pass(
             frame_glyphs
                 .glyphs
@@ -1671,6 +1673,14 @@ impl WgpuRenderer {
         let timestamp_writes = None;
 
         // Create command encoder
+        #[cfg(feature = "video")]
+        let mut encoder = self.caches.video.create_command_encoder(
+            &self.device,
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("Frame Glyphs Encoder"),
+            },
+        );
+        #[cfg(not(feature = "video"))]
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1782,7 +1792,7 @@ impl WgpuRenderer {
             self.draw_inline_images(&mut ctx);
             #[cfg(feature = "video")]
             {
-                submitted_video_ids = self.draw_inline_videos(&mut ctx);
+                (submitted_video_ids, video_submission_token) = self.draw_inline_videos(&mut ctx);
             }
             #[cfg(all(feature = "webview", target_os = "linux"))]
             self.draw_inline_webkit_views(&mut ctx);
@@ -1804,7 +1814,12 @@ impl WgpuRenderer {
         stats.log_if_enabled();
 
         #[cfg(feature = "video")]
-        self.submit_video_frame_content_pass(encoder, gpu_timing, submitted_video_ids);
+        self.submit_video_frame_content_pass(
+            encoder,
+            gpu_timing,
+            submitted_video_ids,
+            video_submission_token,
+        );
         #[cfg(not(feature = "video"))]
         self.queue.submit([encoder.finish()]);
     }
