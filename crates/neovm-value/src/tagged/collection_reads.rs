@@ -167,6 +167,10 @@ pub fn hoist_reads() -> bool {
 #[inline]
 #[doc(hidden)]
 pub fn reads_need_observation() -> bool {
+    #[cfg(debug_assertions)]
+    if FORBID_OBSERVED_READS.with(Cell::get) != 0 {
+        return true;
+    }
     let policy = CAPTURE_SCOPES.load(Ordering::Relaxed);
     if policy == 0 {
         return false;
@@ -191,6 +195,8 @@ const MAX_DEPTH: usize = 8;
 
 thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
+    #[cfg(debug_assertions)]
+    static FORBID_OBSERVED_READS: Cell<usize> = const { Cell::new(0) };
     static RECENT_READS: RecentReads = const { RecentReads::new() };
     static STATE: store_state::StateSlot = store_state::StateSlot::default();
     #[cfg(any(test, feature = "test-support"))]
@@ -660,6 +666,12 @@ impl Drop for CollectionReadScope {
 
 #[inline]
 pub(crate) fn observe(value: TaggedValue) {
+    #[cfg(debug_assertions)]
+    debug_assert_eq!(
+        FORBID_OBSERVED_READS.with(Cell::get),
+        0,
+        "observed Lisp collection read inside assert_no_observed_reads scope"
+    );
     // This private membership is read afresh for each pointer projection. A
     // different mutator cannot change it, and no state is cached across reads
     // or callbacks. begin/take restore it before running any user code.
@@ -1259,6 +1271,33 @@ enum NativeWindowCollectionOwner {
     Slots,
 }
 
+/// Execute `body` while asserting (in debug/test builds) that no observed
+/// Lisp collection read occurs. Compiles to a direct call in release builds.
+///
+/// Lazy derived-index publishers (such as `publish_endpoints_for`) wrap their
+/// publication work in this scope so reintroducing a Lisp plist/heap walk
+/// fails immediately instead of silently exhausting `MAX_READS` during a
+/// caller's `collection_reads::capture`.
+#[inline]
+pub fn assert_no_observed_reads<R>(body: impl FnOnce() -> R) -> R {
+    #[cfg(debug_assertions)]
+    {
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                FORBID_OBSERVED_READS.with(|depth| depth.set(depth.get() - 1));
+            }
+        }
+        FORBID_OBSERVED_READS.with(|depth| depth.set(depth.get() + 1));
+        let _guard = Guard;
+        body()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        body()
+    }
+}
+
 /// Observe reads made by `read`, rejecting reuse if its dependency budget or
 /// coherent mutation history cannot be retained. No Lisp object is rooted.
 pub fn capture<T>(read: impl FnOnce() -> T) -> (T, Option<CollectionReads>) {
@@ -1354,6 +1393,8 @@ mod observed_sweep_amortization_tests;
 #[doc(hidden)]
 pub fn reset_carrier_tls() {
     ACTIVE.with(|slot| slot.set(false));
+    #[cfg(debug_assertions)]
+    FORBID_OBSERVED_READS.with(|slot| slot.set(0));
     // Epoch 0 is the fresh-thread value (`RecentReads::new`), so the snapshot
     // probe can compare a parked carrier with a fresh one; any later lookup
     // validates against the live epoch and misses.
@@ -1365,6 +1406,7 @@ pub fn reset_carrier_tls() {
 #[doc(hidden)]
 pub fn carrier_tls_fingerprint(h: &mut u64) {
     crate::tls_fingerprint::mix(h, ACTIVE.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(h, FORBID_OBSERVED_READS.with(|slot| slot.get() as u64));
     crate::tls_fingerprint::mix(
         h,
         RECENT_READS.with(|r| {

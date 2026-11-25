@@ -530,6 +530,11 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
     ),
     (BINARY_CENSUS, "FOO", TlsClass::CarrierIntrinsic),
     (
+        "neovm-value/src/tagged/collection_reads.rs",
+        "FORBID_OBSERVED_READS",
+        TlsClass::MustReset,
+    ),
+    (
         "neovm-eval/src/emacs_core/lisp/print/error_format.rs",
         "FORMAT_OBJECT_STACK",
         TlsClass::MustReset,

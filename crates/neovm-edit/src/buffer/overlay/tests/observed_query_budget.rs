@@ -70,14 +70,33 @@ enum FirstQuery {
     CategoryPresence,
     NextBoundary,
     PreviousBoundary,
+    PropertySweep,
+    PropertyExtent,
+}
+
+struct DirectFaceResolver<'a> {
+    list: &'a OverlayList,
+    property: Value,
+}
+
+impl OverlayPropertyResolver for DirectFaceResolver<'_> {
+    fn value_for_overlay(&mut self, overlay: Value) -> Option<Value> {
+        self.list.overlay_get_named(overlay, self.property)
+    }
+
+    fn endpoint_filter(&self) -> OverlayPropertyFilter {
+        OverlayPropertyFilter::for_properties([self.property])
+    }
 }
 
 fn check_first_query(count: usize, query: FirstQuery) {
     crate::test_utils::init_test_tracing();
     check_observation_probe();
     let category = Value::symbol("category");
+    let face = Value::symbol("face");
     let list = unique_plist_overlays(count);
     let start = 10 + (count / 2) * 4;
+    let total_end = 10 + count * 4;
     let label = format!("first {query:?} with {count} unique plists");
     // No prior predicate or boundary query warms any derived index. This also
     // permits a design that maintains its index eagerly during attachment.
@@ -106,6 +125,49 @@ fn check_first_query(count: usize, query: FirstQuery) {
                 }),
                 Some(emacs_byte_pos(start + 2))
             );
+        }
+        FirstQuery::PropertySweep => {
+            let run = observed_query(&label, || {
+                let OverlayPropertyAtPoint::Present(resolution) = list
+                    .resolve_overlay_property_at_emacs_byte_pos(
+                        emacs_byte_pos(start),
+                        None,
+                        DirectFaceResolver {
+                            list: &list,
+                            property: face,
+                        },
+                    )
+                else {
+                    panic!("expected face overlay at {start}");
+                };
+                let mut sweep = resolution
+                    .sweep(emacs_byte_range(0, total_end))
+                    .expect("sweep covers midpoint");
+                sweep
+                    .partition_at(emacs_byte_pos(start))
+                    .expect("partition covers midpoint")
+            });
+            assert_eq!(run.range(), emacs_byte_range(start, start + 2));
+        }
+        FirstQuery::PropertyExtent => {
+            let extent = observed_query(&label, || {
+                let OverlayPropertyAtPoint::Present(resolution) = list
+                    .resolve_overlay_property_at_emacs_byte_pos(
+                        emacs_byte_pos(start),
+                        None,
+                        DirectFaceResolver {
+                            list: &list,
+                            property: face,
+                        },
+                    )
+                else {
+                    panic!("expected face overlay at {start}");
+                };
+                resolution
+                    .extent(emacs_byte_range(0, total_end))
+                    .expect("extent covers midpoint")
+            });
+            assert_eq!(extent.range(), emacs_byte_range(start, start + 2));
         }
     }
 }
@@ -163,6 +225,36 @@ first_query_case!(
     first_previous_boundary_capture_budget_64000,
     64_000,
     FirstQuery::PreviousBoundary
+);
+first_query_case!(
+    first_property_sweep_capture_budget_2000,
+    2_000,
+    FirstQuery::PropertySweep
+);
+first_query_case!(
+    first_property_sweep_capture_budget_16000,
+    16_000,
+    FirstQuery::PropertySweep
+);
+first_query_case!(
+    first_property_sweep_capture_budget_64000,
+    64_000,
+    FirstQuery::PropertySweep
+);
+first_query_case!(
+    first_property_extent_capture_budget_2000,
+    2_000,
+    FirstQuery::PropertyExtent
+);
+first_query_case!(
+    first_property_extent_capture_budget_16000,
+    16_000,
+    FirstQuery::PropertyExtent
+);
+first_query_case!(
+    first_property_extent_capture_budget_64000,
+    64_000,
+    FirstQuery::PropertyExtent
 );
 
 #[test]
@@ -394,8 +486,9 @@ fn check_single_property_write_key_index_work(published: bool, write: SingleProp
             .endpoint_records_strictly_within(bounds, OverlayPropertyFilter::unfiltered())
             .collect();
         assert_eq!(endpoints.len(), 2);
-        // A separate positive control covers the other physical plist walker.
-        assert!(property_index_plist_steps().1 > 0);
+        // Publishing endpoints must reuse cached per-overlay property masks
+        // without re-walking Lisp plists.
+        assert_eq!(property_index_plist_steps().1, 0);
     }
 
     let added = if published {
@@ -441,9 +534,13 @@ fn check_single_property_write_key_index_work(published: bool, write: SingleProp
             SinglePropertyWrite::Insert | SinglePropertyWrite::InsertNil
         )
     );
-    // Do this only after reading the work counter: an invariant check and a
-    // cold endpoint publication legitimately traverse their source plists.
+    // Do this only after reading the work counter: an invariant check
+    // legitimately traverses source plists to cross-check cached masks.
     list.assert_index_invariants_for_test();
+    assert!(
+        property_index_plist_steps().1 > 0,
+        "invariant check must exercise the independent mask-verification walker"
+    );
     let carriers: Vec<_> = list
         .index
         .endpoint_records_strictly_within(bounds, OverlayPropertyFilter::for_properties([property]))
@@ -812,5 +909,260 @@ fn single_property_write_owner_resolution_plist_visibility_control() {
         foreign.overlay_plist(overlay).unwrap().bits(),
         plist.bits(),
         "a detached overlay's plist remains observable through either list"
+    );
+}
+
+#[test]
+fn cold_endpoint_publication_performs_zero_observed_reads_and_matches_live_masks() {
+    use crate::buffer::overlay_index::{
+        property_index_plist_steps, reset_property_index_plist_steps,
+    };
+
+    crate::test_utils::init_test_tracing();
+    let face = Value::symbol("face");
+    let mouse_face = Value::symbol("mouse-face");
+    let nil_added = Value::symbol("cold-pub-nil-key");
+    let detached_only = Value::symbol("cold-pub-detached-key");
+    let evaporated_only = Value::symbol("cold-pub-evaporated-key");
+    let evaporate = Value::symbol("evaporate");
+
+    // 1. Live OverlayList mutated across every cold write path before publication.
+    let mut list = OverlayList::new();
+    let kept = overlay_with_plist(10, 20, Value::list(vec![face, Value::symbol("bold")]));
+    let moved = overlay_with_plist(30, 40, Value::NIL);
+    let detached = overlay_with_plist(
+        50,
+        60,
+        Value::list(vec![detached_only, Value::symbol("gone")]),
+    );
+    let evaporating = overlay_with_plist(
+        70,
+        75,
+        Value::list(vec![evaporate, Value::T, evaporated_only, Value::T]),
+    );
+    for ov in [kept, moved, detached, evaporating] {
+        list.insert_overlay(ov);
+    }
+    // Cold overlay_put: existing key update, new non-nil key, new explicit-nil key.
+    assert!(
+        list.overlay_put(kept, face, Value::symbol("italic"))
+            .unwrap()
+    );
+    assert!(
+        list.overlay_put(kept, mouse_face, Value::symbol("highlight"))
+            .unwrap()
+    );
+    assert!(!list.overlay_put(moved, nil_added, Value::NIL).unwrap());
+    // Cold move (EndOnly then StartChanged).
+    list.move_overlay_to_emacs_byte_range(moved, emacs_byte_range(30, 44));
+    list.move_overlay_to_emacs_byte_range(moved, emacs_byte_range(32, 46));
+    // Cold detach.
+    assert!(list.delete_overlay(detached));
+    // Cold text insert (shifts suffix) and delete (evaporates `evaporating`).
+    list.adjust_for_insert_at_emacs_byte_pos(emacs_byte_pos(5), EmacsByteLen::new(2), false);
+    // `evaporating` shifted from [70, 75] to [72, 77]; delete [72, 77] to evaporate it.
+    let _ = list.adjust_for_delete_emacs_byte_range(emacs_byte_range(72, 77));
+
+    let bounds = emacs_byte_range(0, 200);
+    reset_property_index_plist_steps();
+    let (all_endpoints, reads) = collection_reads::capture(|| {
+        list.index
+            .endpoint_records_strictly_within(bounds, OverlayPropertyFilter::unfiltered())
+            .collect::<Vec<_>>()
+    });
+    let reads = reads.expect("cold publication must yield a valid certificate");
+    assert!(
+        reads.reads_empty_for_test(),
+        "cold endpoint publication must perform zero observed Lisp reads"
+    );
+    assert_eq!(
+        property_index_plist_steps(),
+        (0, 0),
+        "cold endpoint publication must perform zero Lisp plist walks"
+    );
+    assert_eq!(
+        all_endpoints.len(),
+        4,
+        "only kept and moved remain attached"
+    );
+
+    // Filtered queries on the published tree must reflect every cold mutation
+    // (no stale masks after zero-observed-read publication).
+    let mouse_carriers: Vec<_> = list
+        .index
+        .endpoint_records_strictly_within(
+            bounds,
+            OverlayPropertyFilter::for_properties([mouse_face]),
+        )
+        .map(|ep| ep.overlay.bits())
+        .collect();
+    assert_eq!(mouse_carriers, vec![kept.bits(), kept.bits()]);
+
+    let nil_key_carriers: Vec<_> = list
+        .index
+        .endpoint_records_strictly_within(
+            bounds,
+            OverlayPropertyFilter::for_properties([nil_added]),
+        )
+        .map(|ep| ep.overlay.bits())
+        .collect();
+    assert_eq!(nil_key_carriers, vec![moved.bits(), moved.bits()]);
+
+    assert!(
+        list.index
+            .endpoint_records_strictly_within(
+                bounds,
+                OverlayPropertyFilter::for_properties([detached_only]),
+            )
+            .next()
+            .is_none(),
+        "detached overlay key must not survive in published endpoint masks"
+    );
+    assert!(
+        list.index
+            .endpoint_records_strictly_within(
+                bounds,
+                OverlayPropertyFilter::for_properties([evaporated_only]),
+            )
+            .next()
+            .is_none(),
+        "evaporated overlay key must not survive in published endpoint masks"
+    );
+    list.assert_index_invariants_for_test();
+
+    // 2. Batch-attached (from_dump) + remapped cold index must also publish
+    // with zero observed reads and up-to-date masks.
+    let batch_a = overlay_with_plist(10, 14, Value::list(vec![mouse_face, Value::T]));
+    let batch_b = overlay_with_plist(20, 24, Value::list(vec![face, Value::symbol("default")]));
+    let mut restored = OverlayList::from_dump(vec![batch_a, batch_b]);
+    restored.remap_overlay_positions(&[
+        OverlayPositionRemap {
+            overlay: batch_a,
+            old_range: emacs_byte_range(10, 14),
+            range: emacs_byte_range(110, 114),
+            old_begin: CharPos0::new(10),
+            new_begin: CharPos0::new(110),
+        },
+        OverlayPositionRemap {
+            overlay: batch_b,
+            old_range: emacs_byte_range(20, 24),
+            range: emacs_byte_range(120, 124),
+            old_begin: CharPos0::new(20),
+            new_begin: CharPos0::new(120),
+        },
+    ]);
+    reset_property_index_plist_steps();
+    let (batch_mouse, batch_reads) = collection_reads::capture(|| {
+        restored
+            .index
+            .endpoint_records_strictly_within(
+                bounds,
+                OverlayPropertyFilter::for_properties([mouse_face]),
+            )
+            .map(|ep| (ep.overlay.bits(), ep.position.get()))
+            .collect::<Vec<_>>()
+    });
+    let batch_reads = batch_reads.expect("batch cold publication certificate");
+    assert!(
+        batch_reads.reads_empty_for_test(),
+        "batch cold endpoint publication must perform zero observed Lisp reads"
+    );
+    assert_eq!(property_index_plist_steps(), (0, 0));
+    assert_eq!(
+        batch_mouse,
+        vec![(batch_a.bits(), 110), (batch_a.bits(), 114)]
+    );
+    restored.assert_index_invariants_for_test();
+}
+
+#[test]
+fn cold_live_view_endpoint_publication_performs_zero_observed_reads() {
+    use crate::buffer::overlay_index::{
+        property_index_plist_steps, reset_property_index_plist_steps,
+    };
+
+    crate::test_utils::init_test_tracing();
+    let mouse_face = Value::symbol("mouse-face");
+    let mut list = unique_plist_overlays(2_000);
+    let target_start = 10 + 1_000 * 4;
+    let target = list.overlays_at_emacs_byte_pos(emacs_byte_pos(target_start))[0];
+    assert!(
+        list.overlay_put(target, mouse_face, Value::symbol("highlight"))
+            .unwrap()
+    );
+
+    struct LivePropertyResolver<'a> {
+        view: &'a LiveOverlayView,
+        property: Value,
+    }
+    impl OverlayPropertyResolver for LivePropertyResolver<'_> {
+        fn value_for_overlay(&mut self, overlay: Value) -> Option<Value> {
+            self.view.overlay_get_named(overlay, self.property)
+        }
+
+        fn endpoint_filter(&self) -> OverlayPropertyFilter {
+            OverlayPropertyFilter::for_properties([self.property])
+        }
+    }
+
+    let live = list.live_view();
+    let total_end = 10 + 2_000 * 4;
+    reset_property_index_plist_steps();
+    let (run, reads) = collection_reads::capture(|| {
+        let OverlayPropertyAtPoint::Present(resolution) = live
+            .resolve_overlay_property_at_emacs_byte_pos(
+                emacs_byte_pos(target_start),
+                None,
+                LivePropertyResolver {
+                    view: &live,
+                    property: mouse_face,
+                },
+            )
+        else {
+            panic!("expected mouse-face overlay at {target_start}");
+        };
+        let mut sweep = resolution
+            .sweep(emacs_byte_range(0, total_end))
+            .expect("live view sweep covers target");
+        sweep
+            .partition_at(emacs_byte_pos(target_start))
+            .expect("live view partition covers target")
+    });
+    let reads = reads.expect("cold live-view sweep must produce a coherent certificate");
+    assert!(
+        owner_count(&reads) <= QUERY_OWNER_BUDGET,
+        "cold live-view publication must not enroll distant overlays; observed {}",
+        owner_count(&reads)
+    );
+    assert_eq!(
+        property_index_plist_steps(),
+        (0, 0),
+        "cold live-view endpoint publication must perform zero plist walks"
+    );
+    assert_eq!(
+        run.range(),
+        emacs_byte_range(target_start, target_start + 2)
+    );
+    assert_eq!(
+        run.winner().map(|w| w.overlay().bits()),
+        Some(target.bits())
+    );
+    assert!(!live.is_stale());
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn assert_no_observed_reads_rejects_plist_walk_in_debug() {
+    crate::test_utils::init_test_tracing();
+    let plist = Value::list(vec![Value::symbol("face"), Value::symbol("bold")]);
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        collection_reads::assert_no_observed_reads(|| {
+            let _ = plist.cons_car();
+        });
+    }))
+    .is_err();
+    assert!(
+        panicked,
+        "assert_no_observed_reads must panic on an observed Lisp read in debug builds"
     );
 }

@@ -187,14 +187,26 @@ impl OverlayPropertyFilter {
     }
 }
 
-fn overlay_property_signature_bit(property: Value) -> usize {
+fn overlay_property_signature_bit_raw(bits: usize) -> usize {
     // SplitMix64 finalizer: symbol ids are densely allocated and their tagged
     // representation has low zero bits, so using the raw low byte would create
     // systematic collisions rather than a conservative bloom signature.
-    let mut value = property.bits() as u64;
+    let mut value = bits as u64;
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     ((value ^ (value >> 31)) & 0xff) as usize
+}
+
+fn overlay_property_signature_bit(property: Value) -> usize {
+    overlay_property_signature_bit_raw(property.bits())
+}
+
+fn filter_mask_for_direct_keys(keys: &[usize]) -> OrderedFilterMask {
+    let mut mask = OrderedFilterMask::EMPTY;
+    for &bits in keys {
+        mask = mask.with_bit(overlay_property_signature_bit_raw(bits));
+    }
+    mask
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -362,6 +374,7 @@ fn overlay_direct_property_keys(overlay: Value) -> SmallVec<[usize; 8]> {
     keys
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn overlay_indexed_property_mask(overlay: Value) -> OrderedFilterMask {
     let Some(data) = overlay.as_overlay_data() else {
         return OrderedFilterMask::EMPTY;
@@ -678,19 +691,27 @@ struct EndpointBPlusTree {
 }
 
 impl EndpointBPlusTree {
-    fn from_entries(entries: &[(Value, EndpointKind, EmacsBytePos)]) -> Self {
+    fn from_entries(
+        entries: &[(Value, EndpointKind, EmacsBytePos)],
+        property_masks: &FxHashMap<OverlayIdentity, OrderedFilterMask>,
+    ) -> Self {
         let records = entries
             .iter()
             .enumerate()
-            .map(|(order, (overlay, kind, position))| EndpointRecord {
-                key: EndpointKey {
-                    position: *position,
-                    order: order as u64,
-                },
-                identity: EndpointIdentity::of(*overlay, *kind),
-                overlay: *overlay,
-                kind: *kind,
-                property_mask: overlay_indexed_property_mask(*overlay),
+            .map(|(order, (overlay, kind, position))| {
+                let property_mask = *property_masks
+                    .get(&OverlayIdentity::of(*overlay))
+                    .expect("attached overlay missing cached property mask");
+                EndpointRecord {
+                    key: EndpointKey {
+                        position: *position,
+                        order: order as u64,
+                    },
+                    identity: EndpointIdentity::of(*overlay, *kind),
+                    overlay: *overlay,
+                    kind: *kind,
+                    property_mask,
+                }
             })
             .collect();
         Self {
@@ -699,7 +720,13 @@ impl EndpointBPlusTree {
         }
     }
 
-    fn insert(&mut self, position: EmacsBytePos, kind: EndpointKind, overlay: Value) -> bool {
+    fn insert(
+        &mut self,
+        position: EmacsBytePos,
+        kind: EndpointKind,
+        overlay: Value,
+        property_mask: OrderedFilterMask,
+    ) -> bool {
         let identity = EndpointIdentity::of(overlay, kind);
         let order = self.next_order;
         self.next_order = self
@@ -711,7 +738,7 @@ impl EndpointBPlusTree {
             identity,
             overlay,
             kind,
-            property_mask: overlay_indexed_property_mask(overlay),
+            property_mask,
         })
     }
 
@@ -722,8 +749,7 @@ impl EndpointBPlusTree {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    fn refresh_overlay_property_mask(&mut self, overlay: Value) {
-        let property_mask = overlay_indexed_property_mask(overlay);
+    fn replace_overlay_property_mask(&mut self, overlay: Value, property_mask: OrderedFilterMask) {
         for kind in [EndpointKind::Start, EndpointKind::End] {
             // The signature conservatively tracks plist key classes,
             // independent of their values. Changing a value or adding a
@@ -830,6 +856,10 @@ struct OverlayIndexCore {
     // Exact direct-key pair counts, maintained by this index's owner.
     // Keys are eq identities, not rooted Lisp values or alias/category meaning.
     direct_property_keys: FxHashMap<usize, usize>,
+    /// Conservative per-overlay property signature masks for attached overlays,
+    /// maintained alongside `direct_property_keys` at mutation time so lazy
+    /// endpoint publication reads cached masks without walking Lisp plists.
+    property_masks: FxHashMap<OverlayIdentity, OrderedFilterMask>,
     generation: u64,
 }
 
@@ -905,15 +935,26 @@ fn publish_endpoints_for(
     #[cfg(test)]
     super::overlay::record_endpoint_publication_interval_read();
     let built = {
+        // Lock order: acquire `intervals` before `core`, capture the attached
+        // endpoints, then drop `intervals` while keeping `core.read()` held so
+        // `core.property_masks` stays coherent with `entries` without walking
+        // Lisp plists inside an observed read capture.
         let intervals = intervals_lock.read();
+        let core = core_lock.read();
         if let Some((stale, stamp)) = live
-            && core_lock.read().generation != stamp
+            && core.generation != stamp
         {
             stale.set(true);
             return false;
         }
+        if core.endpoints.get().is_some() {
+            return true;
+        }
         let entries = intervals.endpoint_entries_in_attachment_order();
-        EndpointBPlusTree::from_entries(&entries)
+        drop(intervals);
+        neovm_value::tagged::collection_reads::assert_no_observed_reads(|| {
+            EndpointBPlusTree::from_entries(&entries, &core.property_masks)
+        })
     };
     let core = core_lock.write();
     if let Some((stale, stamp)) = live
@@ -1230,6 +1271,7 @@ impl OverlayIndex {
             core: Arc::new(RwLock::new(OverlayIndexCore {
                 endpoints: OnceLock::new(),
                 direct_property_keys: FxHashMap::default(),
+                property_masks: FxHashMap::default(),
                 generation: 0,
             })),
             direct_property_key_bloom: 0,
@@ -1351,14 +1393,21 @@ impl OverlayIndex {
         // A later handle write would invalidate an enclosing read capture.
         set_overlay_position_handle(overlay, &self.intervals);
         let keys = overlay_direct_property_keys(overlay);
+        let property_mask = filter_mask_for_direct_keys(&keys);
         for &key in &keys {
             self.note_direct_property_key_added(key);
         }
         self.write_core(|core| {
             core.add_property_keys(&keys);
+            core.property_masks.insert(identity, property_mask);
             if let Some(endpoints) = core.endpoints.get_mut() {
-                assert!(endpoints.insert(range.start(), EndpointKind::Start, overlay));
-                assert!(endpoints.insert(range.end(), EndpointKind::End, overlay));
+                assert!(endpoints.insert(
+                    range.start(),
+                    EndpointKind::Start,
+                    overlay,
+                    property_mask,
+                ));
+                assert!(endpoints.insert(range.end(), EndpointKind::End, overlay, property_mask,));
             }
         });
         true
@@ -1413,11 +1462,18 @@ impl OverlayIndex {
         self.intervals = Arc::new(RwLock::new(intervals));
         self.gnu_order = gnu_order;
         let mut direct_property_keys = FxHashMap::default();
+        let mut property_masks =
+            FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
         for (overlay, _) in entries {
             // Snapshot attachment can run inside a collection-read capture.
             // Finish owner initialization before observing its property keys.
             set_overlay_position_handle(*overlay, &self.intervals);
-            for key in overlay_direct_property_keys(*overlay) {
+            let keys = overlay_direct_property_keys(*overlay);
+            property_masks.insert(
+                OverlayIdentity::of(*overlay),
+                filter_mask_for_direct_keys(&keys),
+            );
+            for key in keys {
                 *direct_property_keys.entry(key).or_default() += 1;
             }
         }
@@ -1425,6 +1481,7 @@ impl OverlayIndex {
         self.write_core(|core| {
             core.endpoints = OnceLock::new();
             core.direct_property_keys = direct_property_keys;
+            core.property_masks = property_masks;
         });
         true
     }
@@ -1432,14 +1489,19 @@ impl OverlayIndex {
     /// Detach an overlay and return its indexed range.
     pub(super) fn detach(&mut self, overlay: Value) -> Option<EmacsByteRange> {
         let (range, _) = self.intervals.write().take(overlay)?;
+        let identity = OverlayIdentity::of(overlay);
         let keys = overlay_direct_property_keys(overlay);
         assert!(
-            self.gnu_order.remove(OverlayIdentity::of(overlay)).is_ok(),
+            self.gnu_order.remove(identity).is_ok(),
             "indexed overlay missing from GNU order mirror"
         );
         materialize_overlay_position(overlay, range);
         let cache = self.write_core(|core| {
             let distinct_changed = core.remove_property_keys(&keys);
+            assert!(
+                core.property_masks.remove(&identity).is_some(),
+                "detached overlay missing cached property mask"
+            );
             if let Some(endpoints) = core.endpoints.get_mut() {
                 assert_eq!(
                     endpoints.remove(overlay, EndpointKind::Start),
@@ -1476,11 +1538,20 @@ impl OverlayIndex {
                 // Lock order: `intervals` is already held before acquiring `core`.
                 write_core_lock(&self.core, |core| {
                     if let Some(endpoints) = core.endpoints.get_mut() {
+                        let property_mask = *core
+                            .property_masks
+                            .get(&OverlayIdentity::of(overlay))
+                            .expect("attached overlay missing cached property mask");
                         assert_eq!(
                             endpoints.remove(overlay, EndpointKind::End),
                             Some(old_range.end())
                         );
-                        assert!(endpoints.insert(new_range.end(), EndpointKind::End, overlay));
+                        assert!(endpoints.insert(
+                            new_range.end(),
+                            EndpointKind::End,
+                            overlay,
+                            property_mask,
+                        ));
                     }
                 });
             }
@@ -1555,6 +1626,10 @@ impl OverlayIndex {
                 // Lock order: `intervals` is already held before acquiring `core`.
                 write_core_lock(&self.core, |core| {
                     if let Some(endpoints) = core.endpoints.get_mut() {
+                        let property_mask = *core
+                            .property_masks
+                            .get(&OverlayIdentity::of(overlay))
+                            .expect("attached overlay missing cached property mask");
                         assert_eq!(
                             endpoints.remove(overlay, EndpointKind::Start),
                             Some(old_range.start())
@@ -1563,8 +1638,18 @@ impl OverlayIndex {
                             endpoints.remove(overlay, EndpointKind::End),
                             Some(old_range.end())
                         );
-                        assert!(endpoints.insert(new_range.start(), EndpointKind::Start, overlay));
-                        assert!(endpoints.insert(new_range.end(), EndpointKind::End, overlay));
+                        assert!(endpoints.insert(
+                            new_range.start(),
+                            EndpointKind::Start,
+                            overlay,
+                            property_mask,
+                        ));
+                        assert!(endpoints.insert(
+                            new_range.end(),
+                            EndpointKind::End,
+                            overlay,
+                            property_mask,
+                        ));
                     }
                 });
             }
@@ -1883,8 +1968,22 @@ impl OverlayIndex {
                 }
                 endpoints.shift_at_or_after(position, before_markers, delta);
                 for &(overlay, new_range) in &restored {
-                    assert!(endpoints.insert(new_range.start(), EndpointKind::Start, overlay));
-                    assert!(endpoints.insert(new_range.end(), EndpointKind::End, overlay));
+                    let property_mask = *core
+                        .property_masks
+                        .get(&OverlayIdentity::of(overlay))
+                        .expect("attached overlay missing cached property mask");
+                    assert!(endpoints.insert(
+                        new_range.start(),
+                        EndpointKind::Start,
+                        overlay,
+                        property_mask,
+                    ));
+                    assert!(endpoints.insert(
+                        new_range.end(),
+                        EndpointKind::End,
+                        overlay,
+                        property_mask,
+                    ));
                 }
             }
         });
@@ -2017,7 +2116,7 @@ impl OverlayIndex {
         // GNU discovers evaporated overlays in ascending itree order, conses
         // them, then deletes the resulting reversed list.  Preserve that
         // removal order because red-black topology affects later insertion.
-        for identity in evaporated.into_iter().rev() {
+        for &identity in evaporated.iter().rev() {
             assert!(
                 self.gnu_order.remove(identity).is_ok(),
                 "evaporated overlay missing from GNU order mirror"
@@ -2027,6 +2126,12 @@ impl OverlayIndex {
         // bump in one critical section after all interval edits have finished.
         let cache = self.write_core(|core| {
             let mut distinct_changed = false;
+            for &identity in &evaporated {
+                assert!(
+                    core.property_masks.remove(&identity).is_some(),
+                    "evaporated overlay missing cached property mask"
+                );
+            }
             for keys in &evaporated_keys {
                 distinct_changed |= core.remove_property_keys(keys);
             }
@@ -2043,8 +2148,22 @@ impl OverlayIndex {
                 }
                 endpoints.shift_at_or_after(range.end(), true, delta);
                 for &(overlay, new_range) in &restored {
-                    assert!(endpoints.insert(new_range.start(), EndpointKind::Start, overlay));
-                    assert!(endpoints.insert(new_range.end(), EndpointKind::End, overlay));
+                    let property_mask = *core
+                        .property_masks
+                        .get(&OverlayIdentity::of(overlay))
+                        .expect("attached overlay missing cached property mask");
+                    assert!(endpoints.insert(
+                        new_range.start(),
+                        EndpointKind::Start,
+                        overlay,
+                        property_mask,
+                    ));
+                    assert!(endpoints.insert(
+                        new_range.end(),
+                        EndpointKind::End,
+                        overlay,
+                        property_mask,
+                    ));
                 }
             }
             distinct_changed.then(|| snapshot_direct_property_key_cache(&core.direct_property_keys))
@@ -2120,6 +2239,7 @@ impl OverlayIndex {
         self.write_core(|core| {
             core.endpoints = OnceLock::new();
             core.direct_property_keys.clear();
+            core.property_masks.clear();
         });
     }
 
@@ -2347,16 +2467,21 @@ impl OverlayIndex {
             );
             overlay_direct_property_keys(overlay)
         });
+        let new_mask = new_keys
+            .as_deref()
+            .map(filter_mask_for_direct_keys)
+            .unwrap_or(OrderedFilterMask::EMPTY);
         let cache = self.write_core(|core| {
             let distinct_changed = if let (Some(previous), Some(new_keys)) = (previous, new_keys) {
                 let removed = core.remove_property_keys(&previous.keys);
                 let added = core.add_property_keys(&new_keys);
+                core.property_masks.insert(previous.overlay, new_mask);
                 removed || added
             } else {
                 false
             };
             if let Some(endpoints) = core.endpoints.get_mut() {
-                endpoints.refresh_overlay_property_mask(overlay);
+                endpoints.replace_overlay_property_mask(overlay, new_mask);
             }
             distinct_changed.then(|| snapshot_direct_property_key_cache(&core.direct_property_keys))
         });
@@ -2372,9 +2497,16 @@ impl OverlayIndex {
     /// neither key counts nor endpoint classes.
     pub(super) fn overlay_property_key_added_to_member(&mut self, overlay: Value, property: Value) {
         let bits = property.bits();
+        let identity = OverlayIdentity::of(overlay);
+        let bit = overlay_property_signature_bit_raw(bits);
         self.note_direct_property_key_added(bits);
         self.write_core(|core| {
             *core.direct_property_keys.entry(bits).or_default() += 1;
+            let mask = core
+                .property_masks
+                .get_mut(&identity)
+                .expect("attached overlay missing cached property mask");
+            *mask = mask.with_bit(bit);
             if let Some(endpoints) = core.endpoints.get_mut() {
                 endpoints.add_overlay_property_key(overlay, property);
             }
@@ -2485,13 +2617,25 @@ impl OverlayIndex {
         self.gnu_order.assert_invariants();
         assert_eq!(interval_len, self.gnu_order.len());
         let mut expected_keys = FxHashMap::default();
+        let mut expected_masks = FxHashMap::default();
         for overlay in self.values() {
             for key in overlay_direct_property_keys(overlay) {
                 *expected_keys.entry(key).or_insert(0usize) += 1;
             }
+            expected_masks.insert(
+                OverlayIdentity::of(overlay),
+                overlay_indexed_property_mask(overlay),
+            );
         }
-        let actual_keys = self.core.read().direct_property_keys.clone();
+        let (actual_keys, actual_masks) = {
+            let core = self.core.read();
+            (
+                core.direct_property_keys.clone(),
+                core.property_masks.clone(),
+            )
+        };
         assert_eq!(actual_keys, expected_keys);
+        assert_eq!(actual_masks, expected_masks);
         let (expected_bloom, _, expected_len) = snapshot_direct_property_key_cache(&expected_keys);
         assert_eq!(self.direct_property_key_bloom, expected_bloom);
         assert_eq!(self.direct_property_keys_inline_len, expected_len);
