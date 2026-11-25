@@ -247,6 +247,7 @@ impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
 
     fn run_emergency_escape(
         &mut self,
+        reset_strings: &[u8],
         ops: &mut dyn neovm_core::emacs_core::terminal::pure::EmergencyEscapeOps,
     ) -> bool {
         let _pause_guard = self.input_pause.pause();
@@ -260,11 +261,7 @@ impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
         // `tty_sys_suspend` / `tty_resume_terminal` so Lisp-configured
         // `tty-mode-reset-strings` and `tty-mode-set-strings` fire on 2nd-C-g
         // emergency escape as in GNU (`src/keyboard.c:12636,12710`).
-        let reset_strings = neovm_core::emacs_core::terminal::pure::terminal_mode_strings_bytes(
-            neovm_core::emacs_core::terminal::pure::TERMINAL_ID,
-            "tty-mode-reset-strings",
-        );
-        super::tty_init::tty_suspend_terminal(&reset_strings);
+        super::tty_init::tty_suspend_terminal(reset_strings);
         let _ = io::stdout().flush();
 
         #[cfg(unix)]
@@ -284,12 +281,9 @@ impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
             },
         );
 
-        let set_strings = neovm_core::emacs_core::terminal::pure::terminal_mode_strings_bytes(
-            neovm_core::emacs_core::terminal::pure::TERMINAL_ID,
-            "tty-mode-set-strings",
-        );
+        let set_strings = ops.tty_mode_set_strings();
         if let Err(err) = super::tty_init::tty_resume_terminal(&set_strings) {
-            tracing::warn!(%err, "emergency escape failed to reinitialize TTY");
+            tracing::warn!(%err, "emergency escape failed to resume TTY");
         }
         self.force_full_redraw.store(true, Ordering::Release);
         true

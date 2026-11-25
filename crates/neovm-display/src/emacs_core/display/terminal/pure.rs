@@ -166,8 +166,8 @@ impl TerminalRuntime {
 pub use super::config::{TerminalRuntimeConfig, TtyTerminalConfig};
 
 pub use neovm_eval::emacs_core::eval::protocol::tty_host::{
-    EmergencyEscapeOps, OpenedTtyFrameHost, SuspendRequest, TerminalHost, TtyFrameHostFactory,
-    TtyFrameOpenRequest, TtyFrameSize,
+    CONTROLLING_DEV_TTY_NAME, EmergencyEscapeOps, OpenedTtyFrameHost, SuspendRequest, TerminalHost,
+    TtyFrameHostFactory, TtyFrameOpenRequest, TtyFrameSize,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -554,7 +554,9 @@ fn terminal_configuration_parts(
                 attribute_capabilities: config.attribute_capabilities,
             };
             (
-                config.name.unwrap_or_else(|| "/dev/tty".into()),
+                config
+                    .name
+                    .unwrap_or_else(|| CONTROLLING_DEV_TTY_NAME.into()),
                 TerminalOutputMethod::Termcap,
                 runtime,
                 None,
@@ -1223,14 +1225,9 @@ fn with_terminal_host_for_id<R>(
     })
 }
 
-#[cfg(windows)]
-const CONTROLLING_DEV_TTY_NAME: &str = "CONOUT$";
-#[cfg(not(windows))]
-const CONTROLLING_DEV_TTY_NAME: &str = "/dev/tty";
-
 /// GNU `get_named_terminal (dev_tty)` (`src/terminal.c:263-277`): matches only
 /// a live, non-suspended (`TERMINAL_ACTIVE_P`) termcap terminal whose name is
-/// `dev_tty` (`"/dev/tty"` on Unix), never secondary TTYs opened via
+/// `dev_tty` (`CONTROLLING_DEV_TTY_NAME`), never secondary TTYs opened via
 /// `make-terminal-frame` or `emacsclient -t`.
 fn is_active_controlling_tty_for_emergency_escape(terminal: &TerminalRecord) -> bool {
     terminal.output_method == TerminalOutputMethod::Termcap
@@ -1283,28 +1280,39 @@ pub fn try_run_controlling_tty_emergency_escape(
         }
     }
 
-    struct ContextEmergencyEscapeOps<'a>(&'a mut neovm_eval::emacs_core::eval::Context);
+    struct ContextEmergencyEscapeOps<'a> {
+        ctx: &'a mut neovm_eval::emacs_core::eval::Context,
+        terminal_id: u64,
+    }
 
     impl EmergencyEscapeOps for ContextEmergencyEscapeOps<'_> {
         fn auto_save(&mut self) {
-            self.0.run_emergency_auto_save();
+            self.ctx.run_emergency_auto_save();
         }
 
         fn abort_orderly(&mut self) -> ! {
-            self.0.run_emergency_abort()
+            self.ctx.run_emergency_abort()
+        }
+
+        fn tty_mode_set_strings(&self) -> Vec<u8> {
+            terminal_mode_strings_bytes(self.terminal_id, "tty-mode-set-strings")
         }
     }
 
+    let reset_strings = terminal_mode_strings_bytes(id, "tty-mode-reset-strings");
     let mut guard = RestoreHost {
         id,
         host: Some(host),
     };
     let handled = {
-        let mut ops = ContextEmergencyEscapeOps(ctx);
+        let mut ops = ContextEmergencyEscapeOps {
+            ctx,
+            terminal_id: id,
+        };
         guard
             .host
             .as_deref_mut()
-            .is_some_and(|host| host.run_emergency_escape(&mut ops))
+            .is_some_and(|host| host.run_emergency_escape(&reset_strings, &mut ops))
     };
     drop(guard);
     if handled {

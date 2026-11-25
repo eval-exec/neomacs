@@ -124,14 +124,7 @@ pub fn detect_term_caps() -> neomacs_display_runtime::backend::tty::rif::TermCap
 }
 
 pub(crate) fn default_controlling_tty_name() -> &'static str {
-    #[cfg(windows)]
-    {
-        "CONOUT$"
-    }
-    #[cfg(not(windows))]
-    {
-        "/dev/tty"
-    }
+    neovm_core::emacs_core::terminal::pure::CONTROLLING_DEV_TTY_NAME
 }
 
 pub fn detect_tty_name(_startup: &StartupOptions) -> String {

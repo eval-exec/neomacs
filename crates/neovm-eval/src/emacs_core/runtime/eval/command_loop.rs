@@ -294,6 +294,12 @@ enum ConcurrentCycleKind {
 
 static_assertions::assert_impl_all!(ConcurrentCycleKind: Send, Sync, Copy, Clone, std::fmt::Debug);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShutdownFlowPolicy {
+    Propagate,
+    Contain,
+}
+
 impl Context {
     /// Mark this evaluator as a daemon before running normal-top-level.
     /// The name is host-owned; Lisp cannot change daemonp by setting variables.
@@ -374,6 +380,61 @@ impl Context {
         self.assign_by_id(CommandLoopSymbol::InhibitRedisplay.id(), Value::T);
     }
 
+    /// Shared core of GNU `shut_down_emacs` (`src/emacs.c:3104-3160`), locking
+    /// the step order between `kill-emacs` and emergency-escape abort:
+    ///
+    /// 1. `Vrun_hooks = Qnil`, `Vinhibit_redisplay = Qt` (`enter_shut_down`);
+    /// 2. optional foreground controlling-TTY fatal diagnostic (`before_processes`);
+    ///    note that GNU also calls `reset_all_sys_modes ()` (`src/emacs.c:3117`)
+    ///    right before the diagnostic — on the emergency-escape path the
+    ///    primary TTY has already been suspended/cooked via
+    ///    `tty_suspend_terminal` before entering `run_emergency_abort`;
+    /// 3. `inhibit_sentinels = 1` + `kill_buffer_processes` (`shutdown_processes_for_exit`);
+    /// 4. `Fdo_auto_save (Qt, Qnil)` (`auto_save_hooks::do_auto_save`);
+    /// 5. `unlock_all_files` (`unlock_all_files_for_shutdown`).
+    ///
+    /// Known pre-existing gap (applies to all Neomacs shutdown paths): GNU's
+    /// `stuff_buffered_input` (`src/keyboard.c:12484-12513`, `TIOCSTI`
+    /// typeahead pushback) is not implemented.
+    fn run_shut_down_emacs_core(
+        &mut self,
+        flow_policy: ShutdownFlowPolicy,
+        before_processes: impl FnOnce(&mut Self),
+    ) -> Result<(), Flow> {
+        // Every entry to GNU shut_down_emacs repeats the native shutdown
+        // assignments, even when a previous auto-save handler escaped. The
+        // Dying boundary is permanent: only pre-boundary hook exits roll back.
+        self.enter_shut_down();
+        before_processes(self);
+        // GNU emacs.c:3154: sentinel inhibition precedes process teardown,
+        // and process teardown precedes the canonical shutdown auto-save.
+        let step_processes = super::process_hooks::shutdown_processes_for_exit(self);
+        if matches!(flow_policy, ShutdownFlowPolicy::Propagate) {
+            step_processes?;
+        }
+        // GNU calls `Fdo_auto_save (Qt, Qnil)` directly after disabling
+        // hooks (`emacs.c:3107-3110`, `:3157`). The canonical body is reached
+        // through the eval-owned auto-save table core installs at
+        // construction, independently of a redefined or unbound Lisp
+        // function cell. A handler's nonlocal exit leaves before publishing
+        // a kill-emacs request under `Propagate`; under `Contain` (the `-> !`
+        // fatal abort path) we contain any escaping `Flow` and continue to
+        // unlock files and raise `SIGABRT`.
+        let step_auto_save = super::auto_save_hooks::do_auto_save(self, Value::T, Value::NIL);
+        if matches!(flow_policy, ShutdownFlowPolicy::Propagate) {
+            step_auto_save?;
+        }
+        // GNU emacs.c:3157-3159: auto-save, then unlock_all_files. An
+        // escaping unlock handler keeps Dying but leaves before publishing;
+        // a later deliberate kill repeats both operations. The deliberate
+        // auto-save-list unlink belongs after this walk, never before it.
+        let step_unlock = self.unlock_all_files_for_shutdown();
+        if matches!(flow_policy, ShutdownFlowPolicy::Propagate) {
+            step_unlock?;
+        }
+        Ok(())
+    }
+
     /// Publish the shutdown request once hook bodies are no longer eligible.
     ///
     /// A later entry while `Dying` reaches here without running hook bodies
@@ -384,26 +445,7 @@ impl Context {
         if let Some(published) = self.shutdown_request {
             return Err(Flow::shutdown(published));
         }
-        // Every entry to GNU shut_down_emacs repeats the native shutdown
-        // assignments, even when a previous auto-save handler escaped. The
-        // Dying boundary is permanent: only pre-boundary hook exits roll back.
-        self.enter_shut_down();
-        // GNU emacs.c:3154: sentinel inhibition precedes process teardown,
-        // and process teardown precedes the canonical shutdown auto-save.
-        super::process_hooks::shutdown_processes_for_exit(self)?;
-        // GNU calls `Fdo_auto_save (Qt, Qnil)` directly after disabling
-        // hooks (`emacs.c:3107-3110`, `:3157`). The canonical body is reached
-        // through the eval-owned auto-save table core installs at
-        // construction, independently of a redefined or unbound Lisp
-        // function cell. A handler's nonlocal exit leaves before publishing
-        // this request, including a throw or a nested shutdown with its own
-        // exit code.
-        super::auto_save_hooks::do_auto_save(self, Value::T, Value::NIL)?;
-        // GNU emacs.c:3157-3159: auto-save, then unlock_all_files. An
-        // escaping unlock handler keeps Dying but leaves before publishing;
-        // a later deliberate kill repeats both operations. The deliberate
-        // auto-save-list unlink belongs after this walk, never before it.
-        self.unlock_all_files_for_shutdown()?;
+        self.run_shut_down_emacs_core(ShutdownFlowPolicy::Propagate, |_| {})?;
         self.unlink_auto_save_list_for_deliberate_exit()?;
         self.log_cconv_memo_report();
         self.log_tier_i_report();
@@ -3140,6 +3182,11 @@ impl Context {
     /// 6. `emacs_backtrace (40)` and `SIG_DFL` + `raise(SIGABRT)`.
     #[doc(hidden)]
     pub fn run_emergency_abort(&mut self) -> ! {
+        // Note: GNU's `fatal_error_in_progress` is process-wide across all
+        // fatal signal handlers; this latch guards only re-entry into
+        // `run_emergency_abort` (so a `SIGTERM` arriving during abort's
+        // auto-save could still reach `maybe_quit_slow` -> `builtin_kill_emacs`
+        // until a shared process-wide fatal-phase latch unifies both paths).
         static FATAL_ABORT_IN_PROGRESS: std::sync::atomic::AtomicBool =
             std::sync::atomic::AtomicBool::new(false);
 
@@ -3148,12 +3195,9 @@ impl Context {
         let mut ran_orderly = false;
         if orderly && !FATAL_ABORT_IN_PROGRESS.swap(true, std::sync::atomic::Ordering::AcqRel) {
             ran_orderly = true;
-            self.enter_shut_down();
-            crate::emacs_core::eval::input_hooks::write_fatal_abort_diagnostic();
-            let _ = super::process_hooks::shutdown_processes_for_exit(self);
-            let _ =
-                crate::emacs_core::eval::auto_save_hooks::do_auto_save(self, Value::T, Value::NIL);
-            let _ = self.unlock_all_files_for_shutdown();
+            let _ = self.run_shut_down_emacs_core(ShutdownFlowPolicy::Contain, |_| {
+                crate::emacs_core::eval::input_hooks::write_fatal_abort_diagnostic();
+            });
         }
         crate::emacs_core::eval::input_hooks::terminate_with_abort(ran_orderly)
     }

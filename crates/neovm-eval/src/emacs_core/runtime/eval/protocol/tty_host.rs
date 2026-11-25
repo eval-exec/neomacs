@@ -16,6 +16,13 @@ use neovm_value::display_vocab::FrameId;
 /// GNU's initial terminal id (`initial_terminal`).
 pub const TERMINAL_ID: u64 = 0;
 
+/// GNU's controlling terminal device name (`DEV_TTY`, `src/keyboard.c:94`,
+/// matched by `get_named_terminal (dev_tty)` at `src/terminal.c:263-277`).
+#[cfg(windows)]
+pub const CONTROLLING_DEV_TTY_NAME: &str = "CONOUT$";
+#[cfg(not(windows))]
+pub const CONTROLLING_DEV_TTY_NAME: &str = "/dev/tty";
+
 use super::super::Context;
 
 /// Evaluator operations invoked by [`TerminalHost::run_emergency_escape`]
@@ -28,6 +35,13 @@ pub trait EmergencyEscapeOps {
     /// `"Abort (and dump core)? (y or n) "` (`src/sysdep.c:2401`,
     /// `src/emacs.c:441-483`, `shut_down_emacs` `:3104-3160`).
     fn abort_orderly(&mut self) -> !;
+
+    /// Raw `tty-mode-set-strings` bytes for the controlling terminal, queried
+    /// when re-entering TTY modes on `"Continuing..."` (`src/keyboard.c:12710`,
+    /// `src/term.c:222`).
+    fn tty_mode_set_strings(&self) -> Vec<u8> {
+        Vec::new()
+    }
 }
 
 /// Arguments forwarded from `suspend-emacs` to the controlling terminal host
@@ -74,15 +88,20 @@ pub trait TerminalHost {
     }
 
     /// GNU `handle_interrupt` controlling-TTY emergency escape
-    /// (`src/keyboard.c:12622-12711`): restore terminal modes, suspend with
-    /// `SIGTSTP`, and on resume prompt for auto-save / abort / continue before
-    /// re-entering raw mode.
+    /// (`src/keyboard.c:12622-12711`): emit `reset_strings` and restore
+    /// terminal modes, suspend with `SIGTSTP`, and on resume prompt for
+    /// auto-save / abort / continue before re-entering raw mode and emitting
+    /// `ops.tty_mode_set_strings()`.
     ///
     /// Returns `true` when this host owns the interactive controlling TTY and
     /// handled the emergency escape; returns `false` when the host does not
     /// support emergency escape so the evaluator falls back to GNU's
     /// `force_quit_count` path (`src/keyboard.c:12712-12720`).
-    fn run_emergency_escape(&mut self, _ops: &mut dyn EmergencyEscapeOps) -> bool {
+    fn run_emergency_escape(
+        &mut self,
+        _reset_strings: &[u8],
+        _ops: &mut dyn EmergencyEscapeOps,
+    ) -> bool {
         false
     }
 }

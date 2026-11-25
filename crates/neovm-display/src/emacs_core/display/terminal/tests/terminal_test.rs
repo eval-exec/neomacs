@@ -1434,6 +1434,7 @@ fn made_frame(eval: &Context, made: Value) -> &crate::window::Frame {
 struct EmergencyEscapeProbeHost {
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     trigger_auto_save: bool,
+    recorded_mode_strings: Option<Rc<RefCell<Vec<(Vec<u8>, Vec<u8>)>>>>,
 }
 
 impl TerminalHost for EmergencyEscapeProbeHost {
@@ -1445,10 +1446,19 @@ impl TerminalHost for EmergencyEscapeProbeHost {
         Ok(())
     }
 
-    fn run_emergency_escape(&mut self, ops: &mut dyn EmergencyEscapeOps) -> bool {
+    fn run_emergency_escape(
+        &mut self,
+        reset_strings: &[u8],
+        ops: &mut dyn EmergencyEscapeOps,
+    ) -> bool {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.trigger_auto_save {
             ops.auto_save();
+        }
+        if let Some(recorded) = &self.recorded_mode_strings {
+            recorded
+                .borrow_mut()
+                .push((reset_strings.to_vec(), ops.tty_mode_set_strings()));
         }
         true
     }
@@ -1472,10 +1482,30 @@ fn interactive_controlling_tty_context() -> Context {
 fn controlling_tty_second_quit_interrupt_triggers_emergency_escape() {
     let mut eval = interactive_controlling_tty_context();
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recorded_mode_strings = Rc::new(RefCell::new(Vec::new()));
     set_terminal_host(Box::new(EmergencyEscapeProbeHost {
         calls: std::sync::Arc::clone(&calls),
         trigger_auto_save: true,
+        recorded_mode_strings: Some(Rc::clone(&recorded_mode_strings)),
     }));
+    builtin_set_terminal_parameter(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::symbol("tty-mode-reset-strings"),
+            Value::list(vec![Value::string("<R1>"), Value::string("<R2>")]),
+        ],
+    )
+    .expect("set tty-mode-reset-strings");
+    builtin_set_terminal_parameter(
+        &mut eval,
+        vec![
+            Value::NIL,
+            Value::symbol("tty-mode-set-strings"),
+            Value::list(vec![Value::string("<S1>"), Value::string("<S2>")]),
+        ],
+    )
+    .expect("set tty-mode-set-strings");
     eval.set_variable("inhibit-quit", Value::T);
 
     // 1st C-g sets quit-flag without entering emergency escape.
@@ -1485,11 +1515,16 @@ fn controlling_tty_second_quit_interrupt_triggers_emergency_escape() {
     assert!(eval.inhibit_quit.is_truthy());
 
     // 2nd C-g while quit-flag is non-nil enters controlling-TTY emergency escape
-    // instead of incrementing force_quit_count or clearing inhibit-quit.
+    // instead of incrementing force_quit_count or clearing inhibit-quit, and
+    // forwards GNU's tty-mode-reset-strings / tty-mode-set-strings.
     eval.record_quit_interrupts(1);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(eval.quit_flag_value().is_truthy());
     assert!(eval.inhibit_quit.is_truthy());
+    assert_eq!(
+        recorded_mode_strings.borrow().as_slice(),
+        &[(b"<R1><R2>".to_vec(), b"<S1><S2>".to_vec())]
+    );
 
     // A 3rd C-g still enters emergency escape rather than clearing inhibit-quit.
     eval.record_quit_interrupts(1);
@@ -1516,6 +1551,7 @@ fn suspended_or_non_tty_terminal_falls_back_to_force_quit_count() {
     set_terminal_host(Box::new(EmergencyEscapeProbeHost {
         calls: std::sync::Arc::clone(&calls),
         trigger_auto_save: false,
+        recorded_mode_strings: None,
     }));
     // GNU get_named_terminal(dev_tty) returns NULL when the controlling tty
     // is suspended (src/terminal.c:274 TERMINAL_ACTIVE_P).
@@ -1573,6 +1609,7 @@ fn suspended_or_non_tty_terminal_falls_back_to_force_quit_count() {
     set_terminal_host(Box::new(EmergencyEscapeProbeHost {
         calls: std::sync::Arc::clone(&calls),
         trigger_auto_save: false,
+        recorded_mode_strings: None,
     }));
     batch_eval.set_variable("inhibit-quit", Value::T);
     batch_eval.record_quit_interrupts(3);

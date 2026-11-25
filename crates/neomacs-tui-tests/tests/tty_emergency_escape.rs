@@ -86,10 +86,40 @@ const CONTINUE_PROBE: &str = r#";;; -*- lexical-binding: nil; -*-
   (kill-emacs 0))
 "#;
 
+const MODE_STRINGS_PROBE: &str = r#";;; -*- lexical-binding: nil; -*-
+(let* ((dir (getenv "EE_DIR"))
+       (ready (expand-file-name "ready" dir))
+       (done (expand-file-name "done" dir)))
+  (push "<EE-RESET-1>" (terminal-parameter nil 'tty-mode-reset-strings))
+  (push 42 (terminal-parameter nil 'tty-mode-reset-strings))
+  (push "<EE-RESET-2>" (terminal-parameter nil 'tty-mode-reset-strings))
+  (push "<EE-SET-1>" (terminal-parameter nil 'tty-mode-set-strings))
+  (push 99 (terminal-parameter nil 'tty-mode-set-strings))
+  (push "<EE-SET-2>" (terminal-parameter nil 'tty-mode-set-strings))
+  (condition-case nil
+      (progn
+        (let ((inhibit-quit t))
+          (with-temp-file ready
+            (insert "ready\n"))
+          (while (not (file-exists-p done))
+            (sleep-for 0.02)))
+        (sleep-for 0))
+    (quit nil))
+  (kill-emacs 0))
+"#;
+
 const ABORT_PROBE: &str = r#";;; -*- lexical-binding: nil; -*-
 (let* ((dir (getenv "EE_DIR"))
        (target (expand-file-name "draft.txt" dir))
-       (ready (expand-file-name "ready" dir)))
+       (ready (expand-file-name "ready" dir))
+       (kill-marker (expand-file-name "kill-hook-ran" dir))
+       (autosave-marker (expand-file-name "auto-save-hook-ran" dir)))
+  (add-hook 'kill-emacs-hook
+            (lambda ()
+              (with-temp-file kill-marker (insert "ran\n"))))
+  (add-hook 'auto-save-hook
+            (lambda ()
+              (with-temp-file autosave-marker (insert "ran\n"))))
   (find-file target)
   (auto-save-mode 1)
   (insert "unsaved abort line\n")
@@ -293,7 +323,10 @@ struct AbortObservation {
     child_status: String,
     lock_existed_before_abort: bool,
     lock_exists_after_abort: bool,
+    autosave_existed_before_abort: bool,
     autosave_contents: Option<String>,
+    kill_hook_ran: bool,
+    auto_save_hook_ran: bool,
     saw_fatal_error_line: bool,
 }
 
@@ -306,6 +339,8 @@ fn run_abort_case(program: &Path, name: &str) -> AbortObservation {
     let status = dir.path().join("status");
     let autosave_file = dir.path().join("#draft.txt#");
     let lock_file = dir.path().join(".#draft.txt");
+    let kill_hook_marker = dir.path().join("kill-hook-ran");
+    let auto_save_hook_marker = dir.path().join("auto-save-hook-ran");
     std::fs::write(&script, ABORT_PROBE).expect("write abort probe");
 
     let mut session = spawn_job_controlled_editor(
@@ -353,12 +388,14 @@ fn run_abort_case(program: &Path, name: &str) -> AbortObservation {
     );
     // Answer "n" to Auto-save, then "y" to Abort: GNU emacs_abort ->
     // terminate_due_to_signal(SIGABRT, 40) -> shut_down_emacs STILL auto-saves
-    // modified buffers, unlocks lock files, and writes "Fatal error 6: Aborted".
+    // modified buffers, unlocks lock files, suppresses kill-emacs-hook and
+    // auto-save-hook, and writes "Fatal error 6: Aborted".
     session.send(b"n\n");
     assert!(
         session.wait_for_raw_output(b"Abort (and dump core)? (y or n) ", Duration::from_secs(10)),
         "{name} missing Abort prompt"
     );
+    let autosave_existed_before_abort = autosave_file.exists();
     session.send(b"y\n");
 
     assert_eq!(
@@ -369,6 +406,8 @@ fn run_abort_case(program: &Path, name: &str) -> AbortObservation {
     let child_status = std::fs::read_to_string(&status).expect("read abort status");
     let lock_exists_after_abort = std::fs::symlink_metadata(&lock_file).is_ok();
     let autosave_contents = std::fs::read_to_string(&autosave_file).ok();
+    let kill_hook_ran = kill_hook_marker.exists();
+    let auto_save_hook_ran = auto_save_hook_marker.exists();
     let saw_fatal_error_line = session
         .recent_output()
         .windows(b"Fatal error 6: Aborted".len())
@@ -378,7 +417,10 @@ fn run_abort_case(program: &Path, name: &str) -> AbortObservation {
         child_status,
         lock_existed_before_abort,
         lock_exists_after_abort,
+        autosave_existed_before_abort,
         autosave_contents,
+        kill_hook_ran,
+        auto_save_hook_ran,
         saw_fatal_error_line,
     }
 }
@@ -431,7 +473,10 @@ fn controlling_tty_second_ctrl_g_abort_terminates_with_sigabrt() {
             child_status: format!("signal:{}", libc::SIGABRT),
             lock_existed_before_abort: true,
             lock_exists_after_abort: false,
+            autosave_existed_before_abort: false,
             autosave_contents: Some("unsaved abort line\n".to_string()),
+            kill_hook_ran: false,
+            auto_save_hook_ran: false,
             saw_fatal_error_line: true,
         },
         "GNU 31.1 abort orderly shutdown contract"
@@ -439,5 +484,139 @@ fn controlling_tty_second_ctrl_g_abort_terminates_with_sigabrt() {
     assert_eq!(
         neo_obs, gnu_obs,
         "Neomacs emergency escape abort diverged from GNU 31.1"
+    );
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ModeStringsObservation {
+    stop_signal: i32,
+    reset_strings_ordered_before_te: bool,
+    set_strings_ordered_after_ti: bool,
+    child_status: String,
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn find_subslice_from(haystack: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
+    find_subslice(&haystack[start..], needle).map(|offset| start + offset)
+}
+
+fn run_mode_strings_case(program: &Path, name: &str) -> ModeStringsObservation {
+    const TERM_TE: &[u8] = b"\x1b[?1049l";
+    const TERM_TI: &[u8] = b"\x1b[?1049h";
+
+    let dir = neomacs_tui_tests::TuiTempDirectory::new("tty-ee-modes-");
+    let script = dir.path().join("probe.el");
+    let ready = dir.path().join("ready");
+    let stopped = dir.path().join("stopped");
+    let resume = dir.path().join("resume");
+    let status = dir.path().join("status");
+    let done = dir.path().join("done");
+    std::fs::write(&script, MODE_STRINGS_PROBE).expect("write mode-strings probe");
+
+    let mut session = spawn_job_controlled_editor(
+        program,
+        name,
+        dir.path(),
+        &script,
+        &stopped,
+        &resume,
+        &status,
+        false,
+    );
+    assert!(
+        wait_for_file(&ready, &mut session, Duration::from_secs(30)),
+        "{name} did not enter inhibit-quit loop"
+    );
+
+    session.clear_recent_output();
+    session.send(b"\x07");
+    assert!(
+        !wait_for_file(&stopped, &mut session, Duration::from_millis(250)),
+        "{name} must not stop on the 1st C-g"
+    );
+
+    session.send(b"\x07");
+    assert!(
+        wait_for_file(&stopped, &mut session, Duration::from_secs(10)),
+        "{name} did not stop with SIGTSTP on 2nd C-g"
+    );
+    let stop_signal: i32 = std::fs::read_to_string(&stopped)
+        .expect("read stop signal")
+        .trim()
+        .parse()
+        .expect("parse stop signal");
+    session.read(Duration::from_millis(100));
+    let pre_suspend = session.recent_output().to_vec();
+    let reset_strings_ordered_before_te = find_subslice(&pre_suspend, b"<EE-RESET-2>")
+        .and_then(|r2| find_subslice_from(&pre_suspend, r2 + 1, b"<EE-RESET-1>"))
+        .and_then(|r1| find_subslice_from(&pre_suspend, r1 + 1, TERM_TE))
+        .is_some();
+
+    session.clear_recent_output();
+    std::fs::write(&resume, "go\n").expect("signal SIGCONT");
+    assert!(
+        session.wait_for_raw_output(b"Auto-save? (y or n) ", Duration::from_secs(10)),
+        "{name} missing Auto-save prompt"
+    );
+    session.send(b"n\n");
+    assert!(
+        session.wait_for_raw_output(b"Abort (and dump core)? (y or n) ", Duration::from_secs(10)),
+        "{name} missing Abort prompt"
+    );
+    session.send(b"n\n");
+    assert!(
+        session.wait_for_raw_output(b"Continuing...", Duration::from_secs(10)),
+        "{name} missing Continuing..."
+    );
+
+    std::fs::write(&done, "done\n").expect("write done sentinel");
+    assert_eq!(
+        session.run_to_completion(Duration::from_secs(20)),
+        TuiProcessOutcome::Exited,
+        "{name} did not exit cleanly after Continuing..."
+    );
+    let post_resume = session.recent_output().to_vec();
+    let set_strings_ordered_after_ti = find_subslice(&post_resume, b"Continuing...")
+        .and_then(|cont| find_subslice_from(&post_resume, cont + 1, TERM_TI))
+        .and_then(|ti| find_subslice_from(&post_resume, ti + TERM_TI.len(), b"<EE-SET-2>"))
+        .and_then(|s2| find_subslice_from(&post_resume, s2 + 1, b"<EE-SET-1>"))
+        .is_some();
+    let child_status = std::fs::read_to_string(&status).expect("read child status");
+
+    ModeStringsObservation {
+        stop_signal,
+        reset_strings_ordered_before_te,
+        set_strings_ordered_after_ti,
+        child_status,
+    }
+}
+
+#[test]
+fn controlling_tty_second_ctrl_g_emits_tty_mode_reset_and_set_strings() {
+    let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
+    let neo = neomacs_tui_tests::neomacs_binary();
+
+    let gnu_obs = run_mode_strings_case(&gnu, "GNU emergency escape mode strings");
+    let neo_obs = run_mode_strings_case(&neo, "Neo emergency escape mode strings");
+    eprintln!("GNU mode strings: {gnu_obs:?}\nNeo mode strings: {neo_obs:?}");
+
+    assert_eq!(
+        gnu_obs,
+        ModeStringsObservation {
+            stop_signal: libc::SIGTSTP,
+            reset_strings_ordered_before_te: true,
+            set_strings_ordered_after_ti: true,
+            child_status: "exit:0".to_string(),
+        },
+        "GNU 31.1 emergency escape tty-mode-reset/set-strings contract"
+    );
+    assert_eq!(
+        neo_obs, gnu_obs,
+        "Neomacs emergency escape tty-mode-reset/set-strings diverged from GNU 31.1"
     );
 }
