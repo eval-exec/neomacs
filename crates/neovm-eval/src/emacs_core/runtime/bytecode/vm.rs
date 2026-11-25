@@ -745,14 +745,22 @@ impl std::fmt::Debug for RunLoopCursor {
 }
 
 impl RunLoopCursor {
+    /// Acquire the operand-stack cursor for the active VM driver.
+    ///
+    /// # Safety
+    /// Same contract as [`StackCursor::acquire`]: `vm.ctx.bc_buf` must not be
+    /// reallocated, mutated externally, or observed by GC until published back
+    /// to the same `vm`.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn acquire(
+    pub unsafe fn acquire(
         vm: &mut Vm<'_>,
         phase: crate::emacs_core::eval::world::SoleOwnerDriver,
     ) -> Self {
         Self {
-            operands: StackCursor::acquire(vm.ctx),
+            // SAFETY: caller upholds `StackCursor::acquire`'s exclusivity and
+            // publish-before-GC contract on `vm.ctx.bc_buf`.
+            operands: unsafe { StackCursor::acquire(vm.ctx) },
             phase,
         }
     }
@@ -765,10 +773,18 @@ impl RunLoopCursor {
         (self.operands, self.phase)
     }
 
+    /// Publish the operand-stack cursor back to `vm.ctx.bc_buf` and transition
+    /// the sole-owner phase to published.
+    ///
+    /// # Safety
+    /// Same contract as [`StackCursor::publish`]: `vm.ctx` must be the same
+    /// `Context` from which `self` was acquired, and `vm.ctx.bc_buf` must not
+    /// have been reallocated or mutated externally since acquisition.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn publish(self, vm: &mut Vm<'_>) -> PublishedSolePhase {
-        self.operands.publish(vm.ctx);
+    pub unsafe fn publish(self, vm: &mut Vm<'_>) -> PublishedSolePhase {
+        // SAFETY: caller upholds `StackCursor::publish`'s contract on `vm.ctx`.
+        unsafe { self.operands.publish(vm.ctx) };
         PublishedSolePhase {
             phase: self.phase.into_published(),
         }
@@ -778,10 +794,16 @@ impl RunLoopCursor {
 impl PublishedSolePhase {
     /// Rejoin through the original VM receiver retained by the private driver.
     /// No identity is encoded in the ZST; this receiver policy remains audited.
+    ///
+    /// # Safety
+    /// `vm` must be the same VM receiver whose phase was published, and the
+    /// caller must uphold [`RunLoopCursor::acquire`]'s contract until the
+    /// returned cursor is published.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn rejoin(self, vm: &mut Vm<'_>) -> RunLoopCursor {
-        RunLoopCursor::acquire(vm, self.phase.into_running())
+    pub unsafe fn rejoin(self, vm: &mut Vm<'_>) -> RunLoopCursor {
+        // SAFETY: caller upholds `RunLoopCursor::acquire`'s contract on `vm`.
+        unsafe { RunLoopCursor::acquire(vm, self.phase.into_running()) }
     }
 
     /// Retire a published activation on a normal or nonlocal final exit.
@@ -808,9 +830,17 @@ pub(crate) fn debug_assert_no_live_stack_cursor() {
 }
 
 impl StackCursor {
+    /// Snapshot `ctx.bc_buf`'s raw pointer and length into a register-friendly
+    /// cursor, releasing the `&mut Context` borrow.
+    ///
+    /// # Safety
+    /// While this `StackCursor` is live (until [`Self::publish`] on the SAME
+    /// `ctx`), nothing may reallocate or externally mutate `ctx.bc_buf`, no
+    /// other `StackCursor` may be acquired on this thread, and no GC may
+    /// observe `ctx.bc_buf`'s stale length.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn acquire(ctx: &mut crate::emacs_core::eval::Context) -> Self {
+    pub unsafe fn acquire(ctx: &mut crate::emacs_core::eval::Context) -> Self {
         #[cfg(debug_assertions)]
         STACK_CURSOR_LIVE.with(|flag| {
             assert!(!flag.get(), "acquired a StackCursor while another is live");
@@ -822,14 +852,33 @@ impl StackCursor {
         }
     }
 
+    /// Write the cursor's live length back into `ctx.bc_buf`.
+    ///
+    /// # Safety
+    /// `ctx` must be the same [`Context`] passed to [`Self::acquire`], its
+    /// `bc_buf` backing allocation must not have moved (`self.base == ctx.bc_buf.as_mut_ptr()`),
+    /// `self.len <= ctx.bc_buf.capacity()`, and every slot below `self.len`
+    /// must be initialized.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn publish(self, ctx: &mut crate::emacs_core::eval::Context) {
+    pub unsafe fn publish(self, ctx: &mut crate::emacs_core::eval::Context) {
         #[cfg(debug_assertions)]
         STACK_CURSOR_LIVE.with(|flag| flag.set(false));
-        debug_assert!(self.len <= ctx.bc_buf.capacity());
-        // SAFETY: every slot below `len` was either already initialized in
-        // bc_buf or written through the cursor; Value is Copy with no Drop.
+        debug_assert_eq!(
+            self.base,
+            ctx.bc_buf.as_mut_ptr(),
+            "StackCursor::publish called with a different or reallocated bc_buf"
+        );
+        debug_assert!(
+            self.len <= ctx.bc_buf.capacity(),
+            "StackCursor::publish len {} exceeds bc_buf capacity {}",
+            self.len,
+            ctx.bc_buf.capacity()
+        );
+        // SAFETY: caller guarantees `self.base == ctx.bc_buf.as_mut_ptr()`,
+        // `self.len <= ctx.bc_buf.capacity()`, and every slot below `self.len`
+        // was already initialized in `bc_buf` or written through the cursor;
+        // `Value` is `Copy` with no `Drop`.
         unsafe { ctx.bc_buf.set_len(self.len) }
     }
 
@@ -3027,7 +3076,8 @@ impl<'a> Vm<'a> {
         cursor: RunLoopCursor,
         overflow: BytecodeDepthOverflow,
     ) -> (Flow, PublishedSolePhase) {
-        let published = cursor.publish(self);
+        // SAFETY: `cursor` was acquired from `self` and `self.ctx.bc_buf` was not reallocated.
+        let published = unsafe { cursor.publish(self) };
         let flow = self.ctx.finish_lisp_depth_overflow(overflow.into_flow());
         (flow, published)
     }
@@ -5227,15 +5277,21 @@ impl<'a> Vm<'a> {
         // top/pc in locals across setup_frame/Breturn, bytecode.c). Escapes
         // publish and reacquire; the iterative Bcall/Breturn transitions keep
         // the cursor live.
-        let (mut cursor, mut phase) = RunLoopCursor::acquire(self, phase).into_parts();
+        // SAFETY: the VM driver exclusively operates on `self.ctx.bc_buf` and
+        // publishes the cursor before every escape or GC-capable call.
+        let (mut cursor, mut phase) = unsafe { RunLoopCursor::acquire(self, phase) }.into_parts();
         let mut published;
         macro_rules! publish_phase {
             () => {
-                published = RunLoopCursor {
-                    operands: cursor,
-                    phase,
+                // SAFETY: `cursor` was acquired from `self` and `self.ctx.bc_buf`
+                // has not been reallocated or mutated externally while live.
+                published = unsafe {
+                    RunLoopCursor {
+                        operands: cursor,
+                        phase,
+                    }
+                    .publish(self)
                 }
-                .publish(self)
             };
         }
         // Rejoin reacquires the cursor. It must not name `frame_base`: this
@@ -5246,7 +5302,9 @@ impl<'a> Vm<'a> {
         // re-enter `invalid_bytecode!`.
         macro_rules! rejoin_phase_raw {
             () => {
-                (cursor, phase) = published.rejoin(self).into_parts()
+                // SAFETY: `self` is the same VM whose phase was just published,
+                // and every subsequent escape publishes before yielding.
+                (cursor, phase) = unsafe { published.rejoin(self) }.into_parts()
             };
         }
         macro_rules! rejoin_phase {

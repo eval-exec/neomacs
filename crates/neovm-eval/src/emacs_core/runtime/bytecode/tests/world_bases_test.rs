@@ -77,12 +77,14 @@ fn world_bases_cursor_reacquires_after_publication_gc_and_manager_replacement() 
         .push(Value::list(vec![Value::string("operand-only")]));
     let mut vm = Vm::from_context(&mut context);
     let phase = vm.sole_owner.driver();
-    let cursor = RunLoopCursor::acquire(&mut vm, phase);
+    // SAFETY: test exclusively owns `vm.ctx.bc_buf` and publishes `cursor` before GC.
+    let cursor = unsafe { RunLoopCursor::acquire(&mut vm, phase) };
     assert_eq!(
         vm.ctx.obarray.symbol_value_id_copied(global),
         Some(Value::fixnum(11))
     );
-    let published = cursor.publish(&mut vm);
+    // SAFETY: `cursor` was acquired from `vm` without reallocating `bc_buf`.
+    let published = unsafe { cursor.publish(&mut vm) };
     for index in 0..256 {
         vm.ctx.obarray.set_symbol_value_id(
             intern(&format!("world-bases-growth-{index}")),
@@ -95,7 +97,8 @@ fn world_bases_cursor_reacquires_after_publication_gc_and_manager_replacement() 
     let gc_before = vm.ctx.gc_count;
     replace_buffers_and_collect(vm.ctx).expect("published GC and replacement");
     assert!(vm.ctx.gc_count > gc_before);
-    let cursor = published.rejoin(&mut vm);
+    // SAFETY: `vm` is the same VM that published `published`, and `cursor` is published below.
+    let cursor = unsafe { published.rejoin(&mut vm) };
     assert_eq!(
         vm.ctx.obarray.symbol_value_id_copied(global),
         Some(Value::fixnum(22))
@@ -110,7 +113,8 @@ fn world_bases_cursor_reacquires_after_publication_gc_and_manager_replacement() 
             .as_deref(),
         Some(" *world-bases-returning-owner*")
     );
-    let _finished = cursor.publish(&mut vm);
+    // SAFETY: `cursor` was rejoined from `vm` without reallocating `bc_buf`.
+    let _finished = unsafe { cursor.publish(&mut vm) };
     vm.ctx.bc_buf.clear();
 }
 
