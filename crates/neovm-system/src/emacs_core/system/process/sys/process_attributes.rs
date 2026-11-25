@@ -652,52 +652,88 @@ pub(crate) fn process_effective_ids(pid: i64) -> Option<(u32, u32)> {
     Some((euid?, egid?))
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(miri)))]
 pub(crate) fn user_name(uid: u32) -> Option<String> {
-    // SAFETY: libc returns either null or a valid passwd struct pointer.
-    let user = unsafe { libc::getpwuid(uid as libc::uid_t) };
-    if user.is_null() {
+    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    let mut buf_len = 1024usize;
+    loop {
+        let mut buf = vec![0u8; buf_len];
+        // SAFETY: `pwd`, `buf` (with `buf_len` bytes), and `result` are valid
+        // writable out-parameters for `getpwuid_r`; `pwd.pw_name` points into
+        // `buf`, which stays live until we copy it into an owned `String`.
+        let rc = unsafe {
+            libc::getpwuid_r(
+                uid as libc::uid_t,
+                &mut pwd,
+                buf.as_mut_ptr().cast(),
+                buf_len,
+                &mut result,
+            )
+        };
+        if rc == 0 {
+            if result.is_null() || pwd.pw_name.is_null() {
+                return None;
+            }
+            // SAFETY: `pwd.pw_name` is a NUL-terminated C string inside `buf`.
+            return Some(
+                unsafe { CStr::from_ptr(pwd.pw_name) }
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        if rc == libc::ERANGE && buf_len < (1 << 20) {
+            buf_len *= 2;
+            continue;
+        }
         return None;
     }
-    // SAFETY: `user` is non-null and `pw_name` is a valid C string pointer.
-    let name_ptr = unsafe { (*user).pw_name };
-    if name_ptr.is_null() {
-        return None;
-    }
-    // SAFETY: `name_ptr` is a valid NUL-terminated C string.
-    Some(
-        unsafe { CStr::from_ptr(name_ptr) }
-            .to_string_lossy()
-            .into_owned(),
-    )
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", miri))]
 pub(crate) fn user_name(_uid: u32) -> Option<String> {
     None
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(miri)))]
 pub fn group_name(gid: u32) -> Option<String> {
-    // SAFETY: libc returns either null or a valid group struct pointer.
-    let group = unsafe { libc::getgrgid(gid as libc::gid_t) };
-    if group.is_null() {
+    let mut grp: libc::group = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::group = std::ptr::null_mut();
+    let mut buf_len = 1024usize;
+    loop {
+        let mut buf = vec![0u8; buf_len];
+        // SAFETY: `grp`, `buf` (with `buf_len` bytes), and `result` are valid
+        // writable out-parameters for `getgrgid_r`; `grp.gr_name` points into
+        // `buf`, which stays live until we copy it into an owned `String`.
+        let rc = unsafe {
+            libc::getgrgid_r(
+                gid as libc::gid_t,
+                &mut grp,
+                buf.as_mut_ptr().cast(),
+                buf_len,
+                &mut result,
+            )
+        };
+        if rc == 0 {
+            if result.is_null() || grp.gr_name.is_null() {
+                return None;
+            }
+            // SAFETY: `grp.gr_name` is a NUL-terminated C string inside `buf`.
+            return Some(
+                unsafe { CStr::from_ptr(grp.gr_name) }
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        if rc == libc::ERANGE && buf_len < (1 << 20) {
+            buf_len *= 2;
+            continue;
+        }
         return None;
     }
-    // SAFETY: `group` is non-null and `gr_name` is a valid C string pointer.
-    let name_ptr = unsafe { (*group).gr_name };
-    if name_ptr.is_null() {
-        return None;
-    }
-    // SAFETY: `name_ptr` is a valid NUL-terminated C string.
-    Some(
-        unsafe { CStr::from_ptr(name_ptr) }
-            .to_string_lossy()
-            .into_owned(),
-    )
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", miri))]
 pub fn group_name(_gid: u32) -> Option<String> {
     None
 }

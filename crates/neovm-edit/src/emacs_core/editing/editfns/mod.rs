@@ -2279,24 +2279,45 @@ pub fn builtin_logcount(args: Vec<Value>) -> EvalResult {
 // OS lookup helpers
 // ---------------------------------------------------------------------------
 
-#[cfg(unix)]
+#[cfg(all(unix, not(miri)))]
 fn lookup_group_name(gid: u32) -> Option<String> {
-    let group = unsafe { libc::getgrgid(gid as libc::gid_t) };
-    if group.is_null() {
+    let mut grp: libc::group = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::group = std::ptr::null_mut();
+    let mut buf_len = 1024usize;
+    loop {
+        let mut buf = vec![0u8; buf_len];
+        // SAFETY: `grp`, `buf` (with `buf_len` bytes), and `result` are valid
+        // writable out-parameters for `getgrgid_r`, and any string pointer
+        // returned in `grp.gr_name` points into `buf`, which stays live while
+        // we copy it into an owned `String`.
+        let rc = unsafe {
+            libc::getgrgid_r(
+                gid as libc::gid_t,
+                &mut grp,
+                buf.as_mut_ptr().cast(),
+                buf_len,
+                &mut result,
+            )
+        };
+        if rc == 0 {
+            if result.is_null() || grp.gr_name.is_null() {
+                return None;
+            }
+            return Some(
+                unsafe { CStr::from_ptr(grp.gr_name) }
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        if rc == libc::ERANGE && buf_len < (1 << 20) {
+            buf_len *= 2;
+            continue;
+        }
         return None;
     }
-    let name_ptr = unsafe { (*group).gr_name };
-    if name_ptr.is_null() {
-        return None;
-    }
-    Some(
-        unsafe { CStr::from_ptr(name_ptr) }
-            .to_string_lossy()
-            .into_owned(),
-    )
 }
 
-#[cfg(not(unix))]
+#[cfg(any(not(unix), miri))]
 fn lookup_group_name(_gid: u32) -> Option<String> {
     None
 }

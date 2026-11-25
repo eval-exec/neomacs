@@ -99,53 +99,53 @@ pub(crate) fn signal_name_number(name: &str) -> Option<i32> {
     }
 }
 
+#[cfg(unix)]
+static STRSIGNAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Thread-safe `strsignal` lookup: serializes access to libc's shared signal
+/// description buffer and copies into an owned `String` before unlocking.
+#[cfg(unix)]
+pub(crate) fn raw_signal_description(signum: i32) -> Option<String> {
+    let _guard = STRSIGNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // SAFETY: `STRSIGNAL_LOCK` serializes all `strsignal` calls across this
+    // crate, and we copy the returned C string before dropping `_guard`.
+    unsafe {
+        let p = libc::strsignal(signum);
+        if p.is_null() {
+            None
+        } else {
+            Some(std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned())
+        }
+    }
+}
+
 /// A signal number's `strsignal` description with the first character
 /// down-cased, matching GNU's `status_message` ("Terminated" -> "terminated").
 /// Falls back to "unknown" when `strsignal` yields NULL or off Unix.
 pub(crate) fn signal_description(signum: i32) -> String {
     #[cfg(unix)]
-    {
-        // SAFETY: `strsignal` returns NULL or a valid static C string.
-        let raw = unsafe {
-            let p = libc::strsignal(signum);
-            if p.is_null() {
-                None
-            } else {
-                Some(std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned())
+    if let Some(s) = raw_signal_description(signum) {
+        let mut chars = s.chars();
+        return match chars.next() {
+            Some(first) => {
+                let lowered: String = first.to_lowercase().collect();
+                format!("{lowered}{}", chars.as_str())
             }
+            None => s,
         };
-        if let Some(s) = raw {
-            let mut chars = s.chars();
-            return match chars.next() {
-                Some(first) => {
-                    let lowered: String = first.to_lowercase().collect();
-                    format!("{lowered}{}", chars.as_str())
-                }
-                None => s,
-            };
-        }
     }
     let _ = signum;
     "unknown".to_string()
 }
 
 /// An errno's `strerror` text, exactly as GNU's `emacs_strerror`
-/// (src/sysdep.c) hands it to `emacs_perror`: `strerror` verbatim, with a
-/// fixed fallback when the number has no description.
+/// (src/sysdep.c) hands it to `emacs_perror`: reentrant `emacs_strerror`
+/// verbatim, with a fixed fallback when the number has no description.
 pub(crate) fn errno_description(errno: i32) -> String {
     #[cfg(unix)]
     {
-        // SAFETY: `strerror` returns NULL or a valid C string; the same
-        // contract `signal_description` relies on for `strsignal`.
-        let raw = unsafe {
-            let p = libc::strerror(errno);
-            if p.is_null() {
-                None
-            } else {
-                Some(std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned())
-            }
-        };
-        if let Some(text) = raw {
+        let text = neovm_value::system_vocab::errno::emacs_strerror(errno);
+        if !text.is_empty() {
             return text;
         }
     }
@@ -166,13 +166,8 @@ pub(crate) fn signal_number_from_description(name: &str) -> Option<i32> {
         return Some(n);
     }
     for signum in 1..=64i32 {
-        // SAFETY: `strsignal` returns NULL or a valid static C string.
-        let desc = unsafe {
-            let p = libc::strsignal(signum);
-            if p.is_null() {
-                continue;
-            }
-            std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+        let Some(desc) = raw_signal_description(signum) else {
+            continue;
         };
         if desc == name {
             return Some(signum);

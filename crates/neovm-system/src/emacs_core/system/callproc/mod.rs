@@ -754,14 +754,8 @@ fn route_captured_output_in_state(
 
 #[cfg(unix)]
 fn signal_description(signal: i32) -> String {
-    let ptr = unsafe { libc::strsignal(signal) };
-    if ptr.is_null() {
-        "unknown".to_string()
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(ptr) }
-            .to_string_lossy()
-            .into_owned()
-    }
+    crate::emacs_core::process::sys::raw_signal_description(signal)
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn call_process_status_value(status: std::process::ExitStatus) -> Value {

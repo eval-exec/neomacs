@@ -21,6 +21,8 @@ pub use neovm_eval::emacs_core::eval::data::process_state::ChildStatusSource;
 use crate::emacs_core::process::{HostInterfaceEntry, ProcessId};
 
 mod signals;
+#[cfg(unix)]
+pub(crate) use signals::raw_signal_description;
 pub(crate) use signals::send_signal;
 #[cfg(unix)]
 pub(crate) use signals::signal_number_from_description;
@@ -171,3 +173,7 @@ pub(super) fn interface_snapshot() -> Option<Vec<HostInterfaceEntry>> {
 
 #[cfg(target_os = "macos")]
 pub(crate) use process_attributes::{DarwinCpuTime, darwin_process_snapshot};
+
+#[cfg(all(test, unix))]
+#[path = "tests/reentrant_libc_test.rs"]
+mod reentrant_libc_test;
