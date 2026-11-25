@@ -625,7 +625,8 @@ impl<T: PagedObject> ObjectPage<T> {
             "ObjectPage::set_allocated index {index} >= SLOTS {}",
             Self::SLOTS
         );
-        // SAFETY: `index < Self::SLOTS` verified above.
+        assert!(!self.is_allocated(index), "arena slot double-allocated");
+        // SAFETY: `index < Self::SLOTS` and unallocated state verified above.
         unsafe { self.set_allocated_unchecked(index) };
     }
 
@@ -2608,6 +2609,21 @@ mod arena_pages_soundness_tests {
         assert!(
             free_res.is_err(),
             "free_slot must reject index >= Self::SLOTS"
+        );
+
+        let mut float_page = ObjectPage::<FloatObj>::new();
+        float_page.set_allocated(0);
+        let double_alloc = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            float_page.set_allocated(0);
+        }));
+        assert!(
+            double_alloc.is_err(),
+            "set_allocated must reject double-allocation in release as well as debug"
+        );
+        assert_eq!(
+            float_page.allocated(),
+            1,
+            "rejected double-allocation must not bump occupancy"
         );
     }
 
