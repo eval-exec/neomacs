@@ -2030,10 +2030,20 @@ fn l67a_collection_request_rides_batch_stop_once() {
                         collect_inbox
                             .send(KeeperMsg::Collect { reply: Some(c_tx) })
                             .expect("send Collect during pending stop");
+                        // Synchronize through the same FIFO inbox so `between_stops`
+                        // is guaranteed to have drained `Collect` during `Pending`
+                        // before releasing L. A bare `notices.recv_timeout` can pop
+                        // a stale pending notice buffered while this helper thread
+                        // was preempted under parallel load.
+                        let (barrier_tx, barrier_rx) = mpsc::sync_channel(1);
+                        collect_inbox
+                            .send(KeeperMsg::IdleQuery { reply: barrier_tx })
+                            .expect("send inbox barrier");
                         drop(collect_inbox);
-                        // Wait for one more pending tick so `between_stops` has
-                        // drained `Collect` before releasing L.
-                        let _ = notices.recv_timeout(BOUND).expect("post-collect notice");
+                        let idle = barrier_rx
+                            .recv_timeout(BOUND)
+                            .expect("driver drained Collect during Pending");
+                        assert!(!idle, "driver must not be idle while stop is pending");
                         l_go_tx.send(()).expect("release L");
                         return;
                     }
@@ -2544,8 +2554,21 @@ fn l67a_slow_owner_delays_empty_ring_collect_then_completes() {
                 collect_inbox
                     .send(KeeperMsg::Collect { reply: Some(c2_tx) })
                     .expect("send Collect 2");
+                // Synchronize through the same FIFO inbox so `between_stops`
+                // is guaranteed to have drained `Collect 2` during `Pending`
+                // before releasing L. A bare `notices.recv_timeout` can pop a
+                // stale pending notice buffered while this helper thread was
+                // preempted under parallel load, causing Collect 2 to miss
+                // Stop #1 and run on Stop #2.
+                let (barrier_tx, barrier_rx) = mpsc::sync_channel(1);
+                collect_inbox
+                    .send(KeeperMsg::IdleQuery { reply: barrier_tx })
+                    .expect("send inbox barrier");
                 drop(collect_inbox);
-                let _ = notices.recv_timeout(BOUND).expect("pending notice 2");
+                let idle = barrier_rx
+                    .recv_timeout(BOUND)
+                    .expect("driver drained Collect 2 during Pending");
+                assert!(!idle, "driver must not be idle while stop is pending");
                 l_go_tx.send(()).expect("release L");
             });
             assert_eq!(driver.run(), DriverEnd::Drained);
