@@ -1,5 +1,8 @@
 use super::*;
-use crate::font::{ResolvedCharGlyph, ResolvedFontId, ResolvedGlyph, ResolvedGlyphId};
+use crate::font::{
+    FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedCharGlyph, ResolvedFont,
+    ResolvedFontId, ResolvedFontIdentity, ResolvedGlyph, ResolvedGlyphId,
+};
 
 fn base_state() -> FrameDisplayState {
     let mut state = super::prepared_surface_tests::frame();
@@ -7,18 +10,42 @@ fn base_state() -> FrameDisplayState {
     state
 }
 
+fn fixture_font(id: ResolvedFontId, family: &str) -> ResolvedFont {
+    let asset = FontFileAsset::new("/fixture/coverage-font.ttf", 0).unwrap();
+    ResolvedFont {
+        id,
+        identity: ResolvedFontIdentity::from_file("/fixture/coverage-font.ttf", 0, None),
+        replay: FontReplay::Swash {
+            asset: FontOutlineAsset::File(asset),
+        },
+        family: family.into(),
+        full_name: None,
+        postscript_name: None,
+        weight: 400,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size: 10.0,
+        ascent_px: 8.0,
+        descent_px: 2.0,
+        space_advance_px: 10.0,
+        glyph_advance: Default::default(),
+        spacing: None,
+    }
+}
+
 #[test]
-fn auxiliary_nested_bindings_require_each_exact_entry() {
+fn auxiliary_nested_bindings_accept_additive_entries_and_refuse_conflicts() {
     let mut state = base_state();
     let mut coverage = state.scroll_coverage[0].as_ref().clone();
     let face = crate::FaceId::new(0);
+    let font_id = ResolvedFontId(91);
     let glyph = ResolvedCharGlyph {
-        resolved_font_id: ResolvedFontId(91),
+        resolved_font_id: font_id,
         glyph_id: ResolvedGlyphId::new(17),
         advance_px: 10.0,
     };
     let cluster = vec![ResolvedGlyph {
-        resolved_font_id: glyph.resolved_font_id,
+        resolved_font_id: font_id,
         glyph_id: glyph.glyph_id,
         x: 0.0,
         y: 0.0,
@@ -26,6 +53,9 @@ fn auxiliary_nested_bindings_require_each_exact_entry() {
         cluster_start: 0,
         cluster_end: 1,
     }];
+    coverage
+        .fonts
+        .insert(font_id, fixture_font(font_id, "Coverage fixture"));
     coverage
         .char_fonts
         .entry(face)
@@ -36,16 +66,32 @@ fn auxiliary_nested_bindings_require_each_exact_entry() {
         .entry(face)
         .or_default()
         .insert("a".into(), cluster.clone());
-    state.char_fonts = coverage.char_fonts.clone();
-    state.char_fonts.get_mut(&face).unwrap().insert('b', glyph);
-    state.shaped_clusters = coverage.shaped_clusters.clone();
+
+    // Base lacks 'a' / "a" / font_id (additive in Aux v2), and has sibling 'b' / "b".
+    state.char_fonts.entry(face).or_default().insert('b', glyph);
     state
         .shaped_clusters
-        .get_mut(&face)
-        .unwrap()
-        .insert("b".into(), cluster);
-    assert!(coverage.resource_subset_of_frame_state(&state));
-    assert!(coverage.resource_subset_of_frame_buffer(&state.materialize()));
+        .entry(face)
+        .or_default()
+        .insert("b".into(), cluster.clone());
+    assert!(coverage.resources_self_closed());
+    assert!(coverage.resources_compatible_with_frame_state(&state));
+    assert!(coverage.resources_compatible_with_frame_buffer(&state.materialize()));
+
+    // Matching entries on base also remain compatible.
+    state
+        .fonts
+        .insert(font_id, fixture_font(font_id, "Coverage fixture"));
+    state.char_fonts.entry(face).or_default().insert('a', glyph);
+    state
+        .shaped_clusters
+        .entry(face)
+        .or_default()
+        .insert("a".into(), cluster.clone());
+    assert!(coverage.resources_compatible_with_frame_state(&state));
+    assert!(coverage.resources_compatible_with_frame_buffer(&state.materialize()));
+
+    // Genuine char_fonts conflict on the same (FaceId, char) must be refused.
     state
         .char_fonts
         .get_mut(&face)
@@ -53,7 +99,10 @@ fn auxiliary_nested_bindings_require_each_exact_entry() {
         .get_mut(&'a')
         .unwrap()
         .advance_px += 1.0;
-    assert!(!coverage.resource_subset_of_frame_state(&state));
+    assert!(!coverage.resources_compatible_with_frame_state(&state));
+    assert!(!coverage.resources_compatible_with_frame_buffer(&state.materialize()));
+
+    // Genuine shaped_clusters conflict on the same (FaceId, text) must be refused.
     state.char_fonts.get_mut(&face).unwrap().insert('a', glyph);
     state
         .shaped_clusters
@@ -62,26 +111,135 @@ fn auxiliary_nested_bindings_require_each_exact_entry() {
         .get_mut("a")
         .unwrap()[0]
         .x += 1.0;
-    assert!(!coverage.resource_subset_of_frame_state(&state));
-    state.shaped_clusters = coverage.shaped_clusters.clone();
-    state.char_fonts.get_mut(&face).unwrap().remove(&'a');
-    assert!(!coverage.resource_subset_of_frame_state(&state));
+    assert!(!coverage.resources_compatible_with_frame_state(&state));
+    assert!(!coverage.resources_compatible_with_frame_buffer(&state.materialize()));
 }
 
 #[test]
-fn auxiliary_faces_are_exact_subsets_and_extra_base_faces_are_allowed() {
+fn auxiliary_faces_accept_self_closed_additions_and_refuse_conflicts() {
     let mut state = base_state();
-    let coverage = state.scroll_coverage[0].as_ref().clone();
+    let mut coverage = state.scroll_coverage[0].as_ref().clone();
+
+    // Extra base faces are allowed.
     state.faces.insert(
         crate::FaceId::new(90),
         crate::Face::new(crate::FaceId::new(90)),
     );
-    assert!(coverage.resource_subset_of_frame_state(&state));
-    let own_face = *coverage.faces.keys().next().unwrap();
+    assert!(coverage.resources_compatible_with_frame_state(&state));
+    assert!(coverage.resources_compatible_with_frame_buffer(&state.materialize()));
+
+    // Additive self-closed offscreen face absent from base is allowed in Aux v2.
+    let additive_face_id = crate::FaceId::new(95);
+    let additive_font_id = ResolvedFontId(95);
+    let mut additive_face = crate::Face::new(additive_face_id);
+    additive_face.foreground = crate::Color::GREEN;
+    additive_face.default_resolved_font_id = Some(additive_font_id);
+    coverage.faces.insert(additive_face_id, additive_face);
+    coverage.fonts.insert(
+        additive_font_id,
+        fixture_font(additive_font_id, "Additive offscreen"),
+    );
+    assert!(coverage.resources_compatible_with_frame_state(&state));
+    assert!(coverage.resources_compatible_with_frame_buffer(&state.materialize()));
+
+    // Conflicting face binding for an existing base FaceId must be refused.
+    let own_face = crate::FaceId::new(0);
     state.faces.get_mut(&own_face).unwrap().background = crate::Color::RED;
-    assert!(!coverage.resource_subset_of_frame_state(&state));
-    state.faces.remove(&own_face);
-    assert!(!coverage.resource_subset_of_frame_state(&state));
+    assert!(!coverage.resources_compatible_with_frame_state(&state));
+    assert!(!coverage.resources_compatible_with_frame_buffer(&state.materialize()));
+}
+
+#[test]
+fn auxiliary_self_closure_refuses_every_dangling_face_or_font_reference() {
+    let state = base_state();
+    let face0 = crate::FaceId::new(0);
+    let missing_face = crate::FaceId::new(404);
+    let font_id = ResolvedFontId(91);
+    let missing_font = ResolvedFontId(404);
+    let glyph_with = |id| ResolvedCharGlyph {
+        resolved_font_id: id,
+        glyph_id: ResolvedGlyphId::new(17),
+        advance_px: 10.0,
+    };
+    let cluster_with = |id| {
+        vec![ResolvedGlyph {
+            resolved_font_id: id,
+            glyph_id: ResolvedGlyphId::new(17),
+            x: 0.0,
+            y: 0.0,
+            x_advance: 10.0,
+            cluster_start: 0,
+            cluster_end: 1,
+        }]
+    };
+
+    // 1. Matrix row referencing a FaceId absent from coverage.faces.
+    let mut dangling_matrix_face = state.scroll_coverage[0].as_ref().clone();
+    dangling_matrix_face.faces.remove(&face0);
+    assert!(!dangling_matrix_face.resources_self_closed());
+    assert!(!dangling_matrix_face.resources_compatible_with_frame_state(&state));
+    assert!(!dangling_matrix_face.resources_compatible_with_frame_buffer(&state.materialize()));
+
+    // 2. char_fonts referencing a FaceId absent from coverage.faces.
+    let mut dangling_char_face = state.scroll_coverage[0].as_ref().clone();
+    dangling_char_face
+        .fonts
+        .insert(font_id, fixture_font(font_id, "F"));
+    dangling_char_face
+        .char_fonts
+        .entry(missing_face)
+        .or_default()
+        .insert('x', glyph_with(font_id));
+    assert!(!dangling_char_face.resources_self_closed());
+    assert!(!dangling_char_face.resources_compatible_with_frame_state(&state));
+    assert!(!dangling_char_face.resources_compatible_with_frame_buffer(&state.materialize()));
+
+    // 3. shaped_clusters referencing a FaceId absent from coverage.faces.
+    let mut dangling_cluster_face = state.scroll_coverage[0].as_ref().clone();
+    dangling_cluster_face
+        .fonts
+        .insert(font_id, fixture_font(font_id, "F"));
+    dangling_cluster_face
+        .shaped_clusters
+        .entry(missing_face)
+        .or_default()
+        .insert("xy".into(), cluster_with(font_id));
+    assert!(!dangling_cluster_face.resources_self_closed());
+    assert!(!dangling_cluster_face.resources_compatible_with_frame_state(&state));
+    assert!(!dangling_cluster_face.resources_compatible_with_frame_buffer(&state.materialize()));
+
+    // 4. Face::default_resolved_font_id absent from coverage.fonts.
+    let mut dangling_face_font = state.scroll_coverage[0].as_ref().clone();
+    dangling_face_font
+        .faces
+        .get_mut(&face0)
+        .unwrap()
+        .default_resolved_font_id = Some(missing_font);
+    assert!(!dangling_face_font.resources_self_closed());
+    assert!(!dangling_face_font.resources_compatible_with_frame_state(&state));
+    assert!(!dangling_face_font.resources_compatible_with_frame_buffer(&state.materialize()));
+
+    // 5. char_fonts entry referencing a ResolvedFontId absent from coverage.fonts.
+    let mut dangling_char_font = state.scroll_coverage[0].as_ref().clone();
+    dangling_char_font
+        .char_fonts
+        .entry(face0)
+        .or_default()
+        .insert('x', glyph_with(missing_font));
+    assert!(!dangling_char_font.resources_self_closed());
+    assert!(!dangling_char_font.resources_compatible_with_frame_state(&state));
+    assert!(!dangling_char_font.resources_compatible_with_frame_buffer(&state.materialize()));
+
+    // 6. shaped_clusters entry referencing a ResolvedFontId absent from coverage.fonts.
+    let mut dangling_cluster_font = state.scroll_coverage[0].as_ref().clone();
+    dangling_cluster_font
+        .shaped_clusters
+        .entry(face0)
+        .or_default()
+        .insert("xy".into(), cluster_with(missing_font));
+    assert!(!dangling_cluster_font.resources_self_closed());
+    assert!(!dangling_cluster_font.resources_compatible_with_frame_state(&state));
+    assert!(!dangling_cluster_font.resources_compatible_with_frame_buffer(&state.materialize()));
 }
 
 #[test]
@@ -117,42 +275,23 @@ fn auxiliary_admission_checks_catalog_metrics_materialized_bars_and_bitmaps() {
 }
 
 #[test]
-fn auxiliary_font_table_requires_the_exact_resolved_binding() {
-    use crate::font::{
-        FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedFont,
-        ResolvedFontIdentity,
-    };
+fn auxiliary_font_table_accepts_additive_font_and_refuses_conflicting_binding() {
     let mut state = base_state();
     let mut coverage = state.scroll_coverage[0].as_ref().clone();
     let id = ResolvedFontId(91);
-    let asset = FontFileAsset::new("/fixture/coverage-font.ttf", 0).unwrap();
-    let font = ResolvedFont {
-        id,
-        identity: ResolvedFontIdentity::from_file("/fixture/coverage-font.ttf", 0, None),
-        replay: FontReplay::Swash {
-            asset: FontOutlineAsset::File(asset),
-        },
-        family: "Coverage fixture".into(),
-        full_name: None,
-        postscript_name: None,
-        weight: 400,
-        slant: FontSlantKind::Normal,
-        width: 5,
-        pixel_size: 10.0,
-        ascent_px: 8.0,
-        descent_px: 2.0,
-        space_advance_px: 10.0,
-        glyph_advance: Default::default(),
-        spacing: None,
-    };
+    let font = fixture_font(id, "Coverage fixture");
     coverage.fonts.insert(id, font.clone());
-    assert!(!coverage.resource_subset_of_frame_state(&state));
+    // Additive font absent from base is compatible when self-closed.
+    assert!(coverage.resources_compatible_with_frame_state(&state));
+    assert!(coverage.resources_compatible_with_frame_buffer(&state.materialize()));
+    // Matching binding on base is compatible.
     state.fonts.insert(id, font);
-    assert!(coverage.resource_subset_of_frame_state(&state));
-    assert!(coverage.resource_subset_of_frame_buffer(&state.materialize()));
+    assert!(coverage.resources_compatible_with_frame_state(&state));
+    assert!(coverage.resources_compatible_with_frame_buffer(&state.materialize()));
+    // Conflicting binding for the same ResolvedFontId is refused.
     state.fonts.get_mut(&id).unwrap().pixel_size += 1.0;
-    assert!(!coverage.resource_subset_of_frame_state(&state));
-    assert!(!coverage.resource_subset_of_frame_buffer(&state.materialize()));
+    assert!(!coverage.resources_compatible_with_frame_state(&state));
+    assert!(!coverage.resources_compatible_with_frame_buffer(&state.materialize()));
 }
 
 #[test]

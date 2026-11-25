@@ -57,6 +57,8 @@ fn surface(window: u64, epoch: u64, presentation: u64) -> Arc<ScrollSurface> {
         positions,
     )
     .unwrap();
+    let mut faces = FrameFaceMap::default();
+    faces.insert(FaceId::new(0), Face::new(FaceId::new(0)));
     state.window_matrices.push(content.clone());
     state.scroll_coverage.push(Arc::new(ScrollCoverage {
         epoch,
@@ -68,7 +70,7 @@ fn surface(window: u64, epoch: u64, presentation: u64) -> Arc<ScrollSurface> {
         viewport,
         origin: 0.0,
         content,
-        faces: Default::default(),
+        faces,
         fonts: Default::default(),
         char_fonts: Default::default(),
         shaped_clusters: Default::default(),
@@ -366,6 +368,139 @@ fn auxiliary_resource_refusal_revokes_its_previous_surface() {
         auxiliary(1, first.scroll_surfaces.clone()),
         Some(&incompatible),
     );
+    assert_eq!(
+        changes,
+        AuxiliaryCoverageChanges {
+            installed: 0,
+            revoked: 1,
+            conservative_revocations: 0,
+        }
+    );
+    assert!(retention.entries.is_empty());
+}
+
+fn surface_with_coverage_edit(
+    window: u64,
+    epoch: u64,
+    presentation: u64,
+    edit: impl FnOnce(&mut ScrollCoverage),
+) -> Arc<ScrollSurface> {
+    let base = surface(window, epoch, presentation);
+    let mut cov = base.coverage().clone();
+    edit(&mut cov);
+    let mut state = FrameDisplayState::new(10, 2, 10.0, 10.0);
+    state.presentation_id = PresentationId::new(presentation);
+    state.window_matrices.push(cov.content.clone());
+    state.scroll_coverage.push(Arc::new(cov));
+    let mut frame = state.materialize();
+    frame.scroll_surfaces.pop().unwrap()
+}
+
+#[test]
+fn auxiliary_accepts_self_closed_additive_resources_without_modifying_base() {
+    use neomacs_display_protocol::font::{
+        FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedCharGlyph,
+        ResolvedFont, ResolvedFontId, ResolvedFontIdentity, ResolvedGlyph, ResolvedGlyphId,
+    };
+    let base = surface_frame(1, 7, 3);
+    let additive_face = FaceId::new(77);
+    let additive_font = ResolvedFontId(77);
+    let font = ResolvedFont {
+        id: additive_font,
+        identity: ResolvedFontIdentity::from_file("/fixture/aux-v2.ttf", 0, None),
+        replay: FontReplay::Swash {
+            asset: FontOutlineAsset::File(FontFileAsset::new("/fixture/aux-v2.ttf", 0).unwrap()),
+        },
+        family: "AuxV2".into(),
+        full_name: None,
+        postscript_name: None,
+        weight: 400,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size: 10.0,
+        ascent_px: 8.0,
+        descent_px: 2.0,
+        space_advance_px: 10.0,
+        glyph_advance: Default::default(),
+        spacing: None,
+    };
+    let enriched = surface_with_coverage_edit(7, 3, 1, |cov| {
+        let mut face = Face::new(additive_face);
+        face.default_resolved_font_id = Some(additive_font);
+        cov.faces.insert(additive_face, face);
+        cov.fonts.insert(additive_font, font);
+        cov.char_fonts.entry(additive_face).or_default().insert(
+            'q',
+            ResolvedCharGlyph {
+                resolved_font_id: additive_font,
+                glyph_id: ResolvedGlyphId::new(5),
+                advance_px: 10.0,
+            },
+        );
+        cov.shaped_clusters
+            .entry(additive_face)
+            .or_default()
+            .insert(
+                "qr".into(),
+                vec![ResolvedGlyph {
+                    resolved_font_id: additive_font,
+                    glyph_id: ResolvedGlyphId::new(5),
+                    x: 0.0,
+                    y: 0.0,
+                    x_advance: 10.0,
+                    cluster_start: 0,
+                    cluster_end: 2,
+                }],
+            );
+    });
+    let pub_id = enriched.coverage().publication;
+    let mut retention = CoverageRetention::default();
+    retention.refresh(&base);
+    let changes = retention.apply_auxiliary(auxiliary(1, vec![enriched]), Some(&base));
+    assert_eq!(
+        changes,
+        AuxiliaryCoverageChanges {
+            installed: 1,
+            revoked: 0,
+            conservative_revocations: 0,
+        }
+    );
+    assert!(
+        retention
+            .certified_publication_at(base.presentation_id, DisplayWindowId::new(7), 3, pub_id)
+            .is_some()
+    );
+}
+
+#[test]
+fn auxiliary_rejects_conflicting_or_dangling_resources_and_revokes_previous() {
+    let mut base = surface_frame(1, 7, 3);
+    let mut conflicting_face = Face::new(FaceId::new(0));
+    conflicting_face.background = Color::RED;
+    base.faces.insert(FaceId::new(0), conflicting_face);
+
+    // 1. Conflicting FaceId binding against base FrameGlyphBuffer is rejected.
+    let mut retention = CoverageRetention::default();
+    retention.refresh(&base);
+    let candidate = surface(7, 3, 1);
+    let changes = retention.apply_auxiliary(auxiliary(1, vec![candidate]), Some(&base));
+    assert_eq!(
+        changes,
+        AuxiliaryCoverageChanges {
+            installed: 0,
+            revoked: 1,
+            conservative_revocations: 0,
+        }
+    );
+    assert!(retention.entries.is_empty());
+
+    // 2. Dangling FaceId in coverage.content.matrix (missing from coverage.faces) is rejected.
+    let clean_base = surface_frame(1, 7, 3);
+    retention.refresh(&clean_base);
+    let dangling = surface_with_coverage_edit(7, 3, 1, |cov| {
+        cov.faces.remove(&FaceId::new(0));
+    });
+    let changes = retention.apply_auxiliary(auxiliary(1, vec![dangling]), Some(&clean_base));
     assert_eq!(
         changes,
         AuxiliaryCoverageChanges {

@@ -208,36 +208,93 @@ impl ScrollCoverageAdmission {
 }
 
 impl ScrollCoverage {
-    fn resource_subset(
+    /// Prove every face and resolved font referenced by this coverage is owned
+    /// inside its own tables (self-closure).
+    ///
+    /// - Every enabled row's `referenced_face_ids()` and every `FaceId` key in
+    ///   `char_fonts` / `shaped_clusters` must exist in `self.faces`.
+    /// - Every `ResolvedFontId` referenced by `self.faces[*].default_resolved_font_id`,
+    ///   `self.char_fonts`, or `self.shaped_clusters` must exist in `self.fonts`.
+    pub fn resources_self_closed(&self) -> bool {
+        let matrix_faces_closed = self
+            .content
+            .matrix
+            .rows
+            .iter()
+            .filter(|row| row.enabled)
+            .all(|row| {
+                row.referenced_face_ids()
+                    .all(|face_id| self.faces.contains_key(&face_id))
+            });
+        let table_faces_closed = self
+            .char_fonts
+            .keys()
+            .chain(self.shaped_clusters.keys())
+            .all(|face_id| self.faces.contains_key(face_id));
+        let face_default_fonts_closed = self
+            .faces
+            .values()
+            .filter_map(|face| face.default_resolved_font_id)
+            .all(|font_id| self.fonts.contains_key(&font_id));
+        let char_fonts_closed = self.char_fonts.values().all(|chars| {
+            chars
+                .values()
+                .all(|glyph| self.fonts.contains_key(&glyph.resolved_font_id))
+        });
+        let shaped_clusters_closed = self.shaped_clusters.values().all(|clusters| {
+            clusters.values().all(|glyphs| {
+                glyphs
+                    .iter()
+                    .all(|glyph| self.fonts.contains_key(&glyph.resolved_font_id))
+            })
+        });
+        matrix_faces_closed
+            && table_faces_closed
+            && face_default_fonts_closed
+            && char_fonts_closed
+            && shaped_clusters_closed
+    }
+
+    fn resources_compatible(
         &self,
         faces: &crate::FrameFaceMap,
         fonts: &crate::font::ResolvedFontTable,
         char_fonts: &crate::font::CharFontTable,
         shaped_clusters: &crate::font::ShapedClusterTable,
     ) -> bool {
-        self.faces
-            .iter()
-            .all(|(id, face)| faces.get(id) == Some(face))
+        self.resources_self_closed()
+            && self
+                .faces
+                .iter()
+                .all(|(id, face)| faces.get(id).is_none_or(|base| base == face))
             && self
                 .fonts
                 .iter()
-                .all(|(id, font)| fonts.get(id) == Some(font))
+                .all(|(id, font)| fonts.get(id).is_none_or(|base| base == font))
             && self.char_fonts.iter().all(|(face, chars)| {
                 chars.iter().all(|(ch, glyph)| {
-                    char_fonts.get(face).and_then(|table| table.get(ch)) == Some(glyph)
+                    char_fonts
+                        .get(face)
+                        .and_then(|table| table.get(ch))
+                        .is_none_or(|base| base == glyph)
                 })
             })
             && self.shaped_clusters.iter().all(|(face, clusters)| {
                 clusters.iter().all(|(text, glyphs)| {
-                    shaped_clusters.get(face).and_then(|table| table.get(text)) == Some(glyphs)
+                    shaped_clusters
+                        .get(face)
+                        .and_then(|table| table.get(text))
+                        .is_none_or(|base| base == glyphs)
                 })
             })
     }
 
-    /// Auxiliary publication cannot extend or replace the base's font/face
-    /// bindings. Nested maps are subsets entry by entry, not just by face ID.
-    pub fn resource_subset_of_frame_state(&self, frame: &FrameDisplayState) -> bool {
-        self.resource_subset(
+    /// Auxiliary publication (Aux v2) may introduce self-closed additive
+    /// faces/fonts/glyph mappings for offscreen rows, but can never carry
+    /// dangling references or conflict with any existing binding in the base
+    /// presentation. Nested maps are checked entry by entry.
+    pub fn resources_compatible_with_frame_state(&self, frame: &FrameDisplayState) -> bool {
+        self.resources_compatible(
             &frame.faces,
             &frame.fonts,
             &frame.char_fonts,
@@ -245,8 +302,9 @@ impl ScrollCoverage {
         )
     }
 
-    pub fn resource_subset_of_frame_buffer(&self, frame: &FrameGlyphBuffer) -> bool {
-        self.resource_subset(
+    /// Symmetric render-thread check against the active `FrameGlyphBuffer`.
+    pub fn resources_compatible_with_frame_buffer(&self, frame: &FrameGlyphBuffer) -> bool {
+        self.resources_compatible(
             &frame.faces,
             &frame.fonts,
             &frame.char_fonts,

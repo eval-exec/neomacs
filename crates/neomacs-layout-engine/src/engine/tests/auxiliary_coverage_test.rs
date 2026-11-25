@@ -607,18 +607,18 @@ fn auxiliary_refuses_source_point_overlay_fontset_media_topology_placement_and_d
 }
 
 #[test]
-fn auxiliary_refuses_offscreen_new_face_in_v1() {
+fn auxiliary_publishes_self_closed_offscreen_new_face_in_v2() {
     let _policy = RedisplayHookPolicyGuard::gnu();
-    // Apply a face with a distinct background/height ONLY on offscreen lines
-    // (lines 20..120), never visible in the initial base viewport.
+    // Apply a face with a distinct foreground/height ONLY on offscreen lines
+    // (never visible in the initial base viewport). Under Aux v1 strict-subset
+    // this was refused (blocking every rich/syntax-highlighted buffer); Aux v2
+    // publishes it cleanly when self-closed and conflict-free against the base.
     let line_len = "ordinary offscreen text\n".len();
     let offscreen_start = 45 * line_len + 1;
     let offscreen_end = 120 * line_len + 1;
     let mut fix = AuxFixture::new(Some(&format!(
         "(put-text-property {offscreen_start} {offscreen_end} 'face '(:foreground \"#ff0088\" :height 140))"
     )));
-    // Directly request a worker page inside the offscreen region that introduces
-    // the new face not present in the base frame's sealed FrameFaceMap.
     let target = neovm_core::buffer::CharPos0::new(
         fix.engine.borrow().retained_window_matrices[&fix.owner]
             .matrix
@@ -630,8 +630,6 @@ fn auxiliary_refuses_offscreen_new_face_in_v1() {
             .unwrap()
             .start_charpos,
     );
-    // Move the face start right below the initial viewport so the very first
-    // connected worker page introduces the unseen face.
     let first_offscreen_lisp = target.get() + 2 * line_len + 1;
     fix.eval
         .eval_str(&format!(
@@ -643,6 +641,75 @@ fn auxiliary_refuses_offscreen_new_face_in_v1() {
     // the offscreen face, while buffer ticks match the base).
     fix.eval.redisplay().unwrap();
     fix.drain_worker_prefix(8);
+    let base_face_ids: rustc_hash::FxHashSet<_> = fix
+        .engine
+        .borrow()
+        .auxiliary_base
+        .as_ref()
+        .and_then(|base| base.template())
+        .expect("sealed base template")
+        .faces
+        .keys()
+        .copied()
+        .collect();
+    let prepared = match fix
+        .engine
+        .borrow_mut()
+        .prepare_auxiliary_scroll_coverage(&fix.eval)
+    {
+        AuxiliaryPreparation::Ready(prepared) => prepared,
+        AuxiliaryPreparation::NoChange => {
+            panic!("expected Aux v2 Ready publication for self-closed offscreen face, got NoChange")
+        }
+        AuxiliaryPreparation::Refused(refusal) => {
+            panic!(
+                "Aux v2 must publish self-closed offscreen face without conflict, got Refused({refusal:?})"
+            )
+        }
+    };
+    assert_eq!(prepared.update().surfaces.len(), 1);
+    let coverage = prepared.update().surfaces[0].coverage();
+    assert!(coverage.resources_self_closed());
+    assert!(
+        coverage.faces.keys().any(|id| !base_face_ids.contains(id)),
+        "expected published coverage to carry an additive offscreen face absent from the base template"
+    );
+    fix.engine
+        .borrow_mut()
+        .commit_auxiliary_scroll_coverage(prepared);
+    assert!(
+        fix.engine
+            .borrow()
+            .published_scroll_coverage(fix.frame, fix.owner)
+            .is_some()
+    );
+}
+
+#[test]
+fn auxiliary_refuses_conflicting_base_face_binding() {
+    let _policy = RedisplayHookPolicyGuard::gnu();
+    let mut fix = AuxFixture::new(None);
+    fix.drain_worker_prefix(8);
+    // Inject a genuine conflict on a body FaceId shared between the sealed base
+    // template and the exported coverage so both disagree on the same key.
+    {
+        let mut engine = fix.engine.borrow_mut();
+        let body_face = engine.retained_window_matrices[&fix.owner]
+            .matrix
+            .rows
+            .iter()
+            .filter(|row| row.enabled && row.role == GlyphRowRole::Text)
+            .flat_map(|row| row.referenced_face_ids())
+            .next()
+            .expect("body text face");
+        let template = engine
+            .auxiliary_base
+            .as_mut()
+            .and_then(|base| base.template_mut())
+            .expect("sealed base template");
+        template.faces.get_mut(&body_face).unwrap().foreground =
+            neomacs_display_protocol::Color::rgb(0.123, 0.456, 0.789);
+    }
     let prep = fix
         .engine
         .borrow_mut()
@@ -650,11 +717,10 @@ fn auxiliary_refuses_offscreen_new_face_in_v1() {
     assert!(
         matches!(
             prep,
-            AuxiliaryPreparation::Refused(AuxiliaryPublicationRefusal::ResourceExtensionRequired(
-                owner
-            )) if owner == fix.owner
+            AuxiliaryPreparation::Refused(AuxiliaryPublicationRefusal::ResourceConflict(owner))
+                if owner == fix.owner
         ),
-        "v1 must refuse an offscreen new face that is not a subset of the base frame resources"
+        "Aux v2 must still refuse a conflicting face binding on the same FaceId"
     );
 }
 

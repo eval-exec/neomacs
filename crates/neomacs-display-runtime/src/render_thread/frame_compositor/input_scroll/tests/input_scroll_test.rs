@@ -70,7 +70,9 @@ fn frame_with_prediction(
             viewport,
             origin: displacement,
             content,
-            faces: Default::default(),
+            faces: [(FaceId::new(0), Face::new(FaceId::new(0)))]
+                .into_iter()
+                .collect(),
             fonts: Default::default(),
             char_fonts: Default::default(),
             shaped_clusters: Default::default(),

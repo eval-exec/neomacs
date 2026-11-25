@@ -227,8 +227,8 @@ impl PreparedViewports {
             let (compositor_enabled, predict_pixels) = window_policy(window);
             coverage.compositor_enabled = compositor_enabled;
             coverage.predict_pixels = predict_pixels;
-            if !coverage.resource_subset_of_frame_state(template) {
-                return Err(Refusal::ResourceExtensionRequired(window));
+            if !coverage.resources_compatible_with_frame_state(template) {
+                return Err(Refusal::ResourceConflict(window));
             }
             let backward_start = coverage
                 .content

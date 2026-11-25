@@ -112,7 +112,7 @@ impl CoverageRetention {
             let window = coverage.content.window_id;
             if coverage.hit_index.presentation() != update.base
                 || !surface.frame_buffer_resources_match(frame)
-                || !coverage.resource_subset_of_frame_buffer(frame)
+                || !coverage.resources_compatible_with_frame_buffer(frame)
             {
                 tracing::debug!(
                     target: "neomacs_display_runtime::retained_scroll",

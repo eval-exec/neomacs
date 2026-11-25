@@ -82,6 +82,16 @@ impl AuxiliaryCoverageBase {
     pub(super) fn presentation_id(&self) -> PresentationId {
         self.presentation_id
     }
+
+    #[cfg(test)]
+    pub(super) fn template(&self) -> Option<&FrameDisplayState> {
+        self.template.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(super) fn template_mut(&mut self) -> Option<&mut FrameDisplayState> {
+        self.template.as_mut()
+    }
 }
 
 /// Exhaustive reason why native auxiliary publication was refused for the
@@ -103,7 +113,7 @@ pub enum AuxiliaryPublicationRefusal {
     EvaluatorRedisplay(AuxiliaryRedisplayRefusal),
     WindowSetChanged,
     WindowFreshnessChanged(DisplayWindowId),
-    ResourceExtensionRequired(DisplayWindowId),
+    ResourceConflict(DisplayWindowId),
     SurfaceMaterializationRejected(DisplayWindowId),
 }
 
@@ -467,8 +477,9 @@ impl LayoutEngine {
             }
         }
 
-        // Proof 4: Existing page eligibility, resource subset (no additive
-        // extension in v1), and evaluator-side surface materialization.
+        // Proof 4: Existing page eligibility, self-closed & conflict-free
+        // resource compatibility (Aux v2), and evaluator-side surface
+        // materialization.
         let arena = self
             .frame_face_arenas
             .get(&frame_id)
