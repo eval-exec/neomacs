@@ -217,9 +217,8 @@ fn pentry_e2b_owned_source_foreign_heap_refusal_preserves_current_owner() {
     let source = Box::new(parked_source.resume_for_test().expect("resume source"));
     // SAFETY: `parked_foreign` owns `foreign_root` and outlives `foreign_heap`;
     // `source` owns the displaced root and outlives `drop(foreign_heap)`.
-    let foreign_heap = unsafe {
-        neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(foreign_root)
-    };
+    let foreign_heap =
+        unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(foreign_root) };
     let result = capture(source);
     drop(foreign_heap);
     match result {

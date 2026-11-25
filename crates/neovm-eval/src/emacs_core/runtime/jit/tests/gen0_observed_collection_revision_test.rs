@@ -691,9 +691,7 @@ fn gen0_observed_certificate_survives_context_switch_until_its_owner_is_stored()
     // that World's state through the Baton (covered by the Green transfer
     // fixture).
     let _parked_second = second_context.park_for_test();
-    let mut first_context = parked_first
-        .resume_for_test()
-        .expect("resume Context A");
+    let mut first_context = parked_first.resume_for_test().expect("resume Context A");
     let before = LispCollectionRevision::current();
     native(&mut first_context, &leaf, &[owner, Value::make_int(65)]);
     assert_eq!(

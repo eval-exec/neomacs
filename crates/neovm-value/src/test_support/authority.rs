@@ -90,8 +90,7 @@ impl TestHeapScope {
         // SAFETY: this scope owns the AliasableBox and ends `nest` in Drop
         // before retiring `heap`. Any displaced outer root stays live until
         // this scope drops.
-        let nest =
-            unsafe { crate::tagged::gc::NestedTaggedHeapInstall::install_bare(heap.root()) };
+        let nest = unsafe { crate::tagged::gc::NestedTaggedHeapInstall::install_bare(heap.root()) };
         Self {
             nest,
             heap: std::mem::ManuallyDrop::new(heap),
