@@ -1,5 +1,6 @@
 mod artifact;
 mod artifact_store;
+mod baseline_manifest;
 mod capture;
 mod catalog;
 mod cli;
@@ -19,6 +20,10 @@ pub use artifact::{
     ArtifactFile, ArtifactKind, CorrectnessMismatch, EditorCapabilities, EditorKind,
     EditorProvenance, Measurement, MetricName, MetricUnit, PortableDumpProvenance, RunArtifact,
     RunVerdict,
+};
+pub use baseline_manifest::{
+    BaselineAssetEntry, BaselineBinaryEntry, BaselineManifest, BaselinePdumpEntry,
+    ResolvedGuardTools, VerifiedBaselineManifest, resolve_guard_tools, resolve_pinned_tool,
 };
 pub(crate) use capture::CaptureRoute;
 pub use catalog::{
@@ -62,8 +67,8 @@ pub(crate) use profile_gate::ProfileGate;
 #[cfg(test)]
 pub(crate) use suite::{SUITE_ARTIFACT_SCHEMA_VERSION, evaluate_suite, read_history_link};
 pub use suite::{
-    SuiteArtifact, SuiteHistoryLink, SuiteId, SuiteRegression, SuiteReport, SuiteRequest,
-    SuiteScenario, SuiteScenarioResult, SuiteVerdict,
+    SuiteArtifact, SuiteGateMetric, SuiteHistoryLink, SuiteId, SuiteRegression, SuiteReport,
+    SuiteRequest, SuiteScenario, SuiteScenarioResult, SuiteVerdict,
 };
 
 /// The workspace root of the machine running this code: nextest's runtime

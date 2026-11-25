@@ -37,6 +37,10 @@ pub struct ComparisonInput {
     pub journal_file: Option<PathBuf>,
     pub baseline_execution_overrides: crate::ExecutionOverrides,
     pub candidate_execution_overrides: crate::ExecutionOverrides,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_baseline: Option<crate::VerifiedBaselineManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_tools: Option<crate::ResolvedGuardTools>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -60,6 +64,11 @@ pub struct ComparisonRun {
     pub iterations: u32,
     pub editor_provenance: Option<EditorProvenance>,
     pub execution_environment: Option<BTreeMap<String, String>>,
+    /// Full recorded passthrough environment from child `input-provenance.json`.
+    /// Set-compared against the closed constructed guard environment when
+    /// `ComparisonInput.expected_baseline` is `Some`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passthrough_environment: Option<BTreeMap<String, String>>,
     pub native_video_input: Option<NativeVideoComparisonIdentity>,
     pub native_video_execution: Option<NativeVideoExecutionIdentity>,
     pub outcome: ComparisonRunOutcome,
@@ -198,6 +207,9 @@ pub struct ComparisonRequest {
     timeout: Duration,
     machine: crate::MachinePolicy,
     counters: Option<crate::CounterScope>,
+    primary_metric: Option<MetricName>,
+    expected_baseline: Option<crate::VerifiedBaselineManifest>,
+    guard_tools: Option<crate::ResolvedGuardTools>,
     video_file: Option<PathBuf>,
     journal_file: Option<PathBuf>,
     baseline_execution_overrides: crate::ExecutionOverrides,
@@ -223,6 +235,9 @@ impl ComparisonRequest {
             timeout: Duration::from_secs(300),
             machine: crate::MachinePolicy::default(),
             counters: None,
+            primary_metric: None,
+            expected_baseline: None,
+            guard_tools: None,
             video_file: None,
             journal_file: None,
             baseline_execution_overrides: crate::ExecutionOverrides::default(),
@@ -253,6 +268,24 @@ impl ComparisonRequest {
         self
     }
 
+    pub fn with_primary_metric(mut self, metric: MetricName) -> Self {
+        self.primary_metric = Some(metric);
+        self
+    }
+
+    pub fn with_expected_baseline(
+        mut self,
+        expected_baseline: Option<crate::VerifiedBaselineManifest>,
+    ) -> Self {
+        self.expected_baseline = expected_baseline;
+        self
+    }
+
+    pub fn with_guard_tools(mut self, guard_tools: Option<crate::ResolvedGuardTools>) -> Self {
+        self.guard_tools = guard_tools;
+        self
+    }
+
     pub fn with_video_file(mut self, video_file: Option<PathBuf>) -> Self {
         self.video_file = video_file;
         self
@@ -276,6 +309,98 @@ impl ComparisonRequest {
     pub fn frontend(&self) -> Frontend {
         self.frontend
             .unwrap_or_else(|| scenario(self.scenario).default_frontend)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_inherited_environment(
+        mut self,
+        inherited_environment: BTreeMap<String, std::ffi::OsString>,
+    ) -> Self {
+        self.inherited_environment = inherited_environment;
+        self
+    }
+
+    /// Construct the closed inherited environment for a manifest-pinned guard
+    /// comparison.
+    ///
+    /// Built explicitly from scratch rather than inheriting-and-subtracting from
+    /// `BENCHMARK_PASSTHROUGH_ENVIRONMENT` / `NEOVM_JIT_*`. Empty by design:
+    /// `command.env_clear()` plus `MelpaSandbox::process_environment()` already
+    /// pin `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `TZ`, and `TERM` deterministically,
+    /// while `perf` and `taskset` are resolved once to canonical absolute paths
+    /// outside the child environment. Neither arm inherits `PATH`,
+    /// `LD_LIBRARY_PATH` / `DYLD_*`, `NEOMACS_RUNTIME_ROOT`, `NEOVM_JIT*`,
+    /// `NEOVM_GC_*`, or any other tuning knob.
+    pub(crate) fn guard_constructed_environment() -> BTreeMap<String, std::ffi::OsString> {
+        BTreeMap::new()
+    }
+
+    /// Resolve the inherited environment for one comparison arm.
+    ///
+    /// Manifest-pinned guard comparisons construct the closed guard environment
+    /// identically for BOTH `Baseline` and `Candidate` arms; non-manifest
+    /// comparisons (`SuiteId::Standard`, standalone `perf compare`) keep the
+    /// existing inherited passthrough environment untouched.
+    pub(crate) fn run_inherited_environment(
+        &self,
+        _role: ComparisonRunRole,
+    ) -> BTreeMap<String, std::ffi::OsString> {
+        if self.expected_baseline.is_some() {
+            Self::guard_constructed_environment()
+        } else {
+            self.inherited_environment.clone()
+        }
+    }
+
+    pub(crate) fn run_request_for(&self, role: ComparisonRunRole) -> RunRequest {
+        let editor = match role {
+            ComparisonRunRole::Baseline => &self.baseline_editor,
+            ComparisonRunRole::Candidate => &self.candidate_editor,
+        };
+        let overrides = match role {
+            ComparisonRunRole::Baseline => &self.baseline_execution_overrides,
+            ComparisonRunRole::Candidate => &self.candidate_execution_overrides,
+        };
+        let taskset_path = self
+            .guard_tools
+            .as_ref()
+            .and_then(|tools| tools.taskset_path.clone());
+        let perf_path = self
+            .guard_tools
+            .as_ref()
+            .map(|tools| tools.perf_path.clone());
+        RunRequest::new(self.scenario, editor, self.iterations)
+            .with_inherited_environment(self.run_inherited_environment(role))
+            .with_resolved_tools(taskset_path, perf_path)
+            .with_execution_overrides(overrides.clone())
+            .with_frontend(self.frontend())
+            .with_timeout(self.timeout)
+            .with_machine_policy(self.machine.clone())
+            .with_counters(self.counters)
+            .with_video_file(self.video_file.clone())
+            .with_journal_file(self.journal_file.clone())
+    }
+
+    pub(crate) fn build_input(&self) -> ComparisonInput {
+        ComparisonInput {
+            scenario: self.scenario,
+            frontend: self.frontend(),
+            iterations: self.iterations,
+            samples_per_side: self.samples_per_side,
+            primary_metric: self
+                .primary_metric
+                .unwrap_or_else(|| scenario(self.scenario).primary_metric),
+            baseline_editor: self.baseline_editor.clone(),
+            candidate_editor: self.candidate_editor.clone(),
+            machine: self.machine.clone(),
+            counters: self.counters,
+            video_file: self.video_file.clone(),
+            journal_file: self.journal_file.clone(),
+            baseline_execution_overrides: self.baseline_execution_overrides.clone(),
+            candidate_execution_overrides: self.candidate_execution_overrides.clone(),
+            expected_baseline: self.expected_baseline.clone(),
+            guard_tools: self.guard_tools.clone(),
+        }
     }
 }
 
@@ -349,6 +474,12 @@ pub enum ComparisonRejection {
         run_id: String,
         expected: EditorProvenance,
         actual: EditorProvenance,
+    },
+    BaselineManifestProvenanceMismatch {
+        role: ComparisonRunRole,
+        sample_index: u32,
+        run_id: String,
+        reason: String,
     },
     MissingPortableDumpProvenance {
         role: ComparisonRunRole,
@@ -582,6 +713,16 @@ pub(crate) fn evaluate_comparison(
                 reason,
             });
         }
+        if let Some(expected_baseline) = &input.expected_baseline {
+            if let Err(reason) = validate_guard_run_environment(expected_baseline, input, run) {
+                reasons.push(ComparisonRejection::BaselineManifestProvenanceMismatch {
+                    role: run.role,
+                    sample_index: run.sample_index,
+                    run_id: run.run_id.clone(),
+                    reason,
+                });
+            }
+        }
         match &run.editor_provenance {
             None => reasons.push(ComparisonRejection::MissingEditorProvenance {
                 role: run.role,
@@ -595,6 +736,22 @@ pub(crate) fn evaluate_comparison(
                         sample_index: run.sample_index,
                         run_id: run.run_id.clone(),
                     });
+                }
+                if run.role == ComparisonRunRole::Baseline {
+                    if let Some(expected_baseline) = &input.expected_baseline {
+                        if let Err(reason) = validate_baseline_manifest_provenance(
+                            expected_baseline,
+                            &input.baseline_editor,
+                            actual,
+                        ) {
+                            reasons.push(ComparisonRejection::BaselineManifestProvenanceMismatch {
+                                role: run.role,
+                                sample_index: run.sample_index,
+                                run_id: run.run_id.clone(),
+                                reason,
+                            });
+                        }
+                    }
                 }
                 let expected = match run.role {
                     ComparisonRunRole::Baseline => &mut baseline_provenance,
@@ -820,6 +977,168 @@ pub(crate) fn evaluate_comparison(
     }
 }
 
+fn validate_guard_run_environment(
+    expected: &crate::VerifiedBaselineManifest,
+    input: &ComparisonInput,
+    run: &ComparisonRun,
+) -> Result<(), String> {
+    let overrides = match run.role {
+        ComparisonRunRole::Baseline => &input.baseline_execution_overrides,
+        ComparisonRunRole::Candidate => &input.candidate_execution_overrides,
+    };
+    if *overrides != crate::ExecutionOverrides::default() {
+        return Err(format!(
+            "manifest-pinned guard {:?} run forbids execution overrides (manifest={}): {:?}",
+            run.role,
+            expected.manifest_path.display(),
+            overrides
+        ));
+    }
+    match &input.guard_tools {
+        None => {
+            return Err(format!(
+                "manifest-pinned guard requires resolved canonical host tools (`perf`, and `taskset` when --cpu is set) (manifest={})",
+                expected.manifest_path.display()
+            ));
+        }
+        Some(tools) => {
+            if !tools.perf_path.is_absolute() {
+                return Err(format!(
+                    "manifest-pinned guard requires canonical absolute `perf` path, got {} (manifest={})",
+                    tools.perf_path.display(),
+                    expected.manifest_path.display()
+                ));
+            }
+            if input.machine.cpu.is_some() {
+                match &tools.taskset_path {
+                    Some(path) if path.is_absolute() => {}
+                    Some(path) => {
+                        return Err(format!(
+                            "manifest-pinned guard requires canonical absolute `taskset` path when --cpu is set, got {} (manifest={})",
+                            path.display(),
+                            expected.manifest_path.display()
+                        ));
+                    }
+                    None => {
+                        return Err(format!(
+                            "manifest-pinned guard requires resolved `taskset` path when --cpu is set (manifest={})",
+                            expected.manifest_path.display()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let Some(actual_env) = &run.passthrough_environment else {
+        return Err(format!(
+            "manifest-pinned guard {:?} run is missing full passthrough_environment provenance (manifest={})",
+            run.role,
+            expected.manifest_path.display()
+        ));
+    };
+    let expected_env: BTreeMap<String, String> = ComparisonRequest::guard_constructed_environment()
+        .into_iter()
+        .map(|(k, v)| (k, v.to_string_lossy().into_owned()))
+        .collect();
+    if *actual_env != expected_env {
+        let unexpected = actual_env
+            .iter()
+            .filter(|(k, v)| expected_env.get(*k) != Some(*v))
+            .map(|(k, v)| format!("{k}={v:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "manifest-pinned guard {:?} run environment differs from closed guard contract (manifest={}): unexpected [{}]",
+            run.role,
+            expected.manifest_path.display(),
+            unexpected
+        ));
+    }
+    Ok(())
+}
+
+fn validate_baseline_manifest_provenance(
+    expected: &crate::VerifiedBaselineManifest,
+    configured_baseline_editor: &Path,
+    actual: &EditorProvenance,
+) -> Result<(), String> {
+    if !expected.binary_path.is_absolute() || !configured_baseline_editor.is_absolute() {
+        return Err(format!(
+            "manifest-pinned baseline executable must use a canonical absolute path (manifest={}, configured={}, verified={})",
+            expected.manifest_path.display(),
+            configured_baseline_editor.display(),
+            expected.binary_path.display(),
+        ));
+    }
+    if configured_baseline_editor != expected.binary_path {
+        return Err(format!(
+            "baseline editor path mismatch against manifest {}: expected {}, configured {}",
+            expected.manifest_path.display(),
+            expected.binary_path.display(),
+            configured_baseline_editor.display(),
+        ));
+    }
+    let expected_binary_path = expected.binary_path.to_string_lossy();
+    if actual.path != expected_binary_path {
+        return Err(format!(
+            "baseline observed canonical executable path mismatch against manifest {}: expected {}, observed {}",
+            expected.manifest_path.display(),
+            expected_binary_path,
+            actual.path,
+        ));
+    }
+    if actual.executable_sha256 != expected.binary_sha256
+        || actual.executable_size_bytes != expected.binary_size_bytes
+    {
+        return Err(format!(
+            "baseline executable provenance mismatch against manifest {}: expected sha256={} ({} B), observed sha256={} ({} B)",
+            expected.manifest_path.display(),
+            expected.binary_sha256,
+            expected.binary_size_bytes,
+            actual.executable_sha256,
+            actual.executable_size_bytes,
+        ));
+    }
+    match &actual.portable_dump {
+        PortableDumpProvenance::Loaded {
+            path,
+            sha256,
+            size_bytes,
+        } => {
+            if *sha256 != expected.pdump_sha256 || *size_bytes != expected.pdump_size_bytes {
+                return Err(format!(
+                    "baseline loaded portable dump `{path}` does not match manifest {}: expected sha256={} ({} B), observed sha256={} ({} B)",
+                    expected.manifest_path.display(),
+                    expected.pdump_sha256,
+                    expected.pdump_size_bytes,
+                    sha256,
+                    size_bytes,
+                ));
+            }
+            Ok(())
+        }
+        other => Err(format!(
+            "baseline run did not load verified portable dump from manifest {}: observed portable_dump={other:?}",
+            expected.manifest_path.display(),
+        )),
+    }
+}
+
+fn extract_execution_environment(
+    passthrough: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    passthrough
+        .iter()
+        .filter(|(name, _)| {
+            matches!(
+                name.as_str(),
+                "NEOVM_JIT" | "NEOVM_JIT_OSR" | "NEOVM_JIT_THRESHOLD" | "NEOVM_JIT_LOOP_HEAT"
+            )
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
 fn parity_metric_values(
     observations: &[ComparisonObservation],
     role: ComparisonRunRole,
@@ -862,41 +1181,10 @@ impl PerfHarness {
             source,
         })?;
 
-        let frontend = request.frontend();
-        let input = ComparisonInput {
-            scenario: request.scenario,
-            frontend,
-            iterations: request.iterations,
-            samples_per_side: request.samples_per_side,
-            primary_metric: scenario(request.scenario).primary_metric,
-            baseline_editor: request.baseline_editor.clone(),
-            candidate_editor: request.candidate_editor.clone(),
-            machine: request.machine.clone(),
-            counters: request.counters,
-            video_file: request.video_file.clone(),
-            journal_file: request.journal_file.clone(),
-            baseline_execution_overrides: request.baseline_execution_overrides.clone(),
-            candidate_execution_overrides: request.candidate_execution_overrides.clone(),
-        };
+        let input = request.build_input();
         let mut observations = Vec::with_capacity(request.samples_per_side.get() as usize * 2);
         for (role, sample_index) in comparison_schedule(request.samples_per_side) {
-            let editor = match role {
-                ComparisonRunRole::Baseline => &request.baseline_editor,
-                ComparisonRunRole::Candidate => &request.candidate_editor,
-            };
-            let overrides = match role {
-                ComparisonRunRole::Baseline => &request.baseline_execution_overrides,
-                ComparisonRunRole::Candidate => &request.candidate_execution_overrides,
-            };
-            let run_request = RunRequest::new(request.scenario, editor, request.iterations)
-                .with_inherited_environment(request.inherited_environment.clone())
-                .with_execution_overrides(overrides.clone())
-                .with_frontend(frontend)
-                .with_timeout(request.timeout)
-                .with_machine_policy(request.machine.clone())
-                .with_counters(request.counters)
-                .with_video_file(request.video_file.clone())
-                .with_journal_file(request.journal_file.clone());
+            let run_request = request.run_request_for(role);
             let report = self.run(&run_request)?;
             let child_provenance = read_child_provenance(&report.artifact_path);
             let child = report.artifact;
@@ -917,21 +1205,10 @@ impl PerfHarness {
                     execution_environment: child_provenance
                         .as_ref()
                         .and_then(|p| p.passthrough_environment.as_ref())
-                        .map(|environment| {
-                            environment
-                                .iter()
-                                .filter(|(name, _)| {
-                                    matches!(
-                                        name.as_str(),
-                                        "NEOVM_JIT"
-                                            | "NEOVM_JIT_OSR"
-                                            | "NEOVM_JIT_THRESHOLD"
-                                            | "NEOVM_JIT_LOOP_HEAT"
-                                    )
-                                })
-                                .map(|(name, value)| (name.clone(), value.clone()))
-                                .collect()
-                        }),
+                        .map(extract_execution_environment),
+                    passthrough_environment: child_provenance
+                        .as_ref()
+                        .and_then(|p| p.passthrough_environment.clone()),
                     native_video_input: child_provenance
                         .and_then(|provenance| provenance.comparison_identity),
                     native_video_execution: child.native_video_execution,

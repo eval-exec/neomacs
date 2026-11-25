@@ -25,9 +25,9 @@ use crate::harness::{
     CorrectnessMismatch, EditorProvenance, HostProvenance, INPUT_LATENCY_BUDGET_US, Measurement,
     MetricName, MetricUnit, PackageProvenance, PreparedScenario, PreparedWorkload, RunRequest,
     SCENARIO_RESULT_SCHEMA_VERSION, ScenarioId, ScenarioOutcome, ScenarioStatus,
-    collect_editor_provenance, collect_host_provenance, deserialize_optional_error, mismatch,
-    nearest_rank, prepare_gui_runtime_directory, require_positive_phase, scenario_outcome,
-    sha256_file,
+    collect_editor_provenance_with_environment, collect_host_provenance,
+    deserialize_optional_error, mismatch, nearest_rank, prepare_gui_runtime_directory,
+    require_positive_phase, scenario_outcome, sha256_file,
 };
 
 #[cfg(test)]
@@ -50,7 +50,11 @@ pub(crate) fn prepare(
     run_directory: &Path,
 ) -> Result<PreparedScenario, String> {
     let sandbox = MelpaSandbox::new(&format!("perf-{}", request.scenario))?;
-    let editor = collect_editor_provenance(request.editor(), &sandbox)?;
+    let editor = collect_editor_provenance_with_environment(
+        request.editor(),
+        &sandbox,
+        request.benchmark_environment(),
+    )?;
     let fixture_source = workspace_root.join("crates/neomacs-perf/fixtures/editor-workloads.el");
     let source_fixture = workspace_root.join("lisp/emacs-lisp/bytecomp.el");
     for required in [&fixture_source, &source_fixture] {

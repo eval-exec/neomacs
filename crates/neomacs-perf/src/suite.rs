@@ -10,8 +10,9 @@ use sha2::{Digest, Sha256};
 
 use crate::artifact_store::{unix_time_ms, write_json_atomically};
 use crate::{
-    ComparisonRequest, ComparisonSampleCount, ComparisonVerdict, CounterScope, MachinePolicy,
-    PerfError, PerfHarness, ScenarioId, scenario,
+    BaselineManifest, ComparisonRequest, ComparisonSampleCount, ComparisonVerdict, CounterScope,
+    MachinePolicy, MetricName, PerfError, PerfHarness, ResolvedGuardTools, ScenarioId,
+    VerifiedBaselineManifest, resolve_guard_tools, scenario,
 };
 
 static SUITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -21,12 +22,14 @@ pub(crate) const SUITE_ARTIFACT_SCHEMA_VERSION: u32 = 1;
 #[serde(rename_all = "kebab-case")]
 pub enum SuiteId {
     Standard,
+    OrgEditingGuard,
 }
 
 impl fmt::Display for SuiteId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Standard => "standard",
+            Self::OrgEditingGuard => "org-editing-guard",
         })
     }
 }
@@ -48,7 +51,33 @@ impl FromStr for SuiteId {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "standard" => Ok(Self::Standard),
+            "org-editing-guard" => Ok(Self::OrgEditingGuard),
             value => Err(UnknownSuiteId(value.to_string())),
+        }
+    }
+}
+
+/// Which metric a suite row gates against its regression budget.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SuiteGateMetric {
+    /// Gate on the scenario's default primary metric (wall or CPU time).
+    #[default]
+    ScenarioPrimary,
+    /// Gate on retired user-space instructions (`MetricName::Instructions`),
+    /// requiring `--hardware-counters` and rejecting any run that omits it.
+    Instructions,
+}
+
+impl SuiteGateMetric {
+    pub const fn requires_hardware_counters(self) -> bool {
+        matches!(self, Self::Instructions)
+    }
+
+    pub fn metric_for(self, scenario_id: ScenarioId) -> MetricName {
+        match self {
+            Self::ScenarioPrimary => scenario(scenario_id).primary_metric,
+            Self::Instructions => MetricName::Instructions,
         }
     }
 }
@@ -70,6 +99,7 @@ pub struct SuiteScenario {
     /// the same binary and `sustained-editing` about 0.8%, so arming those
     /// would produce false failures; the batch rows reproduce to ~0.03%.
     pub maximum_drift_percent: Option<f64>,
+    pub gate_metric: SuiteGateMetric,
 }
 
 const STANDARD_SCENARIOS: &[SuiteScenario] = &[
@@ -105,11 +135,17 @@ const STANDARD_SCENARIOS: &[SuiteScenario] = &[
     ratcheted(ScenarioId::LspJsonRpc, 8.0, 2.0),
 ];
 
+const ORG_EDITING_GUARD_SCENARIOS: &[SuiteScenario] = &[
+    instruction_gated(ScenarioId::OrgEditing, 1.0),
+    instruction_gated(ScenarioId::OrgEditingHeavy, 1.0),
+];
+
 const fn suite_scenario(scenario: ScenarioId, maximum_regression_percent: f64) -> SuiteScenario {
     SuiteScenario {
         scenario,
         maximum_regression_percent,
         maximum_drift_percent: None,
+        gate_metric: SuiteGateMetric::ScenarioPrimary,
     }
 }
 
@@ -123,6 +159,17 @@ const fn ratcheted(
         scenario,
         maximum_regression_percent,
         maximum_drift_percent: Some(maximum_drift_percent),
+        gate_metric: SuiteGateMetric::ScenarioPrimary,
+    }
+}
+
+/// A deterministic guard row gated directly on retired user-space instructions.
+const fn instruction_gated(scenario: ScenarioId, maximum_regression_percent: f64) -> SuiteScenario {
+    SuiteScenario {
+        scenario,
+        maximum_regression_percent,
+        maximum_drift_percent: None,
+        gate_metric: SuiteGateMetric::Instructions,
     }
 }
 
@@ -130,6 +177,14 @@ impl SuiteId {
     pub const fn scenarios(self) -> &'static [SuiteScenario] {
         match self {
             Self::Standard => STANDARD_SCENARIOS,
+            Self::OrgEditingGuard => ORG_EDITING_GUARD_SCENARIOS,
+        }
+    }
+
+    pub const fn requires_baseline_manifest(self) -> bool {
+        match self {
+            Self::Standard => false,
+            Self::OrgEditingGuard => true,
         }
     }
 }
@@ -144,6 +199,7 @@ pub struct SuiteRequest {
     pub(crate) machine: MachinePolicy,
     pub(crate) counters: Option<CounterScope>,
     pub(crate) previous_suite: Option<PathBuf>,
+    pub(crate) baseline_manifest: Option<PathBuf>,
 }
 
 impl SuiteRequest {
@@ -162,6 +218,7 @@ impl SuiteRequest {
             machine: MachinePolicy::default(),
             counters: None,
             previous_suite: None,
+            baseline_manifest: None,
         }
     }
 
@@ -184,6 +241,69 @@ impl SuiteRequest {
         self.previous_suite = previous_suite;
         self
     }
+
+    pub fn with_baseline_manifest(mut self, baseline_manifest: Option<PathBuf>) -> Self {
+        self.baseline_manifest = baseline_manifest;
+        self
+    }
+
+    /// Reject invalid suite configurations before any artifact directory or
+    /// editor process is created.
+    pub fn validate(&self) -> Result<(), PerfError> {
+        let instruction_scenarios: Vec<ScenarioId> = self
+            .suite
+            .scenarios()
+            .iter()
+            .filter(|row| row.gate_metric.requires_hardware_counters())
+            .map(|row| row.scenario)
+            .collect();
+        if !instruction_scenarios.is_empty() && self.counters.is_none() {
+            return Err(PerfError::HardwareCountersRequired {
+                suite: self.suite,
+                scenarios: instruction_scenarios,
+            });
+        }
+        if self.suite.requires_baseline_manifest() && self.baseline_manifest.is_none() {
+            return Err(PerfError::BaselineManifestRequired { suite: self.suite });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn comparison_request_for(
+        &self,
+        suite_scenario: &SuiteScenario,
+        expected_baseline: Option<VerifiedBaselineManifest>,
+        guard_tools: Option<ResolvedGuardTools>,
+    ) -> ComparisonRequest {
+        let spec = scenario(suite_scenario.scenario);
+        // Thread the canonical absolute baseline path from the verified
+        // manifest into every downstream provenance check and execution
+        // command so verify and exec cannot resolve a relative path against
+        // different directories (process CWD vs workspace_root).
+        let baseline_editor = expected_baseline
+            .as_ref()
+            .map_or(self.baseline_editor.as_path(), |verified| {
+                verified.binary_path.as_path()
+            });
+        ComparisonRequest::new(
+            suite_scenario.scenario,
+            baseline_editor,
+            &self.candidate_editor,
+            self.samples,
+            spec.default_iterations,
+        )
+        .with_frontend(spec.default_frontend)
+        .with_timeout(self.timeout)
+        .with_machine_policy(self.machine.clone())
+        .with_counters(self.counters)
+        .with_primary_metric(
+            suite_scenario
+                .gate_metric
+                .metric_for(suite_scenario.scenario),
+        )
+        .with_expected_baseline(expected_baseline)
+        .with_guard_tools(guard_tools)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -195,6 +315,8 @@ pub struct SuiteScenarioResult {
     /// re-deriving it, and so the artifact records what gate was in force.
     #[serde(default)]
     pub maximum_drift_percent: Option<f64>,
+    #[serde(default)]
+    pub gate_metric: SuiteGateMetric,
     pub percent_change: Option<f64>,
     pub comparison_artifact: PathBuf,
 }
@@ -264,6 +386,10 @@ pub struct SuiteArtifact {
     pub started_unix_ms: u128,
     pub total_elapsed_us: u128,
     pub previous_suite: Option<SuiteHistoryLink>,
+    #[serde(default)]
+    pub baseline_manifest: Option<VerifiedBaselineManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_tools: Option<ResolvedGuardTools>,
     pub scenarios: Vec<SuiteScenarioResult>,
     pub verdict: SuiteVerdict,
 }
@@ -276,6 +402,22 @@ pub struct SuiteReport {
 
 impl PerfHarness {
     pub fn suite(&self, request: &SuiteRequest) -> Result<SuiteReport, PerfError> {
+        request.validate()?;
+        let baseline_manifest = match request.baseline_manifest.as_deref() {
+            Some(path) => {
+                let (manifest, manifest_sha256) = BaselineManifest::load(path)?;
+                Some(manifest.verify_editor(path, manifest_sha256, &request.baseline_editor)?)
+            }
+            None => None,
+        };
+        let guard_tools = if baseline_manifest.is_some() {
+            Some(resolve_guard_tools(
+                std::env::var_os("PATH").as_deref(),
+                request.machine.cpu.is_some(),
+            )?)
+        } else {
+            None
+        };
         let started = Instant::now();
         let started_unix_ms = unix_time_ms();
         let sequence = SUITE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -313,18 +455,11 @@ impl PerfHarness {
         };
         let mut scenario_results = Vec::with_capacity(request.suite.scenarios().len());
         for suite_scenario in request.suite.scenarios() {
-            let spec = scenario(suite_scenario.scenario);
-            let comparison = ComparisonRequest::new(
-                suite_scenario.scenario,
-                &request.baseline_editor,
-                &request.candidate_editor,
-                request.samples,
-                spec.default_iterations,
-            )
-            .with_frontend(spec.default_frontend)
-            .with_timeout(request.timeout)
-            .with_machine_policy(request.machine.clone())
-            .with_counters(request.counters);
+            let comparison = request.comparison_request_for(
+                suite_scenario,
+                baseline_manifest.clone(),
+                guard_tools.clone(),
+            );
             let report = self.compare(&comparison)?;
             let percent_change = match &report.artifact.verdict {
                 ComparisonVerdict::Valid { summary } => Some(summary.percent_change),
@@ -334,6 +469,7 @@ impl PerfHarness {
                 scenario: suite_scenario.scenario,
                 maximum_regression_percent: suite_scenario.maximum_regression_percent,
                 maximum_drift_percent: suite_scenario.maximum_drift_percent,
+                gate_metric: suite_scenario.gate_metric,
                 percent_change,
                 comparison_artifact: report.artifact_path,
             });
@@ -343,7 +479,10 @@ impl PerfHarness {
             schema_version: SUITE_ARTIFACT_SCHEMA_VERSION,
             suite_id,
             suite: request.suite,
-            baseline_editor: request.baseline_editor.clone(),
+            baseline_editor: baseline_manifest.as_ref().map_or_else(
+                || request.baseline_editor.clone(),
+                |v| v.binary_path.clone(),
+            ),
             candidate_editor: request.candidate_editor.clone(),
             samples_per_side: request.samples,
             machine: request.machine.clone(),
@@ -351,6 +490,8 @@ impl PerfHarness {
             started_unix_ms,
             total_elapsed_us: started.elapsed().as_micros(),
             previous_suite,
+            baseline_manifest,
+            guard_tools,
             scenarios: scenario_results,
             verdict,
         };

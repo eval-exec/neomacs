@@ -396,6 +396,26 @@ dedicated whole-process startup-counter comparison, and uploads all run,
 comparison, and suite artifacts for 90 days. Hosted shared runners are
 deliberately excluded from regression decisions.
 
+A dedicated `org-editing-guard` suite (`perf suite org-editing-guard`) gates
+`org-editing` and `org-editing-heavy` directly on retired user-space
+instructions (`MetricName::Instructions`) with a `+1.0%` maximum regression
+budget against the frozen `v0.0.21` release asset pinned in
+`.github/perf-baselines/v0.0.21.json`. Both `--hardware-counters` and
+`--baseline-manifest .github/perf-baselines/v0.0.21.json` are required at the
+`SuiteRequest` level (omitting either rejects the suite before launching any
+editor, and any sample missing `MetricName::Instructions` is rejected rather
+than falling back to wall time). The manifest verifies the SHA-256 and byte
+size of both the baseline binary and its sibling portable dump before running,
+threads the canonical absolute binary path through verify, provenance, and
+execution, resolves `perf` (and `taskset` when `--cpu` is set) to unambiguous
+canonical absolute paths while rejecting `PATH` shadowing, constructs a closed
+empty inherited environment for BOTH baseline and candidate arms (no
+`LD_LIBRARY_PATH`, `PATH`, `NEOMACS_RUNTIME_ROOT`, or `NEOVM_*`/`NEOMACS_*`
+knobs forwarded), and set-compares the full recorded `passthrough_environment`
+alongside canonical executable path, executable SHA-256/size, and loaded
+portable dump SHA-256/size on every sample. `SuiteId::Standard` keeps its
+existing `2.0%` wall-time drift ratchet and environment forwarding untouched.
+
 ## `rust-lsp-typing`
 
 This workload reproduces the heavy Rust edit path that originally exposed
