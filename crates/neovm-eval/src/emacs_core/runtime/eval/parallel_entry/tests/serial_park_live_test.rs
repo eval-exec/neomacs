@@ -1446,9 +1446,7 @@ const R: u64 = 7206;
 
 /// Enroll the Baton group with the driver; its port crosses to the runner.
 fn enroll_group(driver: &mut Driver<'_, '_, '_>, inbox: &mpsc::Sender<KeeperMsg>) -> GroupPort {
-    let (world_tx, world) = mpsc::sync_channel(1);
-    let waiter = driver.enroll_group(world_tx);
-    GroupPort::new(inbox.clone(), world, waiter)
+    GroupPort::new(inbox.clone(), driver.enroll_group())
 }
 
 /// L6.7b b3. The Baton group and an owner are both lent through the
@@ -1678,20 +1676,29 @@ fn l67b_the_deadlock_query_answers_idle_only_with_no_live_owner() {
             });
             let runner = scope.spawn(move || {
                 live.recv_timeout(BOUND).expect("O is live");
-                let with_owner = group.idle_for_deadlock().ok().expect("the keeper answers");
+                let with_owner = group
+                    .idle_for_deadlock(BOUND)
+                    .ok()
+                    .expect("the keeper answers");
                 exit_tx.send(()).expect("let O exit");
                 // O's exit reaches the keeper before a later query only if
                 // the keeper has read it, so ask until it has (bounded).
                 let start = Instant::now();
                 let alone = loop {
-                    let idle = group.idle_for_deadlock().ok().expect("the keeper answers");
+                    let idle = group
+                        .idle_for_deadlock(BOUND)
+                        .ok()
+                        .expect("the keeper answers");
                     if idle || start.elapsed() >= BOUND {
                         break idle;
                     }
                     std::thread::sleep(Duration::from_millis(1));
                 };
                 group.request().ok().expect("the group asks");
-                let queued = group.idle_for_deadlock().ok().expect("the keeper answers");
+                let queued = group
+                    .idle_for_deadlock(BOUND)
+                    .ok()
+                    .expect("the keeper answers");
                 let (turn, _epoch, lend) = group
                     .await_world()
                     .ok()
@@ -1708,6 +1715,114 @@ fn l67b_the_deadlock_query_answers_idle_only_with_no_live_owner() {
             );
             assert!(alone, "no owner and nothing queued: idle");
             assert!(!queued, "a queued request is not idle");
+        });
+    });
+}
+
+/// Lead #14206 nit 1. The deadlock query answers "not idle" while any turn
+/// is out: while the group holds the World, and while an owner holds its
+/// ticket. Neither is a moment at which nothing could wake a Baton waiter.
+#[test]
+fn l67b_the_deadlock_query_is_false_while_any_turn_is_out() {
+    with_live_era("l67b-idle-out", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let o = enroll_driver(era, &mut driver, &inbox, O);
+        let mut group = enroll_group(&mut driver, &inbox);
+        drop(inbox);
+        let (start_tx, start) = mpsc::channel::<()>();
+        let (holding_tx, holding) = mpsc::channel::<()>();
+        let (end_tx, end) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            scope.spawn(move || {
+                start
+                    .recv_timeout(BOUND)
+                    .expect("the group's interval is over");
+                o.run(|state, home, port| {
+                    let turn = driver_turn(state, home, port, "(setq sp-live 43)");
+                    holding_tx.send(()).expect("O holds its ticket");
+                    end.recv_timeout(BOUND).expect("the group asked");
+                    turn.end(port).ok().expect("the host detaches");
+                })
+            });
+            let runner = scope.spawn(move || {
+                let (turn, _epoch, lend) = group
+                    .request_world()
+                    .ok()
+                    .expect("the group is lent the World");
+                let world_out = group
+                    .idle_for_deadlock(BOUND)
+                    .ok()
+                    .expect("the keeper answers");
+                group.give_back(lend, WorldReturned::from_end(turn));
+                start_tx.send(()).expect("let O ask");
+                holding.recv_timeout(BOUND).expect("O holds its ticket");
+                let ticket_out = group
+                    .idle_for_deadlock(BOUND)
+                    .ok()
+                    .expect("the keeper answers");
+                end_tx.send(()).expect("let O end");
+                group.exit();
+                (world_out, ticket_out)
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            let (world_out, ticket_out) = runner.join().expect("the group");
+            assert!(!world_out, "the group holding the World is not idle");
+            assert!(!ticket_out, "an owner holding its ticket is not idle");
+        });
+    });
+}
+
+/// Lead #14206 nits 1 and 2. A queued collection answers "not idle" between
+/// stops. A collection asked while the group holds the World raises the
+/// group's waiter word, so the group ends its interval for it.
+#[test]
+fn l67b_a_collection_blocks_idle_and_raises_the_waiter_word() {
+    with_live_era("l67b-collect-waiter", |era| {
+        let (inbox, inbox_rx) = mpsc::channel();
+        let mut driver = Driver::new(era, inbox_rx);
+        let mut group = enroll_group(&mut driver, &inbox);
+        // Both are in the inbox before the keeper runs: the query is read
+        // with the collection queued and no stop taken yet.
+        inbox
+            .send(KeeperMsg::Collect { reply: None })
+            .expect("ask for a collection");
+        let (reply, answer) = mpsc::sync_channel(1);
+        inbox
+            .send(KeeperMsg::IdleQuery { reply })
+            .expect("ask the keeper");
+        let asker = inbox.clone();
+        drop(inbox);
+        std::thread::scope(|scope| {
+            let _panic_guard = KeeperPanicGuard { keeper: era };
+            let runner = scope.spawn(move || {
+                let queued = answer.recv_timeout(BOUND).expect("the keeper answers");
+                let (turn, _epoch, lend) = group
+                    .request_world()
+                    .ok()
+                    .expect("the group is lent the World");
+                let before = group.ring_waiter();
+                asker
+                    .send(KeeperMsg::Collect { reply: None })
+                    .expect("ask for a collection during the World");
+                drop(asker);
+                let start = Instant::now();
+                while !group.ring_waiter() {
+                    assert!(
+                        start.elapsed() < BOUND,
+                        "a collection asked during the World raises the waiter word"
+                    );
+                    std::thread::yield_now();
+                }
+                group.give_back(lend, WorldReturned::from_end(turn));
+                group.exit();
+                (queued, before)
+            });
+            assert_eq!(driver.run(), DriverEnd::Drained);
+            let (queued, before) = runner.join().expect("the group");
+            assert!(!queued, "a queued collection is not idle");
+            assert!(!before, "nothing waited when the World was lent");
         });
     });
 }

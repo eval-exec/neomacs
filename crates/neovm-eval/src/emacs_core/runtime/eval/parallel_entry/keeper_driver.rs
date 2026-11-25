@@ -40,6 +40,8 @@ pub(crate) type KeeperMsg = driver_core::KeeperMsg<
 pub(crate) type GrantMsg = driver_core::GrantMsg<StoppedSerialTicket>;
 /// Keeper -> the Baton group (L6.7b b3).
 pub(crate) type GroupMsg = driver_core::GroupMsg<WorldTurn>;
+/// The Baton group's enrollment, for its port.
+pub(crate) type GroupLink = driver_core::GroupLink<WorldTurn>;
 /// A proven invariant break.
 pub(crate) type Breach = driver_core::Breach<ReceiveReason, RendezvousError>;
 /// Why the driver stopped serving.
@@ -507,12 +509,9 @@ pub(crate) struct GroupPort {
     expect(dead_code, reason = "L6.7b b4 (Green switch points) is the caller")
 )]
 impl GroupPort {
-    /// WAITER is the word `Driver::enroll_group` returned for this group.
-    pub(crate) fn new(
-        inbox: mpsc::Sender<KeeperMsg>,
-        world: mpsc::Receiver<GroupMsg>,
-        waiter: Arc<driver_core::RingWaiter>,
-    ) -> Self {
+    /// LINK is what `Driver::enroll_group` returned for this group.
+    pub(crate) fn new(inbox: mpsc::Sender<KeeperMsg>, link: GroupLink) -> Self {
+        let (world, waiter) = link.into_parts();
         Self {
             inbox,
             world,
@@ -596,13 +595,23 @@ impl GroupPort {
     /// asked when no Baton thread is runnable and the group holds no World.
     /// `Ok(true)` only when the keeper, between stops, has no live parallel
     /// owner, nothing queued and no collection asked for. Conservative: any
-    /// doubt answers `false`, and the era being gone refuses.
-    pub(crate) fn idle_for_deadlock(&self) -> Result<bool, PortRefusal> {
+    /// doubt answers `false`, and so does a keeper that has not answered
+    /// within BOUND (lead #14206: a caller may hold scheduler state, so
+    /// the wait is bounded). The era being gone refuses.
+    ///
+    /// On the group's port, not `KeeperEra` (ratified, lead #14206 R1):
+    /// `KeeperEra` is keeper-confined, and this port is Green's handle on
+    /// the keeper.
+    pub(crate) fn idle_for_deadlock(&self, bound: Duration) -> Result<bool, PortRefusal> {
         let (reply, answer) = mpsc::sync_channel(1);
         self.inbox
             .send(KeeperMsg::IdleQuery { reply })
             .map_err(|_| PortRefusal::Poisoned)?;
-        answer.recv().map_err(|_| PortRefusal::Poisoned)
+        match answer.recv_timeout(bound) {
+            Ok(idle) => Ok(idle),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(false),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(PortRefusal::Poisoned),
+        }
     }
 
     /// The group leaves the era.

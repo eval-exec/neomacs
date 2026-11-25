@@ -232,6 +232,13 @@ pub(crate) enum KeeperMsg<Receipt, Returned, Ticket, Reason, WorldReturned, Repo
     /// between stops with no live parallel owner, nothing queued and no
     /// collection asked for. Any other state answers `false`: a missed
     /// verdict is acceptable, a false one never is.
+    ///
+    /// "Live parallel owner" means an owner enrolled with this driver and
+    /// not exited. A mutator registered with the era but never enrolled is
+    /// invisible to the query. Accepted limitation (lead #14206): any
+    /// enrolled owner blocks the verdict, so a deadlock between Baton
+    /// waiters and a live owner that never wakes them is a silent hang, not
+    /// a reported deadlock.
     IdleQuery { reply: mpsc::SyncSender<bool> },
 }
 
@@ -332,6 +339,7 @@ pub(crate) type MsgOf<O> = KeeperMsg<
 >;
 pub(crate) type GrantOf<O> = GrantMsg<<O as KeeperOps>::Ticket>;
 pub(crate) type GroupOf<O> = GroupMsg<<O as KeeperOps>::WorldTurn>;
+pub(crate) type GroupLinkOf<O> = GroupLink<<O as KeeperOps>::WorldTurn>;
 pub(crate) type IntervalEndOf<O> = IntervalEnd<<O as KeeperOps>::Report>;
 pub(crate) type BreachOf<O> = Breach<<O as KeeperOps>::Reason, <O as KeeperOps>::Error>;
 pub(crate) type EndOf<O> = DriverEnd<<O as KeeperOps>::Reason, <O as KeeperOps>::Error>;
@@ -360,7 +368,28 @@ enum GroupRequest {
 /// parallel owner's request or a collection) is waiting, and lowers it when
 /// the World comes back. The group reads it at each switch point with one
 /// Acquire load: no lock, no syscall.
+///
+/// The QB2 contract (ratified, lead #14206 R2): the word is RAISED at the
+/// lend when a client is already waiting, so an owner committed behind the
+/// group is not missed. This overrides the b4 plan's "a grant starts
+/// false". Only the keeper writes it (Release). It is published through the
+/// channel that carries the lend, and lowered only after the World returns.
 pub(crate) struct RingWaiter(sync::atomic::AtomicBool);
+
+/// What `Driver::enroll_group` hands the group's port: the World channel
+/// and the waiter word of one enrollment, so a port cannot pair one
+/// driver's channel with another's word (lead #14206 nit 4).
+pub(crate) struct GroupLink<WorldTurn> {
+    world: mpsc::Receiver<GroupMsg<WorldTurn>>,
+    waiter: sync::Arc<RingWaiter>,
+}
+
+impl<WorldTurn> GroupLink<WorldTurn> {
+    /// The World channel and the waiter word, for the group's port.
+    pub(crate) fn into_parts(self) -> (mpsc::Receiver<GroupMsg<WorldTurn>>, sync::Arc<RingWaiter>) {
+        (self.world, self.waiter)
+    }
+}
 
 impl RingWaiter {
     fn new() -> Self {
@@ -450,20 +479,18 @@ impl<'o, O: KeeperOps> Driver<'o, O> {
         self.owners.insert(owner, Enrolled { key, grants });
     }
 
-    /// Enroll the Baton group before it can request. `grants` is the group's
-    /// own one-slot channel. The returned word is the group's view of the
-    /// ring while it holds the World (b4.1).
-    pub(crate) fn enroll_group(
-        &mut self,
-        grants: mpsc::SyncSender<GroupOf<O>>,
-    ) -> sync::Arc<RingWaiter> {
+    /// Enroll the Baton group before it can request. The returned link
+    /// carries the group's own one-slot World channel and its waiter word
+    /// (b4.1), minted together for this driver.
+    pub(crate) fn enroll_group(&mut self) -> GroupLinkOf<O> {
+        let (grants, world) = mpsc::sync_channel(1);
         let waiter = sync::Arc::new(RingWaiter::new());
         self.group = Some(Group {
             grants,
             request: GroupRequest::None,
             waiter: waiter.clone(),
         });
-        waiter
+        GroupLink { world, waiter }
     }
 
     /// Raise or lower the group's waiter word.

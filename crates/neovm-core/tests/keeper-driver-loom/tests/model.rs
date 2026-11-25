@@ -787,8 +787,7 @@ fn a_group_and_an_owner(on_world: OnWorld) {
         let in_turn = Arc::new(AtomicUsize::new(0));
         let (grants_tx, grants) = mpsc::sync_channel(1);
         driver.enroll(1, key(1), grants_tx);
-        let (world_tx, world) = mpsc::sync_channel(1);
-        let _waiter = driver.enroll_group(world_tx);
+        let (world, _waiter) = driver.enroll_group().into_parts();
         let owner = {
             let inbox = inbox.clone();
             let in_turn = in_turn.clone();
@@ -825,8 +824,7 @@ pub fn an_abandoned_world_turn_poisons_the_owners() {
         let in_turn = Arc::new(AtomicUsize::new(0));
         let (grants_tx, grants) = mpsc::sync_channel(1);
         driver.enroll(1, key(1), grants_tx);
-        let (world_tx, world) = mpsc::sync_channel(1);
-        let _waiter = driver.enroll_group(world_tx);
+        let (world, _waiter) = driver.enroll_group().into_parts();
         let (holding_tx, holding) = mpsc::channel::<()>();
         let group = {
             let inbox = inbox.clone();
@@ -875,8 +873,7 @@ pub fn an_abandoned_lend_poisons_the_queued_group() {
         let in_turn = Arc::new(AtomicUsize::new(0));
         let (grants_tx, grants) = mpsc::sync_channel(1);
         driver.enroll(1, key(1), grants_tx);
-        let (world_tx, world) = mpsc::sync_channel(1);
-        let _waiter = driver.enroll_group(world_tx);
+        let (world, _waiter) = driver.enroll_group().into_parts();
         let (holding_tx, holding) = mpsc::channel::<()>();
         let owner = {
             let inbox = inbox.clone();
@@ -935,8 +932,7 @@ pub fn a_collecting_group_resumes_before_any_other_turn() {
         let in_turn = Arc::new(AtomicUsize::new(0));
         let (grants_tx, grants) = mpsc::sync_channel(1);
         driver.enroll(1, key(1), grants_tx);
-        let (world_tx, world) = mpsc::sync_channel(1);
-        let _waiter = driver.enroll_group(world_tx);
+        let (world, _waiter) = driver.enroll_group().into_parts();
         let (holding_tx, holding) = mpsc::channel::<()>();
         let group = {
             let inbox = inbox.clone();
@@ -989,8 +985,7 @@ pub fn an_owner_request_during_the_world_raises_the_waiter_word() {
         let in_turn = Arc::new(AtomicUsize::new(0));
         let (grants_tx, grants) = mpsc::sync_channel(1);
         driver.enroll(1, key(1), grants_tx);
-        let (world_tx, world) = mpsc::sync_channel(1);
-        let waiter = driver.enroll_group(world_tx);
+        let (world, waiter) = driver.enroll_group().into_parts();
         let (holding_tx, holding) = mpsc::channel::<()>();
         let group = {
             let inbox = inbox.clone();
