@@ -542,29 +542,42 @@ fn with_live_green_era(
     finish_fixture(returned, private);
 }
 
-fn with_live_green_era_with_transfer_words(
+/// Full `unit_runtime()` live Green era with a pre-freeze cons allocated on
+/// `source` AFTER `gc_collect_exact()` and BEFORE `prepare_era()` so
+/// `entry0.image.young` is non-empty and `pending_mutators` contains `id_0`
+/// (exercising `peer-gcfix`'s young-log merge in `restore_legacy_for_collection`
+/// and `prepare_finish` without any extra teardown collection).
+fn with_live_full_green_era_pre_freeze_cons(
     label: &'static str,
     setup: impl FnOnce(&mut Context),
-    body: impl for<'k, 'service, 'heap> FnOnce(
-        &'k KeeperEra<'service, 'heap>,
-        neovm_value::tagged::gc::HeapWord,
-        neovm_value::tagged::gc::HeapWord,
-    ) + Send
-    + 'static,
+    body: impl for<'k, 'service, 'heap> FnOnce(&'k KeeperEra<'service, 'heap>) + Send + 'static,
 ) {
-    let mut source = ready();
+    crate::test_utils::init_test_tracing();
+    #[cfg(feature = "jit")]
+    {
+        crate::emacs_core::jit::force_jit_off_for_test(true);
+        crate::emacs_core::jit::cache::reset_carrier_tls();
+    }
+    crate::emacs_core::eval::parallel_entry::source_entry::install_inactive_source_module_probe_for_test();
+    let mut source = Box::new(Context::new_with_threading(
+        ThreadingMode::Green,
+        crate::test_utils::unit_runtime(),
+    ));
+    source.setup_thread_locals();
     setup(&mut source);
     let private = Value::string(label);
     source.lexenv = private;
-    let survivor = source
-        .tagged_heap
-        .alloc_cons(Value::fixnum(111), Value::fixnum(222));
-    let survivor_word = survivor.heap_word_for_test();
-    source.set_variable("l67b-b4-transfer-survivor", survivor);
-    let garbage_word = source
-        .tagged_heap
-        .alloc_cons(Value::fixnum(333), Value::fixnum(444))
-        .heap_word_for_test();
+    source.gc_collect_exact();
+    assert!(
+        source.tagged_heap.tagged_heap_generational_enabled(),
+        "L6.7b Lisp-path rows require a generational heap"
+    );
+    // Allocate a young cons on `source` BEFORE `prepare_era()` with NO
+    // intervening GC so `entry0.image.young` is non-empty when the era opens.
+    let pre_freeze = source
+        .eval_str("(cons 10 20)")
+        .expect("pre-freeze cons on source");
+    source.set_variable("l67b-b4-pre-freeze", pre_freeze);
     source.tagged_heap.close_alloc_regions();
     let bootstrap = source.capture_green_bootstrap_for_test();
     let (shell, start) = close(source).prepare_era().unwrap();
@@ -574,7 +587,7 @@ fn with_live_green_era_with_transfer_words(
             keeper
                 .keeper_baton_for_test()
                 .install_stowed_green_runtime_for_test(bootstrap);
-            body(keeper, survivor_word, garbage_word);
+            body(keeper);
             keeper
                 .keeper_baton_for_test()
                 .uninstall_green_runtime_for_test();
@@ -592,23 +605,21 @@ fn with_live_green_era_with_transfer_words(
     finish_fixture(returned, private);
 }
 
-/// L6.7b b4 P1 (Row a): a seated Baton `Context` parked via `WorldSeat` holds
-/// the ONLY reference to a cons cell (`ctx.lexenv`) alongside an unreachable
-/// cons cell. When the Baton group collects via `GroupPort::collect` (b5),
-/// the parked Context's cons MUST survive and the unreachable cons MUST be
-/// reclaimed.
-///
-/// Note (#14164/#14165): both conses are currently allocated on `source` before
-/// `prepare_era()` and `survivor` is transferred into `ctx.lexenv` without
-/// consing inside the `WorldTurn` to avoid the `restore_legacy_for_collection`
-/// `YoungBlockLog` merge bug; flip to in-turn consing once `peer-gcfix` lands
-/// that fix.
+/// L6.7b b4 P1 (Row a — upgraded Lisp path, #14218/#14220): in a full
+/// `unit_runtime()` live Green era with a pre-freeze cons on `source`
+/// (`entry0.image.young` non-empty), a seated Baton `Context` conses via real
+/// Lisp (`ctx.eval_str`) past one `ConsBlock` inside `WorldTurn`, keeps the
+/// ONLY reference to a survivor cons in `ctx.lexenv` alongside an unrooted
+/// garbage cons, collects via `GroupPort::collect`, verifies survivor +
+/// pre-freeze cons survive and garbage is reclaimed, then performs post-collect
+/// Lisp consing with NO further collection before `era.finish()`
+/// (`prepare_finish` young-log merge).
 #[test]
 fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() {
-    with_live_green_era_with_transfer_words(
+    with_live_full_green_era_pre_freeze_cons(
         "l67b-b4-parked-roots",
         |_| {},
-        |era, survivor_word, garbage_word| {
+        |era| {
             let (inbox, inbox_rx) = mpsc::channel();
             let mut driver = Driver::new(era, inbox_rx);
             let mut group = enroll_group(&mut driver, &inbox);
@@ -617,6 +628,8 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
             let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
             let (ready_tx, ready_rx) = mpsc::channel::<()>();
             let (retire_tx, retire_rx) = mpsc::channel::<()>();
+            let (words_tx, words_rx) =
+                mpsc::sync_channel::<neovm_value::tagged::gc::HeapWord>(1);
             let (report_tx, report_rx) = mpsc::sync_channel(1);
 
             std::thread::scope(|scope| {
@@ -634,16 +647,44 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
                         .enter(&mut ctx, turn, lend)
                         .expect("enter seated Baton worker");
 
-                    // Move `survivor` out of the temporary global symbol into
-                    // `ctx.lexenv` and clear the symbol to NIL so `ctx.lexenv`
-                    // on this parked Baton Context is the SOLE root.
+                    // Context-local GC threshold only (never process-wide):
+                    // raise threshold so in-turn Lisp consing crosses >1
+                    // ConsBlock without triggering maybe_gc (covered by Row 2),
+                    // then restore before leaving the era.
+                    let saved_threshold = ctx
+                        .eval_str("gc-cons-threshold")
+                        .expect("read Context-local gc-cons-threshold");
+                    ctx.eval_str("(setq gc-cons-threshold most-positive-fixnum)")
+                        .expect("raise Context-local gc-cons-threshold");
+
+                    assert_eq!(
+                        eval(&mut ctx, "(length (make-list 5000 nil))"),
+                        "5000",
+                        "real Lisp consing inside WorldTurn crosses >1 ConsBlock"
+                    );
                     let survivor = ctx
-                        .obarray()
-                        .symbol_value_copied("l67b-b4-transfer-survivor")
-                        .expect("transfer symbol holds survivor cons");
-                    assert_eq!(survivor.bits(), survivor_word.bits());
+                        .eval_str("(cons 111 222)")
+                        .expect("allocate survivor cons via Lisp inside WorldTurn");
+                    let garbage = ctx
+                        .eval_str("(cons 333 444)")
+                        .expect("allocate garbage cons via Lisp inside WorldTurn");
+                    // Positive pre-collect controls: both words live in the heap.
+                    assert!(
+                        ctx.tagged_heap.owns_heap_value_for_test(survivor),
+                        "survivor cons must be owned before GroupPort::collect"
+                    );
+                    assert!(
+                        ctx.tagged_heap.owns_heap_value_for_test(garbage),
+                        "garbage cons must be owned before GroupPort::collect"
+                    );
+                    let survivor_word = survivor.heap_word_for_test();
+                    words_tx.send(survivor_word).expect("publish survivor word");
+
+                    // `ctx.lexenv` on this parked Baton Context is the SOLE root
+                    // for `survivor`; `garbage` is kept unrooted so we can
+                    // verify reclamation right after `GroupPort::collect`
+                    // (before WorldTurn #2 allocates and can reuse its slot).
                     ctx.lexenv = survivor;
-                    ctx.set_variable("l67b-b4-transfer-survivor", Value::NIL);
 
                     let (parked, lend, returned) = active.exit(&mut ctx);
                     let (turn2, second_epoch, lend2) = group
@@ -661,8 +702,24 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
                     let active2 = parked
                         .enter(&mut ctx, turn2, lend2)
                         .expect("re-enter seated Baton worker after collection");
+                    // Check survivor & garbage BEFORE any WorldTurn #2 allocation
+                    // can reuse `garbage`'s freed cons slot.
                     let survivor_alive = ctx.tagged_heap.owns_heap_value_for_test(ctx.lexenv);
+                    let garbage_alive = ctx.tagged_heap.owns_heap_value_for_test(garbage);
                     let survivor_printed = survivor_alive.then(|| print_value(&ctx.lexenv));
+                    assert_eq!(
+                        eval(&mut ctx, "l67b-b4-pre-freeze"),
+                        "(10 . 20)",
+                        "pre-freeze source cons must survive GroupPort::collect"
+                    );
+                    // Post-collect Lisp consing with NO further collection
+                    // before era.finish() (exercises prepare_finish young merge).
+                    assert_eq!(
+                        eval(&mut ctx, "(length (make-list 2000 nil))"),
+                        "2000",
+                        "post-collect Lisp consing succeeds before prepare_finish"
+                    );
+                    ctx.set_variable("gc-cons-threshold", saved_threshold);
                     ctx.lexenv = Value::NIL;
                     let (parked, lend2, returned2) = active2.exit(&mut ctx);
                     group.give_back(lend2, returned2);
@@ -671,13 +728,14 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
                     retire_rx.recv_timeout(BOUND).expect("teardown signal");
                     parked.retire_parked_for_teardown_for_test(&mut ctx);
                     ctx.retire_green_owner();
-                    (survivor_alive, survivor_printed)
+                    (survivor_alive, garbage_alive, survivor_printed)
                 });
 
                 ready_rx
                     .recv_timeout(BOUND)
                     .expect("wait for seated worker to park before driver.run");
                 assert_eq!(driver.run(), DriverEnd::Drained);
+                let survivor_word = words_rx.recv_timeout(BOUND).expect("survivor word");
 
                 let mut stopped = loop {
                     match era.stop() {
@@ -689,14 +747,12 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
                 let era_owns_survivor = era
                     .owns_heap_word_for_test(&stopped, survivor_word)
                     .expect("check survivor word");
-                let era_owns_garbage = era
-                    .owns_heap_word_for_test(&stopped, garbage_word)
-                    .expect("check garbage word");
                 stopped.trace_serial().expect("trace verify stop");
                 stopped.complete().expect("complete verify stop");
 
                 retire_tx.send(()).expect("signal worker teardown");
-                let (worker_saw_survivor, survivor_printed) = runner.join().expect("runner joined");
+                let (worker_saw_survivor, garbage_alive_after_collect, survivor_printed) =
+                    runner.join().expect("runner joined");
 
                 assert!(
                     era_owns_survivor,
@@ -708,7 +764,7 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
                 );
                 assert_eq!(survivor_printed.as_deref(), Some("(111 . 222)"));
                 assert!(
-                    !era_owns_garbage,
+                    !garbage_alive_after_collect,
                     "unreachable garbage cons MUST be reclaimed by GroupPort::collect"
                 );
             });
@@ -716,19 +772,18 @@ fn l67b_b4_parked_world_seat_roots_survive_group_collect_and_garbage_reclaims() 
     );
 }
 
-/// L6.7b b4 Q1 + `world.owner_slabs` (Row a'): a parked seated Baton `Context`
-/// holds the ONLY reference to a cons cell in a dynamic binding stored on its
-/// `OwnerSlab` (not in `collect_parked_roots()` private roots). When the group
-/// collects via `GroupPort::collect`, the `OwnerSlab` binding survives and
-/// unreachable garbage is reclaimed.
-///
-/// Note (#14164/#14165): allocates `survivor` and `garbage` on `source` before
-/// `prepare_era()` to avoid the `restore_legacy_for_collection` `YoungBlockLog`
-/// merge bug; flip to in-turn consing once `peer-gcfix` lands that fix.
+/// L6.7b b4 Q1 + `world.owner_slabs` (Row a' — upgraded Lisp path,
+/// #14218/#14220): in a full `unit_runtime()` live Green era with a pre-freeze
+/// cons on `source`, a seated Baton `Context` conses via real Lisp
+/// (`ctx.eval_str`) past one `ConsBlock` inside `WorldTurn` and holds the ONLY
+/// reference to `survivor` in a projected dynamic binding on its `OwnerSlab`
+/// (not in `collect_parked_roots()` private roots). `GroupPort::collect`
+/// preserves the `OwnerSlab` binding and reclaims unrooted garbage, followed by
+/// post-collect Lisp consing with no further collection before `era.finish()`.
 #[test]
 fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
     let symbol = neovm_value::intern::intern("l67b-b4-slab-binding");
-    with_live_green_era_with_transfer_words(
+    with_live_full_green_era_pre_freeze_cons(
         "l67b-b4-owner-slab-roots",
         move |source| {
             source.obarray.make_special_id(symbol);
@@ -739,7 +794,7 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                 .thread_projection_for_test(symbol)
                 .expect("special variable projected for thread OwnerSlabs");
         },
-        move |era, survivor_word, garbage_word| {
+        move |era| {
             let (inbox, inbox_rx) = mpsc::channel();
             let mut driver = Driver::new(era, inbox_rx);
             let mut group = enroll_group(&mut driver, &inbox);
@@ -748,6 +803,8 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
             let world_handle = era.keeper_baton_for_test().test_world_handle_for_test();
             let (ready_tx, ready_rx) = mpsc::channel::<()>();
             let (retire_tx, retire_rx) = mpsc::channel::<()>();
+            let (words_tx, words_rx) =
+                mpsc::sync_channel::<neovm_value::tagged::gc::HeapWord>(1);
             let (report_tx, report_rx) = mpsc::sync_channel(1);
 
             std::thread::scope(|scope| {
@@ -765,16 +822,37 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                         .enter(&mut ctx, turn, lend)
                         .expect("enter seated Baton worker");
 
+                    let saved_threshold = ctx
+                        .eval_str("gc-cons-threshold")
+                        .expect("read Context-local gc-cons-threshold");
+                    ctx.eval_str("(setq gc-cons-threshold most-positive-fixnum)")
+                        .expect("raise Context-local gc-cons-threshold");
+
+                    assert_eq!(
+                        eval(&mut ctx, "(length (make-list 5000 nil))"),
+                        "5000",
+                        "real Lisp consing inside WorldTurn crosses >1 ConsBlock"
+                    );
+                    let survivor = ctx
+                        .eval_str("(cons 111 222)")
+                        .expect("allocate survivor cons via Lisp inside WorldTurn");
+                    let garbage = ctx
+                        .eval_str("(cons 333 444)")
+                        .expect("allocate garbage cons via Lisp inside WorldTurn");
+                    assert!(
+                        ctx.tagged_heap.owns_heap_value_for_test(survivor),
+                        "survivor cons must be owned before GroupPort::collect"
+                    );
+                    assert!(
+                        ctx.tagged_heap.owns_heap_value_for_test(garbage),
+                        "garbage cons must be owned before GroupPort::collect"
+                    );
+                    let survivor_word = survivor.heap_word_for_test();
+                    words_tx.send(survivor_word).expect("publish survivor word");
+
                     let specpdl_base = ctx.specpdl.len();
-                    let transfer_sym = neovm_value::intern::intern("l67b-b4-transfer-survivor");
-                    let survivor = match ctx.find_symbol_value_by_id(transfer_sym) {
-                        Ok(crate::emacs_core::eval::SymbolValueLookup::Bound(val)) => val,
-                        other => panic!("transfer symbol holds survivor cons, got {other:?}"),
-                    };
-                    assert_eq!(survivor.bits(), survivor_word.bits());
                     ctx.try_specbind(symbol, survivor)
                         .expect("bind survivor on OwnerSlab");
-                    ctx.set_variable("l67b-b4-transfer-survivor", Value::NIL);
                     assert_eq!(
                         ctx.owner.slab().expect("slab").records_of(symbol).count(),
                         1,
@@ -805,12 +883,26 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                     let active2 = parked
                         .enter(&mut ctx, turn2, lend2)
                         .expect("re-enter after collection");
+                    // Check survivor & garbage BEFORE any WorldTurn #2 allocation
+                    // can reuse `garbage`'s freed cons slot.
                     let bound_after = match ctx.find_symbol_value_by_id(symbol) {
                         Ok(crate::emacs_core::eval::SymbolValueLookup::Bound(val)) => val,
                         other => panic!("expected OwnerSlab binding after collect, got {other:?}"),
                     };
                     let survivor_alive = ctx.tagged_heap.owns_heap_value_for_test(bound_after);
+                    let garbage_alive = ctx.tagged_heap.owns_heap_value_for_test(garbage);
                     let survivor_printed = survivor_alive.then(|| print_value(&bound_after));
+                    assert_eq!(
+                        eval(&mut ctx, "l67b-b4-pre-freeze"),
+                        "(10 . 20)",
+                        "pre-freeze source cons must survive GroupPort::collect"
+                    );
+                    assert_eq!(
+                        eval(&mut ctx, "(length (make-list 2000 nil))"),
+                        "2000",
+                        "post-collect Lisp consing succeeds before prepare_finish"
+                    );
+                    ctx.set_variable("gc-cons-threshold", saved_threshold);
                     ctx.unbind_to(specpdl_base);
 
                     let (parked, lend2, returned2) = active2.exit(&mut ctx);
@@ -820,11 +912,12 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                     retire_rx.recv_timeout(BOUND).expect("teardown signal");
                     parked.retire_parked_for_teardown_for_test(&mut ctx);
                     ctx.retire_green_owner();
-                    (survivor_alive, survivor_printed)
+                    (survivor_alive, garbage_alive, survivor_printed)
                 });
 
                 ready_rx.recv_timeout(BOUND).expect("worker parked");
                 assert_eq!(driver.run(), DriverEnd::Drained);
+                let survivor_word = words_rx.recv_timeout(BOUND).expect("survivor word");
 
                 let mut stopped = loop {
                     match era.stop() {
@@ -836,14 +929,12 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                 let era_owns_survivor = era
                     .owns_heap_word_for_test(&stopped, survivor_word)
                     .expect("check survivor word");
-                let era_owns_garbage = era
-                    .owns_heap_word_for_test(&stopped, garbage_word)
-                    .expect("check garbage word");
                 stopped.trace_serial().expect("trace verify stop");
                 stopped.complete().expect("complete verify stop");
 
                 retire_tx.send(()).expect("signal worker teardown");
-                let (worker_saw_survivor, survivor_printed) = runner.join().expect("runner joined");
+                let (worker_saw_survivor, garbage_alive_after_collect, survivor_printed) =
+                    runner.join().expect("runner joined");
 
                 assert!(
                     era_owns_survivor,
@@ -851,7 +942,10 @@ fn l67b_b4_parked_owner_slab_binding_survives_group_collect() {
                 );
                 assert!(worker_saw_survivor);
                 assert_eq!(survivor_printed.as_deref(), Some("(111 . 222)"));
-                assert!(!era_owns_garbage, "garbage cons MUST be reclaimed");
+                assert!(
+                    !garbage_alive_after_collect,
+                    "garbage cons MUST be reclaimed"
+                );
             });
         },
     );
