@@ -14,6 +14,14 @@
 //!
 //! Fixtures prepared before a test run use [`cached_pinned_file`], which
 //! only reads and verifies the cache and never attempts a download.
+//!
+//! Cache reads and writes reject symlinks at `<cache_root>/<sha256>` and
+//! `<name>` via `symlink_metadata` (`lstat`) before opening or replacing. This
+//! assumes cooperative writers sharing a trusted cache root; eliminating the
+//! residual cross-step `lstat`-then-open TOCTOU against an untrusted local
+//! process with write access to `<cache_root>` would require platform-specific
+//! `O_DIRECTORY | O_NOFOLLOW` + `openat`/`renameat` APIs and is a known
+//! limitation of the portable path-based design.
 
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
@@ -74,6 +82,7 @@ pub(crate) fn entry_dir(root: &Path, sha256: &str) -> PathBuf {
     root.join(sha256)
 }
 
+#[cfg(test)]
 pub(crate) fn entry_path(root: &Path, name: &str, sha256: &str) -> PathBuf {
     entry_dir(root, sha256).join(name)
 }
@@ -602,24 +611,11 @@ fn verify_cache_entry(root: &Path, name: &str, sha256: &str) -> Result<PathBuf, 
             });
         }
     }
-    verify(&destination, sha256).map(|()| destination)
+    verify_bytes_at_path(&destination, sha256).map(|()| destination)
 }
 
-/// The cached bytes are what the pin describes. Never follows symlinks.
-fn verify(path: &Path, expected: &str) -> Result<(), PinnedError> {
-    let meta = fs::symlink_metadata(path).map_err(|source| PinnedError::Read {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if !meta.file_type().is_file() {
-        return Err(PinnedError::Read {
-            path: path.to_path_buf(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "pinned fixture cache entry must be a real file, not a symlink or directory",
-            ),
-        });
-    }
+/// Read and hash an already-`lstat`-verified regular file path.
+fn verify_bytes_at_path(path: &Path, expected: &str) -> Result<(), PinnedError> {
     let bytes = fs::read(path).map_err(|source| PinnedError::Read {
         path: path.to_path_buf(),
         source,
@@ -634,6 +630,25 @@ fn verify(path: &Path, expected: &str) -> Result<(), PinnedError> {
             actual,
         })
     }
+}
+
+/// The cached bytes are what the pin describes. Never follows symlinks.
+#[cfg(test)]
+fn verify(path: &Path, expected: &str) -> Result<(), PinnedError> {
+    let meta = fs::symlink_metadata(path).map_err(|source| PinnedError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !meta.file_type().is_file() {
+        return Err(PinnedError::Read {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "pinned fixture cache entry must be a real file, not a symlink or directory",
+            ),
+        });
+    }
+    verify_bytes_at_path(path, expected)
 }
 
 #[cfg(test)]

@@ -267,9 +267,9 @@ def is_real_file(path: Path) -> bool:
 
 
 def entry_matches(destination: Path, sha256: str) -> bool:
-    if not is_real_dir(destination.parent) or not is_real_file(destination):
-        return False
     try:
+        if not is_real_dir(destination.parent) or not is_real_file(destination):
+            return False
         cached = destination.read_bytes()
     except OSError:
         return False

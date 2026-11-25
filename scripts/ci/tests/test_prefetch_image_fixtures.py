@@ -793,6 +793,53 @@ class ImageFixtureTests(unittest.TestCase):
         unlink.assert_called_once_with(target)
         rmdir.assert_called_once_with(target)
 
+    def test_remove_stray_non_dir_reraises_permission_error_for_windows_regular_file(
+        self,
+    ):
+        fake_lstat = mock.Mock(st_mode=provisioner.stat.S_IFREG | 0o644)
+        target = self.cache / self.pin.sha256
+        with (
+            mock.patch.object(provisioner.os, "name", "nt"),
+            mock.patch.object(provisioner.os, "lstat", return_value=fake_lstat),
+            mock.patch.object(
+                provisioner.os,
+                "unlink",
+                side_effect=PermissionError(errno.EACCES, "denied"),
+            ) as unlink,
+            mock.patch.object(provisioner.os, "rmdir") as rmdir,
+        ):
+            with self.assertRaises(PermissionError):
+                provisioner.remove_stray_non_dir(target)
+        unlink.assert_called_once_with(target)
+        rmdir.assert_not_called()
+
+    def test_single_lstat_helpers_never_call_stat(self):
+        self.seed(self.data)
+        stray = self.cache / ("0" * 64)
+        stray.write_bytes(b"stray")
+        with mock.patch.object(
+            provisioner.os,
+            "stat",
+            side_effect=AssertionError("lstat helpers must never call os.stat"),
+        ):
+            self.assertTrue(provisioner.is_real_dir(self.destination.parent))
+            self.assertTrue(provisioner.is_real_file(self.destination))
+            self.assertTrue(provisioner.entry_matches(self.destination, self.pin.sha256))
+            self.assertTrue(provisioner.remove_stray_non_dir(stray))
+            self.assertFalse(provisioner.is_real_dir(stray))
+
+    def test_entry_matches_treats_unsearchable_hash_dir_as_miss(self):
+        if os.name != "posix" or os.geteuid() == 0:
+            return
+        self.seed(self.data)
+        os.chmod(self.destination.parent, 0o000)
+        try:
+            self.assertFalse(
+                provisioner.entry_matches(self.destination, self.pin.sha256)
+            )
+        finally:
+            os.chmod(self.destination.parent, 0o755)
+
     def test_distinct_revisions_for_same_filename_coexist_in_shared_cache(self):
         rev_b_data = b"revision b image bytes"
         pin_b = provisioner.Pin(
