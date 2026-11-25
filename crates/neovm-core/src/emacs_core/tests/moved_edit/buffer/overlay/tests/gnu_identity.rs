@@ -12,9 +12,8 @@ fn gde_overlay_restored_live_identity_preserves_the_creation_serial() {
     let proof = eval.hooks_installed();
     let snapshot = crate::emacs_core::pdump::snapshot_evaluator(&eval);
     drop(eval);
-    let mut restored =
-        crate::emacs_core::pdump::restore_snapshot(&snapshot, proof)
-            .expect("restore context containing a live overlay");
+    let mut restored = crate::emacs_core::pdump::restore_snapshot(&snapshot, proof)
+        .expect("restore context containing a live overlay");
     let relocated = restored
         .eval_str("gde-restored-overlay")
         .expect("restored overlay");

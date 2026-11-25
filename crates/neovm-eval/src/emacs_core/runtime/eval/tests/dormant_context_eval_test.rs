@@ -360,12 +360,22 @@ fn pdump_clone_evaluator_refuses_under_foreign_heap() {
         (
             "clone_evaluator",
             crate::emacs_core::pdump::clone_evaluator
-                as fn(&mut Context) -> Result<super::parked_context::ParkedContext, crate::emacs_core::pdump::DumpError>,
+                as fn(
+                    &mut Context,
+                ) -> Result<
+                    super::parked_context::ParkedContext,
+                    crate::emacs_core::pdump::DumpError,
+                >,
         ),
         (
             "clone_active_evaluator",
             crate::emacs_core::pdump::clone_active_evaluator
-                as fn(&mut Context) -> Result<super::parked_context::ParkedContext, crate::emacs_core::pdump::DumpError>,
+                as fn(
+                    &mut Context,
+                ) -> Result<
+                    super::parked_context::ParkedContext,
+                    crate::emacs_core::pdump::DumpError,
+                >,
         ),
     ] {
         let refused = catch_unwind(AssertUnwindSafe(|| {
@@ -469,20 +479,28 @@ fn setup_thread_locals_refuses_over_foreign_heap_without_mutating_tls() {
     let nest = unsafe { NestedTaggedHeapInstall::install_bare(foreign.root()) };
     neovm_text::emacs_core::ccl::reset_ccl_registry();
     let foreign_ccl = neovm_text::emacs_core::ccl::current_ccl_registry_handle();
-    assert!(!neovm_value::heap_registry::HeapRegistryHandle::registry_ptr_eq_for_test(
-        &ctx_ccl,
-        &foreign_ccl
-    ));
+    assert!(
+        !neovm_value::heap_registry::HeapRegistryHandle::registry_ptr_eq_for_test(
+            &ctx_ccl,
+            &foreign_ccl
+        )
+    );
     let _foreign_quit = neovm_value::quit::install_quit_requested_for_test(true);
     assert!(neovm_value::quit::quit_pending());
 
     for (label, call) in [
-        ("setup_thread_locals", Context::setup_thread_locals as fn(&mut Context)),
+        (
+            "setup_thread_locals",
+            Context::setup_thread_locals as fn(&mut Context),
+        ),
         (
             "setup_owner_thread_locals",
             Context::setup_owner_thread_locals as fn(&mut Context),
         ),
-        ("gc_collect_exact", Context::gc_collect_exact as fn(&mut Context)),
+        (
+            "gc_collect_exact",
+            Context::gc_collect_exact as fn(&mut Context),
+        ),
         (
             "gc_collect_from_current_roots",
             Context::gc_collect_from_current_roots as fn(&mut Context),
@@ -530,7 +548,10 @@ fn setup_thread_locals_refuses_over_foreign_heap_without_mutating_tls() {
     );
 
     // Empty-slot install (via park + resume) also succeeds.
-    let mut ctx = ctx.park_for_test().resume_for_test().expect("resume on empty slot");
+    let mut ctx = ctx
+        .park_for_test()
+        .resume_for_test()
+        .expect("resume on empty slot");
     assert_eq!(current_tagged_heap_identity(), Some(ctx_id));
     assert_eq!(ctx.eval_str("42").expect("resumed eval"), Value::fixnum(42));
 }

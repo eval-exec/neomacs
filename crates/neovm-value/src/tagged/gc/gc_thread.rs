@@ -2007,10 +2007,7 @@ pub fn refuse_if_live_heap_installed() {
 #[doc(hidden)]
 pub unsafe fn install_tagged_heap_root_refusing_foreign(root: std::ptr::NonNull<TaggedHeap>) {
     let current = TAGGED_HEAP.with(|slot| slot.get());
-    if !current.is_null()
-        && current != root.as_ptr()
-        && !installed_slot_is_armed_test_fallback()
-    {
+    if !current.is_null() && current != root.as_ptr() && !installed_slot_is_armed_test_fallback() {
         refuse_foreign_heap_install();
     }
     // SAFETY: caller upholds `set_tagged_heap_root`'s contract.

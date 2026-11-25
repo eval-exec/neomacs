@@ -419,8 +419,8 @@ fn deterministic_order_restart_gc_stats_exclude_history_without_mutating_live_st
 
     let proof = eval.hooks_installed();
     drop(eval);
-    let loaded = super::load_from_dump_with_proof(&second, proof)
-        .expect("load normalized restart image");
+    let loaded =
+        super::load_from_dump_with_proof(&second, proof).expect("load normalized restart image");
     assert_eq!(
         loaded
             .obarray

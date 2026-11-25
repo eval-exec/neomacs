@@ -286,8 +286,7 @@ fn lazy_prewarm_marks_pdump_stubs_without_materializing_them() {
     let proof = ctx.hooks_installed();
     drop(ctx);
     let mut loaded =
-        crate::emacs_core::pdump::load_from_dump_with_proof(&dump_path, proof)
-            .expect("load");
+        crate::emacs_core::pdump::load_from_dump_with_proof(&dump_path, proof).expect("load");
 
     let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
     test_support::set_forced_enabled(true);

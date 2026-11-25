@@ -349,8 +349,8 @@ fn test_restore_snapshot_preserves_core_subr_callable_surface() {
     let snapshot = snapshot_evaluator(&template);
     drop(template);
 
-    let mut restored = restore_snapshot(&snapshot, proof)
-        .expect("restored snapshot should succeed");
+    let mut restored =
+        restore_snapshot(&snapshot, proof).expect("restored snapshot should succeed");
     let forms = crate::emacs_core::value_reader::read_all(
         r#"(list (funcall 'cons 1 2)
                  (funcall 'list 1 2 3)
@@ -383,8 +383,7 @@ fn test_restore_snapshot_preserves_lone_uninterned_symbol_identity() {
     let snapshot = snapshot_evaluator(&template);
     drop(template);
 
-    let restored = restore_snapshot(&snapshot, proof)
-        .expect("restored snapshot should succeed");
+    let restored = restore_snapshot(&snapshot, proof).expect("restored snapshot should succeed");
     let held = restored
         .obarray
         .symbol_value_copied("compat-pdump-uninterned-holder")
@@ -422,8 +421,7 @@ fn test_restore_snapshot_preserves_raw_unibyte_symbol_name_storage() {
     let snapshot = snapshot_evaluator(&template);
     drop(template);
 
-    let restored = restore_snapshot(&snapshot, proof)
-        .expect("restored snapshot should succeed");
+    let restored = restore_snapshot(&snapshot, proof).expect("restored snapshot should succeed");
 
     for (holder, should_be_canonical) in [
         ("compat-pdump-raw-uninterned-holder", false),
@@ -458,8 +456,7 @@ fn test_restore_snapshot_preserves_subr_name_identity_via_name_atoms() {
     let snapshot = snapshot_evaluator(&template);
     drop(template);
 
-    let restored = restore_snapshot(&snapshot, proof)
-        .expect("restored snapshot should succeed");
+    let restored = restore_snapshot(&snapshot, proof).expect("restored snapshot should succeed");
     let held = restored
         .obarray
         .symbol_value_copied("compat-pdump-subr-holder")
@@ -491,8 +488,8 @@ fn test_restore_snapshot_does_not_report_file_based_pdump_session() {
     let snapshot = snapshot_evaluator(&template);
     drop(template);
 
-    let mut restored = restore_snapshot(&snapshot, proof)
-        .expect("restored snapshot should succeed");
+    let mut restored =
+        restore_snapshot(&snapshot, proof).expect("restored snapshot should succeed");
     assert_eq!(
         restored
             .obarray

@@ -780,9 +780,8 @@ fn test_restore_snapshot_isolated_between_clones() {
     let snapshot = crate::emacs_core::pdump::snapshot_evaluator(&template);
     drop(template);
 
-    let mut first =
-        crate::emacs_core::pdump::restore_snapshot(&snapshot, proof)
-            .expect("first clone should succeed");
+    let mut first = crate::emacs_core::pdump::restore_snapshot(&snapshot, proof)
+        .expect("first clone should succeed");
     let setup = crate::emacs_core::value_reader::read_all(
         "(progn
            (setq compat-pdump-clone-smoke 'first)
@@ -802,9 +801,8 @@ fn test_restore_snapshot_isolated_between_clones() {
     );
     let _parked_first = first.park_for_test();
 
-    let mut second =
-        crate::emacs_core::pdump::restore_snapshot(&snapshot, proof)
-            .expect("second clone should succeed");
+    let mut second = crate::emacs_core::pdump::restore_snapshot(&snapshot, proof)
+        .expect("second clone should succeed");
     let probe = crate::emacs_core::value_reader::read_all(
         "(boundp 'compat-pdump-clone-smoke)",
         crate::emacs_core::eval::VariableView::canonical(

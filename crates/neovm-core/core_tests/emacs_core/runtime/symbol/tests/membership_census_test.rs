@@ -38,8 +38,7 @@ fn pdump_restored_context_has_no_lisp_visible_non_members() {
     let proof = template.hooks_installed();
     let snapshot = crate::emacs_core::pdump::snapshot_evaluator(&template);
     drop(template);
-    let restored =
-        crate::emacs_core::pdump::restore_snapshot(&snapshot, proof)
-            .expect("pdump restore should succeed");
+    let restored = crate::emacs_core::pdump::restore_snapshot(&snapshot, proof)
+        .expect("pdump restore should succeed");
     assert_clean(&restored, "pdump-restored Context");
 }
