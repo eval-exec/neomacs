@@ -354,6 +354,13 @@ impl<'heap, K: EraKeeper> ProofEra<'heap, K> {
     ) -> Result<symbol_authority::PreparedNameFunction, FunctionError> {
         self.core.prepare_name_function_symbol(key)
     }
+
+    /// Head of the live serial ring. This does not grant it.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn serial_ring_head_for_test(&self) -> Result<(usize, Option<u64>), RendezvousError> {
+        super::rendezvous::serial_ring_head_for_test(self.core.registry())
+    }
 }
 
 // These are direct forwards, not a Deref exposing the private core. The sole

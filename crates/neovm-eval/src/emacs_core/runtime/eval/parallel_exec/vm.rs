@@ -49,7 +49,7 @@ use crate::emacs_core::subr::effect_schema::{
 };
 use neovm_value::error::{Flow, signal};
 use neovm_value::intern::{NIL_SYM_ID, SymId};
-use neovm_value::tagged::gc::RendezvousError;
+use neovm_value::tagged::gc::{RegistrationError, RendezvousError};
 use neovm_value::value::Value;
 use std::num::NonZeroU32;
 
@@ -176,9 +176,15 @@ pub(crate) fn static_stack_effect(op: &Op) -> StackEffect {
 /// `branch_to!` quitcounter edge of GNU `op_branch` (bytecode.c:861-866).
 /// [`VmPoll::vm_call`] runs before `Call`, `Apply`, `CallBuiltin` and
 /// `CallBuiltinSym`: GNU `Bcall`'s `maybe_quit` (bytecode.c:781).
-/// [`VmPoll::serial_request`] runs before every escape. Publication rule as
-/// on `engine::OwnerPoll`: a `Value` must not be carried unrooted across a
-/// call.
+/// [`VmPoll::serial_request`] runs before every escape.
+/// [`VmPoll::vm_refill`] serves an instruction-boundary [`Step::Refill`].
+///
+/// Publication rule as on `engine::OwnerPoll`: a `Value` must not be carried
+/// unrooted across a call. Close-before-publish invariant (#12246): no cons
+/// region or numeric run may remain open outside a live `RunAccess` —
+/// `RunAccess` borrows `&mut Mutator`, its `Drop` poisons the registry if any
+/// run is left open, and `publish_roots` refuses `Loan` while admitted. That
+/// structural guarantee holds at all four edges.
 pub(crate) trait VmPoll {
     fn vm_back_edge(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError>;
 
@@ -187,17 +193,14 @@ pub(crate) trait VmPoll {
     fn serial_request(&mut self, arena: &FrameArena) -> Result<PollOutcome, RendezvousError>;
 
     /// The driver's refill at an instruction boundary (V5; peer #12100,
-    /// #12241, #12246): the publish contract is `RunAccess::close_all_runs`
-    /// unconditionally -> publish (`poll_region_refill`) -> the stopped
-    /// grant (`resume_cons_storage` mints the class pool on demand,
-    /// gcpace's N2) -> restore the generation -> reacquire. A close failure
-    /// is registration-invariant only and faults before anything is
-    /// published. No serial ticket, no Baton. Production cons grants stay
-    /// gated on L6.5 routing serial GC through the stop session (#13084,
-    /// #13088). One call per [`Step::Refill`]; `Ok` means the same pc may
-    /// re-dispatch, and the caller does not assume progress - an `Err` is
-    /// the poll fault and ends the run. Publication rule as on every poll:
-    /// nothing of the owner's stays borrowed across it.
+    /// #12241, #12246): with no run open (per the structural `RunAccess`
+    /// invariant above), publish (`poll_region_refill`) -> the stopped grant
+    /// (`resume_cons_storage` mints the class pool on demand, gcpace's N2) ->
+    /// restore the generation -> reacquire. No serial ticket, no Baton.
+    /// Production cons grants stay gated on L6.5 routing serial GC through
+    /// the stop session (#13084, #13088). One call per [`Step::Refill`];
+    /// `Ok` means the same pc may re-dispatch, and the caller does not assume
+    /// progress — an `Err` is the poll fault and ends the run.
     fn vm_refill(
         &mut self,
         arena: &FrameArena,
@@ -254,6 +257,11 @@ pub(crate) enum ArithRefusal {
     /// (E4 item4 C2, peer #12095/#12100; the pool is gcpace's N2). The
     /// port never polls or publishes itself; a refusal is not a fault.
     Exhausted(NumericClass),
+    /// A registration or era-poison failure from the owner's allocator
+    /// (e.g. poisoned between an `Ok` refill and the retry, M1 / #12221).
+    /// Surfaces as `VmOutcome::Fault(EngineFault::Poll(Registration(..)))`,
+    /// never as a Lisp signal.
+    Fault(RegistrationError),
 }
 
 /// The owner-local arithmetic port (E4-DESIGN R6; the approved `ArithOps`
@@ -1073,6 +1081,9 @@ where
             // Nothing was consumed: `args` borrows the segment and the
             // store never ran, so pc, operands and frame are as they were.
             Err(ArithRefusal::Exhausted(class)) => Step::Refill(class),
+            Err(ArithRefusal::Fault(error)) => {
+                Step::Stop(VmOutcome::Fault(EngineFault::Poll(error.into())))
+            }
             Err(ArithRefusal::Flow(flow)) => Step::Stop(VmOutcome::Signaled(flow)),
             Err(ArithRefusal::MarkerInvolved) => self.escape(
                 op,
