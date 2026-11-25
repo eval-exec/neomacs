@@ -172,14 +172,25 @@ impl Baton {
             return Err(neovm_value::tagged::gc::RegistrationError::WrongThread.into());
         }
         stopped.check_world_roots(self.parallel_heap_identity())?;
-        if self
-            .world
-            .green
-            .try_borrow()
-            .map_err(|_| RendezvousError::Busy)?
-            .is_some()
+        // A live Green runtime may participate in parallel collection only when
+        // its carried TLS and warm `OwnerCarried` are stowed (`CarriedHolder::Stowed`).
+        // If any owner still holds them inline (`CarriedHolder::Held`), fail closed.
         {
-            return Err(RendezvousError::Publication);
+            let green = self
+                .world
+                .green
+                .try_borrow()
+                .map_err(|_| RendezvousError::Busy)?;
+            if let Some(runtime) = green.as_deref() {
+                if !runtime.carried_is_stowed() {
+                    return Err(RendezvousError::Publication);
+                }
+                let _ = self
+                    .world
+                    .owner_slabs
+                    .try_borrow()
+                    .map_err(|_| RendezvousError::Busy)?;
+            }
         }
         // All symbol/projection access requires the same checked receiver.
         // Drop it before any collector/table bridge can borrow the stop.
@@ -197,6 +208,19 @@ impl Baton {
         let marker_heads = unsafe {
             let world = &self.world;
             let mut visit = |value| out.push(value);
+            if let Some(runtime) = world.green.borrow().as_deref() {
+                // Parked seated Baton Contexts publish `RootBatchLease`s into
+                // the heap's transport root table, which `EraCore::collect_requested`
+                // already traces via `collect_shared_root_gc_roots`. Here we
+                // trace `GreenRuntime`'s own World roots (`bootstrap`,
+                // `pending_starts`, `standard_case_table`, stowed `owner_carried`)
+                // and every registered `OwnerSlab`'s dynamic-binding roots.
+                runtime.trace_roots(&mut visit);
+                world
+                    .owner_slabs
+                    .borrow()
+                    .trace_roots_for_heap(self.parallel_heap_identity(), &mut visit);
+            }
             (&*world.owned_roots.get()).trace_roots_with_buffers(&*world.buffers.get(), &mut visit);
             for value in (&*world.treesit.get()).roots() {
                 visit(value);

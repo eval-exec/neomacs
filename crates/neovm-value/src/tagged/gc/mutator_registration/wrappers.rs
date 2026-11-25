@@ -815,6 +815,13 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
     pub fn retire_serial_head_for_test(&self, id: u64) -> Result<(), RendezvousError> {
         super::rendezvous::retire_serial_head_for_test(self.core.registry(), id)
     }
+
+    /// Read-only keeper accessor for live-era test fixtures.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn keeper_for_test(&self) -> Option<&K> {
+        self.core.keeper.as_ref()
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]

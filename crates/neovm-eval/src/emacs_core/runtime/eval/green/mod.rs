@@ -35,6 +35,7 @@ pub(crate) use bootstrap::GreenBootstrap;
 pub(crate) use bootstrap::debug_assert_native_tables_open;
 pub(crate) use carried::SourceWorldCarriers;
 pub(crate) use scheduler::{ConditionId, MutexId, ThreadKey, Wait};
+pub(crate) use switch::WorldSeatParkedRoots;
 #[doc(hidden)]
 pub use switch::{GreenSeat, SelectTurn};
 
@@ -132,6 +133,12 @@ impl GreenRuntime {
                 })
             }
         }
+    }
+
+    /// Whether the World's carried TLS and warm `OwnerCarried` are currently
+    /// stowed in this runtime rather than held inline by a running Context.
+    pub(crate) fn carried_is_stowed(&self) -> bool {
+        self.carried_holder.get() == CarriedHolder::Stowed
     }
 
     /// Visit every value the runtime holds. Out of line: the World's trace
@@ -522,7 +529,92 @@ impl Context {
 }
 
 #[cfg(test)]
+pub(crate) struct TestGreenBootstrap {
+    bootstrap: GreenBootstrap,
+    standard_case_table: Option<neovm_value::value::Value>,
+}
+
+// SAFETY: test-only fixture transfer across the `keeper_serve` spawn edge while
+// the closed World is escrowed in `PreparedEraStart`.
+#[cfg(test)]
+unsafe impl Send for TestGreenBootstrap {}
+
+#[cfg(test)]
+impl GreenRuntime {
+    pub(crate) fn new_stowed_for_test(
+        heap: neovm_value::tagged::gc::HeapIdentity,
+        captured: TestGreenBootstrap,
+    ) -> Box<Self> {
+        Box::new(Self {
+            bootstrap: captured.bootstrap,
+            control: Default::default(),
+            parked: std::cell::RefCell::new(host_service::WorldRootRegistry::new(heap)),
+            pending_starts: Default::default(),
+            exit: Default::default(),
+            carried: std::cell::RefCell::new(carried::CarriedState::placeholders()),
+            owner_carried: Default::default(),
+            carried_holder: std::cell::Cell::new(CarriedHolder::Stowed),
+            standard_case_table: std::cell::Cell::new(captured.standard_case_table),
+            outgoing_constant_error: std::cell::Cell::new(None),
+            carriers: carrier::CarrierPool::new(),
+        })
+    }
+
+    pub(crate) fn parked_is_empty_for_test(&self) -> bool {
+        self.parked.borrow().is_empty()
+    }
+}
+
+#[cfg(test)]
 impl Context {
+    /// Capture bootstrap metadata from a serial source Context before
+    /// `close(source).prepare_era()`, leaving `world.green` unset so A5 legacy
+    /// root capture continues to refuse pre-existing Green runtimes.
+    pub(crate) fn capture_green_bootstrap_for_test(&self) -> TestGreenBootstrap {
+        TestGreenBootstrap {
+            bootstrap: GreenBootstrap::capture(self),
+            standard_case_table: self.cached_standard_case_table,
+        }
+    }
+
+    /// Build and seat a Green worker Context over an already-open era's
+    /// `World` without holding the `Baton` inline (the keeper holds it).
+    /// Callers must serialize construction against the era's World turns.
+    pub(crate) fn new_seated_era_worker_for_test(
+        handle: &super::world::TestBatonWorldHandle,
+        worker_id: u64,
+    ) -> Self {
+        neovm_value::intern::prepare_thread_symbol_caches();
+        let (seed, current, case_table, control) = {
+            let runtime = handle.green_runtime_for_test();
+            let runtime = runtime
+                .as_ref()
+                .expect("era test installs GreenRuntime before spawning seated worker");
+            runtime.bootstrap.install_native_tables();
+            (
+                runtime.bootstrap.seed(),
+                runtime.bootstrap.current_buffer,
+                runtime.standard_case_table.get(),
+                std::sync::Arc::clone(&runtime.control),
+            )
+        };
+        let mut views = handle.owner_views_for_test(current);
+        views.tagged_heap.install_tagged_heap();
+        let mut owner = Context::assemble(views, seed);
+        owner.cached_standard_case_table = case_table;
+        owner.gc_count = owner.tagged_heap.gc_collections() as u64;
+        owner.ensure_owner_slab();
+        owner.setup_thread_locals();
+        owner.republish_owner_mirrors();
+        let key = ThreadKey::Worker(
+            std::num::NonZeroU64::new(worker_id).expect("worker_id must be nonzero"),
+        );
+        let (_tx, rx) = std::sync::mpsc::channel();
+        owner.take_green_seat_without_baton_for_test(key, control, rx);
+        owner.unstow_serial_world_state();
+        owner
+    }
+
     /// Seat this main owner with an already-issued Baton (after
     /// `start_green_runtime`), keeping `scheduler::Wake` inside Green.
     pub(crate) fn seat_green_main_for_test(&mut self, baton: super::world::Baton) {

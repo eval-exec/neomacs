@@ -227,6 +227,84 @@ impl Baton {
         debug_assert!(self.held_here(), "the Green runtime read off the Baton");
         self.world.green.borrow()
     }
+
+    #[cfg(test)]
+    pub(crate) fn install_stowed_green_runtime_for_test(
+        &self,
+        captured: super::super::green::TestGreenBootstrap,
+    ) {
+        assert!(self.held_here(), "install GreenRuntime on keeper thread");
+        let mut slot = self.world.green.borrow_mut();
+        assert!(slot.is_none(), "World must not already have a GreenRuntime");
+        *slot = Some(super::super::green::GreenRuntime::new_stowed_for_test(
+            self.parallel_heap_identity(),
+            captured,
+        ));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn uninstall_green_runtime_for_test(&self) {
+        assert!(self.held_here(), "uninstall GreenRuntime on keeper thread");
+        let runtime = self.world.green.borrow_mut().take();
+        if let Some(runtime) = runtime {
+            assert!(
+                runtime.parked_is_empty_for_test(),
+                "all parked root leases must retire before uninstalling GreenRuntime"
+            );
+            drop(runtime);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_world_handle_for_test(&self) -> TestBatonWorldHandle {
+        assert!(self.held_here(), "mint world handle on keeper thread");
+        TestBatonWorldHandle {
+            world: Arc::clone(&self.world),
+            retention: self
+                .parallel_epoch_retention()
+                .expect("keeper Baton retains facade epoch"),
+        }
+    }
+}
+
+/// Test-only `Send` handle allowing a spawned Baton thread inside a live
+/// `KeeperEra` fixture to build a seated `Context` over the era's `World`
+/// (serialized against the keeper's turns by the test).
+#[cfg(test)]
+pub(crate) struct TestBatonWorldHandle {
+    world: Arc<World>,
+    retention: neovm_value::tagged::gc::FacadeEpochRetention,
+}
+
+// SAFETY: test-only fixture handle; callers serialize `spawn_seated_context_for_test`
+// while no other thread accesses the World.
+#[cfg(test)]
+unsafe impl Send for TestBatonWorldHandle {}
+
+#[cfg(test)]
+impl TestBatonWorldHandle {
+    pub(crate) fn green_runtime_for_test(
+        &self,
+    ) -> std::cell::Ref<'_, Option<Box<super::super::green::GreenRuntime>>> {
+        self.world.green.borrow()
+    }
+
+    pub(crate) fn owner_views_for_test(&self, current: Option<BufferId>) -> ReadyWorld {
+        let lease = WorldLease(Arc::clone(&self.world));
+        WorldStorageBuilder::publish_views(&lease, BufferSelection::for_owner(current))
+    }
+
+    pub(crate) fn spawn_seated_context_for_test(
+        &self,
+        worker_id: u64,
+    ) -> (Context, neovm_value::tagged::gc::FacadeEpochRetention) {
+        let ctx = Context::new_seated_era_worker_for_test(self, worker_id);
+        let retention = self
+            .retention
+            .retain()
+            .expect("retain facade epoch for seated world handle");
+        (ctx, retention)
+    }
 }
 
 impl Context {

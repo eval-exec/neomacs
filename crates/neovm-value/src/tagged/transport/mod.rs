@@ -21,6 +21,9 @@ mod root_table;
 mod shared_root;
 
 pub use immediate::{ImmediateValue, NotImmediate};
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use root_batch::HeldRootBatchReaderForTest;
 pub use root_batch::{FinalizedRootBatch, RootBatchReader};
 pub(crate) use root_batch::{
     ParallelRootBatchError, ParallelRootBatchLease, ParallelRootBatchReader, ParallelRootIdentity,

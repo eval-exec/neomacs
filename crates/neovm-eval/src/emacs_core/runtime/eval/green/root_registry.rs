@@ -47,6 +47,13 @@ impl super::GreenRuntime {
                 panic!("terminated Green root batch cannot finish: {error}");
             }
         }
+        while let Some(publication) = parked.pop_retained() {
+            if let Err(failure) = finish(publication) {
+                let (publication, error) = failure.into_parts();
+                parked.push_retained(publication);
+                panic!("terminated retained Green root batch cannot finish: {error}");
+            }
+        }
     }
 }
 

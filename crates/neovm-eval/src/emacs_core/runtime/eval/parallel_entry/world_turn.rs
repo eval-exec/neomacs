@@ -86,8 +86,22 @@ impl WorldTurn {
 }
 
 impl WorldReturned {
-    /// End the group's interval: consume the turn so it goes back to the
-    /// keeper. The seat stows the World host first.
+    /// Production mint (Nit 6): only `ActiveWorldSeat::exit` can construct
+    /// `StowedForReturn`, proving World carriers are stowed, parked roots are
+    /// published, and carrier TLS is parked before the turn returns to the
+    /// keeper.
+    pub(super) fn from_stowed_seat(
+        turn: WorldTurn,
+        _proof: super::world_seat::StowedForReturn,
+    ) -> Self {
+        Self {
+            identity: turn.identity,
+            _not_sync: PhantomData,
+        }
+    }
+
+    /// Test-only return. Production return is [`Self::from_stowed_seat`].
+    #[cfg(test)]
     pub(crate) fn from_end(turn: WorldTurn) -> Self {
         Self {
             identity: turn.identity,

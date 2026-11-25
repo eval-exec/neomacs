@@ -822,6 +822,26 @@ impl OwnerSlabRegistry {
             slab.trace_roots(visit);
         }
     }
+
+    /// Visit every registered slab's values under `AllStopped` in a stowed
+    /// Green World, verifying each slab belongs to `heap`.
+    pub(crate) fn trace_roots_for_heap(
+        &self,
+        heap: neovm_value::tagged::gc::HeapIdentity,
+        visit: &mut dyn FnMut(Value),
+    ) {
+        for slab in &self.slabs {
+            // SAFETY: the registry owns every registered slab until World drop,
+            // and `AllStopped` excludes every mutator from mutating any slab.
+            let slab = unsafe { slab.as_ref() };
+            debug_assert_eq!(
+                neovm_value::tagged::gc::HeapIdentity::from_legacy_word(slab.heap),
+                Some(heap),
+                "an owner slab traced for another heap"
+            );
+            slab.trace_roots(visit);
+        }
+    }
 }
 
 impl Drop for OwnerSlabRegistry {

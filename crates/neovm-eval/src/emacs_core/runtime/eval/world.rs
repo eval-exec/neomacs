@@ -71,6 +71,8 @@ pub(crate) mod sole_owner;
 pub use green_owner::Baton;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use green_owner::OwnedProofProjection;
+#[cfg(test)]
+pub(crate) use green_owner::TestBatonWorldHandle;
 #[allow(unused_imports)]
 pub(crate) use green_owner::{FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection};
 pub(crate) use slot::WorldSlot;
@@ -1509,6 +1511,11 @@ impl Context {
     #[inline]
     pub(crate) fn threading_mode(&self) -> super::admission::ThreadingMode {
         self.obarray.lease.0.threading.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_threading_mode_for_test(&mut self, mode: super::admission::ThreadingMode) {
+        self.obarray.lease.0.threading.set(mode);
     }
 
     /// Take the World's one activation authority through this Context's

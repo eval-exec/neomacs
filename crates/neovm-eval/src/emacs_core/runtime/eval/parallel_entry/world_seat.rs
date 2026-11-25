@@ -1,5 +1,7 @@
-//! L6.7b b3 (pentry seat): activate a seated Green World host under a
-//! [`WorldTurn`] and stow its World carriers before returning the turn.
+//! L6.7b b3 + b4.2 (pentry seat + parked roots): activate a seated Green World
+//! host under a [`WorldTurn`], switch Baton-group threads inside one interval,
+//! publish parked private roots as a `RootBatchLease`, and stow World carriers
+//! before returning the turn.
 //!
 //! Unlike unseated parallel owners (which use [`super::serial_turn::SerialHost`]
 //! and are refused when seated via `HostRefusal::Seated`), Baton-group threads
@@ -7,33 +9,56 @@
 //! `GreenRuntime`'s carried TLS and warm `OwnerCarried` slots (`green/switch.rs`).
 //!
 //! Contracts:
-//! - [`ParkedWorldSeat::park_seated`] accepts only a seated Green `Context`
-//!   whose own heap is currently installed on this OS thread and that holds
-//!   the World's carried state here; it parks host bindings, stows the World's
-//!   carriers to `CarriedHolder::Stowed`, and parks carrier TLS.
-//! - [`ParkedWorldSeat::enter`] fails closed on every invariant before
-//!   mutating TLS or World state: seated Green host, structural heap identity
-//!   matching [`WorldTurnIdentity::heap`] (Condition A-3), no foreign heap
-//!   installed on this OS thread, and `CarriedHolder::Stowed` (Condition A-1).
-//!   Any refusal hands back `(self, turn, lend, refusal)` unchanged so the
-//!   armed [`WorldLend`] is never leaked silently.
-//! - [`ActiveWorldSeat::exit`] parks host bindings, stows the World carriers
-//!   back to `CarriedHolder::Stowed`, and parks carrier TLS strictly BEFORE
-//!   converting `WorldTurn` into [`WorldReturned`] via
-//!   [`WorldReturned::from_end`], discharging A-1 liveness for subsequent
-//!   parallel-owner serial turns.
+//! - [`ParkedWorldSeat::park_seated`] (and [`ParkedWorldSeat::park_seated_with_retention`])
+//!   accepts only a seated Green `Context` whose own heap is currently installed
+//!   on this OS thread and that holds the World's carried state here; it closes
+//!   open bump-allocation regions, parks host bindings + JIT pins, publishes the
+//!   seated `Context`'s private roots into `GreenRuntime::parked` as a
+//!   `RootBatchLease` (P1), stows the World's carriers to
+//!   `CarriedHolder::Stowed`, and parks carrier TLS.
+//! - [`ParkedWorldSeat::enter`] and [`ParkedWorldSeat::switch_in`] fail closed
+//!   on every invariant before mutating TLS or World state: seated Green host,
+//!   matching parked `OwnerSlab` identity (`WorldSeatRefusal::WrongContext`,
+//!   Low 4), structural heap identity matching [`WorldTurnIdentity::heap`]
+//!   (Condition A-3), no foreign heap installed on this OS thread, and
+//!   `CarriedHolder::Stowed` (Condition A-1). Any refusal hands back
+//!   `(self, turn, lend, refusal)` unchanged so the armed [`WorldLend`] is never
+//!   leaked silently. On success, the Context is restored FIRST (`resume_owner`
+//!   and any `ParkedJit` resume), and only then is its parked `RootBatchLease`
+//!   retired under the Q2 non-marking phase guard without `drain_to_quiescent`
+//!   (failing closed to retain on busy/held readers).
+//! - [`ActiveWorldSeat::switch_out`] publishes parked roots, stows World
+//!   carriers to `CarriedHolder::Stowed`, and parks carrier TLS WITHOUT
+//!   consuming [`WorldTurn`], handing back `(ParkedWorldSeat, WorldTurn, WorldLend)`
+//!   so another Baton thread in the group can [`ParkedWorldSeat::switch_in`]
+//!   during the same keeper stop interval (b4.2).
+//! - [`ActiveWorldSeat::exit`] runs [`ActiveWorldSeat::switch_out`] strictly
+//!   BEFORE converting `WorldTurn` into [`WorldReturned`] via
+//!   [`WorldReturned::from_stowed_seat`] (Nit 6 — sole production mint of
+//!   `WorldReturned`), discharging A-1 liveness for subsequent parallel-owner
+//!   serial turns.
+//! - Both [`ParkedWorldSeat`] and [`ActiveWorldSeat`] carry one retained
+//!   `FacadeEpochRetention` (Q3) across open-era cycles; dropping the seat drops
+//!   that retention before `World::finish_green_registry` / final `TaggedHeap::drop`.
 //! - A panic unwinding between the multi-step TLS/stow transitions aborts the
 //!   process (matching `serial_detach.rs` and `green/switch.rs`); a panic
-//!   inside the active Lisp interval drops `ActiveWorldSeat`, whose armed
-//!   [`WorldLend`] automatically sends `KeeperMsg::GroupAbandon { cause: Unwound }`
-//!   (K7).
+//!   inside the active Lisp interval (or between `switch_out` and `switch_in`)
+//!   drops the armed [`WorldLend`], which automatically sends
+//!   `KeeperMsg::GroupAbandon { cause: Unwound }` (K7).
 #![forbid(unsafe_code)]
 
+use super::super::Context;
+use super::super::green::WorldSeatParkedRoots;
 use super::super::green::carrier_tls::{park_carrier_tls, reset_carrier_tls};
-use super::super::{Context, ParkedOwner};
 use super::keeper_driver::WorldLend;
 use super::world_turn::{WorldReturned, WorldTurn, WorldTurnIdentity};
+use neovm_value::tagged::gc::FacadeEpochRetention;
 use std::marker::PhantomData;
+
+/// Private proof constructed solely by [`ActiveWorldSeat::exit`] after
+/// [`ActiveWorldSeat::switch_out`] has published parked roots, stowed World
+/// carriers, and parked carrier TLS (Nit 6).
+pub(super) struct StowedForReturn(());
 
 /// Why a seated Green host refused to park or enter a [`WorldTurn`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,30 +71,39 @@ pub(crate) enum WorldSeatRefusal {
     NotInstalled,
     /// `park_seated`: this Context on this OS thread does not hold the World's carried state.
     WorldNotHeldHere,
-    /// `enter` (A-3): `WorldTurnIdentity::heap` does not match this Context's own heap.
+    /// `park_seated`: failed to retain epoch exclusion or publish the parked root batch.
+    RootPublication,
+    /// `enter`/`switch_in` (Low 4): the `&mut Context` does not match the parked `OwnerSlab`.
+    WrongContext,
+    /// `enter`/`switch_in` (A-3): `WorldTurnIdentity::heap` does not match this Context's own heap.
     WrongHeap,
-    /// `enter`: another Context's heap is already installed on this OS thread.
+    /// `enter`/`switch_in`: another Context's heap is already installed on this OS thread.
     HeapInstalled,
-    /// `enter` (A-1): the Green World's carriers are held elsewhere rather than stowed.
+    /// `enter`/`switch_in` (A-1): the Green World's carriers are held elsewhere rather than stowed.
     WorldHeldElsewhere,
 }
 
 /// Proof that a seated Green `Context` is currently parked off this OS thread
-/// with its host bindings unbound and carrier TLS parked.
+/// with its host bindings unbound, private roots published in
+/// `GreenRuntime::parked`, and carrier TLS parked.
 #[must_use = "enter the parked World seat under a WorldTurn"]
 #[derive(Debug)]
 pub(crate) struct ParkedWorldSeat {
-    parked: ParkedOwner,
+    slab: usize,
+    roots: WorldSeatParkedRoots,
+    retention: FacadeEpochRetention,
     _thread: PhantomData<*const ()>,
 }
 
 /// Live Baton-group World interval holding a [`WorldTurn`] and its `Send` K7
 /// [`WorldLend`] guard.
-#[must_use = "exit the active World seat to stow carriers and return the turn"]
+#[must_use = "switch_out or exit the active World seat to stow carriers"]
 #[derive(Debug)]
 pub(crate) struct ActiveWorldSeat {
+    slab: usize,
     turn: WorldTurn,
     lend: WorldLend,
+    retention: FacadeEpochRetention,
     _thread: PhantomData<*const ()>,
 }
 
@@ -94,17 +128,43 @@ impl Drop for AbortOnPanic {
 
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "L6.7b b4 (Green switch points) is the caller")
+    expect(dead_code, reason = "L6.7b b4.3 (Green switch points) is the caller")
 )]
 impl ParkedWorldSeat {
-    /// Park a live seated Green `Context` off this OS thread so a parallel era
-    /// can lend World turns through the keeper ring.
+    /// Park a live seated Green `Context` (holding its `Baton` inline on its
+    /// `GreenSeat`) off this OS thread so a parallel era can lend World turns
+    /// through the keeper ring.
     #[cold]
     #[inline(never)]
     pub(crate) fn park_seated(ctx: &mut Context) -> Result<Self, WorldSeatRefusal> {
-        if ctx.owner.slab().and_then(|s| s.green_seat()).is_none() {
+        Self::park_seated_inner(ctx, None)
+    }
+
+    /// Park a live seated Green `Context` during an already-open era where the
+    /// keeper retains the World's `Baton`, using an explicit retained facade
+    /// epoch token (Q3).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn park_seated_with_retention(
+        ctx: &mut Context,
+        retention: &FacadeEpochRetention,
+    ) -> Result<Self, WorldSeatRefusal> {
+        Self::park_seated_inner(ctx, Some(retention))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn park_seated_inner(
+        ctx: &mut Context,
+        retention: Option<&FacadeEpochRetention>,
+    ) -> Result<Self, WorldSeatRefusal> {
+        let Some(slab_ref) = ctx.owner.slab() else {
+            return Err(WorldSeatRefusal::Unseated);
+        };
+        if slab_ref.green_seat().is_none() {
             return Err(WorldSeatRefusal::Unseated);
         }
+        let slab = slab_ref as *const _ as usize;
         if ctx.green_runtime_ref().is_none() {
             return Err(WorldSeatRefusal::NotGreenWorld);
         }
@@ -114,8 +174,10 @@ impl ParkedWorldSeat {
         if !ctx.holds_serial_world_here() {
             return Err(WorldSeatRefusal::WorldNotHeldHere);
         }
+        let (roots, retention) = ctx
+            .park_world_seat_with_roots(retention)
+            .map_err(|_| WorldSeatRefusal::RootPublication)?;
         let _abort = AbortOnPanic("world-seat-park");
-        let parked = ctx.park_owner();
         let stowed = ctx.stow_serial_world_state();
         assert!(
             stowed,
@@ -123,7 +185,9 @@ impl ParkedWorldSeat {
         );
         park_carrier_tls();
         Ok(Self {
-            parked,
+            slab,
+            roots,
+            retention,
             _thread: PhantomData,
         })
     }
@@ -139,11 +203,17 @@ impl ParkedWorldSeat {
         turn: WorldTurn,
         lend: WorldLend,
     ) -> Result<ActiveWorldSeat, (Self, WorldTurn, WorldLend, WorldSeatRefusal)> {
-        if ctx.owner.slab().and_then(|s| s.green_seat()).is_none() {
+        let Some(slab_ref) = ctx.owner.slab() else {
+            return Err((self, turn, lend, WorldSeatRefusal::Unseated));
+        };
+        if slab_ref.green_seat().is_none() {
             return Err((self, turn, lend, WorldSeatRefusal::Unseated));
         }
         if ctx.green_runtime_ref().is_none() {
             return Err((self, turn, lend, WorldSeatRefusal::NotGreenWorld));
+        }
+        if (slab_ref as *const _ as usize) != self.slab {
+            return Err((self, turn, lend, WorldSeatRefusal::WrongContext));
         }
         if turn.identity().heap != ctx.tagged_heap.heap_identity() {
             return Err((self, turn, lend, WorldSeatRefusal::WrongHeap));
@@ -157,54 +227,112 @@ impl ParkedWorldSeat {
         let _abort = AbortOnPanic("world-seat-enter");
         reset_carrier_tls();
         ctx.unstow_serial_world_state();
-        ctx.resume_owner(self.parked);
+        ctx.resume_world_seat_with_roots(self.roots);
         Ok(ActiveWorldSeat {
+            slab: self.slab,
             turn,
             lend,
+            retention: self.retention,
             _thread: PhantomData,
         })
+    }
+
+    /// Intra-interval Baton-group handoff (b4.2): resume this parked seated
+    /// Green `Context` under an already-live `(WorldTurn, WorldLend)` handed
+    /// off from another Baton thread's [`ActiveWorldSeat::switch_out`].
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn switch_in(
+        self,
+        ctx: &mut Context,
+        turn: WorldTurn,
+        lend: WorldLend,
+    ) -> Result<ActiveWorldSeat, (Self, WorldTurn, WorldLend, WorldSeatRefusal)> {
+        self.enter(ctx, turn, lend)
+    }
+
+    /// Test-only teardown helper: restore `ctx` briefly to retire its parked
+    /// `RootBatchLease`, clear any cached `PreparedRootBatch`, stow World
+    /// carriers back to `Stowed`, and drop the seat's `FacadeEpochRetention`
+    /// before `World::finish_green_registry` / final `TaggedHeap::drop` (Q3).
+    #[cfg(test)]
+    pub(crate) fn retire_parked_for_teardown_for_test(self, ctx: &mut Context) {
+        let _abort = AbortOnPanic("world-seat-teardown");
+        reset_carrier_tls();
+        ctx.unstow_serial_world_state();
+        ctx.resume_world_seat_with_roots(self.roots);
+        ctx.clear_cached_parked_root_batch_for_test();
+        let _parked = ctx.park_owner();
+        let stowed = ctx.stow_serial_world_state();
+        assert!(stowed, "teardown must stow World carriers back to Stowed");
+        park_carrier_tls();
+        drop(self.retention);
     }
 }
 
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "L6.7b b4 (Green switch points) is the caller")
+    expect(dead_code, reason = "L6.7b b4.3 (Green switch points) is the caller")
 )]
 impl ActiveWorldSeat {
     pub(crate) fn identity(&self) -> WorldTurnIdentity {
         self.turn.identity()
     }
 
-    /// End the Baton-group interval: unbind host bindings, stow the World's
-    /// carriers back to `CarriedHolder::Stowed`, park carrier TLS, and only
-    /// then consume `WorldTurn` into `WorldReturned`.
+    /// Intra-interval Baton-group handoff (b4.2): publish parked private
+    /// roots, unbind host bindings, stow World carriers to
+    /// `CarriedHolder::Stowed`, and park carrier TLS WITHOUT consuming
+    /// `WorldTurn`, returning `(ParkedWorldSeat, WorldTurn, WorldLend)` so
+    /// another Baton thread can `switch_in` during the same keeper stop.
     #[cold]
     #[inline(never)]
-    pub(crate) fn exit(self, ctx: &mut Context) -> (ParkedWorldSeat, WorldLend, WorldReturned) {
-        let parked = {
-            let _abort = AbortOnPanic("world-seat-exit");
+    pub(crate) fn switch_out(self, ctx: &mut Context) -> (ParkedWorldSeat, WorldTurn, WorldLend) {
+        let (roots, retention) = {
+            let _abort = AbortOnPanic("world-seat-switch-out");
+            let current_slab = ctx.owner.slab().map(|s| s as *const _ as usize);
+            assert_eq!(
+                current_slab,
+                Some(self.slab),
+                "active World seat must switch_out the same Context slab it entered"
+            );
             assert!(
                 neovm_value::tagged::gc::tagged_heap_is_current(&ctx.tagged_heap),
-                "active World seat must still have its own heap installed on exit"
+                "active World seat must still have its own heap installed on switch_out"
             );
-            let parked = ctx.park_owner();
+            let (roots, retention) = ctx
+                .park_world_seat_with_roots(Some(&self.retention))
+                .expect("active World seat must publish parked roots on switch_out");
             let stowed = ctx.stow_serial_world_state();
             assert!(
                 stowed,
-                "active World seat must stow World carriers into GreenRuntime on exit"
+                "active World seat must stow World carriers into GreenRuntime on switch_out"
             );
             park_carrier_tls();
-            parked
+            (roots, retention)
         };
-        let returned = WorldReturned::from_end(self.turn);
+        drop(self.retention);
         (
             ParkedWorldSeat {
-                parked,
+                slab: self.slab,
+                roots,
+                retention,
                 _thread: PhantomData,
             },
+            self.turn,
             self.lend,
-            returned,
         )
+    }
+
+    /// End the Baton-group interval: run [`Self::switch_out`] to publish
+    /// parked roots, stow World carriers to `CarriedHolder::Stowed`, and park
+    /// carrier TLS, and ONLY THEN consume `WorldTurn` into [`WorldReturned`]
+    /// via [`WorldReturned::from_stowed_seat`] (Nit 6).
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn exit(self, ctx: &mut Context) -> (ParkedWorldSeat, WorldLend, WorldReturned) {
+        let (parked, turn, lend) = self.switch_out(ctx);
+        let returned = WorldReturned::from_stowed_seat(turn, StowedForReturn(()));
+        (parked, lend, returned)
     }
 }
 

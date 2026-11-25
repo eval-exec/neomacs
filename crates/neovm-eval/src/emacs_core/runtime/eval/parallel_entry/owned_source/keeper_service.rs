@@ -188,6 +188,13 @@ impl<'service, 'heap> KeeperEra<'service, 'heap> {
     }
 
     #[cfg(test)]
+    pub(crate) fn keeper_baton_for_test(&self) -> &Baton {
+        self.era
+            .keeper_for_test()
+            .expect("keeper era retains its Baton")
+    }
+
+    #[cfg(test)]
     pub(crate) fn owns_heap_word_for_test(
         &self,
         stopped: &AllStopped<'_>,

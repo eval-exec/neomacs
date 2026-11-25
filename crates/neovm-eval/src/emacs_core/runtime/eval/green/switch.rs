@@ -258,6 +258,31 @@ impl MainNativeHandoff<'_> {
     }
 }
 
+/// Proof that a seated Green `Context` has parked its host bindings, JIT pins,
+/// and private-root `RootBatchLease` into `GreenRuntime::parked`.
+#[derive(Debug)]
+pub(crate) struct WorldSeatParkedRoots {
+    parked: super::super::ParkedOwner,
+    #[cfg(feature = "jit")]
+    jit: crate::emacs_core::jit::green_owner::ParkedJit,
+    pub(crate) key: ThreadKey,
+}
+
+static_assertions::assert_not_impl_any!(WorldSeatParkedRoots: Send, Sync, Clone, Copy);
+
+/// Why `Context::park_world_seat_with_roots` refused before stowing World
+/// carriers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorldSeatRootError {
+    Unseated,
+    Retention,
+    #[cfg(feature = "jit")]
+    JitPrepare,
+    BatchPrepare,
+    BatchFinalize,
+    BatchPublish,
+}
+
 /// A Lisp thread's place in its Green runtime, kept in its owner slab.
 #[doc(hidden)]
 pub struct GreenSeat {
@@ -377,6 +402,30 @@ impl Context {
                 control,
                 receiver: Some(OwnerReceive::new(key, receiver)),
                 baton: Some(baton),
+                binding_resume_error: None,
+                condition_wait: super::condition_wait::ConditionWait::Completed,
+                parked_roots_buffer: Vec::new(),
+                parked_root_batch: None,
+                #[cfg(feature = "jit")]
+                parked_jit_scratch: Default::default(),
+            }));
+    }
+
+    /// Seat a test worker during an open parallel era where the keeper holds
+    /// the World's `Baton`.
+    #[cfg(test)]
+    pub(super) fn take_green_seat_without_baton_for_test(
+        &mut self,
+        key: ThreadKey,
+        control: Arc<Control>,
+        receiver: mpsc::Receiver<Wake>,
+    ) {
+        self.ensure_owner_slab()
+            .install_green_seat(Box::new(GreenSeat {
+                key,
+                control,
+                receiver: Some(OwnerReceive::new(key, receiver)),
+                baton: None,
                 binding_resume_error: None,
                 condition_wait: super::condition_wait::ConditionWait::Completed,
                 parked_roots_buffer: Vec::new(),
@@ -1519,6 +1568,253 @@ impl Context {
         let seat = self.green_seat().expect("a publishing owner is seated");
         debug_assert!(seat.parked_roots_buffer.is_empty());
         seat.parked_roots_buffer = roots;
+    }
+
+    /// Whether this seated owner's heap is in a safe non-marking phase for
+    /// retiring a duplicate parked `RootBatchLease` under a live `WorldTurn`
+    /// without calling `drain_to_quiescent` (L6.7b b4 Q2 ruling).
+    fn world_seat_retirement_phase_is_safe(&self) -> bool {
+        !self.gc_driver_active
+            && matches!(
+                self.tagged_heap.mark_phase(),
+                MarkPhase::Idle | MarkPhase::Sweeping
+            )
+            && !self.tagged_heap.gc_locks_poisoned()
+    }
+
+    /// Best-effort fail-closed retirement of this owner's parked lease (and
+    /// any previously deferred leases) under the Q2 non-marking phase guard.
+    /// Over-rooting is safe: if the guard fails or a reader is held, the lease
+    /// stays live in `GreenRuntime::parked` and retires at a later safe point.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn try_retire_world_seat_parked_roots(&mut self, key: ThreadKey) {
+        if !self.world_seat_retirement_phase_is_safe() {
+            return;
+        }
+        let publication =
+            self.with_green_runtime(|runtime| runtime.parked.borrow_mut().remove(&key));
+        if let Some(publication) = publication {
+            match publication.try_recycle() {
+                Ok(prepared) => {
+                    let seat = self.green_seat().expect("a returning owner is seated");
+                    if seat.parked_root_batch.is_none() {
+                        seat.parked_root_batch = Some(prepared);
+                    }
+                }
+                Err(failure) => {
+                    let (publication, _) = failure.into_parts();
+                    if let Err(failure) = super::root_registry::finish(publication) {
+                        let (publication, _) = failure.into_parts();
+                        self.with_green_runtime(|runtime| {
+                            if let Some(existing) =
+                                runtime.parked.borrow_mut().insert(key, publication)
+                            {
+                                runtime.parked.borrow_mut().push_retained(existing);
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        self.with_green_runtime(|runtime| {
+            runtime.parked.borrow_mut().drain_retained_with(|lease| {
+                super::root_registry::finish(lease).map_err(|failure| failure.into_parts().0)
+            });
+        });
+    }
+
+    /// Park a seated Green `Context`'s private roots and JIT pins into the
+    /// World's `GreenRuntime::parked` table before stowing World carriers.
+    ///
+    /// Keeps `world_seat.rs` `#![forbid(unsafe_code)]` while sharing Green's
+    /// exact census + `RootBatchLease` publication contract.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn park_world_seat_with_roots(
+        &mut self,
+        retention: Option<&neovm_value::tagged::gc::FacadeEpochRetention>,
+    ) -> Result<
+        (
+            WorldSeatParkedRoots,
+            neovm_value::tagged::gc::FacadeEpochRetention,
+        ),
+        WorldSeatRootError,
+    > {
+        let (key, seat_retention) = {
+            let Some(seat) = self.green_seat() else {
+                return Err(WorldSeatRootError::Unseated);
+            };
+            let key = seat.key;
+            let retained = match retention {
+                Some(existing) => existing
+                    .retain()
+                    .map_err(|_| WorldSeatRootError::Retention)?,
+                None => match seat.baton.as_ref() {
+                    Some(baton) => baton
+                        .parallel_epoch_retention()
+                        .map_err(|_| WorldSeatRootError::Retention)?,
+                    None => return Err(WorldSeatRootError::Retention),
+                },
+            };
+            (key, retained)
+        };
+        // Opportunistically retire any previously deferred lease for this key
+        // before publishing a fresh census. If retirement still refuses (e.g.
+        // a held reader), preserve the old lease in `retained` below so zero
+        // live leases are dropped.
+        self.try_retire_world_seat_parked_roots(key);
+        // Close any open bump-allocation regions before the World turn ends so
+        // stopped collections never trip `ImageError::RegionsOpen`.
+        self.tagged_heap.close_alloc_regions();
+        #[cfg(feature = "jit")]
+        let parked_jit = {
+            let mut scratch =
+                std::mem::take(&mut self.green_seat().expect("seated above").parked_jit_scratch);
+            let prepared =
+                crate::emacs_core::jit::green_owner::ParkedJit::prepare_reusing(self, &mut scratch);
+            self.green_seat().expect("seated above").parked_jit_scratch = scratch;
+            prepared.map_err(|_| WorldSeatRootError::JitPrepare)?
+        };
+        let parked = self.park_owner();
+        #[allow(unused_mut)]
+        let mut roots = self.collect_parked_roots();
+        #[cfg(feature = "jit")]
+        roots.extend_from_slice(parked_jit.roots());
+        macro_rules! rollback_park {
+            ($err:expr) => {{
+                self.return_parked_root_buffer(roots);
+                #[cfg(feature = "jit")]
+                parked_jit.return_scratch(
+                    &mut self.green_seat().expect("seated above").parked_jit_scratch,
+                );
+                self.resume_owner(parked);
+                return Err($err);
+            }};
+        }
+        let prepared = self
+            .green_seat()
+            .expect("seated above")
+            .parked_root_batch
+            .take();
+        let prepared = match prepared {
+            Some(mut prepared) => match prepared.ensure_capacity(roots.len()) {
+                Ok(()) => Ok(prepared),
+                Err(_) => {
+                    self.green_seat().expect("seated above").parked_root_batch = Some(prepared);
+                    Err(WorldSeatRootError::BatchPrepare)
+                }
+            },
+            None => match seat_retention.retain() {
+                Ok(batch_epoch) => {
+                    neovm_value::tagged::transport::PreparedRootBatch::reserve_retained(
+                        &self.tagged_heap,
+                        batch_epoch,
+                        roots.len(),
+                    )
+                    .map_err(|_| WorldSeatRootError::BatchPrepare)
+                }
+                Err(_) => Err(WorldSeatRootError::Retention),
+            },
+        };
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(err) => rollback_park!(err),
+        };
+        // SAFETY: this seated owner holds exclusive World access after
+        // `park_owner` completed. The census was copied from this heap's live
+        // roots; no GC, Lisp or handoff occurs between collection,
+        // finalization and publication.
+        let finalized = match unsafe { prepared.finalize(&roots) } {
+            Ok(finalized) => finalized,
+            Err(failure) => {
+                let (prepared, _) = failure.into_parts();
+                self.green_seat().expect("seated above").parked_root_batch = Some(prepared);
+                rollback_park!(WorldSeatRootError::BatchFinalize);
+            }
+        };
+        let publication = match finalized.publish_finalized_root_batch() {
+            Ok(publication) => publication,
+            Err(failure) => {
+                let (finalized, _) = failure.into_parts();
+                drop(finalized);
+                rollback_park!(WorldSeatRootError::BatchPublish);
+            }
+        };
+        self.return_parked_root_buffer(roots);
+        self.with_green_runtime(|runtime| {
+            let mut parked_map = runtime.parked.borrow_mut();
+            if let Some(previous) = parked_map.insert(key, publication) {
+                parked_map.push_retained(previous);
+            }
+        });
+        Ok((
+            WorldSeatParkedRoots {
+                parked,
+                #[cfg(feature = "jit")]
+                jit: parked_jit,
+                key,
+            },
+            seat_retention,
+        ))
+    }
+
+    /// Restore a seated Green `Context`'s JIT pins and host bindings FIRST,
+    /// then retire its parked `RootBatchLease` under the Q2 non-marking phase
+    /// guard without calling `drain_to_quiescent`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn resume_world_seat_with_roots(&mut self, parked_roots: WorldSeatParkedRoots) {
+        self.obarray.refresh_admission();
+        #[cfg(feature = "jit")]
+        {
+            let mut scratch = std::mem::take(
+                &mut self
+                    .green_seat()
+                    .expect("returning owner is seated")
+                    .parked_jit_scratch,
+            );
+            let resumed = parked_roots.jit.resume_reusing(self, &mut scratch);
+            self.green_seat()
+                .expect("returning owner is seated")
+                .parked_jit_scratch = scratch;
+            resumed.expect("the original seated owner resumes in its own heap");
+        }
+        self.resume_owner(parked_roots.parked);
+        self.try_retire_world_seat_parked_roots(parked_roots.key);
+    }
+
+    /// Test-only helper: admit a detached reader on this seated owner's parked
+    /// `RootBatchLease` to exercise Q2 `ReadersOutstanding` deferral.
+    #[cfg(test)]
+    pub(crate) fn admit_parked_root_reader_for_test(
+        &self,
+    ) -> Result<
+        neovm_value::tagged::transport::HeldRootBatchReaderForTest,
+        neovm_value::tagged::transport::RootBatchError,
+    > {
+        let key = self
+            .owner
+            .slab()
+            .and_then(|slab| slab.green_seat())
+            .expect("seated owner")
+            .key;
+        self.with_green_runtime(|runtime| {
+            let parked = runtime.parked.borrow();
+            let lease = parked
+                .owner_lease_for_test(&key)
+                .expect("parked owner has an active RootBatchLease");
+            lease.admit_detached_reader_for_test(&self.tagged_heap)
+        })
+    }
+
+    /// Test-only helper: drop any cached recycled `PreparedRootBatch` on this
+    /// seated owner's `GreenSeat` before teardown.
+    #[cfg(test)]
+    pub(crate) fn clear_cached_parked_root_batch_for_test(&mut self) {
+        if let Some(seat) = self.green_seat() {
+            seat.parked_root_batch = None;
+        }
     }
 
     /// GNU `make-thread` (ARGS: FUNCTION, NAME, BUFFER-DISPOSITION) in a

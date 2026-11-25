@@ -428,6 +428,10 @@ impl DrainBlocked {
 #[derive(Debug)]
 pub(in crate::emacs_core::eval) struct WorldRootRegistry {
     owners: FxHashMap<ThreadKey, RootBatchLease>,
+    /// Previously deferred owner leases that could not retire before a later
+    /// park (e.g. due to a held reader or non-idle phase). Over-rooting is
+    /// safe; drained at the next safe retirement point or World teardown.
+    retained: Vec<RootBatchLease>,
     hosts: HostRegistry,
     pub(super) services: scheduling::ServiceRuntime,
 }
@@ -437,24 +441,46 @@ impl WorldRootRegistry {
     pub fn new(heap: HeapIdentity) -> Self {
         Self {
             owners: FxHashMap::default(),
+            retained: Vec::new(),
             hosts: HostRegistry::new(heap),
             services: scheduling::ServiceRuntime::default(),
         }
     }
     #[doc(hidden)]
     pub fn is_empty(&self) -> bool {
-        self.owners.is_empty() && self.hosts.records.is_empty()
+        self.owners.is_empty() && self.retained.is_empty() && self.hosts.records.is_empty()
     }
     #[doc(hidden)]
     pub fn len(&self) -> usize {
-        self.owners.len()
+        self.owners.len() + self.retained.len()
     }
     #[doc(hidden)]
     pub fn values(&self) -> impl Iterator<Item = &RootBatchLease> {
-        self.owners.values()
+        self.owners.values().chain(self.retained.iter())
     }
     pub(crate) fn first_owner_key(&self) -> Option<ThreadKey> {
         self.owners.keys().next().copied()
+    }
+    pub(crate) fn pop_retained(&mut self) -> Option<RootBatchLease> {
+        self.retained.pop()
+    }
+    pub(crate) fn push_retained(&mut self, roots: RootBatchLease) {
+        self.retained.push(roots);
+    }
+    pub(crate) fn drain_retained_with(
+        &mut self,
+        mut try_finish: impl FnMut(RootBatchLease) -> Result<(), RootBatchLease>,
+    ) {
+        let pending = std::mem::take(&mut self.retained);
+        for lease in pending {
+            if let Err(still_live) = try_finish(lease) {
+                self.retained.push(still_live);
+            }
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn owner_lease_for_test(&self, key: &ThreadKey) -> Option<&RootBatchLease> {
+        self.owners.get(key)
     }
     #[doc(hidden)]
     pub fn contains_key(&self, key: &ThreadKey) -> bool {
