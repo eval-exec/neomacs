@@ -53,6 +53,7 @@ impl fmt::Debug for ResumeGcImageFailure<'_, '_> {
 }
 
 impl<'era> Mutator<'era> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn begin_restore(
         &mut self,
         native: bool,

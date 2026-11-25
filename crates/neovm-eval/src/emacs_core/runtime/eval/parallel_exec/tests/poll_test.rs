@@ -677,3 +677,213 @@ fn poll_fast_path_continue_ns() {
         },
     );
 }
+
+#[test]
+fn poll_during_draining_resumes_returns_continue_without_deadlock() {
+    // HIGH-3 regression: after `end_epoch`, the era stays in
+    // `Phase::DrainingResumes` (`TAG_DRAINING == 3`, `!admissible`) until
+    // every frozen owner finishes `apply()` on its `ResumeGcImage`. Hold Peer
+    // A paused after `begin_restore(false)` and before `apply()`, assert Peer
+    // B observes `phase_word & 0x0F == 3`, verify `owner_b.poll(...)` returns
+    // `Ok(PollOutcome::Continue)` with 0 `roots()` invocations, release Peer
+    // A, then trigger a second stop `Stopping(epoch1 + 1)` and verify Peer B
+    // still parks and resumes cleanly.
+    const PEER_OWNER: u64 = 7503;
+    Context::with_test_collection_era(
+        |_context| (),
+        |era, ()| {
+            let permit_a = era.register(OWNER, 0).expect("register A");
+            let permit_b = era.register(PEER_OWNER, 0).expect("register B");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let (ready_a_tx, ready_a_rx) = mpsc::channel();
+            let (ready_b_tx, ready_b_rx) = mpsc::channel();
+            let (go_b1_tx, go_b1_rx) = mpsc::channel::<()>();
+            let (a_ended_tx, a_ended_rx) = mpsc::channel::<()>();
+            let (a_paused_tx, a_paused_rx) = mpsc::channel::<()>();
+            let (a_apply_tx, a_apply_rx) = mpsc::channel::<()>();
+            let (a_applied_tx, a_applied_rx) = mpsc::channel::<()>();
+            let (b_draining_tx, b_draining_rx) = mpsc::channel();
+            let (go_b2_tx, go_b2_rx) = mpsc::channel::<()>();
+            let (done_b2_tx, done_b2_rx) = mpsc::channel();
+            let (go_a2_tx, go_a2_rx) = mpsc::channel::<()>();
+            thread::scope(|scope| {
+                // Peer A: ACKs epoch 1, waits for `end_epoch`, calls
+                // `begin_restore(false)` and pauses BEFORE `apply()` so the
+                // era remains deterministically in `Phase::DrainingResumes`.
+                scope.spawn(move || {
+                    let mut owner = activate(permit_a, heap, OWNER);
+                    ready_a_tx.send(()).expect("A ready");
+                    let epoch1 = retry("A wait_request", || owner.wait_request());
+                    retry("A ack", || owner.acknowledge(epoch1, &[]));
+                    recv(&a_ended_rx);
+                    let start = Instant::now();
+                    let mut pending = loop {
+                        match owner.begin_restore(false) {
+                            Ok(image) => break image,
+                            Err(RendezvousError::Busy) if start.elapsed() < DEADLINE => {
+                                thread::yield_now();
+                            }
+                            Err(error) => panic!("A begin_restore: {error:?}"),
+                        }
+                    };
+                    a_paused_tx.send(()).expect("A paused in DrainingResumes");
+                    recv(&a_apply_rx);
+                    loop {
+                        match pending.apply() {
+                            Ok(()) => break,
+                            Err(failure) if failure.reason == RendezvousError::Busy => {
+                                pending = failure.into_image();
+                                thread::yield_now();
+                            }
+                            Err(failure) => panic!("A apply: {:?}", failure.reason),
+                        }
+                    }
+                    a_applied_tx.send(()).expect("A applied");
+                    recv(&go_a2_rx);
+                    let second = owner.poll(|| Ok(Vec::new())).expect("A second poll");
+                    assert!(matches!(second, PollOutcome::Resumed { epoch } if epoch.get() == epoch1.get() + 1));
+                    retire(owner);
+                });
+                // Peer B: resumes from epoch 1 via `poll()`, observes
+                // `TAG_DRAINING == 3` while Peer A holds `begin_restore`
+                // without `apply()`, calls `poll()` -> `Continue` with 0
+                // `roots()` calls, then parks cleanly on `Stopping(epoch1+1)`.
+                scope.spawn(move || {
+                    let mut owner = activate(permit_b, heap, PEER_OWNER);
+                    ready_b_tx.send(()).expect("B ready");
+                    recv(&go_b1_rx);
+                    let first = owner.poll(|| Ok(Vec::new())).expect("B first poll");
+                    let PollOutcome::Resumed { epoch: epoch1 } = first else {
+                        panic!("expected Resumed on epoch 1, got {first:?}");
+                    };
+                    recv(&a_paused_rx);
+                    let phase_tag = owner.phase_word_for_test() & 0x0F;
+                    let non_admissible = !admissible(&owner);
+                    let closure_calls = AtomicUsize::new(0);
+                    let during_drain = owner
+                        .poll(|| {
+                            closure_calls.fetch_add(1, Ordering::Relaxed);
+                            Ok(Vec::new())
+                        })
+                        .expect("B poll during DrainingResumes");
+                    b_draining_tx
+                        .send((
+                            epoch1,
+                            phase_tag,
+                            non_admissible,
+                            during_drain,
+                            closure_calls.load(Ordering::Relaxed),
+                        ))
+                        .expect("B draining report");
+                    recv(&go_b2_rx);
+                    let second_calls = AtomicUsize::new(0);
+                    let second = owner
+                        .poll(|| {
+                            second_calls.fetch_add(1, Ordering::Relaxed);
+                            Ok(Vec::new())
+                        })
+                        .expect("B second poll");
+                    done_b2_tx
+                        .send((second, second_calls.load(Ordering::Relaxed)))
+                        .expect("B second report");
+                    retire(owner);
+                });
+                recv(&ready_a_rx);
+                recv(&ready_b_rx);
+                request_stop(rendezvous);
+                go_b1_tx.send(()).expect("go B1");
+                let stopped = retry("stop 1", || stop_for_test(&era));
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                end_epoch(ticket);
+                a_ended_tx.send(()).expect("epoch 1 ended");
+
+                let (epoch1, phase_tag, non_admissible, during_drain, calls_during_drain) =
+                    recv(&b_draining_rx);
+                assert_eq!(
+                    phase_tag, 3,
+                    "Peer B must observe TAG_DRAINING (3) while Peer A holds resume debt"
+                );
+                assert!(non_admissible);
+                assert_eq!(during_drain, PollOutcome::Continue);
+                assert_eq!(
+                    calls_during_drain, 0,
+                    "poll during DrainingResumes must not build a root batch"
+                );
+
+                // Release Peer A so the era returns to Idle, then verify a
+                // subsequent Stopping(epoch1 + 1) still parks Peer B cleanly.
+                a_apply_tx.send(()).expect("release A apply");
+                recv(&a_applied_rx);
+                request_stop(rendezvous);
+                go_a2_tx.send(()).expect("go A2");
+                go_b2_tx.send(()).expect("go B2");
+                let stopped2 = retry("stop 2", || stop_for_test(&era));
+                let mut ticket2 = lend(&era, stopped2);
+                collect(&mut ticket2);
+                end_epoch(ticket2);
+                let (second, second_calls) = recv(&done_b2_rx);
+                assert_eq!(
+                    second,
+                    PollOutcome::Resumed {
+                        epoch: std::num::NonZeroU64::new(epoch1.get() + 1).expect("epoch+1"),
+                    }
+                );
+                assert_eq!(second_calls, 1, "subsequent Stopping must park Peer B once");
+            });
+            finish(era);
+        },
+    );
+}
+
+#[test]
+fn poll_in_native_stopped_mode_refuses_busy_without_spinning() {
+    // LOW-2 regression: calling `Mutator::poll` while the owner is already in
+    // `Mode::NativeStopped` and `!admissible` must immediately refuse with
+    // `Err(RendezvousError::Busy)` and 0 `roots()` invocations rather than
+    // spinning forever in `poll_stopped`.
+    Context::with_test_collection_era(
+        |_context| (),
+        |era, ()| {
+            let permit = era.register(OWNER, 0).expect("register");
+            let heap = era.heap_identity();
+            let rendezvous = era.rendezvous();
+            let (native_tx, native_rx) = mpsc::channel::<()>();
+            let (go_tx, go_rx) = mpsc::channel::<()>();
+            let (done_tx, done_rx) = mpsc::channel();
+            let (leave_tx, leave_rx) = mpsc::channel::<()>();
+            thread::scope(|scope| {
+                scope.spawn(move || {
+                    let mut owner = activate(permit, heap, OWNER);
+                    owner.enter_native(&[]).expect("enter_native");
+                    native_tx.send(()).expect("native entered");
+                    recv(&go_rx);
+                    let calls = AtomicUsize::new(0);
+                    let result = owner.poll(|| {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        Ok(Vec::new())
+                    });
+                    done_tx
+                        .send((result, calls.load(Ordering::Relaxed)))
+                        .expect("poll result");
+                    recv(&leave_rx);
+                    owner.leave_native().expect("leave_native");
+                    retire(owner);
+                });
+                recv(&native_rx);
+                request_stop(rendezvous);
+                go_tx.send(()).expect("go poll in native");
+                let (result, calls) = recv(&done_rx);
+                assert_eq!(result, Err(RendezvousError::Busy));
+                assert_eq!(calls, 0);
+                let stopped = retry("native stop", || stop_for_test(&era));
+                let mut ticket = lend(&era, stopped);
+                collect(&mut ticket);
+                end_epoch(ticket);
+                leave_tx.send(()).expect("release leave_native");
+            });
+            finish(era);
+        },
+    );
+}

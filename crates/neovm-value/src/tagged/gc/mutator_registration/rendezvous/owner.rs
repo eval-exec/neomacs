@@ -6,14 +6,60 @@ use crate::tagged::transport::PreparedParallelRootBatch;
 
 /// What the engine does after one poll.
 ///
-/// `Continue` did not park: the phase word was admissible, or this owner is
-/// the keeper. `Resumed` is only returned after image restore. Parking stays
-/// inside the poll.
+/// `Continue` did not park: the phase word was admissible, this owner is the
+/// keeper, or a non-admissible phase word (`Phase::DrainingResumes`, a
+/// transient catalog `BLOCKED_BIT`, or a raced `Phase::Idle`) had no active
+/// stop targeting this owner under the canonical gate. `Resumed` is only
+/// returned after image restore. Parking stays inside the poll.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "a resumed owner has a restored image; continuing does not"]
 pub enum PollOutcome {
     Continue,
     Resumed { epoch: NonZeroU64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PollTarget {
+    Continue,
+    Stop(NonZeroU64),
+    RetryLock,
+}
+
+/// Classify `(phase, mode)` under the canonical gate for `Mutator::poll`.
+///
+/// Fails closed on broken stop-protocol invariants: only a `StartingStopped`
+/// owner can legitimately observe `Stopping(_)` outside `frozen` or observe
+/// `Tracing(_)`; a `Running` owner there returns `Identity` / `Publication`.
+/// Non-`Running`/`StartingStopped` modes return a non-retryable `Busy` refusal
+/// (only this thread can change its own mode, so retrying would spin forever).
+fn classify_poll_target(
+    phase: Phase,
+    mode: Mode,
+    is_frozen: bool,
+    request_epoch: u64,
+) -> Result<PollTarget, RendezvousError> {
+    match (phase, mode) {
+        (Phase::Poisoned, _) => Err(RendezvousError::Poisoned),
+        (Phase::Stopping(epoch), Mode::Running) => {
+            if !is_frozen {
+                return Err(RendezvousError::Identity);
+            }
+            if request_epoch != epoch.get() {
+                return Err(RendezvousError::Publication);
+            }
+            Ok(PollTarget::Stop(epoch))
+        }
+        (Phase::Tracing(_), Mode::Running) => Err(RendezvousError::Publication),
+        (Phase::Idle | Phase::DrainingResumes, Mode::Running) => Ok(PollTarget::Continue),
+        (
+            Phase::Idle | Phase::DrainingResumes | Phase::Stopping(_) | Phase::Tracing(_),
+            Mode::StartingStopped,
+        ) => Ok(PollTarget::Continue),
+        (
+            _,
+            Mode::NativeStopped | Mode::Publishing | Mode::Stopped | Mode::Resuming | Mode::Retired,
+        ) => Err(RendezvousError::Busy),
+    }
 }
 
 #[inline(always)]
@@ -166,9 +212,14 @@ impl<'era> Mutator<'era> {
     /// Safepoint poll. The admissible path is one Acquire load of the phase
     /// word and does not call `roots`, take the gate, or allocate.
     ///
-    /// The closure runs once, and only after that word is not admissible and
-    /// this owner is not the keeper. Busy retries reuse the batch the closure
-    /// already returned. A closure error returns before `wait_request`.
+    /// When the phase word is not admissible and this owner is not the keeper,
+    /// `poll_stopped` checks under the canonical gate (`poll_target_epoch`)
+    /// whether a `Phase::Stopping(epoch)` actually targets this owner. A
+    /// non-targeting word (`Phase::DrainingResumes`, a transient catalog
+    /// `BLOCKED_BIT`, or a raced `Phase::Idle`) returns `Ok(PollOutcome::Continue)`
+    /// without calling `roots`. Otherwise `roots` runs once after the targeting
+    /// epoch is confirmed; `Busy` retries on `acknowledge` reuse that batch,
+    /// and a closure error returns before `acknowledge`.
     #[inline(never)]
     pub fn poll(
         &mut self,
@@ -183,34 +234,29 @@ impl<'era> Mutator<'era> {
     }
 
     /// Check under the canonical gate whether an active stop epoch targets
-    /// this owner. Returns `Ok(Some(epoch))` only when this owner is frozen in
-    /// `Phase::Stopping(epoch)` and must publish + ACK; returns `Ok(None)`
-    /// when a non-admissible phase word was `Phase::DrainingResumes` (peers
-    /// still finishing `restore_wait`), a transient catalog `BLOCKED_BIT`, or
-    /// `Phase::Idle` by the time the gate was acquired.
-    fn poll_target_epoch(&self) -> Result<Option<NonZeroU64>, RendezvousError> {
+    /// this owner. Distinguishes transient gate/entry lock contention
+    /// (`PollTarget::RetryLock`) from non-retryable owner mode refusals
+    /// (`Err(RendezvousError::Busy)`) and fail-closed stop-protocol errors
+    /// (`Err(Identity)` / `Err(Publication)`).
+    fn poll_target_epoch(&self) -> Result<PollTarget, RendezvousError> {
         self.check_thread()?;
-        let gate = self.registry.lock()?;
+        let gate = match self.registry.lock() {
+            Ok(gate) => gate,
+            Err(RegistrationError::Busy) => return Ok(PollTarget::RetryLock),
+            Err(error) => return Err(error.into()),
+        };
         let request = self.registry.request_epoch.load(Ordering::Acquire);
-        let e = entry_state(&self.entry)?;
-        if !matches!(e.rendezvous.mode, Mode::Running | Mode::StartingStopped) {
-            return Err(RendezvousError::Busy);
-        }
-        match gate.rendezvous.phase {
-            Phase::Stopping(epoch)
-                if gate.rendezvous.frozen.contains(&self.entry.key)
-                    && e.rendezvous.mode == Mode::Running =>
-            {
-                if request != epoch.get() {
-                    return Err(RendezvousError::Publication);
-                }
-                Ok(Some(epoch))
-            }
-            Phase::Idle | Phase::DrainingResumes | Phase::Stopping(_) | Phase::Tracing(_) => {
-                Ok(None)
-            }
-            Phase::Poisoned => Err(RendezvousError::Poisoned),
-        }
+        let e = match entry_state(&self.entry) {
+            Ok(entry) => entry,
+            Err(RendezvousError::Busy) => return Ok(PollTarget::RetryLock),
+            Err(error) => return Err(error),
+        };
+        classify_poll_target(
+            gate.rendezvous.phase,
+            e.rendezvous.mode,
+            gate.rendezvous.frozen.contains(&self.entry.key),
+            request,
+        )
     }
 
     #[cold]
@@ -230,11 +276,10 @@ impl<'era> Mutator<'era> {
         // otherwise a resumed owner polling during `DrainingResumes` would
         // enter `wait_request()` and deadlock once the era returns to `Idle`.
         let epoch = loop {
-            match self.poll_target_epoch() {
-                Ok(Some(epoch)) => break epoch,
-                Ok(None) => return Ok(PollOutcome::Continue),
-                Err(RendezvousError::Busy) => std::thread::yield_now(),
-                Err(error) => return Err(error),
+            match self.poll_target_epoch()? {
+                PollTarget::Stop(epoch) => break epoch,
+                PollTarget::Continue => return Ok(PollOutcome::Continue),
+                PollTarget::RetryLock => std::thread::yield_now(),
             }
         };
         let batch = roots()?;
@@ -521,5 +566,100 @@ impl std::fmt::Debug for RootedRetireFailure<'_> {
         f.debug_tuple("RootedRetireFailure")
             .field(&self.reason)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_poll_target_fails_closed_on_running_and_non_running_modes() {
+        let ep1 = NonZeroU64::new(1).unwrap();
+
+        // Targeting stop for a frozen Running owner.
+        assert_eq!(
+            classify_poll_target(Phase::Stopping(ep1), Mode::Running, true, 1),
+            Ok(PollTarget::Stop(ep1))
+        );
+        // Running owner missing from frozen during Stopping -> fail closed (Identity).
+        assert_eq!(
+            classify_poll_target(Phase::Stopping(ep1), Mode::Running, false, 1),
+            Err(RendezvousError::Identity)
+        );
+        // Request epoch mismatch -> fail closed (Publication).
+        assert_eq!(
+            classify_poll_target(Phase::Stopping(ep1), Mode::Running, true, 0),
+            Err(RendezvousError::Publication)
+        );
+        // Running owner observing Tracing -> fail closed (Publication).
+        assert_eq!(
+            classify_poll_target(Phase::Tracing(ep1), Mode::Running, true, 1),
+            Err(RendezvousError::Publication)
+        );
+        assert_eq!(
+            classify_poll_target(Phase::Tracing(ep1), Mode::Running, false, 1),
+            Err(RendezvousError::Publication)
+        );
+
+        // Idle / DrainingResumes for Running -> Continue without parking.
+        assert_eq!(
+            classify_poll_target(Phase::Idle, Mode::Running, false, 0),
+            Ok(PollTarget::Continue)
+        );
+        assert_eq!(
+            classify_poll_target(Phase::DrainingResumes, Mode::Running, false, 1),
+            Ok(PollTarget::Continue)
+        );
+
+        // StartingStopped may observe any non-poisoned phase outside frozen -> Continue.
+        for phase in [
+            Phase::Idle,
+            Phase::DrainingResumes,
+            Phase::Stopping(ep1),
+            Phase::Tracing(ep1),
+        ] {
+            assert_eq!(
+                classify_poll_target(phase, Mode::StartingStopped, false, 1),
+                Ok(PollTarget::Continue)
+            );
+        }
+
+        // Poison always refuses regardless of mode.
+        for mode in [
+            Mode::StartingStopped,
+            Mode::Running,
+            Mode::NativeStopped,
+            Mode::Publishing,
+            Mode::Stopped,
+            Mode::Resuming,
+            Mode::Retired,
+        ] {
+            assert_eq!(
+                classify_poll_target(Phase::Poisoned, mode, false, 1),
+                Err(RendezvousError::Poisoned)
+            );
+        }
+
+        // Non-Running/StartingStopped modes return non-retryable Busy (LOW-2).
+        for mode in [
+            Mode::NativeStopped,
+            Mode::Publishing,
+            Mode::Stopped,
+            Mode::Resuming,
+            Mode::Retired,
+        ] {
+            for phase in [
+                Phase::Idle,
+                Phase::DrainingResumes,
+                Phase::Stopping(ep1),
+                Phase::Tracing(ep1),
+            ] {
+                assert_eq!(
+                    classify_poll_target(phase, mode, true, 1),
+                    Err(RendezvousError::Busy)
+                );
+            }
+        }
     }
 }

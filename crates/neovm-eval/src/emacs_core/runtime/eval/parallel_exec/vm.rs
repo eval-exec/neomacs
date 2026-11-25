@@ -504,7 +504,8 @@ pub(crate) struct VmExec<'era, E, S, A, V, P> {
     frame: Option<FrameId>,
     state: RunState,
     /// Whether this executor is actively stepping bytecode (`Running`) or
-    /// stopped (`Stopped`: idle, parked at an escape, or parked in a refill).
+    /// stopped (`Stopped`: idle, parked at any [`VmPoll`] edge, or parked in
+    /// an escape).
     stop_state: OwnerStopState,
     /// The exit flags the next run's bottom frame carries (V4). The
     /// harness arms them; V6's backtrace adapter sets a stopped owner's.
@@ -908,9 +909,12 @@ where
             return Step::Stop(VmOutcome::Fault(fault));
         }
         if target <= branch_pc {
-            if let Err(error) = self.poll.vm_back_edge(&self.arena) {
+            self.stop_state = OwnerStopState::Stopped;
+            let poll = self.poll.vm_back_edge(&self.arena);
+            if let Err(error) = poll {
                 return Step::Stop(VmOutcome::Fault(EngineFault::Poll(error)));
             }
+            self.stop_state = OwnerStopState::Running;
         }
         Step::Continue
     }
@@ -1542,6 +1546,9 @@ where
         if operands.len() < usize::from(effect.consumed) {
             return invalid();
         }
+        // The owner is now stopped across the call/serial-request polls and
+        // the escape park until checked deltas/debug-on-exit updates apply.
+        self.stop_state = OwnerStopState::Stopped;
         if matches!(
             op,
             Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) | Op::CallBuiltinSym(..)
@@ -1564,9 +1571,6 @@ where
             frame,
             operands,
         };
-        // The owner is now stopped at the escape boundary until the serial
-        // turn completes and any checked deltas/debug-on-exit updates apply.
-        self.stop_state = OwnerStopState::Stopped;
         let completion = self.escape.escape(request, &self.arena, &mut self.plain);
         let debug_updates = self.escape.take_debug_on_exit_updates();
         let (consumed, produced, jump) = match completion.stack {
