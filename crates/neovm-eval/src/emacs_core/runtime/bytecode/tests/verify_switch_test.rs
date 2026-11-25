@@ -590,8 +590,10 @@ fn org_elc_functions_all_verify_for_verified_driver() {
             walk(car, seen, next_name.clone(), total, unverified);
             walk(cdr, seen, next_name, total, unverified);
         } else if let Some(vec) = v.as_vector_data() {
+            // `LispValueSlice` iteration yields `TaggedValue` by value since
+            // Phase 1b's atomic reads, so there is no reference to deref.
             for elem in vec {
-                walk(*elem, seen, cur_name.clone(), total, unverified);
+                walk(elem, seen, cur_name.clone(), total, unverified);
             }
         }
     }
