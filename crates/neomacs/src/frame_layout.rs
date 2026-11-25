@@ -241,12 +241,6 @@ pub fn install_frame_snapshot_fn(evaluator: &mut Context) {
     }));
 }
 
-/// Install the synchronous layout-query adapter used by display primitives
-/// such as `(window-end WINDOW t)` and `posn-at-point`.
-///
-/// This targets one window through the canonical row producer without entering
-/// the renderer presentation lifecycle. Both GUI and TTY install this adapter;
-/// batch mode intentionally does not.
 /// Single frontend font-driver vtable (`N-font-driver-vtable`, GNU
 /// `struct font_driver`) backed by `REDISPLAY_RUNTIME`. Zero-sized so boxing
 /// it performs no heap allocation.
@@ -290,6 +284,12 @@ pub fn install_font_driver(evaluator: &mut Context) {
     evaluator.font_driver = Some(Box::new(RedisplayFontDriver));
 }
 
+/// Install the synchronous layout-query adapter used by display primitives
+/// such as `(window-end WINDOW t)` and `posn-at-point`.
+///
+/// This targets one window through the canonical row producer without entering
+/// the renderer presentation lifecycle. Both GUI and TTY install this adapter;
+/// batch mode intentionally does not.
 pub fn install_window_layout_query_fn(evaluator: &mut Context) {
     install_window_layout_query_with_policy(
         evaluator,

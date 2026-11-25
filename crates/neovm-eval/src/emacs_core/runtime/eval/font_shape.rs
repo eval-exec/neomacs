@@ -82,8 +82,12 @@ static_assertions::assert_not_impl_any!(FontDriverScope<'static>: Send, Sync);
 impl Context {
     /// Run `f` with exclusive access to both `self` and the installed
     /// [`FontDriver`], restoring the driver even when `f` returns early or
-    /// unwinds. Returns `None` when no driver is installed (or while an outer
-    /// call already holds it).
+    /// unwinds. Returns `None` when no driver is installed or while an outer
+    /// `with_font_driver` call (`shape_gstring` or `realized_fontset`) already
+    /// holds the slot; any nested font-driver call (including
+    /// `glyph_text_metrics` and `realized_fontset`) observes `None` until the
+    /// outer call finishes. Production `REDISPLAY_RUNTIME` methods do not call
+    /// back into Lisp or into one another.
     pub fn with_font_driver<R>(
         &mut self,
         f: impl FnOnce(&mut Context, &mut dyn FontDriver) -> R,

@@ -4252,8 +4252,11 @@ pub(crate) fn resolve_font_match(
 /// The face id redisplay sealed for this window's buffer position.
 ///
 /// The driver is taken via [`neovm_eval::emacs_core::eval::Context::with_font_driver`]
-/// so a nested `font-at` does not borrow it twice and unwinds always restore
-/// the slot. `None` (no driver, or the layout engine already borrowed) keeps
+/// so a nested call does not borrow it twice and unwinds always restore the
+/// slot. While `realized_fontset` holds the driver, any nested `FontDriver`
+/// call (`shape_gstring`, `glyph_text_metrics`, or `realized_fontset`) observes
+/// `None`; production lookups do not invoke Lisp or re-enter the driver.
+/// `None` (no driver, nested borrow, or layout engine already borrowed) keeps
 /// the implicit fontset.
 fn realized_fontset_at(
     eval: &mut neovm_eval::emacs_core::eval::Context,
