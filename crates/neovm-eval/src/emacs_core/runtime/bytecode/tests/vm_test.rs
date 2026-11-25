@@ -7885,6 +7885,124 @@ fn vm_verified_switch_follows_a_mutation_only_onto_a_proven_depth() {
     assert_eq!(run_switch(&mut eval, &func, b), 30);
 }
 
+/// Multi-depth switches (common in Org/pcase .elc output) must verify and run
+/// in the verified driver, while any runtime jump-table mutation targeting a
+/// different switch's stack depth is still rejected as invalid bytecode.
+#[test]
+fn vm_verified_multi_depth_switches_execute_and_reject_cross_switch_mutation() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_minimal_vm_harness(crate::test_utils::unit_runtime());
+    let (a, b, c) = (
+        Value::symbol("vm-msw-a"),
+        Value::symbol("vm-msw-b"),
+        Value::symbol("vm-msw-c"),
+    );
+    let table1 = switch_table(HashTableTest::Eq, &[(a, 9)]);
+    let table2 = switch_table(HashTableTest::Eq, &[(b, 11)]);
+    // 1 arg (entry depth 1):
+    //   0: dup (137)          -> d=2
+    //   1: constant 0 (192)   -> d=3 (table1)
+    //   2: switch (183)       -> d=1 (fall-through pc 3; target 9 at d=1)
+    //   3: constant 5 (197)   -> d=2 (extra stack slot under switch 2)
+    //   4: stack-ref 1 (1)    -> d=3 (arg)
+    //   5: constant 1 (193)   -> d=4 (table2)
+    //   6: switch (183)       -> d=2 (fall-through pc 7; target 11 at d=2)
+    //   7: constant 4 (196)   -> d=3 (300)
+    //   8: return (135)
+    //   9: constant 2 (194)   -> d=2 (100, switch 1 target)
+    //  10: return (135)
+    //  11: constant 3 (195)   -> d=3 (200, switch 2 target)
+    //  12: return (135)
+    let mut func =
+        ByteCodeFunction::new(crate::emacs_core::bytecode::decode::parse_arglist_descriptor(257));
+    func.set_constants(
+        vec![
+            table1,
+            table2,
+            Value::fixnum(100),
+            Value::fixnum(200),
+            Value::fixnum(300),
+            Value::fixnum(1),
+        ]
+        .into(),
+    );
+    func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
+    func.set_gnu_bytecode_bytes(Some(neovm_value::tagged::header::LispByteVec::owned(vec![
+        137, 192, 183, 197, 1, 193, 183, 196, 135, 194, 135, 195, 135,
+    ])));
+    func.defer_gnu_decode();
+    assert!(
+        func.executes_verified_ops(),
+        "multi-depth switches must verify for the verified driver"
+    );
+
+    // Normal execution across both switch sites and fall-through, checked
+    // against an eager unverified twin running on the checked driver.
+    let mut checked_constants = vec![
+        table1,
+        table2,
+        Value::fixnum(100),
+        Value::fixnum(200),
+        Value::fixnum(300),
+        Value::fixnum(1),
+    ];
+    let (checked_ops, checked_offset_map) =
+        crate::emacs_core::bytecode::decode::decode_gnu_bytecode_with_offset_map(
+            &[
+                137, 192, 183, 197, 1, 193, 183, 196, 135, 194, 135, 195, 135,
+            ],
+            &mut checked_constants,
+        )
+        .expect("decode checked twin");
+    let mut checked_func =
+        ByteCodeFunction::new(crate::emacs_core::bytecode::decode::parse_arglist_descriptor(257));
+    checked_func.set_ops(checked_ops);
+    checked_func.set_constants(checked_constants.into());
+    checked_func.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
+    checked_func.set_gnu_byte_offset_map(Some(checked_offset_map));
+    checked_func.seal_hand_assembled_ops_for_test();
+    assert!(
+        !checked_func.executes_verified_ops(),
+        "eager twin without switch tables stays on the checked driver"
+    );
+
+    for _ in 0..4 {
+        for (input, expected) in [(a, 100), (b, 200), (c, 300)] {
+            let verified_val = run_switch(&mut eval, &func, input);
+            let checked_val = run_switch(&mut eval, &checked_func, input);
+            assert_eq!(verified_val, expected);
+            assert_eq!(
+                verified_val, checked_val,
+                "verified driver must match checked driver on multi-depth switches"
+            );
+        }
+    }
+
+    let remap = |table: Value, key: Value, offset: i64| {
+        let _ = table.with_hash_table_mut(|ht| {
+            ht.insert(key.to_hash_key(&ht.test), key, Value::fixnum(offset));
+        });
+    };
+    // Cross-switch mutation: table1 (depth 1) -> target 11 (proven at depth 2) must fail.
+    remap(table1, a, 11);
+    assert!(
+        new_vm(&mut eval).execute(&func, vec![a]).is_err(),
+        "switch 1 (depth 1) must reject switch 2's target (depth 2)"
+    );
+    remap(table1, a, 9);
+    assert_eq!(run_switch(&mut eval, &func, a), 100);
+
+    // Cross-switch mutation: table2 (depth 2) -> target 9 (proven at depth 1) must fail.
+    remap(table2, b, 9);
+    assert!(
+        new_vm(&mut eval).execute(&func, vec![b]).is_err(),
+        "switch 2 (depth 2) must reject switch 1's target (depth 1)"
+    );
+    // Same-depth mutation: table2 (depth 2) -> fall-through 7 (proven at depth 2) succeeds.
+    remap(table2, c, 7);
+    assert_eq!(run_switch(&mut eval, &func, c), 300);
+}
+
 /// `(lambda (a i) (aref a i))` and `(lambda (a i v) (aset a i v) a)` /
 /// `(lambda (a i v) (aset a i v))` as hand-built, sealed and stack-verified
 /// bytecode: the real `Aref`/`Aset` arms of the VERIFIED driver and their

@@ -365,11 +365,11 @@ pub(crate) fn opcode_min_operands(op: &Op) -> usize {
 ///   ([`switch_static_targets`]);
 /// - the switch has two operands (table, dispatch value) and every target,
 ///   like the fall-through (no match), is entered at `depth - 2`;
-/// - all reachable switches share one post-pop depth, so target validation
-///   needs no live stack depth from the dispatch arm;
-/// - the per-instruction depths are recorded ([`StackProof`]), so a table
-///   mutated after sealing cannot steer the unchecked driver to an
-///   instruction at an unproven depth.
+/// - the per-instruction depths are recorded ([`StackProof`]), so each switch
+///   site's fall-through `depths[pc + 1]` records its exact proven post-pop
+///   depth `depth - 2`. Different switches in the same function may sit at
+///   different stack depths, while a table mutated after sealing still cannot
+///   steer the unchecked driver to an instruction proven at another depth.
 ///
 /// Other deliberately conservative refusals: a depth inconsistency at a join,
 /// or an effect the table below cannot bound.
@@ -394,7 +394,6 @@ pub(crate) fn verify_stack_effects_with_tables(
     if entry_depth > max_stack || ops.is_empty() {
         return None;
     }
-    let mut switch_depth = None;
     let mut switch_targets: Vec<(i64, u32)> = Vec::new();
     let mut depths: Vec<Option<usize>> = vec![None; ops.len()];
     depths[0] = Some(entry_depth);
@@ -509,10 +508,6 @@ pub(crate) fn verify_stack_effects_with_tables(
                     }
                     switch_targets.push((raw, target as u32));
                 }
-                if switch_depth.is_some_and(|proven| proven != depth - 2) {
-                    return None;
-                }
-                switch_depth = Some(depth - 2);
                 (2, -2)
             }
             Op::Return | Op::Throw | Op::TrapOutOfRangeConstant(_) => {
@@ -644,12 +639,7 @@ pub(crate) fn verify_stack_effects_with_tables(
     switch_targets.dedup_by_key(|entry| entry.0);
     Some(unsafe {
         /* SAFETY: the proof must be the verifier's result for exactly these ops */
-        StackProof::from_parts(
-            switch_depth,
-            switch_targets.into_boxed_slice(),
-            depths,
-            max_stack,
-        )
+        StackProof::from_parts(switch_targets.into_boxed_slice(), depths, max_stack)
     })
 }
 

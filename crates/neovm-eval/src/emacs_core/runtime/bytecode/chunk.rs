@@ -189,8 +189,10 @@ pub(crate) trait ByteCodeFunctionExt {
     #[allow(dead_code)]
     fn disassemble(&self) -> String;
 
-    /// Resolve a switch hit through the standing proof.
-    fn verified_switch_pc(&self, raw: i64) -> Option<Option<usize>>;
+    /// Resolve a switch hit through the standing proof using the switch's
+    /// fall-through instruction index (`pc + 1`), whose proven depth equals
+    /// that switch's post-pop depth.
+    fn verified_switch_pc(&self, fallthrough_pc: usize, raw: i64) -> Option<Option<usize>>;
 
     /// Recompute the eager-instruction stack proof.
     fn refresh_stack_verification(&mut self);
@@ -405,11 +407,21 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         }
     }
     /// Resolve a switch hit through the standing proof, if this function has
-    /// one. All its reachable switches share the post-pop depth recorded at
-    /// verification, so this needs no live depth from the dispatch arm.
-    /// A mutated table may name any instruction proven at that fixed depth.
-    /// Admitted values use the pre-resolved table; only new values search
-    /// the byte-offset map on the cold path.
+    /// one.
+    ///
+    /// Soundness invariant: at the moment `Op::Switch` executes at instruction
+    /// `pc`, `fallthrough_pc == pc + 1` and the live operand depth after
+    /// popping the switch's two operands equals `proof.proven_depth(pc + 1)`
+    /// (proven by `verify_stack_effects_with_tables` on the fall-through edge;
+    /// `seal_ops` guarantees `pc + 1 < ops.len()`). Requiring
+    /// `proof.proves_depth(target, depth)` therefore ensures that even when a
+    /// jump table is mutated at runtime (`puthash`), the jump can land only on
+    /// an instruction whose proven depth equals THIS switch's exact post-pop
+    /// depth. This is strictly stronger than a single function-wide
+    /// `switch_depth` check: a mutated table at Switch A (depth `d1`) cannot
+    /// jump to a target proven only at Switch B's depth (`d2 != d1`).
+    /// Admitted values use the pre-resolved table; only new values search the
+    /// byte-offset map on the cold path.
     ///
     /// The outer `None` leaves unverified/eager functions with the checked
     /// resolver's existing behavior. `Some(None)` rejects an unsafe target.
@@ -417,7 +429,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// matches the proof. The checked driver does not use this target; it
     /// keeps its own operand checks.
     #[inline(never)]
-    fn verified_switch_pc(&self, raw: i64) -> Option<Option<usize>> {
+    fn verified_switch_pc(&self, fallthrough_pc: usize, raw: i64) -> Option<Option<usize>> {
         let lazy = self.lazy_gnu_code().as_ref()?;
         let decoded = lazy.decoded_ready()?;
         if !decoded.stack_verified() {
@@ -428,7 +440,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                 Some(target) => target,
                 None => decoded.unadmitted_switch_target(raw)?,
             };
-            let depth = proof.switch_depth()?;
+            let depth = proof.proven_depth(fallthrough_pc)?;
             proof.proves_depth(target, depth).then_some(target)
         }))
     }

@@ -6502,7 +6502,7 @@ impl<'a> Vm<'a> {
                         if let Some(target_val) = target {
                             match target_val.kind() {
                                 ValueKind::Fixnum(addr) => {
-                                    pc_local = vm_try!(resolve_switch_target(func, addr));
+                                    pc_local = vm_try!(resolve_switch_target(func, pc_local, addr));
                                 }
                                 _ => {
                                     vm_try!(Err(signal(
@@ -11406,10 +11406,21 @@ fn vm_switch_target(ht: &LispHashTable, dispatch: Value, swp: bool) -> Option<Va
 }
 
 #[inline(never)]
-fn resolve_switch_target(func: &ByteCodeFunction, raw_addr: i64) -> Result<usize, Flow> {
-    // Keep proof handling behind this existing two-argument boundary: a
-    // live depth argument in the Switch arm spills the ops base in fat LTO.
-    if let Some(target) = func.verified_switch_pc(raw_addr) {
+fn resolve_switch_target(
+    func: &ByteCodeFunction,
+    fallthrough_pc: usize,
+    raw_addr: i64,
+) -> Result<usize, Flow> {
+    // Soundness & register-pressure boundary: at `Op::Switch` (instruction `pc`),
+    // `pc_local` is already incremented to `fallthrough_pc == pc + 1` and live in
+    // a register. By `verify_stack_effects_with_tables`, the live operand depth
+    // after popping the switch's two operands equals `proof.proven_depth(pc + 1)`,
+    // and any runtime-mutated jump-table hit is accepted iff the target's proven
+    // depth equals THAT per-site depth (stronger than a function-wide switch
+    // depth: Switch A cannot jump into Switch B's depth). Passing `pc_local`
+    // avoids computing `cursor.len - frame_base` in the Switch arm, which kept
+    // `frame_base` live and spilled the ops base in fat LTO.
+    if let Some(target) = func.verified_switch_pc(fallthrough_pc, raw_addr) {
         return target.ok_or_else(invalid_bytecode_flow);
     }
 
