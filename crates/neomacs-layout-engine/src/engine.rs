@@ -7575,7 +7575,7 @@ impl LayoutEngine {
             BufferSourceRenderAttemptOutcome::Skipped
             | BufferSourceRenderAttemptOutcome::LogicalInputsChanged
             | BufferSourceRenderAttemptOutcome::ChromeSourceInvalidated
-            | BufferSourceRenderAttemptOutcome::OverlayViewUnusable(_)
+            | BufferSourceRenderAttemptOutcome::OverlayViewExhausted
             | BufferSourceRenderAttemptOutcome::GlyphMatrixCapacityExhausted
             | BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { .. }
             | BufferSourceRenderAttemptOutcome::Retry { .. }
@@ -7986,7 +7986,7 @@ impl LayoutEngine {
                 reject_changed_cursor_sources(evaluator, &mut window_end_attempt, true);
                 return LeafLayoutAttempt::ChromeInputsChanged;
             }
-            BufferSourceRenderAttemptOutcome::OverlayViewUnusable(reason) => {
+            BufferSourceRenderAttemptOutcome::OverlayViewExhausted => {
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
                 }
