@@ -1131,7 +1131,7 @@ impl ImageCache {
         // A resident GIF stream already owns its source bytes (`anim_cache` in
         // GNU `gif_load`, src/image.c:9889-9902): step it directly without
         // re-reading a multi-megabyte file from disk on every `:index` tick.
-        if let Some(resolution) = sequence_cache.resolve_resident_gif(sequence, frame) {
+        if let Some(resolution) = sequence_cache.resolve_resident_gif(sequence, frame, colors) {
             match resolution {
                 ImageSequenceResolution::Frame(frame) => {
                     let (width, height) = frame.dimensions();
@@ -1144,7 +1144,9 @@ impl ImageCache {
                     }
                     .realize_bitmap(size, rotation, realization, mask);
                 }
-                ImageSequenceResolution::MissingFrame => return None,
+                ImageSequenceResolution::MissingFrame | ImageSequenceResolution::Failed => {
+                    return None;
+                }
                 ImageSequenceResolution::NotAnimated => {}
             }
         }
@@ -1162,6 +1164,7 @@ impl ImageCache {
                 sequence,
                 size,
                 rotation,
+                colors,
                 realization,
                 mask,
                 sink,
@@ -1266,6 +1269,7 @@ impl ImageCache {
             sequence,
             size,
             rotation,
+            colors,
             realization,
             mask,
             sink,
@@ -1342,6 +1346,7 @@ impl ImageCache {
     /// drops both frame selection and animation metadata. Route animated
     /// formats through `AnimationDecoder` first, then use the still-image path
     /// only for frame zero.
+    #[allow(clippy::too_many_arguments)]
     fn decode_raster_data(
         data: EncodedBytes,
         frame: ImageFrameIndex,
@@ -1349,11 +1354,12 @@ impl ImageCache {
         sequence: ImageSequenceId,
         size: ImageSizeSpec,
         rotation: ImageRotation,
+        colors: ImageColorContext,
         realization: ImageRealization,
         mask_policy: ImageMaskPolicy,
         sink: Option<&mut dyn FnMut(DecodedBand)>,
     ) -> Option<DecodedPixels> {
-        match sequence_cache.resolve(sequence, &data, frame) {
+        match sequence_cache.resolve(sequence, &data, frame, colors) {
             ImageSequenceResolution::Frame(frame) => {
                 let (width, height) = frame.dimensions();
                 let (rgba, embedded) = frame.into_parts();
@@ -1365,7 +1371,7 @@ impl ImageCache {
                 }
                 .realize_bitmap(size, rotation, realization, mask_policy)
             }
-            ImageSequenceResolution::MissingFrame => None,
+            ImageSequenceResolution::MissingFrame | ImageSequenceResolution::Failed => None,
             ImageSequenceResolution::NotAnimated => {
                 Self::decode_still_image(data, size, rotation, realization, mask_policy, sink)
             }
@@ -1405,7 +1411,9 @@ impl ImageCache {
                 .map(ComputedSequenceDecode::Frame)
                 .unwrap_or(ComputedSequenceDecode::Unavailable)
             }
-            ImageSequenceResolution::MissingFrame => ComputedSequenceDecode::Unavailable,
+            ImageSequenceResolution::MissingFrame | ImageSequenceResolution::Failed => {
+                ComputedSequenceDecode::Unavailable
+            }
             ImageSequenceResolution::NotAnimated => ComputedSequenceDecode::NotAnimated,
         }
     }

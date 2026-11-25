@@ -143,6 +143,9 @@ mod frame_bar_parameters;
 #[path = "frame_resize_oracle.rs"]
 mod frame_resize_oracle;
 
+#[path = "gif_disposal_oracle.rs"]
+mod gif_disposal_oracle;
+
 #[path = "glyph_coverage.rs"]
 mod glyph_coverage;
 

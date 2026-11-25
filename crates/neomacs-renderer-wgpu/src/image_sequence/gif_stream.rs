@@ -9,9 +9,17 @@
 //! backward-seek window so reverse playback (`:speed` < 0) avoids restarting
 //! from frame 0 on every step.
 //!
-//! Each frame is composed exactly as `image`'s own GIF iterator composes it
-//! (`GifFrameIterator::next`), because the whole-sequence decode this
-//! replaces used that iterator. A row pins the two byte for byte.
+//! Frame compositing follows GNU Emacs 31.1 `gif_load` (src/image.c:10013-10263)
+//! directly on palette-indexed pixels:
+//! - subimages outside the logical screen are rejected;
+//! - pixels outside frame 0's rectangle are filled with `frame_bg`;
+//! - frame 0 forces `DISPOSE_BACKGROUND`, while `DISPOSAL_UNSPECIFIED` (`Any`)
+//!   and `DISPOSE_PREVIOUS` (`Previous`) map to `DISPOSE_DO_NOT` (`Keep`);
+//! - transparent pixels overwrite with `transparent_bg` (`:background` if
+//!   specified, else `frame_bg`, or `[0, 0, 0, 0]` for `Transparent` chrome
+//!   icons) when disposal != `Keep`, and leave the canvas untouched when
+//!   disposal == `Keep`;
+//! - disposed frames are never cleared from the retained canvas afterwards.
 
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -25,10 +33,31 @@ use std::sync::{
 use gif::{ColorOutput, DecodeOptions, DisposalMethod};
 use neomacs_display_protocol::image::ImageExtensionBlock;
 use neomacs_display_protocol::{
-    EncodedBytes, ImageEmbeddedMetadata, ImageFrameDelay, ImageFrameIndex,
+    EncodedBytes, ImageColorContext, ImageEmbeddedMetadata, ImageFrameDelay, ImageFrameIndex,
 };
 
 use super::{DecodedSequenceFrame, ImageSequenceFrame};
+
+/// Background colors that GNU `gif_load` bakes into composed GIF frames.
+///
+/// Kept separate from the rest of [`ImageColorContext`] so specs differing only
+/// in displaying-face foreground/background (which `gif_load` ignores) share one
+/// resident stream, while specs with a different `:background`, frame
+/// background, or chrome background policy never reuse stale pixels.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(super) struct GifBackgroundColors {
+    frame_bg: [u8; 4],
+    transparent_bg: [u8; 4],
+}
+
+impl GifBackgroundColors {
+    pub(super) const fn from_context(colors: ImageColorContext) -> Self {
+        Self {
+            frame_bg: colors.gif_frame_background_rgba8(),
+            transparent_bg: colors.gif_transparent_background_rgba8(),
+        }
+    }
+}
 
 /// Independent forward decoder positions kept per GIF source so multiple specs
 /// animating the same GIF out of phase each step in O(1) without restarting.
@@ -49,6 +78,8 @@ pub(super) struct GifStream {
     /// is decoded.
     extensions: Vec<Vec<(u8, Vec<u8>)>>,
     source: EncodedBytes,
+    /// Background colors baked into this stream's composed frames.
+    colors: GifBackgroundColors,
     /// Fixed retained memory: encoded GIF bytes (GNU's `anim_cache.byte_size`,
     /// src/image.c:9946/9963) plus the parsed extension payload table.
     fixed_bytes: usize,
@@ -133,12 +164,15 @@ const _: () = assert_send::<GifStream>();
 
 impl GifStream {
     /// Read the record structure and the header, as GNU's `DGifSlurp` and
-    /// `gif_load` do before the first frame. No frame is decoded.
-    pub(super) fn open(source: EncodedBytes) -> Option<Self> {
-        let extensions = super::gif_metadata::frame_extensions(&source)?;
-        if extensions.is_empty() {
+    /// `gif_load` do before the first frame. Rejects the whole GIF up front if
+    /// any subimage descriptor extends outside the logical screen
+    /// (`src/image.c:10018-10035`). No frame is decoded.
+    pub(super) fn open(source: EncodedBytes, colors: GifBackgroundColors) -> Option<Self> {
+        let structure = super::gif_metadata::parse_structure(&source)?;
+        if structure.extensions.is_empty() || !structure.all_subimages_fit_screen {
             return None;
         }
+        let extensions = structure.extensions;
         let extension_bytes: usize = extensions
             .iter()
             .flatten()
@@ -150,6 +184,7 @@ impl GifStream {
         Some(Self {
             extensions,
             source,
+            colors,
             fixed_bytes,
             width,
             height,
@@ -374,6 +409,7 @@ impl GifStream {
             let decoded = frame_reader.read_frame(
                 slot.next,
                 &self.extensions,
+                self.colors,
                 #[cfg(test)]
                 self.decoded_frames.as_deref(),
             );
@@ -411,130 +447,179 @@ impl GifStream {
     }
 }
 
-/// The decoder plus the canvas `image`'s iterator composites onto.
+/// The palette-indexed decoder plus the retained RGBA canvas matching GNU
+/// `gif_load`'s `anim_handle->pixmap` (src/image.c:10081-10263).
 struct FrameReader {
     decoder: gif::Decoder<Cursor<EncodedBytes>>,
     width: u32,
     height: u32,
-    /// The canvas as the disposal method of the last frame left it
-    /// (`non_disposed_frame` in `image`'s `GifFrameIterator`).
-    canvas: Option<image::RgbaImage>,
+    global_palette: Vec<u8>,
+    /// The retained composed canvas (`width * height * 4` RGBA bytes).
+    canvas: Option<Vec<u8>>,
+    /// Frame 0's `(left, top, right, bottom)` sub-rectangle (`img->corners`
+    /// in GNU `gif_load`, src/image.c:10061-10066).
+    frame0_rect: Option<(u32, u32, u32, u32)>,
 }
 
-/// A decode failure, as `image`'s iterator reports it: every error there
-/// ends the sequence, so the reason needs no distinction here.
+/// A decode failure: any malformed frame ends the sequence.
 type FrameResult<T> = Result<T, ()>;
 
 impl FrameReader {
-    /// What `image::codecs::gif::GifDecoder::new` reads: the header, with
-    /// RGBA output.
+    /// Read the logical screen descriptor and global palette in indexed mode.
     fn open(source: &EncodedBytes) -> Option<Self> {
         let mut options = DecodeOptions::new();
-        options.set_color_output(ColorOutput::RGBA);
+        options.set_color_output(ColorOutput::Indexed);
         let decoder = options.read_info(Cursor::new(source.clone())).ok()?;
         let (width, height) = (u32::from(decoder.width()), u32::from(decoder.height()));
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let global_palette = decoder
+            .global_palette()
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
         Some(Self {
             decoder,
             width,
             height,
+            global_palette,
             canvas: None,
+            frame0_rect: None,
         })
     }
 
     fn canvas_bytes(&self) -> usize {
-        self.canvas
-            .as_ref()
-            .map_or(0, |canvas| canvas.as_raw().len())
+        self.canvas.as_ref().map_or(0, Vec::len)
     }
 
-    /// Decode frame `index` and composite it onto the canvas. `Ok(None)` is
-    /// the end of the stream.
+    /// Decode frame `index` and composite it onto the canvas following GNU
+    /// Emacs 31.1 `gif_load` (src/image.c:10018-10263). `Ok(None)` is the end
+    /// of the stream.
     fn read_frame(
         &mut self,
         index: u32,
         extensions: &[Vec<(u8, Vec<u8>)>],
+        colors: GifBackgroundColors,
         #[cfg(test)] decoded_frames: Option<&AtomicU64>,
     ) -> FrameResult<Option<DecodedSequenceFrame>> {
-        let (left, top, width, height, dispose, delay) = match self.decoder.next_frame_info() {
-            Ok(Some(frame)) => (
-                u32::from(frame.left),
-                u32::from(frame.top),
-                u32::from(frame.width),
-                u32::from(frame.height),
-                frame.dispose,
-                u32::from(frame.delay),
-            ),
-            Ok(None) => return Ok(None),
-            Err(_) => return Err(()),
-        };
-        // `image` ignores the background color "for web compatibility".
-        let non_disposed_frame = self.canvas.get_or_insert_with(|| {
-            image::RgbaImage::from_pixel(self.width, self.height, image::Rgba([0, 0, 0, 0]))
-        });
-        let mut raw = vec![0; self.decoder.buffer_size()];
+        let (left, top, width, height, dispose, transparent, delay, pixel_colors) =
+            match self.decoder.next_frame_info() {
+                Ok(Some(frame)) => {
+                    let palette = frame
+                        .palette
+                        .as_deref()
+                        .unwrap_or(self.global_palette.as_slice());
+                    // GNU `unsigned long pixel_colors[256] = { 0, };`
+                    // (src/image.c:10210-10225): unmapped indices paint opaque
+                    // black; the transparent index within the color map maps to
+                    // `specified_bg` if set, else `frame_bg`.
+                    let mut pixel_colors = [[0u8, 0, 0, 255]; 256];
+                    let color_count = (palette.len() / 3).min(256);
+                    for (i, slot) in pixel_colors.iter_mut().take(color_count).enumerate() {
+                        if frame.transparent == Some(i as u8) {
+                            *slot = colors.transparent_bg;
+                        } else {
+                            let base = i * 3;
+                            *slot = [palette[base], palette[base + 1], palette[base + 2], 255];
+                        }
+                    }
+                    (
+                        u32::from(frame.left),
+                        u32::from(frame.top),
+                        u32::from(frame.width),
+                        u32::from(frame.height),
+                        frame.dispose,
+                        frame.transparent,
+                        u32::from(frame.delay),
+                        pixel_colors,
+                    )
+                }
+                Ok(None) => return Ok(None),
+                Err(_) => return Err(()),
+            };
+
+        // GNU src/image.c:10018-10035: reject subimages that extend outside the
+        // logical screen.
+        let right = left.checked_add(width).ok_or(())?;
+        let bottom = top.checked_add(height).ok_or(())?;
+        if right > self.width || bottom > self.height {
+            return Err(());
+        }
+
+        // `gif` 0.14 de-interlaces into scanline order for `ColorOutput::Indexed`.
+        let mut raw = vec![0u8; self.decoder.buffer_size()];
         if self.decoder.read_into_buffer(&mut raw).is_err() {
             return Err(());
         }
-        let Some(mut frame_buffer) = image::ImageBuffer::from_raw(width, height, raw) else {
+        let sub_w = usize::try_from(width).map_err(|_| ())?;
+        let sub_h = usize::try_from(height).map_err(|_| ())?;
+        let sub_pixels = sub_w.checked_mul(sub_h).ok_or(())?;
+        if raw.len() < sub_pixels {
             return Err(());
-        };
+        }
 
-        // Blend the frame with the canvas, then update the canvas according
-        // to the disposal method.
-        fn blend_and_dispose_pixel(
-            dispose: DisposalMethod,
-            previous: &mut image::Rgba<u8>,
-            current: &mut image::Rgba<u8>,
-        ) {
-            let pixel_alpha = current.0[3];
-            if pixel_alpha == 0 {
-                *current = *previous;
+        let screen_w = usize::try_from(self.width).map_err(|_| ())?;
+        let screen_h = usize::try_from(self.height).map_err(|_| ())?;
+        let canvas_len = screen_w
+            .checked_mul(screen_h)
+            .and_then(|px| px.checked_mul(4))
+            .ok_or(())?;
+        let canvas = self.canvas.get_or_insert_with(|| {
+            let mut buf = vec![0u8; canvas_len];
+            for px in buf.chunks_exact_mut(4) {
+                px.copy_from_slice(&colors.frame_bg);
             }
+            buf
+        });
 
+        // GNU src/image.c:10061-10118: clear the border outside frame 0's
+        // rectangle to `frame_bg` before compositing each frame.
+        if index == 0 {
+            self.frame0_rect = Some((left, top, right, bottom));
+        } else if let Some((f0_left, f0_top, f0_right, f0_bottom)) = self.frame0_rect
+            && (f0_left > 0 || f0_top > 0 || f0_right < self.width || f0_bottom < self.height)
+        {
+            clear_outside_rect(
+                canvas,
+                screen_w,
+                screen_h,
+                (
+                    f0_left as usize,
+                    f0_top as usize,
+                    f0_right as usize,
+                    f0_bottom as usize,
+                ),
+                colors.frame_bg,
+            );
+        }
+
+        // GNU src/image.c:10185-10203, 10256:
+        // - frame 0 forces DISPOSE_BACKGROUND;
+        // - DISPOSAL_UNSPECIFIED and DISPOSE_PREVIOUS map to DISPOSE_DO_NOT;
+        // - transparent pixels overwrite only when disposal != DISPOSE_DO_NOT;
+        // - the canvas is never cleared after compositing a disposed frame.
+        let effective_disposal = if index == 0 {
+            DisposalMethod::Background
+        } else {
             match dispose {
-                DisposalMethod::Any | DisposalMethod::Keep => {
-                    // do not dispose (keep pixels from this frame); `Any` is
-                    // underspecified in the GIF spec, but most viewers treat
-                    // it identically to `Keep`
-                    *previous = *current;
-                }
-                DisposalMethod::Background => {
-                    // restore to background color (background shows through
-                    // transparent pixels in the next frame)
-                    *previous = image::Rgba([0, 0, 0, 0]);
-                }
-                DisposalMethod::Previous => {
-                    // restore to previous (dispose frames leaving the last
-                    // none disposal frame)
+                DisposalMethod::Any | DisposalMethod::Previous => DisposalMethod::Keep,
+                other => other,
+            }
+        };
+        let overwrite_transparent = effective_disposal != DisposalMethod::Keep;
+
+        let sub_left = left as usize;
+        let sub_top = top as usize;
+        for y in 0..sub_h {
+            let src_row = &raw[y * sub_w..(y + 1) * sub_w];
+            let dst_row_start = ((sub_top + y) * screen_w + sub_left) * 4;
+            for (x, &c) in src_row.iter().enumerate() {
+                if transparent != Some(c) || overwrite_transparent {
+                    let dst = dst_row_start + x * 4;
+                    canvas[dst..dst + 4].copy_from_slice(&pixel_colors[usize::from(c)]);
                 }
             }
         }
-
-        // A frame that exactly covers the canvas is used directly; any other
-        // frame gets a canvas-sized buffer.
-        let image_buffer =
-            if (left, top) == (0, 0) && (self.width, self.height) == frame_buffer.dimensions() {
-                for (x, y, pixel) in frame_buffer.enumerate_pixels_mut() {
-                    let previous_pixel = non_disposed_frame.get_pixel_mut(x, y);
-                    blend_and_dispose_pixel(dispose, previous_pixel, pixel);
-                }
-                frame_buffer
-            } else {
-                image::ImageBuffer::from_fn(self.width, self.height, |x, y| {
-                    let frame_x = x.wrapping_sub(left);
-                    let frame_y = y.wrapping_sub(top);
-                    let previous_pixel = non_disposed_frame.get_pixel_mut(x, y);
-
-                    if frame_x < frame_buffer.width() && frame_y < frame_buffer.height() {
-                        let mut pixel = *frame_buffer.get_pixel(frame_x, frame_y);
-                        blend_and_dispose_pixel(dispose, previous_pixel, &mut pixel);
-                        pixel
-                    } else {
-                        // out of bounds: the canvas pixel stays as it was
-                        *previous_pixel
-                    }
-                })
-            };
 
         // GNU gif_load (src/image.c:10273-10318) publishes the extension
         // blocks of the selected sub-image, its count, and its own delay.
@@ -548,7 +633,7 @@ impl FrameReader {
                 bytes: bytes.clone(),
             })
             .collect();
-        // `image` carries a GIF delay of N centiseconds as N*10 ms.
+        // GIF delay is stored in centiseconds (N * 10 ms).
         let delay = ImageFrameDelay::milliseconds(delay * 10, 1).ok_or(())?;
         #[cfg(test)]
         if let Some(counter) = decoded_frames {
@@ -557,9 +642,41 @@ impl FrameReader {
         Ok(Some(DecodedSequenceFrame {
             width: self.width,
             height: self.height,
-            rgba: image_buffer.into_raw().into(),
+            rgba: canvas.as_slice().into(),
             delay,
             embedded: Some(ImageEmbeddedMetadata::gif(count, blocks)),
         }))
+    }
+}
+
+/// Paint every pixel outside `(left, top, right, bottom)` with `bg`, mirroring
+/// GNU `gif_load` (`src/image.c:10103-10117`).
+fn clear_outside_rect(
+    canvas: &mut [u8],
+    width: usize,
+    height: usize,
+    (left, top, right, bottom): (usize, usize, usize, usize),
+    bg: [u8; 4],
+) {
+    for y in 0..top {
+        let row_start = y * width * 4;
+        for px in canvas[row_start..row_start + width * 4].chunks_exact_mut(4) {
+            px.copy_from_slice(&bg);
+        }
+    }
+    for y in bottom..height {
+        let row_start = y * width * 4;
+        for px in canvas[row_start..row_start + width * 4].chunks_exact_mut(4) {
+            px.copy_from_slice(&bg);
+        }
+    }
+    for y in top..bottom {
+        let row_start = y * width * 4;
+        for px in canvas[row_start..row_start + left * 4].chunks_exact_mut(4) {
+            px.copy_from_slice(&bg);
+        }
+        for px in canvas[row_start + right * 4..row_start + width * 4].chunks_exact_mut(4) {
+            px.copy_from_slice(&bg);
+        }
     }
 }

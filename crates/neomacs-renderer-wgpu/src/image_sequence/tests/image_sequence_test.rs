@@ -1,7 +1,8 @@
 use super::*;
 use gif::{DisposalMethod, Encoder};
 use neomacs_display_protocol::{
-    EncodedBytes, ImageFrameIndex, ImageSequenceId, ImageSequenceRetirement,
+    EncodedBytes, ImageBackgroundPolicy, ImageColorContext, ImageFrameIndex, ImageSequenceId,
+    ImageSequenceRetirement,
 };
 
 fn sequence(id: u64) -> ImageSequenceId {
@@ -134,7 +135,12 @@ fn decoder_panic_does_not_leave_retirement_fenced_forever() {
     assert!(panic.is_err());
     cache.retire(ImageSequenceRetirement::One(id));
     cache
-        .resolve(id, &source(&animated_gif_bytes()), ImageFrameIndex::new(0))
+        .resolve(
+            id,
+            &source(&animated_gif_bytes()),
+            ImageFrameIndex::new(0),
+            ImageColorContext::default(),
+        )
         .expect_frame("subsequent decode");
     assert!(
         cache.contains(id),
@@ -172,10 +178,20 @@ fn sequence_cache_decodes_once_and_reuses_composited_frames() {
     let bytes = animated_gif_bytes();
 
     let first = cache
-        .resolve(sequence, &source(&bytes), ImageFrameIndex::new(0))
+        .resolve(
+            sequence,
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            ImageColorContext::default(),
+        )
         .expect_frame("first frame");
     let second = cache
-        .resolve(sequence, &source(&bytes), ImageFrameIndex::new(1))
+        .resolve(
+            sequence,
+            &source(&bytes),
+            ImageFrameIndex::new(1),
+            ImageColorContext::default(),
+        )
         .expect_frame("second frame");
 
     assert_eq!(first.rgba(), [0xff, 0, 0, 0xff, 0xff, 0, 0, 0xff]);
@@ -213,7 +229,12 @@ fn retirement_prevents_a_late_decode_from_repopulating_stale_identity() {
         ready.wait();
         cache.retire(ImageSequenceRetirement::AllocatedThrough(old));
         cache
-            .resolve(future, &source(&bytes), ImageFrameIndex::new(0))
+            .resolve(
+                future,
+                &source(&bytes),
+                ImageFrameIndex::new(0),
+                ImageColorContext::default(),
+            )
             .expect_frame("future sequence remains live");
         retired.wait();
         late.join()
@@ -255,7 +276,12 @@ fn a_retired_identity_is_not_repopulated_by_a_stream() {
     cache.retire(ImageSequenceRetirement::AllocatedThrough(retired));
 
     cache
-        .resolve(retired, &source(&bytes), ImageFrameIndex::new(0))
+        .resolve(
+            retired,
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            ImageColorContext::default(),
+        )
         .expect_frame("the request itself is still answered");
 
     assert!(!cache.contains(retired));
@@ -277,7 +303,12 @@ fn stream_residency_counts_source_extensions_canvas_and_current_frame() {
     // compositing canvas, the frame it last returned, and that frame's GCE.
     let cache = ImageSequenceCache::with_max_bytes(pixel_bytes);
     cache
-        .resolve(sequence(1), &source(&bytes), ImageFrameIndex::new(0))
+        .resolve(
+            sequence(1),
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            ImageColorContext::default(),
+        )
         .expect_frame("first frame");
 
     assert!(cache.contains(sequence(1)));
@@ -292,17 +323,32 @@ fn streams_evict_the_least_recently_used_other_entry_to_meet_the_budget() {
     let cache = ImageSequenceCache::with_max_bytes(2 * residency);
     for id in [1, 2] {
         cache
-            .resolve(sequence(id), &source(&bytes), ImageFrameIndex::new(0))
+            .resolve(
+                sequence(id),
+                &source(&bytes),
+                ImageFrameIndex::new(0),
+                ImageColorContext::default(),
+            )
             .expect_frame("resident stream");
     }
     assert_eq!(cache.resident_bytes(), 2 * residency);
 
     // Stream 1 was used more recently than stream 2, so stream 3 displaces 2.
     cache
-        .resolve(sequence(1), &source(&bytes), ImageFrameIndex::new(1))
+        .resolve(
+            sequence(1),
+            &source(&bytes),
+            ImageFrameIndex::new(1),
+            ImageColorContext::default(),
+        )
         .expect_frame("stream 1 again");
     cache
-        .resolve(sequence(3), &source(&bytes), ImageFrameIndex::new(0))
+        .resolve(
+            sequence(3),
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            ImageColorContext::default(),
+        )
         .expect_frame("third stream");
     assert!(cache.contains(sequence(1)));
     assert!(!cache.contains(sequence(2)));
@@ -312,7 +358,12 @@ fn streams_evict_the_least_recently_used_other_entry_to_meet_the_budget() {
     // A displaced stream reopens on its next request, displacing stream 1.
     cache.reset_decoded_frames();
     let reopened = cache
-        .resolve(sequence(2), &source(&bytes), ImageFrameIndex::new(1))
+        .resolve(
+            sequence(2),
+            &source(&bytes),
+            ImageFrameIndex::new(1),
+            ImageColorContext::default(),
+        )
         .expect_frame("displaced stream again");
     assert_eq!(reopened.rgba(), [0, 0xff, 0, 0xff, 0, 0xff, 0, 0xff]);
     assert_eq!(cache.decoded_frames(), 2);
@@ -332,13 +383,23 @@ fn a_stream_larger_than_the_whole_budget_is_still_retained() {
     let residency = bytes.len() + extension_bytes + pixel_bytes + extension_bytes / 2;
     let cache = ImageSequenceCache::with_max_bytes(residency - 1);
     cache
-        .resolve(sequence(1), &source(&bytes), ImageFrameIndex::new(0))
+        .resolve(
+            sequence(1),
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            ImageColorContext::default(),
+        )
         .expect_frame("first frame");
 
     assert!(cache.contains(sequence(1)));
     cache.reset_decoded_frames();
     cache
-        .resolve(sequence(1), &source(&bytes), ImageFrameIndex::new(1))
+        .resolve(
+            sequence(1),
+            &source(&bytes),
+            ImageFrameIndex::new(1),
+            ImageColorContext::default(),
+        )
         .expect_frame("second frame");
     assert_eq!(
         cache.decoded_frames(),
@@ -393,7 +454,8 @@ fn a_materialized_sequence_stays_within_its_exact_budget_and_stills_are_never_ke
         cache.resolve(
             sequence(3),
             &source(encoded.get_ref()),
-            ImageFrameIndex::new(0)
+            ImageFrameIndex::new(0),
+            ImageColorContext::default(),
         ),
         ImageSequenceResolution::NotAnimated
     ));
@@ -409,7 +471,12 @@ fn single_gif_keeps_graphics_control_delay_metadata() {
     let bytes = b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff\x21\xf9\x04\x01\x0a\0\0\0\x2c\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0\x3b";
     let cache = ImageSequenceCache::new();
     let frame = cache
-        .resolve(sequence(1), &source(bytes), ImageFrameIndex::new(0))
+        .resolve(
+            sequence(1),
+            &source(bytes),
+            ImageFrameIndex::new(0),
+            ImageColorContext::default(),
+        )
         .expect_frame("one-frame GIF");
     let (_, metadata) = frame.into_parts();
     assert_eq!(metadata.frame_count(), None);
@@ -473,25 +540,70 @@ fn indexed_gif(width: u16, height: u16, frames: &[IndexedFrame]) -> Vec<u8> {
     bytes
 }
 
-/// `image`'s own GIF iterator over `bytes`: frame for frame what the
-/// whole-sequence decode served before streams existed. Stops on the first
-/// decode error because `image`'s `GifFrameIterator` is not fused on error
-/// and `decode_sequence` itself returned on the first `Err`.
-fn reference_frames(bytes: &[u8]) -> Vec<Result<image::RgbaImage, String>> {
-    let mut frames = Vec::new();
-    for frame in image::codecs::gif::GifDecoder::new(Cursor::new(bytes))
-        .unwrap()
-        .into_frames()
-    {
-        match frame {
-            Ok(frame) => frames.push(Ok(frame.buffer().clone())),
-            Err(error) => {
-                frames.push(Err(error.to_string()));
-                break;
+/// Direct model of GNU Emacs 31.1 `gif_load` (`src/image.c:10061-10263`) over
+/// an `IndexedFrame` sequence using `PALETTE`, used to verify that `GifStream`
+/// produces identical frames across forward playback, rewinds, and reverse
+/// steps.
+fn gnu_gif_load_reference(
+    width: usize,
+    height: usize,
+    frames: &[IndexedFrame],
+    colors: ImageColorContext,
+) -> Vec<Vec<u8>> {
+    let frame_bg = colors.gif_frame_background_rgba8();
+    let transparent_bg = colors.gif_transparent_background_rgba8();
+    let mut canvas = vec![0u8; width * height * 4];
+    for px in canvas.chunks_exact_mut(4) {
+        px.copy_from_slice(&frame_bg);
+    }
+    let f0 = &frames[0];
+    let (f0_l, f0_t, f0_r, f0_b) = (
+        usize::from(f0.left),
+        usize::from(f0.top),
+        usize::from(f0.left) + usize::from(f0.width),
+        usize::from(f0.top) + usize::from(f0.height),
+    );
+    let mut out = Vec::with_capacity(frames.len());
+    for (j, frame) in frames.iter().enumerate() {
+        for y in 0..height {
+            for x in 0..width {
+                if y < f0_t || y >= f0_b || x < f0_l || x >= f0_r {
+                    let dst = (y * width + x) * 4;
+                    canvas[dst..dst + 4].copy_from_slice(&frame_bg);
+                }
             }
         }
+        let disposal = if j == 0 {
+            DisposalMethod::Background
+        } else {
+            match frame.dispose {
+                DisposalMethod::Any | DisposalMethod::Previous => DisposalMethod::Keep,
+                other => other,
+            }
+        };
+        let overwrite_transparent = disposal != DisposalMethod::Keep;
+        let sw = usize::from(frame.width);
+        let sh = usize::from(frame.height);
+        let sl = usize::from(frame.left);
+        let st = usize::from(frame.top);
+        for y in 0..sh {
+            for x in 0..sw {
+                let c = frame.pixels[y * sw + x];
+                if frame.transparent != Some(c) || overwrite_transparent {
+                    let rgba = if frame.transparent == Some(c) {
+                        transparent_bg
+                    } else {
+                        let base = usize::from(c) * 3;
+                        [PALETTE[base], PALETTE[base + 1], PALETTE[base + 2], 255]
+                    };
+                    let dst = ((st + y) * width + (sl + x)) * 4;
+                    canvas[dst..dst + 4].copy_from_slice(&rgba);
+                }
+            }
+        }
+        out.push(canvas.clone());
     }
-    frames
+    out
 }
 
 /// Six frames of a 4x3 canvas: every disposal method, transparent indices
@@ -564,12 +676,13 @@ fn disposal_frames() -> Vec<IndexedFrame> {
 }
 
 #[test]
-fn gif_stream_frames_are_the_whole_sequence_decode_frames() {
+fn gif_stream_frames_match_gnu_gif_load_compositing() {
     let frames = disposal_frames();
     let bytes = indexed_gif(4, 3, &frames);
-    let reference = reference_frames(&bytes);
+    let colors = ImageColorContext::from_pixels(0x00_ff_ff_ff, 0x00_10_20_30)
+        .with_frame_background(0x00_ee_dd_cc);
+    let reference = gnu_gif_load_reference(4, 3, &frames, colors);
     assert_eq!(reference.len(), frames.len());
-    assert!(reference.iter().all(Result::is_ok), "{reference:?}");
     let extensions = super::gif_metadata::frame_extensions(&bytes).unwrap();
     let cache = ImageSequenceCache::new();
     let id = sequence(1);
@@ -581,12 +694,10 @@ fn gif_stream_frames_are_the_whole_sequence_decode_frames() {
                 id,
                 &source(&bytes),
                 ImageFrameIndex::new(u64::try_from(index).unwrap()),
+                colors,
             )
             .expect_frame("frame");
-        assert_eq!(
-            frame.rgba(),
-            reference[index].as_ref().unwrap().as_raw().as_slice()
-        );
+        assert_eq!(frame.rgba(), reference[index].as_slice());
         let (_, metadata) = frame.into_parts();
         // GNU gif_load publishes the selected frame's count, delay and
         // extension blocks (src/image.c:10276-10314).
@@ -640,25 +751,24 @@ fn interlaced_gif_frames_match_the_whole_sequence_decode() {
             [PALETTE[color], PALETTE[color + 1], PALETTE[color + 2], 255]
         })
         .collect();
-    assert_eq!(
-        reference_frames(&bytes)[0]
-            .as_ref()
-            .unwrap()
-            .as_raw()
-            .as_slice(),
-        expected
-    );
 
     let frame = ImageSequenceCache::new()
-        .resolve(sequence(1), &source(&bytes), ImageFrameIndex::new(0))
+        .resolve(
+            sequence(1),
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            ImageColorContext::default(),
+        )
         .expect_frame("interlaced frame");
     assert_eq!(frame.rgba(), expected);
 }
 
 #[test]
 fn gif_stream_rewinds_by_reopening_and_decodes_forward_once() {
-    let bytes = indexed_gif(4, 3, &disposal_frames());
-    let reference = reference_frames(&bytes);
+    let frames = disposal_frames();
+    let bytes = indexed_gif(4, 3, &frames);
+    let colors = ImageColorContext::default();
+    let reference = gnu_gif_load_reference(4, 3, &frames, colors);
     let cache = ImageSequenceCache::new();
     let id = sequence(1);
     cache.reset_decoded_frames();
@@ -671,12 +781,10 @@ fn gif_stream_rewinds_by_reopening_and_decodes_forward_once() {
                 id,
                 &source(&bytes),
                 ImageFrameIndex::new(u64::try_from(index).unwrap()),
+                colors,
             )
             .expect_frame("frame");
-        assert_eq!(
-            frame.rgba(),
-            reference[index].as_ref().unwrap().as_raw().as_slice()
-        );
+        assert_eq!(frame.rgba(), reference[index].as_slice());
         decoded_per_request.push(cache.decoded_frames() - before);
     }
     assert_eq!(
@@ -688,7 +796,7 @@ fn gif_stream_rewinds_by_reopening_and_decodes_forward_once() {
 
     // Past the last image descriptor there is no frame to decode.
     assert!(matches!(
-        cache.resolve(id, &source(&bytes), ImageFrameIndex::new(6)),
+        cache.resolve(id, &source(&bytes), ImageFrameIndex::new(6), colors),
         ImageSequenceResolution::MissingFrame
     ));
     assert_eq!(cache.decoded_frames(), 9);
@@ -696,20 +804,22 @@ fn gif_stream_rewinds_by_reopening_and_decodes_forward_once() {
 
 #[test]
 fn concurrent_requests_step_a_stream_once() {
-    let bytes = indexed_gif(4, 3, &disposal_frames());
-    let reference = reference_frames(&bytes);
+    let frames = disposal_frames();
+    let bytes = indexed_gif(4, 3, &frames);
+    let colors = ImageColorContext::default();
+    let reference = gnu_gif_load_reference(4, 3, &frames, colors);
     let cache = std::sync::Arc::new(ImageSequenceCache::new());
     let id = sequence(1);
     cache.reset_decoded_frames();
 
-    let frames = std::thread::scope(|scope| {
+    let decoded = std::thread::scope(|scope| {
         let requests = (0..4)
             .map(|_| {
                 let cache = &cache;
                 let source = source(&bytes);
                 scope.spawn(move || {
                     cache
-                        .resolve(id, &source, ImageFrameIndex::new(3))
+                        .resolve(id, &source, ImageFrameIndex::new(3), colors)
                         .expect_frame("frame 3")
                         .rgba()
                         .to_vec()
@@ -722,11 +832,7 @@ fn concurrent_requests_step_a_stream_once() {
             .collect::<Vec<_>>()
     });
 
-    assert!(
-        frames
-            .iter()
-            .all(|rgba| rgba == reference[3].as_ref().unwrap().as_raw())
-    );
+    assert!(decoded.iter().all(|rgba| rgba == &reference[3]));
     assert_eq!(
         cache.decoded_frames(),
         4,
@@ -784,38 +890,33 @@ fn a_frame_that_fails_to_decode_ends_the_stream() {
     // it answers an earlier one, so the prefix it already decoded stands;
     // from the failure on, every answer is the whole-sequence one.
     let frames = disposal_frames();
+    let colors = ImageColorContext::default();
+    let reference = gnu_gif_load_reference(4, 3, &frames, colors);
     let mut broken = indexed_gif(4, 3, &frames);
     corrupt_nth_frame_code_size(&mut broken, 2);
-    let reference = reference_frames(&broken);
-    assert!(reference[0].is_ok(), "{reference:?}");
-    assert!(reference[1].is_err(), "{reference:?}");
 
     let cache = ImageSequenceCache::new();
     let id = sequence(1);
     let first = cache
-        .resolve(id, &source(&broken), ImageFrameIndex::new(0))
+        .resolve(id, &source(&broken), ImageFrameIndex::new(0), colors)
         .expect_frame("the frame before the broken one");
-    assert_eq!(
-        first.rgba(),
-        reference[0].as_ref().unwrap().as_raw().as_slice()
-    );
+    assert_eq!(first.rgba(), reference[0].as_slice());
     assert!(matches!(
-        cache.resolve(id, &source(&broken), ImageFrameIndex::new(1)),
-        ImageSequenceResolution::MissingFrame
+        cache.resolve(id, &source(&broken), ImageFrameIndex::new(1), colors),
+        ImageSequenceResolution::Failed
     ));
     assert!(!cache.contains(id));
     assert_eq!(cache.resident_bytes(), 0);
 
     let mut broken_first = indexed_gif(4, 3, &frames);
     corrupt_nth_frame_code_size(&mut broken_first, 1);
-    assert!(reference_frames(&broken_first)[0].is_err());
     assert!(matches!(
-        cache.resolve(id, &source(&broken_first), ImageFrameIndex::new(0)),
-        ImageSequenceResolution::NotAnimated
+        cache.resolve(id, &source(&broken_first), ImageFrameIndex::new(0), colors),
+        ImageSequenceResolution::Failed
     ));
     assert!(matches!(
-        cache.resolve(id, &source(&broken_first), ImageFrameIndex::new(2)),
-        ImageSequenceResolution::MissingFrame
+        cache.resolve(id, &source(&broken_first), ImageFrameIndex::new(2), colors),
+        ImageSequenceResolution::Failed
     ));
     assert!(!cache.contains(id));
 }
@@ -882,7 +983,12 @@ fn over_budget_gif_decodes_one_frame_per_shown_frame() {
         .sum();
     cache.reset_decoded_frames();
     let first = cache
-        .resolve(id, &source(&bytes), ImageFrameIndex::new(0))
+        .resolve(
+            id,
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            ImageColorContext::default(),
+        )
         .expect_frame("first frame");
     assert_eq!(first.dimensions(), (480, 480));
     let mut per_shown = Vec::new();
@@ -896,11 +1002,17 @@ fn over_budget_gif_decodes_one_frame_per_shown_frame() {
                 id,
                 &source(&bytes),
                 ImageFrameIndex::new(u64::from(shown - 1)),
+                ImageColorContext::default(),
             )
             .expect_frame("metadata of the frame on display");
         assert_eq!(displayed.into_parts().1.frame_count(), Some(FRAMES));
         let next = cache
-            .resolve(id, &source(&bytes), ImageFrameIndex::new(u64::from(shown)))
+            .resolve(
+                id,
+                &source(&bytes),
+                ImageFrameIndex::new(u64::from(shown)),
+                ImageColorContext::default(),
+            )
             .expect_frame("next frame");
         assert_eq!(
             next.into_parts().1.frame_delay(),
@@ -928,12 +1040,13 @@ fn individual_retirement_during_stream_open_does_not_repopulate() {
     let bytes = animated_gif_bytes();
     let ready = std::sync::Barrier::new(2);
     let retired = std::sync::Barrier::new(2);
+    let colors = ImageColorContext::default();
     std::thread::scope(|scope| {
         let opener = scope.spawn(|| {
-            cache.resolve_stream_with(id, ImageFrameIndex::new(0), || {
+            cache.resolve_stream_with(id, ImageFrameIndex::new(0), colors, || {
                 ready.wait();
                 retired.wait();
-                GifStream::open(source(&bytes))
+                GifStream::open(source(&bytes), GifBackgroundColors::from_context(colors))
             })
         });
         ready.wait();
@@ -957,13 +1070,14 @@ fn zero_frame_gif_is_not_retained_as_a_stream() {
     let empty_gif = b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff\x3b";
     let cache = ImageSequenceCache::new();
     let id = sequence(10);
+    let colors = ImageColorContext::default();
     assert!(matches!(
-        cache.resolve(id, &source(empty_gif), ImageFrameIndex::new(0)),
-        ImageSequenceResolution::NotAnimated
+        cache.resolve(id, &source(empty_gif), ImageFrameIndex::new(0), colors),
+        ImageSequenceResolution::Failed
     ));
     assert!(matches!(
-        cache.resolve(id, &source(empty_gif), ImageFrameIndex::new(1)),
-        ImageSequenceResolution::MissingFrame
+        cache.resolve(id, &source(empty_gif), ImageFrameIndex::new(1), colors),
+        ImageSequenceResolution::Failed
     ));
     assert!(!cache.contains(id));
     assert_eq!(cache.resident_bytes(), 0);
@@ -974,9 +1088,10 @@ fn resolve_resident_gif_steps_without_source_bytes() {
     let bytes = animated_gif_bytes();
     let cache = ImageSequenceCache::new();
     let id = sequence(11);
+    let colors = ImageColorContext::default();
     assert!(
         cache
-            .resolve_resident_gif(id, ImageFrameIndex::new(0))
+            .resolve_resident_gif(id, ImageFrameIndex::new(0), colors)
             .is_none()
     );
     assert_eq!(
@@ -986,11 +1101,11 @@ fn resolve_resident_gif_steps_without_source_bytes() {
     );
 
     cache
-        .resolve(id, &source(&bytes), ImageFrameIndex::new(0))
+        .resolve(id, &source(&bytes), ImageFrameIndex::new(0), colors)
         .expect_frame("initial open");
     cache.reset_decoded_frames();
     let second = cache
-        .resolve_resident_gif(id, ImageFrameIndex::new(1))
+        .resolve_resident_gif(id, ImageFrameIndex::new(1), colors)
         .expect("resident stream hit")
         .expect_frame("second frame");
     assert_eq!(second.rgba(), [0, 0xff, 0, 0xff, 0, 0xff, 0, 0xff]);
@@ -1019,20 +1134,21 @@ fn two_out_of_phase_readers_on_one_gif_decode_one_frame_per_shown_frame() {
         })
         .collect();
     let bytes = indexed_gif(4, 3, &frames);
-    let reference = reference_frames(&bytes);
+    let colors = ImageColorContext::default();
+    let reference = gnu_gif_load_reference(4, 3, &frames, colors);
     let cache = ImageSequenceCache::new();
     let id = sequence(12);
     let src = source(&bytes);
 
     // Prime spec A at frame 0..1 and spec B at frame 6.
     cache
-        .resolve(id, &src, ImageFrameIndex::new(0))
+        .resolve(id, &src, ImageFrameIndex::new(0), colors)
         .expect_frame("A frame 0");
     cache
-        .resolve(id, &src, ImageFrameIndex::new(6))
+        .resolve(id, &src, ImageFrameIndex::new(6), colors)
         .expect_frame("B frame 6");
     cache
-        .resolve(id, &src, ImageFrameIndex::new(1))
+        .resolve(id, &src, ImageFrameIndex::new(1), colors)
         .expect_frame("A frame 1");
 
     // Now both specs alternate forward ticks (including metadata check on
@@ -1046,36 +1162,22 @@ fn two_out_of_phase_readers_on_one_gif_decode_one_frame_per_shown_frame() {
 
         let before_b = cache.decoded_frames();
         cache
-            .resolve(id, &src, ImageFrameIndex::new(b_prev))
+            .resolve(id, &src, ImageFrameIndex::new(b_prev), colors)
             .expect_frame("B current metadata");
         let b_frame = cache
-            .resolve(id, &src, ImageFrameIndex::new(b_next))
+            .resolve(id, &src, ImageFrameIndex::new(b_next), colors)
             .expect_frame("B next frame");
-        assert_eq!(
-            b_frame.rgba(),
-            reference[b_next as usize]
-                .as_ref()
-                .unwrap()
-                .as_raw()
-                .as_slice()
-        );
+        assert_eq!(b_frame.rgba(), reference[b_next as usize].as_slice());
         per_tick.push(cache.decoded_frames() - before_b);
 
         let before_a = cache.decoded_frames();
         cache
-            .resolve(id, &src, ImageFrameIndex::new(a_prev))
+            .resolve(id, &src, ImageFrameIndex::new(a_prev), colors)
             .expect_frame("A current metadata");
         let a_frame = cache
-            .resolve(id, &src, ImageFrameIndex::new(a_next))
+            .resolve(id, &src, ImageFrameIndex::new(a_next), colors)
             .expect_frame("A next frame");
-        assert_eq!(
-            a_frame.rgba(),
-            reference[a_next as usize]
-                .as_ref()
-                .unwrap()
-                .as_raw()
-                .as_slice()
-        );
+        assert_eq!(a_frame.rgba(), reference[a_next as usize].as_slice());
         per_tick.push(cache.decoded_frames() - before_a);
     }
 
@@ -1093,27 +1195,22 @@ fn reverse_playback_reuses_backward_window_for_o1_steps() {
     // remaining reverse frame of a small GIF hits in O(1) with 0 decodes.
     let frames = disposal_frames();
     let bytes = indexed_gif(4, 3, &frames);
-    let reference = reference_frames(&bytes);
+    let colors = ImageColorContext::default();
+    let reference = gnu_gif_load_reference(4, 3, &frames, colors);
     let cache = ImageSequenceCache::new();
     let id = sequence(13);
     let src = source(&bytes);
 
     let last = cache
-        .resolve(id, &src, ImageFrameIndex::new(5))
+        .resolve(id, &src, ImageFrameIndex::new(5), colors)
         .expect_frame("frame 5");
-    assert_eq!(
-        last.rgba(),
-        reference[5].as_ref().unwrap().as_raw().as_slice()
-    );
+    assert_eq!(last.rgba(), reference[5].as_slice());
 
     // First reverse step 5 -> 4 rewinds once and populates the backward window.
     let four = cache
-        .resolve(id, &src, ImageFrameIndex::new(4))
+        .resolve(id, &src, ImageFrameIndex::new(4), colors)
         .expect_frame("frame 4");
-    assert_eq!(
-        four.rgba(),
-        reference[4].as_ref().unwrap().as_raw().as_slice()
-    );
+    assert_eq!(four.rgba(), reference[4].as_slice());
 
     cache.reset_decoded_frames();
     for index in (0..4_usize).rev() {
@@ -1122,12 +1219,10 @@ fn reverse_playback_reuses_backward_window_for_o1_steps() {
                 id,
                 &src,
                 ImageFrameIndex::new(u64::try_from(index).unwrap()),
+                colors,
             )
             .expect_frame("reverse frame");
-        assert_eq!(
-            frame.rgba(),
-            reference[index].as_ref().unwrap().as_raw().as_slice()
-        );
+        assert_eq!(frame.rgba(), reference[index].as_slice());
     }
     assert_eq!(
         cache.decoded_frames(),
@@ -1141,15 +1236,23 @@ fn idle_streams_are_pruned_after_sixty_seconds() {
     let bytes = animated_gif_bytes();
     let cache = ImageSequenceCache::new();
     let t0 = Instant::now();
+    let colors = ImageColorContext::default();
 
     cache
-        .resolve_at(sequence(1), &source(&bytes), ImageFrameIndex::new(0), t0)
+        .resolve_at(
+            sequence(1),
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            colors,
+            t0,
+        )
         .expect_frame("idle stream");
     cache
         .resolve_at(
             sequence(2),
             &source(&bytes),
             ImageFrameIndex::new(0),
+            colors,
             t0 + Duration::from_secs(30),
         )
         .expect_frame("recent stream");
@@ -1174,6 +1277,7 @@ fn budget_pressure_evicts_idle_streams_before_active_streams() {
     let residency = bytes.len() + extension_bytes + pixel_bytes + extension_bytes / 2;
     let cache = ImageSequenceCache::with_max_bytes(2 * residency);
     let t0 = Instant::now();
+    let colors = ImageColorContext::default();
 
     // 1) Materialized entry (sequence 1, lower last_access stamp) vs idle GIF
     //    stream (sequence 2, higher last_access stamp, idle >= 5 s).
@@ -1195,6 +1299,7 @@ fn budget_pressure_evicts_idle_streams_before_active_streams() {
             sequence(2),
             &source(&bytes),
             ImageFrameIndex::new(0),
+            colors,
             t0 + Duration::from_secs(1),
         )
         .expect_frame("stream 2 open");
@@ -1206,6 +1311,7 @@ fn budget_pressure_evicts_idle_streams_before_active_streams() {
             sequence(3),
             &source(&bytes),
             ImageFrameIndex::new(0),
+            colors,
             t0 + Duration::from_secs(10),
         )
         .expect_frame("stream 3 open");
@@ -1228,6 +1334,7 @@ fn budget_pressure_evicts_idle_streams_before_active_streams() {
             sequence(4),
             &source(&bytes),
             ImageFrameIndex::new(0),
+            colors,
             t0 + Duration::from_secs(12),
         )
         .expect_frame("stream 4 open");
@@ -1241,4 +1348,495 @@ fn budget_pressure_evicts_idle_streams_before_active_streams() {
     );
     assert!(cache.contains(sequence(4)));
     assert_eq!(cache.resident_bytes(), 2 * residency);
+}
+
+// ---------------------------------------------------------------------------
+// GNU Emacs 31.1 gif_load disposal and transparency contract (F6)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gnu_gif_load_frame_zero_dispose_background_does_not_clear_canvas_for_frame_one() {
+    // Minimal F6 reproducer: frame 0 fills 4x4 with red and carries
+    // DISPOSE_BACKGROUND; frame 1 draws a 2x2 green subimage at (1, 1) with
+    // DISPOSE_DO_NOT. GNU gif_load (src/image.c:10185-10263) never clears the
+    // pixmap after a disposed frame, so frame 1 retains all 12 outer red pixels.
+    let bytes = indexed_gif(
+        4,
+        4,
+        &[
+            IndexedFrame {
+                left: 0,
+                top: 0,
+                width: 4,
+                height: 4,
+                dispose: DisposalMethod::Background,
+                transparent: None,
+                delay: 10,
+                interlaced: false,
+                pixels: vec![0; 16], // red
+            },
+            IndexedFrame {
+                left: 1,
+                top: 1,
+                width: 2,
+                height: 2,
+                dispose: DisposalMethod::Keep,
+                transparent: None,
+                delay: 10,
+                interlaced: false,
+                pixels: vec![1; 4], // green
+            },
+        ],
+    );
+    let colors = ImageColorContext::from_pixels(0x00_00_00_00, 0x00_ff_ff_ff)
+        .with_frame_background(0x00_ff_ff_ff);
+    let frame1 = ImageSequenceCache::new()
+        .resolve(
+            sequence(20),
+            &source(&bytes),
+            ImageFrameIndex::new(1),
+            colors,
+        )
+        .expect_frame("frame 1");
+
+    let red = [255, 0, 0, 255];
+    let green = [0, 255, 0, 255];
+    let red_px = frame1
+        .rgba()
+        .chunks_exact(4)
+        .filter(|px| *px == red)
+        .count();
+    let green_px = frame1
+        .rgba()
+        .chunks_exact(4)
+        .filter(|px| *px == green)
+        .count();
+    assert_eq!(
+        red_px, 12,
+        "outer pixels from frame 0 must survive DISPOSE_BACKGROUND"
+    );
+    assert_eq!(green_px, 4, "inner 2x2 subimage must paint green");
+}
+
+#[test]
+fn gnu_gif_load_transparent_pixels_use_specified_or_frame_bg_and_borders_use_frame_bg() {
+    // 4x4 canvas:
+    // - Frame 0 is 2x2 at (1, 1), top-left transparent (index 3), rest red (0).
+    // - Frame 1 covers 4x4 with blue (2), painting into the border outside frame 0.
+    // - Frame 2 is 2x2 at (1, 1) with Keep and all transparent (index 3).
+    // GNU gif_load (src/image.c:10061-10118, :10215-10217):
+    // - Border outside frame 0 is ALWAYS filled with frame_bg (even when
+    //   :background is specified), and is restored before each subsequent frame.
+    // - Transparent pixels inside frame 0 use :background if specified, else
+    //   frame_bg, ignoring the displaying face's own background.
+    let bytes = indexed_gif(
+        4,
+        4,
+        &[
+            IndexedFrame {
+                left: 1,
+                top: 1,
+                width: 2,
+                height: 2,
+                dispose: DisposalMethod::Keep, // forced to Background on frame 0
+                transparent: Some(3),
+                delay: 10,
+                interlaced: false,
+                pixels: vec![3, 0, 0, 0],
+            },
+            IndexedFrame {
+                left: 0,
+                top: 0,
+                width: 4,
+                height: 4,
+                dispose: DisposalMethod::Keep,
+                transparent: None,
+                delay: 10,
+                interlaced: false,
+                pixels: vec![2; 16], // blue everywhere, including border
+            },
+            IndexedFrame {
+                left: 1,
+                top: 1,
+                width: 2,
+                height: 2,
+                dispose: DisposalMethod::Keep,
+                transparent: Some(3),
+                delay: 10,
+                interlaced: false,
+                pixels: vec![3; 4], // all transparent with Keep -> preserves blue inside
+            },
+        ],
+    );
+    let src = source(&bytes);
+    let frame_bg = [0xee, 0xdd, 0xcc, 0xff];
+    let spec_bg = [0x11, 0x22, 0x33, 0xff];
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+
+    // Case A: no :background -> transparent pixel uses frame_bg, ignoring face_bg (0xaa_bb_cc).
+    let no_spec_colors =
+        ImageColorContext::from_pixels(0, 0x00_aa_bb_cc).with_frame_background(0x00_ee_dd_cc);
+    let f0_no_spec = ImageSequenceCache::new()
+        .resolve(sequence(21), &src, ImageFrameIndex::new(0), no_spec_colors)
+        .expect_frame("frame 0 without :background");
+    assert_eq!(
+        &f0_no_spec.rgba()[0..4],
+        &frame_bg,
+        "border (0,0) is frame_bg"
+    );
+    assert_eq!(
+        &f0_no_spec.rgba()[(4 + 1) * 4..(4 + 1) * 4 + 4],
+        &frame_bg,
+        "transparent pixel (1,1) uses frame_bg, not face_bg"
+    );
+    assert_eq!(
+        &f0_no_spec.rgba()[(4 + 2) * 4..(4 + 2) * 4 + 4],
+        &red,
+        "opaque pixel (2,1) is red"
+    );
+
+    // Case B: explicit :background -> transparent pixel uses spec_bg, border stays frame_bg,
+    // and frame 2 restores the border outside frame 0 back to frame_bg after frame 1 painted it.
+    let with_spec_colors = no_spec_colors.with_specified_background(0x00_11_22_33);
+    let cache = ImageSequenceCache::new();
+    let f0_spec = cache
+        .resolve(
+            sequence(22),
+            &src,
+            ImageFrameIndex::new(0),
+            with_spec_colors,
+        )
+        .expect_frame("frame 0 with :background");
+    assert_eq!(
+        &f0_spec.rgba()[0..4],
+        &frame_bg,
+        "border outside frame 0 ignores :background"
+    );
+    assert_eq!(
+        &f0_spec.rgba()[(4 + 1) * 4..(4 + 1) * 4 + 4],
+        &spec_bg,
+        "transparent pixel inside frame 0 uses :background"
+    );
+    let f1_spec = cache
+        .resolve(
+            sequence(22),
+            &src,
+            ImageFrameIndex::new(1),
+            with_spec_colors,
+        )
+        .expect_frame("frame 1");
+    assert_eq!(
+        &f1_spec.rgba()[0..4],
+        &blue,
+        "frame 1 covers border with blue"
+    );
+    let f2_spec = cache
+        .resolve(
+            sequence(22),
+            &src,
+            ImageFrameIndex::new(2),
+            with_spec_colors,
+        )
+        .expect_frame("frame 2");
+    assert_eq!(
+        &f2_spec.rgba()[0..4],
+        &frame_bg,
+        "frame 2 restores border outside frame 0 back to frame_bg (src/image.c:10103-10117)"
+    );
+    assert_eq!(
+        &f2_spec.rgba()[(4 + 1) * 4..(4 + 1) * 4 + 4],
+        &blue,
+        "transparent pixel inside frame 2 with Keep preserves frame 1's blue"
+    );
+}
+
+#[test]
+fn gnu_gif_load_disposal_modes_control_transparent_pixel_overwrites() {
+    // Frame 0: 4x1 all red.
+    // Frame 1: (0,0) 1x1 transparent with DisposalMethod::Any -> treated as Keep (stays red).
+    // Frame 2: (1,0) 1x1 transparent with DisposalMethod::Previous -> treated as Keep (stays red).
+    // Frame 3: (2,0) 1x1 transparent with DisposalMethod::Keep -> stays red.
+    // Frame 4: (3,0) 1x1 transparent with DisposalMethod::Background -> overwritten with transparent_bg.
+    let bytes = indexed_gif(
+        4,
+        1,
+        &[
+            IndexedFrame {
+                left: 0,
+                top: 0,
+                width: 4,
+                height: 1,
+                dispose: DisposalMethod::Keep,
+                transparent: None,
+                delay: 10,
+                interlaced: false,
+                pixels: vec![0, 0, 0, 0],
+            },
+            IndexedFrame {
+                left: 0,
+                top: 0,
+                width: 1,
+                height: 1,
+                dispose: DisposalMethod::Any,
+                transparent: Some(3),
+                delay: 10,
+                interlaced: false,
+                pixels: vec![3],
+            },
+            IndexedFrame {
+                left: 1,
+                top: 0,
+                width: 1,
+                height: 1,
+                dispose: DisposalMethod::Previous,
+                transparent: Some(3),
+                delay: 10,
+                interlaced: false,
+                pixels: vec![3],
+            },
+            IndexedFrame {
+                left: 2,
+                top: 0,
+                width: 1,
+                height: 1,
+                dispose: DisposalMethod::Keep,
+                transparent: Some(3),
+                delay: 10,
+                interlaced: false,
+                pixels: vec![3],
+            },
+            IndexedFrame {
+                left: 3,
+                top: 0,
+                width: 1,
+                height: 1,
+                dispose: DisposalMethod::Background,
+                transparent: Some(3),
+                delay: 10,
+                interlaced: false,
+                pixels: vec![3],
+            },
+        ],
+    );
+    let colors = ImageColorContext::from_pixels(0, 0)
+        .with_frame_background(0x00_ff_ff_ff)
+        .with_specified_background(0x00_12_34_56);
+    let f4 = ImageSequenceCache::new()
+        .resolve(
+            sequence(23),
+            &source(&bytes),
+            ImageFrameIndex::new(4),
+            colors,
+        )
+        .expect_frame("frame 4");
+    assert_eq!(
+        f4.rgba(),
+        [
+            255, 0, 0, 255, // Any -> Keep
+            255, 0, 0, 255, // Previous -> Keep
+            255, 0, 0, 255, // Keep
+            0x12, 0x34, 0x56, 255, // Background overwrites with specified_bg
+        ]
+    );
+}
+
+#[test]
+fn transparent_background_policy_preserves_alpha_zero_for_chrome_gif_icons() {
+    let bytes = indexed_gif(
+        2,
+        1,
+        &[IndexedFrame {
+            left: 0,
+            top: 0,
+            width: 2,
+            height: 1,
+            dispose: DisposalMethod::Background,
+            transparent: Some(3),
+            delay: 10,
+            interlaced: false,
+            pixels: vec![0, 3],
+        }],
+    );
+    let chrome = ImageColorContext::from_pixels(0, 0x00_ff_ff_ff)
+        .with_background_policy(ImageBackgroundPolicy::Transparent);
+    let frame = ImageSequenceCache::new()
+        .resolve(
+            sequence(24),
+            &source(&bytes),
+            ImageFrameIndex::new(0),
+            chrome,
+        )
+        .expect_frame("chrome GIF");
+    assert_eq!(frame.rgba(), [255, 0, 0, 255, 0, 0, 0, 0]);
+}
+
+#[test]
+fn gif_stream_cache_separates_distinct_backgrounds_and_shares_face_only_changes() {
+    let bytes = indexed_gif(
+        2,
+        1,
+        &[
+            IndexedFrame {
+                left: 0,
+                top: 0,
+                width: 2,
+                height: 1,
+                dispose: DisposalMethod::Keep,
+                transparent: Some(3),
+                delay: 10,
+                interlaced: false,
+                pixels: vec![0, 3],
+            },
+            IndexedFrame {
+                left: 0,
+                top: 0,
+                width: 2,
+                height: 1,
+                dispose: DisposalMethod::Keep,
+                transparent: Some(3),
+                delay: 10,
+                interlaced: false,
+                pixels: vec![1, 3],
+            },
+        ],
+    );
+    let src = source(&bytes);
+    let cache = ImageSequenceCache::new();
+    let id = sequence(25);
+
+    let face_a = ImageColorContext::from_pixels(0x00_11_11_11, 0x00_22_22_22)
+        .with_frame_background(0x00_ee_dd_cc);
+    let face_b = ImageColorContext::from_pixels(0x00_33_33_33, 0x00_44_44_44)
+        .with_frame_background(0x00_ee_dd_cc);
+    let spec_blue = face_a.with_specified_background(0x00_00_00_ff);
+
+    let f0 = cache
+        .resolve(id, &src, ImageFrameIndex::new(0), face_a)
+        .expect_frame("frame 0 under face A");
+    assert_eq!(f0.rgba(), [255, 0, 0, 255, 0xee, 0xdd, 0xcc, 255]);
+
+    // Different face bg but identical frame_bg & no :background -> reuses resident stream!
+    let f1 = cache
+        .resolve_resident_gif(id, ImageFrameIndex::new(1), face_b)
+        .expect("face-only change must hit resident GIF stream")
+        .expect_frame("frame 1 under face B");
+    assert_eq!(f1.rgba(), [0, 255, 0, 255, 0xee, 0xdd, 0xcc, 255]);
+    assert_eq!(
+        cache.stats(),
+        ImageSequenceCacheStats { hits: 1, misses: 1 }
+    );
+
+    // Explicit :background differs -> resident probe declines, full resolve opens a
+    // second coexisting stream without evicting the first.
+    assert!(
+        cache
+            .resolve_resident_gif(id, ImageFrameIndex::new(0), spec_blue)
+            .is_none(),
+        "different :background must not reuse stale pixels"
+    );
+    let f0_blue = cache
+        .resolve(id, &src, ImageFrameIndex::new(0), spec_blue)
+        .expect_frame("frame 0 with :background blue");
+    assert_eq!(f0_blue.rgba(), [255, 0, 0, 255, 0, 0, 255, 255]);
+
+    // Both streams remain resident simultaneously: stepping frame 1 of blue
+    // and reading frame 1 of face_a cost 1 + 0 decodes (no cross-eviction).
+    cache.reset_decoded_frames();
+    let f1_blue = cache
+        .resolve_resident_gif(id, ImageFrameIndex::new(1), spec_blue)
+        .expect("blue stream must stay resident")
+        .expect_frame("frame 1 with :background blue");
+    assert_eq!(f1_blue.rgba(), [0, 255, 0, 255, 0, 0, 255, 255]);
+    let f1_again = cache
+        .resolve_resident_gif(id, ImageFrameIndex::new(1), face_a)
+        .expect("original stream must stay resident beside blue stream")
+        .expect_frame("frame 1 under face A");
+    assert_eq!(f1_again.rgba(), [0, 255, 0, 255, 0xee, 0xdd, 0xcc, 255]);
+    assert_eq!(
+        cache.decoded_frames(),
+        1,
+        "coexisting :background streams must not evict each other"
+    );
+
+    // Retiring the sequence identity drops every background variant together.
+    cache.retire(ImageSequenceRetirement::One(id));
+    assert!(!cache.contains(id));
+    assert_eq!(cache.resident_bytes(), 0);
+}
+
+#[test]
+fn gnu_gif_load_rejects_whole_image_when_any_subimage_extends_outside_logical_screen() {
+    // GNU src/image.c:10018-10035 checks EVERY subimage up front and rejects
+    // the entire GIF for every :index (never falling back to a still decoder).
+    let single_oob = indexed_gif(
+        2,
+        2,
+        &[IndexedFrame {
+            left: 1,
+            top: 0,
+            width: 2,
+            height: 2,
+            dispose: DisposalMethod::Keep,
+            transparent: None,
+            delay: 10,
+            interlaced: false,
+            pixels: vec![0; 4],
+        }],
+    );
+    let multi_oob = indexed_gif(
+        4,
+        4,
+        &[
+            IndexedFrame {
+                left: 0,
+                top: 0,
+                width: 4,
+                height: 4,
+                dispose: DisposalMethod::Keep,
+                transparent: None,
+                delay: 10,
+                interlaced: false,
+                pixels: vec![0; 16],
+            },
+            IndexedFrame {
+                left: 2,
+                top: 0,
+                width: 4,
+                height: 4,
+                dispose: DisposalMethod::Keep,
+                transparent: None,
+                delay: 10,
+                interlaced: false,
+                pixels: vec![1; 16],
+            },
+        ],
+    );
+    let cache = ImageSequenceCache::new();
+    let colors = ImageColorContext::default();
+    assert!(matches!(
+        cache.resolve(
+            sequence(26),
+            &source(&single_oob),
+            ImageFrameIndex::new(0),
+            colors
+        ),
+        ImageSequenceResolution::Failed
+    ));
+    assert!(!cache.contains(sequence(26)));
+
+    // Even frame 0 (which itself fits) must fail when frame 1 is out of bounds.
+    for index in [0, 1] {
+        assert!(matches!(
+            cache.resolve(
+                sequence(27),
+                &source(&multi_oob),
+                ImageFrameIndex::new(index),
+                colors
+            ),
+            ImageSequenceResolution::Failed
+        ));
+    }
+    assert!(!cache.contains(sequence(27)));
+    assert_eq!(cache.resident_bytes(), 0);
 }

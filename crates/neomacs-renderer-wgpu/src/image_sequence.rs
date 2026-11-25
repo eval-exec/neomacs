@@ -191,6 +191,10 @@ pub(crate) enum ImageSequenceResolution {
     NotAnimated,
     Frame(ImageSequenceFrame),
     MissingFrame,
+    /// A sequence format owned by this cache (GIF) failed validation or
+    /// decoding and must not fall back to the generic `image`-crate still
+    /// decoder.
+    Failed,
 }
 
 impl ImageSequenceResolution {
@@ -198,7 +202,24 @@ impl ImageSequenceResolution {
     fn expect_frame(self, message: &str) -> ImageSequenceFrame {
         match self {
             Self::Frame(frame) => frame,
-            Self::NotAnimated | Self::MissingFrame => panic!("{message}"),
+            Self::NotAnimated | Self::MissingFrame | Self::Failed => panic!("{message}"),
+        }
+    }
+}
+
+/// Cache key distinguishing materialized sequences from color-dependent GIF
+/// streams so two displays of the same GIF with different `:background` or
+/// frame background colors coexist without evicting each other every tick.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum SequenceCacheKey {
+    Materialized(ImageSequenceId),
+    GifStream(ImageSequenceId, GifBackgroundColors),
+}
+
+impl SequenceCacheKey {
+    const fn sequence(self) -> ImageSequenceId {
+        match self {
+            Self::Materialized(sequence) | Self::GifStream(sequence, _) => sequence,
         }
     }
 }
@@ -224,8 +245,10 @@ enum SequenceCacheEntry {
         materialization: SequenceMaterialization,
         last_access: u64,
     },
-    /// A GIF decoded frame by frame: GNU's `anim_cache` entry. Authored
-    /// raster only; a computed sequence for the same source replaces it.
+    /// A GIF decoded frame by frame: GNU's `anim_cache` entry. Keyed by
+    /// `(ImageSequenceId, GifBackgroundColors)` in `ImageSequenceCacheState`
+    /// because GNU `gif_load` bakes `frame_bg` and `specified_bg` into
+    /// transparent pixels and uncovered borders.
     Stream {
         stream: Arc<GifStream>,
         memory_size: usize,
@@ -300,7 +323,7 @@ impl SequenceCacheEntry {
 
 #[derive(Default)]
 struct ImageSequenceCacheState {
-    entries: HashMap<ImageSequenceId, SequenceCacheEntry>,
+    entries: HashMap<SequenceCacheKey, SequenceCacheEntry>,
     in_flight: HashMap<ImageSequenceId, usize>,
     individually_retired: HashSet<ImageSequenceId>,
     retired_through: Option<ImageSequenceId>,
@@ -325,20 +348,20 @@ impl ImageSequenceCacheState {
     /// Drop GIF streams idle for at least `ttl`, matching GNU
     /// `anim_prune_animation_cache` (`src/image.c:3768-3794`).
     fn prune_idle_streams(&mut self, now: Instant, ttl: Duration) {
-        let expired: Vec<ImageSequenceId> = self
+        let expired: Vec<SequenceCacheKey> = self
             .entries
             .iter()
-            .filter_map(|(id, entry)| match entry {
+            .filter_map(|(key, entry)| match entry {
                 SequenceCacheEntry::Stream { last_access_at, .. }
                     if now.saturating_duration_since(*last_access_at) >= ttl =>
                 {
-                    Some(*id)
+                    Some(*key)
                 }
                 _ => None,
             })
             .collect();
-        for id in expired {
-            self.remove(id);
+        for key in expired {
+            self.remove_key(key);
         }
     }
 
@@ -353,7 +376,7 @@ impl ImageSequenceCacheState {
         let stamp = self.next_access();
         let hit = self
             .entries
-            .get_mut(&sequence)
+            .get_mut(&SequenceCacheKey::Materialized(sequence))
             .filter(|entry| entry.animated_sequence(materialization).is_some());
         match hit {
             Some(entry) => {
@@ -368,21 +391,38 @@ impl ImageSequenceCacheState {
         }
     }
 
-    fn remove(&mut self, sequence: ImageSequenceId) {
-        if let Some(entry) = self.entries.remove(&sequence) {
+    fn remove_key(&mut self, key: SequenceCacheKey) {
+        if let Some(entry) = self.entries.remove(&key) {
             self.total_bytes = self.total_bytes.saturating_sub(entry.memory_size());
         }
     }
 
-    /// The resident stream for `sequence`, without counting a miss when absent.
+    fn remove_sequence(&mut self, sequence: ImageSequenceId) {
+        let keys: Vec<SequenceCacheKey> = self
+            .entries
+            .keys()
+            .copied()
+            .filter(|key| key.sequence() == sequence)
+            .collect();
+        for key in keys {
+            self.remove_key(key);
+        }
+    }
+
+    /// The resident stream for `(sequence, colors)`, without counting a miss
+    /// when absent.
     fn existing_stream_for(
         &mut self,
         sequence: ImageSequenceId,
+        colors: GifBackgroundColors,
         now: Instant,
     ) -> Option<Arc<GifStream>> {
         self.prune_idle_streams(now, IDLE_STREAM_TTL);
         let stamp = self.next_access();
-        match self.entries.get_mut(&sequence) {
+        match self
+            .entries
+            .get_mut(&SequenceCacheKey::GifStream(sequence, colors))
+        {
             Some(SequenceCacheEntry::Stream {
                 stream,
                 last_access,
@@ -398,10 +438,15 @@ impl ImageSequenceCacheState {
         }
     }
 
-    /// The resident stream for `sequence`, counted like `entry_for` counts a
-    /// materialized hit. Any other entry, or none, is a miss.
-    fn stream_for(&mut self, sequence: ImageSequenceId, now: Instant) -> Option<Arc<GifStream>> {
-        match self.existing_stream_for(sequence, now) {
+    /// The resident stream for `(sequence, colors)`, counted like `entry_for`
+    /// counts a materialized hit. Any other entry, or none, is a miss.
+    fn stream_for(
+        &mut self,
+        sequence: ImageSequenceId,
+        colors: GifBackgroundColors,
+        now: Instant,
+    ) -> Option<Arc<GifStream>> {
+        match self.existing_stream_for(sequence, colors, now) {
             Some(stream) => Some(stream),
             None => {
                 self.misses = self.misses.saturating_add(1);
@@ -410,29 +455,32 @@ impl ImageSequenceCacheState {
         }
     }
 
-    /// Make `stream` the resident stream for `sequence`. A stream opened
-    /// while another request retired the identity is not published, exactly
-    /// as a late materialized decode is not, and a concurrent creator's
-    /// stream wins.
+    /// Make `stream` the resident stream for `(sequence, colors)`. A stream
+    /// opened while another request retired the identity is not published,
+    /// exactly as a late materialized decode is not, and a concurrent creator's
+    /// stream for the same `(sequence, colors)` wins. Distinct background
+    /// contexts on the same GIF coexist without evicting each other.
     fn insert_stream(
         &mut self,
         sequence: ImageSequenceId,
+        colors: GifBackgroundColors,
         stream: Arc<GifStream>,
         now: Instant,
     ) -> Arc<GifStream> {
         if self.is_retired(sequence) {
             return stream;
         }
+        let key = SequenceCacheKey::GifStream(sequence, colors);
         if let Some(SequenceCacheEntry::Stream {
             stream: resident, ..
-        }) = self.entries.get(&sequence)
+        }) = self.entries.get(&key)
         {
             return Arc::clone(resident);
         }
-        self.remove(sequence);
+        self.remove_key(key);
         let last_access = self.next_access();
         self.entries.insert(
-            sequence,
+            key,
             SequenceCacheEntry::Stream {
                 stream: Arc::clone(&stream),
                 memory_size: 0,
@@ -453,19 +501,21 @@ impl ImageSequenceCacheState {
     fn account_stream(
         &mut self,
         sequence: ImageSequenceId,
+        colors: GifBackgroundColors,
         stream: &Arc<GifStream>,
         bytes: usize,
         max_bytes: usize,
         now: Instant,
     ) {
         self.prune_idle_streams(now, IDLE_STREAM_TTL);
+        let key = SequenceCacheKey::GifStream(sequence, colors);
         {
             let Some(SequenceCacheEntry::Stream {
                 stream: resident,
                 memory_size,
                 last_access_at,
                 ..
-            }) = self.entries.get_mut(&sequence)
+            }) = self.entries.get_mut(&key)
             else {
                 return;
             };
@@ -483,25 +533,37 @@ impl ImageSequenceCacheState {
             let Some(victim) = self
                 .entries
                 .iter()
-                .filter(|(id, entry)| **id != sequence && entry.memory_size() > 0)
-                .min_by_key(|(id, entry)| (entry.eviction_priority(now), entry.last_access(), **id))
-                .map(|(id, _)| *id)
+                .filter(|(candidate, entry)| **candidate != key && entry.memory_size() > 0)
+                .min_by_key(|(candidate, entry)| {
+                    (
+                        entry.eviction_priority(now),
+                        entry.last_access(),
+                        **candidate,
+                    )
+                })
+                .map(|(candidate, _)| *candidate)
             else {
                 break;
             };
-            self.remove(victim);
+            self.remove_key(victim);
         }
     }
 
     /// A stream whose source failed to decode is dropped, as a failed
     /// materialized decode was never published.
-    fn discard_stream(&mut self, sequence: ImageSequenceId, stream: &Arc<GifStream>) {
+    fn discard_stream(
+        &mut self,
+        sequence: ImageSequenceId,
+        colors: GifBackgroundColors,
+        stream: &Arc<GifStream>,
+    ) {
+        let key = SequenceCacheKey::GifStream(sequence, colors);
         let is_resident = matches!(
-            self.entries.get(&sequence),
+            self.entries.get(&key),
             Some(SequenceCacheEntry::Stream { stream: resident, .. }) if Arc::ptr_eq(resident, stream)
         );
         if is_resident {
-            self.remove(sequence);
+            self.remove_key(key);
         }
     }
 
@@ -578,8 +640,9 @@ impl ImageSequenceCache {
         sequence: ImageSequenceId,
         data: &EncodedBytes,
         frame: ImageFrameIndex,
+        colors: ImageColorContext,
     ) -> ImageSequenceResolution {
-        self.resolve_at(sequence, data, frame, Instant::now())
+        self.resolve_at(sequence, data, frame, colors, Instant::now())
     }
 
     fn resolve_at(
@@ -587,6 +650,7 @@ impl ImageSequenceCache {
         sequence: ImageSequenceId,
         data: &EncodedBytes,
         frame: ImageFrameIndex,
+        colors: ImageColorContext,
         now: Instant,
     ) -> ImageSequenceResolution {
         if crate::image_probe::has_tiff_signature(data) {
@@ -596,7 +660,13 @@ impl ImageSequenceCache {
             };
         }
         if matches!(image::guess_format(data), Ok(image::ImageFormat::Gif)) {
-            return self.resolve_stream_at(sequence, data, frame, now);
+            return self.resolve_stream_at(
+                sequence,
+                data,
+                frame,
+                GifBackgroundColors::from_context(colors),
+                now,
+            );
         }
         self.resolve_with(
             sequence,
@@ -608,20 +678,23 @@ impl ImageSequenceCache {
 
     /// Step an already-resident GIF stream without re-reading the file from disk.
     ///
-    /// Returns `None` when no stream is resident for `sequence`, without
-    /// counting a cache miss (the caller still runs the full decode path).
+    /// Returns `None` when no stream is resident for `sequence` with matching
+    /// GIF background colors, without counting a cache miss (the caller still
+    /// runs the full decode path).
     pub(crate) fn resolve_resident_gif(
         &self,
         sequence: ImageSequenceId,
         frame: ImageFrameIndex,
+        colors: ImageColorContext,
     ) -> Option<ImageSequenceResolution> {
         let now = Instant::now();
+        let gif_colors = GifBackgroundColors::from_context(colors);
         let stream = self
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .existing_stream_for(sequence, now)?;
-        Some(self.step_stream(sequence, stream, frame, now))
+            .existing_stream_for(sequence, gif_colors, now)?;
+        Some(self.step_stream(sequence, gif_colors, stream, frame, now))
     }
 
     /// One frame of a GIF, from the stream retained for its source.
@@ -630,9 +703,12 @@ impl ImageSequenceCache {
         sequence: ImageSequenceId,
         source: &EncodedBytes,
         frame: ImageFrameIndex,
+        colors: GifBackgroundColors,
         now: Instant,
     ) -> ImageSequenceResolution {
-        self.resolve_stream_with_at(sequence, frame, now, || GifStream::open(source.clone()))
+        self.resolve_stream_with_at(sequence, frame, colors, now, || {
+            GifStream::open(source.clone(), colors)
+        })
     }
 
     #[cfg(test)]
@@ -640,21 +716,29 @@ impl ImageSequenceCache {
         &self,
         sequence: ImageSequenceId,
         frame: ImageFrameIndex,
+        colors: ImageColorContext,
         open: impl FnOnce() -> Option<GifStream>,
     ) -> ImageSequenceResolution {
-        self.resolve_stream_with_at(sequence, frame, Instant::now(), open)
+        self.resolve_stream_with_at(
+            sequence,
+            frame,
+            GifBackgroundColors::from_context(colors),
+            Instant::now(),
+            open,
+        )
     }
 
     fn resolve_stream_with_at(
         &self,
         sequence: ImageSequenceId,
         frame: ImageFrameIndex,
+        colors: GifBackgroundColors,
         now: Instant,
         open: impl FnOnce() -> Option<GifStream>,
     ) -> ImageSequenceResolution {
         let existing_or_lease = {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            match state.stream_for(sequence, now) {
+            match state.stream_for(sequence, colors, now) {
                 Some(stream) => Ok(stream),
                 None => {
                     // Track the in-flight open under `DecodeLease` so an
@@ -675,7 +759,10 @@ impl ImageSequenceCache {
             Err(_lease) => {
                 #[allow(unused_mut)]
                 let Some(mut stream) = open() else {
-                    return undecodable(frame);
+                    // GIF is owned by `GifStream` (both stills and animations):
+                    // reject the whole image instead of falling back to the
+                    // generic `image`-crate still decoder.
+                    return ImageSequenceResolution::Failed;
                 };
                 #[cfg(test)]
                 stream.attach_counter(Arc::clone(&self.decoded_frames));
@@ -686,20 +773,21 @@ impl ImageSequenceCache {
                     let (decoded, _) = stream.frame(frame, 0);
                     return match decoded {
                         StreamFrame::Ready(frame) => ImageSequenceResolution::Frame(frame),
-                        StreamFrame::Failed => undecodable(frame),
+                        StreamFrame::Failed => ImageSequenceResolution::Failed,
                         StreamFrame::Missing => ImageSequenceResolution::MissingFrame,
                     };
                 }
                 let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-                state.insert_stream(sequence, Arc::new(stream), now)
+                state.insert_stream(sequence, colors, Arc::new(stream), now)
             }
         };
-        self.step_stream(sequence, stream, frame, now)
+        self.step_stream(sequence, colors, stream, frame, now)
     }
 
     fn step_stream(
         &self,
         sequence: ImageSequenceId,
+        colors: GifBackgroundColors,
         stream: Arc<GifStream>,
         frame: ImageFrameIndex,
         now: Instant,
@@ -711,16 +799,21 @@ impl ImageSequenceCache {
         {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             match &decoded {
-                StreamFrame::Ready(_) => {
-                    state.account_stream(sequence, &stream, memory_size, self.max_bytes, now)
-                }
-                StreamFrame::Failed => state.discard_stream(sequence, &stream),
+                StreamFrame::Ready(_) => state.account_stream(
+                    sequence,
+                    colors,
+                    &stream,
+                    memory_size,
+                    self.max_bytes,
+                    now,
+                ),
+                StreamFrame::Failed => state.discard_stream(sequence, colors, &stream),
                 StreamFrame::Missing => {}
             }
         }
         match decoded {
             StreamFrame::Ready(frame) => ImageSequenceResolution::Frame(frame),
-            StreamFrame::Failed => undecodable(frame),
+            StreamFrame::Failed => ImageSequenceResolution::Failed,
             StreamFrame::Missing => ImageSequenceResolution::MissingFrame,
         }
     }
@@ -807,9 +900,10 @@ impl ImageSequenceCache {
         if state.is_retired(sequence) {
             return decoded;
         }
+        let key = SequenceCacheKey::Materialized(sequence);
         if let Some(resident) = state
             .entries
-            .get(&sequence)
+            .get(&key)
             .and_then(|entry| entry.animated_sequence(&materialization))
         {
             // A duplicate decode must return the same sequence every subsequent
@@ -817,7 +911,7 @@ impl ImageSequenceCache {
             return resident;
         }
         // A different materialization cannot satisfy this request.
-        state.remove(sequence);
+        state.remove_key(key);
         let memory_size = decoded.memory_size;
         if memory_size > self.max_bytes {
             return decoded;
@@ -827,17 +921,23 @@ impl ImageSequenceCache {
                 .entries
                 .iter()
                 .filter(|(_, entry)| entry.memory_size() > 0)
-                .min_by_key(|(id, entry)| (entry.eviction_priority(now), entry.last_access(), **id))
-                .map(|(id, _)| *id)
+                .min_by_key(|(candidate, entry)| {
+                    (
+                        entry.eviction_priority(now),
+                        entry.last_access(),
+                        **candidate,
+                    )
+                })
+                .map(|(candidate, _)| *candidate)
             else {
                 break;
             };
-            state.remove(victim);
+            state.remove_key(victim);
         }
         let stamp = state.next_access();
         state.total_bytes = state.total_bytes.saturating_add(memory_size);
         state.entries.insert(
-            sequence,
+            key,
             SequenceCacheEntry::Animated {
                 sequence: Arc::clone(&decoded),
                 materialization,
@@ -851,7 +951,7 @@ impl ImageSequenceCache {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         match retirement {
             ImageSequenceRetirement::One(sequence) => {
-                state.remove(sequence);
+                state.remove_sequence(sequence);
                 if state.in_flight.contains_key(&sequence) {
                     state.individually_retired.insert(sequence);
                 }
@@ -868,10 +968,10 @@ impl ImageSequenceCache {
                     .entries
                     .keys()
                     .copied()
-                    .filter(|id| *id <= retired_through)
+                    .filter(|key| key.sequence() <= retired_through)
                     .collect::<Vec<_>>();
-                for id in stale {
-                    state.remove(id);
+                for key in stale {
+                    state.remove_key(key);
                 }
             }
         }
@@ -891,7 +991,8 @@ impl ImageSequenceCache {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .entries
-            .contains_key(&sequence)
+            .keys()
+            .any(|key| key.sequence() == sequence)
     }
 
     #[cfg(test)]
@@ -1017,7 +1118,7 @@ fn undecodable(frame: ImageFrameIndex) -> ImageSequenceResolution {
 mod gif_metadata;
 
 mod gif_stream;
-use gif_stream::{GifStream, StreamFrame};
+use gif_stream::{GifBackgroundColors, GifStream, StreamFrame};
 
 mod tiff_pages;
 

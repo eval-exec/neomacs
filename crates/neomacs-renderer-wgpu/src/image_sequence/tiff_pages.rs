@@ -358,6 +358,7 @@ mod tests {
                         neomacs_display_protocol::ImageSequenceId::new(901).unwrap(),
                         &encoded,
                         ImageFrameIndex::new(index),
+                        neomacs_display_protocol::ImageColorContext::default(),
                     );
                     let crate::image_sequence::ImageSequenceResolution::Frame(frame) = resolved
                     else {

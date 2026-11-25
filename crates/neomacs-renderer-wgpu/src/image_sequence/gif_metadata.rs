@@ -9,23 +9,31 @@
 //! Record framing follows GIF89a sections 15-16 and 18-27:
 //! <https://www.w3.org/Graphics/GIF/spec-gif89a.txt>.
 
-/// Return the extension blocks preceding each image descriptor.
-///
-/// This only extracts framing and metadata; the pixel decoder remains
-/// responsible for validating image dimensions, palettes, and LZW contents.
-/// Extensions after the last image belong to the file rather than a frame,
-/// so they are discarded when the trailer is reached.
-pub(super) fn frame_extensions(data: &[u8]) -> Option<Vec<Vec<(u8, Vec<u8>)>>> {
+/// Structural framing extracted from a GIF's header and image descriptors.
+pub(super) struct GifStructure {
+    pub(super) extensions: Vec<Vec<(u8, Vec<u8>)>>,
+    /// True iff every image descriptor fits within the logical screen
+    /// (`left + width <= screen_width && top + height <= screen_height`),
+    /// matching GNU `gif_load`'s up-front check (`src/image.c:10018-10035`).
+    pub(super) all_subimages_fit_screen: bool,
+}
+
+/// Parse the GIF record structure, returning each frame's preceding extension
+/// blocks and whether every subimage descriptor fits within the logical screen.
+pub(super) fn parse_structure(data: &[u8]) -> Option<GifStructure> {
     let mut remaining = data;
     match take(&mut remaining, 6)? {
         b"GIF87a" | b"GIF89a" => {}
         _ => return None,
     }
     let screen = take(&mut remaining, 7)?;
+    let screen_width = u32::from(u16::from_le_bytes([screen[0], screen[1]]));
+    let screen_height = u32::from(u16::from_le_bytes([screen[2], screen[3]]));
     take(&mut remaining, color_table_length(screen[4]))?;
 
     let mut frames = Vec::new();
     let mut extensions = Vec::new();
+    let mut all_subimages_fit_screen = true;
     loop {
         match byte(&mut remaining)? {
             0x21 => {
@@ -37,15 +45,38 @@ pub(super) fn frame_extensions(data: &[u8]) -> Option<Vec<Vec<(u8, Vec<u8>)>>> {
             }
             0x2c => {
                 let descriptor = take(&mut remaining, 9)?;
+                let left = u32::from(u16::from_le_bytes([descriptor[0], descriptor[1]]));
+                let top = u32::from(u16::from_le_bytes([descriptor[2], descriptor[3]]));
+                let width = u32::from(u16::from_le_bytes([descriptor[4], descriptor[5]]));
+                let height = u32::from(u16::from_le_bytes([descriptor[6], descriptor[7]]));
+                if left.saturating_add(width) > screen_width
+                    || top.saturating_add(height) > screen_height
+                {
+                    all_subimages_fit_screen = false;
+                }
                 take(&mut remaining, color_table_length(descriptor[8]))?;
                 byte(&mut remaining)?; // LZW minimum code size.
                 while sub_block(&mut remaining)?.is_some() {}
                 frames.push(std::mem::take(&mut extensions));
             }
-            0x3b => return Some(frames),
+            0x3b => {
+                return Some(GifStructure {
+                    extensions: frames,
+                    all_subimages_fit_screen,
+                });
+            }
             _ => return None,
         }
     }
+}
+
+/// Return the extension blocks preceding each image descriptor.
+///
+/// Extensions after the last image belong to the file rather than a frame,
+/// so they are discarded when the trailer is reached.
+#[cfg(test)]
+pub(super) fn frame_extensions(data: &[u8]) -> Option<Vec<Vec<(u8, Vec<u8>)>>> {
+    parse_structure(data).map(|structure| structure.extensions)
 }
 
 fn take<'a>(remaining: &mut &'a [u8], length: usize) -> Option<&'a [u8]> {
