@@ -907,7 +907,8 @@ pub unsafe fn plant_scalar_root_for_test(
     root: &crate::tagged::gc::mutator_registration::OwnerRootSlot<'_>,
     value: crate::tagged::value::TaggedValue,
 ) {
-    run.plant_scalar_root_for_test(root, value);
+    // SAFETY: upheld by caller contract.
+    unsafe { run.plant_scalar_root_for_test(root, value) };
 }
 
 /// Value-FENCE row (REGWAIT-GAP): retrying activation for the relocated

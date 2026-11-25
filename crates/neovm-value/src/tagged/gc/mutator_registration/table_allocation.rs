@@ -60,13 +60,16 @@ impl RunAccess<'_, '_> {
         self.cons_state().check_boundary()?;
         source.check(self)?;
         destination.check(self)?;
-        let value = self
+        let word = self
             .owner
             .local
             .as_ref()
             .expect("resident owner roots")
-            .root_scratch[source.index]
-            .value();
+            .root_slot_word(source.index)
+            .expect("validated owner root index");
+        // SAFETY: `source.check(self)` validated this slot belongs to the
+        // active owning mutator thread's live root bank.
+        let value = unsafe { word.value() };
         let table = {
             let lease = TableRef::enter(self, value)?;
             observe(&lease);
@@ -105,7 +108,13 @@ impl RunAccess<'_, '_> {
         local.hot.bytes_since_gc += bytes;
         let slot = MemoryUseCountSlot::VectorCells.index();
         local.hot.memory_use_counts[slot] = local.hot.memory_use_counts[slot].wrapping_add(1);
-        local.root_scratch[destination.index] = MarkWord::of(value);
+        // SAFETY: `value` was just allocated on this owner's heap and linked
+        // into its active catalog under this exclusive `RunAccess`.
+        unsafe {
+            local
+                .set_root_slot(destination.index, value)
+                .expect("validated destination root index");
+        }
         Ok(())
     }
 }

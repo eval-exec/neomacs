@@ -237,13 +237,15 @@ impl<'era> RunAccess<'_, 'era> {
     ) -> Result<(), FunctionError> {
         globals::check_home(self, src)?;
         globals::check_home(self, dst)?;
-        let value = self
+        let word = self
             .owner
             .local
             .as_ref()
-            .and_then(|local| local.root_scratch.get(src.index))
-            .ok_or(RegistrationError::StaleRegistration)?
-            .value();
+            .and_then(|local| local.root_slot_word(src.index))
+            .ok_or(RegistrationError::StaleRegistration)?;
+        // SAFETY: `check_home` verified this slot belongs to the active
+        // owning mutator thread's live root bank.
+        let value = unsafe { word.value() };
         self.symbol_mut(symbol)?.write_function_into(
             super::super::intern::OwnerRootIndex::from(&*dst),
             FunctionUpdate::Fset(value),
@@ -273,10 +275,9 @@ pub(in crate::tagged::gc::mutator_registration::symbol_authority) fn publish(
     symbols: &SymbolSidecar,
     id: SymId,
     update: FunctionUpdate,
-    dst: &mut MarkWord,
     authority: &SymbolWriteToken<'_>,
     shape: CallShape,
-) -> Result<(), FunctionError> {
+) -> Result<Value, FunctionError> {
     // SAFETY: private token comes from the matching identity-checked writer;
     // no running reader touches this vector, and it never grows here.
     let records = unsafe { &mut *symbols.functions.records.get() };
@@ -302,8 +303,7 @@ pub(in crate::tagged::gc::mutator_registration::symbol_authority) fn publish(
                 {
                     return Err(FunctionError::UnsupportedDefinition);
                 }
-                *dst = MarkWord::of(value);
-                return Ok(());
+                return Ok(value);
             }
             value
         }
@@ -313,7 +313,9 @@ pub(in crate::tagged::gc::mutator_registration::symbol_authority) fn publish(
     let planned = unsafe { symbols.backing.plan_function_write(id, update, authority) }?;
     if let Some(commit) = planned {
         if record.previous.is_none() {
-            record.previous = Some(MarkWord::of(commit.previous));
+            // SAFETY: `commit.previous` was read from this era's live backing
+            // under `SymbolWriteToken` and stays live until stopped trace.
+            record.previous = Some(unsafe { MarkWord::of(commit.previous) });
         }
         symbols.functions.dirty.store(true, Ordering::Release);
         // Original legacy target is now a stopped trace obligation. Every
@@ -327,8 +329,7 @@ pub(in crate::tagged::gc::mutator_registration::symbol_authority) fn publish(
             return Err(error);
         }
     }
-    *dst = MarkWord::of(answer);
-    Ok(())
+    Ok(answer)
 }
 
 impl KeeperSymbols<'_> {
@@ -345,7 +346,9 @@ impl KeeperSymbols<'_> {
             records
                 .iter()
                 .filter_map(|r| r.previous)
-                .map(MarkWord::value),
+                // SAFETY: matching AllStopped keeps all journaled previous
+                // function cells live on this stopped collector thread.
+                .map(|word| unsafe { word.value() }),
         );
         Ok(())
     }

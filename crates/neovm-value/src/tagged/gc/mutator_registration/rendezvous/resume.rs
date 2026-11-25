@@ -268,7 +268,11 @@ impl<'owner, 'era> ResumeGcImage<'owner, 'era> {
             .as_mut()
             .ok_or(RendezvousError::Publication)?;
         let image = self.image.take().ok_or(RendezvousError::Publication)?;
-        if let Err(failure) = local.restore(image) {
+        // SAFETY: `ResumeGcImage` is `!Send` on the owning mutator thread,
+        // `check_thread()`, `EntryPhase::Published`, `image_epoch`, `debt`,
+        // `!run_loan`, `!worker_loan`, and `readers == 0` verified that this
+        // image belongs to this exact owner in the current live era.
+        if let Err(failure) = unsafe { local.restore(image) } {
             self.image = Some(failure.image);
             return Err(RegistrationError::from(failure.error).into());
         }

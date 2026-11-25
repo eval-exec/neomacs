@@ -210,13 +210,13 @@ where
         stopped
             .with_owner_image(key, |image| {
                 image.visit_work(|work| match work {
-                    PublishedGcWork::Root(word) => roots.push(WordIdentity(word.value().bits())),
+                    PublishedGcWork::Root(word) => roots.push(WordIdentity(word.bits())),
                     PublishedGcWork::YoungBlock(_) => {
                         result.young_owners.push(OwnerId(key.owner()))
                     }
                     PublishedGcWork::ConsWrite(word) => result
                         .cons_writes
-                        .push((OwnerId(key.owner()), WordIdentity(word.value().bits()))),
+                        .push((OwnerId(key.owner()), WordIdentity(word.bits()))),
                     PublishedGcWork::Remembered(_)
                     | PublishedGcWork::MappedOwner(_)
                     | PublishedGcWork::BlackHeader(_)

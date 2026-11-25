@@ -530,7 +530,9 @@ impl TaggedHeap {
         // is the only publisher.
         unsafe { self.publish_barrier_window() };
         let job = ConcurrentMarkJob {
-            gray: MarkStack::from_values(gray),
+            // SAFETY: `gray` was populated from this heap's live roots at the
+            // start handshake and stays live through this active mark cycle.
+            gray: unsafe { MarkStack::from_values(gray) },
             claims: ConcurrentClaimJob {
                 // Mandated carry: the GC thread claims at THIS cycle's parity.
                 parity: self.mark_parity,
@@ -572,7 +574,9 @@ impl TaggedHeap {
         } else {
             GcRequest::ConcurrentMark(job)
         };
-        send_to_collector(self.heap_identity(), request);
+        // SAFETY: `request` was assembled from this live heap's start
+        // handshake; blocks, pages, and snapshots remain retained until join.
+        unsafe { send_to_collector(self.heap_identity(), request) };
         self.handshake.last_start_jobasm_us = jobasm_t0.elapsed().as_micros() as u64;
         // Pacer: open this cycle's mark window (closed by `incremental_finish`).
         self.pace_mark_start = Some(std::time::Instant::now());
@@ -870,16 +874,20 @@ impl TaggedHeap {
         {
             let mut kinds = DrainKinds::default();
             for &word in &deferred {
-                // SAFETY: parked entries are live heap values; nothing has been
-                // swept since they were parked (see `DrainKinds::note`).
+                // SAFETY: the concurrent marker has joined at the stop
+                // boundary on this `&mut TaggedHeap` owning thread, so
+                // `word.value()` is sound; parked entries stay live before
+                // sweep (see `DrainKinds::note`).
                 unsafe { kinds.note(word.value()) };
             }
             self.last_termination_kinds = kinds;
             self.max_termination_kinds.merge_max(&kinds);
         }
         self.termination_count += 1;
+        // SAFETY: the concurrent marker has joined at the stop boundary; this
+        // mutator owns `&mut TaggedHeap` and no sweep has reclaimed deferred words.
         self.gray_queue
-            .extend(deferred.into_iter().map(MarkWord::value));
+            .extend(deferred.into_iter().map(|word| unsafe { word.value() }));
         self.last_termination_fold_us = fold_t0.elapsed().as_micros() as u64;
         // Stage 2 Tier B CONCURRENT VECTOR SCAN: the GC thread has provably exited its
         // mark loop (the `rx.recv()` above), so its snapshot pointers into the retired
@@ -1000,7 +1008,9 @@ impl TaggedHeap {
             if value.is_heap_object()
                 || (major && matches!(value.gc_kind(), crate::tagged::value::ValueKind::Symbol(_)))
             {
-                mutator.satb.push(MarkWord::of(value), handoff);
+                // SAFETY: `value` is a live root on this heap and `handoff`
+                // belongs to this same heap's active mark cycle.
+                unsafe { mutator.satb.push(value, handoff) };
             }
         }
         mutator
@@ -1018,7 +1028,9 @@ impl TaggedHeap {
             _ if value.is_heap_object() => {
                 self.debug_assert_heap_tag_matches_header(value, "satb-concurrent");
                 let (mutator, handoff) = self.satb_parts();
-                mutator.satb.push(MarkWord::of(value), handoff);
+                // SAFETY: `value` is a live child read from an object on this
+                // heap during its active concurrent mark cycle.
+                unsafe { mutator.satb.push(value, handoff) };
             }
             _ => {}
         }
@@ -1088,7 +1100,9 @@ impl TaggedHeap {
         }
         if pre_image.is_heap_object() {
             let (mutator, handoff) = self.satb_parts();
-            mutator.satb.push(MarkWord::of(pre_image), handoff);
+            // SAFETY: `pre_image` is the overwritten live root value on this
+            // heap during its active concurrent mark cycle.
+            unsafe { mutator.satb.push(pre_image, handoff) };
         }
     }
 

@@ -76,11 +76,14 @@ fn canonical_young_retire_rejects_loan_before_satb_take_then_drains() {
     let mut world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut heap) };
     let physical = world.register_mutator_gc_for_test();
     let id = world.registered_young_id_for_test(physical).unwrap();
-    world
-        .mutator_gc_for_test(physical)
-        .satb
-        .satb
-        .push(MarkWord::of(TaggedValue::fixnum(73)), &handoff);
+    // SAFETY: pushing an immediate into this test's local SATB handoff.
+    unsafe {
+        world
+            .mutator_gc_for_test(physical)
+            .satb
+            .satb
+            .push(TaggedValue::fixnum(73), &handoff);
+    }
     let loan = world.take_young_log_loan(id).unwrap();
     assert!(matches!(
         world.retire_young_registration_for_test(id),
@@ -133,11 +136,14 @@ fn canonical_young_nested_selected_owner_capture_retire_and_panic_restore() {
     let pc = world.register_mutator_gc_for_test();
     let b = world.registered_young_id_for_test(pb).unwrap();
     let c = world.registered_young_id_for_test(pc).unwrap();
-    world
-        .mutator_gc_for_test(pb)
-        .satb
-        .satb
-        .push(MarkWord::of(TaggedValue::fixnum(91)), &handoff);
+    // SAFETY: pushing an immediate into this test's local SATB handoff.
+    unsafe {
+        world
+            .mutator_gc_for_test(pb)
+            .satb
+            .satb
+            .push(TaggedValue::fixnum(91), &handoff);
+    }
     drop(world);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         heap.with_mutator_gc_for_test(pb, |root| {

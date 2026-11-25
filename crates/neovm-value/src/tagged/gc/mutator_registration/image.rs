@@ -18,6 +18,7 @@ use super::super::young_registry::{
 };
 use super::super::{HeapIdentity, MEMORY_USE_COUNT_LEN, TaggedHeap};
 use crate::intern::SymId;
+use crate::tagged::value::TaggedValue;
 use rustc_hash::FxHashSet;
 
 /// Response-local pacing policy, distinct from the major/minor cycle kind.
@@ -62,7 +63,10 @@ pub(in crate::tagged::gc) struct OwnerGcState {
     pub(in crate::tagged::gc) jit: JitHeapState,
     pub(in crate::tagged::gc) regions: RegionBook,
     pub(in crate::tagged::gc) region_stats: RegionStats,
-    pub(in crate::tagged::gc) root_scratch: Vec<MarkWord>,
+    /// Private owner root bank. Encapsulation prevents safe code in
+    /// `tagged::gc` from injecting arbitrary cross-thread [`MarkWord`]s into
+    /// slots that `mutator_registration` consumers later materialize.
+    root_scratch: Vec<MarkWord>,
     pub(super) root_slot_limit: usize,
     pub(super) root_slot_generation: u64,
     pub(super) catalog_region: Option<super::super::cons_storage::CatalogRegion>,
@@ -256,15 +260,23 @@ impl Facts {
             bytes_since_gc: old.bytes_since_gc,
             bytes_banked_at_resets: old.bytes_banked_at_resets,
             pacing: old.pacing,
-            remset: old.remset.into_iter().map(MarkWord::of).collect(),
+            // SAFETY: `old` belongs to this owner's heap; the published image
+            // stays within the originating heap's era protocol until restore
+            // or stopped-collector merge before any sweep.
+            remset: old
+                .remset
+                .into_iter()
+                .map(|value| unsafe { MarkWord::of(value) })
+                .collect(),
             mapped_seen: old.r_mapped_seen,
             black_headers: old.black_born.into_iter().map(|ptr| ptr as usize).collect(),
             black_regions: old.black_born_regions,
             symbol_preimages: old.major_symbol_preimages,
+            // SAFETY: same owner-publication contract as `remset` above.
             cons_writes: old
                 .major_cons_writes
                 .into_iter()
-                .map(MarkWord::of)
+                .map(|value| unsafe { MarkWord::of(value) })
                 .collect(),
             snapshotted_owners: std::mem::take(&mut cold.satb_snapshotted_owners),
             string_preimage_addrs: std::mem::take(&mut cold.satb_string_preimage_addrs),
@@ -273,7 +285,11 @@ impl Facts {
         }
     }
 
-    fn restore(
+    /// # Safety
+    /// The caller must hold owning-mutator or stopped-collector authority on
+    /// the thread owning `hot`/`cold` for the heap era that published these
+    /// facts, and no sweep may have reclaimed any queued `MarkWord`.
+    unsafe fn restore(
         self,
         hot: &mut MutatorGcState,
         cold: &mut SatbMutatorState,
@@ -283,7 +299,13 @@ impl Facts {
         hot.bytes_since_gc = self.bytes_since_gc;
         hot.bytes_banked_at_resets = self.bytes_banked_at_resets;
         hot.pacing = self.pacing;
-        hot.remset = self.remset.into_iter().map(MarkWord::value).collect();
+        // SAFETY: caller upholds owning-thread and live-era contract for all
+        // queued `MarkWord`s in `self`.
+        hot.remset = self
+            .remset
+            .into_iter()
+            .map(|word| unsafe { word.value() })
+            .collect();
         hot.r_mapped_seen = self.mapped_seen;
         hot.black_born = self
             .black_headers
@@ -292,7 +314,12 @@ impl Facts {
             .collect();
         hot.black_born_regions = self.black_regions;
         hot.major_symbol_preimages = self.symbol_preimages;
-        hot.major_cons_writes = self.cons_writes.into_iter().map(MarkWord::value).collect();
+        // SAFETY: same caller contract as `remset` above.
+        hot.major_cons_writes = self
+            .cons_writes
+            .into_iter()
+            .map(|word| unsafe { word.value() })
+            .collect();
         // Do not restore a stale direct-mapped reject cache.
         hot.remembered_cache.fill(0);
         cold.satb_snapshotted_owners = self.snapshotted_owners;
@@ -300,7 +327,11 @@ impl Facts {
         (self.roots, self.region_stats)
     }
 
-    fn merge_into_heap(self, heap: &mut TaggedHeap) {
+    /// # Safety
+    /// The caller must hold stopped-collector authority on the thread owning
+    /// `heap` for the heap era that published these facts, and no sweep may
+    /// have reclaimed any queued `MarkWord`.
+    unsafe fn merge_into_heap(self, heap: &mut TaggedHeap) {
         let hot = heap.current_mutator_gc_mut();
         hot.allocated_count = hot.allocated_count.saturating_add(self.allocated_count);
         for (dst, src) in hot.memory_use_counts.iter_mut().zip(self.memory_use_counts) {
@@ -322,15 +353,21 @@ impl Facts {
             .pacing
             .stress_cycles_since_major
             .saturating_add(self.pacing.stress_cycles_since_major);
+        // SAFETY: caller upholds stopped-collector and live-era contract for
+        // all queued `MarkWord`s in `self`.
         hot.remset
-            .extend(self.remset.into_iter().map(MarkWord::value));
+            .extend(self.remset.into_iter().map(|word| unsafe { word.value() }));
         hot.r_mapped_seen.extend(self.mapped_seen);
         hot.black_born
             .extend(self.black_headers.into_iter().map(|addr| addr as *mut _));
         hot.black_born_regions.extend(self.black_regions);
         hot.major_symbol_preimages.extend(self.symbol_preimages);
-        hot.major_cons_writes
-            .extend(self.cons_writes.into_iter().map(MarkWord::value));
+        // SAFETY: same caller contract as `remset` above.
+        hot.major_cons_writes.extend(
+            self.cons_writes
+                .into_iter()
+                .map(|word| unsafe { word.value() }),
+        );
         hot.remembered_cache.fill(0);
         let cold = heap.current_mutator_satb_mut();
         cold.satb_snapshotted_owners.extend(self.snapshotted_owners);
@@ -419,7 +456,14 @@ impl OwnerGcState {
         })
     }
 
-    pub(in crate::tagged::gc) fn restore(
+    /// Restore a published owner image back into this destination-thread state.
+    ///
+    /// # Safety
+    /// `image` must have been published from the same live heap era on this
+    /// owner's thread (or handed back by the stopped-world rendezvous protocol
+    /// for this exact owner), and no sweep may have reclaimed any `MarkWord`
+    /// stored inside `image`.
+    pub(in crate::tagged::gc) unsafe fn restore(
         &mut self,
         image: PublishedGcImage,
     ) -> Result<(), RestoreImageFailure> {
@@ -449,8 +493,112 @@ impl OwnerGcState {
                 image: PublishedGcImage { facts, young },
             });
         }
-        (self.root_scratch, self.region_stats) = facts.restore(&mut self.hot, &mut self.cold);
+        // SAFETY: caller upholds owning-thread and live-era contract for `facts`.
+        (self.root_scratch, self.region_stats) =
+            unsafe { facts.restore(&mut self.hot, &mut self.cold) };
         Ok(())
+    }
+
+    pub(super) fn root_scratch_len(&self) -> usize {
+        self.root_scratch.len()
+    }
+
+    pub(super) fn root_scratch_capacity(&self) -> usize {
+        self.root_scratch.capacity()
+    }
+
+    pub(super) fn root_scratch_is_empty(&self) -> bool {
+        self.root_scratch.is_empty()
+    }
+
+    pub(super) fn root_slot_bits(&self, index: usize) -> Option<usize> {
+        self.root_scratch.get(index).map(|word| word.bits())
+    }
+
+    pub(super) fn root_slot_word(&self, index: usize) -> Option<MarkWord> {
+        self.root_scratch.get(index).copied()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn root_words_bits(&self) -> Vec<usize> {
+        self.root_scratch.iter().map(|word| word.bits()).collect()
+    }
+
+    pub(super) fn push_nil_root_slot(&mut self) {
+        self.root_scratch.push(MarkWord::nil());
+    }
+
+    pub(super) fn set_root_slot_nil(&mut self, index: usize) -> Option<()> {
+        *self.root_scratch.get_mut(index)? = MarkWord::nil();
+        Some(())
+    }
+
+    pub(super) fn clear_root_scratch(&mut self) {
+        self.root_scratch.clear();
+    }
+
+    /// Push a same-heap [`TaggedValue`] into this owner's root bank.
+    ///
+    /// # Safety
+    /// `value` must belong to this owner's heap (or be an immediate) and must
+    /// remain valid under this owner's active era protocol.
+    pub(super) unsafe fn push_root_slot(&mut self, value: TaggedValue) {
+        // SAFETY: caller guarantees `value` belongs to this owner's heap.
+        self.root_scratch.push(unsafe { MarkWord::of(value) });
+    }
+
+    /// Overwrite one resident slot in this owner's root bank with a same-heap
+    /// [`TaggedValue`].
+    ///
+    /// # Safety
+    /// `value` must belong to this owner's heap (or be an immediate) and must
+    /// remain valid under this owner's active era protocol.
+    pub(super) unsafe fn set_root_slot(&mut self, index: usize, value: TaggedValue) -> Option<()> {
+        let slot = self.root_scratch.get_mut(index)?;
+        // SAFETY: caller guarantees `value` belongs to this owner's heap.
+        *slot = unsafe { MarkWord::of(value) };
+        Some(())
+    }
+
+    /// Split resident owner fields for [`super::run_slice::RunSlice`].
+    ///
+    /// # Safety
+    /// The caller must hold exclusive [`super::RunAccess`] on this owner and
+    /// only write same-heap live values through validated root slots.
+    #[allow(clippy::type_complexity)]
+    pub(super) unsafe fn split_for_slice(
+        &mut self,
+    ) -> (
+        &mut MutatorGcState,
+        &mut SatbMutatorState,
+        &mut RegionStats,
+        &mut Option<super::super::cons_storage::CatalogRegion>,
+        &mut Vec<super::super::cons_storage::OwnedConsTail>,
+        u64,
+        &mut [MarkWord],
+    ) {
+        (
+            &mut self.hot,
+            &mut self.cold,
+            &mut self.region_stats,
+            &mut self.catalog_region,
+            &mut self.cons_tails,
+            self.root_slot_generation,
+            &mut self.root_scratch,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn root_scratch_words_for_test(&self) -> &[MarkWord] {
+        &self.root_scratch
+    }
+
+    #[cfg(test)]
+    pub(super) fn push_immediate_root_slot_for_test(&mut self, value: TaggedValue) {
+        self.root_scratch.push(
+            MarkWord::from_immediate(value)
+                .expect("push_immediate_root_slot_for_test requires an immediate"),
+        );
     }
 }
 
@@ -462,8 +610,13 @@ impl PublishedGcImage {
         self.facts.bytes_since_gc = self.facts.bytes_since_gc.saturating_add(bytes.get());
     }
 
+    /// Seed test words into a published image before collection.
+    ///
+    /// # Safety
+    /// `root`, `remembered`, and `cons_write` must be immediates or live
+    /// objects belonging to the heap that owns this image.
     #[cfg(any(test, feature = "test-support"))]
-    pub(in crate::tagged::gc) fn seed_collection_words_for_test(
+    pub(in crate::tagged::gc) unsafe fn seed_collection_words_for_test(
         &mut self,
         root: MarkWord,
         remembered: MarkWord,
@@ -627,7 +780,7 @@ impl PublishedGcImage {
     #[doc(hidden)]
     pub fn log_value_bits_for_test(&self) -> Vec<usize> {
         let mut out = Vec::new();
-        self.visit_logs(|word| out.push(word.value().bits()));
+        self.visit_logs(|word| out.push(word.bits()));
         out
     }
 
@@ -684,7 +837,13 @@ impl PublishedGcImage {
         })
     }
 
-    pub(in crate::tagged::gc) fn restore_legacy(
+    /// Restore a frozen serial image back into `heap`.
+    ///
+    /// # Safety
+    /// `self` must belong to `heap`'s current live era, the caller must hold
+    /// stopped-collector / owning-thread authority over `heap`, and no sweep
+    /// may have reclaimed any `MarkWord` stored inside `self`.
+    pub(in crate::tagged::gc) unsafe fn restore_legacy(
         self,
         heap: &mut TaggedHeap,
     ) -> Result<(), RestoreImageFailure> {
@@ -723,7 +882,8 @@ impl PublishedGcImage {
             });
         }
         let mut hot = MutatorGcState::new();
-        let (_, stats) = facts.restore(&mut hot, heap.current_mutator_satb_mut());
+        // SAFETY: caller upholds stopped-collector and live-era contract for `facts`.
+        let (_, stats) = unsafe { facts.restore(&mut hot, heap.current_mutator_satb_mut()) };
         *heap.current_mutator_gc_mut() = hot;
         heap.region_stats = stats;
         Ok(())
@@ -739,7 +899,10 @@ impl PublishedGcImage {
     /// swap-remove another live registration into the freed slot; `resolve_peer`
     /// resolves that registration's `YoungBlockLog` during preflight (before
     /// any mutation) so its pending index can be validated and repaired.
-    pub(in crate::tagged::gc) fn restore_legacy_for_collection<'a>(
+    ///
+    /// # Safety
+    /// Same stopped-collector and live-era contract as [`Self::restore_legacy`].
+    pub(in crate::tagged::gc) unsafe fn restore_legacy_for_collection<'a>(
         mut self,
         heap: &mut TaggedHeap,
         resolve_peer: impl FnOnce(YoungRegistrationId) -> Option<&'a mut YoungBlockLog>,
@@ -752,7 +915,8 @@ impl PublishedGcImage {
         if young_shell_empty
             && empty_destination(heap.current_mutator_gc(), heap.current_mutator_satb(), &[])
         {
-            return self.restore_legacy(heap);
+            // SAFETY: upheld by caller contract.
+            return unsafe { self.restore_legacy(heap) };
         }
         let result = validate_closed(
             heap.current_mutator_gc(),
@@ -795,15 +959,18 @@ impl PublishedGcImage {
             Vec::new(),
             stats,
         );
-        if let Err(failure) = self.restore_legacy(heap) {
+        // SAFETY: upheld by caller contract.
+        if let Err(failure) = unsafe { self.restore_legacy(heap) } {
             let mut restored_hot = MutatorGcState::new();
+            // SAFETY: `serial_delta` was just taken from `heap` on this thread.
             let (_, restored_stats) =
-                serial_delta.restore(&mut restored_hot, heap.current_mutator_satb_mut());
+                unsafe { serial_delta.restore(&mut restored_hot, heap.current_mutator_satb_mut()) };
             *heap.current_mutator_gc_mut() = restored_hot;
             heap.region_stats = restored_stats;
             return Err(failure);
         }
-        serial_delta.merge_into_heap(heap);
+        // SAFETY: `serial_delta` was just taken from `heap` on this thread.
+        unsafe { serial_delta.merge_into_heap(heap) };
         Ok(())
     }
 

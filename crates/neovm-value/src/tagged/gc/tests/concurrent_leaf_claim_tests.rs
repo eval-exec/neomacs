@@ -284,7 +284,8 @@ fn claim(
         } else {
             concurrent_try_mark_owned_logged::<false>(value, &job.base, &mut stack, &mut legacy)
         };
-        gray.extend(stack.into_values());
+        // SAFETY: synchronous test helper on the owning thread before sweep.
+        gray.extend(unsafe { stack.into_values() });
         logs.result.promo.extend(legacy.result.promo);
         logs.result.symbols.extend(legacy.result.symbols);
         handled
@@ -571,7 +572,8 @@ fn concurrent_leaf_claims_do_not_read_marker_chain_payloads() {
 fn concurrent_leaf_claim_rmw_has_one_winner_across_threads() {
     let mut heap = heap(true, true, true);
     let value = Leaf::Marker.allocate(&mut heap);
-    let value_word = MarkWord::of(value);
+    // SAFETY: `value` lives on `heap`, which stays alive until the scoped worker joins.
+    let value_word = unsafe { MarkWord::of(value) };
     let job = job(&mut heap, true);
     let promotions = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..8)
@@ -582,7 +584,12 @@ fn concurrent_leaf_claim_rmw_has_one_winner_across_threads() {
                     // SAFETY: this scoped collector fixture retains the heap
                     // and admitted job through every worker, with no payload
                     // mutation, collection or reclamation during the claims.
-                    assert!(claim(value_word.value(), job, &mut Vec::new(), &mut logs));
+                    assert!(claim(
+                        unsafe { value_word.value() },
+                        job,
+                        &mut Vec::new(),
+                        &mut logs
+                    ));
                     logs.result.promo.len()
                 })
             })

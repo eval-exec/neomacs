@@ -233,7 +233,9 @@ fn concurrent_mapped_chartable_scan_and_builtin_range_writes_are_atomic() {
         let worker_start = start.clone();
         let worker = scope.spawn(move || {
             worker_start.wait();
-            run_concurrent_mark(job);
+            // SAFETY: `job` was assembled from `heap`'s live start state and
+            // `heap` remains alive until this scoped worker joins.
+            unsafe { run_concurrent_mark(job) };
         });
         start.wait();
         for ordinal in 0..REPEATS {

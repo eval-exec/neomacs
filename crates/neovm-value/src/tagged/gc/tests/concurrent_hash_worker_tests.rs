@@ -281,7 +281,10 @@ fn paused_worker_with_policy(
     let leaves = heap.leaf_page_snapshot_for_mark(&mut pages);
     let job = ConcurrentMarkJob {
         // Pop the owner first so its first fresh claim reaches the latch.
-        gray: MarkStack::from_values(other_roots.iter().copied().chain([owner]).collect()),
+        // SAFETY: `other_roots` and `owner` are live values on `heap` for this test job.
+        gray: unsafe {
+            MarkStack::from_values(other_roots.iter().copied().chain([owner]).collect())
+        },
         claims: ConcurrentClaimJob {
             parity: heap.mark_parity,
             major: heap.generational.major_in_progress,
@@ -340,7 +343,8 @@ fn paused_worker_with_policy(
                 });
             }
         }
-        run_concurrent_mark_enabled(job);
+        // SAFETY: `job` was assembled from this live fixture heap until join.
+        unsafe { run_concurrent_mark_enabled(job) };
         CONCURRENT_HASH_BEFORE_CLAIM_HOOK.with(|slot| assert!(slot.borrow().is_none()));
         CONCURRENT_HASH_SCAN_HOOK.with(|slot| assert!(slot.borrow().is_none()));
     });
@@ -396,7 +400,7 @@ fn tier_h_actual_worker_stop_mid_scan_hands_off_every_child_before_termination()
         inspect_completed_deferred(&mut heap, |deferred| {
             let mut remaining: FxHashSet<_> = records.iter().map(|record| record.bits()).collect();
             for word in deferred {
-                remaining.remove(&word.value().bits());
+                remaining.remove(&word.bits());
             }
             assert!(
                 remaining.is_empty(),
@@ -699,7 +703,7 @@ fn tier_h_actual_worker_deferred_first_write_keeps_header_white_and_both_child_s
             0,
         );
         inspect_completed_deferred(&mut heap, |deferred| {
-            assert!(deferred.contains(&MarkWord::of(owner)));
+            assert!(deferred.iter().any(|word| word.bits() == owner.bits()));
         });
 
         // No reader ever touches the changed backing. SATB retains removed

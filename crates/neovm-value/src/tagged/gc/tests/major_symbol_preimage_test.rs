@@ -140,8 +140,11 @@ impl Drop for MarkPhase {
     }
 }
 
-fn satb(heap: &TaggedHeap) -> Vec<TaggedValue> {
+fn satb(heap: &TaggedHeap) -> Vec<usize> {
     heap.satb_words_for_test()
+        .into_iter()
+        .map(MarkWord::bits)
+        .collect()
 }
 
 fn special_immediates() -> [TaggedValue; 4] {
@@ -222,7 +225,7 @@ fn major_symbol_root_overwrite_gates_keep_exact_kind_and_symbol_with_pos_paths()
             note_root_overwrite(value);
             note_root_overwrite_while_marking(value);
         }
-        assert_eq!(satb(&heap), [positioned]);
+        assert_eq!(satb(&heap), [positioned.bits()]);
         let expected = if enabled {
             vec![id(public), id(checked)]
         } else {
@@ -296,7 +299,7 @@ fn runtime_plist_head_store_notes_a_heap_preimage_through_the_seam() {
         "installing the head before the mark must not log"
     );
     obarray.set_symbol_plist_id(owner, TaggedValue::NIL);
-    assert_eq!(satb(&heap), [cons]);
+    assert_eq!(satb(&heap), [cons.bits()]);
     assert!(heap.current_mutator_gc().major_symbol_preimages.is_empty());
     assert!(obarray.symbol_plist_id(owner).is_nil());
 }
@@ -355,9 +358,9 @@ fn major_symbol_live_root_batches_filter_special_immediates_and_keep_heap_values
             key,
         ]);
         let expected = if enabled {
-            vec![key, positioned, key]
+            vec![key.bits(), positioned.bits(), key.bits()]
         } else {
-            vec![positioned]
+            vec![positioned.bits()]
         };
         assert_eq!(satb(&heap), expected);
         assert!(heap.current_mutator_gc().major_symbol_preimages.is_empty());
@@ -380,11 +383,15 @@ fn major_symbol_raw_interval_choke_points_retain_plists_once_and_ignore_nil_gaps
         unsafe {
             (*ptr).data.intervals_mut();
         }
-        assert_eq!(satb(&heap), [plist]);
+        assert_eq!(satb(&heap), [plist.bits()]);
         unsafe {
             (*ptr).data.clear_intervals();
         }
-        assert_eq!(satb(&heap), [plist], "the same string is deduplicated");
+        assert_eq!(
+            satb(&heap),
+            [plist.bits()],
+            "the same string is deduplicated"
+        );
         assert_eq!(
             heap.current_mutator_satb().satb_string_preimage_addrs.len(),
             1
@@ -582,13 +589,9 @@ fn atomic_forwarder_stores_keep_root_preimages_before_publication() {
         assert!(object.get().is_nil());
         assert_eq!(keyboard.get().bits(), TaggedValue::T.bits());
         let old_roots = satb(&heap);
-        assert!(old_roots.iter().any(|value| value.bits() == first.bits()));
-        assert!(old_roots.iter().any(|value| value.bits() == second.bits()));
-        assert!(
-            old_roots
-                .iter()
-                .any(|value| value.bits() == integer_old.bits())
-        );
+        assert!(old_roots.contains(&first.bits()));
+        assert!(old_roots.contains(&second.bits()));
+        assert!(old_roots.contains(&integer_old.bits()));
         phase.stop_synthetic(&mut heap);
         drop(phase);
     }

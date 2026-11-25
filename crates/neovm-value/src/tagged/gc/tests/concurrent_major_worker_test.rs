@@ -156,7 +156,9 @@ impl WorkerHarness {
     }
 
     fn run(self) -> (ConcurrentMarkResult, Vec<TaggedValue>) {
-        run_concurrent_mark(self.job);
+        // SAFETY: `self.job` was assembled from this live fixture heap, which
+        // stays alive for this synchronous test run.
+        unsafe { run_concurrent_mark(self.job) };
         let result = self.result.recv().expect("worker result missing");
         assert!(
             self.result.try_recv().is_err(),
@@ -166,7 +168,9 @@ impl WorkerHarness {
             .deferred
             .iter()
             .copied()
-            .map(MarkWord::value)
+            // SAFETY: worker exited and handed deferred words back to the test
+            // harness's stopped heap owner thread before any sweep.
+            .map(|word| unsafe { word.value() })
             .collect();
         (result, deferred)
     }
@@ -419,7 +423,8 @@ fn generational_worker_bytecode_routes_each_symbol_field_and_keeps_legacy_heap_f
             concurrent_try_mark_owned_logged::<false>(value, &job, &mut gray, &mut logs)
         };
         assert!(handled);
-        assert_eq!(gray.into_values(), [child]);
+        // SAFETY: synchronous test helper on the owning thread before sweep.
+        assert_eq!(unsafe { gray.into_values() }, [child]);
         if major {
             assert_eq!(logs.result.promo, [header(value) as usize]);
             for symbol in &symbols {
@@ -478,10 +483,12 @@ fn generational_worker_gray_and_satb_symbols_reach_major_result_only() {
         let first = symbol("u34-worker-gray");
         let second = symbol("u34-worker-satb");
         let mut harness = WorkerHarness::new(&heap, major);
-        harness.job.gray.push(first);
+        // SAFETY: bare symbols pushed for this live test harness run.
+        unsafe { harness.job.gray.push(first) };
         let mut buffer = satb::SatbBuffer::new();
         for value in [first, second] {
-            buffer.push(MarkWord::of(value), &harness.satb);
+            // SAFETY: bare symbols pushed into this harness's SATB handoff.
+            unsafe { buffer.push(value, &harness.satb) };
         }
         buffer.retire(&harness.satb).unwrap().acknowledge();
         let (result, deferred) = harness.run();
@@ -561,7 +568,8 @@ fn generational_worker_early_cdr_stop_retains_initial_claims_symbols_and_tail() 
     let vector = roots.keep(heap.alloc_vector(vec![key, float]));
     heap.close_alloc_regions();
     let mut harness = WorkerHarness::new(&heap, true);
-    harness.job.gray.push(spine);
+    // SAFETY: `spine` is rooted on `heap` for this synchronous harness run.
+    unsafe { harness.job.gray.push(spine) };
     harness.job.vectors = Some(snapshot(&mut heap, vector));
     let parity = harness.job.claims.parity;
     let (result, deferred) = harness.run();
@@ -597,10 +605,12 @@ fn generational_worker_outer_stop_preserves_unprocessed_gray_and_owned_logs() {
     heap.close_alloc_regions();
     let mut harness = WorkerHarness::new(&heap, true);
     for _ in 0..2048 {
-        harness.job.gray.push(value);
+        // SAFETY: `value` is rooted on `heap` for this synchronous harness run.
+        unsafe { harness.job.gray.push(value) };
     }
     // Both are visited before the quantum reaches the repeated float tail.
-    harness.job.gray.push(key);
+    // SAFETY: `key` is a bare symbol for this synchronous harness run.
+    unsafe { harness.job.gray.push(key) };
     let (result, deferred) = harness.run();
     assert_eq!(result.promo, [header(value) as usize]);
     assert_symbol_once(&result, key);
@@ -685,7 +695,10 @@ fn concurrent_worker_channel_dispatch_preserves_legacy_and_enabled_symbol_polici
                 });
                 let mut harness = WorkerHarness::new(&heap, major);
                 harness.job.claims.pages = pages;
-                harness.job.gray = MarkStack::from_values(vec![root_cons, owner, position]);
+                // SAFETY: `root_cons`, `owner`, and `position` live on `heap`
+                // until `harness.result.recv()` completes below.
+                harness.job.gray =
+                    unsafe { MarkStack::from_values(vec![root_cons, owner, position]) };
                 let done = harness.job.done.clone();
                 let request = if let Some(claims) = extension {
                     GcRequest::ConcurrentMarkEnabled(Box::new(EnabledConcurrentMarkJob {
@@ -697,7 +710,9 @@ fn concurrent_worker_channel_dispatch_preserves_legacy_and_enabled_symbol_polici
                 };
                 // Exercise the actual shared channel match, not a direct loop
                 // call or a model of its enabled/legacy election.
-                send_to_collector(heap.heap_identity(), request);
+                // SAFETY: `heap` and all snapshot objects remain alive until
+                // `harness.result.recv()` joins the worker below.
+                unsafe { send_to_collector(heap.heap_identity(), request) };
                 let result = harness
                     .result
                     // Keep the heap alive until the actual exit handoff. A
@@ -729,8 +744,8 @@ fn concurrent_worker_channel_dispatch_preserves_legacy_and_enabled_symbol_polici
                     assert_eq!(leaf.load(Ordering::Relaxed), 1);
                     assert_eq!(hash.load(Ordering::Relaxed), 1);
                 } else {
-                    assert!(deferred.contains(&MarkWord::of(owner)));
-                    assert!(deferred.contains(&MarkWord::of(position)));
+                    assert!(deferred.iter().any(|word| word.bits() == owner.bits()));
+                    assert!(deferred.iter().any(|word| word.bits() == position.bits()));
                     assert!(!unsafe { (*header(owner)).is_marked_at(parity) });
                     assert!(!unsafe { (*header(position)).is_marked_at(parity) });
                 }

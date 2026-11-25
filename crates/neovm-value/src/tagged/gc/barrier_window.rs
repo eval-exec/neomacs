@@ -653,12 +653,12 @@ pub(crate) fn current_collection_dump_window() -> BarrierWindow {
 #[cfg(any(test, feature = "test-support"))]
 impl TaggedHeap {
     /// Read the current synthetic fixture's words without consuming them.
-    pub(super) fn satb_words_for_test(&self) -> Vec<TaggedValue> {
+    pub(super) fn satb_words_for_test(&self) -> Vec<super::mark_word::MarkWord> {
         let mut words = self.satb_handoff.snapshot_words_for_test().unwrap();
         for mutator in self.mutator_satb_states() {
             words.extend_from_slice(mutator.satb.words_for_test());
         }
-        words.into_iter().map(MarkWord::value).collect()
+        words
     }
 
     /// Test hook: is `value` a tenured (old-generation) heap object?
@@ -722,7 +722,9 @@ impl TaggedHeap {
             .unwrap()
             .into_iter()
             .flat_map(satb::SatbChunk::into_words)
-            .map(MarkWord::value)
+            // SAFETY: caller contract guarantees no concurrent marker is
+            // running and this thread owns the serial fixture heap.
+            .map(|word| unsafe { word.value() })
             .collect()
     }
 

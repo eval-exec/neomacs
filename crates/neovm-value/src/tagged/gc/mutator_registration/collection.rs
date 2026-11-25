@@ -512,7 +512,9 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             .as_mut()
             .ok_or(RendezvousError::Publication)?
             .registration_heap_mut();
-        if let Err(failure) = legacy.restore_legacy(heap) {
+        // SAFETY: world-stopped keeper holds `AllStopped` and exclusive
+        // `&mut TaggedHeap` on the collector thread; `legacy` belongs to this era.
+        if let Err(failure) = unsafe { legacy.restore_legacy(heap) } {
             let _ = entry_state(&legacy_entry).map(|mut s| s.image = Some(failure.image));
             return Err(RegistrationError::from(failure.error).into());
         }
@@ -906,13 +908,17 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         // folding any live serial-turn GC facts accrued directly on `heap`.
         let legacy = images.images[0].1.take().expect("frozen serial image");
         let peers = &mut images.images[1..];
-        if let Err(failure) = legacy.restore_legacy_for_collection(heap, move |moved_id| {
-            peers
-                .iter_mut()
-                .find(|(entry, _)| entry.young == moved_id)
-                .and_then(|(_, image)| image.as_mut())
-                .map(PublishedGcImage::young_mut)
-        }) {
+        // SAFETY: world-stopped collection holds `AllStopped` and exclusive
+        // `&mut TaggedHeap` before sweep; `legacy` belongs to this live era.
+        if let Err(failure) = unsafe {
+            legacy.restore_legacy_for_collection(heap, move |moved_id| {
+                peers
+                    .iter_mut()
+                    .find(|(entry, _)| entry.young == moved_id)
+                    .and_then(|(_, image)| image.as_mut())
+                    .map(PublishedGcImage::young_mut)
+            })
+        } {
             images.images[0].1 = Some(failure.image);
             return Err(RegistrationError::from(failure.error).into());
         }
@@ -1207,10 +1213,13 @@ fn trace_work(heap: &mut TaggedHeap, work: &CollectionWork) {
         .chain(&work.remembered)
         .chain(&work.cons_writes)
     {
-        heap.seed_root(word.value());
+        // SAFETY: world-stopped collector holds `&mut TaggedHeap` before sweep;
+        // all queued owner words stay live for this cycle.
+        heap.seed_root(unsafe { word.value() });
     }
     for word in &work.remembered {
-        let owner = word.value();
+        // SAFETY: same world-stopped collector authority before sweep.
+        let owner = unsafe { word.value() };
         if !owner.is_cons() && !heap.owner_is_mapped(owner) {
             if let Some(address) = TaggedHeap::value_heap_addr(owner) {
                 // SAFETY: the pending remembered owner remains retained until
@@ -1222,7 +1231,8 @@ fn trace_work(heap: &mut TaggedHeap, work: &CollectionWork) {
         }
     }
     for word in work.remembered.iter().chain(&work.cons_writes) {
-        heap.push_value_children_to_gray(word.value(), "parallel-written-owner");
+        // SAFETY: same world-stopped collector authority before sweep.
+        heap.push_value_children_to_gray(unsafe { word.value() }, "parallel-written-owner");
     }
     for &bits in work.mapped.iter().chain(&work.written_owners) {
         heap.push_value_children_to_gray(

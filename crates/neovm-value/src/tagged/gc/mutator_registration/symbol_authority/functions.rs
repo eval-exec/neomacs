@@ -160,14 +160,14 @@ impl SymbolRef<'_, '_, '_> {
         // No callback, allocation or safepoint can occur after the copy. The
         // SymbolRef still holds its word while installing the canonical home;
         // even an unexpected stale home returns a total error under that lease.
-        let dst = self
-            .run
+        // SAFETY: `answer` was loaded from this active era's retained backing
+        // under `SymbolRef` and is installed into this owner's root bank.
+        self.run
             .owner
             .local
             .as_mut()
-            .and_then(|local| local.root_scratch.get_mut(usize::from(index)))
+            .and_then(|local| unsafe { local.set_root_slot(usize::from(index), answer) })
             .ok_or(RegistrationError::StaleRegistration)?;
-        *dst = MarkWord::of(answer);
         Ok(())
     }
 }

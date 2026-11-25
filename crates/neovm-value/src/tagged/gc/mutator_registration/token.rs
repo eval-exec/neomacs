@@ -491,7 +491,11 @@ impl<'era> Mutator<'era> {
             return Err(RegistrationError::OutstandingLoan);
         }
         let image = state.image.take().ok_or(RegistrationError::Publication)?;
-        if let Err(failure) = self.local.as_mut().expect("local shells").restore(image) {
+        // SAFETY: `check_thread()` pinned this call to the owning mutator
+        // thread, `state.phase == Published`, `binding.epoch` matched, and
+        // `readers == 0` / `!worker_loan` ensure the image belongs to this
+        // live era and no sweep has reclaimed its words.
+        if let Err(failure) = unsafe { self.local.as_mut().expect("local shells").restore(image) } {
             let reason = failure.error.into();
             state.image = Some(failure.image);
             return Err(reason);
@@ -635,7 +639,8 @@ pub struct OwnerGcSnapshot {
 }
 
 impl RunAccess<'_, '_> {
-    pub(in crate::tagged::gc) fn state(&mut self) -> &mut OwnerGcState {
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn state(&mut self) -> &mut OwnerGcState {
         self.owner.local.as_mut().expect("resident owner state")
     }
 
@@ -692,12 +697,8 @@ impl RunAccess<'_, '_> {
             allocated_count: state.hot.allocated_count,
             bytes_since_gc: state.hot.bytes_since_gc,
             memory_use_counts: state.hot.memory_use_counts,
-            root_words: state
-                .root_scratch
-                .iter()
-                .map(|w| w.value().bits())
-                .collect(),
-            root_capacity: state.root_scratch.capacity(),
+            root_words: state.root_words_bits(),
+            root_capacity: state.root_scratch_capacity(),
             root_slot_generation: state.root_slot_generation,
         }
     }
@@ -711,18 +712,35 @@ impl RunAccess<'_, '_> {
         self.state().root_slot_generation = u64::MAX;
     }
 
-    /// Value-FENCE hook (class C3): assertion-only plant of a same-heap
-    /// immediate into this owner's root scratch slot. Callers go through
-    /// neovm_value::test_support::authority::plant_scalar_root_for_test.
+    /// Value-FENCE hook (class C3): assertion-only plant of a non-heap scalar
+    /// into this owner's root scratch slot. Callers go through
+    /// `neovm_value::test_support::authority::plant_scalar_root_for_test`.
+    ///
+    /// # Safety
+    /// `value` must be a non-heap scalar (immediate or bare symbol), `root`
+    /// must name one of this owner's rooted slots, and the owner must be
+    /// exclusively borrowed by `self`.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub(crate) fn plant_scalar_root_for_test(
+    pub(crate) unsafe fn plant_scalar_root_for_test(
         &mut self,
         root: &OwnerRootSlot<'_>,
         value: crate::tagged::value::TaggedValue,
     ) {
-        self.owner.local.as_mut().unwrap().root_scratch[root.index] =
-            crate::tagged::gc::mark_word::MarkWord::of(value);
+        assert!(
+            !value.is_heap_object(),
+            "plant_scalar_root_for_test requires a non-heap scalar value"
+        );
+        // SAFETY: `value` is asserted non-heap and caller upholds slot
+        // ownership under this exclusive `RunAccess`.
+        unsafe {
+            self.owner
+                .local
+                .as_mut()
+                .unwrap()
+                .set_root_slot(root.index, value)
+                .expect("valid root slot index");
+        }
     }
 
     /// Era follow-up row (peer 10:5xZ item 3): copied owner region-statistics
@@ -739,7 +757,7 @@ impl RunAccess<'_, '_> {
     #[doc(hidden)]
     pub fn root_bank_for_test(&mut self) -> (usize, usize) {
         let state = self.state();
-        (state.root_scratch.len(), state.root_scratch.capacity())
+        (state.root_scratch_len(), state.root_scratch_capacity())
     }
 
     /// Era follow-up row: copied owner allocation count. The owner GC state
@@ -764,9 +782,8 @@ impl RunAccess<'_, '_> {
         &mut self,
         value: crate::tagged::value::TaggedValue,
     ) {
-        self.state()
-            .root_scratch
-            .push(crate::tagged::gc::mark_word::MarkWord::of(value));
+        // SAFETY: upheld by caller contract.
+        unsafe { self.state().push_root_slot(value) };
     }
 
     /// Value-FENCE hook (class C3): seed the generation-pacing promoted

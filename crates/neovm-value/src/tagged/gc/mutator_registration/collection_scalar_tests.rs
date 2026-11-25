@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 //! Redistribute existing real credits, then prove sweeping and serial merge do
 //! not resurrect the pre-sweep peer balance or duplicate cumulative histories.
 use super::super::TaggedHeap;
@@ -7,6 +7,16 @@ use super::super::pacing::GenerationPacingCounters;
 use super::image::{CollectionHistory, OwnerGcState, PublishedGcImage, ResponsePacing};
 use super::*;
 use crate::tagged::value::TaggedValue;
+
+#[allow(unsafe_code)]
+fn restore_legacy_for_test(
+    image: PublishedGcImage,
+    heap: &mut TaggedHeap,
+) -> Result<(), super::image::RestoreImageFailure> {
+    // SAFETY: single-threaded unit test restoring `image` back into its
+    // own live `&mut TaggedHeap` before any sweep.
+    unsafe { image.restore_legacy(heap) }
+}
 
 #[test]
 fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
@@ -113,7 +123,7 @@ fn stopped_scalar_fold_preserves_history_and_rebases_real_live_credits_once() {
     // Use the actual era-finish fold to check a second accounting boundary.
     let mut serial = PublishedGcImage::from_legacy(&mut heap).unwrap();
     serial.merge_non_young(peer).unwrap();
-    serial.restore_legacy(&mut heap).unwrap();
+    restore_legacy_for_test(serial, &mut heap).unwrap();
     assert_eq!(heap.current_mutator_gc().allocated_count, after_count);
     assert_eq!(heap.memory_use_counts_snapshot(), before_memory);
     assert_eq!(heap.total_allocated_bytes(), before_bytes);

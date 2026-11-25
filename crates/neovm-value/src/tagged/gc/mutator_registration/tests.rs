@@ -348,12 +348,7 @@ fn panic_abandonment_poison_retains_owner_state_and_world_authority<
                 .unwrap()
                 .activate(era.heap_identity(), 1)
                 .unwrap();
-            token
-                .local
-                .as_mut()
-                .unwrap()
-                .root_scratch
-                .push(MarkWord::of(TaggedValue::NIL));
+            token.local.as_mut().unwrap().push_nil_root_slot();
             panic!("owner failed before publication");
         }));
         assert!(result.is_err());
@@ -446,12 +441,7 @@ fn pending_root_retirement_failure_preserves_entry_and_allows_explicit_transfer<
             .unwrap()
             .activate(era.heap_identity(), 1)
             .unwrap();
-        token
-            .local
-            .as_mut()
-            .unwrap()
-            .root_scratch
-            .push(MarkWord::of(TaggedValue::NIL));
+        token.local.as_mut().unwrap().push_nil_root_slot();
         token.finish(epoch(1)).unwrap();
         let failed = era.finish().unwrap_err();
         assert_eq!(failed.reason, RegistrationError::PendingRoots);

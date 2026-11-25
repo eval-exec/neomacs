@@ -109,7 +109,7 @@ impl Chunk {
 
 struct MarkWord;
 impl MarkWord {
-    fn value(self) -> usize {
+    unsafe fn value(self) -> usize {
         unimplemented!()
     }
 }

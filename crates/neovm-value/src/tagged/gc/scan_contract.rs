@@ -224,9 +224,11 @@ impl SingleMutatorWorld<'_> {
         let mut words = 0;
         for chunk in batches {
             words += chunk.len();
+            // SAFETY: the concurrent marker has joined and this stopped
+            // collector exclusively borrows `self.heap` before sweep.
             self.heap
                 .gray_queue
-                .extend(chunk.into_words().into_iter().map(super::MarkWord::value));
+                .extend(chunk.into_words().into_iter().map(|w| unsafe { w.value() }));
         }
         // Split through the heap-wide iterator so a future K-mutator registry
         // cannot accidentally leave an exited registration's partial behind.
@@ -243,9 +245,10 @@ impl SingleMutatorWorld<'_> {
             }
         }
         for chunk in partials {
+            // SAFETY: same stopped-world collector authority as `batches` above.
             self.heap
                 .gray_queue
-                .extend(chunk.into_words().into_iter().map(super::MarkWord::value));
+                .extend(chunk.into_words().into_iter().map(|w| unsafe { w.value() }));
         }
         Ok(SatbFoldCounts {
             total_words: words,

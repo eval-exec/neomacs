@@ -160,8 +160,10 @@ impl HashTableScanSnapshot {
             HashTableScanEntry {
                 slots,
                 slots_len,
+                // SAFETY: callbacks were read from this live hash table on the
+                // heap at the start handshake and stay live until join.
                 callbacks: [table.user_cmp_function, table.user_hash_function]
-                    .map(|callback| callback.map(MarkWord::of)),
+                    .map(|callback| callback.map(|value| unsafe { MarkWord::of(value) })),
                 reader: AtomicU8::new(AVAILABLE),
                 cow: AtomicU8::new(UNTOUCHED),
                 dirty: AtomicBool::new(false),
@@ -361,7 +363,9 @@ impl HashTableReadGuard<'_> {
             push(entry.value);
         }
         for callback in self.entry.callbacks.into_iter().flatten() {
-            push(callback.value());
+            // SAFETY: Tier-H reader scan runs inside an active concurrent mark
+            // cycle where the captured snapshot keeps callback values live.
+            push(unsafe { callback.value() });
         }
         self.scan_complete = true;
     }

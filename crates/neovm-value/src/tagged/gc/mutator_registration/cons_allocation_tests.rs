@@ -1470,7 +1470,7 @@ fn cons_result_survives_from_published_head_then_reclaims_after_serial_restore<K
         .unwrap();
         complete(stopped);
         owner.leave_native().unwrap();
-        with_run(&mut owner, |run| run.state().root_scratch.clear());
+        with_run(&mut owner, |run| run.state().clear_root_scratch());
         retire(owner);
         let (collector, keeper) = era.finish().unwrap();
         (collector, keeper, words)
@@ -3160,7 +3160,9 @@ fn numeric_serial_window_case<K, W>(
             let legacy = entry_state(&legacy_entry).unwrap().image.take().unwrap();
             let mut collector = era.core.collector.borrow_mut();
             let heap = collector.as_mut().unwrap().registration_heap_mut();
-            legacy.restore_legacy(heap).unwrap();
+            // SAFETY: stopped-era test helper restoring `legacy` into its
+            // own live `&mut TaggedHeap` before any sweep.
+            unsafe { legacy.restore_legacy(heap) }.unwrap();
             let float = heap.alloc_float(40.5);
             // SAFETY: the stopped serial heap owns this initialized object.
             // Root it before the second real serial allocation.

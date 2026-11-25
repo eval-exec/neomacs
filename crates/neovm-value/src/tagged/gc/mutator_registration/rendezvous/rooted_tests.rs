@@ -380,9 +380,9 @@ fn native_owner_sleeps_two_epochs_latest_image_and_synthetic_work_once_body<
                         folded += retry(|| {
                             guard.with_owner_image(native_key, |image| {
                                 image
-                                    .consume_synthetic_remembered_for_test(MarkWord::of(
-                                        TaggedValue::fixnum(621),
-                                    ))
+                                    .consume_synthetic_remembered_for_test(
+                                        MarkWord::from_immediate(TaggedValue::fixnum(621)).unwrap(),
+                                    )
                                     .unwrap()
                             })
                         });
@@ -1584,9 +1584,9 @@ fn a6_ht_b9_table_scope_body_error_stays_terminal_after_image_mutation_body<
                     guard.with_owner_image(key, |image| {
                         assert_eq!(
                             image
-                                .consume_synthetic_remembered_for_test(MarkWord::of(
-                                    TaggedValue::fixnum(1912)
-                                ))
+                                .consume_synthetic_remembered_for_test(
+                                    MarkWord::from_immediate(TaggedValue::fixnum(1912)).unwrap(),
+                                )
                                 .unwrap(),
                             1
                         );

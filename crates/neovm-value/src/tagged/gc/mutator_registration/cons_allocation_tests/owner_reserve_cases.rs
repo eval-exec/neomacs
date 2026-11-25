@@ -31,7 +31,9 @@ where
     let legacy = entry_state(&legacy_entry).unwrap().image.take().unwrap();
     let mut collector = era.core.collector.borrow_mut();
     let heap = collector.as_mut().unwrap().registration_heap_mut();
-    legacy.restore_legacy(heap).unwrap();
+    // SAFETY: stopped-era test helper restoring `legacy` into its own live
+    // `&mut TaggedHeap` before any sweep.
+    unsafe { legacy.restore_legacy(heap) }.unwrap();
     let result = body(heap);
     heap.close_alloc_regions();
     let legacy = PublishedGcImage::from_legacy(heap).unwrap();

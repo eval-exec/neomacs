@@ -335,7 +335,7 @@ fn two_requesters_collect_transitive_world_private_and_image_roots<K, W>(
                         assert_eq!(run.state().hot.pacing.minors_since_major, 0);
                         assert_eq!(run.state().hot.pacing.stress_cycles_since_major, 0);
                         assert_eq!(run.state().hot.bytes_banked_at_resets, (64 + index) as u64);
-                        run.state().root_scratch.clear();
+                        run.state().clear_root_scratch();
                     }
                     retire(owner);
                 });
@@ -361,11 +361,15 @@ fn two_requesters_collect_transitive_world_private_and_image_roots<K, W>(
             let [root, remembered, cons_write] = logs;
             retry(|| {
                 stopped.with_owner_image(first.0, |image| {
-                    image.seed_collection_words_for_test(
-                        MarkWord::of(root.2),
-                        MarkWord::of(remembered.2),
-                        MarkWord::of(cons_write.2),
-                    );
+                    // SAFETY: `root`, `remembered`, and `cons_write` are live
+                    // objects allocated on this stopped era's heap.
+                    unsafe {
+                        image.seed_collection_words_for_test(
+                            MarkWord::of(root.2),
+                            MarkWord::of(remembered.2),
+                            MarkWord::of(cons_write.2),
+                        );
+                    }
                 })
             });
             let log_words = [root.1, remembered.1, cons_write.1].concat();
@@ -432,11 +436,14 @@ fn native_image_logs_fold_once_across_repeated_full_majors<K, W>(
             let work_words = if let Some((root, words, word)) = remembered.take() {
                 stopped
                     .with_owner_image(key, |image| {
-                        image.seed_collection_words_for_test(
-                            MarkWord::of(Value::NIL),
-                            MarkWord::of(word),
-                            MarkWord::of(Value::NIL),
-                        );
+                        // SAFETY: `word` is a live object on this stopped era's heap.
+                        unsafe {
+                            image.seed_collection_words_for_test(
+                                MarkWord::nil(),
+                                MarkWord::of(word),
+                                MarkWord::nil(),
+                            );
+                        }
                     })
                     .unwrap();
                 drop(root);
@@ -473,7 +480,7 @@ fn native_image_logs_fold_once_across_repeated_full_majors<K, W>(
         owner.leave_native().unwrap();
         {
             let mut run = owner.run_access().unwrap();
-            run.state().root_scratch.clear();
+            run.state().clear_root_scratch();
         }
         retire(owner);
         let (collector, keeper) = era.finish().unwrap();

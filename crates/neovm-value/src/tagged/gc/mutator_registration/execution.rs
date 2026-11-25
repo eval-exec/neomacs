@@ -127,7 +127,7 @@ impl<'era> ParallelExecutionAdmission<'era> {
         result.check_binding(
             run.owner.entry.key,
             local.root_slot_generation,
-            local.root_scratch.len(),
+            local.root_scratch_len(),
         )?;
         let mut activation = ExecutionActivation {
             registry: self.registry,
@@ -176,17 +176,15 @@ impl ExecutionActivation<'_, '_, '_> {
     #[doc(hidden)]
     pub fn store_immediate(&mut self, result: ImmediateResult) -> Result<(), RegistrationError> {
         self.run.owner.check_thread()?;
-        let destination = self
-            .run
+        // SAFETY: `ImmediateResult` validated `result.word()` as a safe
+        // immediate (`nil`, `t`, or fixnum) with no heap backing.
+        let value = unsafe { TaggedValue::from_bits(result.word()) };
+        self.run
             .owner
             .local
             .as_mut()
-            .and_then(|local| local.root_scratch.get_mut(self.result.index))
+            .and_then(|local| unsafe { local.set_root_slot(self.result.index, value) })
             .ok_or(RegistrationError::StaleRegistration)?;
-        *destination = MarkWord::of(unsafe {
-            /* SAFETY: value-internal construction from a real Value */
-            TaggedValue::from_bits(result.word())
-        });
         Ok(())
     }
 }

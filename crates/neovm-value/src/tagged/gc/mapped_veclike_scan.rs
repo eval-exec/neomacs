@@ -127,9 +127,9 @@ impl MappedVeclikeScanSnapshot {
                 // SAFETY: capture's provenance contract admits this aligned,
                 // initialized same-heap header while every writer is stopped.
                 let type_tag = unsafe { (*header).type_tag };
-                // SAFETY: tagging a retained veclike header only constructs
-                // collector work; no live payload is borrowed on the worker.
-                let owner = MarkWord::of(unsafe { TaggedValue::from_veclike_ptr(header) });
+                // SAFETY: tagging a retained veclike header from this heap's
+                // stopped start handshake stays bound to this mark cycle.
+                let owner = unsafe { MarkWord::of(TaggedValue::from_veclike_ptr(header)) };
                 let payload = match type_tag {
                     VecLikeType::Vector => {
                         // SAFETY: the stopped header's immutable subtype proves
@@ -322,7 +322,11 @@ mod tests {
         unsafe {
             snapshot.scan(|item| match item {
                 MappedVeclikeScanItem::Child(value) => children.push(value),
-                MappedVeclikeScanItem::Deferred(owner) => deferred.push(owner.value()),
+                MappedVeclikeScanItem::Deferred(owner) => {
+                    // SAFETY: fixture's stopped owner retains the captured
+                    // objects through this scan on the owning thread.
+                    deferred.push(unsafe { owner.value() })
+                }
             })
         };
         (children, deferred)

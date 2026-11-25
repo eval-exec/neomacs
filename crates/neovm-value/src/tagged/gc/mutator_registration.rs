@@ -1277,14 +1277,18 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             }
             current.phase = EntryPhase::Retired;
         }
-        if let Err(failure) = image.restore_legacy_for_collection(
-            self.collector
-                .get_mut()
-                .as_mut()
-                .expect("live era")
-                .registration_heap_mut(),
-            |_moved_id| None,
-        ) {
+        // SAFETY: era finish runs on the keeper thread with all owners retired
+        // and exclusive `&mut TaggedHeap` ownership; `image` came from this era.
+        if let Err(failure) = unsafe {
+            image.restore_legacy_for_collection(
+                self.collector
+                    .get_mut()
+                    .as_mut()
+                    .expect("live era")
+                    .registration_heap_mut(),
+                |_moved_id| None,
+            )
+        } {
             legacy.image = Some(failure.image);
             registry.poison();
             return Err(failure.error.into());

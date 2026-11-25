@@ -360,8 +360,13 @@ fn minor_rejects_dropped_major_capture_without_changing_collection_state() {
         capture.heap_mut().note_root_overwrite_value(orphan);
         drop(capture);
         assert_eq!(
-            heap.current_mutator_satb().satb.words_for_test(),
-            &[MarkWord::of(orphan)]
+            heap.current_mutator_satb()
+                .satb
+                .words_for_test()
+                .iter()
+                .map(|word| word.bits())
+                .collect::<Vec<_>>(),
+            vec![orphan.bits()]
         );
         reject_and_recover(&mut heap, root, child, garbage);
         assert!(heap.owns_heap_value_for_test(orphan));
@@ -413,13 +418,13 @@ fn inject_satb_preimage(heap: &mut TaggedHeap, source: SatbResidualSource, value
     let handoff = heap.satb_handoff.clone();
     match source {
         SatbResidualSource::OwnerPartial => {
-            heap.current_mutator_satb_mut()
-                .satb
-                .push(MarkWord::of(value), &handoff);
+            // SAFETY: `value` was allocated on `heap` for this test.
+            unsafe { heap.current_mutator_satb_mut().satb.push(value, &handoff) };
         }
         SatbResidualSource::PublishedChunk => {
             let owner = heap.current_mutator_satb_mut();
-            owner.satb.push(MarkWord::of(value), &handoff);
+            // SAFETY: `value` was allocated on `heap` for this test.
+            unsafe { owner.satb.push(value, &handoff) };
             owner.satb.publish_partial(&handoff).unwrap();
         }
         SatbResidualSource::RegisteredOwnerPartial | SatbResidualSource::RetiredOwnerPublished => {
@@ -427,11 +432,14 @@ fn inject_satb_preimage(heap: &mut TaggedHeap, source: SatbResidualSource, value
             // have no launched worker, TLS aliases, callbacks or safepoints.
             let mut world = unsafe { scan_contract::SingleMutatorWorld::from_heap(heap) };
             let id = world.register_mutator_gc_for_test();
-            world
-                .mutator_gc_for_test(id)
-                .satb
-                .satb
-                .push(MarkWord::of(value), &handoff);
+            // SAFETY: `value` was allocated on `heap` for this test.
+            unsafe {
+                world
+                    .mutator_gc_for_test(id)
+                    .satb
+                    .satb
+                    .push(value, &handoff);
+            }
             if matches!(source, SatbResidualSource::RetiredOwnerPublished) {
                 world.retire_mutator_gc_for_test(id).unwrap().acknowledge();
             }
@@ -494,8 +502,13 @@ fn minor_and_major_admissions_reject_poisoned_satb_without_collection_mutations(
         heap.satb_handoff.poison_for_test();
         assert_both_admissions_preserve(&mut heap, &[orphan]);
         assert_eq!(
-            heap.current_mutator_satb().satb.words_for_test(),
-            &[MarkWord::of(orphan)]
+            heap.current_mutator_satb()
+                .satb
+                .words_for_test()
+                .iter()
+                .map(|word| word.bits())
+                .collect::<Vec<_>>(),
+            vec![orphan.bits()]
         );
         // Poisoned state is terminal: this fixture does not fabricate a drain
         // or clear poison. Heap Drop abandons its owner buffers explicitly.

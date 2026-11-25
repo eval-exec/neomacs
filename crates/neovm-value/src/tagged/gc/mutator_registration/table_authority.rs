@@ -393,11 +393,8 @@ impl TableRef<'_> {
             .as_ref()
             .ok_or(RegistrationError::StaleRegistration)?;
         let slot_bits = local
-            .root_scratch
-            .get(root.index)
-            .ok_or(RegistrationError::StaleRegistration)?
-            .value()
-            .bits();
+            .root_slot_bits(root.index)
+            .ok_or(RegistrationError::StaleRegistration)?;
         if slot_bits != self.value.bits() {
             return Err(RegistrationError::Publication);
         }
