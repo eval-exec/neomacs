@@ -225,17 +225,50 @@ fn mirrored_plist_write_advances_snapshot_generation() {
             &*snap_before as *const OverlayList,
         )
     };
+    // 1. Adding a new property key mirrors key-filter + generation update.
     list.overlay_put(overlay, Value::symbol("face"), Value::symbol("bold"))
         .unwrap();
-    let snap_after = list.snapshot();
+    let gen_after_add = {
+        let snap_after = list.snapshot();
+        assert_eq!(
+            &*snap_after as *const OverlayList, ptr_before,
+            "overlay_put should reuse and mirror into the cached snapshot"
+        );
+        snap_after.assert_index_invariants_for_test();
+        assert!(snap_after.may_contain_property(Value::symbol("face")));
+        let snap_ov = snap_after.overlays_at_emacs_byte_pos(emacs_byte_pos(12))[0];
+        assert_eq!(
+            snap_after.overlay_get_named(snap_ov, Value::symbol("face")),
+            Some(Value::symbol("bold"))
+        );
+        let g = snap_after.overlay_generation();
+        assert_bumped(
+            gen_before,
+            g,
+            "mirrored new-key plist write on cached snapshot",
+        );
+        g
+    };
+    // 2. Overwriting an existing property key preserves key invariants and
+    //    still advances the cached snapshot's generation.
+    list.overlay_put(overlay, Value::symbol("face"), Value::symbol("italic"))
+        .unwrap();
+    let snap_after_update = list.snapshot();
     assert_eq!(
-        &*snap_after as *const OverlayList, ptr_before,
-        "overlay_put should reuse and mirror into the cached snapshot"
+        &*snap_after_update as *const OverlayList, ptr_before,
+        "existing-key overlay_put should keep reusing the cached snapshot"
+    );
+    snap_after_update.assert_index_invariants_for_test();
+    assert!(snap_after_update.may_contain_property(Value::symbol("face")));
+    let snap_ov = snap_after_update.overlays_at_emacs_byte_pos(emacs_byte_pos(12))[0];
+    assert_eq!(
+        snap_after_update.overlay_get_named(snap_ov, Value::symbol("face")),
+        Some(Value::symbol("italic"))
     );
     assert_bumped(
-        gen_before,
-        snap_after.overlay_generation(),
-        "mirrored plist write on cached snapshot",
+        gen_after_add,
+        snap_after_update.overlay_generation(),
+        "mirrored existing-key plist write on cached snapshot",
     );
 }
 

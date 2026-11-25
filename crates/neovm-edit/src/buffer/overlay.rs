@@ -633,7 +633,12 @@ impl OverlayList {
     /// The search examines at most `MIRROR_CANDIDATE_LIMIT` overlays touching
     /// that start. Past it the cache is dropped, so a write never costs more
     /// than a bounded search, as the next snapshot's rebuild is paid anyway.
-    fn mirror_plist_write(&mut self, source: Value, start: EmacsBytePos) -> bool {
+    fn mirror_plist_write(
+        &mut self,
+        source: Value,
+        start: EmacsBytePos,
+        added_prop: Option<Value>,
+    ) -> bool {
         const MIRROR_CANDIDATE_LIMIT: usize = 32;
         let source = source
             .as_overlay_data()
@@ -658,13 +663,20 @@ impl OverlayList {
         ) else {
             return false;
         };
-        let previous_keys = self.index.property_keys_before_write(copy);
         let _ = copy.with_overlay_data_mut(|data| {
             data.plist = plist;
         });
         self.content_dirty.set(true);
         self.invalidate_snapshot();
-        self.index.overlay_properties_changed(copy, previous_keys);
+        // `overlay_put` is the only plist mutator and already resolved whether
+        // a new key was prepended (`added_prop = Some`) or an existing key's
+        // value was overwritten in place (`added_prop = None`). Mirror that
+        // exact index update instead of rescanning the full plist keys.
+        if let Some(prop) = added_prop {
+            self.index.overlay_property_key_added_to_member(copy, prop);
+        } else {
+            self.index.bump_generation();
+        }
         true
     }
 
@@ -2156,7 +2168,13 @@ impl OverlayList {
                 );
             }
             self.retain_snapshot_if(|_live, snapshot| {
-                range.is_some_and(|range| snapshot.mirror_plist_write(overlay, range.start()))
+                range.is_some_and(|range| {
+                    snapshot.mirror_plist_write(
+                        overlay,
+                        range.start(),
+                        plist_replaced.then_some(prop),
+                    )
+                })
             });
         }
         Ok(changed)

@@ -820,13 +820,20 @@ impl OverlayIndexCore {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    fn add_property_keys(&mut self, keys: &[usize]) {
+    fn add_property_keys(&mut self, keys: &[usize]) -> bool {
+        let mut distinct_changed = false;
         for key in keys {
-            *self.direct_property_keys.entry(*key).or_default() += 1;
+            let entry = self.direct_property_keys.entry(*key).or_default();
+            if *entry == 0 {
+                distinct_changed = true;
+            }
+            *entry += 1;
         }
+        distinct_changed
     }
 
-    fn remove_property_keys(&mut self, keys: &[usize]) {
+    fn remove_property_keys(&mut self, keys: &[usize]) -> bool {
+        let mut distinct_changed = false;
         for key in keys {
             let count = self
                 .direct_property_keys
@@ -835,8 +842,10 @@ impl OverlayIndexCore {
             *count -= 1;
             if *count == 0 {
                 self.direct_property_keys.remove(key);
+                distinct_changed = true;
             }
         }
+        distinct_changed
     }
 }
 
@@ -1407,7 +1416,7 @@ impl OverlayIndex {
         );
         materialize_overlay_position(overlay, range);
         let cache = self.write_core(|core| {
-            core.remove_property_keys(&keys);
+            let distinct_changed = core.remove_property_keys(&keys);
             if let Some(endpoints) = core.endpoints.get_mut() {
                 assert_eq!(
                     endpoints.remove(overlay, EndpointKind::Start),
@@ -1418,9 +1427,11 @@ impl OverlayIndex {
                     Some(range.end())
                 );
             }
-            snapshot_direct_property_key_cache(&core.direct_property_keys)
+            distinct_changed.then(|| snapshot_direct_property_key_cache(&core.direct_property_keys))
         });
-        self.apply_direct_property_key_cache(cache);
+        if let Some(cache) = cache {
+            self.apply_direct_property_key_cache(cache);
+        }
         Some(range)
     }
 
@@ -1602,6 +1613,7 @@ impl OverlayIndex {
     /// shifted by lazy subtree tags.  Only boundary-crossing intervals are
     /// removed and reinserted so endpoint gravity and evaporation remain
     /// GNU-compatible.
+    #[inline]
     pub(super) fn adjust_for_text_edit(&mut self, edit: OverlayTextEdit) -> OverlayTextEditOutcome {
         // Most buffers carry no overlays, and every insertion and deletion
         // comes through here: with nothing to shift, the queries and vectors
@@ -1623,6 +1635,7 @@ impl OverlayIndex {
         }
     }
 
+    #[inline]
     fn adjust_for_insert(
         &mut self,
         position: EmacsBytePos,
@@ -1632,7 +1645,34 @@ impl OverlayIndex {
         if length.is_empty() {
             return OverlayTextEditOutcome::preserved(Vec::new());
         }
-        let mut exceptions = self.overlays_touching(position);
+        let exceptions = self.overlays_touching(position);
+        if exceptions.is_empty() {
+            // Nothing touches the insertion, so no overlay grows, evaporates,
+            // or changes order: shift the suffix in place and bump generation
+            // in one core lock. Keeping this fast path compact lets
+            // `adjust_for_text_edit` inline cleanly into `apply_text_edit`.
+            let delta = EmacsByteDelta::insertion(length);
+            self.intervals
+                .write()
+                .shift_at_or_after(position, before_markers, delta);
+            self.write_core(|core| {
+                if let Some(endpoints) = core.endpoints.get_mut() {
+                    endpoints.shift_at_or_after(position, before_markers, delta);
+                }
+            });
+            return OverlayTextEditOutcome::preserved(Vec::new());
+        }
+        self.adjust_for_insert_touching(position, length, before_markers, exceptions)
+    }
+
+    #[inline(never)]
+    fn adjust_for_insert_touching(
+        &mut self,
+        position: EmacsBytePos,
+        length: EmacsByteLen,
+        before_markers: bool,
+        mut exceptions: Vec<Value>,
+    ) -> OverlayTextEditOutcome {
         // An overlay that STRICTLY contains the insertion keeps its start and
         // grows its end, whatever its advance flags say -- those decide only
         // what happens at a boundary. Its order against every other overlay is
@@ -1828,6 +1868,7 @@ impl OverlayIndex {
         OverlayTextEditOutcome { effects, order }
     }
 
+    #[inline(never)]
     fn adjust_for_delete(&mut self, range: EmacsByteRange) -> Vec<OverlayEditEffect> {
         if range.is_empty() {
             return Vec::new();
@@ -1962,8 +2003,9 @@ impl OverlayIndex {
         // Apply evaporated key removals, endpoint updates, and the generation
         // bump in one critical section after all interval edits have finished.
         let cache = self.write_core(|core| {
+            let mut distinct_changed = false;
             for keys in &evaporated_keys {
-                core.remove_property_keys(keys);
+                distinct_changed |= core.remove_property_keys(keys);
             }
             if let Some(endpoints) = core.endpoints.get_mut() {
                 for &(overlay, old_range, _) in &detached {
@@ -1982,8 +2024,7 @@ impl OverlayIndex {
                     assert!(endpoints.insert(new_range.end(), EndpointKind::End, overlay));
                 }
             }
-            (!evaporated_keys.is_empty())
-                .then(|| snapshot_direct_property_key_cache(&core.direct_property_keys))
+            distinct_changed.then(|| snapshot_direct_property_key_cache(&core.direct_property_keys))
         });
         if let Some(cache) = cache {
             self.apply_direct_property_key_cache(cache);
@@ -2279,17 +2320,17 @@ impl OverlayIndex {
             overlay_direct_property_keys(overlay)
         });
         let cache = self.write_core(|core| {
-            let keys_changed = if let (Some(previous), Some(new_keys)) = (previous, new_keys) {
-                core.remove_property_keys(&previous.keys);
-                core.add_property_keys(&new_keys);
-                true
+            let distinct_changed = if let (Some(previous), Some(new_keys)) = (previous, new_keys) {
+                let removed = core.remove_property_keys(&previous.keys);
+                let added = core.add_property_keys(&new_keys);
+                removed || added
             } else {
                 false
             };
             if let Some(endpoints) = core.endpoints.get_mut() {
                 endpoints.refresh_overlay_property_mask(overlay);
             }
-            keys_changed.then(|| snapshot_direct_property_key_cache(&core.direct_property_keys))
+            distinct_changed.then(|| snapshot_direct_property_key_cache(&core.direct_property_keys))
         });
         if let Some(cache) = cache {
             self.apply_direct_property_key_cache(cache);
