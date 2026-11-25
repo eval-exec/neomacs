@@ -7882,6 +7882,10 @@ mod gc_atomic_slot_tests;
 mod gc_tls_ownership_tests;
 
 #[cfg(test)]
+#[path = "tests/green_no_thread_census_tls_test.rs"]
+mod green_no_thread_census_tls_tests;
+
+#[cfg(test)]
 #[path = "tests/dormant_context_eval_test.rs"]
 mod dormant_context_eval_tests;
 

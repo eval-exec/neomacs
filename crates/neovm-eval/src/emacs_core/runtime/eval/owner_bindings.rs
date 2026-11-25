@@ -800,6 +800,13 @@ impl std::fmt::Debug for OwnerSlabRegistry {
 }
 
 impl OwnerSlabRegistry {
+    /// Number of owner slabs registered in this World (0 while Green/admission
+    /// is dormant).
+    #[cfg(test)]
+    pub(crate) fn len_for_test(&self) -> usize {
+        self.slabs.len()
+    }
+
     /// Allocate and register a slab for a new owner on HEAP.
     #[doc(hidden)]
     pub fn register(&mut self, heap: usize) -> NonNull<OwnerSlab> {

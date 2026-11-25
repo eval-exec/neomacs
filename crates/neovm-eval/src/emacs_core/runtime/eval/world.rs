@@ -1676,6 +1676,25 @@ impl Context {
     pub(crate) fn thread_projection_count_for_test(&self) -> usize {
         self.obarray.lease.0.thread_projections.borrow().len()
     }
+
+    /// Whether this World has allocated a `GreenRuntime` (false while Green is
+    /// dormant on the no-thread path).
+    #[cfg(test)]
+    pub(crate) fn has_green_runtime_for_test(&self) -> bool {
+        self.obarray.lease.0.green.borrow().is_some()
+    }
+
+    /// Current Baton holder thread, if a Green Baton has been issued.
+    #[cfg(test)]
+    pub(crate) fn baton_holder_for_test(&self) -> Option<std::thread::ThreadId> {
+        self.obarray.lease.0.baton_holder.get()
+    }
+
+    /// Number of owner slabs registered in this World's `OwnerSlabRegistry`.
+    #[cfg(test)]
+    pub(crate) fn owner_slab_count_for_test(&self) -> usize {
+        self.obarray.lease.0.owner_slabs.borrow().len_for_test()
+    }
 }
 
 impl Context {
