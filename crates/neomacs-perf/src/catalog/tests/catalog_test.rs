@@ -494,3 +494,55 @@ fn cjk_font_lock_pulse_stays_out_of_the_mean_and_exercises_font_lock() {
         "the row's ten face writes are pulse.el's default"
     );
 }
+
+#[test]
+fn process_output_carryover_stays_out_of_the_mean_and_covers_async_filter_carryover() {
+    let id = ScenarioId::ProcessOutputCarryover;
+    assert_eq!(ScenarioId::from_str("process-output-carryover"), Ok(id));
+    let spec = scenario(id);
+    assert_eq!(spec.id, id);
+    assert_eq!(spec.default_frontend, Frontend::Batch);
+    assert_eq!(spec.default_iterations.get(), 20);
+    assert_eq!(spec.primary_metric, MetricName::PerOperationWallTime);
+    assert!(spec.description.contains("filter"));
+    assert!(spec.description.contains("carryover"));
+    assert!(
+        !crate::suite::SuiteId::Standard
+            .scenarios()
+            .iter()
+            .any(|entry| entry.scenario == id),
+        "an unmeasured process-output-carryover row must not enter the board's geometric mean"
+    );
+
+    let root = crate::workspace_root();
+    let fixture =
+        std::fs::read_to_string(root.join("crates/neomacs-perf/fixtures/editor-workloads.el"))
+            .expect("editor workload fixture");
+    let prepare_at = fixture
+        .find("((equal scenario \"process-output-carryover\")")
+        .expect("carryover prepare branch");
+    let prepare = &fixture[prepare_at..prepare_at + 350];
+    assert!(prepare.contains("neomacs-perf-workload--prepare-carryover-stream"));
+
+    let branch_at = fixture
+        .find("(\"process-output-carryover\"")
+        .expect("timed carryover branch");
+    let branch = &fixture[branch_at..branch_at + 750];
+    assert!(branch.contains("neomacs-perf-workload--run-process-output-carryover"));
+    assert!(branch.contains("process-filter-calls"));
+    assert!(branch.contains("process-carryover-boundaries"));
+    assert!(branch.contains("process-carryover-verified"));
+
+    let helper_at = fixture
+        .find("(defun neomacs-perf-workload--run-process-output-carryover")
+        .expect("carryover runner helper");
+    let helper_end = fixture[helper_at + 1..]
+        .find("\n(defun ")
+        .map_or(fixture.len(), |offset| helper_at + 1 + offset);
+    let helper = &fixture[helper_at..helper_end];
+    assert!(helper.contains("make-process"));
+    assert!(helper.contains(":connection-type 'pipe"));
+    assert!(helper.contains(":filter"));
+    assert!(helper.contains("accept-process-output"));
+    assert!(helper.contains("last-coding-system-used 'utf-8-dos"));
+}

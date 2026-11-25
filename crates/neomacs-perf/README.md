@@ -532,6 +532,33 @@ This row is not in the standard suite. It has no measured baseline, and
 an unmeasured row would move the board's geometric mean. It does not
 report a fallback-key count.
 
+## `process-output-carryover`
+
+Complements `process-output` (which uses synchronous `call-process` over
+one complete block) by covering asynchronous `make-process` pipe I/O,
+Lisp `:filter` dispatch, sticky EOL resolution (`utf-8` -> `utf-8-dos`),
+and partial-run carryover (`coding->carryover`).
+
+Before the timed window opens, the fixture builds a ~255 KiB UTF-8/CRLF
+byte stream and slices it into 64 deterministic unibyte chunks, each
+`<= 4096` bytes (`PIPE_BUF` atomic write size) so every chunk lands in
+one `read_process_output` call. The 63 chunk boundaries cycle across
+split 2-byte (`é`), 3-byte (`あ`), and 4-byte (`😀`) UTF-8 sequences
+plus trailing-CR DOS EOL lookahead (`\r | \n` once chunk 0 locks
+`utf-8-dos`). Each iteration spawns a pipe `cat` subprocess with
+`process-adaptive-read-buffering` bound to `nil`, streams the 64 chunks
+in lockstep (`process-send-string` + `accept-process-output` until the
+filter receives that chunk's exact expected character count and inserts
+it into a temporary buffer), and verifies `last-coding-system-used`,
+decoded character count, and buffer MD5 against the reference decode.
+
+The run is rejected unless `type-phase-time` is positive,
+`process-filter-calls` equals `iterations * 64`,
+`process-carryover-boundaries` equals `iterations * 63`, and
+`process-carryover-verified` is true. This row stays out of the standard
+suite until it has a measured baseline so it does not move the board's
+geometric mean.
+
 ## Adding a workload
 
 Add a `ScenarioId` and `ScenarioSpec` (including the scenario-owned iteration

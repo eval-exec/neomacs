@@ -341,6 +341,140 @@ writes without the timer delay.")
 (defvar neomacs-perf-workload--cjk-displayed nil
   "Non-nil when every CJK pulse redisplay showed a CJK character.")
 
+(defconst neomacs-perf-workload--carryover-chunk-count 64
+  "Atomic pipe chunks (`<= PIPE_BUF` = 4096 bytes) per `process-output-carryover' iteration.")
+
+(defvar neomacs-perf-workload--carryover-chunks nil
+  "Pre-sliced unibyte chunks for `process-output-carryover'.")
+
+(defvar neomacs-perf-workload--carryover-expected-lens nil
+  "Vector of exact expected decoded character counts per carryover chunk.")
+
+(defvar neomacs-perf-workload--carryover-ref-md5 nil
+  "Expected MD5 of the decoded `process-output-carryover' stream.")
+
+(defvar neomacs-perf-workload--carryover-ref-chars 0
+  "Expected character count of the decoded `process-output-carryover' stream.")
+
+(defun neomacs-perf-workload--prepare-carryover-stream ()
+  "Build 64 `<= 4096'-byte chunks that split UTF-8 and CRLF across every boundary.
+
+Chunk 0 ends mid-2-byte UTF-8 while its earlier CRLF lines resolve sticky
+`utf-8' -> `utf-8-dos'; subsequent boundaries cycle 3-byte UTF-8, 4-byte
+UTF-8, trailing CR (DOS EOL lookahead), and 2-byte UTF-8 across all 63
+boundaries.  Every chunk is `<= 4096' bytes (POSIX `PIPE_BUF'), so a
+lockstep write through `cat' delivers one atomic read per chunk."
+  (let* ((unit (encode-coding-string
+                "alpha=123 cafe\u00e9 \u3042\u65e5 \U0001f600 line\r\n"
+                'utf-8-unix))
+         (raw (apply #'concat (make-list 7300 unit)))
+         (total (length raw))
+         (target neomacs-perf-workload--carryover-chunk-count)
+         (step (/ total target))
+         (pos 0)
+         (chunks nil)
+         (expected nil)
+         (carry ""))
+    (dotimes (i target)
+      (let* ((end (if (= i (1- target))
+                      total
+                    (let ((mode (% (1+ i) 4))
+                          (p (min (+ pos step) (- total 4)))
+                          (limit (min (+ pos 4090) (- total 4)))
+                          (found nil))
+                      (while (and (< p limit) (not found))
+                        (let ((b0 (aref raw p))
+                              (b1 (aref raw (1+ p))))
+                          (cond
+                           ((and (= mode 0) (= b0 ?\r) (= b1 ?\n))
+                            (setq found (1+ p)))
+                           ((and (= mode 1) (= b0 #xc3) (= b1 #xa9))
+                            (setq found (1+ p)))
+                           ((and (= mode 2) (= b0 #xe3) (= b1 #x81))
+                            (setq found (+ p 2)))
+                           ((and (= mode 3) (= b0 #xf0) (= b1 #x9f))
+                            (setq found (+ p 3)))))
+                        (setq p (1+ p)))
+                      (or found (error "carryover boundary %d not found" i)))))
+             (chunk (substring raw pos end)))
+        (when (> (length chunk) 4096)
+          (error "carryover chunk %d exceeds PIPE_BUF: %d" i (length chunk)))
+        (push chunk chunks)
+        (setq pos end)))
+    (setq chunks (nreverse chunks))
+    (dolist (ch chunks)
+      (let* ((comb (concat carry ch))
+             (len (length comb))
+             (cut len))
+        (cond
+         ((and (> len 0) (= (aref comb (1- len)) ?\r))
+          (setq cut (1- len)))
+         ((and (> len 0) (>= (aref comb (1- len)) #xc0))
+          (setq cut (1- len)))
+         ((and (> len 1) (>= (aref comb (- len 2)) #xe0))
+          (setq cut (- len 2)))
+         ((and (> len 2) (>= (aref comb (- len 3)) #xf0))
+          (setq cut (- len 3))))
+        (push (length (decode-coding-string (substring comb 0 cut) 'utf-8-dos))
+              expected)
+        (setq carry (substring comb cut))))
+    (unless (equal carry "")
+      (error "carryover stream left %d trailing bytes" (length carry)))
+    (let ((ref (decode-coding-string raw 'utf-8-dos)))
+      (setq neomacs-perf-workload--carryover-chunks (vconcat chunks)
+            neomacs-perf-workload--carryover-expected-lens (vconcat (nreverse expected))
+            neomacs-perf-workload--carryover-ref-md5 (md5 ref)
+            neomacs-perf-workload--carryover-ref-chars (length ref)))))
+
+(defun neomacs-perf-workload--run-process-output-carryover ()
+  "Stream the prepared 64-chunk payload through an async pipe `cat' filter.
+Returns (FILTER-CALLS CARRYOVER-BOUNDARIES VERIFIED-P)."
+  (let* ((process-adaptive-read-buffering nil)
+         (chunks neomacs-perf-workload--carryover-chunks)
+         (expected neomacs-perf-workload--carryover-expected-lens)
+         (count (length chunks))
+         (filter-calls 0)
+         (chunk-got 0)
+         (buf (generate-new-buffer " *neomacs-perf-carryover*")))
+    (unwind-protect
+        (let ((proc (make-process
+                     :name "neomacs-perf-carryover"
+                     :buffer nil
+                     :command '("cat")
+                     :coding '(utf-8 . no-conversion)
+                     :connection-type 'pipe
+                     :noquery t
+                     :sentinel #'ignore
+                     :filter (lambda (_p str)
+                               (setq filter-calls (1+ filter-calls)
+                                     chunk-got (+ chunk-got (length str)))
+                               (with-current-buffer buf
+                                 (goto-char (point-max))
+                                 (insert str))))))
+          (unwind-protect
+              (progn
+                (dotimes (i count)
+                  (let ((want (aref expected i)))
+                    (setq chunk-got 0)
+                    (process-send-string proc (aref chunks i))
+                    (while (< chunk-got want)
+                      (accept-process-output proc 1))
+                    (unless (= chunk-got want)
+                      (error "process-output-carryover chunk %d got %d want %d"
+                             i chunk-got want))))
+                (process-send-eof proc)
+                (while (process-live-p proc)
+                  (accept-process-output proc 0.05)))
+            (when (process-live-p proc)
+              (delete-process proc)))
+          (let* ((got (with-current-buffer buf (buffer-string)))
+                 (verified (and (eq last-coding-system-used 'utf-8-dos)
+                                (= (length got) neomacs-perf-workload--carryover-ref-chars)
+                                (equal (md5 got) neomacs-perf-workload--carryover-ref-md5))))
+            (list filter-calls (1- count) verified)))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
+
 (defun neomacs-perf-workload--pulse-face-steps ()
   "Apply one xref pulse and redisplay after every face write.
 
@@ -378,6 +512,11 @@ redisplay that does not show the CJK line is an error."
     (fundamental-mode))
    ((equal scenario "process-output")
     ;; The workload spawns the subprocess itself, once per iteration.
+    (fundamental-mode))
+   ((equal scenario "process-output-carryover")
+    ;; Precompute the 64 `<= PIPE_BUF' chunks and reference MD5 before the
+    ;; timed window opens.
+    (neomacs-perf-workload--prepare-carryover-stream)
     (fundamental-mode))
    ((equal scenario "file-open")
     ;; The workload opens the file itself, once per iteration, into a fresh
@@ -435,6 +574,8 @@ redisplay that does not show the CJK line is an error."
         (mode-us 0) (fontify-us 0) (replace-us 0) (undo-redo-us 0)
         (isearch-us 0) (buffer-switch-us 0) (how-many-us 0) (motion-us 0)
         (bookkeeping-us 0) (face-changes 0) (distinct-cjk 0)
+        (process-filter-calls 0) (process-carryover-boundaries 0)
+        (process-carryover-verified t)
         (neomacs-perf-workload--redisplay-count 0)
         (neomacs-perf-workload--cjk-displayed nil))
     (dotimes (_ iterations)
@@ -491,7 +632,7 @@ redisplay that does not show the CJK line is an error."
            ;; deterministic -- it reaches the same decoder
            ;; (`decode_process_run_in_context`), which is what this row exists
            ;; to hold honest; it does not cover filter dispatch or partial-run
-           ;; carryover, and a row that claimed to would be lying.
+           ;; carryover (covered by `process-output-carryover').
            (let ((path (neomacs-perf-workload--required-environment
                         "NEOMACS_PERF_SOURCE")))
              (setq type-us
@@ -500,6 +641,20 @@ redisplay that does not show the CJK line is an error."
                        (lambda ()
                          (with-temp-buffer
                            (call-process "cat" nil t nil path))))))))
+          ("process-output-carryover"
+           ;; Asynchronous pipe subprocess output through a Lisp `:filter',
+           ;; exercising 63 deterministic UTF-8 and CRLF partial-run carryover
+           ;; boundaries per iteration.
+           (let (stats)
+             (setq type-us
+                   (+ type-us
+                      (neomacs-perf-workload--time
+                       (lambda ()
+                         (setq stats
+                               (neomacs-perf-workload--run-process-output-carryover))))))
+             (setq process-filter-calls (+ process-filter-calls (nth 0 stats))
+                   process-carryover-boundaries (+ process-carryover-boundaries (nth 1 stats))
+                   process-carryover-verified (and process-carryover-verified (nth 2 stats)))))
           ("file-open"
            ;; Opening a file, split into the two halves that behave
            ;; differently, because a single number hides both.
@@ -622,7 +777,11 @@ redisplay that does not show the CJK line is an error."
       (face-changes . ,face-changes)
       (distinct-cjk . ,distinct-cjk)
       (redisplays . ,neomacs-perf-workload--redisplay-count)
-      (cjk-displayed . ,neomacs-perf-workload--cjk-displayed))))
+      (cjk-displayed . ,neomacs-perf-workload--cjk-displayed)
+      (process-filter-calls . ,process-filter-calls)
+      (process-carryover-boundaries . ,process-carryover-boundaries)
+      (process-carryover-verified . ,(and (equal scenario "process-output-carryover")
+                                          process-carryover-verified)))))
 
 (defun neomacs-perf-workload--lsp-message (count)
   "Build one `textDocument/publishDiagnostics' plist with COUNT diagnostics.
@@ -698,6 +857,9 @@ Both engines run the same code here, so the number is comparable."
         (distinct_cjk . ,(or (alist-get 'distinct-cjk phases) 0))
         (redisplay_count . ,(or (alist-get 'redisplays phases) 0))
         (cjk_displayed . ,(if (alist-get 'cjk-displayed phases) t :json-false))
+        (process_filter_calls . ,(or (alist-get 'process-filter-calls phases) 0))
+        (process_carryover_boundaries . ,(or (alist-get 'process-carryover-boundaries phases) 0))
+        (process_carryover_verified . ,(if (alist-get 'process-carryover-verified phases) t :json-false))
         ;; What the harness spent on its own snapshot/restore inside the
         ;; timed window, so a reader can tell the workload from the scaffold.
         (harness_bookkeeping_us . ,(alist-get 'bookkeeping phases))

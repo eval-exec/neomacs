@@ -43,6 +43,10 @@ pub(crate) const CJK_PULSE_FACE_STEPS: u64 = 10;
 /// Distinct CJK characters the fixture must show. The row stays outside
 /// the standard suite until it has a measured baseline.
 pub(crate) const CJK_DISTINCT_MINIMUM: u64 = 60;
+/// Atomic (`<= PIPE_BUF`) chunks streamed per iteration of `process-output-carryover`.
+pub(crate) const PROCESS_CARRYOVER_CHUNKS: u64 = 64;
+/// Partial-run carryover boundaries per iteration (`PROCESS_CARRYOVER_CHUNKS - 1`).
+pub(crate) const PROCESS_CARRYOVER_BOUNDARIES: u64 = PROCESS_CARRYOVER_CHUNKS - 1;
 
 pub(crate) fn prepare(
     workspace_root: &Path,
@@ -215,6 +219,9 @@ pub(crate) struct EditorWorkloadResult {
     distinct_cjk: u64,
     redisplay_count: u64,
     cjk_displayed: bool,
+    process_filter_calls: u64,
+    process_carryover_boundaries: u64,
+    process_carryover_verified: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -283,6 +290,15 @@ struct EditorWorkloadResultWire {
     /// True when each CJK redisplay showed a character at or above U+3000.
     #[serde(default)]
     cjk_displayed: bool,
+    /// Lisp process-filter calls observed by `process-output-carryover`. Other workloads leave 0.
+    #[serde(default)]
+    process_filter_calls: u64,
+    /// Partial-run carryover boundaries exercised by `process-output-carryover`. Other workloads leave 0.
+    #[serde(default)]
+    process_carryover_boundaries: u64,
+    /// True when every `process-output-carryover` iteration matched `utf-8-dos` and the reference MD5.
+    #[serde(default)]
+    process_carryover_verified: bool,
     #[serde(deserialize_with = "deserialize_optional_error", rename = "error")]
     error: Option<String>,
 }
@@ -336,6 +352,9 @@ impl TryFrom<EditorWorkloadResultWire> for EditorWorkloadResult {
             distinct_cjk: wire.distinct_cjk,
             redisplay_count: wire.redisplay_count,
             cjk_displayed: wire.cjk_displayed,
+            process_filter_calls: wire.process_filter_calls,
+            process_carryover_boundaries: wire.process_carryover_boundaries,
+            process_carryover_verified: wire.process_carryover_verified,
         })
     }
 }
@@ -471,6 +490,31 @@ pub(crate) fn validate_editor_workload_result(
         // only one would silently stop guarding the other.
         ScenarioId::ProcessOutput => {
             require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
+        }
+        ScenarioId::ProcessOutputCarryover => {
+            require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
+            let expected_filter_calls =
+                u64::from(request.iterations.get()) * PROCESS_CARRYOVER_CHUNKS;
+            mismatch(
+                &mut mismatches,
+                "process-filter-calls",
+                expected_filter_calls,
+                result.process_filter_calls,
+            );
+            let expected_carryover_boundaries =
+                u64::from(request.iterations.get()) * PROCESS_CARRYOVER_BOUNDARIES;
+            mismatch(
+                &mut mismatches,
+                "process-carryover-boundaries",
+                expected_carryover_boundaries,
+                result.process_carryover_boundaries,
+            );
+            mismatch(
+                &mut mismatches,
+                "process-carryover-verified",
+                true,
+                result.process_carryover_verified,
+            );
         }
         ScenarioId::FileOpen => {
             require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);

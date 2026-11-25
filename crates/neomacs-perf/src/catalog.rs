@@ -160,7 +160,7 @@ pub enum ScenarioId {
     /// no other row touches it. It uses `call-process` so the row is
     /// deterministic; that reaches the same decoder as the async filters
     /// (`decode_process_run_in_context`) but does NOT cover filter dispatch or
-    /// partial-run carryover.
+    /// partial-run carryover (covered by `ProcessOutputCarryover`).
     ProcessOutput,
     /// Opening a file: decode plus buffer insert, then fontification, timed
     /// apart.
@@ -216,6 +216,21 @@ pub enum ScenarioId {
     /// Deliberately absent from `STANDARD_SCENARIOS`. It has no measured
     /// baseline, and an unmeasured row would move the board's geometric mean.
     CjkFontLockPulse,
+    /// Asynchronous subprocess output through a Lisp filter with deterministic
+    /// partial-run carryover across every chunk boundary.
+    ///
+    /// `ProcessOutput` uses `call-process` (single `SourceBlock::Last` read)
+    /// and therefore never exercises async `:filter` dispatch, sticky EOL
+    /// resolution across reads, or `coding->carryover`. This row streams 64
+    /// `<= PIPE_BUF` (4096 B) chunks in lockstep through an async pipe `cat`
+    /// process, splitting 2-/3-/4-byte UTF-8 sequences and trailing-CR DOS
+    /// newlines across all 63 chunk boundaries, and rejects any run whose
+    /// filter-call count, carryover-boundary count, `last-coding-system-used`,
+    /// or decoded checksum drifts.
+    ///
+    /// Deliberately absent from `STANDARD_SCENARIOS` until it has a measured
+    /// baseline so it does not move the board's geometric mean.
+    ProcessOutputCarryover,
 }
 
 impl ScenarioId {
@@ -800,6 +815,14 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::ProcessOutputCarryover,
+        description: "Async pipe subprocess output through a Lisp filter with 63 UTF-8 and CRLF partial-run carryover boundaries per iteration",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(20).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -870,6 +893,7 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::MxTabCompletionSteady => &SCENARIOS[52],
         ScenarioId::Scrolling => &SCENARIOS[53],
         ScenarioId::CjkFontLockPulse => &SCENARIOS[54],
+        ScenarioId::ProcessOutputCarryover => &SCENARIOS[55],
     }
 }
 
