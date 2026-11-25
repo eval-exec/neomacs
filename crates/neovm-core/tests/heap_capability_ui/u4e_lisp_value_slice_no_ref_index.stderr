@@ -1,0 +1,14 @@
+error[E0277]: the type `LispValueSlice` cannot be indexed by `{integer}`
+ --> tests/heap_capability_ui/u4e_lisp_value_slice_no_ref_index.rs:6:28
+  |
+6 |     let _: &Value = &items[0];
+  |                            ^ `LispValueSlice` cannot be indexed by `{integer}`
+  |
+  = help: the trait `std::ops::Index<{integer}>` is not implemented for `LispValueSlice`
+  = help: `LispValueSlice` implements trait `std::ops::Index<Idx>`:
+            std::ops::Index<RangeFull>
+            std::ops::Index<RangeTo<usize>>
+            std::ops::Index<std::ops::Range<usize>>
+            std::ops::Index<std::ops::RangeFrom<usize>>
+            std::ops::Index<std::ops::RangeInclusive<usize>>
+            std::ops::Index<std::ops::RangeToInclusive<usize>>

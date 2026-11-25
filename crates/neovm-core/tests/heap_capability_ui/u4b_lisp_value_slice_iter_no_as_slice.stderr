@@ -1,0 +1,5 @@
+error[E0599]: no method named `as_slice` found for struct `LispValueSliceIter<'a>` in the current scope
+ --> tests/heap_capability_ui/u4b_lisp_value_slice_iter_no_as_slice.rs:6:26
+  |
+6 |     let _ = items.iter().as_slice();
+  |                          ^^^^^^^^ method not found in `LispValueSliceIter<'_>`

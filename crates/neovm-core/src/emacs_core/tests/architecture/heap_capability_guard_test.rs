@@ -1852,3 +1852,1692 @@ fn heap_capability_guard_flags_ufcs_era_collect_calls() {
             .collect::<Vec<_>>()
     );
 }
+
+/// Unsafe-budget fence: audits only neovm-value/src/tagged/slice_view.rs; unsafe transmutes written in other modules are governed by workspace unsafe review and Miri SB+TB, not by this fence.
+///
+/// Closed allowlist over `neovm-value/src/tagged/slice_view.rs`:
+/// 1. Nested items (`Stmt::Item`) inside any function/block body and every `mod` item are forbidden outright.
+/// 2. Every `use` declaration (`Item::Use`) and every macro (`Item::Macro`, `ImplItem::Macro`,
+///    `Stmt::Macro`, `Expr::Macro`, `Type::Macro`, `Pat::Macro`, `TraitItem::Macro`) is forbidden
+///    outright — zero exceptions.
+/// 3. Attributes are a closed allowlist (`//! doc = "..."` inner only; outer `doc = "..."`,
+///    `inline` / `inline(always|never)`, `repr(transparent)`,
+///    `derive(::core::clone::Clone | ::core::fmt::Debug)`, and
+///    `allow(clippy::should_implement_trait)` only); all other outer, inner, and proc-macro
+///    attributes (including bare `#[derive(Debug)]`, `#[visibility::make]`, and `#[cfg_attr]`)
+///    are violations.
+/// 4. Trait impls must use full canonical `::core::...` paths matching the closed per-target
+///    allowlist; `Expr::Verbatim` / `Type::Verbatim` / `Pat::Verbatim` / `TypeParamBound::Verbatim`
+///    fail closed.
+/// 5. Every `fn` signature (receiver, parameters, generics, return type) and associated `type`
+///    is governed by a closed allowlist so safe code in `slice_view.rs` cannot leak
+///    `&[AtomicTaggedValue]`, `&AtomicTaggedValue`, `&[TaggedValue]`, `&TaggedValue`, callbacks,
+///    or any unanalysable type.
+/// 6. The `unsafe` budget is strictly 2 `Expr::Unsafe` blocks, one inside
+///    `LispValueSlice::from_atomic_slice` and one inside `LispValueSlice::from_raw_atomic_parts`.
+const SLICE_VIEW_FILE: &str = "neovm-value/src/tagged/slice_view.rs";
+
+const SLICE_VIEW_ALLOWED_SLICE_TRAITS: &[&str] = &[
+    "::core::ops::Index",
+    "::core::fmt::Debug",
+    "::core::cmp::PartialEq",
+    "::core::cmp::Eq",
+    "::core::iter::IntoIterator",
+];
+
+const SLICE_VIEW_ALLOWED_ITER_TRAITS: &[&str] = &[
+    "::core::iter::Iterator",
+    "::core::iter::DoubleEndedIterator",
+    "::core::iter::ExactSizeIterator",
+    "::core::iter::FusedIterator",
+];
+
+const SLICE_VIEW_ALLOWED_FOREIGN_TRAIT: &str = "::core::cmp::PartialEq";
+
+fn slice_view_self_type_name(ty: &Type) -> Option<String> {
+    match ty {
+        syn::Type::Reference(r) => slice_view_self_type_name(&r.elem),
+        syn::Type::Group(g) => slice_view_self_type_name(&g.elem),
+        syn::Type::Paren(p) => slice_view_self_type_name(&p.elem),
+        syn::Type::Path(p)
+            if p.qself.is_none()
+                && p.path.leading_colon.is_none()
+                && p.path.segments.len() == 1 =>
+        {
+            Some(p.path.segments[0].ident.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn slice_view_is_exact_path(ty: &Type, leading_colon: bool, expected: &[&str]) -> bool {
+    let syn::Type::Path(p) = ty else {
+        return false;
+    };
+    if p.qself.is_some()
+        || p.path.leading_colon.is_some() != leading_colon
+        || !p.path.segments.iter().all(|s| s.arguments.is_empty())
+    {
+        return false;
+    }
+    let segs: Vec<String> = p
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    let refs: Vec<&str> = segs.iter().map(String::as_str).collect();
+    refs.as_slice() == expected
+}
+
+fn slice_view_is_exact_atomic_tagged_value_type(ty: &Type) -> bool {
+    slice_view_is_exact_path(ty, false, &["super", "header", "AtomicTaggedValue"])
+}
+
+fn slice_view_is_exact_tagged_value_type(ty: &Type) -> bool {
+    slice_view_is_exact_path(ty, false, &["super", "value", "TaggedValue"])
+}
+
+fn slice_view_is_exact_index_output_type(ty: &Type) -> bool {
+    slice_view_is_exact_path(ty, false, &["Self"])
+        || slice_view_is_exact_path(ty, false, &["LispValueSlice"])
+}
+
+fn slice_view_is_exact_self_ref(ty: &Type) -> bool {
+    matches!(
+        ty,
+        syn::Type::Reference(r)
+            if r.mutability.is_none() && slice_view_is_exact_path(&r.elem, false, &["Self"])
+    )
+}
+
+fn slice_view_is_exact_iter_type(ty: &Type) -> bool {
+    let syn::Type::Path(p) = ty else {
+        return false;
+    };
+    if p.qself.is_some() || p.path.leading_colon.is_some() || p.path.segments.len() != 1 {
+        return false;
+    }
+    let seg = &p.path.segments[0];
+    if seg.ident != "LispValueSliceIter" {
+        return false;
+    }
+    match &seg.arguments {
+        syn::PathArguments::AngleBracketed(args) if args.args.len() == 1 => {
+            matches!(&args.args[0], syn::GenericArgument::Lifetime(_))
+        }
+        _ => false,
+    }
+}
+
+fn slice_view_extract_single_type_arg<'a>(
+    ty: &'a Type,
+    leading_colon: bool,
+    expected: &[&str],
+) -> Option<&'a Type> {
+    let syn::Type::Path(p) = ty else {
+        return None;
+    };
+    if p.qself.is_some() || p.path.leading_colon.is_some() != leading_colon {
+        return None;
+    }
+    let segs: Vec<String> = p
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    let refs: Vec<&str> = segs.iter().map(String::as_str).collect();
+    if refs.as_slice() != expected {
+        return None;
+    }
+    let last_idx = p.path.segments.len() - 1;
+    if p.path
+        .segments
+        .iter()
+        .take(last_idx)
+        .any(|s| !s.arguments.is_empty())
+    {
+        return None;
+    }
+    match &p.path.segments[last_idx].arguments {
+        syn::PathArguments::AngleBracketed(args) if args.args.len() == 1 => match &args.args[0] {
+            syn::GenericArgument::Type(inner) => Some(inner),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn slice_view_is_pub_crate(vis: &syn::Visibility) -> bool {
+    matches!(
+        vis,
+        syn::Visibility::Restricted(r)
+            if r.in_token.is_none() && r.path.is_ident("crate")
+    )
+}
+
+fn slice_view_is_allowed_range_type(ty: &Type) -> bool {
+    if slice_view_is_exact_path(ty, true, &["core", "ops", "RangeFull"]) {
+        return true;
+    }
+    for range_name in [
+        "Range",
+        "RangeFrom",
+        "RangeTo",
+        "RangeInclusive",
+        "RangeToInclusive",
+    ] {
+        if let Some(inner) =
+            slice_view_extract_single_type_arg(ty, true, &["core", "ops", range_name])
+            && slice_view_is_exact_path(inner, false, &["usize"])
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn slice_view_is_allowed_tagged_value_slice_or_array(ty: &Type) -> bool {
+    match ty {
+        syn::Type::Slice(s) => slice_view_is_exact_tagged_value_type(&s.elem),
+        syn::Type::Array(a) => slice_view_is_exact_tagged_value_type(&a.elem),
+        _ => false,
+    }
+}
+
+fn slice_view_is_allowed_foreign_eq_target(ty: &Type) -> bool {
+    if slice_view_is_allowed_tagged_value_slice_or_array(ty) {
+        return true;
+    }
+    if let Some(vec_elem) = slice_view_extract_single_type_arg(ty, true, &["std", "vec", "Vec"])
+        && slice_view_is_exact_tagged_value_type(vec_elem)
+    {
+        return true;
+    }
+    matches!(
+        ty,
+        syn::Type::Reference(r)
+            if r.mutability.is_none()
+                && slice_view_is_allowed_tagged_value_slice_or_array(&r.elem)
+    )
+}
+
+fn slice_view_is_allowed_eq_rhs_param(ty: &Type) -> bool {
+    let syn::Type::Reference(r) = ty else {
+        return false;
+    };
+    if r.mutability.is_some() {
+        return false;
+    }
+    let inner = &*r.elem;
+    if slice_view_is_exact_path(inner, false, &["Self"])
+        || slice_view_is_exact_path(inner, false, &["LispValueSlice"])
+        || slice_view_is_allowed_tagged_value_slice_or_array(inner)
+    {
+        return true;
+    }
+    if let Some(vec_elem) = slice_view_extract_single_type_arg(inner, true, &["std", "vec", "Vec"])
+        && slice_view_is_exact_tagged_value_type(vec_elem)
+    {
+        return true;
+    }
+    matches!(
+        inner,
+        syn::Type::Reference(r2)
+            if r2.mutability.is_none()
+                && slice_view_is_allowed_tagged_value_slice_or_array(&r2.elem)
+    )
+}
+
+fn slice_view_is_allowed_fmt_formatter_param(ty: &Type) -> bool {
+    let syn::Type::Reference(r) = ty else {
+        return false;
+    };
+    if r.mutability.is_none() {
+        return false;
+    }
+    let syn::Type::Path(p) = &*r.elem else {
+        return false;
+    };
+    if p.qself.is_some() || p.path.leading_colon.is_none() {
+        return false;
+    }
+    let segs: Vec<String> = p
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    let refs: Vec<&str> = segs.iter().map(String::as_str).collect();
+    if refs.as_slice() != ["core", "fmt", "Formatter"] {
+        return false;
+    }
+    if p.path.segments[0].arguments.is_empty() && p.path.segments[1].arguments.is_empty() {
+        matches!(
+            &p.path.segments[2].arguments,
+            syn::PathArguments::AngleBracketed(args)
+                if args.args.len() == 1
+                    && matches!(&args.args[0], syn::GenericArgument::Lifetime(_))
+        )
+    } else {
+        false
+    }
+}
+
+fn slice_view_is_allowed_get_slice_generics(generics: &syn::Generics) -> bool {
+    if generics.params.len() != 1 {
+        return false;
+    }
+    let syn::GenericParam::Type(tp) = &generics.params[0] else {
+        return false;
+    };
+    if tp.ident != "I" || !tp.bounds.is_empty() || tp.default.is_some() {
+        return false;
+    }
+    let Some(wc) = &generics.where_clause else {
+        return false;
+    };
+    if wc.predicates.len() != 1 {
+        return false;
+    }
+    let syn::WherePredicate::Type(pred) = &wc.predicates[0] else {
+        return false;
+    };
+    if !slice_view_is_exact_path(&pred.bounded_ty, false, &["I"]) || pred.bounds.len() != 1 {
+        return false;
+    }
+    let syn::TypeParamBound::Trait(tb) = &pred.bounds[0] else {
+        return false;
+    };
+    let path = &tb.path;
+    if path.leading_colon.is_none() {
+        return false;
+    }
+    let segs: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+    let refs: Vec<&str> = segs.iter().map(String::as_str).collect();
+    if refs.as_slice() != ["core", "slice", "SliceIndex"]
+        || !path.segments[0].arguments.is_empty()
+        || !path.segments[1].arguments.is_empty()
+    {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &path.segments[2].arguments else {
+        return false;
+    };
+    if args.args.len() != 2 {
+        return false;
+    }
+    let arg0_ok = matches!(
+        &args.args[0],
+        syn::GenericArgument::Type(syn::Type::Slice(s))
+            if slice_view_is_exact_atomic_tagged_value_type(&s.elem)
+    );
+    let arg1_ok = matches!(
+        &args.args[1],
+        syn::GenericArgument::AssocType(assoc)
+            if assoc.ident == "Output"
+                && assoc.generics.is_none()
+                && matches!(
+                    &assoc.ty,
+                    syn::Type::Slice(s) if slice_view_is_exact_atomic_tagged_value_type(&s.elem)
+                )
+    );
+    arg0_ok && arg1_ok
+}
+
+fn slice_view_return_type_is_allowed(ret: &syn::ReturnType, canonical_trait: Option<&str>) -> bool {
+    let syn::ReturnType::Type(_, ty) = ret else {
+        return true;
+    };
+    let ty = &**ty;
+    if let syn::Type::Tuple(t) = ty {
+        if t.elems.is_empty() {
+            return true;
+        }
+        if t.elems.len() == 2
+            && slice_view_is_exact_path(&t.elems[0], false, &["usize"])
+            && slice_view_extract_single_type_arg(&t.elems[1], true, &["core", "option", "Option"])
+                .is_some_and(|inner| slice_view_is_exact_path(inner, false, &["usize"]))
+        {
+            return true;
+        }
+        return false;
+    }
+    if slice_view_is_exact_path(ty, false, &["usize"])
+        || slice_view_is_exact_path(ty, false, &["bool"])
+        || slice_view_is_exact_tagged_value_type(ty)
+        || slice_view_is_exact_self_ref(ty)
+        || slice_view_is_exact_iter_type(ty)
+        || slice_view_is_exact_path(ty, true, &["core", "fmt", "Result"])
+    {
+        return true;
+    }
+    if let Some(vec_elem) = slice_view_extract_single_type_arg(ty, true, &["std", "vec", "Vec"])
+        && slice_view_is_exact_tagged_value_type(vec_elem)
+    {
+        return true;
+    }
+    if let Some(opt_inner) =
+        slice_view_extract_single_type_arg(ty, true, &["core", "option", "Option"])
+    {
+        if slice_view_is_exact_tagged_value_type(opt_inner)
+            || slice_view_is_exact_self_ref(opt_inner)
+        {
+            return true;
+        }
+        if matches!(
+            canonical_trait,
+            Some("::core::iter::Iterator" | "::core::iter::DoubleEndedIterator")
+        ) && slice_view_is_exact_path(opt_inner, false, &["Self", "Item"])
+        {
+            return true;
+        }
+        if let syn::Type::Tuple(t) = opt_inner
+            && t.elems.len() == 2
+            && slice_view_is_exact_tagged_value_type(&t.elems[0])
+            && slice_view_is_exact_self_ref(&t.elems[1])
+        {
+            return true;
+        }
+        return false;
+    }
+    if canonical_trait == Some("::core::ops::Index")
+        && matches!(
+            ty,
+            syn::Type::Reference(r)
+                if r.mutability.is_none()
+                    && slice_view_is_exact_path(&r.elem, false, &["Self", "Output"])
+        )
+    {
+        return true;
+    }
+    if canonical_trait == Some("::core::iter::IntoIterator")
+        && slice_view_is_exact_path(ty, false, &["Self", "IntoIter"])
+    {
+        return true;
+    }
+    false
+}
+
+fn slice_view_check_fn_signature(
+    sig: &syn::Signature,
+    vis: &syn::Visibility,
+    target_name: Option<&str>,
+    canonical_trait: Option<&str>,
+    problems: &mut Vec<String>,
+) {
+    let fn_name = sig.ident.to_string();
+    let is_inherent_slice = canonical_trait.is_none() && target_name == Some("LispValueSlice");
+    let is_from_atomic_slice = is_inherent_slice && fn_name == "from_atomic_slice";
+    let is_from_raw_parts = is_inherent_slice && fn_name == "from_raw_atomic_parts";
+    let is_get_slice = is_inherent_slice && fn_name == "get_slice";
+
+    if is_from_atomic_slice || is_from_raw_parts {
+        if !slice_view_is_pub_crate(vis) {
+            problems.push(format!(
+                "{SLICE_VIEW_FILE}: constructor `LispValueSlice::{fn_name}` must stay `pub(crate)` (fail closed)"
+            ));
+        }
+    }
+
+    if is_get_slice {
+        if !slice_view_is_allowed_get_slice_generics(&sig.generics) {
+            problems.push(format!(
+                "{SLICE_VIEW_FILE}: `LispValueSlice::get_slice` has disallowed generics/where bounds (fail closed)"
+            ));
+        }
+    } else if sig
+        .generics
+        .params
+        .iter()
+        .any(|p| !matches!(p, syn::GenericParam::Lifetime(_)))
+        || sig.generics.where_clause.is_some()
+    {
+        problems.push(format!(
+            "{SLICE_VIEW_FILE}: `fn {fn_name}` has disallowed type/const generics or where clause (fail closed)"
+        ));
+    }
+
+    if !slice_view_return_type_is_allowed(&sig.output, canonical_trait) {
+        problems.push(format!(
+            "{SLICE_VIEW_FILE}: `fn {fn_name}` has disallowed return type (fail closed)"
+        ));
+    }
+
+    for (idx, arg) in sig.inputs.iter().enumerate() {
+        match arg {
+            syn::FnArg::Receiver(r) => {
+                if !matches!(
+                    r.kind,
+                    syn::ReceiverKind::Value | syn::ReceiverKind::Reference(..)
+                ) {
+                    problems.push(format!(
+                        "{SLICE_VIEW_FILE}: `fn {fn_name}` has disallowed typed receiver (fail closed)"
+                    ));
+                }
+            }
+            syn::FnArg::Typed(pat_ty) => {
+                let ty = &*pat_ty.ty;
+                let param_ok = if is_from_atomic_slice && idx == 0 {
+                    matches!(
+                        ty,
+                        syn::Type::Reference(r)
+                            if r.mutability.is_none()
+                                && matches!(
+                                    &*r.elem,
+                                    syn::Type::Slice(s)
+                                        if slice_view_is_exact_atomic_tagged_value_type(&s.elem)
+                                )
+                    )
+                } else if is_from_raw_parts && idx == 0 {
+                    matches!(
+                        ty,
+                        syn::Type::Ptr(p)
+                            if matches!(p.mutability, syn::PointerMutability::Const(_))
+                                && slice_view_is_exact_atomic_tagged_value_type(&p.elem)
+                    )
+                } else if is_from_raw_parts && idx == 1 {
+                    slice_view_is_exact_path(ty, false, &["usize"])
+                } else if is_get_slice && idx == 1 {
+                    slice_view_is_exact_path(ty, false, &["I"])
+                } else if canonical_trait == Some("::core::fmt::Debug") && fn_name == "fmt" {
+                    slice_view_is_allowed_fmt_formatter_param(ty)
+                } else if canonical_trait == Some("::core::ops::Index") && fn_name == "index" {
+                    slice_view_is_allowed_range_type(ty)
+                } else if canonical_trait == Some("::core::cmp::PartialEq") && fn_name == "eq" {
+                    slice_view_is_allowed_eq_rhs_param(ty)
+                } else {
+                    slice_view_is_exact_path(ty, false, &["usize"])
+                        || matches!(
+                            ty,
+                            syn::Type::Reference(r)
+                                if r.mutability.is_none()
+                                    && slice_view_is_exact_tagged_value_type(&r.elem)
+                        )
+                };
+                if !param_ok {
+                    problems.push(format!(
+                        "{SLICE_VIEW_FILE}: `fn {fn_name}` parameter {idx} has disallowed type (fail closed)"
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn slice_view_display_path(path: &syn::Path) -> String {
+    let prefix = if path.leading_colon.is_some() {
+        "::"
+    } else {
+        ""
+    };
+    let joined = path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::");
+    format!("{prefix}{joined}")
+}
+
+/// Full canonical `::crate::...` path for trait impls (leading `::` required,
+/// non-final segments must carry no generic arguments).
+fn slice_view_canonical_trait_path(path: &syn::Path) -> Option<String> {
+    if path.leading_colon.is_none() || path.segments.is_empty() {
+        return None;
+    }
+    let last_idx = path.segments.len() - 1;
+    if path
+        .segments
+        .iter()
+        .take(last_idx)
+        .any(|s| !s.arguments.is_empty())
+    {
+        return None;
+    }
+    Some(slice_view_display_path(path))
+}
+
+fn slice_view_item_kind(item: &syn::Item) -> &'static str {
+    match item {
+        syn::Item::Const(_) => "const",
+        syn::Item::Enum(_) => "enum",
+        syn::Item::ExternCrate(_) => "extern crate",
+        syn::Item::Fn(_) => "fn",
+        syn::Item::ForeignMod(_) => "extern",
+        syn::Item::Impl(_) => "impl",
+        syn::Item::Macro(_) => "macro",
+        syn::Item::Mod(_) => "mod",
+        syn::Item::Static(_) => "static",
+        syn::Item::Struct(_) => "struct",
+        syn::Item::Trait(_) => "trait",
+        syn::Item::TraitAlias(_) => "trait alias",
+        syn::Item::Type(_) => "type",
+        syn::Item::Union(_) => "union",
+        syn::Item::Use(_) => "use",
+        _ => "item",
+    }
+}
+
+/// Closed attribute allowlist for `slice_view.rs`.
+///
+/// Inner attributes: ONLY `doc = "..."` (`//! ...`).
+/// Outer attributes: ONLY single-segment `doc = "..."`, `inline` / `inline(always|never)`,
+/// `repr(transparent)`, `derive(::core::clone::Clone, ::core::fmt::Debug)`, and
+/// `allow(clippy::should_implement_trait)`.
+/// Every other attribute (including bare `#[derive(Debug)]`, `#[cfg]`, `#[cfg_attr]`,
+/// `#[path]`, `#[visibility::make(pub)]`, `#[allow(unsafe_op_in_unsafe_fn)]`, arbitrary
+/// derives, and all inner attributes other than `//!`) fails closed.
+fn slice_view_attribute_is_allowed(attr: &Attribute) -> bool {
+    let Some(ident) = attr.path().get_ident() else {
+        // Multi-segment attribute path (e.g. `#[visibility::make(pub)]`) is forbidden.
+        return false;
+    };
+    let name = ident.to_string();
+    let is_plain_doc_str = matches!(
+        &attr.meta,
+        syn::Meta::NameValue(nv)
+            if matches!(
+                &nv.value,
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(_),
+                    ..
+                })
+            )
+    );
+    if matches!(attr.style, syn::AttrStyle::Inner(_)) {
+        return name == "doc" && is_plain_doc_str;
+    }
+    match name.as_str() {
+        "doc" => is_plain_doc_str,
+        "inline" => {
+            matches!(&attr.meta, syn::Meta::Path(_))
+                || attr
+                    .parse_args::<syn::Ident>()
+                    .is_ok_and(|arg| arg == "always" || arg == "never")
+        }
+        "repr" => attr
+            .parse_args::<syn::Ident>()
+            .is_ok_and(|arg| arg == "transparent"),
+        "derive" => attr
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|paths| {
+                !paths.is_empty()
+                    && paths.iter().all(|p| {
+                        p.leading_colon.is_some()
+                            && p.segments.iter().all(|s| s.arguments.is_empty())
+                            && matches!(
+                                slice_view_display_path(p).as_str(),
+                                "::core::clone::Clone" | "::core::fmt::Debug"
+                            )
+                    })
+            }),
+        "allow" => attr
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|paths| {
+                !paths.is_empty()
+                    && paths.iter().all(|p| {
+                        p.leading_colon.is_none()
+                            && p.segments.iter().all(|s| s.arguments.is_empty())
+                            && slice_view_display_path(p) == "clippy::should_implement_trait"
+                    })
+            }),
+        _ => false,
+    }
+}
+
+struct SliceViewUnsafeBudgetVisitor {
+    saw_slice_struct: bool,
+    saw_iter_struct: bool,
+    impl_target_stack: Vec<String>,
+    owner_stack: Vec<String>,
+    unsafe_locations: Vec<(Option<String>, Option<String>)>,
+    problems: Vec<String>,
+}
+
+impl SliceViewUnsafeBudgetVisitor {
+    fn check_top_level_item(&mut self, item: &syn::Item) {
+        match item {
+            syn::Item::Struct(s) => {
+                let name = s.ident.to_string();
+                match name.as_str() {
+                    "LispValueSlice" => {
+                        self.saw_slice_struct = true;
+                        let has_repr_transparent = s.attrs.iter().any(|attr| {
+                            attr.path().is_ident("repr")
+                                && attr
+                                    .parse_args::<syn::Ident>()
+                                    .is_ok_and(|ident| ident == "transparent")
+                        });
+                        if !has_repr_transparent {
+                            self.problems.push(format!(
+                                "{SLICE_VIEW_FILE}: `LispValueSlice` must keep `#[repr(transparent)]`"
+                            ));
+                        }
+                        match &s.fields {
+                            syn::Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                                let field = &fields.unnamed[0];
+                                if !matches!(field.vis, syn::Visibility::Inherited) {
+                                    self.problems.push(format!(
+                                        "{SLICE_VIEW_FILE}: `LispValueSlice` field 0 must stay private"
+                                    ));
+                                }
+                                let wraps_atomic_slice = match &field.ty {
+                                    syn::Type::Slice(slice) => {
+                                        slice_view_is_exact_atomic_tagged_value_type(&slice.elem)
+                                    }
+                                    _ => false,
+                                };
+                                if !wraps_atomic_slice {
+                                    self.problems.push(format!(
+                                        "{SLICE_VIEW_FILE}: `LispValueSlice` must wrap `[super::header::AtomicTaggedValue]`"
+                                    ));
+                                }
+                            }
+                            _ => self.problems.push(format!(
+                                "{SLICE_VIEW_FILE}: `LispValueSlice` must be a single-field tuple struct"
+                            )),
+                        }
+                    }
+                    "LispValueSliceIter" => {
+                        self.saw_iter_struct = true;
+                        for field in &s.fields {
+                            if !matches!(field.vis, syn::Visibility::Inherited) {
+                                let fname = field
+                                    .ident
+                                    .as_ref()
+                                    .map(ToString::to_string)
+                                    .unwrap_or_else(|| "<unnamed>".to_owned());
+                                self.problems.push(format!(
+                                    "{SLICE_VIEW_FILE}: `LispValueSliceIter::{fname}` field must stay private"
+                                ));
+                            }
+                        }
+                    }
+                    other => {
+                        self.problems.push(format!(
+                            "{SLICE_VIEW_FILE}: unexpected struct `{other}` inside sealed slice_view module (fail closed)"
+                        ));
+                    }
+                }
+            }
+            syn::Item::Impl(imp) => {
+                if imp.unsafety.is_some() {
+                    self.problems.push(format!(
+                        "{SLICE_VIEW_FILE}: `unsafe impl` is forbidden in slice_view.rs"
+                    ));
+                }
+                if imp
+                    .generics
+                    .params
+                    .iter()
+                    .any(|p| matches!(p, syn::GenericParam::Type(_)))
+                    || imp.generics.where_clause.is_some()
+                {
+                    self.problems.push(format!(
+                        "{SLICE_VIEW_FILE}: `impl` block has disallowed type generics or where clause (fail closed)"
+                    ));
+                }
+                let target_name = slice_view_self_type_name(&imp.self_ty);
+                if let Some((trait_path, _)) = &imp.trait_ {
+                    let display_trait = slice_view_display_path(trait_path);
+                    let canonical_trait = slice_view_canonical_trait_path(trait_path);
+                    match target_name.as_deref() {
+                        Some("LispValueSlice") => {
+                            let allowed = canonical_trait
+                                .as_deref()
+                                .is_some_and(|p| SLICE_VIEW_ALLOWED_SLICE_TRAITS.contains(&p));
+                            if !allowed {
+                                self.problems.push(format!(
+                                    "{SLICE_VIEW_FILE}: `LispValueSlice` must not implement `{display_trait}`"
+                                ));
+                            }
+                            if canonical_trait.as_deref() == Some("::core::ops::Index") {
+                                let output_ok = imp.items.iter().any(|item| match item {
+                                    syn::ImplItem::Type(assoc) if assoc.ident == "Output" => {
+                                        slice_view_is_exact_index_output_type(&assoc.ty)
+                                    }
+                                    _ => false,
+                                });
+                                if !output_ok {
+                                    self.problems.push(format!(
+                                        "{SLICE_VIEW_FILE}: `::core::ops::Index` impl on `LispValueSlice` must have `type Output = Self` or `LispValueSlice`"
+                                    ));
+                                }
+                            }
+                        }
+                        Some("LispValueSliceIter") => {
+                            let allowed = canonical_trait
+                                .as_deref()
+                                .is_some_and(|p| SLICE_VIEW_ALLOWED_ITER_TRAITS.contains(&p));
+                            if !allowed {
+                                self.problems.push(format!(
+                                    "{SLICE_VIEW_FILE}: `LispValueSliceIter` must not implement `{display_trait}`"
+                                ));
+                            }
+                        }
+                        _ => {
+                            if canonical_trait.as_deref() != Some(SLICE_VIEW_ALLOWED_FOREIGN_TRAIT)
+                                || !slice_view_is_allowed_foreign_eq_target(&imp.self_ty)
+                            {
+                                self.problems.push(format!(
+                                    "{SLICE_VIEW_FILE}: unexpected trait impl `{display_trait}` on foreign type in slice_view.rs (fail closed)"
+                                ));
+                            }
+                        }
+                    }
+                } else if !matches!(
+                    target_name.as_deref(),
+                    Some("LispValueSlice" | "LispValueSliceIter")
+                ) {
+                    self.problems.push(format!(
+                        "{SLICE_VIEW_FILE}: unexpected inherent impl target in slice_view.rs (fail closed)"
+                    ));
+                }
+
+                let canonical_trait = imp
+                    .trait_
+                    .as_ref()
+                    .and_then(|(trait_path, _)| slice_view_canonical_trait_path(trait_path));
+
+                for impl_item in &imp.items {
+                    match impl_item {
+                        syn::ImplItem::Fn(func) => {
+                            if matches!(func.sig.safety, syn::Safety::Unsafe(_))
+                                && !(target_name.as_deref() == Some("LispValueSlice")
+                                    && func.sig.ident == "from_raw_atomic_parts")
+                            {
+                                self.problems.push(format!(
+                                    "{SLICE_VIEW_FILE}: unexpected `unsafe fn {}` in slice_view.rs",
+                                    func.sig.ident
+                                ));
+                            }
+                            slice_view_check_fn_signature(
+                                &func.sig,
+                                &func.vis,
+                                target_name.as_deref(),
+                                canonical_trait.as_deref(),
+                                &mut self.problems,
+                            );
+                        }
+                        syn::ImplItem::Type(assoc) => {
+                            let assoc_ok = match (
+                                canonical_trait.as_deref(),
+                                assoc.ident.to_string().as_str(),
+                            ) {
+                                (Some("::core::ops::Index"), "Output") => {
+                                    slice_view_is_exact_index_output_type(&assoc.ty)
+                                }
+                                (
+                                    Some("::core::iter::Iterator" | "::core::iter::IntoIterator"),
+                                    "Item",
+                                ) => slice_view_is_exact_tagged_value_type(&assoc.ty),
+                                (Some("::core::iter::IntoIterator"), "IntoIter") => {
+                                    slice_view_is_exact_iter_type(&assoc.ty)
+                                }
+                                _ => false,
+                            };
+                            if !assoc_ok {
+                                self.problems.push(format!(
+                                    "{SLICE_VIEW_FILE}: disallowed associated type `{}` in impl (fail closed)",
+                                    assoc.ident
+                                ));
+                            }
+                        }
+                        syn::ImplItem::Macro(_) => {
+                            // Caught unconditionally by `visit_macro`.
+                        }
+                        _ => {
+                            self.problems.push(format!(
+                                "{SLICE_VIEW_FILE}: unanalysable `ImplItem` in slice_view.rs (fail closed)"
+                            ));
+                        }
+                    }
+                }
+            }
+            syn::Item::Use(_) => {
+                // Caught unconditionally by `visit_item_use`.
+            }
+            syn::Item::Macro(_) => {
+                // Caught unconditionally by `visit_macro`.
+            }
+            syn::Item::Mod(_) => {
+                // Caught unconditionally by `visit_item_mod`.
+            }
+            other => {
+                self.problems.push(format!(
+                    "{SLICE_VIEW_FILE}: unanalysable top-level `{}` item in slice_view.rs (fail closed)",
+                    slice_view_item_kind(other)
+                ));
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for SliceViewUnsafeBudgetVisitor {
+    fn visit_attribute(&mut self, attr: &'ast Attribute) {
+        if !slice_view_attribute_is_allowed(attr) {
+            let style = match attr.style {
+                syn::AttrStyle::Inner(_) => "inner",
+                syn::AttrStyle::Outer => "outer",
+            };
+            let prefix = match attr.style {
+                syn::AttrStyle::Inner(_) => "#!",
+                syn::AttrStyle::Outer => "#",
+            };
+            self.problems.push(format!(
+                "{SLICE_VIEW_FILE}: disallowed {style} attribute `{prefix}[{}]` (fail closed)",
+                slice_view_display_path(attr.path())
+            ));
+        }
+        visit::visit_attribute(self, attr);
+    }
+
+    fn visit_stmt(&mut self, node: &'ast syn::Stmt) {
+        if let syn::Stmt::Item(item) = node {
+            self.problems.push(format!(
+                "{SLICE_VIEW_FILE}: nested item `{}` inside function/block body is forbidden (fail closed)",
+                slice_view_item_kind(item)
+            ));
+        }
+        visit::visit_stmt(self, node);
+    }
+
+    fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
+        self.problems.push(format!(
+            "{SLICE_VIEW_FILE}: `use` declarations are forbidden in slice_view.rs (fail closed)"
+        ));
+        visit::visit_item_use(self, node);
+    }
+
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        self.problems.push(format!(
+            "{SLICE_VIEW_FILE}: nested/external `mod {}` is forbidden in slice_view.rs (fail closed)",
+            node.ident
+        ));
+        visit::visit_item_mod(self, node);
+    }
+
+    fn visit_item_impl(&mut self, node: &'ast ItemImpl) {
+        self.impl_target_stack.push(
+            slice_view_self_type_name(&node.self_ty).unwrap_or_else(|| "<foreign>".to_owned()),
+        );
+        visit::visit_item_impl(self, node);
+        self.impl_target_stack.pop();
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        self.owner_stack.push(node.sig.ident.to_string());
+        visit::visit_impl_item_fn(self, node);
+        self.owner_stack.pop();
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        self.owner_stack.push(format!("fn {}", node.sig.ident));
+        visit::visit_item_fn(self, node);
+        self.owner_stack.pop();
+    }
+
+    fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
+        self.owner_stack.push(format!("const {}", node.ident));
+        visit::visit_item_const(self, node);
+        self.owner_stack.pop();
+    }
+
+    fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
+        self.owner_stack.push(format!("static {}", node.ident));
+        visit::visit_item_static(self, node);
+        self.owner_stack.pop();
+    }
+
+    fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
+        self.owner_stack.push("<closure>".to_owned());
+        visit::visit_expr_closure(self, node);
+        self.owner_stack.pop();
+    }
+
+    fn visit_expr_unsafe(&mut self, node: &'ast syn::ExprUnsafe) {
+        self.unsafe_locations.push((
+            self.impl_target_stack.last().cloned(),
+            self.owner_stack.last().cloned(),
+        ));
+        visit::visit_expr_unsafe(self, node);
+    }
+
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        self.problems.push(format!(
+            "{SLICE_VIEW_FILE}: macro `{}!` is forbidden in slice_view.rs (fail closed)",
+            slice_view_display_path(&node.path)
+        ));
+        visit::visit_macro(self, node);
+    }
+
+    fn visit_expr(&mut self, node: &'ast syn::Expr) {
+        if matches!(node, syn::Expr::Verbatim(_)) {
+            self.problems.push(format!(
+                "{SLICE_VIEW_FILE}: unanalysable `Expr::Verbatim` in slice_view.rs (fail closed)"
+            ));
+        }
+        visit::visit_expr(self, node);
+    }
+
+    fn visit_type(&mut self, node: &'ast syn::Type) {
+        if matches!(node, syn::Type::Verbatim(_)) {
+            self.problems.push(format!(
+                "{SLICE_VIEW_FILE}: unanalysable `Type::Verbatim` in slice_view.rs (fail closed)"
+            ));
+        }
+        visit::visit_type(self, node);
+    }
+
+    fn visit_pat(&mut self, node: &'ast syn::Pat) {
+        if matches!(node, syn::Pat::Verbatim(_)) {
+            self.problems.push(format!(
+                "{SLICE_VIEW_FILE}: unanalysable `Pat::Verbatim` in slice_view.rs (fail closed)"
+            ));
+        }
+        visit::visit_pat(self, node);
+    }
+
+    fn visit_type_param_bound(&mut self, node: &'ast syn::TypeParamBound) {
+        if matches!(node, syn::TypeParamBound::Verbatim(_)) {
+            self.problems.push(format!(
+                "{SLICE_VIEW_FILE}: unanalysable `TypeParamBound::Verbatim` in slice_view.rs (fail closed)"
+            ));
+        }
+        visit::visit_type_param_bound(self, node);
+    }
+}
+
+fn slice_view_unsafe_budget_problems(source: &str) -> Vec<String> {
+    let parsed = syn::parse_file(source)
+        .unwrap_or_else(|error| panic!("parse {SLICE_VIEW_FILE} for unsafe-budget fence: {error}"));
+    let mut visitor = SliceViewUnsafeBudgetVisitor {
+        saw_slice_struct: false,
+        saw_iter_struct: false,
+        impl_target_stack: Vec::new(),
+        owner_stack: Vec::new(),
+        unsafe_locations: Vec::new(),
+        problems: Vec::new(),
+    };
+    for item in &parsed.items {
+        visitor.check_top_level_item(item);
+    }
+    visitor.visit_file(&parsed);
+
+    if !visitor.saw_slice_struct {
+        visitor.problems.push(format!(
+            "{SLICE_VIEW_FILE}: missing `struct LispValueSlice`"
+        ));
+    }
+    if !visitor.saw_iter_struct {
+        visitor.problems.push(format!(
+            "{SLICE_VIEW_FILE}: missing `struct LispValueSliceIter`"
+        ));
+    }
+
+    let mut from_atomic_count = 0usize;
+    let mut from_raw_count = 0usize;
+    for (impl_target, owner_name) in &visitor.unsafe_locations {
+        match (impl_target.as_deref(), owner_name.as_deref()) {
+            (Some("LispValueSlice"), Some("from_atomic_slice")) => from_atomic_count += 1,
+            (Some("LispValueSlice"), Some("from_raw_atomic_parts")) => from_raw_count += 1,
+            _ => visitor.problems.push(format!(
+                "{SLICE_VIEW_FILE}: unexpected `unsafe` block in {}::{} (budget is strictly 2 constructor blocks: from_atomic_slice and from_raw_atomic_parts)",
+                impl_target.as_deref().unwrap_or("<top-level>"),
+                owner_name.as_deref().unwrap_or("<non-fn>")
+            )),
+        }
+    }
+    if from_atomic_count != 1 || from_raw_count != 1 || visitor.unsafe_locations.len() != 2 {
+        visitor.problems.push(format!(
+            "{SLICE_VIEW_FILE}: unsafe-block budget mismatch (expected 1 in from_atomic_slice + 1 in from_raw_atomic_parts = 2 total; found {from_atomic_count} + {from_raw_count}, total {})",
+            visitor.unsafe_locations.len()
+        ));
+    }
+
+    visitor.problems
+}
+
+/// Moved out of `slice_view.rs` so the sealed module contains zero macros.
+#[test]
+fn slice_view_types_are_not_send_or_sync() {
+    static_assertions::assert_not_impl_any!(crate::tagged::header::LispValueSlice: Send, Sync);
+    static_assertions::assert_not_impl_any!(
+        crate::tagged::header::LispValueSliceIter<'static>: Send,
+        Sync
+    );
+}
+
+/// Unsafe-budget fence: audits only neovm-value/src/tagged/slice_view.rs; unsafe transmutes written in other modules are governed by workspace unsafe review and Miri SB+TB, not by this fence.
+#[test]
+fn slice_view_unsafe_budget_fence() {
+    let slice_view = architecture_production_source_roots::production_source_files()
+        .into_iter()
+        .find(|file| file.workspace_relative() == SLICE_VIEW_FILE)
+        .unwrap_or_else(|| panic!("locate {SLICE_VIEW_FILE} in production source roots"));
+    let source = std::fs::read_to_string(&slice_view.path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", slice_view.path.display()));
+    let problems = slice_view_unsafe_budget_problems(&source);
+    assert!(
+        problems.is_empty(),
+        "slice_view.rs unsafe-budget fence violated:\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+#[should_panic(expected = "for unsafe-budget fence")]
+fn slice_view_unsafe_budget_fence_panics_on_unparseable_source() {
+    let _ = slice_view_unsafe_budget_problems("pub struct LispValueSlice([");
+}
+
+#[test]
+fn slice_view_unsafe_budget_fence_rejects_violations() {
+    // Direct unit check on the closed attribute allowlist helper.
+    let parsed_allowed = syn::parse_file(
+        r#"
+        //! module doc
+        /// item doc
+        #[repr(transparent)]
+        #[derive(::core::clone::Clone, ::core::fmt::Debug)]
+        #[inline(always)]
+        #[allow(clippy::should_implement_trait)]
+        struct Ok;
+        "#,
+    )
+    .expect("parse allowed attrs");
+    for attr in &parsed_allowed.attrs {
+        assert!(
+            slice_view_attribute_is_allowed(attr),
+            "expected inner doc attr allowed"
+        );
+    }
+    let syn::Item::Struct(ok_struct) = &parsed_allowed.items[0] else {
+        panic!("expected struct");
+    };
+    for attr in &ok_struct.attrs {
+        assert!(
+            slice_view_attribute_is_allowed(attr),
+            "expected outer attr `{}` allowed",
+            slice_view_display_path(attr.path())
+        );
+    }
+    let parsed_disallowed = syn::parse_file(
+        r#"
+        #![cfg(unix)]
+        #[cfg(test)]
+        #[cfg_attr(all(), path = "../other.rs")]
+        #[visibility::make(pub)]
+        #[allow(unsafe_op_in_unsafe_fn)]
+        #[derive(Debug)]
+        #[derive(EvilDerive)]
+        #[doc(hidden)]
+        struct Bad;
+        "#,
+    )
+    .expect("parse disallowed attrs");
+    assert!(
+        !slice_view_attribute_is_allowed(&parsed_disallowed.attrs[0]),
+        "inner #![cfg(unix)] must be rejected"
+    );
+    let syn::Item::Struct(bad_struct) = &parsed_disallowed.items[0] else {
+        panic!("expected struct");
+    };
+    for attr in &bad_struct.attrs {
+        assert!(
+            !slice_view_attribute_is_allowed(attr),
+            "expected outer attr `{}` rejected",
+            slice_view_display_path(attr.path())
+        );
+    }
+
+    let valid_base = r#"
+        //! Sealed slice view doc.
+
+        #[repr(transparent)]
+        pub struct LispValueSlice([super::header::AtomicTaggedValue]);
+
+        #[derive(::core::clone::Clone, ::core::fmt::Debug)]
+        pub struct LispValueSliceIter<'a> {
+            inner: ::core::slice::Iter<'a, super::header::AtomicTaggedValue>,
+        }
+
+        impl LispValueSlice {
+            #[inline(always)]
+            pub(crate) fn from_atomic_slice(slice: &[super::header::AtomicTaggedValue]) -> &Self {
+                unsafe { &*(slice as *const [super::header::AtomicTaggedValue] as *const Self) }
+            }
+            #[inline(always)]
+            pub(crate) unsafe fn from_raw_atomic_parts<'a>(ptr: *const super::header::AtomicTaggedValue, len: usize) -> &'a Self {
+                unsafe { &*(::core::ptr::slice_from_raw_parts(ptr, len) as *const Self) }
+            }
+            #[allow(clippy::should_implement_trait)]
+            pub fn clone(&self) -> ::std::vec::Vec<super::value::TaggedValue> { ::std::vec::Vec::new() }
+        }
+    "#;
+    assert!(
+        slice_view_unsafe_budget_problems(valid_base).is_empty(),
+        "valid baseline must pass unsafe-budget fence: {:?}",
+        slice_view_unsafe_budget_problems(valid_base)
+    );
+
+    // 1. Third `unsafe` block: method, top-level const, top-level static, closure, constructor, top-level fn.
+    let third_unsafe_fn = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub fn leak(&self) -> &[super::value::TaggedValue] {{\n\
+                 unsafe {{ &*(&self.0 as *const [super::header::AtomicTaggedValue] as *const [super::value::TaggedValue]) }}\n\
+             }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&third_unsafe_fn).join("\n");
+    assert!(
+        p.contains("unexpected `unsafe` block in LispValueSlice::leak"),
+        "third unsafe block in method must fail:\n{p}"
+    );
+    let third_unsafe_const = format!("{valid_base}\nconst LEAK_CONST: usize = unsafe {{ 0 }};");
+    let p = slice_view_unsafe_budget_problems(&third_unsafe_const).join("\n");
+    assert!(
+        p.contains("unexpected `unsafe` block in <top-level>::const LEAK_CONST"),
+        "third unsafe block in const must fail:\n{p}"
+    );
+    let third_unsafe_static = format!("{valid_base}\nstatic LEAK_STATIC: usize = unsafe {{ 0 }};");
+    let p = slice_view_unsafe_budget_problems(&third_unsafe_static).join("\n");
+    assert!(
+        p.contains("unexpected `unsafe` block in <top-level>::static LEAK_STATIC"),
+        "third unsafe block in static must fail:\n{p}"
+    );
+    let third_unsafe_closure = valid_base.replace(
+        "unsafe { &*(slice as *const [super::header::AtomicTaggedValue] as *const Self) }",
+        "let _f = || unsafe { 0usize }; unsafe { &*(slice as *const [super::header::AtomicTaggedValue] as *const Self) }",
+    );
+    let p = slice_view_unsafe_budget_problems(&third_unsafe_closure).join("\n");
+    assert!(
+        p.contains("unexpected `unsafe` block in LispValueSlice::<closure>"),
+        "third unsafe block in closure inside constructor must fail:\n{p}"
+    );
+    let third_unsafe_same_ctor = valid_base.replace(
+        "unsafe { &*(slice as *const [super::header::AtomicTaggedValue] as *const Self) }",
+        "let _ = unsafe { 0usize }; unsafe { &*(slice as *const [super::header::AtomicTaggedValue] as *const Self) }",
+    );
+    let p = slice_view_unsafe_budget_problems(&third_unsafe_same_ctor).join("\n");
+    assert!(
+        p.contains("unsafe-block budget mismatch") && p.contains("total 3"),
+        "second unsafe block inside permitted constructor must fail budget:\n{p}"
+    );
+    let third_unsafe_top_fn = format!("{valid_base}\nfn top_leak() -> usize {{ unsafe {{ 0 }} }}");
+    let p = slice_view_unsafe_budget_problems(&third_unsafe_top_fn).join("\n");
+    assert!(
+        p.contains("unexpected `unsafe` block in <top-level>::fn top_leak"),
+        "third unsafe block in top-level fn must fail:\n{p}"
+    );
+    let top_level_mod = format!("{valid_base}\nmod smuggled;");
+    let p = slice_view_unsafe_budget_problems(&top_level_mod).join("\n");
+    assert!(
+        p.contains("nested/external `mod smuggled` is forbidden"),
+        "top-level mod must fail visit_item_mod:\n{p}"
+    );
+    let extra_unsafe_fn = format!(
+        "{valid_base}\nimpl LispValueSlice {{ pub unsafe fn extra(&self) -> usize {{ 0 }} }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&extra_unsafe_fn).join("\n");
+    assert!(
+        p.contains("unexpected `unsafe fn extra` in slice_view.rs"),
+        "unexpected unsafe fn must fail:\n{p}"
+    );
+    let unsafe_impl =
+        format!("{valid_base}\nunsafe impl ::core::marker::Send for LispValueSlice {{}}");
+    let p = slice_view_unsafe_budget_problems(&unsafe_impl).join("\n");
+    assert!(
+        p.contains("`unsafe impl` is forbidden in slice_view.rs"),
+        "unsafe impl must fail:\n{p}"
+    );
+
+    // 2. Public fields on `LispValueSlice` and `LispValueSliceIter`.
+    let pub_slice_field = valid_base.replace(
+        "pub struct LispValueSlice([super::header::AtomicTaggedValue]);",
+        "pub struct LispValueSlice(pub [super::header::AtomicTaggedValue]);",
+    );
+    let p = slice_view_unsafe_budget_problems(&pub_slice_field).join("\n");
+    assert!(
+        p.contains("`LispValueSlice` field 0 must stay private"),
+        "pub field on LispValueSlice must fail:\n{p}"
+    );
+    let pub_iter_field = valid_base.replace(
+        "inner: ::core::slice::Iter<'a, super::header::AtomicTaggedValue>,",
+        "pub inner: ::core::slice::Iter<'a, super::header::AtomicTaggedValue>,",
+    );
+    let p = slice_view_unsafe_budget_problems(&pub_iter_field).join("\n");
+    assert!(
+        p.contains("`LispValueSliceIter::inner` field must stay private"),
+        "pub field on LispValueSliceIter must fail:\n{p}"
+    );
+
+    // 3. Nested `Stmt::Item` inside method bodies (#14924 P0 Bypasses 1, 2, 3).
+    let nested_macro_impl = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub fn len(&self) -> usize {{\n\
+                 macro_rules! emit_leak {{\n\
+                     () => {{ pub fn leak(&self) -> &[super::value::TaggedValue] {{ unsafe {{ &[] }} }} }};\n\
+                 }}\n\
+                 impl LispValueSlice {{ emit_leak!(); }}\n\
+                 self.0.len()\n\
+             }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&nested_macro_impl).join("\n");
+    assert!(
+        p.contains("nested item `macro` inside function/block body is forbidden")
+            && p.contains("nested item `impl` inside function/block body is forbidden")
+            && p.contains("macro `emit_leak!` is forbidden"),
+        "nested macro_rules! + impl inside fn body must fail:\n{p}"
+    );
+    let nested_path_mod = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub fn len(&self) -> usize {{\n\
+                 #[path = \"smuggled.rs\"]\n\
+                 mod smuggled;\n\
+                 self.0.len()\n\
+             }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&nested_path_mod).join("\n");
+    assert!(
+        p.contains("nested item `mod` inside function/block body is forbidden")
+            && p.contains("nested/external `mod smuggled` is forbidden")
+            && p.contains("disallowed outer attribute `#[path]`"),
+        "nested #[path] mod inside fn body must fail:\n{p}"
+    );
+    let nested_deref_impl = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub fn len(&self) -> usize {{\n\
+                 impl ::core::ops::Deref for LispValueSlice {{\n\
+                     type Target = [super::header::AtomicTaggedValue];\n\
+                     fn deref(&self) -> &[super::header::AtomicTaggedValue] {{ &self.0 }}\n\
+                 }}\n\
+                 self.0.len()\n\
+             }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&nested_deref_impl).join("\n");
+    assert!(
+        p.contains("nested item `impl` inside function/block body is forbidden"),
+        "nested Deref impl inside fn body must fail:\n{p}"
+    );
+
+    // 4. Zero-macro ban in every AST position — including #14954 P0 Bypass 1 verbatim.
+    let macro_const_unsafe_bypass = format!(
+        "{valid_base}\n\
+         static_assertions::assert_not_impl_any!((*const LispValueSlice, [u8; {{ unsafe {{ 1 }} }}]): Send, Sync);"
+    );
+    let p = slice_view_unsafe_budget_problems(&macro_const_unsafe_bypass).join("\n");
+    assert!(
+        p.contains("macro `static_assertions::assert_not_impl_any!` is forbidden"),
+        "#14954 P0 macro-token unsafe bypass must fail:\n{p}"
+    );
+    let plain_static_assert = format!(
+        "{valid_base}\n\
+         static_assertions::assert_not_impl_any!(LispValueSlice: Send, Sync);"
+    );
+    let p = slice_view_unsafe_budget_problems(&plain_static_assert).join("\n");
+    assert!(
+        p.contains("macro `static_assertions::assert_not_impl_any!` is forbidden"),
+        "even plain static_assertions macro must fail (zero macros allowed):\n{p}"
+    );
+    let impl_item_macro = format!("{valid_base}\nimpl LispValueSlice {{ hidden_escape!(); }}");
+    let p = slice_view_unsafe_budget_problems(&impl_item_macro).join("\n");
+    assert!(
+        p.contains("macro `hidden_escape!` is forbidden"),
+        "ImplItem::Macro must fail:\n{p}"
+    );
+    let stmt_macro = format!(
+        "{valid_base}\nimpl LispValueSlice {{ pub fn sneaky(&self) -> usize {{ hidden_stmt!(); 0 }} }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&stmt_macro).join("\n");
+    assert!(
+        p.contains("macro `hidden_stmt!` is forbidden"),
+        "Stmt::Macro must fail:\n{p}"
+    );
+    let expr_macro = format!(
+        "{valid_base}\nimpl LispValueSlice {{ pub fn em(&self) -> usize {{ hidden_expr!() }} }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&expr_macro).join("\n");
+    assert!(
+        p.contains("macro `hidden_expr!` is forbidden"),
+        "Expr::Macro must fail:\n{p}"
+    );
+    let type_macro = format!(
+        "{valid_base}\nimpl LispValueSlice {{ pub fn tm(&self) -> imported_type_macro!() {{ loop {{}} }} }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&type_macro).join("\n");
+    assert!(
+        p.contains("macro `imported_type_macro!` is forbidden"),
+        "Type::Macro must fail:\n{p}"
+    );
+    let pat_macro = format!(
+        "{valid_base}\nimpl LispValueSlice {{ pub fn pm(&self) {{ let imported_pat_macro!() = 0; }} }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&pat_macro).join("\n");
+    assert!(
+        p.contains("macro `imported_pat_macro!` is forbidden"),
+        "Pat::Macro must fail:\n{p}"
+    );
+    let with_include = format!("{valid_base}\ninclude!(\"extra.rs\");");
+    let p = slice_view_unsafe_budget_problems(&with_include).join("\n");
+    assert!(
+        p.contains("macro `include!` is forbidden"),
+        "include! must fail:\n{p}"
+    );
+
+    // 5. Zero-`use` ban — including #14954 P1 Bypass 2 verbatim and collateral shapes.
+    let use_self_shadow_bypass = format!(
+        "{valid_base}\n\
+         use super::evil::static_assertions::{{self}};\n\
+         static_assertions::assert_not_impl_any!(LispValueSlice: Send, Sync);"
+    );
+    let p = slice_view_unsafe_budget_problems(&use_self_shadow_bypass).join("\n");
+    assert!(
+        p.contains("`use` declarations are forbidden in slice_view.rs")
+            && p.contains("macro `static_assertions::assert_not_impl_any!` is forbidden"),
+        "#14954 P1 use-self shadow bypass must fail both use and macro checks:\n{p}"
+    );
+    let use_debug_shadow = format!("{valid_base}\nuse some_proc_macro_crate::Debug;");
+    let p = slice_view_unsafe_budget_problems(&use_debug_shadow).join("\n");
+    assert!(
+        p.contains("`use` declarations are forbidden in slice_view.rs"),
+        "use shadowing Debug must fail:\n{p}"
+    );
+    let pub_use_leak = format!("{valid_base}\npub use super::header::AtomicTaggedValue;");
+    let p = slice_view_unsafe_budget_problems(&pub_use_leak).join("\n");
+    assert!(
+        p.contains("`use` declarations are forbidden in slice_view.rs"),
+        "pub use must fail:\n{p}"
+    );
+    let plain_use = format!("{valid_base}\nuse super::header::AtomicTaggedValue;");
+    let p = slice_view_unsafe_budget_problems(&plain_use).join("\n");
+    assert!(
+        p.contains("`use` declarations are forbidden in slice_view.rs"),
+        "plain use must fail (zero use declarations allowed):\n{p}"
+    );
+    let glob_use = format!("{valid_base}\nuse other::*;");
+    let p = slice_view_unsafe_budget_problems(&glob_use).join("\n");
+    assert!(
+        p.contains("`use` declarations are forbidden in slice_view.rs"),
+        "glob use must fail:\n{p}"
+    );
+
+    // 6. Disallowed attributes on otherwise-valid items (directly exercises `visit_attribute`).
+    let attr_cfg_attr = format!(
+        "{valid_base}\nimpl LispValueSlice {{ #[cfg_attr(all(), inline)] pub fn ok(&self) -> usize {{ 0 }} }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&attr_cfg_attr).join("\n");
+    assert!(
+        p.contains("disallowed outer attribute `#[cfg_attr]`"),
+        "#[cfg_attr] on valid fn must fail attribute check:\n{p}"
+    );
+    let attr_visibility = format!(
+        "{valid_base}\nimpl LispValueSlice {{ #[visibility::make(pub)] fn secret(&self) -> usize {{ 0 }} }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&attr_visibility).join("\n");
+    assert!(
+        p.contains("disallowed outer attribute `#[visibility::make]`"),
+        "#[visibility::make(pub)] must fail attribute check:\n{p}"
+    );
+    let attr_inner_cfg = format!("#![cfg(unix)]\n{valid_base}");
+    let p = slice_view_unsafe_budget_problems(&attr_inner_cfg).join("\n");
+    assert!(
+        p.contains("disallowed inner attribute `#![cfg]`"),
+        "inner #![cfg(unix)] must fail attribute check:\n{p}"
+    );
+    let attr_unsafe_allow = format!(
+        "{valid_base}\nimpl LispValueSlice {{ #[allow(unsafe_op_in_unsafe_fn)] pub fn ok2(&self) -> usize {{ 0 }} }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&attr_unsafe_allow).join("\n");
+    assert!(
+        p.contains("disallowed outer attribute `#[allow]`"),
+        "#[allow(unsafe_op_in_unsafe_fn)] must fail attribute check:\n{p}"
+    );
+    let attr_bare_derive = valid_base.replace(
+        "#[derive(::core::clone::Clone, ::core::fmt::Debug)]",
+        "#[derive(Clone, Debug)]",
+    );
+    let p = slice_view_unsafe_budget_problems(&attr_bare_derive).join("\n");
+    assert!(
+        p.contains("disallowed outer attribute `#[derive]`"),
+        "bare #[derive(Clone, Debug)] without ::core:: prefix must fail:\n{p}"
+    );
+
+    // 7. Full-path trait allowlist — including #14954 P1 Bypass 3 verbatim, bare trait paths,
+    //    banned traits, and tight `Index::Output`.
+    let aliased_deref_as_partial_eq = format!(
+        "{valid_base}\n\
+         impl super::helper::PartialEq for LispValueSlice {{\n\
+             type Target = [super::header::AtomicTaggedValue];\n\
+             fn deref(&self) -> &[super::header::AtomicTaggedValue] {{\n\
+                 &self.0\n\
+             }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&aliased_deref_as_partial_eq).join("\n");
+    assert!(
+        p.contains("`LispValueSlice` must not implement `super::helper::PartialEq`"),
+        "#14954 P1 re-exported PartialEq->Deref bypass must fail full-path trait check:\n{p}"
+    );
+    let bare_partial_eq = format!(
+        "{valid_base}\n\
+         impl PartialEq for LispValueSlice {{\n\
+             fn eq(&self, _other: &Self) -> bool {{ true }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&bare_partial_eq).join("\n");
+    assert!(
+        p.contains("`LispValueSlice` must not implement `PartialEq`"),
+        "unqualified bare PartialEq trait path must fail:\n{p}"
+    );
+    let with_deref = format!(
+        "{valid_base}\n\
+         impl ::core::ops::Deref for LispValueSlice {{\n\
+             type Target = [super::value::TaggedValue];\n\
+             fn deref(&self) -> &[super::value::TaggedValue] {{ &[] }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&with_deref).join("\n");
+    assert!(
+        p.contains("`LispValueSlice` must not implement `::core::ops::Deref`"),
+        "Deref on LispValueSlice must fail:\n{p}"
+    );
+    let with_iter_as_ref = format!(
+        "{valid_base}\n\
+         impl ::core::convert::AsRef<[super::value::TaggedValue]> for LispValueSliceIter<'_> {{\n\
+             fn as_ref(&self) -> &[super::value::TaggedValue] {{ &[] }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&with_iter_as_ref).join("\n");
+    assert!(
+        p.contains("`LispValueSliceIter` must not implement `::core::convert::AsRef`"),
+        "AsRef on LispValueSliceIter must fail:\n{p}"
+    );
+    let bad_index_ref_output = format!(
+        "{valid_base}\n\
+         impl ::core::ops::Index<usize> for LispValueSlice {{\n\
+             type Output = &LispValueSlice;\n\
+             fn index(&self, _index: usize) -> &Self::Output {{ loop {{}} }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&bad_index_ref_output).join("\n");
+    assert!(
+        p.contains("`::core::ops::Index` impl on `LispValueSlice` must have `type Output = Self` or `LispValueSlice`"),
+        "Index with reference Output must fail:\n{p}"
+    );
+    let bad_index_path_output = format!(
+        "{valid_base}\n\
+         impl ::core::ops::Index<usize> for LispValueSlice {{\n\
+             type Output = super::evil::LispValueSlice;\n\
+             fn index(&self, _index: usize) -> &Self::Output {{ loop {{}} }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&bad_index_path_output).join("\n");
+    assert!(
+        p.contains("`::core::ops::Index` impl on `LispValueSlice` must have `type Output = Self` or `LispValueSlice`"),
+        "Index with multi-segment Output must fail:\n{p}"
+    );
+
+    // 8. Closed function signature & associated-type allowlist (#14958 Rule 5).
+    let safe_leak_atomic_slice = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub fn leak(&self) -> &[super::header::AtomicTaggedValue] {{\n\
+                 &self.0\n\
+             }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&safe_leak_atomic_slice).join("\n");
+    assert!(
+        p.contains("`fn leak` has disallowed return type"),
+        "#14958 safe leak(&self) -> &[AtomicTaggedValue] must fail signature check:\n{p}"
+    );
+    let safe_leak_atomic_elem = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub fn leak_one(&self) -> &super::header::AtomicTaggedValue {{\n\
+                 &self.0[0]\n\
+             }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&safe_leak_atomic_elem).join("\n");
+    assert!(
+        p.contains("`fn leak_one` has disallowed return type"),
+        "#14958 safe leak_one(&self) -> &AtomicTaggedValue must fail signature check:\n{p}"
+    );
+    let safe_leak_impl_trait = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub fn leak_iter(&self) -> impl ::core::iter::Iterator<Item = &super::header::AtomicTaggedValue> {{\n\
+                 self.0.iter()\n\
+             }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&safe_leak_impl_trait).join("\n");
+    assert!(
+        p.contains("`fn leak_iter` has disallowed return type"),
+        "impl Iterator<Item = &AtomicTaggedValue> return must fail signature check:\n{p}"
+    );
+    let safe_leak_unknown_ret = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub fn odd(&self) -> &dyn ::core::fmt::Debug {{\n\
+                 self\n\
+             }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&safe_leak_unknown_ret).join("\n");
+    assert!(
+        p.contains("`fn odd` has disallowed return type"),
+        "unallowlisted dyn Debug return must fail signature check:\n{p}"
+    );
+    let safe_leak_callback_param = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub fn with_raw<F>(&self, f: F) {{\n\
+                 let _ = f;\n\
+             }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&safe_leak_callback_param).join("\n");
+    assert!(
+        p.contains("`fn with_raw` has disallowed type/const generics")
+            && p.contains("`fn with_raw` parameter 1 has disallowed type"),
+        "generic callback parameter must fail signature check:\n{p}"
+    );
+    let safe_leak_out_param = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub fn smuggle_out(&self, out: &mut &[super::header::AtomicTaggedValue]) {{\n\
+                 *out = &self.0;\n\
+             }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&safe_leak_out_param).join("\n");
+    assert!(
+        p.contains("`fn smuggle_out` parameter 1 has disallowed type"),
+        "out-parameter leaking &[AtomicTaggedValue] must fail signature check:\n{p}"
+    );
+    let pub_ctor_widening = valid_base.replace(
+        "pub(crate) fn from_atomic_slice",
+        "pub fn from_atomic_slice",
+    );
+    let p = slice_view_unsafe_budget_problems(&pub_ctor_widening).join("\n");
+    assert!(
+        p.contains("constructor `LispValueSlice::from_atomic_slice` must stay `pub(crate)`"),
+        "widening from_atomic_slice to pub must fail signature check:\n{p}"
+    );
+    let bad_assoc_type = format!(
+        "{valid_base}\n\
+         impl ::core::iter::Iterator for LispValueSliceIter<'_> {{\n\
+             type Item = &super::header::AtomicTaggedValue;\n\
+             fn next(&mut self) -> ::core::option::Option<Self::Item> {{ ::core::option::Option::None }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&bad_assoc_type).join("\n");
+    assert!(
+        p.contains("disallowed associated type `Item` in impl"),
+        "Iterator with Item = &AtomicTaggedValue must fail associated-type check:\n{p}"
+    );
+    let unparseable_signature = format!(
+        "{valid_base}\n\
+         impl LispValueSlice {{\n\
+             pub fn unparseable(&self) -> &[ {{\n\
+                 &self.0\n\
+             }}\n\
+         }}"
+    );
+    assert!(
+        std::panic::catch_unwind(|| slice_view_unsafe_budget_problems(&unparseable_signature))
+            .is_err(),
+        "#14958 unparseable fn signature must fail closed (panic)"
+    );
+    let foreign_leak_cell_eq = format!(
+        "{valid_base}\n\
+         impl ::core::cmp::PartialEq<LispValueSlice> for super::evil::LeakCell {{\n\
+             fn eq(&self, _other: &LispValueSlice) -> bool {{ true }}\n\
+         }}"
+    );
+    let p = slice_view_unsafe_budget_problems(&foreign_leak_cell_eq).join("\n");
+    assert!(
+        p.contains("unexpected trait impl `::core::cmp::PartialEq` on foreign type"),
+        "PartialEq on unallowlisted foreign type must fail:\n{p}"
+    );
+
+    // 9. Verbatim fallback syntax (`Expr::Verbatim`, etc.) fails closed.
+    let mut verbatim_visitor = SliceViewUnsafeBudgetVisitor {
+        saw_slice_struct: true,
+        saw_iter_struct: true,
+        impl_target_stack: Vec::new(),
+        owner_stack: Vec::new(),
+        unsafe_locations: Vec::new(),
+        problems: Vec::new(),
+    };
+    verbatim_visitor.visit_expr(&syn::Expr::Verbatim(proc_macro2::TokenStream::new()));
+    verbatim_visitor.visit_type(&syn::Type::Verbatim(proc_macro2::TokenStream::new()));
+    verbatim_visitor.visit_pat(&syn::Pat::Verbatim(proc_macro2::TokenStream::new()));
+    verbatim_visitor.visit_type_param_bound(&syn::TypeParamBound::Verbatim(
+        proc_macro2::TokenStream::new(),
+    ));
+    let p = verbatim_visitor.problems.join("\n");
+    assert!(
+        p.contains("Expr::Verbatim")
+            && p.contains("Type::Verbatim")
+            && p.contains("Pat::Verbatim")
+            && p.contains("TypeParamBound::Verbatim"),
+        "Verbatim AST nodes must fail closed:\n{p}"
+    );
+}

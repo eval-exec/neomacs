@@ -15,6 +15,7 @@ pub mod heap_ref;
 pub mod mutate;
 #[doc(hidden)]
 pub mod pdump_image;
+mod slice_view;
 pub(crate) mod symbol_marks;
 pub mod transport;
 pub mod value;
