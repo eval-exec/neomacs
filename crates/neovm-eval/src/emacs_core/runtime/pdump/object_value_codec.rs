@@ -1732,9 +1732,14 @@ impl<'a> Cursor<'a> {
 
     #[inline]
     #[doc(hidden)]
-    pub fn read_unaligned<T: Copy>(&mut self, what: &str) -> Result<T, DumpError> {
+    pub fn read_unaligned<T: bytemuck::AnyBitPattern>(
+        &mut self,
+        what: &str,
+    ) -> Result<T, DumpError> {
         let start = self.read_fixed_start(std::mem::size_of::<T>(), what)?;
-        Ok(unsafe { std::ptr::read_unaligned(self.section.as_ptr().add(start).cast::<T>()) })
+        Ok(bytemuck::pod_read_unaligned(
+            &self.section[start..self.offset],
+        ))
     }
 
     #[inline]

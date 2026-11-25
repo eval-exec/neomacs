@@ -5,22 +5,28 @@ use super::*;
 #[test]
 fn install_restored_bytecode_slot_object_rejects_a_non_bytecode_value() {
     crate::test_utils::init_test_tracing();
+    // SAFETY: test exercises the non-bytecode early-return rejection path.
     assert!(
-        !LoadDecoder::install_restored_bytecode_slot_object(
-            Value::fixnum(3),
-            ByteCodeSlotObject::Code,
-            Value::fixnum(1),
-        ),
+        !unsafe {
+            LoadDecoder::install_restored_bytecode_slot_object(
+                Value::fixnum(3),
+                ByteCodeSlotObject::Code,
+                Value::fixnum(1),
+            )
+        },
         "a fixnum is not a bytecode object"
     );
     let vector = Value::make_vector(vec![Value::fixnum(9), Value::fixnum(8)]);
     let before = vector.as_vector_data().expect("vector slots")[0];
+    // SAFETY: test exercises the non-bytecode early-return rejection path.
     assert!(
-        !LoadDecoder::install_restored_bytecode_slot_object(
-            vector,
-            ByteCodeSlotObject::Code,
-            Value::fixnum(1),
-        ),
+        !unsafe {
+            LoadDecoder::install_restored_bytecode_slot_object(
+                vector,
+                ByteCodeSlotObject::Code,
+                Value::fixnum(1),
+            )
+        },
         "a vector is not a bytecode object"
     );
     assert_eq!(vector.as_vector_data().expect("vector slots")[0], before);
@@ -36,6 +42,169 @@ fn materialize_and_publish_stub_refuses_a_non_bytecode_value() {
     let before = vector.as_vector_data().expect("vector slots")[0];
     materialize_and_publish_stub(vector);
     assert_eq!(vector.as_vector_data().expect("vector slots")[0], before);
+}
+
+/// P5: `populate_bytecode_from_extras` must verify that `value` is a
+/// `ByteCodeObj` matching `id`'s mapped bytecode span before reading stub
+/// bytes or materializing.
+#[test]
+fn populate_bytecode_from_extras_rejects_mismatched_or_non_bytecode_value() {
+    use neovm_value::tagged::header::{ByteCodeObj, VecLikeHeader, VecLikeType};
+    use neovm_value::tagged::pdump_image::BytecodeExtras;
+
+    crate::test_utils::init_test_tracing();
+    let mut runtime_heap = Box::new(neovm_value::tagged::gc::TaggedHeap::new());
+    neovm_value::tagged::gc::set_tagged_heap(&mut runtime_heap);
+
+    struct SymIdentityGuard(bool);
+    impl Drop for SymIdentityGuard {
+        fn drop(&mut self) {
+            PDUMP_LOAD_SYM_IDENTITY.with(|flag| flag.set(self.0));
+        }
+    }
+    let _guard = SymIdentityGuard(PDUMP_LOAD_SYM_IDENTITY.with(|flag| flag.replace(true)));
+
+    let obj_len = std::mem::size_of::<ByteCodeObj>();
+    let extras_len = std::mem::size_of::<BytecodeExtras>();
+    let span_len = obj_len + extras_len;
+    let align = std::mem::align_of::<ByteCodeObj>().max(16);
+    let stride = (span_len + align - 1) & !(align - 1);
+    let mut backing = vec![0u128; (stride * 2).div_ceil(std::mem::size_of::<u128>())];
+    let bytes: &mut [u8] = bytemuck::cast_slice_mut(&mut backing);
+
+    let stub_template = crate::emacs_core::pdump::mapped_heap::baked_stub_template(extras_len);
+    let data_offset = std::mem::offset_of!(ByteCodeObj, data);
+    let mut extras: BytecodeExtras = bytemuck::Zeroable::zeroed();
+    extras.params_kind = super::super::types::DumpFunctionParamsKind::Named as u8;
+    let extras_bytes = bytemuck::bytes_of(&extras);
+
+    for slot_idx in 0..2 {
+        let base = slot_idx * stride;
+        // SAFETY: `bytes` is 16-byte aligned and `base` is aligned to `ByteCodeObj`.
+        unsafe {
+            std::ptr::write(
+                bytes.as_mut_ptr().add(base).cast::<VecLikeHeader>(),
+                VecLikeHeader::new(VecLikeType::ByteCode),
+            );
+        }
+        bytes[base + data_offset..base + data_offset + stub_template.len()]
+            .copy_from_slice(&stub_template);
+        bytes[base + obj_len..base + obj_len + extras_len].copy_from_slice(extras_bytes);
+    }
+
+    let heap = DumpTaggedHeap {
+        objects: vec![DumpHeapObject::Free, DumpHeapObject::Free],
+        mapped_cons: Vec::new(),
+        mapped_floats: Vec::new(),
+        mapped_strings: Vec::new(),
+        mapped_veclikes: vec![
+            Some(DumpVecLikeSpan {
+                offset: 0,
+                len: span_len as u64,
+            }),
+            Some(DumpVecLikeSpan {
+                offset: stride as u64,
+                len: span_len as u64,
+            }),
+        ],
+        mapped_slots: Vec::new(),
+    };
+    // SAFETY: `backing` stays live for the duration of `decoder`.
+    let mapped = unsafe { MappedHeapView::from_mut_slice(bytes) };
+    let mut decoder = LoadDecoder::new_with_mapped_heap(&heap, Some(mapped));
+
+    let id0 = TaggedHeapRef { index: 0 };
+    let id1 = TaggedHeapRef { index: 1 };
+    let ptr0 = decoder
+        .mapped_typed_object_for_object::<ByteCodeObj>(id0, "bytecode")
+        .expect("object 0 span")
+        .expect("object 0 ptr");
+    let ptr1 = decoder
+        .mapped_typed_object_for_object::<ByteCodeObj>(id1, "bytecode")
+        .expect("object 1 span")
+        .expect("object 1 ptr");
+    // SAFETY: both pointers address initialized ByteCodeObj headers in `bytes`.
+    let value0 = unsafe { Value::from_veclike_ptr(ptr0.cast::<VecLikeHeader>()) };
+    let value1 = unsafe { Value::from_veclike_ptr(ptr1.cast::<VecLikeHeader>()) };
+    assert_eq!(value0.veclike_type(), Some(VecLikeType::ByteCode));
+    assert_eq!(value1.veclike_type(), Some(VecLikeType::ByteCode));
+    assert_ne!(value0.bits(), value1.bits());
+
+    // Passing object 1's ByteCodeObj for id 0 must be rejected even though
+    // value1 itself has valid baked stub bytes.
+    let mismatch = decoder.populate_bytecode_from_extras(id0, value1);
+    assert!(
+        matches!(mismatch, Err(DumpError::ImageFormatError(_))),
+        "populate_bytecode_from_extras must reject a ByteCodeObj belonging to another id, got {mismatch:?}"
+    );
+
+    // Non-bytecode values must also be rejected before any ByteCodeObj read.
+    let fixnum_err = decoder.populate_bytecode_from_extras(id0, Value::fixnum(3));
+    assert!(
+        matches!(fixnum_err, Err(DumpError::ImageFormatError(_))),
+        "populate_bytecode_from_extras must reject a fixnum, got {fixnum_err:?}"
+    );
+    let vector = Value::make_vector(vec![Value::fixnum(7)]);
+    let vector_err = decoder.populate_bytecode_from_extras(id0, vector);
+    assert!(
+        matches!(vector_err, Err(DumpError::ImageFormatError(_))),
+        "populate_bytecode_from_extras must reject a vector, got {vector_err:?}"
+    );
+
+    // Object 0's own validated placeholder succeeds.
+    assert_eq!(
+        decoder
+            .populate_bytecode_from_extras(id0, value0)
+            .expect("matching placeholder should populate"),
+        true
+    );
+}
+
+/// P3: every restore-time placeholder mutator writes object storage without a
+/// GC write barrier and must remain `unsafe fn`.
+#[test]
+#[deny(unused_unsafe)]
+fn restore_slot_installers_require_unsafe() {
+    crate::test_utils::init_test_tracing();
+    let vector = Value::make_vector(vec![Value::fixnum(1)]);
+    // SAFETY: test exercises the type-rejecting paths on a fresh vector with no
+    // concurrent readers; only the vector call mutates this local placeholder.
+    assert!(unsafe {
+        LoadDecoder::install_mapped_vector_slots(
+            vector,
+            LispValueVec::owned(vec![Value::fixnum(2)]),
+        )
+    });
+    assert!(!unsafe {
+        LoadDecoder::install_mapped_record_slots(
+            vector,
+            LispValueVec::owned(vec![Value::fixnum(3)]),
+        )
+    });
+    assert!(!unsafe {
+        LoadDecoder::install_mapped_closure_slots(
+            vector,
+            LispValueVec::owned(vec![Value::fixnum(4)]),
+        )
+    });
+    assert!(
+        unsafe {
+            LoadDecoder::install_restored_bytecode_data(
+                vector,
+                crate::emacs_core::bytecode::chunk::ByteCodeFunction::new(LambdaParams::simple(
+                    Vec::new(),
+                )),
+            )
+        }
+        .is_err()
+    );
+    assert!(!unsafe {
+        LoadDecoder::install_restored_bytecode_slot_object(
+            vector,
+            ByteCodeSlotObject::Code,
+            Value::fixnum(5),
+        )
+    });
 }
 
 #[test]
@@ -141,7 +310,8 @@ fn mapped_cons_raw_words_are_loader_source_of_truth_when_no_remap_needed() {
         Value::fixnum(100).bits(),
     );
 
-    let mapped = MappedHeapView::from_mut_slice(&mut bytes);
+    // SAFETY: `bytes` stays live for the duration of `decoder`.
+    let mapped = unsafe { MappedHeapView::from_mut_slice(&mut bytes) };
     let mut decoder = LoadDecoder::new_with_mapped_heap(&heap, Some(mapped));
     decoder.preload_tagged_heap().unwrap();
 
@@ -191,7 +361,8 @@ fn mapped_vector_raw_slots_are_loader_source_of_truth_when_no_remap_needed() {
         Value::fixnum(88).bits(),
     );
 
-    let mapped = MappedHeapView::from_mut_slice(&mut bytes);
+    // SAFETY: `bytes` stays live for the duration of `decoder`.
+    let mapped = unsafe { MappedHeapView::from_mut_slice(&mut bytes) };
     let mut decoder = LoadDecoder::new_with_mapped_heap(&heap, Some(mapped));
     decoder.preload_tagged_heap().unwrap();
 
@@ -238,7 +409,8 @@ fn mapped_vector_slot_count_comes_from_span_for_compact_descriptors() {
         Value::fixnum(188).bits(),
     );
 
-    let mapped = MappedHeapView::from_mut_slice(&mut bytes);
+    // SAFETY: `bytes` stays live for the duration of `decoder`.
+    let mapped = unsafe { MappedHeapView::from_mut_slice(&mut bytes) };
     let mut decoder = LoadDecoder::new_with_mapped_heap(&heap, Some(mapped));
     decoder.preload_tagged_heap().unwrap();
 

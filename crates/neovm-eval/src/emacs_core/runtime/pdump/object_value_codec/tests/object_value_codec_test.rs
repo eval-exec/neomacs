@@ -216,3 +216,29 @@ fn heap_object_codec_rejects_bad_tag() {
         .expect_err("bad object tag should fail");
     assert!(matches!(err, DumpError::ImageFormatError(_)));
 }
+
+#[test]
+fn cursor_read_unaligned_reads_any_bit_pattern_primitives_from_unaligned_offsets() {
+    let mut buf = vec![0xAAu8]; // shift every subsequent read to an unaligned offset
+    buf.extend_from_slice(&0x1234u16.to_ne_bytes());
+    buf.extend_from_slice(&0x89AB_CDEFu32.to_ne_bytes());
+    buf.extend_from_slice(&0x0102_0304_0506_0708u64.to_ne_bytes());
+    buf.extend_from_slice(&(-987_654_321_i64).to_ne_bytes());
+    buf.extend_from_slice(&3.25f64.to_bits().to_ne_bytes());
+
+    let mut cursor = Cursor::new(&buf);
+    assert_eq!(cursor.read_u8("lead").unwrap(), 0xAA);
+    assert_eq!(cursor.read_unaligned::<u16>("u16").unwrap(), 0x1234);
+    assert_eq!(cursor.read_unaligned::<u32>("u32").unwrap(), 0x89AB_CDEF);
+    assert_eq!(
+        cursor.read_unaligned::<u64>("u64").unwrap(),
+        0x0102_0304_0506_0708
+    );
+    assert_eq!(cursor.read_unaligned::<i64>("i64").unwrap(), -987_654_321);
+    assert_eq!(cursor.read_unaligned::<f64>("f64").unwrap(), 3.25);
+    assert!(cursor.is_empty());
+    assert!(matches!(
+        cursor.read_unaligned::<u16>("eof"),
+        Err(DumpError::ImageFormatError(_))
+    ));
+}

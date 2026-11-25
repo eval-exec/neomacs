@@ -1570,35 +1570,56 @@ impl<'a> LoadDecoder<'a> {
         mapped_heap.typed_object_mut::<T>(span, label).map(Some)
     }
 
+    /// Install mapped slot storage on a freshly allocated vector placeholder.
+    ///
+    /// # Safety
+    /// `value` must be a pre-publish pdump restore placeholder with no live
+    /// shared references: this replaces `(*ptr).data` without a GC write
+    /// barrier.
     #[doc(hidden)]
-    pub fn install_mapped_vector_slots(value: Value, storage: LispValueVec) -> bool {
+    pub unsafe fn install_mapped_vector_slots(value: Value, storage: LispValueVec) -> bool {
         if value.veclike_type() != Some(VecLikeType::Vector) {
             return false;
         }
         let ptr = value.as_veclike_ptr().unwrap() as *mut VectorObj;
+        // SAFETY: type check established `VectorObj`; caller guarantees pre-publish exclusivity.
         unsafe {
             (*ptr).data = storage;
         }
         true
     }
 
+    /// Install mapped slot storage on a freshly allocated record placeholder.
+    ///
+    /// # Safety
+    /// `value` must be a pre-publish pdump restore placeholder with no live
+    /// shared references: this replaces `(*ptr).data` without a GC write
+    /// barrier.
     #[doc(hidden)]
-    pub fn install_mapped_record_slots(value: Value, storage: LispValueVec) -> bool {
+    pub unsafe fn install_mapped_record_slots(value: Value, storage: LispValueVec) -> bool {
         if value.veclike_type() != Some(VecLikeType::Record) {
             return false;
         }
         let ptr = value.as_veclike_ptr().unwrap() as *mut RecordObj;
+        // SAFETY: type check established `RecordObj`; caller guarantees pre-publish exclusivity.
         unsafe {
             (*ptr).data = storage;
         }
         true
     }
 
+    /// Install mapped slot storage on a freshly allocated closure placeholder.
+    ///
+    /// # Safety
+    /// `value` must be a pre-publish pdump restore placeholder with no live
+    /// shared references: this replaces `(*ptr).data` without a GC write
+    /// barrier.
     #[doc(hidden)]
-    pub fn install_mapped_closure_slots(value: Value, storage: LispValueVec) -> bool {
+    pub unsafe fn install_mapped_closure_slots(value: Value, storage: LispValueVec) -> bool {
         match value.veclike_type() {
             Some(VecLikeType::Lambda) => {
                 let ptr = value.as_veclike_ptr().unwrap() as *mut LambdaObj;
+                // SAFETY: type check established `LambdaObj`; caller guarantees pre-publish exclusivity.
                 unsafe {
                     let obj = &mut *ptr;
                     let _ = obj.parsed_params.take();
@@ -1608,6 +1629,7 @@ impl<'a> LoadDecoder<'a> {
             }
             Some(VecLikeType::Macro) => {
                 let ptr = value.as_veclike_ptr().unwrap() as *mut MacroObj;
+                // SAFETY: type check established `MacroObj`; caller guarantees pre-publish exclusivity.
                 unsafe {
                     let obj = &mut *ptr;
                     let _ = obj.parsed_params.take();
@@ -1619,8 +1641,15 @@ impl<'a> LoadDecoder<'a> {
         }
     }
 
+    /// Install restored `ByteCodeFunction` data on a freshly allocated
+    /// bytecode placeholder.
+    ///
+    /// # Safety
+    /// `value` must be a pre-publish pdump restore placeholder with no live
+    /// shared references: this replaces `(*ptr).data` without a GC write
+    /// barrier.
     #[doc(hidden)]
-    pub fn install_restored_bytecode_data(
+    pub unsafe fn install_restored_bytecode_data(
         value: Value,
         data: ByteCodeFunction,
     ) -> Result<(), DumpError> {
@@ -1633,6 +1662,7 @@ impl<'a> LoadDecoder<'a> {
         // This is pdump restore-time initialization of a freshly allocated
         // placeholder.  GNU applies dump relocations directly into restored
         // objects here; no user-observable heap mutation has happened yet.
+        // SAFETY: type check established `ByteCodeObj`; caller guarantees pre-publish exclusivity.
         unsafe {
             (*ptr).data = data;
         }
@@ -1644,8 +1674,12 @@ impl<'a> LoadDecoder<'a> {
     ///
     /// Returns false when `value` is not a bytecode object. The cast is
     /// unreachable for any other veclike type.
+    ///
+    /// # Safety
+    /// `value` must be a pre-publish pdump restore placeholder (so skipping
+    /// the GC write barrier is sound).
     #[doc(hidden)]
-    pub fn install_restored_bytecode_slot_object(
+    pub unsafe fn install_restored_bytecode_slot_object(
         value: Value,
         slot: ByteCodeSlotObject,
         object: Value,
@@ -1658,7 +1692,7 @@ impl<'a> LoadDecoder<'a> {
         };
         let ptr = header as *const ByteCodeObj;
         // SAFETY: the type test established a live byte-code object. The
-        // slot words are atomics. This runs before the object is published.
+        // slot words are atomics. Caller guarantees this runs pre-publish.
         unsafe { (*ptr).slot_objects.set(slot, object) };
         true
     }
@@ -1704,7 +1738,8 @@ impl<'a> LoadDecoder<'a> {
                                 "mapped vector object has no mapped slot storage".into(),
                             )
                         })?;
-                    let _ = Self::install_mapped_vector_slots(value, storage);
+                    // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                    let _ = unsafe { Self::install_mapped_vector_slots(value, storage) };
                     return Ok(true);
                 }
             }
@@ -1718,7 +1753,8 @@ impl<'a> LoadDecoder<'a> {
                                 "mapped closure object has no mapped slot storage".into(),
                             )
                         })?;
-                    let _ = Self::install_mapped_closure_slots(value, storage);
+                    // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                    let _ = unsafe { Self::install_mapped_closure_slots(value, storage) };
                     return Ok(true);
                 }
             }
@@ -1732,7 +1768,8 @@ impl<'a> LoadDecoder<'a> {
                                 "mapped record object has no mapped slot storage".into(),
                             )
                         })?;
-                    let _ = Self::install_mapped_record_slots(value, storage);
+                    // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                    let _ = unsafe { Self::install_mapped_record_slots(value, storage) };
                     return Ok(true);
                 }
             }
@@ -2160,11 +2197,27 @@ impl<'a> LoadDecoder<'a> {
             static STUB_TEMPLATE_ZERO: std::sync::OnceLock<Box<[u8]>> = std::sync::OnceLock::new();
             let template = STUB_TEMPLATE_ZERO
                 .get_or_init(|| crate::emacs_core::pdump::mapped_heap::baked_stub_template(0));
-            let obj_ptr = value.as_veclike_ptr().ok_or_else(|| {
-                DumpError::ImageFormatError(
-                    "bytecode finalize on a value without a veclike pointer".into(),
-                )
-            })? as *const u8;
+            let expected_ptr = self
+                .mapped_typed_object_for_object::<ByteCodeObj>(id, "bytecode")?
+                .ok_or_else(|| {
+                    DumpError::ImageFormatError(format!(
+                        "bytecode extras object {} has no mapped bytecode object span",
+                        id.index
+                    ))
+                })?;
+            if value.veclike_type() != Some(VecLikeType::ByteCode)
+                || value.as_veclike_ptr() != Some(expected_ptr.cast::<VecLikeHeader>())
+            {
+                return Err(DumpError::ImageFormatError(format!(
+                    "bytecode finalize value does not match object {}'s mapped bytecode span",
+                    id.index
+                )));
+            }
+            let obj_ptr = expected_ptr.cast::<u8>();
+            // SAFETY: `mapped_typed_object_for_object::<ByteCodeObj>` proved
+            // `expected_ptr` covers a full `ByteCodeObj` inside `mapped_heap`,
+            // so `data_ptr..data_ptr + template.len()` (`size_of::<ByteCodeFunction>()`)
+            // lies within the validated mapped span.
             let data_ptr = unsafe {
                 obj_ptr.add(std::mem::offset_of!(
                     neovm_value::tagged::header::ByteCodeObj,
@@ -2352,8 +2405,11 @@ impl<'a> LoadDecoder<'a> {
 
         // (c) Eager-GNU mode: materialize now, exactly as the old load did.
         if crate::emacs_core::bytecode::chunk::eager_gnu_bytecode() {
+            // SAFETY: `value` was just verified above to match `id`'s validated
+            // mapped `ByteCodeObj` span and extras region.
             let function = unsafe { materialize_bytecode_from_extras_at(value) };
-            Self::install_restored_bytecode_data(value, function)?;
+            // SAFETY: `value` is a pre-publish pdump restore placeholder.
+            unsafe { Self::install_restored_bytecode_data(value, function)? };
         }
         Ok(true)
     }
@@ -2387,11 +2443,13 @@ impl<'a> LoadDecoder<'a> {
             DumpHeapObject::Vector(items) => {
                 let len = self.mapped_slot_count_or(id, items.len())?;
                 if let Some(storage) = self.mapped_slots_for_object_without_copy(id, len)? {
-                    let _ = Self::install_mapped_vector_slots(value, storage);
+                    // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                    let _ = unsafe { Self::install_mapped_vector_slots(value, storage) };
                 } else {
                     let slots: Vec<_> = items.iter().map(|item| self.load_value(item)).collect();
                     if let Some(storage) = self.mapped_slots_for_object(id, &slots)? {
-                        let _ = Self::install_mapped_vector_slots(value, storage);
+                        // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                        let _ = unsafe { Self::install_mapped_vector_slots(value, storage) };
                     } else {
                         let _ = value.replace_vector_data(slots);
                     }
@@ -2525,11 +2583,13 @@ impl<'a> LoadDecoder<'a> {
             DumpHeapObject::Lambda(slots) | DumpHeapObject::Macro(slots) => {
                 let len = self.mapped_slot_count_or(id, slots.len())?;
                 if let Some(storage) = self.mapped_slots_for_object_without_copy(id, len)? {
-                    let _ = Self::install_mapped_closure_slots(value, storage);
+                    // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                    let _ = unsafe { Self::install_mapped_closure_slots(value, storage) };
                 } else {
                     let slots: Vec<_> = slots.iter().map(|slot| self.load_value(slot)).collect();
                     if let Some(storage) = self.mapped_slots_for_object(id, &slots)? {
-                        let _ = Self::install_mapped_closure_slots(value, storage);
+                        // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                        let _ = unsafe { Self::install_mapped_closure_slots(value, storage) };
                     } else {
                         let _ = value.replace_closure_slots(slots);
                     }
@@ -2544,14 +2604,18 @@ impl<'a> LoadDecoder<'a> {
                 let code_object = bc.code_object.take();
                 let constants_object = bc.constants_object.take();
                 let data = load_bytecode_owned(self, bc, mapped)?;
-                Self::install_restored_bytecode_data(value, data)?;
+                // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                unsafe { Self::install_restored_bytecode_data(value, data)? };
                 for (slot, object) in [
                     (ByteCodeSlotObject::Code, code_object),
                     (ByteCodeSlotObject::Constants, constants_object),
                 ] {
                     if let Some(object) = object {
                         let object = self.load_value(&object);
-                        if !Self::install_restored_bytecode_slot_object(value, slot, object) {
+                        // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                        if !unsafe {
+                            Self::install_restored_bytecode_slot_object(value, slot, object)
+                        } {
                             return Err(DumpError::ImageFormatError(
                                 "pdump bytecode slot object resolved to a non-bytecode object"
                                     .into(),
@@ -2563,11 +2627,13 @@ impl<'a> LoadDecoder<'a> {
             DumpHeapObject::Record(items) => {
                 let len = self.mapped_slot_count_or(id, items.len())?;
                 if let Some(storage) = self.mapped_slots_for_object_without_copy(id, len)? {
-                    let _ = Self::install_mapped_record_slots(value, storage);
+                    // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                    let _ = unsafe { Self::install_mapped_record_slots(value, storage) };
                 } else {
                     let slots: Vec<_> = items.iter().map(|item| self.load_value(item)).collect();
                     if let Some(storage) = self.mapped_slots_for_object(id, &slots)? {
-                        let _ = Self::install_mapped_record_slots(value, storage);
+                        // SAFETY: `value` is a pre-publish pdump restore placeholder.
+                        let _ = unsafe { Self::install_mapped_record_slots(value, storage) };
                     } else {
                         let _ = value.replace_record_data(slots);
                     }

@@ -129,9 +129,14 @@ pub(crate) struct MappedBytes {
 }
 
 impl MappedHeapView {
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    #[doc(hidden)]
-    pub fn from_slice(bytes: &[u8]) -> Self {
+    /// Build a read-only view over a test backing slice.
+    ///
+    /// # Safety
+    /// `MappedHeapView` is `Copy` and erases the slice lifetime. The caller
+    /// must guarantee `bytes` remains live and unmoved (with no conflicting
+    /// mutable borrows) for as long as any copy of the returned view is used.
+    #[cfg(test)]
+    pub(crate) unsafe fn from_slice(bytes: &[u8]) -> Self {
         Self {
             ptr: bytes.as_ptr().cast_mut(),
             len: bytes.len(),
@@ -139,9 +144,14 @@ impl MappedHeapView {
         }
     }
 
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    #[doc(hidden)]
-    pub fn from_mut_slice(bytes: &mut [u8]) -> Self {
+    /// Build a writable view over a test backing slice.
+    ///
+    /// # Safety
+    /// `MappedHeapView` is `Copy` and erases the slice lifetime. The caller
+    /// must guarantee `bytes` remains live, unmoved, and free of conflicting
+    /// references for as long as any copy of the returned view is used.
+    #[cfg(test)]
+    pub(crate) unsafe fn from_mut_slice(bytes: &mut [u8]) -> Self {
         Self {
             ptr: bytes.as_mut_ptr(),
             len: bytes.len(),
@@ -149,6 +159,13 @@ impl MappedHeapView {
         }
     }
 
+    /// Build a view over a raw heap-image mapping.
+    ///
+    /// # Safety
+    /// `ptr` must be valid for reads (and writes when `writable` is `true`)
+    /// across `len` contiguous bytes for as long as any copy of the returned
+    /// `MappedHeapView` or any mapped object pointer derived from it is used,
+    /// with provenance derived from a mutable mapping when `writable` is `true`.
     #[doc(hidden)]
     pub unsafe fn from_raw_parts(ptr: *mut u8, len: usize, writable: bool) -> Self {
         Self { ptr, len, writable }
