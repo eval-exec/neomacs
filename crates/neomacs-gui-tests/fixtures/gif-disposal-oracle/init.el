@@ -32,9 +32,13 @@
 (defconst gif-disposal-face-decoy "#00ffff")
 (defconst gif-disposal-spec-bg "#123456")
 
-(defun gif-disposal-loaded-as-48x48-p (img)
-  (let ((sz (ignore-errors (image-size img t))))
-    (and (equal sz '(48 . 48)) t)))
+(defun gif-disposal-raw-image-size (img)
+  "Return the raw `image-size' outcome without conflating a GNU placeholder
+with a Neomacs signal: `[\"ok\", W, H]' or `[\"error\", MSG]'."
+  (condition-case err
+      (let ((sz (image-size img t)))
+        (vector "ok" (car sz) (cdr sz)))
+    (error (vector "error" (cadr err)))))
 
 (defun gif-disposal-probe ()
   (let* ((dir (getenv "NEOMACS_GIF_DISPOSAL_DIR"))
@@ -84,11 +88,12 @@
       (let ((disposal-size (image-size disposal-img t))
             (mask-default (and (image-mask-p frame-bg-img) t))
             (mask-heuristic (and (image-mask-p frame-bg-heuristic) t))
-            (oob-single-loaded (gif-disposal-loaded-as-48x48-p oob-single-img))
-            (oob-frame1-0-loaded (gif-disposal-loaded-as-48x48-p oob-frame1-0-img))
-            (oob-frame1-1-loaded (gif-disposal-loaded-as-48x48-p oob-frame1-1-img))
+            (oob-single-size (gif-disposal-raw-image-size oob-single-img))
+            (oob-frame1-0-size (gif-disposal-raw-image-size oob-frame1-0-img))
+            (oob-frame1-1-size (gif-disposal-raw-image-size oob-frame1-1-img))
             (oob-single-meta (and (ignore-errors (image-metadata oob-single-img)) t))
-            (oob-frame1-0-meta (and (ignore-errors (image-metadata oob-frame1-0-img)) t)))
+            (oob-frame1-0-meta (and (ignore-errors (image-metadata oob-frame1-0-img)) t))
+            (oob-frame1-1-meta (and (ignore-errors (image-metadata oob-frame1-1-img)) t)))
         (with-temp-file (getenv "NEOMACS_GUI_STATE_JSON")
           (insert
            (json-encode
@@ -99,11 +104,12 @@
                   (cons "disposal-height" (cdr disposal-size))
                   (cons "mask-default" (if mask-default t :json-false))
                   (cons "mask-heuristic" (if mask-heuristic t :json-false))
-                  (cons "oob-single-loaded" (if oob-single-loaded t :json-false))
-                  (cons "oob-frame1-0-loaded" (if oob-frame1-0-loaded t :json-false))
-                  (cons "oob-frame1-1-loaded" (if oob-frame1-1-loaded t :json-false))
+                  (cons "oob-single-size" oob-single-size)
+                  (cons "oob-frame1-0-size" oob-frame1-0-size)
+                  (cons "oob-frame1-1-size" oob-frame1-1-size)
                   (cons "oob-single-meta" (if oob-single-meta t :json-false))
                   (cons "oob-frame1-0-meta" (if oob-frame1-0-meta t :json-false))
+                  (cons "oob-frame1-1-meta" (if oob-frame1-1-meta t :json-false))
                   (cons "frame-background"
                         (color-values (frame-parameter nil 'background-color)))))))))
     (redisplay t)

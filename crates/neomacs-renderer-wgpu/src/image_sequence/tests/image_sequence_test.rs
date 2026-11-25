@@ -259,7 +259,9 @@ fn gif_fixture_payload_sizes(bytes: &[u8]) -> (usize, usize) {
         .iter()
         .map(|frame| frame.buffer().as_raw().len())
         .sum();
-    let extensions = super::gif_metadata::frame_extensions(bytes).unwrap();
+    let extensions = super::gif_metadata::parse_structure(bytes)
+        .unwrap()
+        .extensions;
     let extension_bytes: usize = extensions
         .iter()
         .flatten()
@@ -534,7 +536,7 @@ fn indexed_gif(width: u16, height: u16, frames: &[IndexedFrame]) -> Vec<u8> {
     }
     drop(encoder);
     assert!(
-        super::gif_metadata::frame_extensions(&bytes).is_some(),
+        super::gif_metadata::parse_structure(&bytes).is_some(),
         "the fixture is a well-formed GIF"
     );
     bytes
@@ -683,7 +685,9 @@ fn gif_stream_frames_match_gnu_gif_load_compositing() {
         .with_frame_background(0x00_ee_dd_cc);
     let reference = gnu_gif_load_reference(4, 3, &frames, colors);
     assert_eq!(reference.len(), frames.len());
-    let extensions = super::gif_metadata::frame_extensions(&bytes).unwrap();
+    let extensions = super::gif_metadata::parse_structure(&bytes)
+        .unwrap()
+        .extensions;
     let cache = ImageSequenceCache::new();
     let id = sequence(1);
 
@@ -840,9 +844,8 @@ fn concurrent_requests_step_a_stream_once() {
     );
 }
 
-/// Point the LZW minimum code size of the Nth image at an invalid value. The
-/// record scan still succeeds; only the pixel decoder notices.
-fn corrupt_nth_frame_code_size(bytes: &mut [u8], image_number: usize) {
+/// Locate the LZW minimum code size byte of the Nth (1-based) image descriptor.
+fn nth_frame_code_size_offset(bytes: &[u8], image_number: usize) -> usize {
     fn color_table_length(packed: u8) -> usize {
         if packed & 0x80 == 0 {
             0
@@ -868,8 +871,7 @@ fn corrupt_nth_frame_code_size(bytes: &mut [u8], image_number: usize) {
                 at += 10;
                 at += color_table_length(bytes[at - 1]);
                 if seen == image_number {
-                    bytes[at] = 42;
-                    return;
+                    return at;
                 }
                 at += 1;
                 while bytes[at] != 0 {
@@ -882,32 +884,60 @@ fn corrupt_nth_frame_code_size(bytes: &mut [u8], image_number: usize) {
     }
 }
 
+/// Point the LZW minimum code size of the Nth image at an invalid value (`42`).
+fn corrupt_nth_frame_code_size(bytes: &mut [u8], image_number: usize) {
+    let offset = nth_frame_code_size_offset(bytes, image_number);
+    bytes[offset] = 42;
+}
+
+/// Keep a valid LZW minimum code size (`2`) on the Nth image, but replace its
+/// first LZW sub-block payload with out-of-range codes so only pixel decoding
+/// detects the error mid-stream.
+fn corrupt_nth_frame_lzw_payload(bytes: &mut [u8], image_number: usize) {
+    let cs_offset = nth_frame_code_size_offset(bytes, image_number);
+    let sub_len = usize::from(bytes[cs_offset + 1]);
+    assert!(sub_len > 0, "expected non-empty LZW sub-block");
+    bytes[cs_offset + 2..cs_offset + 2 + sub_len].fill(0xff);
+}
+
 #[test]
 fn a_frame_that_fails_to_decode_ends_the_stream() {
-    // The whole-sequence decode answered a failure the same way for every
-    // frame: not an animation for frame zero, a missing frame otherwise, and
-    // nothing retained. A stream cannot know about a later broken frame when
-    // it answers an earlier one, so the prefix it already decoded stands;
-    // from the failure on, every answer is the whole-sequence one.
     let frames = disposal_frames();
     let colors = ImageColorContext::default();
     let reference = gnu_gif_load_reference(4, 3, &frames, colors);
-    let mut broken = indexed_gif(4, 3, &frames);
-    corrupt_nth_frame_code_size(&mut broken, 2);
-
     let cache = ImageSequenceCache::new();
     let id = sequence(1);
+
+    // 1) Invalid LZW minimum code size on frame 2 (> 8): GNU's DGifSlurp
+    //    (giflib 6.1.3) fails the whole GIF up front, so even frame 0 fails.
+    let mut bad_cs = indexed_gif(4, 3, &frames);
+    corrupt_nth_frame_code_size(&mut bad_cs, 2);
+    for index in [0, 1] {
+        assert!(matches!(
+            cache.resolve(id, &source(&bad_cs), ImageFrameIndex::new(index), colors),
+            ImageSequenceResolution::Failed
+        ));
+    }
+    assert!(!cache.contains(id));
+    assert_eq!(cache.resident_bytes(), 0);
+
+    // 2) Valid framing + code size, but corrupted LZW bitstream on frame 2:
+    //    streaming decodes frame 0, then stepping to frame 1 returns Failed
+    //    and discards the stream cleanly.
+    let mut bad_lzw = indexed_gif(4, 3, &frames);
+    corrupt_nth_frame_lzw_payload(&mut bad_lzw, 2);
     let first = cache
-        .resolve(id, &source(&broken), ImageFrameIndex::new(0), colors)
-        .expect_frame("the frame before the broken one");
+        .resolve(id, &source(&bad_lzw), ImageFrameIndex::new(0), colors)
+        .expect_frame("frame 0 before corrupted LZW payload on frame 1");
     assert_eq!(first.rgba(), reference[0].as_slice());
     assert!(matches!(
-        cache.resolve(id, &source(&broken), ImageFrameIndex::new(1), colors),
+        cache.resolve(id, &source(&bad_lzw), ImageFrameIndex::new(1), colors),
         ImageSequenceResolution::Failed
     ));
     assert!(!cache.contains(id));
     assert_eq!(cache.resident_bytes(), 0);
 
+    // 3) Invalid LZW minimum code size on frame 1 fails every index.
     let mut broken_first = indexed_gif(4, 3, &frames);
     corrupt_nth_frame_code_size(&mut broken_first, 1);
     assert!(matches!(
@@ -965,7 +995,7 @@ fn over_budget_gif_decodes_one_frame_per_shown_frame() {
     const SHOWN: u32 = 6;
     let bytes = large_animated_gif();
     assert_eq!(
-        super::gif_metadata::frame_extensions(&bytes).map(|frames| frames.len()),
+        super::gif_metadata::parse_structure(&bytes).map(|s| s.extensions.len()),
         Some(FRAMES as usize)
     );
     assert!(
@@ -975,8 +1005,9 @@ fn over_budget_gif_decodes_one_frame_per_shown_frame() {
 
     let cache = ImageSequenceCache::new();
     let id = sequence(1);
-    let extension_bytes: usize = super::gif_metadata::frame_extensions(&bytes)
+    let extension_bytes: usize = super::gif_metadata::parse_structure(&bytes)
         .unwrap()
+        .extensions
         .iter()
         .flatten()
         .map(|(_, payload)| payload.len())

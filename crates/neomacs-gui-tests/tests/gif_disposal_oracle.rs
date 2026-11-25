@@ -234,11 +234,13 @@ fn gif_disposal_and_transparency_match_gnu_gif_load() {
 
     let fixture = root.join("crates/neomacs-gui-tests/fixtures/gif-disposal-oracle/init.el");
 
-    // 1. GNU Emacs oracle run: captures both Elisp state and `x-export-frames` PNG.
-    let gnu_program = std::env::var_os("NEOVM_FORCE_ORACLE_PATH")
-        .or_else(|| std::env::var_os("NEOMACS_GNU_EMACS_BINARY"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| "emacs".into());
+    // 1. GNU Emacs oracle run: requires the attested oracle path explicitly
+    //    (never fall back to an unattested `emacs` on PATH) and captures both
+    //    Elisp state and `x-export-frames` PNG.
+    let gnu_program = PathBuf::from(
+        std::env::var_os("NEOVM_FORCE_ORACLE_PATH")
+            .expect("set NEOVM_FORCE_ORACLE_PATH to the checked GNU GUI oracle"),
+    );
     let gnu_session = DisplayHarness::for_backend(GuiBackend::LinuxX11)
         .start_session(&artifacts.join("gnu"))
         .unwrap();
@@ -282,19 +284,18 @@ fn gif_disposal_and_transparency_match_gnu_gif_load() {
     assert_eq!(gnu["disposal-height"], serde_json::json!(80), "{gnu}");
     assert_eq!(gnu["mask-default"], serde_json::json!(false), "{gnu}");
     assert_eq!(gnu["mask-heuristic"], serde_json::json!(true), "{gnu}");
-    assert_eq!(gnu["oob-single-loaded"], serde_json::json!(false), "{gnu}");
-    assert_eq!(
-        gnu["oob-frame1-0-loaded"],
-        serde_json::json!(false),
-        "GNU rejects the whole GIF when frame 1 is out of screen: {gnu}"
-    );
-    assert_eq!(
-        gnu["oob-frame1-1-loaded"],
-        serde_json::json!(false),
-        "{gnu}"
-    );
-    assert_eq!(gnu["oob-single-meta"], serde_json::json!(false), "{gnu}");
-    assert_eq!(gnu["oob-frame1-0-meta"], serde_json::json!(false), "{gnu}");
+    // GNU `lookup_image` (src/image.c:3568-3582) records DEFAULT_IMAGE_WIDTH/HEIGHT
+    // (30x30) on failed loads without signalling, and leaves metadata nil.
+    for key in ["oob-single-size", "oob-frame1-0-size", "oob-frame1-1-size"] {
+        assert_eq!(
+            gnu[key],
+            serde_json::json!(["ok", 30, 30]),
+            "GNU rejects out-of-screen GIFs with the 30x30 failed-image placeholder: {gnu}"
+        );
+    }
+    for key in ["oob-single-meta", "oob-frame1-0-meta", "oob-frame1-1-meta"] {
+        assert_eq!(gnu[key], serde_json::json!(false), "{gnu}");
+    }
 
     let gnu_pixels = image::open(&gnu_png_path)
         .expect("GNU x-export-frames PNG must exist")
@@ -341,15 +342,25 @@ fn gif_disposal_and_transparency_match_gnu_gif_load() {
         "disposal-height",
         "mask-default",
         "mask-heuristic",
-        "oob-single-loaded",
-        "oob-frame1-0-loaded",
-        "oob-frame1-1-loaded",
         "oob-single-meta",
         "oob-frame1-0-meta",
+        "oob-frame1-1-meta",
     ] {
         assert_eq!(
             state[key], gnu[key],
             "Elisp state mismatch for {key}: neo={state} gnu={gnu}"
+        );
+    }
+    // Pre-existing failed-image `image-size` divergence (separate ledger item):
+    // GNU returns the 30x30 placeholder without signalling (src/image.c:3568-3582),
+    // whereas Neomacs `builtin_image_size_in_context` signals "Unable to create image"
+    // on any failed decode. Pin the raw outcome explicitly here rather than hiding it
+    // behind `ignore-errors`; neither editor decodes the 48x48 OOB GIFs.
+    for key in ["oob-single-size", "oob-frame1-0-size", "oob-frame1-1-size"] {
+        assert_eq!(
+            state[key],
+            serde_json::json!(["error", "Unable to create image"]),
+            "Neomacs must reject out-of-screen GIFs rather than decoding 48x48: {state}"
         );
     }
 

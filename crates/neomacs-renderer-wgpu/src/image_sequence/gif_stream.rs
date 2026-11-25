@@ -166,10 +166,15 @@ impl GifStream {
     /// Read the record structure and the header, as GNU's `DGifSlurp` and
     /// `gif_load` do before the first frame. Rejects the whole GIF up front if
     /// any subimage descriptor extends outside the logical screen
-    /// (`src/image.c:10018-10035`). No frame is decoded.
+    /// (`src/image.c:10018-10035`) or carries an invalid LZW minimum code size
+    /// (giflib 6.1.3 rejects `CodeSize > 8` during `DGifSlurp`). No frame is
+    /// decoded.
     pub(super) fn open(source: EncodedBytes, colors: GifBackgroundColors) -> Option<Self> {
         let structure = super::gif_metadata::parse_structure(&source)?;
-        if structure.extensions.is_empty() || !structure.all_subimages_fit_screen {
+        if structure.extensions.is_empty()
+            || !structure.all_subimages_fit_screen
+            || !structure.all_code_sizes_valid
+        {
             return None;
         }
         let extensions = structure.extensions;

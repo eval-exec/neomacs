@@ -16,10 +16,15 @@ pub(super) struct GifStructure {
     /// (`left + width <= screen_width && top + height <= screen_height`),
     /// matching GNU `gif_load`'s up-front check (`src/image.c:10018-10035`).
     pub(super) all_subimages_fit_screen: bool,
+    /// True iff every image's LZW minimum code size byte is in `1..=8`.
+    /// GNU `gif_load` runs `DGifSlurp` up front (`src/image.c:9992`), and
+    /// giflib 6.1.3 rejects `CodeSize > 8` (`D_GIF_ERR_IMAGE_DEFECT`), while
+    /// `gif` 0.14.2 rejects `min_code_size == 0` too.
+    pub(super) all_code_sizes_valid: bool,
 }
 
 /// Parse the GIF record structure, returning each frame's preceding extension
-/// blocks and whether every subimage descriptor fits within the logical screen.
+/// blocks and up-front structural validity flags matching GNU `gif_load`.
 pub(super) fn parse_structure(data: &[u8]) -> Option<GifStructure> {
     let mut remaining = data;
     match take(&mut remaining, 6)? {
@@ -34,6 +39,7 @@ pub(super) fn parse_structure(data: &[u8]) -> Option<GifStructure> {
     let mut frames = Vec::new();
     let mut extensions = Vec::new();
     let mut all_subimages_fit_screen = true;
+    let mut all_code_sizes_valid = true;
     loop {
         match byte(&mut remaining)? {
             0x21 => {
@@ -55,7 +61,10 @@ pub(super) fn parse_structure(data: &[u8]) -> Option<GifStructure> {
                     all_subimages_fit_screen = false;
                 }
                 take(&mut remaining, color_table_length(descriptor[8]))?;
-                byte(&mut remaining)?; // LZW minimum code size.
+                let min_code_size = byte(&mut remaining)?; // LZW minimum code size.
+                if min_code_size == 0 || min_code_size > 8 {
+                    all_code_sizes_valid = false;
+                }
                 while sub_block(&mut remaining)?.is_some() {}
                 frames.push(std::mem::take(&mut extensions));
             }
@@ -63,20 +72,12 @@ pub(super) fn parse_structure(data: &[u8]) -> Option<GifStructure> {
                 return Some(GifStructure {
                     extensions: frames,
                     all_subimages_fit_screen,
+                    all_code_sizes_valid,
                 });
             }
             _ => return None,
         }
     }
-}
-
-/// Return the extension blocks preceding each image descriptor.
-///
-/// Extensions after the last image belong to the file rather than a frame,
-/// so they are discarded when the trailer is reached.
-#[cfg(test)]
-pub(super) fn frame_extensions(data: &[u8]) -> Option<Vec<Vec<(u8, Vec<u8>)>>> {
-    parse_structure(data).map(|structure| structure.extensions)
 }
 
 fn take<'a>(remaining: &mut &'a [u8], length: usize) -> Option<&'a [u8]> {
@@ -110,7 +111,11 @@ fn color_table_length(packed: u8) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::frame_extensions;
+    use super::parse_structure;
+
+    fn frame_extensions(data: &[u8]) -> Option<Vec<Vec<(u8, Vec<u8>)>>> {
+        parse_structure(data).map(|structure| structure.extensions)
+    }
 
     const HEADER: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff";
     const IMAGE: &[u8] = b"\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00";
@@ -123,6 +128,41 @@ mod tests {
         }
         data.push(0x3b);
         data
+    }
+
+    #[test]
+    fn parse_structure_flags_out_of_screen_subimages_and_invalid_lzw_code_sizes() {
+        let valid = parse_structure(&gif(&[GCE, IMAGE])).expect("valid 1x1 GIF");
+        assert!(valid.all_subimages_fit_screen);
+        assert!(valid.all_code_sizes_valid);
+
+        // Second frame extends past 1x1 screen (left=1, width=1 -> right=2 > 1).
+        let oob_image = b"\x2c\x01\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00";
+        let oob = parse_structure(&gif(&[IMAGE, oob_image])).expect("parses structure");
+        assert!(!oob.all_subimages_fit_screen);
+        assert!(oob.all_code_sizes_valid);
+
+        // Second frame has LZW min_code_size outside 1..=8 (0, 9, 42).
+        for bad_cs in [0u8, 9, 42] {
+            let mut bad_image = IMAGE.to_vec();
+            bad_image[10] = bad_cs;
+            let parsed = parse_structure(&gif(&[IMAGE, &bad_image])).expect("parses structure");
+            assert!(parsed.all_subimages_fit_screen);
+            assert!(
+                !parsed.all_code_sizes_valid,
+                "min_code_size={bad_cs} must fail up-front validation"
+            );
+        }
+        // Boundary valid min_code_size values 1 and 8 are accepted.
+        for ok_cs in [1u8, 8] {
+            let mut ok_image = IMAGE.to_vec();
+            ok_image[10] = ok_cs;
+            let parsed = parse_structure(&gif(&[IMAGE, &ok_image])).expect("parses structure");
+            assert!(
+                parsed.all_code_sizes_valid,
+                "min_code_size={ok_cs} is valid"
+            );
+        }
     }
 
     #[test]
