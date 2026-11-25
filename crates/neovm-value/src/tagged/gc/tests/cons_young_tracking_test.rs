@@ -223,8 +223,9 @@ fn cons_young_verifier_compares_dead_sentinel_bits_for_heap_payloads() {
     let mut heap = verified_heap();
     let payload = heap.alloc_string(LispString::from_utf8("young-block-payload"));
     let root = heap.alloc_cons(payload, TaggedValue::NIL);
-    // DEAD has a pointer tag but no object behind it. Verifying allocation
-    // status must compare bits without invoking Lisp structural equality.
+    // DEAD is allocator poison with no live object behind it. Verifying
+    // allocation status must compare bits without invoking Lisp structural
+    // equality.
     minor(&mut heap, &[root]);
     assert!(heap.value_is_old_for_test(root));
     assert!(heap.owns_heap_value_for_test(payload));

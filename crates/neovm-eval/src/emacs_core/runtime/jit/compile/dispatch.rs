@@ -344,8 +344,9 @@ pub(crate) unsafe extern "C" fn neovm_jit_builtin2(
 /// A return word of the value-returning array shims ([`neovm_jit_aref`],
 /// [`neovm_jit_aset`]): a non-local exit was stashed with
 /// [`stash_pending_flow`], so take the site's signal edge. Every other word
-/// such a shim returns is the result's own bits, and no Lisp value carries
-/// tag `0b001`, so one tag test tells the two apart.
+/// such a shim returns is the result's own bits; no Lisp value carries tag
+/// `0b001`, and call sites compare the full word against `VALUE_SHIM_SIGNAL`
+/// so other non-Lisp `0b001` sentinels (such as `DEAD`) cannot alias it.
 pub(crate) const VALUE_SHIM_SIGNAL: i64 = 0b0001;
 const _: () = {
     use neovm_value::tagged::value::{TAG_FLOAT, TAG_VECLIKE};
@@ -353,6 +354,9 @@ const _: () = {
     assert!(tag & FIXNUM_CHECK_MASK != FIXNUM_CHECK_VALUE);
     assert!(tag != TAG_SYMBOL && tag != TAG_CONS && tag != TAG_STRING);
     assert!(tag != TAG_VECLIKE && tag != TAG_FLOAT);
+    // SAFETY: compile-time bit-pattern disjointness check only; never dereferenced.
+    assert!(!unsafe { Value::from_bits(VALUE_SHIM_SIGNAL as usize) }.is_dead());
+    assert!(VALUE_SHIM_SIGNAL as usize != Value::dead_sentinel_bits());
 };
 
 // `(aref ARRAY INDEX)` on the shapes a loop indexes: the one fast path both

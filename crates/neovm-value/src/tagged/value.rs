@@ -396,23 +396,59 @@ impl TaggedValue {
         PhantomData,
     );
 
+    /// Non-Lisp sentinel bit pattern for [`Self::DEAD`].
+    ///
+    /// Uses the unused non-Lisp `0b001` tag with bits `3..5 = 0b11` (outside
+    /// `BacktraceArgs`'s valid descriptor kinds `0..=2` and distinct from JIT
+    /// `VALUE_SHIM_SIGNAL = 0b0001` and `LEAF_NEED_GENERIC = 0b1001`) and
+    /// upper payload `0xDEAD`. Cross-crate compile-time assertions in
+    /// `neovm-eval` enumerate every JIT and backtrace sentinel encoding by
+    /// name to prove disjointness.
+    const DEAD_BITS: usize = (0xDEAD_usize << 5) | (0b11 << TAG_BITS) | 0b001;
+
     /// GNU's `dead_object ()` (`src/lisp.h:1353-1357`): "Return a Lisp_Object
     /// value that does not correspond to any object. This can make some Lisp
-    /// objects on free lists recognizable in O(1)." GNU spells it
-    /// `make_lisp_ptr (NULL, Lisp_String)`; this is the same bit pattern here,
-    /// a STRING tag over a null pointer, which no live object can ever hold.
+    /// objects on free lists recognizable in O(1)."
     ///
     /// It exists because the free list is threaded through the dead cells
     /// themselves (`ConsCell::set_free_next`, matching GNU `sweep_conses`), so
     /// a reclaimed cell's slots still decode as ordinary Lisp values. `nil` in
-    /// the car is indistinguishable from a real `nil`; `dead_object` is
+    /// the car is indistinguishable from a real `nil`; `DEAD` is
     /// distinguishable from every live value, which is the whole point.
-    pub const DEAD: Self = Self(TAG_STRING, PhantomData);
+    ///
+    /// Unlike GNU (which spells `dead_object` as a null `Lisp_String` pointer),
+    /// Neomacs places `DEAD` in the unused non-Lisp `0b001` tag space with
+    /// distinct upper bits and keeps it crate-private so it never satisfies
+    /// `is_string()` or `is_heap_object()`, making a null string pointer
+    /// unrepresentable in safe Rust. External callers observe it only via
+    /// [`Self::is_dead`].
+    pub(crate) const DEAD: Self = Self(Self::DEAD_BITS, PhantomData);
+
+    const _DEAD_BITS_DISJOINT: () = {
+        let tag = Self::DEAD_BITS & TAG_MASK;
+        assert!(Self::DEAD_BITS != 0);
+        assert!(Self::DEAD_BITS != 0b0001);
+        assert!(Self::DEAD_BITS != 0b1001);
+        assert!((Self::DEAD_BITS >> TAG_BITS) & 0b11 == 0b11);
+        assert!(tag & FIXNUM_CHECK_MASK != FIXNUM_CHECK_VALUE);
+        assert!(tag != TAG_SYMBOL && tag != TAG_CONS && tag != TAG_STRING);
+        assert!(tag != TAG_VECLIKE && tag != TAG_FLOAT);
+    };
 
     /// GNU `deadp` (`src/alloc.c:425-429`) — is this the free-list poison?
     #[inline]
-    pub fn is_dead(self) -> bool {
+    pub const fn is_dead(self) -> bool {
         self.0 == Self::DEAD.0
+    }
+
+    /// Raw bit pattern of [`Self::DEAD`], exposed only as an untyped `usize` so
+    /// cross-crate ABI assertions and JIT tests can prove disjointness from
+    /// non-Lisp sentinel encodings without letting external safe code construct
+    /// `DEAD` directly.
+    #[doc(hidden)]
+    #[inline]
+    pub const fn dead_sentinel_bits() -> usize {
+        Self::DEAD_BITS
     }
 
     // -- Fixnum --
@@ -954,10 +990,8 @@ impl TaggedValue {
 
     /// Extract raw string object pointer.
     ///
-    /// Returns `None` when this is not a string, and when the string tag sits
-    /// on a null pointer. That bit pattern is GNU's free-list poison
-    /// ([`Self::DEAD`]); it is not a live object, so this does not observe it
-    /// and does not hand the null out for a later dereference.
+    /// Returns `None` when this is not a string, or if an unsafe caller forged
+    /// a null pointer with `TAG_STRING`.
     #[inline(always)]
     pub fn as_string_ptr(self) -> Option<*const StringObj> {
         if !self.is_string() {
@@ -1390,9 +1424,8 @@ impl TaggedValue {
 
     // -- String extraction --
 
-    /// Get the string content as UTF-8 `&str`. Returns `None` if not a string,
-    /// if the tag is the null free-list poison, **or** if the bytes are not
-    /// valid UTF-8 (e.g. raw-byte Emacs encoding).
+    /// Get the string content as UTF-8 `&str`. Returns `None` if not a string
+    /// **or** if the bytes are not valid UTF-8 (e.g. raw-byte Emacs encoding).
     ///
     /// Prefer `as_bytes()` / `equal_value` for byte-level equality — two
     /// different non-UTF-8 strings both return `None`, so comparing
@@ -1401,7 +1434,7 @@ impl TaggedValue {
         let Some(ptr) = self.as_string_ptr() else {
             return None;
         };
-        // Safety: `as_string_ptr` refused a non-string and the null poison.
+        // Safety: `as_string_ptr` refused non-strings and null pointers.
         // The string object is alive (caller must ensure no GC).
         // Lifetime is extended to 'static — same pattern as old Value::as_str.
         unsafe {

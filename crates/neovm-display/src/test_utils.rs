@@ -1985,11 +1985,7 @@ pub mod mode_line_gc_roots_test_upper_layer_helpers {
                 "retained property name cell"
             );
             let name = plist.cons_car();
-            assert_ne!(
-                name.bits(),
-                Value::DEAD.bits(),
-                "a retained property name was swept"
-            );
+            assert!(!name.is_dead(), "a retained property name was swept");
             let rest = plist.cons_cdr();
             assert!(rest.is_cons(), "retained property value cell");
             assert!(
@@ -1997,11 +1993,7 @@ pub mod mode_line_gc_roots_test_upper_layer_helpers {
                 "retained property value ownership"
             );
             let value = rest.cons_car();
-            assert_ne!(
-                value.bits(),
-                Value::DEAD.bits(),
-                "a retained property value was swept"
-            );
+            assert!(!value.is_dead(), "a retained property value was swept");
             if name.bits() == property.bits() {
                 assert_eq!(value.bits(), expected.bits());
                 found = true;

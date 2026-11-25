@@ -523,6 +523,10 @@ mod architecture_host_effect_guard_test;
 mod architecture_unsafe_shim_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/dead_string_tag_guard_test.rs"]
+mod architecture_dead_string_tag_guard_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/debug_assert_side_effect_guard_test.rs"]
 mod architecture_debug_assert_side_effect_guard_test;
 

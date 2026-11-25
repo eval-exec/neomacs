@@ -1673,6 +1673,24 @@ impl BacktraceArgs {
     #[doc(hidden)]
     pub const BYTECODE_STACK_KIND: usize = 2;
 
+    const _BACKTRACE_ARGS_DISJOINT_FROM_DEAD: () = {
+        let dead = Value::dead_sentinel_bits();
+        let dead_kind = (dead >> Self::KIND_SHIFT) & Self::KIND_MASK;
+        assert!(
+            dead & Self::TAG_MASK != Self::DESCRIPTOR_TAG
+                || (dead_kind != Self::EVALUATED_0_KIND
+                    && dead_kind != Self::EVALUATED_KIND
+                    && dead_kind != Self::BYTECODE_STACK_KIND)
+        );
+        let eval0 = (Self::EVALUATED_0_KIND << Self::KIND_SHIFT) | Self::DESCRIPTOR_TAG;
+        let eval_n = (Self::EVALUATED_KIND << Self::KIND_SHIFT) | Self::DESCRIPTOR_TAG;
+        let bc_span = (Self::BYTECODE_STACK_KIND << Self::KIND_SHIFT) | Self::DESCRIPTOR_TAG;
+        // SAFETY: compile-time bit-pattern disjointness checks only; never dereferenced.
+        assert!(!unsafe { Value::from_bits(eval0) }.is_dead());
+        assert!(!unsafe { Value::from_bits(eval_n) }.is_dead());
+        assert!(!unsafe { Value::from_bits(bc_span) }.is_dead());
+    };
+
     /// Tests push arbitrary values as a frame's argument forms, so this
     /// constructor keeps the reserved-tag check in every build.
     #[cfg(test)]
@@ -1776,6 +1794,12 @@ impl BacktraceArgs {
     pub fn is_unevalled(self) -> bool {
         // `view()`'s first test, and its only Unevalled arm.
         self.0 & Self::TAG_MASK != Self::DESCRIPTOR_TAG
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) const fn raw_bits(self) -> usize {
+        self.0
     }
 
     #[inline]

@@ -2095,8 +2095,7 @@ fn probe_leaf(
             }
         },
         // Any string: the `equal` key is its bytes plus SCHARS, so there is
-        // nothing to validate. `Value::DEAD` carries the string tag over a
-        // null pointer and falls back to identity, matching `to_equal_key`.
+        // nothing to validate.
         ValueKind::String => match test {
             HashTableTest::Equal => {
                 let Some(string) = value.as_lisp_string() else {

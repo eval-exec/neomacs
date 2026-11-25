@@ -37,6 +37,11 @@ pub(crate) const LEAF_NEED_GENERIC: i64 = 0b1001;
 const _: () = {
     assert!(LEAF_SIGNAL & TAG_MASK as i64 == LEAF_NEED_GENERIC & TAG_MASK as i64);
     assert!(LEAF_SIGNAL != LEAF_NEED_GENERIC);
+    // SAFETY: compile-time bit-pattern disjointness checks only; never dereferenced.
+    assert!(!unsafe { Value::from_bits(LEAF_SIGNAL as usize) }.is_dead());
+    assert!(!unsafe { Value::from_bits(LEAF_NEED_GENERIC as usize) }.is_dead());
+    assert!(LEAF_SIGNAL as usize != Value::dead_sentinel_bits());
+    assert!(LEAF_NEED_GENERIC as usize != Value::dead_sentinel_bits());
 };
 
 // ---------------------------------------------------------------------------
