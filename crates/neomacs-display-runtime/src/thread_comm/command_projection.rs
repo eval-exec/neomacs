@@ -72,7 +72,7 @@ impl RenderCommandSender {
         bool,
         TrySendError<neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage>,
     > {
-        let mut pending = pending.lock().unwrap();
+        let mut pending = pending.lock().unwrap_or_else(|e| e.into_inner());
         let frame = update.frame;
         if let std::collections::hash_map::Entry::Occupied(mut entry) = pending.entry(frame) {
             entry.insert(update);

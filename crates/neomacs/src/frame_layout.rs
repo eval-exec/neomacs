@@ -71,17 +71,43 @@ pub(super) fn resolved_scroll_preview(
         .with(|runtime| runtime.resolved_scroll_preview(evaluator, frame, window, inputs))
 }
 
-/// Run one bounded native scroll-coverage maintenance step and deliver any
-/// ready auxiliary snapshot through the caller's GUI transport sink.
-#[inline(always)]
-pub(super) fn maintain_gui_scroll_coverage(
-    evaluator: &Context,
-    deliver: impl FnMut(
-        neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
-    ) -> neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery,
-) -> neovm_core::emacs_core::eval::DisplayMaintenanceOutcome {
-    REDISPLAY_RUNTIME
-        .with(|runtime| runtime.maintain_scroll_coverage_with_delivery(evaluator, deliver))
+/// Install the GUI frontend's bounded display idle-maintenance hook.
+///
+/// This is the sole owner of `Context::display_idle_maintenance_fn`: TTY and
+/// batch sessions leave it unset so periodic GUI service does not engage there.
+pub(super) fn install_gui_display_idle_maintenance(
+    evaluator: &mut Context,
+    cmd_tx: neomacs_display_runtime::thread_comm::RenderCommandSender,
+    slots: Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<
+                neomacs_display_protocol::DisplayFrameId,
+                neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage,
+            >,
+        >,
+    >,
+    wake: impl Fn() + 'static,
+) {
+    evaluator.display_idle_maintenance_fn = Some(Box::new(move |eval| {
+        REDISPLAY_RUNTIME.with(|runtime| {
+            runtime.maintain_scroll_coverage_with_delivery(eval, |update| {
+                match cmd_tx.publish_scroll_coverage(&slots, update) {
+                    Ok(woken) => {
+                        if woken {
+                            wake();
+                        }
+                        neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery::Delivered
+                    }
+                    Err(crossbeam_channel::TrySendError::Full(_)) => {
+                        neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery::QueueFull
+                    }
+                    Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                        neomacs_display_runtime::redisplay::AuxiliaryCoverageDelivery::Disconnected
+                    }
+                }
+            })
+        })
+    }));
 }
 
 #[cfg(test)]
@@ -314,9 +340,6 @@ fn install_window_layout_query_with_policy(
     evaluator: &mut Context,
     policy: neomacs_layout_engine::RowsQueryPolicy,
 ) {
-    evaluator.display_idle_maintenance_fn = Some(Box::new(|eval| {
-        REDISPLAY_RUNTIME.with(|runtime| runtime.maintain_scroll_coverage(eval))
-    }));
     // The immutable native policy lives in this existing heap allocation.
     // Context, LayoutEngine and the runtime's TLS representation do not grow.
     evaluator

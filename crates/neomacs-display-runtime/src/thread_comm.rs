@@ -1192,7 +1192,7 @@ impl RenderComms {
     ) -> Option<neomacs_display_protocol::scroll_coverage::AuxiliaryScrollCoverage> {
         self.auxiliary_scroll_coverage
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .remove(&frame)
     }
 
