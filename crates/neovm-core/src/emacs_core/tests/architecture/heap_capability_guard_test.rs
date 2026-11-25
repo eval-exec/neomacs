@@ -117,6 +117,42 @@ struct Survey {
     tls_token_violations: Vec<Violation>,
 }
 
+struct TokenMintFinder {
+    mints: Vec<(String, usize)>,
+}
+
+impl<'ast> Visit<'ast> for TokenMintFinder {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let name = call.method.to_string();
+        if matches!(name.as_str(), "heap_mut" | "heap_ref") {
+            self.mints.push((name, call.method.span().start().line));
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_path(&mut self, expr: &'ast syn::ExprPath) {
+        if let Some(last) = expr.path.segments.last() {
+            let ident = last.ident.to_string();
+            if matches!(ident.as_str(), "heap_mut" | "heap_ref") {
+                self.mints.push((ident, last.ident.span().start().line));
+            }
+        }
+        visit::visit_expr_path(self, expr);
+    }
+}
+
+fn find_token_mints_in_expr(expr: &Expr) -> Vec<(String, usize)> {
+    let mut finder = TokenMintFinder { mints: Vec::new() };
+    finder.visit_expr(expr);
+    finder.mints
+}
+
+fn find_token_mints_in_block(block: &syn::Block) -> Vec<(String, usize)> {
+    let mut finder = TokenMintFinder { mints: Vec::new() };
+    finder.visit_block(block);
+    finder.mints
+}
+
 struct Scanner<'a> {
     file: &'a str,
     excluded: u32,
@@ -124,6 +160,9 @@ struct Scanner<'a> {
     in_tagged_heap: bool,
     in_with_tagged_heap_arg: u32,
     function: Vec<String>,
+    local_token_mints: Vec<std::collections::BTreeMap<String, Vec<(String, usize)>>>,
+    fn_token_mints: std::collections::BTreeMap<String, Vec<(String, usize)>>,
+    pending_tls_ident_args: Vec<(String, String)>,
     survey: Survey,
 }
 
@@ -136,6 +175,9 @@ impl<'a> Scanner<'a> {
             in_tagged_heap: false,
             in_with_tagged_heap_arg: 0,
             function: Vec::new(),
+            local_token_mints: vec![std::collections::BTreeMap::new()],
+            fn_token_mints: std::collections::BTreeMap::new(),
+            pending_tls_ident_args: Vec::new(),
             survey: Survey {
                 definitions: Vec::new(),
                 era_definitions: Vec::new(),
@@ -160,13 +202,32 @@ impl<'a> Scanner<'a> {
             self.unsafe_fn += 1;
         }
         self.function.push(name.to_owned());
+        self.local_token_mints
+            .push(std::collections::BTreeMap::new());
         body(self);
+        self.local_token_mints.pop();
         self.function.pop();
         if unsafe_fn {
             self.unsafe_fn -= 1;
         }
         if excluded {
             self.excluded -= 1;
+        }
+    }
+
+    fn resolve_pending_tls_helpers(&mut self) {
+        let pending = std::mem::take(&mut self.pending_tls_ident_args);
+        for (caller, callee) in pending {
+            if let Some(mints) = self.fn_token_mints.get(&callee) {
+                for (mint, line) in mints {
+                    self.survey.tls_token_violations.push(Violation {
+                        file: self.file.to_owned(),
+                        line: *line,
+                        function: caller.clone(),
+                        call: format!("{mint} (via `{callee}`)"),
+                    });
+                }
+            }
         }
     }
 
@@ -293,6 +354,12 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
                 matches!(item.sig.safety, syn::Safety::Unsafe(_)),
             );
         }
+        if self.excluded == 0 && !production_excluded(&item.attrs) {
+            let mints = find_token_mints_in_block(&item.block);
+            if !mints.is_empty() {
+                self.fn_token_mints.insert(name.clone(), mints);
+            }
+        }
         self.enter_item(
             &name,
             &item.attrs,
@@ -301,6 +368,21 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
                 visit::visit_item_fn(scanner, item);
             },
         );
+    }
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        if self.excluded == 0
+            && let Some(init) = &local.init
+            && let syn::Pat::Ident(pat_ident) = &local.pat
+        {
+            let mints = find_token_mints_in_expr(&init.expr);
+            if !mints.is_empty()
+                && let Some(scope) = self.local_token_mints.last_mut()
+            {
+                scope.insert(pat_ident.ident.to_string(), mints);
+            }
+        }
+        visit::visit_local(self, local);
     }
 
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
@@ -399,6 +481,30 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
             self.visit_expr(&call.func);
             self.in_with_tagged_heap_arg += 1;
             for arg in &call.args {
+                if self.excluded == 0
+                    && let Expr::Path(arg_path) = arg
+                    && let Some(arg_ident) = arg_path.path.get_ident()
+                {
+                    let ident_str = arg_ident.to_string();
+                    if let Some(mints) = self
+                        .local_token_mints
+                        .iter()
+                        .rev()
+                        .find_map(|scope| scope.get(&ident_str))
+                        .cloned()
+                    {
+                        for (mint, line) in mints {
+                            self.note_tls_token_mint(&format!("{mint} (via `{ident_str}`)"), line);
+                        }
+                    } else {
+                        let caller = self
+                            .function
+                            .last()
+                            .cloned()
+                            .unwrap_or_else(|| "<module>".to_owned());
+                        self.pending_tls_ident_args.push((caller, ident_str));
+                    }
+                }
                 self.visit_expr(arg);
             }
             self.in_with_tagged_heap_arg -= 1;
@@ -422,7 +528,10 @@ impl<'ast> Visit<'ast> for Scanner<'_> {
         let saved = self.unsafe_fn;
         self.unsafe_fn = 0;
         self.function.push("<closure>".to_owned());
+        self.local_token_mints
+            .push(std::collections::BTreeMap::new());
         visit::visit_expr_closure(self, closure);
+        self.local_token_mints.pop();
         self.function.pop();
         self.unsafe_fn = saved;
     }
@@ -534,6 +643,7 @@ fn survey_file(source: &str, file: &str) -> Survey {
         return scanner.survey;
     }
     scanner.visit_file(&syntax);
+    scanner.resolve_pending_tls_helpers();
     scanner.survey
 }
 
@@ -737,6 +847,16 @@ fn heap_capability_guard_flags_safe_with_tagged_heap_and_token_minting() {
         fn bypass_ufcs() {
             with_tagged_heap(TaggedHeap::heap_mut);
         }
+        fn bypass_hoisted() {
+            let op = |h: &mut TaggedHeap| { let _hm = h.heap_mut(); };
+            unsafe { with_tagged_heap(op) };
+        }
+        fn mint_helper(h: &mut TaggedHeap) {
+            let _hr = h.heap_ref();
+        }
+        fn bypass_helper_fn() {
+            unsafe { with_tagged_heap(mint_helper) };
+        }
         "#,
         "bypass.rs",
     );
@@ -752,6 +872,14 @@ fn heap_capability_guard_flags_safe_with_tagged_heap_and_token_minting() {
     assert!(
         problems.contains("mints capability token via `heap_ref`"),
         "with_tagged_heap calling heap_ref must fail even inside unsafe fn: {problems}"
+    );
+    assert!(
+        problems.contains("`heap_mut (via `op`)`"),
+        "hoisted let-op closure calling heap_mut must fail: {problems}"
+    );
+    assert!(
+        problems.contains("`heap_ref (via `mint_helper`)`"),
+        "helper fn calling heap_ref passed to with_tagged_heap must fail: {problems}"
     );
 }
 
