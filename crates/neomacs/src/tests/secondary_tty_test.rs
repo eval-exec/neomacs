@@ -466,8 +466,11 @@ fn secondary_tty_registry_isolates_mode_strings_across_suspend_resume_remove_and
                 },
             )
             .expect("set PTY size");
+            // SAFETY: `master` is a live owned PTY master descriptor.
             let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
             assert!(flags >= 0);
+            // SAFETY: `master` is a live owned descriptor and `flags | O_NONBLOCK`
+            // preserves all existing open-file flags.
             assert_eq!(
                 unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
                 0
@@ -485,6 +488,8 @@ fn secondary_tty_registry_isolates_mode_strings_across_suspend_resume_remove_and
                         events: libc::POLLIN,
                         revents: 0,
                     };
+                    // SAFETY: `pfd` is a valid initialized `pollfd` referencing
+                    // the live thread-owned `master` descriptor.
                     let rc = unsafe { libc::poll(&mut pfd, 1, 20) };
                     if rc <= 0 || (pfd.revents & libc::POLLIN) == 0 {
                         continue;

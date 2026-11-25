@@ -876,7 +876,7 @@ fn check_cannot_suspend_real_subshell_survives_sigint(program: &Path, label: &st
     session.send(b"\x03");
     session.read(Duration::from_millis(250));
     session.send(
-        b"kill -INT $PPID; kill -QUIT $PPID; kill -TERM $PPID; printf '%s-%s\\n' NEOMACS AFTER_SIGNALS\nexit 0\n",
+        b"kill -INT $PPID; kill -QUIT $PPID; kill -TERM $PPID; kill -IO $PPID; printf '%s-%s\\n' NEOMACS AFTER_SIGNALS\nexit 0\n",
     );
     wait_for_bytes(&mut session, MOUSE_ENABLE, Duration::from_secs(10));
 

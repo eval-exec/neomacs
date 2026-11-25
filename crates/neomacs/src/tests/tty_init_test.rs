@@ -334,3 +334,45 @@ fn screen_below_three_is_too_small() {
     let short = super::initial_tty_cells_from_ioctl(80, 2, 80, 24).unwrap_err();
     assert_eq!(short.to_string(), "Screen size 80x2 is too small");
 }
+
+#[cfg(unix)]
+#[test]
+fn subshell_signal_guard_ignores_and_restores_sigint_sigquit_sigterm_sigio() {
+    const SIGNALS: [libc::c_int; 4] = [libc::SIGINT, libc::SIGQUIT, libc::SIGTERM, libc::SIGIO];
+
+    let read_action = |sig: libc::c_int| -> libc::sigaction {
+        // SAFETY: `sigaction` is a plain C struct; `sigaction(sig, NULL, &out)`
+        // queries the current disposition without modifying it.
+        let mut out: libc::sigaction = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { libc::sigaction(sig, std::ptr::null(), &mut out) },
+            0,
+            "query sigaction for signal {sig}"
+        );
+        out
+    };
+
+    let before: Vec<(libc::c_int, libc::sighandler_t)> = SIGNALS
+        .iter()
+        .map(|&sig| (sig, read_action(sig).sa_sigaction))
+        .collect();
+
+    {
+        let _guard = super::SubshellSignalGuard::ignore_subshell_signals();
+        for sig in SIGNALS {
+            assert_eq!(
+                read_action(sig).sa_sigaction,
+                libc::SIG_IGN,
+                "signal {sig} must be SIG_IGN while SubshellSignalGuard is held"
+            );
+        }
+    }
+
+    for (sig, expected) in before {
+        assert_eq!(
+            read_action(sig).sa_sigaction,
+            expected,
+            "signal {sig} disposition must be restored when SubshellSignalGuard drops"
+        );
+    }
+}
