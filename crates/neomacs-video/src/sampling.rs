@@ -1037,38 +1037,60 @@ impl GpuVideoContext {
 /// avoiding ambiguous vendor/device scans on identical multi-GPU systems.
 #[cfg(target_os = "linux")]
 pub fn linux_render_device_numbers(device: &wgpu::Device) -> Option<(u32, u32)> {
-    use std::ffi::CStr;
-
     use ash::vk;
     use wgpu::hal::api::Vulkan;
 
-    unsafe {
-        device.as_hal::<Vulkan>().and_then(|hal| {
-            let instance = hal.shared_instance().raw_instance();
-            let physical_device = hal.raw_physical_device();
-            let supports_drm_identity = instance
-                .enumerate_device_extension_properties(physical_device)
-                .ok()?
-                .iter()
-                .any(|extension| {
-                    CStr::from_ptr(extension.extension_name.as_ptr())
-                        == ash::ext::physical_device_drm::NAME
-                });
-            if !supports_drm_identity {
-                return None;
-            }
-            let mut drm = vk::PhysicalDeviceDrmPropertiesEXT::default();
-            let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut drm);
-            instance.get_physical_device_properties2(physical_device, &mut properties);
-            if drm.has_render == 0 {
-                return None;
-            }
-            Some((
-                u32::try_from(drm.render_major).ok()?,
-                u32::try_from(drm.render_minor).ok()?,
-            ))
-        })
+    // SAFETY: `device.as_hal::<Vulkan>()` returns a guard tied to `&device`
+    // that keeps the underlying Vulkan instance and physical device alive for
+    // the entire lifetime of `hal`; this function only performs read-only
+    // physical-device queries and never mutates or destroys HAL state.
+    let hal = unsafe { device.as_hal::<Vulkan>() }?;
+    let instance = hal.shared_instance().raw_instance();
+    let physical_device = hal.raw_physical_device();
+    // SAFETY: `hal` supplies a matching live `VkInstance` and
+    // `VkPhysicalDevice`; `vkGetPhysicalDeviceProperties` is a core Vulkan 1.0
+    // immutable query.
+    let physical_properties = unsafe { instance.get_physical_device_properties(physical_device) };
+    let api = physical_properties
+        .api_version
+        .min(hal.shared_instance().instance_api_version());
+    // `vkGetPhysicalDeviceProperties2` is a core Vulkan 1.1 entry point;
+    // calling it on a 1.0 instance or physical device would dispatch an
+    // unloaded entry point.
+    if api < vk::API_VERSION_1_1 {
+        return None;
     }
+    // SAFETY: `hal` supplies a matching live `VkInstance` and
+    // `VkPhysicalDevice`; `vkEnumerateDeviceExtensionProperties` is a core
+    // Vulkan 1.0 immutable query. `ash` allocates via
+    // `read_into_uninitialized_vector`, retrying on `VK_INCOMPLETE` and
+    // setting the `Vec` length to the count actually written by the driver, so
+    // returning fewer entries than the initial count query never exposes
+    // uninitialized elements.
+    let extensions =
+        unsafe { instance.enumerate_device_extension_properties(physical_device) }.ok()?;
+    let supports_drm_identity = extensions.iter().any(|extension| {
+        extension.extension_name_as_c_str().ok() == Some(ash::ext::physical_device_drm::NAME)
+    });
+    if !supports_drm_identity {
+        return None;
+    }
+    let mut drm = vk::PhysicalDeviceDrmPropertiesEXT::default();
+    let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut drm);
+    // SAFETY: `hal` supplies a matching live `VkInstance` and
+    // `VkPhysicalDevice`, `api >= vk::API_VERSION_1_1` above guarantees the
+    // core `vkGetPhysicalDeviceProperties2` entry point is available,
+    // `VK_EXT_physical_device_drm` is advertised by `physical_device`, and
+    // `drm` in `properties.p_next` stays pinned on this stack frame for the
+    // duration of the synchronous call.
+    unsafe { instance.get_physical_device_properties2(physical_device, &mut properties) };
+    if drm.has_render == 0 {
+        return None;
+    }
+    Some((
+        u32::try_from(drm.render_major).ok()?,
+        u32::try_from(drm.render_minor).ok()?,
+    ))
 }
 
 /// Generation of the renderer device against which a native surface was

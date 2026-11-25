@@ -1171,10 +1171,7 @@ pub(crate) trait RuntimeStateTieringExt {
     fn note_deopt_history(&self, pc: usize, ops_len: usize) -> u8;
     /// Precise deopts ever counted at `pc` of this source, across all of its
     /// leaves (0 before the first; a read never allocates).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumer: the T2 retreat (P2.1 C9-C11)")
-    )]
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     fn deopt_history(&self, pc: usize) -> u8;
     /// Stop serving this source as AOT-prewarmed: `dispatch_sized` would
     /// otherwise answer `Compiled` from call 1 and skip a re-profile window.
@@ -1774,10 +1771,7 @@ impl RuntimeStateTieringExt for RuntimeState {
 
     /// Precise deopts ever counted at `pc` of this source, across all of its
     /// leaves (0 before the first; a read never allocates).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumer: the T2 retreat (P2.1 C9-C11)")
-    )]
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     #[inline]
     fn deopt_history(&self, pc: usize) -> u8 {
         self.site_retreat()
