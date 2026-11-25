@@ -5024,7 +5024,11 @@ impl Control {
                                     == Some(&OwnerLocation::NativeReleased);
                             if still_idle && !any_runnable {
                                 let invariant = Self::verify_invariants(&state);
-                                Self::coalesce_request_locked(&mut state);
+                                if !Self::coalesce_request_locked(&mut state) {
+                                    // Requester channel closed / keeper poisoned: fail closed
+                                    // instead of spinning in CheckDeadlock (LOW-3).
+                                    std::process::abort();
+                                }
                                 let port = Self::take_era_port_if_requested(&mut state);
                                 Some((port, invariant))
                             } else {
@@ -5039,7 +5043,10 @@ impl Control {
                             baton.enter();
                             return EraIdleWait::Deadlock { baton, invariant };
                         }
-                        continue;
+                        // Fall through to the 5 ms `metadata_changed` wait below rather
+                        // than spinning immediately when `confirmed` is `None` (e.g.
+                        // `closing` with `Main == NativeReleased`) or `Some((None, _))`
+                        // (another waiter took the port) (LOW-3).
                     }
                     let state = self.state();
                     if !matches!(&state.era, EraState::EraOpen(era) if era.turn == GroupTurn::Idle)

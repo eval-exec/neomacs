@@ -384,10 +384,6 @@ impl fmt::Debug for EraWorldHandle {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "L6.7b b4.3 Slice 2 era admission is the caller")
-)]
 impl EraWorldHandle {
     pub(crate) fn heap_identity(&self) -> neovm_value::tagged::gc::HeapIdentity {
         self._retention.heap_identity()
@@ -588,13 +584,6 @@ impl EraTurnRight {
 #[must_use = "dropping a TurnRight strands the World or abandons the keeper's WorldTurn"]
 pub(crate) enum TurnRight {
     Solo(Baton),
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "L6.7b b4.3 Slice 2 era interval wiring constructs Era"
-        )
-    )]
     Era(Box<EraTurnRight>),
 }
 
@@ -679,10 +668,6 @@ impl TurnRight {
         EraTurnRight::from_parts(turn, lend, world).map(|era| Self::Era(Box::new(era)))
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "L6.7b b4.3 Slice 2 era admission is the caller")
-    )]
     pub(crate) fn into_solo(self) -> Result<Baton, Self> {
         match self {
             Self::Solo(baton) => Ok(baton),
@@ -690,13 +675,6 @@ impl TurnRight {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "L6.7b b4.3 Slice 2 era interval wiring is the caller"
-        )
-    )]
     pub(crate) fn into_era(self) -> Result<Box<EraTurnRight>, Self> {
         match self {
             Self::Era(era) => Ok(era),

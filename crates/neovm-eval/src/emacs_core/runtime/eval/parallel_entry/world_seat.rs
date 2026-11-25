@@ -369,6 +369,13 @@ impl ActiveWorldSeat {
     /// [`ActiveWorldSeat`] so `b4.4` (`gc_collect_from_current_roots_impl_flow`)
     /// can end the interval via [`Self::exit`] and re-enter via
     /// [`ParkedWorldSeat::enter`] while preserving Nit 6.
+    ///
+    /// Note for `b4.4` (lead review LOW-2): `ActiveWorldSeat` holds the armed
+    /// `(WorldTurn, WorldLend)` directly without `EraTurnRight`'s
+    /// `KeeperHolderRestore` guard. Before `b4.4` activates this path in
+    /// production, restore `World::baton_holder` to the era's escrowing holder
+    /// strictly before `WorldLend::drop` sends `KeeperMsg::GroupAbandon`
+    /// (preferably as the root fix inside `WorldLend::drop`).
     #[cold]
     #[inline(never)]
     pub(crate) fn from_active_green_seat(
