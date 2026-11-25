@@ -1035,10 +1035,13 @@ impl TreeSitterManager {
 
     /// Store a node belonging to `parser_id`'s current live tree.
     ///
-    /// Panics if `parser_id` does not exist, has no parsed tree, `node` does
-    /// not belong to that parser's current live `TSTree`, or `reparse_epoch`
-    /// does not match the parser's current epoch. Enforcing this on storage
-    /// guarantees that every `NodeEntry.raw` names its parser's live tree
+    /// Note that `node`'s `Node<'_>` lifetime is unrelated to `self` (the
+    /// manager) and ends at return once `node.into_raw()` is stored. The
+    /// runtime assertions below — deliberate production panics if `parser_id`
+    /// does not exist, has no parsed tree, `node` does not belong to that
+    /// parser's current live `TSTree`, or `reparse_epoch` does not match the
+    /// parser's current epoch — are therefore the sole soundness guard
+    /// guaranteeing that every `NodeEntry.raw` names its parser's live tree
     /// (until `apply_parser_edits` retargets it or a reparse clears it).
     #[doc(hidden)]
     pub fn insert_node(

@@ -36,11 +36,12 @@
 //!     no safe `fn` (outside foreign `extern { ... }` import blocks) may take
 //!     a parameter whose type names a raw C FFI handle (`TSNode`, `TSTree`,
 //!     `TSQuery`, `TSQueryCursor`, `sqlite3_stmt`, `sqlite3`, `sqlite3_value`),
-//!     whether by value, reference, raw pointer, `Option`, or `NonNull`.
-//!     Either accept a validated/typed owner or declare `unsafe fn` with a
-//!     `/// # Safety` contract. Limitation: this matches by handle type name
-//!     in parameter types only; it does not inspect structs embedding a handle
-//!     field or lifetime-erasing storage of a borrowed wrapper (`into_raw`).
+//!     whether by value, reference, raw pointer, tuple, array, slice, `Option`,
+//!     or `NonNull`. Either accept a validated/typed owner or declare
+//!     `unsafe fn` with a `/// # Safety` contract. Limitation: this matches by
+//!     handle type name in parameter types only; it does not inspect structs
+//!     embedding a handle field or lifetime-erasing storage of a borrowed
+//!     wrapper (`into_raw`).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -997,6 +998,9 @@ fn is_raw_ffi_handle_type(ty: &syn::Type) -> bool {
         syn::Type::Paren(paren) => is_raw_ffi_handle_type(&paren.elem),
         syn::Type::Reference(reference) => is_raw_ffi_handle_type(&reference.elem),
         syn::Type::Ptr(ptr) => is_raw_ffi_handle_type(&ptr.elem),
+        syn::Type::Array(array) => is_raw_ffi_handle_type(&array.elem),
+        syn::Type::Slice(slice) => is_raw_ffi_handle_type(&slice.elem),
+        syn::Type::Tuple(tuple) => tuple.elems.iter().any(is_raw_ffi_handle_type),
         syn::Type::Path(path) => path.path.segments.last().is_some_and(|seg| {
             RAW_FFI_HANDLE_TYPES
                 .iter()
@@ -2074,7 +2078,7 @@ fn class_guard_controls_detect_safe_ptr_deref_and_word_from_bits() {
     }
 
     // Rule (f): safe fns taking raw C FFI handle types (by value, pointer,
-    // Option, NonNull, or ref) must be caught.
+    // Option, NonNull, ref, tuple, array, or slice) must be caught.
     for (label, fixture) in [
         (
             "safe pub fn taking ffi::TSNode",
@@ -2085,14 +2089,38 @@ fn class_guard_controls_detect_safe_ptr_deref_and_word_from_bits() {
             "fn node_on_clone<'tree>(tree: &'tree WalkClone, raw: tree_sitter::ffi::TSNode) {}",
         ),
         (
+            "safe fn taking *mut ffi::TSTree",
+            "fn bad(tree: *mut ffi::TSTree) {}",
+        ),
+        (
+            "safe fn taking *mut ffi::TSQueryCursor",
+            "fn bad(cursor: *mut ffi::TSQueryCursor) {}",
+        ),
+        (
             "safe fn taking *mut ffi::sqlite3_stmt",
             "fn bind_values(connection: &Connection, stmt: *mut ffi::sqlite3_stmt) {}",
+        ),
+        (
+            "safe fn taking *mut ffi::sqlite3_value",
+            "fn bad(v: *mut ffi::sqlite3_value) {}",
         ),
         (
             "safe fn taking Option<NonNull<ffi::TSQuery>>",
             "fn bad(q: Option<NonNull<ffi::TSQuery>>) {}",
         ),
         ("safe fn taking *mut sqlite3", "fn bad(db: *mut sqlite3) {}"),
+        (
+            "safe fn taking tuple containing ffi::TSNode",
+            "fn bad(n: (ffi::TSNode,)) {}",
+        ),
+        (
+            "safe fn taking array of ffi::TSNode",
+            "fn bad(n: [ffi::TSNode; 4]) {}",
+        ),
+        (
+            "safe fn taking slice of ffi::TSNode",
+            "fn bad(n: &[ffi::TSNode]) {}",
+        ),
     ] {
         let report = scan_class_guard_source("fixture.rs", fixture);
         assert!(
