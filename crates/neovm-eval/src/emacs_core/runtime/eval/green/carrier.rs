@@ -15,7 +15,6 @@
 //! This pool is Green-only. Parallel-era owners identify OS threads through
 //! `std::thread::ThreadId` for mutator confinement and are never pooled here.
 
-use super::super::world::Baton;
 use super::scheduler::{Control, ThreadKey, Wake};
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};

@@ -385,12 +385,6 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn new_green_owner(baton: &super::world::Baton) -> Context {
-        // The job prologue restored the World's carried state before this
-        // call (the carrier reset and `unstow_carried_state` run in
-        // `run_carrier_job`). This owner is about to run on this OS thread;
-        // reserve the dense SymId cache once instead of regrowing it from
-        // empty.
-        neovm_value::intern::prepare_thread_symbol_caches();
         let (seed, current, case_table) = {
             let runtime = baton.green_runtime();
             let bootstrap = &runtime
@@ -406,7 +400,47 @@ impl Context {
                     .and_then(|runtime| runtime.standard_case_table.get()),
             )
         };
-        let mut views = baton.owner_views(current);
+        let views = baton.owner_views(current);
+        Self::assemble_green_owner(views, seed, case_table)
+    }
+
+    /// A further owner of the World TURN belongs to, on this OS thread,
+    /// under either a `Solo(Baton)` or an active `Era` `WorldTurn`.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn new_green_owner_with_turn(turn: &super::world::TurnRight) -> Context {
+        let (seed, current, case_table) = {
+            let runtime = turn.green_runtime();
+            let bootstrap = &runtime
+                .as_ref()
+                .expect("a started Green runtime issued this turn right")
+                .bootstrap;
+            bootstrap.install_native_tables();
+            (
+                bootstrap.seed(),
+                bootstrap.current_buffer,
+                runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.standard_case_table.get()),
+            )
+        };
+        let views = turn.owner_views(current);
+        Self::assemble_green_owner(views, seed, case_table)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn assemble_green_owner(
+        mut views: super::world::ReadyWorld,
+        seed: super::construct::ExecutionSeed,
+        case_table: Option<neovm_value::value::Value>,
+    ) -> Context {
+        // The job prologue restored the World's carried state before this
+        // call (the carrier reset and `unstow_carried_state` run in
+        // `run_carrier_job`). This owner is about to run on this OS thread;
+        // reserve the dense SymId cache once instead of regrowing it from
+        // empty.
+        neovm_value::intern::prepare_thread_symbol_caches();
         views.tagged_heap.install_tagged_heap();
         let mut owner = Context::assemble(views, seed);
         owner.cached_standard_case_table = case_table;
@@ -620,7 +654,7 @@ impl Context {
     pub(crate) fn seat_green_main_for_test(&mut self, baton: super::world::Baton) {
         let control = self.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
         let receiver = control.register_main();
-        self.take_green_seat(ThreadKey::Main, control, receiver, baton);
+        self.take_green_seat(ThreadKey::Main, control, receiver, baton.into());
     }
 
     /// Carrier pool `(slot count, join-handle count)`.

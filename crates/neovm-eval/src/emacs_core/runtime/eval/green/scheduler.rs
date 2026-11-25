@@ -8,7 +8,7 @@
 //! A thread waiting for a mutex, a condition, another thread's end or a
 //! deadline is not ready until another thread makes it so.
 
-use super::super::world::Baton;
+use super::super::world::{Baton, EraWorldHandle, TurnRight};
 use super::host_service::{
     HostParkRegistration, HostRequestKey, HostRequester, RealWaitPermit, SettledHostCall,
 };
@@ -144,7 +144,7 @@ pub(crate) enum Handoff {
     /// lock that decided no owner could run; carrying it out of that critical
     /// section keeps a later transition from rewriting the evidence.
     NoRunnable {
-        baton: Baton,
+        baton: TurnRight,
         invariant: Result<(), SchedulerIndexInconsistency>,
     },
 }
@@ -223,29 +223,29 @@ pub(crate) fn skip_next_condition_index_removal_for_test() {
 #[derive(Debug)]
 #[must_use]
 pub(super) enum Wake {
-    Resume(Baton),
+    Resume(TurnRight),
     ServiceTurn {
         key: HostRequestKey,
-        baton: Baton,
+        baton: TurnRight,
     },
     /// Resume the exact published owner step, without a terminal or signal hop.
     OwnerStep {
         key: HostRequestKey,
-        baton: Baton,
+        baton: TurnRight,
     },
     /// Continue an admitted semantic operation; do not dispatch its actor again.
     ContinuationTurn {
         key: HostRequestKey,
-        baton: Baton,
+        baton: TurnRight,
     },
     /// Reenter the owned native driver without restoring main's Lisp owner.
     NativePump {
-        baton: Baton,
+        baton: TurnRight,
     },
 }
 
 impl Wake {
-    pub(crate) fn baton(&self) -> &Baton {
+    pub(crate) fn baton(&self) -> &TurnRight {
         match self {
             Self::Resume(baton)
             | Self::ServiceTurn { baton, .. }
@@ -388,14 +388,14 @@ pub(super) enum ServiceTransfer {
     Dispatched,
     /// Main is inside a native release. The requester keeps the Baton in a
     /// metadata-only queued wait until main's native acquire is announced.
-    Queued(Baton),
+    Queued(TurnRight),
 }
 
 #[derive(Debug)]
 #[must_use]
 pub(super) struct ServiceTransferRefusal {
     pub(super) reason: ServiceRefusal,
-    pub(super) baton: Baton,
+    pub(super) baton: TurnRight,
 }
 
 #[derive(Debug)]
@@ -407,7 +407,7 @@ pub(super) struct ServiceTransferRefusal {
 pub(super) struct ServiceReturnRefusal {
     pub(super) reason: ServiceRefusal,
     pub(super) slice: ReservedServiceSlice,
-    pub(super) baton: Baton,
+    pub(super) baton: TurnRight,
 }
 
 #[derive(Debug)]
@@ -428,7 +428,7 @@ pub(super) struct ServiceCancelRefusal {
 #[must_use]
 pub(super) enum NativeRelease {
     Transferred,
-    Idle(Baton),
+    Idle(TurnRight),
 }
 
 #[derive(Debug)]
@@ -446,8 +446,11 @@ pub(super) struct ServiceAcquireRefusal {
 #[must_use]
 pub(super) enum ServiceReturn {
     Sent,
-    ResumeMain(Baton),
-    ResumeOwnerStep { key: HostRequestKey, baton: Baton },
+    ResumeMain(TurnRight),
+    ResumeOwnerStep {
+        key: HostRequestKey,
+        baton: TurnRight,
+    },
 }
 
 /// Metadata prepared while the registry still owns its linear slice. It is
@@ -469,7 +472,10 @@ pub(super) struct IntermediateReturnPlan {
 #[must_use]
 pub(super) enum IntermediateReturn {
     Sent,
-    LocalMain { key: HostRequestKey, baton: Baton },
+    LocalMain {
+        key: HostRequestKey,
+        baton: TurnRight,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1128,6 +1134,82 @@ impl ReadyQueue {
     }
 }
 
+/// Why a Green `Control` refused to surrender `Solo(Baton)` or open a parallel
+/// era (L6.7b r1 §2, QD1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EraOpenError {
+    /// A Green thread still holds `TurnRight::Solo(Baton)` (QD1).
+    SoloBatonHeld,
+    /// `Solo(Baton)` was already surrendered for an era admission.
+    AlreadySurrendered,
+    /// A parallel era is already open on this `Control`.
+    AlreadyOpen,
+    /// The Green runtime is closing.
+    Closing,
+}
+
+/// Why closing a parallel era on `Control` was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EraCloseError {
+    /// No parallel era is currently open on this `Control`.
+    NotOpen,
+}
+
+/// Typed QD1 check failure when a `Wake` carries the wrong `TurnRight` variant
+/// for the scheduler's current era state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WakeAuthorityError {
+    /// An era is open; every era-time wake must carry `TurnRight::Era` (QD1).
+    SoloWakeInOpenEra,
+    /// No era is open; every non-era wake must carry `TurnRight::Solo`.
+    EraWakeOutsideEra,
+    /// `Solo(Baton)` was surrendered for era admission and no era is open yet.
+    SoloSurrendered,
+}
+
+/// Baton-group turn state inside an open parallel era (L6.7b r1 §3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "L6.7b b4.3 Slice 2 drives Requested/Holding transitions"
+    )
+)]
+pub(crate) enum GroupTurn {
+    Idle,
+    Requested,
+    Holding,
+}
+
+/// Era state attached to `ControlState` while a parallel era is open.
+#[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "L6.7b b4.3 Slice 2 reads world and turn at switch points"
+    )
+)]
+pub(crate) struct EraLink {
+    world: EraWorldHandle,
+    turn: GroupTurn,
+}
+
+/// Which turn authority governs Green switch points (L6.7b r1 §2, QD1).
+#[derive(Debug, Default)]
+enum EraState {
+    /// Outside an era: Green holds `TurnRight::Solo(Baton)`.
+    #[default]
+    SoloActive,
+    /// `TurnRight::Solo(Baton)` has been linearly surrendered out of Green so
+    /// the keeper can escrow the `Baton` in a parallel era.
+    SoloSurrendered,
+    /// A parallel era is open; every Green turn and wake must carry
+    /// `TurnRight::Era` (QD1).
+    EraOpen(EraLink),
+}
+
 #[derive(Default)]
 struct ControlState {
     // There is only one Baton in the World, so a sender holding it proves
@@ -1137,6 +1219,7 @@ struct ControlState {
     waits: WaitMap,
     ready: ReadyQueue,
     closing: bool,
+    era: EraState,
     physical: BTreeMap<ThreadKey, OwnerLocation>,
     services: BTreeMap<HostRequestKey, ServiceMetadata>,
     pending_services: VecDeque<HostRequestKey>,
@@ -1461,7 +1544,7 @@ impl Control {
     pub(crate) fn transfer_local_service(
         &self,
         slice: &ReservedServiceSlice,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<Wake, ServiceTransferRefusal> {
         let result = Self::transfer_local_metadata(
             &mut self.state(),
@@ -1483,7 +1566,7 @@ impl Control {
     pub(crate) fn transfer_prepared_local_service(
         &self,
         plan: ServiceTransferPlan,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<Wake, ServiceTransferRefusal> {
         let result = Self::transfer_local_metadata(
             &mut self.state(),
@@ -1555,7 +1638,7 @@ impl Control {
     pub(crate) fn return_to_requester_intermediate(
         &self,
         slice: &ReservedServiceSlice,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<IntermediateReturn, ServiceTransferRefusal> {
         let plan = match self.prepare_intermediate_return(slice) {
             Ok(plan) => plan,
@@ -1596,7 +1679,7 @@ impl Control {
     pub(crate) fn return_prepared_intermediate(
         &self,
         plan: IntermediateReturnPlan,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<IntermediateReturn, ServiceTransferRefusal> {
         let mut state = self.state();
         let result = if state.main_os_thread != Some(std::thread::current().id()) {
@@ -1681,7 +1764,7 @@ impl Control {
     pub(crate) fn resume_owner_step(
         &self,
         slice: &ReservedServiceSlice,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<ServiceTransfer, ServiceTransferRefusal> {
         let plan = match self.prepare_owner_resume(slice) {
             Ok(plan) => plan,
@@ -1714,7 +1797,7 @@ impl Control {
     pub(crate) fn resume_prepared_owner_step(
         &self,
         plan: OwnerResumePlan,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<ServiceTransfer, ServiceTransferRefusal> {
         let mut state = self.state();
         if plan.requester == ThreadKey::Main {
@@ -1804,7 +1887,7 @@ impl Control {
     pub(crate) fn resume_local_owner_step(
         &self,
         slice: &ReservedServiceSlice,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<Wake, ServiceTransferRefusal> {
         let plan = match self.prepare_owner_resume(slice) {
             Ok(plan) => plan,
@@ -1816,7 +1899,7 @@ impl Control {
     pub(crate) fn resume_prepared_local_owner_step(
         &self,
         plan: OwnerResumePlan,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<Wake, ServiceTransferRefusal> {
         let mut state = self.state();
         if plan.requester != ThreadKey::Main
@@ -1849,7 +1932,7 @@ impl Control {
     pub(crate) fn return_from_local_service(
         &self,
         slice: ReservedServiceSlice,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<ServiceReturn, ServiceReturnRefusal> {
         let mut state = self.state();
         if slice.requester != ThreadKey::Main
@@ -1881,7 +1964,7 @@ impl Control {
     pub(crate) fn ended_service_owner(
         &self,
         slice: &ReservedServiceSlice,
-        baton: &Baton,
+        baton: &TurnRight,
     ) -> Result<EndedServiceOwner, ServiceRefusal> {
         let runtime = baton.green_runtime();
         if !baton.held_here()
@@ -1903,7 +1986,7 @@ impl Control {
     pub(crate) fn ended_service_owner_for_test(
         key: HostRequestKey,
         requester: ThreadKey,
-        baton: &Baton,
+        baton: &TurnRight,
     ) -> EndedServiceOwner {
         let runtime = baton.green_runtime();
         let control = &runtime.as_ref().unwrap().control;
@@ -1930,7 +2013,7 @@ impl Control {
         &self,
         slice: ReservedServiceSlice,
         settled: SettledHostCall,
-        baton: &Baton,
+        baton: &TurnRight,
     ) -> Result<(), ServiceCancelRefusal> {
         let mut state = self.state();
         let result = if !baton.held_here()
@@ -2000,7 +2083,7 @@ impl Control {
     pub(crate) fn transfer_to_service(
         &self,
         slice: &ReservedServiceSlice,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<ServiceTransfer, ServiceTransferRefusal> {
         let plan = match self.prepare_service_transfer(slice) {
             Ok(plan) => plan,
@@ -2032,7 +2115,7 @@ impl Control {
     pub(crate) fn transfer_prepared_service(
         &self,
         slice: ServiceTransferPlan,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<ServiceTransfer, ServiceTransferRefusal> {
         let mut state = self.state();
         let valid = state.services.get(&slice.key).is_some_and(|metadata| {
@@ -2109,7 +2192,10 @@ impl Control {
         dead_code,
         reason = "dormant service API; hosted activation remains refused"
     )]
-    pub(crate) fn take_queued_service(&self, baton: Baton) -> Result<Wake, ServiceTransferRefusal> {
+    pub(crate) fn take_queued_service(
+        &self,
+        baton: TurnRight,
+    ) -> Result<Wake, ServiceTransferRefusal> {
         let mut state = self.state();
         if state.main_os_thread != Some(std::thread::current().id()) {
             return Err(ServiceTransferRefusal {
@@ -2135,7 +2221,7 @@ impl Control {
     pub(crate) fn return_from_service(
         &self,
         slice: ReservedServiceSlice,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<ServiceReturn, ServiceReturnRefusal> {
         let mut state = self.state();
         let reason = if state.main_os_thread != Some(std::thread::current().id()) {
@@ -2245,7 +2331,7 @@ impl Control {
         &self,
         slice: &ReservedServiceSlice,
         _permit: RealWaitPermit,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<NativeRelease, ServiceTransferRefusal> {
         let mut state = self.state();
         let valid = state.main_os_thread == Some(std::thread::current().id())
@@ -2291,7 +2377,7 @@ impl Control {
         slice: &ReservedServiceSlice,
         release: NativeRelease,
         receiver: &mpsc::Receiver<Wake>,
-    ) -> Result<Baton, ServiceAcquireRefusal> {
+    ) -> Result<TurnRight, ServiceAcquireRefusal> {
         let mut state = self.state();
         if state.main_os_thread != Some(std::thread::current().id())
             || !state.services.get(&slice.key).is_some_and(|metadata| {
@@ -2356,8 +2442,8 @@ impl Control {
     pub(crate) fn defer_native_service(
         &self,
         slice: &ReservedServiceSlice,
-        baton: Baton,
-    ) -> Result<Baton, ServiceTransferRefusal> {
+        baton: TurnRight,
+    ) -> Result<TurnRight, ServiceTransferRefusal> {
         let mut state = self.state();
         let result = if state.main_os_thread != Some(std::thread::current().id()) {
             Err(ServiceRefusal::WrongMainThread)
@@ -2405,8 +2491,8 @@ impl Control {
     pub(crate) fn enter_native_completion(
         &self,
         slice: &ReservedServiceSlice,
-        baton: Baton,
-    ) -> Result<Baton, ServiceTransferRefusal> {
+        baton: TurnRight,
+    ) -> Result<TurnRight, ServiceTransferRefusal> {
         let mut state = self.state();
         let result = if state.main_os_thread != Some(std::thread::current().id()) {
             Err(ServiceRefusal::WrongMainThread)
@@ -2454,7 +2540,7 @@ impl Control {
     pub(crate) fn release_native_pump(
         &self,
         _permit: RealWaitPermit,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<NativeRelease, ServiceTransferRefusal> {
         let mut state = self.state();
         let reason = if state.main_os_thread != Some(std::thread::current().id()) {
@@ -2552,7 +2638,7 @@ impl Control {
     /// PendingNative call cannot admit main's unrelated Lisp continuation.
     pub(crate) fn choose_native_pump_turn(
         &self,
-        baton: Baton,
+        baton: TurnRight,
         purpose: NativePumpPurpose,
     ) -> Result<Wake, ServiceTransferRefusal> {
         let mut state = self.state();
@@ -2652,7 +2738,7 @@ impl Control {
     pub(crate) fn wait_queued_prepared(
         &self,
         slice: ServiceTransferPlan,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<ServiceTransfer, ServiceTransferRefusal> {
         let mut state = self.state();
         loop {
@@ -2690,7 +2776,7 @@ impl Control {
     pub(crate) fn wait_queued_service(
         &self,
         slice: &ReservedServiceSlice,
-        baton: Baton,
+        baton: TurnRight,
     ) -> Result<ServiceTransfer, ServiceTransferRefusal> {
         let plan = match self.prepare_service_transfer(slice) {
             Ok(plan) => plan,
@@ -2754,7 +2840,7 @@ impl Control {
     pub(crate) fn release_main_wait(
         &self,
         _permit: RealWaitPermit,
-        baton: Baton,
+        baton: TurnRight,
         wait_end: Instant,
     ) -> NativeRelease {
         let mut state = self.state();
@@ -2864,7 +2950,7 @@ impl Control {
         &self,
         slice: ReservedServiceSlice,
         settled: SettledHostCall,
-        _baton: &Baton,
+        _baton: &TurnRight,
     ) -> Result<(), ServiceCancelRefusal> {
         self.cancel_service(slice, settled, CancelPlacement::CurrentBatonOwner)
     }
@@ -3580,7 +3666,7 @@ impl Control {
             && Self::queued_native_work(state) == NativeWork::Ready
     }
 
-    pub(crate) fn native_wake(turn: NativeTurn, baton: Baton) -> Wake {
+    pub(crate) fn native_wake(turn: NativeTurn, baton: TurnRight) -> Wake {
         match turn {
             NativeTurn::Service(key) => Wake::ServiceTurn { key, baton },
             NativeTurn::Continuation(key) => Wake::ContinuationTurn { key, baton },
@@ -3588,7 +3674,7 @@ impl Control {
         }
     }
 
-    pub(crate) fn wake_for(next: NextOwner, baton: Baton) -> (ThreadKey, Wake) {
+    pub(crate) fn wake_for(next: NextOwner, baton: TurnRight) -> (ThreadKey, Wake) {
         match next {
             NextOwner::Resume(key) => (key, Wake::Resume(baton)),
             NextOwner::Native(turn) => (ThreadKey::Main, Self::native_wake(turn, baton)),
@@ -3659,15 +3745,173 @@ impl Control {
         }
     }
 
-    pub(crate) fn send_wake(&self, target: ThreadKey, wake: Wake) {
-        let sender = self.state().senders.get(&target).cloned();
+    /// Linearly surrender Green's unique `TurnRight::Solo(Baton)` so the caller
+    /// can escrow the `Baton` in a parallel era (QD1). Refused if the runtime
+    /// is closing, an era is already open, or `Solo` was already surrendered.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "L6.7b b4.3 Slice 2 era admission is the caller")
+    )]
+    pub(crate) fn surrender_solo_for_era(
+        &self,
+        right: TurnRight,
+    ) -> Result<Baton, (TurnRight, EraOpenError)> {
+        let mut state = self.state();
+        if state.closing {
+            return Err((right, EraOpenError::Closing));
+        }
+        match state.era {
+            EraState::SoloActive => {}
+            EraState::SoloSurrendered => return Err((right, EraOpenError::AlreadySurrendered)),
+            EraState::EraOpen(_) => return Err((right, EraOpenError::AlreadyOpen)),
+        }
+        let baton = match right.into_solo() {
+            Ok(baton) => baton,
+            Err(right) => return Err((right, EraOpenError::AlreadyOpen)),
+        };
+        state.era = EraState::SoloSurrendered;
+        Ok(baton)
+    }
+
+    /// Restore a previously surrendered `Baton` back into Green if era
+    /// admission fails before [`Control::open_era`].
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "L6.7b b4.3 Slice 2 era admission rollback is the caller"
+        )
+    )]
+    pub(crate) fn restore_surrendered_solo(&self, baton: Baton) -> Result<TurnRight, Baton> {
+        let mut state = self.state();
+        if !matches!(state.era, EraState::SoloSurrendered) {
+            return Err(baton);
+        }
+        state.era = EraState::SoloActive;
+        Ok(TurnRight::Solo(baton))
+    }
+
+    /// Open a parallel era on this `Control` (QD1 guard).
+    ///
+    /// Refused with [`EraOpenError::SoloBatonHeld`] if Green has not linearly
+    /// surrendered its unique `TurnRight::Solo(Baton)` via
+    /// [`Control::surrender_solo_for_era`].
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "L6.7b b4.3 Slice 2 era admission is the caller")
+    )]
+    pub(crate) fn open_era(
+        &self,
+        world: EraWorldHandle,
+    ) -> Result<(), (EraWorldHandle, EraOpenError)> {
+        let mut state = self.state();
+        if state.closing {
+            return Err((world, EraOpenError::Closing));
+        }
+        match state.era {
+            EraState::SoloActive => return Err((world, EraOpenError::SoloBatonHeld)),
+            EraState::EraOpen(_) => return Err((world, EraOpenError::AlreadyOpen)),
+            EraState::SoloSurrendered => {}
+        }
+        state.era = EraState::EraOpen(EraLink {
+            world,
+            turn: GroupTurn::Idle,
+        });
+        Ok(())
+    }
+
+    /// Close the active parallel era, restoring the keeper's escrowed `Baton`
+    /// back into Green as `TurnRight::Solo(Baton)`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "L6.7b b4.3 Slice 2 era teardown is the caller")
+    )]
+    pub(crate) fn close_era(
+        &self,
+        baton: Baton,
+    ) -> Result<(TurnRight, EraWorldHandle), (Baton, EraCloseError)> {
+        let mut state = self.state();
+        if !matches!(state.era, EraState::EraOpen(_)) {
+            return Err((baton, EraCloseError::NotOpen));
+        }
+        let EraState::EraOpen(link) = std::mem::replace(&mut state.era, EraState::SoloActive)
+        else {
+            unreachable!("checked EraOpen above");
+        };
+        Ok((TurnRight::Solo(baton), link.world))
+    }
+
+    /// QD1 typed check: validate that `right` matches the scheduler's current
+    /// era state (`EraOpen` requires `TurnRight::Era`; `SoloActive` requires
+    /// `TurnRight::Solo`).
+    fn check_turn_authority(
+        state: &ControlState,
+        right: &TurnRight,
+    ) -> Result<(), WakeAuthorityError> {
+        match (&state.era, right.is_solo()) {
+            (EraState::SoloActive, true) | (EraState::EraOpen(_), false) => Ok(()),
+            (EraState::EraOpen(_), true) => Err(WakeAuthorityError::SoloWakeInOpenEra),
+            (EraState::SoloActive, false) => Err(WakeAuthorityError::EraWakeOutsideEra),
+            (EraState::SoloSurrendered, _) => Err(WakeAuthorityError::SoloSurrendered),
+        }
+    }
+
+    /// Debug-only QD1 guard for turn entry and seat restoration. Compiles to
+    /// nothing in release builds so the Baton-only hot path adds zero loads.
+    #[inline]
+    pub(crate) fn debug_assert_turn_authority(&self, right: &TurnRight) {
+        #[cfg(debug_assertions)]
+        {
+            let state = self.state();
+            let check = Self::check_turn_authority(&state, right);
+            debug_assert!(
+                check.is_ok(),
+                "QD1 violation: Green thread holds wrong TurnRight authority for era state: {check:?}"
+            );
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = right;
+    }
+
+    /// Validate `wake` against the current era state (QD1) and send it to
+    /// `target`. Returns `Err((wake, error))` without sending if the `Wake`
+    /// carries the wrong `TurnRight` variant (e.g. `TurnRight::Solo` while an
+    /// era is open).
+    pub(crate) fn try_send_wake(
+        &self,
+        target: ThreadKey,
+        wake: Wake,
+    ) -> Result<(), (Wake, WakeAuthorityError)> {
+        let sender = {
+            let state = self.state();
+            if let Err(error) = Self::check_turn_authority(&state, wake.baton()) {
+                return Err((wake, error));
+            }
+            state.senders.get(&target).cloned()
+        };
         let Some(sender) = sender else {
             std::process::abort()
         };
-        // There is exactly one Baton. A closed receiver or occupied slot is
-        // an ownership failure, never a Lisp-level request failure.
+        // There is exactly one active TurnRight. A closed receiver or occupied
+        // slot is an ownership failure, never a Lisp-level request failure.
         if sender.try_send(wake).is_err() {
             std::process::abort()
+        }
+        Ok(())
+    }
+
+    pub(crate) fn send_wake(&self, target: ThreadKey, wake: Wake) {
+        if let Err((_wake, error)) = self.try_send_wake(target, wake) {
+            debug_assert!(
+                false,
+                "QD1 violation: send_wake received wrong TurnRight authority: {error:?}"
+            );
+            tracing::error!(
+                ?target,
+                ?error,
+                "QD1 violation: send_wake received wrong TurnRight authority"
+            );
+            std::process::abort();
         }
     }
 
@@ -3913,7 +4157,7 @@ impl Control {
         &self,
         me: ThreadKey,
         wait: Wait,
-        baton: Baton,
+        baton: TurnRight,
         receiver: &mpsc::Receiver<Wake>,
     ) -> Result<Wake, Handoff> {
         if matches!(wait, Wait::HostRequest(_)) {
@@ -4038,7 +4282,7 @@ mod tests {
 
         let mut owner =
             Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-        let baton = owner.start_green_runtime().unwrap();
+        let baton = TurnRight::from(owner.start_green_runtime().unwrap());
         let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
         let requester = ThreadKey::Worker(NonZeroU64::MIN);
         let key = host_key();
@@ -4087,7 +4331,7 @@ mod tests {
 
         let mut owner =
             Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-        let baton = owner.start_green_runtime().unwrap();
+        let baton = TurnRight::from(owner.start_green_runtime().unwrap());
         let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
         let requester = ThreadKey::Worker(NonZeroU64::MIN);
         let other = ThreadKey::Worker(NonZeroU64::new(2).unwrap());
@@ -4206,7 +4450,7 @@ mod tests {
 
         let mut owner =
             Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-        let baton = owner.start_green_runtime().unwrap();
+        let baton = TurnRight::from(owner.start_green_runtime().unwrap());
         let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
         let requester = ThreadKey::Worker(NonZeroU64::MIN);
         let key = host_key();
@@ -4240,7 +4484,7 @@ mod tests {
 
         let mut owner =
             Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-        let baton = owner.start_green_runtime().unwrap();
+        let baton = TurnRight::from(owner.start_green_runtime().unwrap());
         let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
         let foreign = Control::default();
         let requester = ThreadKey::Worker(NonZeroU64::MIN);
@@ -5616,5 +5860,198 @@ mod tests {
             control.state().ready.is_empty(),
             "pop_ready dropped the retired worker's stale turn"
         );
+    }
+
+    #[test]
+    fn turn_right_era_accepts_matching_heap_and_rejects_foreign_heap() {
+        use crate::emacs_core::eval::parallel_entry::keeper_driver::{KeeperMsg, WorldLend};
+        use crate::emacs_core::eval::parallel_entry::world_turn::{
+            WorldReturned, WorldTurn, WorldTurnIdentity,
+        };
+        use crate::emacs_core::eval::{Context, ThreadingMode};
+
+        let foreign_heap = {
+            let other = Context::new_with_threading(
+                ThreadingMode::Green,
+                crate::test_utils::unit_runtime(),
+            );
+            other.tagged_heap.heap_identity()
+        };
+        let mut owner =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+        let baton = owner.start_green_runtime().unwrap();
+        let expected_heap = baton.parallel_heap_identity();
+        let world_handle = baton.era_world_handle().unwrap();
+        assert_ne!(expected_heap, foreign_heap);
+
+        let (tx, rx) = mpsc::channel();
+        let foreign_turn = WorldTurn::cut_for_test(WorldTurnIdentity {
+            heap: foreign_heap,
+            epoch: NonZeroU64::MIN,
+        });
+        let foreign_lend = WorldLend::for_test(tx.clone());
+        let (returned_turn, returned_lend, world_handle) =
+            TurnRight::from_era(foreign_turn, foreign_lend, world_handle)
+                .expect_err("A-3: foreign heap WorldTurn must be refused");
+        // Disarm the returned lend cleanly (no GroupAbandon sent).
+        returned_lend.give_back(WorldReturned::from_end(returned_turn));
+        assert!(matches!(rx.try_recv(), Ok(KeeperMsg::WorldReturn { .. })));
+
+        let matching_turn = WorldTurn::cut_for_test(WorldTurnIdentity {
+            heap: expected_heap,
+            epoch: NonZeroU64::MIN,
+        });
+        let matching_lend = WorldLend::for_test(tx);
+        let right = TurnRight::from_era(matching_turn, matching_lend, world_handle)
+            .expect("matching heap constructs TurnRight::Era");
+        assert!(right.is_era());
+        assert!(!right.is_solo());
+        right.enter();
+        assert!(right.held_here());
+        assert_eq!(right.parallel_heap_identity(), expected_heap);
+        assert!(right.green_runtime().is_some());
+
+        let (turn, lend, _world_handle) = right
+            .into_era()
+            .expect("TurnRight::Era decomposes into parts")
+            .into_parts();
+        lend.give_back(WorldReturned::from_end(turn));
+        assert!(matches!(rx.try_recv(), Ok(KeeperMsg::WorldReturn { .. })));
+    }
+
+    #[test]
+    fn qd1_opening_era_while_green_holds_solo_is_refused() {
+        use crate::emacs_core::eval::{Context, ThreadingMode};
+
+        let mut owner =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+        let baton = owner.start_green_runtime().unwrap();
+        let world_handle = baton.era_world_handle().unwrap();
+        let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
+        let _main_rx = control.register_main();
+
+        // Main still holds TurnRight::Solo(baton): opening an era must be refused.
+        let (world_handle, err) = control
+            .open_era(world_handle)
+            .expect_err("QD1: opening an era while Green holds Solo must be refused");
+        assert_eq!(err, EraOpenError::SoloBatonHeld);
+
+        // Linearly surrender Solo(baton) out of Green, then opening an era succeeds.
+        let escrowed_baton = control
+            .surrender_solo_for_era(TurnRight::Solo(baton))
+            .expect("surrender Solo(Baton) before opening era");
+        let second_handle = escrowed_baton.era_world_handle().unwrap();
+        control
+            .open_era(world_handle)
+            .expect("opening era after surrendering Solo succeeds");
+
+        // Opening a second era while one is open is refused.
+        let (_second_handle, err) = control
+            .open_era(second_handle)
+            .expect_err("opening a second era must be refused");
+        assert_eq!(err, EraOpenError::AlreadyOpen);
+
+        // Closing the era restores Solo(baton) and re-arms the SoloBatonHeld guard.
+        let (restored, returned_handle) = control
+            .close_era(escrowed_baton)
+            .expect("closing open era restores Solo(Baton)");
+        assert!(restored.is_solo());
+        let (_returned_handle, err) = control
+            .open_era(returned_handle)
+            .expect_err("QD1: after closing era, Solo is held again so open_era refuses");
+        assert_eq!(err, EraOpenError::SoloBatonHeld);
+    }
+
+    #[test]
+    fn qd1_era_time_wake_carrying_solo_fails_typed_check() {
+        use crate::emacs_core::eval::parallel_entry::keeper_driver::WorldLend;
+        use crate::emacs_core::eval::parallel_entry::world_turn::{
+            WorldReturned, WorldTurn, WorldTurnIdentity,
+        };
+        use crate::emacs_core::eval::{Context, ThreadingMode};
+
+        let mut owner =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+        let baton = owner.start_green_runtime().unwrap();
+        let heap = baton.parallel_heap_identity();
+        let world_handle = baton.era_world_handle().unwrap();
+        let era_turn_handle = baton.era_world_handle().unwrap();
+        let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
+        let main_rx = control.register_main();
+
+        let (tx, _rx) = mpsc::channel();
+        let make_era_right = |handle| {
+            let turn = WorldTurn::cut_for_test(WorldTurnIdentity {
+                heap,
+                epoch: NonZeroU64::MIN,
+            });
+            TurnRight::from_era(turn, WorldLend::for_test(tx.clone()), handle).unwrap()
+        };
+
+        // Outside an era (SoloActive), an Era wake fails the typed check.
+        let era_right = make_era_right(era_turn_handle);
+        let (rejected_era_wake, err) = control
+            .try_send_wake(ThreadKey::Main, Wake::Resume(era_right))
+            .expect_err("Era wake outside an open era must fail typed check");
+        assert_eq!(err, WakeAuthorityError::EraWakeOutsideEra);
+        assert!(matches!(main_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        let Wake::Resume(era_right) = rejected_era_wake else {
+            panic!("expected returned Wake::Resume");
+        };
+
+        // Surrender Solo and open the era.
+        let escrowed_baton = control
+            .surrender_solo_for_era(TurnRight::Solo(baton))
+            .expect("surrender Solo");
+        control.open_era(world_handle).expect("open era");
+
+        // QD1: an era-time wake that would produce Solo fails the typed check
+        // and does not enqueue anything on the receiver.
+        let (rejected_solo_wake, err) = control
+            .try_send_wake(
+                ThreadKey::Main,
+                Wake::Resume(TurnRight::Solo(escrowed_baton)),
+            )
+            .expect_err("QD1: era-time Solo wake must fail typed check");
+        assert_eq!(err, WakeAuthorityError::SoloWakeInOpenEra);
+        assert!(matches!(main_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        let Wake::Resume(solo_right) = rejected_solo_wake else {
+            panic!("expected returned Wake::Resume");
+        };
+        let escrowed_baton = solo_right.into_solo().expect("returned Solo Baton");
+
+        // An era-time wake carrying TurnRight::Era succeeds and arrives intact.
+        control
+            .try_send_wake(ThreadKey::Main, Wake::Resume(era_right))
+            .expect("era-time Era wake succeeds");
+        let Wake::Resume(received) = main_rx.try_recv().expect("Era wake delivered") else {
+            panic!("expected delivered Wake::Resume");
+        };
+        assert!(received.is_era());
+        let (turn, lend, _world_handle) = received.into_era().unwrap().into_parts();
+        lend.give_back(WorldReturned::from_end(turn));
+
+        let (_restored, _handle) = control.close_era(escrowed_baton).expect("close era");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "QD1 violation")]
+    fn qd1_debug_assert_catches_solo_authority_in_open_era() {
+        use crate::emacs_core::eval::{Context, ThreadingMode};
+
+        let mut owner =
+            Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+        let baton = owner.start_green_runtime().unwrap();
+        let world_handle = baton.era_world_handle().unwrap();
+        let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
+        let escrowed_baton = control
+            .surrender_solo_for_era(TurnRight::Solo(baton))
+            .expect("surrender Solo");
+        control.open_era(world_handle).expect("open era");
+
+        // Presenting TurnRight::Solo while an era is open trips the QD1 debug assert.
+        let bogus_solo = TurnRight::Solo(escrowed_baton);
+        control.debug_assert_turn_authority(&bogus_solo);
     }
 }

@@ -4,7 +4,7 @@
 //! owned native interests, block through the single lower executor, then drive
 //! owned observations. A control wake never identifies a completed request.
 
-use super::super::super::world::Baton;
+use super::super::super::world::TurnRight;
 use super::super::scheduler::{
     Control, EndedServiceOwner, IntermediateReturn, NativePumpPurpose, NativeRelease, NativeWork,
     Peers, ReservedServiceSlice, ServiceReturn, ThreadKey, Wake,
@@ -368,7 +368,7 @@ impl MainNativePump {
         }
     }
 
-    pub(crate) fn close_admission(&mut self, baton: &Baton) {
+    pub(crate) fn close_admission(&mut self, baton: &TurnRight) {
         if self.lifecycle == PumpLifecycle::CloseRequested {
             let runtime = baton.green_runtime();
             let Some(runtime) = runtime.as_ref() else {
@@ -425,7 +425,7 @@ impl MainNativePump {
     pub(crate) fn serve(
         &mut self,
         key: HostRequestKey,
-        baton: Baton,
+        baton: TurnRight,
         control: &Control,
         receiver: &Receiver<Wake>,
         host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
@@ -436,7 +436,7 @@ impl MainNativePump {
     #[doc(hidden)]
     pub fn drive(
         &mut self,
-        baton: Baton,
+        baton: TurnRight,
         control: &Control,
         receiver: &Receiver<Wake>,
         host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
@@ -447,7 +447,7 @@ impl MainNativePump {
     pub(crate) fn continue_owner_step(
         &mut self,
         parent: HostRequestKey,
-        baton: Baton,
+        baton: TurnRight,
         control: &Control,
         receiver: &Receiver<Wake>,
         host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
@@ -557,7 +557,7 @@ impl MainNativePump {
 
     pub(crate) fn take_ended_owner_step(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         control: &Control,
     ) -> Option<(OwnerContinuation, EndedServiceOwner)> {
         let runtime = baton.green_runtime();
@@ -585,13 +585,13 @@ impl MainNativePump {
     /// physical continuation. It cannot enter the live-owner service transitions.
     pub(crate) fn advance_ended(
         &mut self,
-        baton: Baton,
+        baton: TurnRight,
         slice: ReservedServiceSlice,
         ticket: DispatchTicket,
         ended: EndedServiceOwner,
         step: NativeAdapterStep,
         control: &Control,
-    ) -> Baton {
+    ) -> TurnRight {
         match step {
             NativeAdapterStep::Complete(outcome) => {
                 complete_ended_native_turn(baton, slice, ticket, ended, outcome, control)
@@ -806,7 +806,7 @@ impl MainNativePump {
         }
     }
 
-    pub(crate) fn observe_controls(&mut self, baton: &Baton) {
+    pub(crate) fn observe_controls(&mut self, baton: &TurnRight) {
         let observations = {
             let runtime = baton.green_runtime();
             let Some(runtime) = runtime.as_ref() else {
@@ -902,13 +902,13 @@ enum PumpLifecycle {
 enum DriverTurn {
     Start {
         key: HostRequestKey,
-        baton: Baton,
+        baton: TurnRight,
     },
     Continue {
         parent: HostRequestKey,
-        baton: Baton,
+        baton: TurnRight,
     },
-    Drive(Baton),
+    Drive(TurnRight),
 }
 
 enum PendingOrigin {
@@ -918,11 +918,11 @@ enum PendingOrigin {
 
 enum PumpProgress {
     Returned(ServiceReturn),
-    Driving(Baton),
+    Driving(TurnRight),
 }
 
 enum PumpAuthority {
-    Held(Baton),
+    Held(TurnRight),
     Released(NativeRelease),
     Acquired(Wake),
     Transition,
@@ -1052,7 +1052,7 @@ impl OwnerReceive {
     pub fn continue_owner_step(
         &mut self,
         parent: HostRequestKey,
-        baton: Baton,
+        baton: TurnRight,
         control: &Control,
         host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
     ) -> ServiceReturn {
@@ -1068,7 +1068,7 @@ impl OwnerReceive {
     pub fn serve(
         &mut self,
         key: HostRequestKey,
-        baton: Baton,
+        baton: TurnRight,
         control: &Control,
         host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
     ) -> ServiceReturn {
@@ -1083,7 +1083,7 @@ impl OwnerReceive {
     #[doc(hidden)]
     pub fn drive(
         &mut self,
-        baton: Baton,
+        baton: TurnRight,
         control: &Control,
         host: Option<&mut (dyn crate::emacs_core::eval::protocol::DisplayHost + 'static)>,
     ) -> ServiceReturn {

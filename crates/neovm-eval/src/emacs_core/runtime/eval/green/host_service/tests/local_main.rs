@@ -32,7 +32,7 @@ fn error(error: impl std::fmt::Display) -> neovm_value::error::Flow {
 
 fn with_hosts<R>(
     owner: &mut Context,
-    apply: impl FnOnce(&mut HostRegistry, &Baton, &TaggedHeap, ThreadKey) -> R,
+    apply: impl FnOnce(&mut HostRegistry, &TurnRight, &TaggedHeap, ThreadKey) -> R,
 ) -> R {
     let key = owner.green_key().unwrap();
     assert_eq!(key, ThreadKey::Main);

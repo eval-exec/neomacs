@@ -1,6 +1,6 @@
 //! Exit publication after the native completion registration was retired.
 
-use super::{Baton, Control, NextOwner, PickNext, ThreadKey, Wait};
+use super::{Control, NextOwner, PickNext, ThreadKey, TurnRight, Wait};
 
 impl Control {
     /// ME ended: hand the Baton to the next thread, wake its joiners, and
@@ -8,7 +8,11 @@ impl Control {
     /// closing: every waiting thread is woken (it signals) and gets the
     /// Baton in turn.
     #[doc(hidden)]
-    pub fn finish(&self, completion: crate::emacs_core::threads::RetiredCompletion, baton: Baton) {
+    pub fn finish(
+        &self,
+        completion: crate::emacs_core::threads::RetiredCompletion,
+        baton: TurnRight,
+    ) {
         let thread = completion.into_thread_id();
         if !baton.held_here() || thread.heap_identity() != baton.parallel_heap_identity() {
             std::process::abort();

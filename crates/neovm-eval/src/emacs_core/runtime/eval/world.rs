@@ -74,6 +74,8 @@ pub(crate) use green_owner::OwnedProofProjection;
 #[cfg(test)]
 pub(crate) use green_owner::TestBatonWorldHandle;
 #[allow(unused_imports)]
+pub(crate) use green_owner::{EraTurnRight, EraWorldHandle, TurnRight};
+#[allow(unused_imports)]
 pub(crate) use green_owner::{FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection};
 pub(crate) use slot::WorldSlot;
 pub(crate) use sole_owner::{

@@ -5,7 +5,7 @@
 //! collection run by another owner traces them there, and never reads the
 //! parked Context, which stays exclusively its own thread's.
 
-use super::super::world::Baton;
+use super::super::world::{Baton, TurnRight};
 use super::super::{Context, Flow, Value};
 use super::carrier::CarrierJob;
 use super::host_service::{
@@ -159,13 +159,13 @@ enum OwnerRestore {
 }
 
 struct RestoringTurn {
-    baton: Baton,
+    baton: TurnRight,
     disposition: OwnerRestore,
 }
 
 impl RestoringTurn {
     #[doc(hidden)]
-    pub fn ordinary(baton: Baton) -> Self {
+    pub fn ordinary(baton: TurnRight) -> Self {
         Self {
             baton,
             disposition: OwnerRestore::Ordinary,
@@ -174,7 +174,7 @@ impl RestoringTurn {
 
     /// Initial carrier entry and an ordinary native input wait cannot consume
     /// another invocation's intermediate owner continuation.
-    pub(crate) fn into_ordinary_baton(self) -> Baton {
+    pub(crate) fn into_ordinary_baton(self) -> TurnRight {
         match self.disposition {
             OwnerRestore::Ordinary => self.baton,
             OwnerRestore::Intermediate(_) => std::process::abort(),
@@ -184,7 +184,7 @@ impl RestoringTurn {
 
 /// Holds native/scheduler ownership only while main's Context is published.
 enum MainWaitAuthority {
-    Held(Baton),
+    Held(TurnRight),
     Released(NativeRelease),
     Transition,
 }
@@ -250,7 +250,7 @@ impl NativeWaitHandoff for MainNativeHandoff<'_> {
 }
 
 impl MainNativeHandoff<'_> {
-    pub(crate) fn into_baton(self) -> Baton {
+    pub(crate) fn into_baton(self) -> TurnRight {
         match self.authority {
             MainWaitAuthority::Held(baton) => baton,
             MainWaitAuthority::Released(_) | MainWaitAuthority::Transition => std::process::abort(),
@@ -290,7 +290,7 @@ pub struct GreenSeat {
     pub(super) control: Arc<Control>,
     receiver: Option<OwnerReceive>,
     /// The World's Baton, while this thread runs.
-    baton: Option<Baton>,
+    baton: Option<TurnRight>,
     /// A constant or native forwarder refused a rebind. Deliver this after
     /// condition-wait retakes its mutex. The owner slab traces a forwarded
     /// error's offending Lisp value, including while this owner is running.
@@ -309,13 +309,16 @@ pub struct GreenSeat {
 }
 
 impl GreenSeat {
-    pub(crate) fn take_owner_step_baton(&mut self) -> Result<Baton, host_service::HostRootError> {
+    pub(crate) fn take_owner_step_baton(
+        &mut self,
+    ) -> Result<TurnRight, host_service::HostRootError> {
         self.baton
             .take()
             .ok_or(host_service::HostRootError::BatonRequired)
     }
 
-    pub(crate) fn restore_owner_step_baton(&mut self, baton: Baton) {
+    pub(crate) fn restore_owner_step_baton(&mut self, baton: TurnRight) {
+        self.control.debug_assert_turn_authority(&baton);
         if self.baton.is_some() {
             tracing::error!("owner step attempted to duplicate its Green Baton");
             std::process::abort();
@@ -335,6 +338,10 @@ impl GreenSeat {
 // Wake envelopes change only the cold channel payload, never the owner slot.
 static_assertions::const_assert_eq!(
     std::mem::size_of::<mpsc::Receiver<Baton>>(),
+    std::mem::size_of::<mpsc::Receiver<Wake>>()
+);
+static_assertions::const_assert_eq!(
+    std::mem::size_of::<mpsc::Receiver<TurnRight>>(),
     std::mem::size_of::<mpsc::Receiver<Wake>>()
 );
 
@@ -394,8 +401,9 @@ impl Context {
         key: ThreadKey,
         control: Arc<Control>,
         receiver: mpsc::Receiver<Wake>,
-        baton: Baton,
+        baton: TurnRight,
     ) {
+        control.debug_assert_turn_authority(&baton);
         self.ensure_owner_slab()
             .install_green_seat(Box::new(GreenSeat {
                 key,
@@ -531,7 +539,7 @@ impl Context {
         &mut self,
         operation: impl FnOnce(
             &mut host_service::HostRegistry,
-            &Baton,
+            &TurnRight,
             &neovm_value::tagged::gc::TaggedHeap,
             ThreadKey,
         ) -> Result<R, host_service::HostRootError>,
@@ -1451,7 +1459,7 @@ impl Context {
     /// Keep ROOTS traced while KEY is parked.
     pub(crate) fn publish_parked_roots(
         &self,
-        baton: &Baton,
+        baton: &TurnRight,
         key: ThreadKey,
         publication: neovm_value::tagged::transport::RootBatchLease,
     ) {
@@ -1927,7 +1935,7 @@ impl Context {
         let control = self.with_green_runtime(|runtime| Arc::clone(&runtime.control));
         control.install_select(crate::emacs_core::eval::process_hooks::select_handle(self));
         let receiver = control.register_main();
-        self.take_green_seat(ThreadKey::Main, control, receiver, baton);
+        self.take_green_seat(ThreadKey::Main, control, receiver, baton.into());
         // A host attached before Green start marks the World hosted; seat
         // main's adapter now that the pump exists. Without a host this is a
         // no-op and every host request settles closed.
@@ -1960,10 +1968,12 @@ fn receive_owner_turn(
         wake = control.intercept_acquire(key, wake, receiver.as_channel());
         let result = match wake {
             Wake::Resume(baton) => {
+                control.debug_assert_turn_authority(&baton);
                 baton.enter();
                 return RestoringTurn::ordinary(baton);
             }
             Wake::OwnerStep { key: parent, baton } => {
+                control.debug_assert_turn_authority(&baton);
                 return restoring_owner_step(key, parent, baton);
             }
             Wake::ContinuationTurn { key: parent, baton } => {
@@ -2005,10 +2015,12 @@ fn receive_owner_turn(
             // Already qualified by the native scheduler. Re-intercepting would
             // steal a ready original main turn merely because A remains pending.
             ServiceReturn::ResumeMain(baton) => {
+                control.debug_assert_turn_authority(&baton);
                 baton.enter();
                 return RestoringTurn::ordinary(baton);
             }
             ServiceReturn::ResumeOwnerStep { key: parent, baton } => {
+                control.debug_assert_turn_authority(&baton);
                 return restoring_owner_step(key, parent, baton);
             }
             ServiceReturn::Sent => {
@@ -2024,7 +2036,11 @@ fn receive_owner_turn(
 /// An OwnerStep wake carries no execution authority. Resolve the durable
 /// expected step under the Baton; heap materialization happens only after the
 /// original owner's JIT/carried/binding restoration has completed.
-fn restoring_owner_step(owner: ThreadKey, parent: HostRequestKey, baton: Baton) -> RestoringTurn {
+fn restoring_owner_step(
+    owner: ThreadKey,
+    parent: HostRequestKey,
+    baton: TurnRight,
+) -> RestoringTurn {
     baton.enter();
     let step = {
         let runtime = baton.green_runtime();
@@ -2107,7 +2123,7 @@ pub(super) fn run_carrier_job(
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::green_owner::begin_owner_turn();
     unstow_carried_state(&baton);
-    let mut owner = Context::new_green_owner(&baton);
+    let mut owner = Context::new_green_owner_with_turn(&baton);
     unstow_owner_state(&mut owner, &baton);
     let completion_id = match owner.threads.get_thread(key.id()) {
         Some(thread) => thread.id(),
@@ -2237,7 +2253,7 @@ pub(super) fn run_carrier_job(
 
 /// The World's thread-local state leaves this OS thread with the Baton
 /// (`carried`).
-fn stow_carried_state(baton: &Baton) {
+fn stow_carried_state(baton: &TurnRight) {
     if let Some(runtime) = baton.green_runtime().as_ref() {
         runtime.carried.borrow_mut().stow();
         runtime.carried_holder.set(super::CarriedHolder::Stowed);
@@ -2245,7 +2261,7 @@ fn stow_carried_state(baton: &Baton) {
 }
 
 /// The World's thread-local state arrives on this OS thread with the Baton.
-fn unstow_carried_state(baton: &Baton) {
+fn unstow_carried_state(baton: &TurnRight) {
     if let Some(runtime) = baton.green_runtime().as_ref() {
         assert_eq!(
             runtime.carried_holder.get(),
@@ -2257,7 +2273,7 @@ fn unstow_carried_state(baton: &Baton) {
 }
 
 /// The warm GNU-global state leaves OWNER with the Baton (`owner_carried`).
-fn stow_owner_state(owner: &mut Context, baton: &Baton) {
+fn stow_owner_state(owner: &mut Context, baton: &TurnRight) {
     if let Some(runtime) = baton.green_runtime().as_ref() {
         let mut slot = runtime.owner_carried.borrow_mut();
         assert!(slot.is_none(), "the World's warm state is in two places");
@@ -2266,7 +2282,7 @@ fn stow_owner_state(owner: &mut Context, baton: &Baton) {
 }
 
 /// The warm GNU-global state arrives in OWNER with the Baton.
-fn unstow_owner_state(owner: &mut Context, baton: &Baton) {
+fn unstow_owner_state(owner: &mut Context, baton: &TurnRight) {
     let owner_slab = super::OwnerSlabId::from_slab(owner.ensure_owner_slab());
     let state = {
         let runtime = baton.green_runtime();

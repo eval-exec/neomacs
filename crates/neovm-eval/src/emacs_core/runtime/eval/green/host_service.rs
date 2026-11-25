@@ -6,7 +6,7 @@
 //! display host and executes a typed request. The other families and hosted
 //! admission remain later cuts (C4c).
 
-use super::super::world::{Baton, WorldLease};
+use super::super::world::{TurnRight, WorldLease};
 use super::scheduler::ThreadKey;
 pub(super) use crate::host_effect::contracts::HostRequestKey;
 use crate::host_effect::contracts::{
@@ -207,7 +207,7 @@ enum RecordOrigin {
 /// Its Context borrow prevents another park during acknowledgement.
 pub(super) struct RestoredHostOwner<'owner> {
     context: &'owner super::super::Context,
-    baton: &'owner Baton,
+    baton: &'owner TurnRight,
     owner: ThreadKey,
 }
 
@@ -222,7 +222,7 @@ impl std::fmt::Debug for RestoredHostOwner<'_> {
 impl<'owner> RestoredHostOwner<'owner> {
     pub(crate) fn after_restore(
         context: &'owner mut super::super::Context,
-        baton: &'owner Baton,
+        baton: &'owner TurnRight,
     ) -> Result<Self, HostRootError> {
         if !baton.held_here() {
             return Err(HostRootError::BatonRequired);
@@ -564,7 +564,7 @@ impl HostRegistry {
 
     /// Stop new admission while retaining already-published continuations.
     /// This is the cold close boundary; it grants no owner execution authority.
-    pub(crate) fn begin_closing(&mut self, baton: &Baton) -> Result<(), HostRootError> {
+    pub(crate) fn begin_closing(&mut self, baton: &TurnRight) -> Result<(), HostRootError> {
         if !baton.held_here() {
             return Err(HostRootError::BatonRequired);
         }
@@ -587,7 +587,10 @@ impl HostRegistry {
     /// Reflect the actor's FIFO close observation only after earlier individual
     /// cancellation observations have been recorded. Closing admission alone
     /// must not overtake an already enqueued requester intent.
-    pub(crate) fn observe_session_closing(&mut self, baton: &Baton) -> Result<(), HostRootError> {
+    pub(crate) fn observe_session_closing(
+        &mut self,
+        baton: &TurnRight,
+    ) -> Result<(), HostRootError> {
         self.begin_closing(baton)?;
         for record in self.records.values_mut() {
             match record.state {
@@ -635,7 +638,7 @@ impl HostRegistry {
     /// preflight. Dropping this handle retains the record for quiescent drain.
     pub(crate) fn abandon_prepared(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         owner: ThreadKey,
         call: PreparedHostCall,
@@ -662,7 +665,7 @@ impl HostRegistry {
     /// registry borrows. Never retire a lease directly from an active GC driver.
     pub(crate) fn retire_abandoned(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         owner: ThreadKey,
         abandoned: AbandonedHostCall,
@@ -705,7 +708,7 @@ impl HostRegistry {
     #[doc(hidden)]
     pub unsafe fn prepare(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         owner: ThreadKey,
         roots: &[TaggedValue],
@@ -763,7 +766,7 @@ impl HostRegistry {
     #[doc(hidden)]
     pub unsafe fn register<K: RegisteredRecord>(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         owner: ThreadKey,
         key: HostRequestKey,
@@ -785,7 +788,7 @@ impl HostRegistry {
     /// Same live original-owner roots and no-GC extent as `register`.
     pub(crate) unsafe fn register_record<K: RegisteredRecord>(
         &mut self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
         owner: ThreadKey,
         key: HostRequestKey,
@@ -844,7 +847,7 @@ impl HostRegistry {
 
     pub(crate) fn validate_access(
         &self,
-        baton: &Baton,
+        baton: &TurnRight,
         heap: &TaggedHeap,
     ) -> Result<(), HostRootError> {
         if !baton.held_here() {
@@ -1039,7 +1042,7 @@ impl HostRegistry {
 /// intervene between decoding a registered reply and closing its root reader.
 pub(super) fn finish_owner_reply<R>(
     context: &mut super::super::Context,
-    baton: &Baton,
+    baton: &TurnRight,
     resume: HostResume,
     consume: impl FnOnce(&RestoredHostOwner<'_>, &NativeSettlement) -> Result<R, super::super::Flow>,
 ) -> Result<R, super::super::Flow> {
