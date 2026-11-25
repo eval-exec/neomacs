@@ -1455,3 +1455,241 @@ fn treesit_callbacks_root_values_across_gc_in_sparse_tree_predicates_and_notifie
         "search-forward and/not predicate corrupted across GC: got {lisp_fwd:?}"
     );
 }
+
+#[test]
+fn treesit_language_remap_alist_is_buffer_local_and_validates_targets_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
+    let json_sym = Value::symbol("json")
+        .as_bare_symbol_id()
+        .expect("json symbol");
+    eval.treesit.cache_loaded_language(
+        json_sym,
+        runtime::LoadedLanguage::from_loaded_parts(
+            Language::new(tree_sitter_json::LANGUAGE),
+            None,
+            None,
+        ),
+    );
+
+    // GNU `src/treesit.c:5442`: `treesit-language-remap-alist` is buffer-local.
+    assert_eq!(
+        eval.eval_str("(local-variable-if-set-p 'treesit-language-remap-alist)")
+            .expect("local-variable-if-set-p"),
+        Value::T
+    );
+
+    // GNU `src/treesit.c:913`: `treesit-language-available-p` does not consult
+    // `treesit-language-remap-alist`.
+    let remap_dotted = Value::list(vec![Value::cons(
+        Value::symbol("alias-json"),
+        Value::symbol("json"),
+    )]);
+    eval.obarray
+        .set_symbol_value("treesit-language-remap-alist", remap_dotted);
+    assert_eq!(
+        builtin_treesit_language_available_p(&mut eval, vec![Value::symbol("alias-json")])
+            .expect("available-p"),
+        Value::NIL
+    );
+
+    // GNU `src/treesit.c:2387-2388` & `:2182-2189`: non-symbol remap targets.
+    let remap_bad = Value::list(vec![Value::cons(
+        Value::symbol("bad-lang"),
+        Value::fixnum(123),
+    )]);
+    eval.obarray
+        .set_symbol_value("treesit-language-remap-alist", remap_bad);
+    let parser_err = expect_signal(
+        builtin_treesit_parser_create(
+            &mut eval,
+            vec![Value::symbol("bad-lang"), Value::NIL, Value::T, Value::NIL],
+        ),
+        "wrong-type-argument",
+    );
+    assert_eq!(
+        parser_err.data,
+        vec![Value::symbol("symbolp"), Value::fixnum(123)]
+    );
+    let query_err = expect_signal(
+        builtin_treesit_query_compile(
+            &mut eval,
+            vec![
+                Value::symbol("bad-lang"),
+                Value::string("(string) @s"),
+                Value::T,
+            ],
+        ),
+        "treesit-query-error",
+    );
+    assert_eq!(
+        query_err.data,
+        vec![Value::string("Invalid language symbol"), Value::fixnum(123)]
+    );
+}
+
+#[test]
+fn treesit_query_capture_uncompiled_uses_parser_loaded_language_after_remap_cleared() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert(r#"{"k": 1}"#);
+    let json_sym = Value::symbol("json")
+        .as_bare_symbol_id()
+        .expect("json symbol");
+    eval.treesit.cache_loaded_language(
+        json_sym,
+        runtime::LoadedLanguage::from_loaded_parts(
+            Language::new(tree_sitter_json::LANGUAGE),
+            None,
+            None,
+        ),
+    );
+
+    // GNU `src/treesit.c:656-662, 2387-2428`: dotted-pair remap creates a
+    // parser whose Lisp-visible language stays unremapped (`alias-json`) while
+    // loading the remapped `TSLanguage` (`json`).
+    let remap_dotted = Value::list(vec![Value::cons(
+        Value::symbol("alias-json"),
+        Value::symbol("json"),
+    )]);
+    eval.obarray
+        .set_symbol_value("treesit-language-remap-alist", remap_dotted);
+    let parser = builtin_treesit_parser_create(
+        &mut eval,
+        vec![
+            Value::symbol("alias-json"),
+            Value::NIL,
+            Value::T,
+            Value::NIL,
+        ],
+    )
+    .expect("remapped parser creation");
+    assert_eq!(
+        builtin_treesit_parser_language(&mut eval, vec![parser]).expect("parser language"),
+        Value::symbol("alias-json")
+    );
+
+    // GNU `src/treesit.c:4063-4064, 3965-3988`: uncompiled query capture must
+    // compile against the parser's loaded `TSLanguage`, even after
+    // `treesit-language-remap-alist` is cleared to `nil`.
+    eval.obarray
+        .set_symbol_value("treesit-language-remap-alist", Value::NIL);
+    assert_eq!(
+        captured_texts(&mut eval, parser, Value::string("(string) @s")),
+        vec![r#""k""#.to_string()]
+    );
+}
+
+#[test]
+fn treesit_query_capture_compiled_matches_loaded_tslanguage_across_remap() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert(r#"{"k": 1}"#);
+    let json_sym = Value::symbol("json")
+        .as_bare_symbol_id()
+        .expect("json symbol");
+    eval.treesit.cache_loaded_language(
+        json_sym,
+        runtime::LoadedLanguage::from_loaded_parts(
+            Language::new(tree_sitter_json::LANGUAGE),
+            None,
+            None,
+        ),
+    );
+
+    let remap_dotted = Value::list(vec![Value::cons(
+        Value::symbol("alias-json"),
+        Value::symbol("json"),
+    )]);
+    eval.obarray
+        .set_symbol_value("treesit-language-remap-alist", remap_dotted);
+    let parser = builtin_treesit_parser_create(
+        &mut eval,
+        vec![
+            Value::symbol("alias-json"),
+            Value::NIL,
+            Value::T,
+            Value::NIL,
+        ],
+    )
+    .expect("remapped parser creation");
+
+    // Compiled query compiled for `'json` shares the loaded `TSLanguage` with
+    // the `'alias-json` parser and must succeed instead of failing on
+    // unremapped Lisp symbol inequality.
+    eval.obarray
+        .set_symbol_value("treesit-language-remap-alist", Value::NIL);
+    let compiled_json = builtin_treesit_query_compile(
+        &mut eval,
+        vec![
+            Value::symbol("json"),
+            Value::string("(string) @s"),
+            Value::T,
+        ],
+    )
+    .expect("compile json query");
+    assert_eq!(
+        captured_texts(&mut eval, parser, compiled_json),
+        vec![r#""k""#.to_string()]
+    );
+}
+
+#[test]
+fn treesit_language_remap_alist_circular_signals_circular_list_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
+    let parser_res = eval
+        .eval_str(
+            r#"(let ((c (list (cons 'a 'b))))
+                 (setcdr c c)
+                 (let ((treesit-language-remap-alist c))
+                   (condition-case e (treesit-parser-create 'z) (error (car e)))))"#,
+        )
+        .expect("circular remap parser-create");
+    assert_eq!(parser_res, Value::symbol("circular-list"));
+
+    let query_res = eval
+        .eval_str(
+            r#"(let ((c (list (cons 'a 'b))))
+                 (setcdr c c)
+                 (let ((treesit-language-remap-alist c))
+                   (condition-case e (treesit-query-compile 'z "(string) @s" t) (error (car e)))))"#,
+        )
+        .expect("circular remap query-compile");
+    assert_eq!(query_res, Value::symbol("circular-list"));
+}
+
+#[test]
+fn treesit_language_remap_alist_improper_signals_whole_alist_datum_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = super::super::eval::Context::new(crate::test_utils::unit_runtime());
+    let parser_res = eval
+        .eval_str(
+            r#"(let ((treesit-language-remap-alist '((a . b) . 42)))
+                 (condition-case e (treesit-parser-create 'c) (error (prin1-to-string e))))"#,
+        )
+        .expect("improper remap parser-create");
+    assert_eq!(
+        parser_res,
+        Value::string("(wrong-type-argument listp ((a . b) . 42))")
+    );
+
+    let query_res = eval
+        .eval_str(
+            r#"(let ((treesit-language-remap-alist '((a . b) . 42)))
+                 (condition-case e (treesit-query-compile 'c "(string) @s" t) (error (prin1-to-string e))))"#,
+        )
+        .expect("improper remap query-compile");
+    assert_eq!(
+        query_res,
+        Value::string("(wrong-type-argument listp ((a . b) . 42))")
+    );
+}

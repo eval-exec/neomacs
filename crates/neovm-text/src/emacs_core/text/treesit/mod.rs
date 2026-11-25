@@ -458,6 +458,7 @@ pub struct RawQueryMatch {
 #[doc(hidden)]
 pub struct EmacsQuery {
     raw: NonNull<ffi::TSQuery>,
+    language: Language,
     capture_names: Vec<String>,
     predicates: Vec<Vec<QueryPredicate>>,
 }
@@ -469,12 +470,18 @@ impl EmacsQuery {
             .expect("tree-sitter returned a null query without an error");
         let mut query = Self {
             raw,
+            language: language.clone(),
             capture_names: Vec::new(),
             predicates: Vec::new(),
         };
         query.capture_names = query.read_capture_names();
         query.predicates = query.read_predicates();
         Ok(query)
+    }
+
+    #[doc(hidden)]
+    pub fn language(&self) -> &Language {
+        &self.language
     }
 
     #[doc(hidden)]
@@ -490,8 +497,9 @@ impl EmacsQuery {
     /// Execute this compiled query against `node` within `byte_range`.
     ///
     /// # Safety
-    /// `node` must be a valid `TSNode` belonging to a live `TSTree` that
-    /// remains alive and unmutated for the duration of this call.
+    /// `node` must be a valid `TSNode` belonging to a live `TSTree` parsed with
+    /// `self.language()` that remains alive and unmutated for the duration of
+    /// this call.
     #[doc(hidden)]
     pub unsafe fn matches(
         &self,
@@ -1759,6 +1767,12 @@ impl ParserEntry {
     #[doc(hidden)]
     pub fn parser_mut(&mut self) -> &mut Parser {
         &mut self.parser
+    }
+
+    /// The `TSLanguage` loaded into this parser (`ts_parser_language`).
+    #[doc(hidden)]
+    pub fn language(&self) -> Option<tree_sitter::LanguageRef<'_>> {
+        self.parser.language()
     }
 }
 

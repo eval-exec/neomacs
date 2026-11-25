@@ -667,7 +667,6 @@ impl Context {
             "treesit-extra-load-path",
             "treesit-auto-install-grammar",
             "treesit-enabled-modes",
-            "treesit-language-remap-alist",
             "treesit-load-name-override-list",
             "treesit-languages-require-line-column-tracking",
             "treesit-major-mode-remap-alist",
@@ -678,6 +677,13 @@ impl Context {
         ] {
             obarray.seed_value(name, Value::NIL);
             obarray.make_special(name);
+        }
+        // GNU `src/treesit.c:5431-5442`: `treesit-language-remap-alist` is
+        // `DEFVAR_LISP` + `Fmake_variable_buffer_local`, default nil.
+        {
+            let id = neovm_value::intern::intern("treesit-language-remap-alist");
+            obarray.make_symbol_localized(id, Value::NIL);
+            obarray.set_blv_local_if_set(id, true);
         }
         // GNU `frame.c` initializes these global minor-mode variables in C:
         //   Vmenu_bar_mode = Qt
