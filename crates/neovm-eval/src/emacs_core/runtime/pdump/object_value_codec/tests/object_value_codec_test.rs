@@ -217,6 +217,17 @@ fn heap_object_codec_rejects_bad_tag() {
     assert!(matches!(err, DumpError::ImageFormatError(_)));
 }
 
+// P6: `Cursor::read_unaligned<T: bytemuck::AnyBitPattern>` rejects types with
+// invalid bit patterns (e.g. `bool`, `char`) at compile time while admitting
+// the integer and float primitives read by the codec.
+static_assertions::assert_not_impl_any!(bool: bytemuck::AnyBitPattern);
+static_assertions::assert_not_impl_any!(char: bytemuck::AnyBitPattern);
+static_assertions::assert_impl_all!(u16: bytemuck::AnyBitPattern);
+static_assertions::assert_impl_all!(u32: bytemuck::AnyBitPattern);
+static_assertions::assert_impl_all!(u64: bytemuck::AnyBitPattern);
+static_assertions::assert_impl_all!(i64: bytemuck::AnyBitPattern);
+static_assertions::assert_impl_all!(f64: bytemuck::AnyBitPattern);
+
 #[test]
 fn cursor_read_unaligned_reads_any_bit_pattern_primitives_from_unaligned_offsets() {
     let mut buf = vec![0xAAu8]; // shift every subsequent read to an unaligned offset

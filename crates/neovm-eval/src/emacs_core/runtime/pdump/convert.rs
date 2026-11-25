@@ -1612,8 +1612,8 @@ impl<'a> LoadDecoder<'a> {
     ///
     /// # Safety
     /// `value` must be a pre-publish pdump restore placeholder with no live
-    /// shared references: this replaces `(*ptr).data` without a GC write
-    /// barrier.
+    /// shared references: this clears `(*ptr).parsed_params` (`take()`) and
+    /// replaces `(*ptr).data` without a GC write barrier.
     #[doc(hidden)]
     pub unsafe fn install_mapped_closure_slots(value: Value, storage: LispValueVec) -> bool {
         match value.veclike_type() {
@@ -1715,8 +1715,10 @@ impl<'a> LoadDecoder<'a> {
         self.state.spans.slots(id.index as usize).is_some()
     }
 
-    #[doc(hidden)]
-    pub fn populate_from_mapped_heap_without_descriptor_clone(
+    /// Populate a pre-publish pdump placeholder directly from mapped heap
+    /// slots without cloning its descriptor. Only valid during restore before
+    /// the object is published to Lisp or GC.
+    pub(crate) fn populate_from_mapped_heap_without_descriptor_clone(
         &mut self,
         id: TaggedHeapRef,
         value: Value,
@@ -2414,8 +2416,9 @@ impl<'a> LoadDecoder<'a> {
         Ok(true)
     }
 
-    #[doc(hidden)]
-    pub fn populate_tagged_object(&mut self, id: TaggedHeapRef) -> Result<(), DumpError> {
+    /// Populate `id`'s pre-publish pdump restore placeholder once. Only valid
+    /// during load before placeholders are published to Lisp or GC.
+    pub(crate) fn populate_tagged_object(&mut self, id: TaggedHeapRef) -> Result<(), DumpError> {
         let index = id.index as usize;
         if self.state.is_populated(index) {
             return Ok(());

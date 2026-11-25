@@ -166,9 +166,32 @@ fn populate_bytecode_from_extras_rejects_mismatched_or_non_bytecode_value() {
 #[deny(unused_unsafe)]
 fn restore_slot_installers_require_unsafe() {
     crate::test_utils::init_test_tracing();
-    let vector = Value::make_vector(vec![Value::fixnum(1)]);
-    // SAFETY: test exercises the type-rejecting paths on a fresh vector with no
-    // concurrent readers; only the vector call mutates this local placeholder.
+    let mut runtime_heap = Box::new(neovm_value::tagged::gc::TaggedHeap::new());
+    neovm_value::tagged::gc::set_tagged_heap(&mut runtime_heap);
+
+    let heap = DumpTaggedHeap {
+        objects: vec![DumpHeapObject::Vector(vec![DumpValue::Int(1)])],
+        mapped_cons: Vec::new(),
+        mapped_floats: Vec::new(),
+        mapped_strings: Vec::new(),
+        mapped_veclikes: vec![Some(DumpVecLikeSpan {
+            offset: 0,
+            len: std::mem::size_of::<VectorObj>() as u64,
+        })],
+        mapped_slots: Vec::new(),
+    };
+    let mut backing = vec![0u128; std::mem::size_of::<VectorObj>().div_ceil(16)];
+    let bytes: &mut [u8] = bytemuck::cast_slice_mut(&mut backing);
+    // SAFETY: `backing` stays live for the duration of `decoder` and `vector`.
+    let mapped = unsafe { MappedHeapView::from_mut_slice(bytes) };
+    let mut decoder = LoadDecoder::new_with_mapped_heap(&heap, Some(mapped));
+    let vector = decoder
+        .allocate_tagged_placeholder(TaggedHeapRef { index: 0 })
+        .expect("fresh pre-publish vector placeholder");
+
+    // SAFETY: `vector` is a freshly allocated, pre-publish pdump placeholder
+    // owned exclusively by this restore step (no live shared references); the
+    // non-vector calls reject before any mutation.
     assert!(unsafe {
         LoadDecoder::install_mapped_vector_slots(
             vector,
