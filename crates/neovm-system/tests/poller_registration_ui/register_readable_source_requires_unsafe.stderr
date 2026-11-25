@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `neovm_system::emacs_core::process::SystemProcessExt::register_readable_source` is unsafe and requires unsafe block
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/register_readable_source_requires_unsafe.rs
+  |
+  |     let _ = ProcessManager::register_readable_source(poller, stream, 1);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

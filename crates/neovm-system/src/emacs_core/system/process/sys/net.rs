@@ -224,36 +224,20 @@ pub(crate) fn service_port(service: &str, protocol: &str) -> Option<u16> {
 
     let service = std::ffi::CString::new(service).ok()?;
     let protocol = std::ffi::CString::new(protocol).ok()?;
-    let mut entry: libc::servent = unsafe { std::mem::zeroed() };
-    let mut result: *mut libc::servent = std::ptr::null_mut();
-    let mut buf_len = 1024usize;
-    loop {
-        let mut buf = vec![0u8; buf_len];
-        // SAFETY: `service` and `protocol` are valid NUL-terminated C strings;
-        // `entry`, `buf` (with `buf_len` bytes), and `result` are valid
-        // writable out-parameters for `getservbyname_r`.
-        let rc = unsafe {
-            getservbyname_r(
-                service.as_ptr(),
-                protocol.as_ptr(),
-                &mut entry,
-                buf.as_mut_ptr().cast(),
-                buf_len,
-                &mut result,
-            )
-        };
-        if rc == 0 {
-            if result.is_null() {
-                return None;
-            }
-            // SAFETY: `result` is non-null and points to `entry`.
-            return Some(u16::from_be(unsafe { (*result).s_port as u16 }));
-        }
-        if rc == libc::ERANGE && buf_len < (1 << 20) {
-            buf_len *= 2;
-            continue;
-        }
-        return None;
+    // SAFETY: `libc::servent` is a C POD struct; `service` and `protocol` are
+    // valid NUL-terminated C strings; `getservbyname_r` populates `entry` and
+    // sets `result` non-null when `rc == 0`.
+    unsafe {
+        neovm_value::system_vocab::posix_lookup::retry_erange_lookup::<libc::servent, u16>(
+            |entry, buf, len, result| {
+                // SAFETY: `service` and `protocol` are valid NUL-terminated C
+                // strings; `entry`, `buf`, and `result` are valid out-parameters.
+                unsafe {
+                    getservbyname_r(service.as_ptr(), protocol.as_ptr(), entry, buf, len, result)
+                }
+            },
+            |entry| Some(u16::from_be(entry.s_port as u16)),
+        )
     }
 }
 

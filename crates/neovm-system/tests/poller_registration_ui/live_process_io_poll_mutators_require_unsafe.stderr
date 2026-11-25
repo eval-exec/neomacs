@@ -1,0 +1,31 @@
+error[E0133]: call to unsafe function `LiveProcessIo::set_child_stdout` is unsafe and requires unsafe block
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/live_process_io_poll_mutators_require_unsafe.rs
+  |
+  |     io.set_child_stdout(None);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior
+
+error[E0133]: call to unsafe function `LiveProcessIo::set_network_socket` is unsafe and requires unsafe block
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/live_process_io_poll_mutators_require_unsafe.rs
+  |
+  |     io.set_network_socket(None);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior
+
+error[E0133]: call to unsafe function `neovm_eval::emacs_core::eval::data::process_state::Process::live_io_mut` is unsafe and requires unsafe block
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/live_process_io_poll_mutators_require_unsafe.rs
+  |
+  |     let _ = proc.live_io_mut();
+  |             ^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior
+
+error[E0133]: call to unsafe function `neovm_eval::emacs_core::eval::data::process_state::Process::clear_live_io` is unsafe and requires unsafe block
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/live_process_io_poll_mutators_require_unsafe.rs
+  |
+  |     proc.clear_live_io();
+  |     ^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

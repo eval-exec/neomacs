@@ -319,7 +319,7 @@ pub(super) fn deliver_process_signal(
     signal_num: i32,
     recipient: ProcessSignalRecipient,
 ) -> i32 {
-    let Some(pid) = proc.live_io.child.pid_if_unreaped() else {
+    let Some(pid) = proc.live_io().child().pid_if_unreaped() else {
         return -1;
     };
     match recipient {
@@ -358,7 +358,7 @@ fn send_signal_via_terminal_character(proc: &mut Process, signal_num: i32) -> bo
         libc::SIGTSTP => libc::VSUSP,
         _ => return false,
     } as usize;
-    let Some(fd) = proc.live_io.pty_master.as_ref().and_then(|m| m.as_raw_fd()) else {
+    let Some(fd) = proc.live_io().pty_master().and_then(|m| m.as_raw_fd()) else {
         return false;
     };
     let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
@@ -377,7 +377,9 @@ fn send_signal_via_terminal_character(proc: &mut Process, signal_num: i32) -> bo
     if character == libc::_POSIX_VDISABLE as libc::cc_t {
         return false;
     }
-    let Some(writer) = proc.live_io.pty_writer.as_mut() else {
+    // SAFETY: `pty_writer` is not a poll-registered descriptor; we only write
+    // a control byte to it without replacing any registered descriptor.
+    let Some(writer) = unsafe { proc.live_io_mut() }.pty_writer_mut() else {
         return false;
     };
     // The master fd is non-blocking (PTY registration sets O_NONBLOCK), so a
@@ -412,7 +414,7 @@ fn send_signal_via_terminal_character(_proc: &mut Process, _signal_num: i32) -> 
 }
 
 pub(super) fn process_has_subprocess_backing(proc: &Process) -> bool {
-    proc.os_pid.is_some() || proc.live_io.child.has_child()
+    proc.os_pid.is_some() || proc.live_io().child().has_child()
 }
 
 pub(super) fn record_unbacked_real_process_signal(proc: &mut Process, signal_num: i32) -> bool {
@@ -447,14 +449,18 @@ pub(super) fn kill_real_process_child(proc: &mut Process, signal_num: i32) {
     if record_unbacked_real_process_signal(proc, signal_num) {
         return;
     }
-    proc.live_io.child.kill_handle();
+    // SAFETY: `kill_handle` signals the child without closing or dropping its
+    // `stdin` descriptor.
+    unsafe { proc.live_io_mut().child_mut() }.kill_handle();
 }
 
 /// GNU asynchronous delete transfers the child to deleted_pid_list
 /// (callproc.c:202-207); handle_child_signal later reaps it with WNOHANG
 /// (process.c:7700-7715). Never block while the child can need its PTY drained.
 pub(super) fn defer_real_process_child_reaping(proc: &mut Process) {
-    proc.live_io.child.defer_reaping();
+    // SAFETY: callers unregister poll sources before tearing down the process
+    // (`deactivate_process_io` calls `unregister_process_poll_sources` first).
+    unsafe { proc.live_io_mut().child_mut() }.defer_reaping();
 }
 
 pub(super) fn signal_hup_number() -> i32 {

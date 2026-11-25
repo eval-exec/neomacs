@@ -34,6 +34,8 @@ fn c2_c3_no_unsynchronized_non_reentrant_libc_calls() {
     let mut violations = Vec::new();
 
     for rel in [
+        "crates/neovm-value/src/system_vocab/posix_lookup.rs",
+        "crates/neovm-core/src/emacs_core/editing/dired/mod.rs",
         "crates/neovm-edit/src/emacs_core/editing/editfns/mod.rs",
         "crates/neovm-system/src/emacs_core/system/process/sys/process_attributes.rs",
         "crates/neovm-system/src/emacs_core/system/process/sys/net.rs",

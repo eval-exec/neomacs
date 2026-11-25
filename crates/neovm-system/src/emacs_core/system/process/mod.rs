@@ -155,15 +155,16 @@ enum ProcessInputEndpoint {
 
 impl ProcessInputEndpoint {
     pub fn select(proc: &Process) -> Option<Self> {
-        if proc.live_io.pty_writer.is_some() {
+        let io = proc.live_io();
+        if io.pty_writer().is_some() {
             Some(Self::Pty)
-        } else if proc.live_io.child.has_pipe_child() && proc.live_io.child.stdin().is_some() {
+        } else if io.child().has_pipe_child() && io.child().stdin().is_some() {
             Some(Self::ChildPipe)
-        } else if proc.live_io.tls_stream.is_some() {
+        } else if io.tls_stream().is_some() {
             Some(Self::Tls)
-        } else if proc.live_io.network_socket.is_some() {
+        } else if io.network_socket().is_some() {
             Some(Self::Network)
-        } else if proc.live_io.serial_port.is_some() {
+        } else if io.serial_port().is_some() {
             Some(Self::Serial)
         } else {
             None
@@ -171,10 +172,15 @@ impl ProcessInputEndpoint {
     }
 
     fn write_once(self, proc: &mut Process, bytes: &[u8]) -> Option<std::io::Result<usize>> {
+        // SAFETY: every arm below only writes bytes to an existing handle and
+        // never replaces, closes, or drops a poll-registered descriptor.
+        let io = unsafe { proc.live_io_mut() };
         match self {
-            Self::Pty => Some(proc.live_io.pty_writer.as_mut()?.write(bytes)),
+            Self::Pty => Some(io.pty_writer_mut()?.write(bytes)),
             Self::ChildPipe => {
-                let stdin = proc.live_io.child.stdin_mut()?;
+                // SAFETY: only sets non-blocking and writes to `stdin`; does
+                // not close or replace the child handle.
+                let stdin = unsafe { io.child_mut() }.stdin_mut()?;
                 #[cfg(unix)]
                 {
                     use std::os::unix::io::AsRawFd;
@@ -184,23 +190,26 @@ impl ProcessInputEndpoint {
                 Some(stdin.write(bytes))
             }
             Self::Tls => Some(
-                proc.live_io
-                    .tls_stream
-                    .as_mut()?
-                    .write_process_input_once(bytes),
+                // SAFETY: writes to the live TLS stream without replacing or
+                // dropping its underlying descriptor.
+                unsafe { io.tls_stream_mut() }?.write_process_input_once(bytes),
             ),
             Self::Network => {
                 let datagram_address = proc.datagram_socket_addr;
                 #[cfg(unix)]
                 let datagram_unix_path = proc.datagram_unix_path.clone();
-                proc.live_io.network_socket.as_mut()?.write_input_once(
+                // SAFETY: writes to the live socket without replacing or
+                // dropping its descriptor.
+                unsafe { proc.live_io_mut().network_socket_mut() }?.write_input_once(
                     bytes,
                     datagram_address,
                     #[cfg(unix)]
                     datagram_unix_path,
                 )
             }
-            Self::Serial => Some(proc.live_io.serial_port.as_mut()?.write(bytes)),
+            // SAFETY: writes to the live serial port without replacing or
+            // dropping its descriptor.
+            Self::Serial => Some(unsafe { io.serial_port_mut() }?.write(bytes)),
         }
     }
 
@@ -214,13 +223,15 @@ impl ProcessInputEndpoint {
     fn disconnect(self, poller: Option<&polling::Poller>, proc: &mut Process) {
         match self {
             Self::Pty => {
-                proc.live_io.pty_writer = None;
+                // SAFETY: `pty_writer` is not a poll-registered descriptor.
+                unsafe { proc.live_io_mut() }.set_pty_writer(None);
             }
             Self::ChildPipe => {
-                if let (Some(poller), Some(stdin)) = (poller, proc.live_io.child.stdin()) {
+                if let (Some(poller), Some(stdin)) = (poller, proc.live_io().child().stdin()) {
                     ProcessManager::unregister_child_stdin_writable_from_poller(poller, stdin);
                 }
-                let _ = proc.live_io.child.close_stdin();
+                // SAFETY: child `stdin` was unregistered from `poller` above.
+                let _ = unsafe { proc.live_io_mut().child_mut() }.close_stdin();
             }
             Self::Tls | Self::Network | Self::Serial => {}
         }
@@ -242,8 +253,8 @@ pub(crate) trait NetworkSocketIo {
     /// Register this socket for writable events on `poller`.
     ///
     /// # Safety
-    /// The caller must call `unregister_readable` (or `poller.delete`) before
-    /// closing or dropping this socket.
+    /// The caller must call `unregister_readable` (which deletes the source)
+    /// or `poller.delete` before closing or dropping this socket.
     unsafe fn register_writable(
         &self,
         poller: &polling::Poller,
@@ -536,7 +547,7 @@ pub mod types;
 // was a no-op that the VIS coverage scan still attributed to the next named
 // re-export, keeping a false ledger row alive (lead #1052 retirement).
 pub use types::*;
-pub(crate) use types::{swap_world_state, world_state_placeholder};
+pub(crate) use types::{ChildPipePollerExt, swap_world_state, world_state_placeholder};
 
 /// Test-support entry points for the option-A re-homed core process tests.
 #[cfg(any(test, feature = "test-support"))]

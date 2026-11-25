@@ -100,7 +100,8 @@ fn deferred_child_reaping_transfers_ownership_without_blocking_wait() {
     // Exercise the aggregate Drop with authority already transferred: it must
     // neither wait nor signal the registry's child a second time.
     let mut io = LiveProcessIo::default();
-    io.child = owner;
+    // SAFETY: standalone test `LiveProcessIo` is never registered on a poller.
+    unsafe { io.set_child(owner) };
     drop(io);
     sweep();
     assert!(state.probes.load(Ordering::Relaxed) >= 1);

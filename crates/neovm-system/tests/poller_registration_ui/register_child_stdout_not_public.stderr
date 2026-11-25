@@ -1,0 +1,19 @@
+warning: unused import: `neovm_system::emacs_core::process::SystemProcessExt`
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/register_child_stdout_not_public.rs
+  |
+  | use neovm_system::emacs_core::process::SystemProcessExt;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0599]: no associated function or constant named `register_child_stdout_with_poller` found for struct `ProcessManager` in the current scope
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/register_child_stdout_not_public.rs
+  |
+  |     ProcessManager::register_child_stdout_with_poller(poller, stdout, 1);
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ associated function or constant not found in `ProcessManager`
+  |
+note: if you're trying to build a new `ProcessManager`, consider using `ProcessManager::new` which returns `ProcessManager`
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/data/process_state.rs
+  |
+  |     pub fn new() -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^

@@ -223,7 +223,7 @@ impl SweepableChild {
         );
         // GNU's `p->alive` itself, since ledger 187: the pid is present in
         // exactly the state in which `waitpid` may be called on it.
-        let alive = proc.live_io.child.pid_if_unreaped().is_some();
+        let alive = proc.live_io().child().pid_if_unreaped().is_some();
         (status_can_change && alive).then_some(Self { id })
     }
 

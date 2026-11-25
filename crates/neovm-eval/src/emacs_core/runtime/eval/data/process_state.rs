@@ -119,7 +119,7 @@ pub enum ProcessKeyword {
     Summary,
 }
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum TlsPolling {
     #[default]
     Enabled,
@@ -133,45 +133,50 @@ pub enum TlsPolling {
 /// native handles in one Rust owner gives Neomacs the same lifetime split:
 /// `Process` is durable Lisp-visible state, while replacing this bundle with
 /// `Default::default()` drops every live handle as one operation.
+///
+/// All fields are private so safe code cannot overwrite or drop a descriptor
+/// that is currently registered with a `polling::Poller` (soundness B5).
+/// Read-only inspection goes through safe getters; mutating or replacing
+/// poll-registered descriptors requires `unsafe`.
 #[derive(Default)]
 pub struct LiveProcessIo {
     /// Pollable child-status wakeup source, where the platform exposes one.
-    pub child_status_source: Option<ChildStatusSource>,
+    child_status_source: Option<ChildStatusSource>,
     /// The OS child this process owns, and GNU's `p->alive` for it.
     ///
     /// One slot for both spawn shapes -- the `std::process::Child` a pipe (or
     /// a `pre_exec` pty) leaves behind and the `portable_pty` handle -- because
     /// they are the same obligation: each owns a `waitpid`, and GNU allows
     /// exactly one owner (src/process.c:1080-1088).  See `process/reap.rs`.
-    pub child: ChildOwnership,
+    child: ChildOwnership,
     /// OS-level output pipe for non-blocking reads (pipe mode).  With no
     /// explicit `:stderr`, this is one shared pipe carrying both stdout and
     /// stderr in the child's write order, as in GNU Emacs.
-    pub child_stdout: Option<ChildOutputReader>,
+    child_stdout: Option<ChildOutputReader>,
     /// Writable endpoint owned by a `make-pipe-process` connection.
-    pub module_pipe_writer: Option<os_pipe::PipeWriter>,
+    module_pipe_writer: Option<os_pipe::PipeWriter>,
     /// Real process that received this pipe's writer as its `:stderr`.
     ///
     /// GNU obtains this ordering relation from process-alist insertion order.
     /// Keeping the actual transfer owner here avoids confusing it with later
     /// processes that merely retain the same Lisp `:stderr` reference after
     /// the one writable endpoint has already been consumed.
-    pub stderr_pipe_owner: Option<ProcessId>,
+    stderr_pipe_owner: Option<ProcessId>,
     /// PTY master handle for resize and I/O (PTY mode).
-    pub pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+    pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
     /// PTY reader for non-blocking reads from the master side.
-    pub pty_reader: Option<PtyOutputReader>,
+    pty_reader: Option<PtyOutputReader>,
     /// PTY writer for sending input to the master side.
-    pub pty_writer: Option<Box<dyn std::io::Write + Send>>,
-    pub network_socket: Option<NetworkSocket>,
+    pty_writer: Option<Box<dyn std::io::Write + Send>>,
+    network_socket: Option<NetworkSocket>,
     /// Filesystem identity captured when binding a Unix listener. Exit cleanup
     /// must not unlink a different endpoint installed by an exit hook.
     #[cfg(unix)]
-    pub unix_listener_path: Option<(PathBuf, u64, u64)>,
-    pub pending_network_connect: Option<PendingNetworkConnect>,
+    unix_listener_path: Option<(PathBuf, u64, u64)>,
+    pending_network_connect: Option<PendingNetworkConnect>,
     /// TLS-wrapped stream for encrypted network connections.
-    pub tls_stream: Option<TlsStream>,
-    pub tls_polling: TlsPolling,
+    tls_stream: Option<TlsStream>,
+    tls_polling: TlsPolling,
     /// The open device behind a serial process.  GNU keeps one descriptor for
     /// both directions (`p->infd = fd; p->outfd = fd`, src/process.c:3216-3217),
     /// so this single slot is the read source AND the write source.
@@ -179,7 +184,7 @@ pub struct LiveProcessIo {
     /// It is `Option` only because `LiveProcessIo` is one struct for every
     /// process kind and `deactivate_process_io` empties it; a serial process
     /// cannot be BORN without one -- see [`ProcessManager::create_serial_process`].
-    pub serial_port: Option<SerialPort>,
+    serial_port: Option<SerialPort>,
 }
 
 pub enum ChildOutputReader {
@@ -363,7 +368,9 @@ pub struct Process {
     /// same-wait status rule.
     pub eof_sent_to_process: bool,
     /// Native resources exist only while this process has active I/O.
-    pub live_io: LiveProcessIo,
+    /// Kept private so safe code cannot overwrite or drop registered poll
+    /// sources via `std::mem::take` (soundness B5).
+    live_io: LiveProcessIo,
     /// Current peer address for datagram network processes, as Lisp.
     pub datagram_address: Value,
     /// Current peer address for datagram network processes, as a Rust socket address.
@@ -1607,7 +1614,292 @@ impl std::os::windows::io::AsRawHandle for ChildOutputReader {
     }
 }
 
+impl Process {
+    /// Borrow the process's live OS resource bundle for read-only inspection.
+    pub fn live_io(&self) -> &LiveProcessIo {
+        &self.live_io
+    }
+
+    /// Borrow the process's live OS resource bundle mutably.
+    ///
+    /// # Safety
+    /// The caller must not replace, take, or drop `LiveProcessIo` (or any
+    /// poll-registered descriptor inside it) while that descriptor is still
+    /// registered in a `polling::Poller`.
+    pub unsafe fn live_io_mut(&mut self) -> &mut LiveProcessIo {
+        &mut self.live_io
+    }
+
+    /// Drop every live OS resource owned by this process.
+    ///
+    /// # Safety
+    /// The caller must have unregistered every poll-registered source in
+    /// `self.live_io` from its `polling::Poller` before calling this method.
+    pub unsafe fn clear_live_io(&mut self) {
+        drop(std::mem::take(&mut self.live_io));
+    }
+}
+
 impl LiveProcessIo {
+    // --- Safe read-only getters ---
+
+    pub fn child_status_source(&self) -> Option<&ChildStatusSource> {
+        self.child_status_source.as_ref()
+    }
+
+    pub fn child(&self) -> &ChildOwnership {
+        &self.child
+    }
+
+    pub fn child_stdout(&self) -> Option<&ChildOutputReader> {
+        self.child_stdout.as_ref()
+    }
+
+    pub fn module_pipe_writer(&self) -> Option<&os_pipe::PipeWriter> {
+        self.module_pipe_writer.as_ref()
+    }
+
+    pub fn stderr_pipe_owner(&self) -> Option<ProcessId> {
+        self.stderr_pipe_owner
+    }
+
+    pub fn pty_master(&self) -> Option<&(dyn portable_pty::MasterPty + Send)> {
+        self.pty_master.as_deref()
+    }
+
+    pub fn pty_reader(&self) -> Option<&PtyOutputReader> {
+        self.pty_reader.as_ref()
+    }
+
+    pub fn pty_writer(&self) -> Option<&(dyn std::io::Write + Send)> {
+        self.pty_writer.as_deref()
+    }
+
+    pub fn network_socket(&self) -> Option<&NetworkSocket> {
+        self.network_socket.as_ref()
+    }
+
+    #[cfg(unix)]
+    pub fn unix_listener_path(&self) -> Option<&(PathBuf, u64, u64)> {
+        self.unix_listener_path.as_ref()
+    }
+
+    pub fn pending_network_connect(&self) -> Option<&PendingNetworkConnect> {
+        self.pending_network_connect.as_ref()
+    }
+
+    pub fn tls_stream(&self) -> Option<&TlsStream> {
+        self.tls_stream.as_ref()
+    }
+
+    pub fn tls_polling(&self) -> TlsPolling {
+        self.tls_polling
+    }
+
+    pub fn serial_port(&self) -> Option<&SerialPort> {
+        self.serial_port.as_ref()
+    }
+
+    // --- Safe mutators for non-polled fields ---
+
+    pub fn set_module_pipe_writer(&mut self, writer: Option<os_pipe::PipeWriter>) {
+        self.module_pipe_writer = writer;
+    }
+
+    pub fn take_module_pipe_writer(&mut self) -> Option<os_pipe::PipeWriter> {
+        self.module_pipe_writer.take()
+    }
+
+    pub fn set_stderr_pipe_owner(&mut self, owner: Option<ProcessId>) {
+        self.stderr_pipe_owner = owner;
+    }
+
+    pub fn pty_reader_mut(&mut self) -> Option<&mut PtyOutputReader> {
+        self.pty_reader.as_mut()
+    }
+
+    pub fn set_pty_reader(&mut self, reader: Option<PtyOutputReader>) {
+        self.pty_reader = reader;
+    }
+
+    pub fn take_pty_reader(&mut self) -> Option<PtyOutputReader> {
+        self.pty_reader.take()
+    }
+
+    pub fn pty_writer_mut(&mut self) -> Option<&mut Box<dyn std::io::Write + Send>> {
+        self.pty_writer.as_mut()
+    }
+
+    pub fn set_pty_writer(&mut self, writer: Option<Box<dyn std::io::Write + Send>>) {
+        self.pty_writer = writer;
+    }
+
+    #[cfg(unix)]
+    pub fn set_unix_listener_path(&mut self, path: Option<(PathBuf, u64, u64)>) {
+        self.unix_listener_path = path;
+    }
+
+    #[cfg(unix)]
+    pub fn take_unix_listener_path(&mut self) -> Option<(PathBuf, u64, u64)> {
+        self.unix_listener_path.take()
+    }
+
+    pub fn pending_network_connect_mut(&mut self) -> Option<&mut PendingNetworkConnect> {
+        self.pending_network_connect.as_mut()
+    }
+
+    pub fn set_pending_network_connect(&mut self, pending: Option<PendingNetworkConnect>) {
+        self.pending_network_connect = pending;
+    }
+
+    pub fn take_pending_network_connect(&mut self) -> Option<PendingNetworkConnect> {
+        self.pending_network_connect.take()
+    }
+
+    pub fn set_tls_polling(&mut self, polling: TlsPolling) {
+        self.tls_polling = polling;
+    }
+
+    // --- Unsafe mutators for poll-registered descriptor fields ---
+
+    /// Replace `child_status_source`.
+    ///
+    /// # Safety
+    /// Any previously stored `ChildStatusSource` must already be deleted from
+    /// its `polling::Poller` before being replaced or dropped.
+    pub unsafe fn set_child_status_source(&mut self, source: Option<ChildStatusSource>) {
+        self.child_status_source = source;
+    }
+
+    /// Take `child_status_source`.
+    ///
+    /// # Safety
+    /// The caller must delete the returned `ChildStatusSource` from its
+    /// `polling::Poller` before dropping it.
+    pub unsafe fn take_child_status_source(&mut self) -> Option<ChildStatusSource> {
+        self.child_status_source.take()
+    }
+
+    /// Borrow `child` mutably.
+    ///
+    /// # Safety
+    /// The caller must not close, replace, or drop a child `stdin` descriptor
+    /// while it is still registered in a `polling::Poller`.
+    pub unsafe fn child_mut(&mut self) -> &mut ChildOwnership {
+        &mut self.child
+    }
+
+    /// Replace `child`.
+    ///
+    /// # Safety
+    /// Any previously stored child `stdin` descriptor must already be deleted
+    /// from its `polling::Poller` before being replaced or dropped.
+    pub unsafe fn set_child(&mut self, child: ChildOwnership) {
+        self.child = child;
+    }
+
+    /// Borrow `child_stdout` mutably.
+    ///
+    /// # Safety
+    /// The caller must not replace or drop a registered `ChildOutputReader`
+    /// while its descriptor is still registered in a `polling::Poller`.
+    pub unsafe fn child_stdout_mut(&mut self) -> Option<&mut ChildOutputReader> {
+        self.child_stdout.as_mut()
+    }
+
+    /// Replace `child_stdout`.
+    ///
+    /// # Safety
+    /// Any previously stored `ChildOutputReader` must already be deleted from
+    /// its `polling::Poller` before being replaced or dropped.
+    pub unsafe fn set_child_stdout(&mut self, stdout: Option<ChildOutputReader>) {
+        self.child_stdout = stdout;
+    }
+
+    /// Replace `pty_master`.
+    ///
+    /// # Safety
+    /// Any previously stored `MasterPty` must already be deleted from its
+    /// `polling::Poller` before being replaced or dropped.
+    pub unsafe fn set_pty_master(
+        &mut self,
+        master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+    ) {
+        self.pty_master = master;
+    }
+
+    /// Borrow `network_socket` mutably.
+    ///
+    /// # Safety
+    /// The caller must not replace or drop a registered `NetworkSocket` while
+    /// its descriptor is still registered in a `polling::Poller`.
+    pub unsafe fn network_socket_mut(&mut self) -> Option<&mut NetworkSocket> {
+        self.network_socket.as_mut()
+    }
+
+    /// Replace `network_socket`.
+    ///
+    /// # Safety
+    /// Any previously stored `NetworkSocket` must already be deleted from its
+    /// `polling::Poller` before being replaced or dropped.
+    pub unsafe fn set_network_socket(&mut self, socket: Option<NetworkSocket>) {
+        self.network_socket = socket;
+    }
+
+    /// Take `network_socket`.
+    ///
+    /// # Safety
+    /// The caller must delete the returned `NetworkSocket` from its
+    /// `polling::Poller` before dropping it (or re-store it before any drop).
+    pub unsafe fn take_network_socket(&mut self) -> Option<NetworkSocket> {
+        self.network_socket.take()
+    }
+
+    /// Borrow `tls_stream` mutably.
+    ///
+    /// # Safety
+    /// The caller must not replace or drop a registered `TlsStream` while its
+    /// underlying socket is still registered in a `polling::Poller`.
+    pub unsafe fn tls_stream_mut(&mut self) -> Option<&mut TlsStream> {
+        self.tls_stream.as_mut()
+    }
+
+    /// Replace `tls_stream`.
+    ///
+    /// # Safety
+    /// Any previously stored `TlsStream` must already be deleted from its
+    /// `polling::Poller` before being replaced or dropped.
+    pub unsafe fn set_tls_stream(&mut self, stream: Option<TlsStream>) {
+        self.tls_stream = stream;
+    }
+
+    /// Take `tls_stream`.
+    ///
+    /// # Safety
+    /// The caller must delete the returned `TlsStream` from its
+    /// `polling::Poller` before dropping it.
+    pub unsafe fn take_tls_stream(&mut self) -> Option<TlsStream> {
+        self.tls_stream.take()
+    }
+
+    /// Borrow `serial_port` mutably.
+    ///
+    /// # Safety
+    /// The caller must not replace or drop a registered `SerialPort` while its
+    /// descriptor is still registered in a `polling::Poller`.
+    pub unsafe fn serial_port_mut(&mut self) -> Option<&mut SerialPort> {
+        self.serial_port.as_mut()
+    }
+
+    /// Replace `serial_port`.
+    ///
+    /// # Safety
+    /// Any previously stored `SerialPort` must already be deleted from its
+    /// `polling::Poller` before being replaced or dropped.
+    pub unsafe fn set_serial_port(&mut self, port: Option<SerialPort>) {
+        self.serial_port = port;
+    }
+
     /// GNU's `record_kill_process` (src/callproc.c:196-211), reached from
     /// `Fdelete_process` as `if (p->alive) record_kill_process (p, Qnil);`
     /// (src/process.c:1135).

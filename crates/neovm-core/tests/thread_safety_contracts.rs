@@ -107,6 +107,9 @@ mod intern_shared_contracts;
 #[path = "jit_grace_contracts.rs"]
 mod jit_grace_contracts;
 
+#[path = "poller_registration_contracts.rs"]
+mod poller_registration_contracts;
+
 #[test]
 #[cfg(feature = "contract-fixtures")]
 fn p15_threading_compile_contracts() {

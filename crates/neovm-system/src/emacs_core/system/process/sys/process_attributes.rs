@@ -21,8 +21,6 @@
 //! Additional native Darwin/BSD or Windows queries belong behind these same
 //! functions.
 
-use std::ffi::CStr;
-
 /// Native Darwin attributes, matching GNU `sysdep.c:4273-4459`. Every query
 /// owns its buffers; snapshots contain no shared or thread-confined state.
 #[cfg(target_os = "macos")]
@@ -652,88 +650,10 @@ pub(crate) fn process_effective_ids(pid: i64) -> Option<(u32, u32)> {
     Some((euid?, egid?))
 }
 
-#[cfg(all(not(target_os = "windows"), not(miri)))]
 pub(crate) fn user_name(uid: u32) -> Option<String> {
-    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut result: *mut libc::passwd = std::ptr::null_mut();
-    let mut buf_len = 1024usize;
-    loop {
-        let mut buf = vec![0u8; buf_len];
-        // SAFETY: `pwd`, `buf` (with `buf_len` bytes), and `result` are valid
-        // writable out-parameters for `getpwuid_r`; `pwd.pw_name` points into
-        // `buf`, which stays live until we copy it into an owned `String`.
-        let rc = unsafe {
-            libc::getpwuid_r(
-                uid as libc::uid_t,
-                &mut pwd,
-                buf.as_mut_ptr().cast(),
-                buf_len,
-                &mut result,
-            )
-        };
-        if rc == 0 {
-            if result.is_null() || pwd.pw_name.is_null() {
-                return None;
-            }
-            // SAFETY: `pwd.pw_name` is a NUL-terminated C string inside `buf`.
-            return Some(
-                unsafe { CStr::from_ptr(pwd.pw_name) }
-                    .to_string_lossy()
-                    .into_owned(),
-            );
-        }
-        if rc == libc::ERANGE && buf_len < (1 << 20) {
-            buf_len *= 2;
-            continue;
-        }
-        return None;
-    }
+    neovm_value::system_vocab::posix_lookup::lookup_user_name(uid)
 }
 
-#[cfg(any(target_os = "windows", miri))]
-pub(crate) fn user_name(_uid: u32) -> Option<String> {
-    None
-}
-
-#[cfg(all(not(target_os = "windows"), not(miri)))]
 pub fn group_name(gid: u32) -> Option<String> {
-    let mut grp: libc::group = unsafe { std::mem::zeroed() };
-    let mut result: *mut libc::group = std::ptr::null_mut();
-    let mut buf_len = 1024usize;
-    loop {
-        let mut buf = vec![0u8; buf_len];
-        // SAFETY: `grp`, `buf` (with `buf_len` bytes), and `result` are valid
-        // writable out-parameters for `getgrgid_r`; `grp.gr_name` points into
-        // `buf`, which stays live until we copy it into an owned `String`.
-        let rc = unsafe {
-            libc::getgrgid_r(
-                gid as libc::gid_t,
-                &mut grp,
-                buf.as_mut_ptr().cast(),
-                buf_len,
-                &mut result,
-            )
-        };
-        if rc == 0 {
-            if result.is_null() || grp.gr_name.is_null() {
-                return None;
-            }
-            // SAFETY: `grp.gr_name` is a NUL-terminated C string inside `buf`.
-            return Some(
-                unsafe { CStr::from_ptr(grp.gr_name) }
-                    .to_string_lossy()
-                    .into_owned(),
-            );
-        }
-        if rc == libc::ERANGE && buf_len < (1 << 20) {
-            buf_len *= 2;
-            continue;
-        }
-        return None;
-    }
-}
-
-#[cfg(any(target_os = "windows", miri))]
-pub fn group_name(_gid: u32) -> Option<String> {
-    None
+    neovm_value::system_vocab::posix_lookup::lookup_group_name(gid)
 }

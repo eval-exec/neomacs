@@ -429,7 +429,12 @@ fn gated_wait_socket(
         .expect("nonblocking process input");
     let process = eval.processes_mut().get_mut(id).expect("socket process");
     process.filter = Value::symbol(filter);
-    process.live_io.network_socket = Some(NetworkSocket::UnixStream(socket));
+    // SAFETY: fresh socket process has no previously registered `network_socket`.
+    unsafe {
+        process
+            .live_io_mut()
+            .set_network_socket(Some(NetworkSocket::UnixStream(socket)));
+    }
     eval.processes()
         .register_socket_fd(id)
         .expect("register process input");
@@ -635,8 +640,8 @@ fn native_maintenance_wait_redisplays_after_block_exit_sentinel_without_eof() {
         .processes()
         .get(id)
         .unwrap()
-        .live_io
-        .child
+        .live_io()
+        .child()
         .stdin()
         .unwrap()
         .try_clone()

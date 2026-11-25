@@ -669,17 +669,15 @@ fn epipe_closes_the_exact_selected_pty_writer() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    pm.processes
-        .get_mut(&id)
-        .expect("process")
-        .live_io
-        .pty_writer = Some(Box::new(BrokenPipeWriter));
+    // SAFETY: `pty_writer` is not a poll-registered descriptor.
+    unsafe { pm.processes.get_mut(&id).expect("process").live_io_mut() }
+        .set_pty_writer(Some(Box::new(BrokenPipeWriter)));
 
     assert!(pm.write_process_input_once(id, b"x").is_err());
 
     let process = pm.processes.get(&id).expect("process remains live");
     assert!(
-        process.live_io.pty_writer.is_none(),
+        process.live_io().pty_writer().is_none(),
         "EPIPE must close the selected PTY endpoint, not an unrelated child stdin"
     );
     assert_eq!(
@@ -2405,8 +2403,8 @@ fn stderr_pipe_uses_child_stdout_as_its_live_source() {
     );
     assert!(pm.get(stderr_id).is_some_and(|proc| {
         proc.kind == ProcessKind::Pipe
-            && proc.live_io.child_stdout.is_some()
-            && !proc.live_io.child.has_child()
+            && proc.live_io().child_stdout().is_some()
+            && !proc.live_io().child().has_child()
     }));
     assert!(pm.live_process_ids().contains(&stderr_id));
     assert!(pm.live_process_ids().contains(&owner_id));
@@ -2490,11 +2488,14 @@ fn stderr_pipe_wait_notifies_a_pending_owner_stop_first() {
         owner.status_notify_pending = true;
         owner.sentinel = Value::NIL;
     }
-    eval.processes_mut()
-        .get_mut(stderr_id)
-        .expect("stderr pipe")
-        .live_io
-        .stderr_pipe_owner = Some(owner_id);
+    // SAFETY: `stderr_pipe_owner` is not a poll-registered descriptor.
+    unsafe {
+        eval.processes_mut()
+            .get_mut(stderr_id)
+            .expect("stderr pipe")
+            .live_io_mut()
+    }
+    .set_stderr_pipe_owner(Some(owner_id));
 
     let mut outcome = ProcessOutputServiceOutcome::default();
     let pipe_may_notify = eval
@@ -9357,12 +9358,15 @@ fn make_network_process_nowait_hostname_dns_failure_is_async_like_gnu() {
         ProcessKeyword::Nowait.value(),
         Value::T,
     ]);
-    proc.live_io.pending_network_connect = Some(PendingNetworkConnect::Dns(PendingDnsRequest {
-        host: "-bad.example".to_string(),
-        receiver,
-        ready: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-        socket_options: Vec::new(),
-    }));
+    // SAFETY: `pending_network_connect` is not a poll-registered descriptor.
+    unsafe { proc.live_io_mut() }.set_pending_network_connect(Some(PendingNetworkConnect::Dns(
+        PendingDnsRequest {
+            host: "-bad.example".to_string(),
+            receiver,
+            ready: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            socket_options: Vec::new(),
+        },
+    )));
 
     let outcome = eval
         .wait_for_process_output(ProcessOutputWaitRequest::new(
@@ -9585,10 +9589,11 @@ fn process_contact_no_block_returns_nil_for_pending_nowait_network_like_gnu() {
             Value::fixnum(9),
         ]),
     ]);
-    proc.live_io.pending_network_connect = Some(PendingNetworkConnect::Tcp {
+    // SAFETY: `pending_network_connect` is not a poll-registered descriptor.
+    unsafe { proc.live_io_mut() }.set_pending_network_connect(Some(PendingNetworkConnect::Tcp {
         remaining_addrs: Vec::new(),
         socket_options: Vec::new(),
-    });
+    }));
     let process = Value::make_process(id);
 
     assert_eq!(
@@ -9842,8 +9847,12 @@ fn readable_network_process(
     );
     let (socket, mut peer) = std::os::unix::net::UnixStream::pair().expect("socket pair");
     let proc = pm.get_mut(id).expect("connection record");
-    proc.live_io.network_socket =
-        Some(neovm_eval::emacs_core::eval::data::process_state::NetworkSocket::UnixStream(socket));
+    // SAFETY: fresh fixture connection has no previously registered socket.
+    unsafe {
+        proc.live_io_mut().set_network_socket(Some(
+            neovm_eval::emacs_core::eval::data::process_state::NetworkSocket::UnixStream(socket),
+        ));
+    }
     if stopped {
         // What `make-network-process :stop t` stores before it registers.
         proc.command = Value::T;
@@ -11633,8 +11642,8 @@ fn adaptive_read_other_process_output_wakes_before_delay() {
         .processes()
         .get(peer_id)
         .expect("peer")
-        .live_io
-        .child
+        .live_io()
+        .child()
         .stdin()
         .expect("peer stdin")
         .try_clone()
@@ -12066,21 +12075,25 @@ fn wait_for_stderr_fixture_exit(eval: &mut Context, owner: Value) {
     // Hold the child at read(0) until every sentinel/global is installed. A
     // quick child can otherwise be reaped by a readiness wait during setup.
     // Write through the owned stdin without entering any Lisp readiness wait.
-    eval.processes_mut()
-        .get_mut(id)
-        .expect("fixture process exists")
-        .live_io
-        .child
-        .stdin_mut()
-        .expect("fixture uses pipe stdin")
-        .write_all(b"ready\n")
-        .expect("release fixture child");
-    let child = &eval
+    // SAFETY: writing to the fixture child's stdin without replacing or
+    // closing the descriptor.
+    unsafe {
+        eval.processes_mut()
+            .get_mut(id)
+            .expect("fixture process exists")
+            .live_io_mut()
+            .child_mut()
+    }
+    .stdin_mut()
+    .expect("fixture uses pipe stdin")
+    .write_all(b"ready\n")
+    .expect("release fixture child");
+    let child = eval
         .processes()
         .get(id)
         .expect("fixture process exists")
-        .live_io
-        .child;
+        .live_io()
+        .child();
     let pid = child
         .pid_if_unreaped()
         .expect("fixture owns a live child pid");
@@ -12121,7 +12134,9 @@ fn with_stderr_fixture_child<T>(
     let id = owner.as_process_id().expect("fixture owner is a process");
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(eval)));
     if let Some(process) = eval.processes_mut().get_mut(id) {
-        let child = &mut process.live_io.child;
+        // SAFETY: only polls/signals the child handle without replacing or
+        // closing a poller-registered stdin descriptor.
+        let child = unsafe { process.live_io_mut().child_mut() };
         child.poll_status();
         if child.pid_if_unreaped().is_some() {
             child.kill_handle();
@@ -12169,8 +12184,8 @@ fn stderr_fixture_assertion_failure_kills_and_reaps_its_owned_child() {
         eval.processes()
             .get(id)
             .expect("fixture process exists")
-            .live_io
-            .child
+            .live_io()
+            .child()
             .pid_if_unreaped()
             .is_none(),
         "fixture child must be reaped"
@@ -15554,7 +15569,7 @@ fn signal_process_reads_an_integer_as_an_os_pid_like_gnu() {
             assert_eq!(id, expected_id);
             let record = processes.get(id).expect("our synthetic process record");
             assert!(record.os_pid.is_none());
-            assert!(!record.live_io.child.has_child());
+            assert!(!record.live_io().child().has_child());
 
             let pid = i64::try_from(id).expect("small ProcessId fits literal PID domain");
             let literal = Value::fixnum(pid);
@@ -16642,7 +16657,7 @@ fn pw187_kill_path_pid(
 ) -> Option<u32> {
     processes
         .get(id)
-        .and_then(|proc| proc.live_io.child.pid_if_unreaped())
+        .and_then(|proc| proc.live_io().child().pid_if_unreaped())
 }
 
 /// Observe only a child created by the calling test, without consuming the
@@ -17386,8 +17401,8 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
         .processes()
         .get(child)
         .expect("owned child")
-        .live_io
-        .child
+        .live_io()
+        .child()
         .stdin()
         .expect("owned child gate input")
         .try_clone()

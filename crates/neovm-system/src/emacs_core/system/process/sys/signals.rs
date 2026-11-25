@@ -102,13 +102,17 @@ pub(crate) fn signal_name_number(name: &str) -> Option<i32> {
 #[cfg(unix)]
 static STRSIGNAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Thread-safe `strsignal` lookup: serializes access to libc's shared signal
-/// description buffer and copies into an owned `String` before unlocking.
+/// Serialized `strsignal` lookup for Neomacs callers: holds `STRSIGNAL_LOCK`
+/// while copying the returned C string into an owned `String`.
+///
+/// Note: third-party `portable-pty` also invokes `strsignal` outside this lock
+/// (harmless on glibc 2.32+ and Apple libc where `strsignal` uses TLS buffers);
+/// a static signal-description table / `sigdescr_np` is tracked as a follow-up.
 #[cfg(unix)]
 pub(crate) fn raw_signal_description(signum: i32) -> Option<String> {
     let _guard = STRSIGNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // SAFETY: `STRSIGNAL_LOCK` serializes all `strsignal` calls across this
-    // crate, and we copy the returned C string before dropping `_guard`.
+    // SAFETY: `STRSIGNAL_LOCK` serializes Neomacs's own `strsignal` calls, and
+    // we copy the returned C string before dropping `_guard`.
     unsafe {
         let p = libc::strsignal(signum);
         if p.is_null() {
