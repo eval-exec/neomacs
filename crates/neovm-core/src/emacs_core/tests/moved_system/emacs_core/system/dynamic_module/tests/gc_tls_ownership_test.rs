@@ -31,7 +31,7 @@ impl Environment {
 
 impl Drop for Environment {
     fn drop(&mut self) {
-        unsafe { finalize_storage(&mut self.private.storage) };
+        finalize_storage(&mut self.private.storage);
     }
 }
 

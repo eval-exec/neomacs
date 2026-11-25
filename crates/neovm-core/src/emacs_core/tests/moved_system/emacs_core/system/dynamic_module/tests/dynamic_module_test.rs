@@ -52,9 +52,7 @@ impl TestEnv {
 
 impl Drop for TestEnv {
     fn drop(&mut self) {
-        unsafe {
-            finalize_storage(&mut self.priv_.storage);
-        }
+        finalize_storage(&mut self.priv_.storage);
     }
 }
 

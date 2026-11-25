@@ -281,13 +281,17 @@ const VALUE_FRAME_SIZE: usize = 512;
 pub(crate) struct emacs_value_frame {
     pub objects: [emacs_value_tag; VALUE_FRAME_SIZE],
     pub offset: usize,
-    pub next: *mut emacs_value_frame,
+    pub next: Option<std::ptr::NonNull<emacs_value_frame>>,
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct emacs_value_storage {
-    pub(crate) initial: emacs_value_frame,
-    pub(crate) current: *mut emacs_value_frame,
+    initial: emacs_value_frame,
+    /// Head of the heap-allocated overflow frame chain, or `None` while
+    /// allocations still fit in `initial`. Never points at `self.initial`, so
+    /// `emacs_value_storage` is never self-referential and is ready immediately
+    /// after `new()`.
+    overflow: Option<std::ptr::NonNull<emacs_value_frame>>,
 }
 
 // ============================================================================
@@ -376,9 +380,12 @@ struct ActiveModuleEnvEntry {
 impl emacs_value_frame {
     fn new() -> Self {
         Self {
+            // SAFETY: `emacs_value_tag` wraps `Value`, whose all-zero bit
+            // pattern is a valid representation (`Value::NIL` / fixnum 0
+            // slots are overwritten before `offset` advances).
             objects: unsafe { std::mem::zeroed() },
             offset: 0,
-            next: std::ptr::null_mut(),
+            next: None,
         }
     }
 }
@@ -388,29 +395,56 @@ impl emacs_value_storage {
     fn new() -> Self {
         Self {
             initial: emacs_value_frame::new(),
-            current: std::ptr::null_mut(),
+            overflow: None,
         }
     }
 
-    fn init(&mut self) {
-        self.current = &mut self.initial;
+    fn reset(&mut self) {
+        finalize_storage(self);
+    }
+}
+
+impl Drop for emacs_value_storage {
+    fn drop(&mut self) {
+        finalize_storage(self);
+    }
+}
+
+impl emacs_env_private {
+    fn new_boxed() -> Box<Self> {
+        Box::new(Self {
+            pending_non_local_exit: emacs_funcall_exit::Return,
+            non_local_exit_symbol: Value::NIL,
+            non_local_exit_data: Value::NIL,
+            storage: emacs_value_storage::new(),
+        })
     }
 }
 
 fn allocate_emacs_value(storage: &mut emacs_value_storage, lisp_val: Value) -> emacs_value {
-    unsafe {
-        let frame = &mut *storage.current;
-        if frame.offset >= VALUE_FRAME_SIZE {
-            let new_frame = Box::into_raw(Box::new(emacs_value_frame::new()));
-            (*new_frame).next = storage.current;
-            storage.current = new_frame;
-            allocate_emacs_value(storage, lisp_val)
-        } else {
-            frame.objects[frame.offset] = emacs_value_tag::new(lisp_val);
-            let ptr = &mut frame.objects[frame.offset] as *mut emacs_value_tag;
-            frame.offset += 1;
-            ptr
+    let active = match storage.overflow {
+        Some(mut ptr) => {
+            // SAFETY: `storage.overflow` only holds heap frames allocated via
+            // `Box::leak` and exclusively owned by `storage` until finalization.
+            unsafe { ptr.as_mut() }
         }
+        None => &mut storage.initial,
+    };
+    if active.offset < VALUE_FRAME_SIZE {
+        let idx = active.offset;
+        active.objects[idx] = emacs_value_tag::new(lisp_val);
+        active.offset = idx + 1;
+        &mut active.objects[idx] as *mut emacs_value_tag
+    } else {
+        let mut new_frame = Box::new(emacs_value_frame::new());
+        new_frame.next = storage.overflow;
+        new_frame.objects[0] = emacs_value_tag::new(lisp_val);
+        new_frame.offset = 1;
+        let new_ptr = std::ptr::NonNull::from(Box::leak(new_frame));
+        storage.overflow = Some(new_ptr);
+        // SAFETY: `new_ptr` points to the heap-allocated `emacs_value_frame`
+        // just stored in `storage.overflow`, valid until `finalize_storage`.
+        unsafe { std::ptr::addr_of_mut!((*new_ptr.as_ptr()).objects[0]) }
     }
 }
 
@@ -426,25 +460,26 @@ unsafe fn value_to_lisp(v: emacs_value) -> Value {
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-unsafe fn finalize_storage(storage: &mut emacs_value_storage) {
-    let initial = &mut storage.initial as *mut emacs_value_frame;
-    // Overflow frames form a reverse chain from `current` to `initial`.
-    // The initial frame's `next` is always null, not the chain's head.
-    let mut frame = storage.current;
-    while !frame.is_null() && frame != initial {
-        let next = unsafe { (*frame).next };
-        unsafe { drop(Box::from_raw(frame)) };
-        frame = next;
+fn finalize_storage(storage: &mut emacs_value_storage) {
+    // Overflow frames form a singly-linked heap chain terminated by `None`;
+    // `storage.initial` lives inline and is never on the chain.
+    let mut frame = storage.overflow.take();
+    while let Some(ptr) = frame {
+        // SAFETY: every node in `storage.overflow` was created via
+        // `Box::leak(Box::new(emacs_value_frame::new()))` and is exclusively
+        // owned by `storage`.
+        let boxed = unsafe { Box::from_raw(ptr.as_ptr()) };
+        frame = boxed.next;
+        drop(boxed);
     }
-    storage.initial.next = std::ptr::null_mut();
+    storage.initial.next = None;
     storage.initial.offset = 0;
-    storage.current = initial;
 }
 
 impl Drop for emacs_env_private {
     fn drop(&mut self) {
         // Initialization failures and contained panics also retire local tags.
-        unsafe { finalize_storage(&mut self.storage) };
+        finalize_storage(&mut self.storage);
     }
 }
 
@@ -535,17 +570,28 @@ pub fn collect_dynamic_module_gc_roots(roots: &mut Vec<Value>, heap_identity: us
             if entry.heap_identity != heap_identity || entry.env_priv.is_null() {
                 continue;
             }
+            // SAFETY: `entry.env_priv` is kept live by `ActiveModuleEnv` while
+            // on `ACTIVE_ENVS`, and `overflow` chains exclusively owned heap frames.
             unsafe {
                 let priv_ = &*entry.env_priv;
                 roots.push(priv_.non_local_exit_symbol);
                 roots.push(priv_.non_local_exit_data);
-                let mut frame = priv_.storage.current as *const emacs_value_frame;
-                while !frame.is_null() {
-                    let frame_ref = &*frame;
+                let mut frame = priv_.storage.overflow;
+                while let Some(ptr) = frame {
+                    let frame_ref = ptr.as_ref();
                     for item in frame_ref.objects.iter().take(frame_ref.offset) {
                         roots.push(item.v);
                     }
                     frame = frame_ref.next;
+                }
+                for item in priv_
+                    .storage
+                    .initial
+                    .objects
+                    .iter()
+                    .take(priv_.storage.initial.offset)
+                {
+                    roots.push(item.v);
                 }
             }
         }
@@ -780,7 +826,7 @@ unsafe fn initialize_environment(env: *mut emacs_env, priv_: *mut emacs_env_priv
         (*priv_).pending_non_local_exit = emacs_funcall_exit::Return;
         (*priv_).non_local_exit_symbol = Value::NIL;
         (*priv_).non_local_exit_data = Value::NIL;
-        (*priv_).storage.init();
+        (*priv_).storage.reset();
 
         let e = &mut *env;
         e.size = std::mem::size_of::<emacs_env>() as isize;
@@ -2434,13 +2480,7 @@ pub fn load_module(ctx: &mut Context, path: std::path::PathBuf) -> EvalResult {
         })?;
     let init_fn_ptr: EmacsInitFn = *init_fn;
 
-    let mut env_priv = Box::new(emacs_env_private {
-        pending_non_local_exit: emacs_funcall_exit::Return,
-        non_local_exit_symbol: Value::NIL,
-        non_local_exit_data: Value::NIL,
-        storage: emacs_value_storage::new(),
-    });
-    env_priv.storage.init();
+    let mut env_priv = emacs_env_private::new_boxed();
     let env_priv_ptr: *mut emacs_env_private = &mut *env_priv;
 
     let mut env_box = Box::new(emacs_env {
@@ -2524,9 +2564,7 @@ pub fn load_module(ctx: &mut Context, path: std::path::PathBuf) -> EvalResult {
     module_signal_or_throw(env_priv_ref, ctx.symbol_mode())?;
     drop(active_env);
 
-    // SAFETY: the initializer has returned; this environment owns the
-    // initialized handle storage being finalized.
-    unsafe { finalize_storage(&mut env_priv.storage) };
+    finalize_storage(&mut env_priv.storage);
     // SAFETY: `private_members` came from `Box::into_raw` above and nothing
     // else frees it. Init has returned, so no module code reads the runtime.
     drop(unsafe { Box::from_raw(rt.private_members) });
@@ -2571,13 +2609,7 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
     let subr_fn: emacs_function = unsafe { std::mem::transmute(mf.subr) };
     let data = mf.data;
 
-    let mut env_priv = Box::new(emacs_env_private {
-        pending_non_local_exit: emacs_funcall_exit::Return,
-        non_local_exit_symbol: Value::NIL,
-        non_local_exit_data: Value::NIL,
-        storage: emacs_value_storage::new(),
-    });
-    env_priv.storage.init();
+    let mut env_priv = emacs_env_private::new_boxed();
 
     let mut env = Box::new(emacs_env {
         size: 0,
@@ -2695,9 +2727,7 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
     };
     drop(active_env);
 
-    unsafe {
-        finalize_storage(&mut env_priv.storage);
-    }
+    finalize_storage(&mut env_priv.storage);
     drop(env);
     drop(env_priv);
 
@@ -2740,5 +2770,64 @@ mod module_string_tests {
     fn module_make_string_null_nonzero_is_rejected() {
         // SAFETY: a null pointer with a positive length is rejected before any read.
         assert!(unsafe { module_input_bytes(std::ptr::null(), 4) }.is_err());
+    }
+}
+
+#[cfg(test)]
+mod value_storage_tests {
+    use super::{
+        ActiveModuleEnv, VALUE_FRAME_SIZE, allocate_emacs_value, collect_dynamic_module_gc_roots,
+        emacs_env_private, emacs_value_storage, finalize_storage, value_to_lisp,
+    };
+    use neovm_value::value::Value;
+
+    #[test]
+    fn emacs_value_storage_allocates_immediately_after_new() {
+        let mut storage = emacs_value_storage::new();
+        let handle = allocate_emacs_value(&mut storage, Value::fixnum(42));
+        // SAFETY: `handle` was allocated from `storage` above and remains live.
+        assert_eq!(unsafe { value_to_lisp(handle) }, Value::fixnum(42));
+        finalize_storage(&mut storage);
+    }
+
+    #[test]
+    fn emacs_value_storage_move_after_new_and_overflow_finalize_is_sound() {
+        let storage = emacs_value_storage::new();
+        let mut moved = Box::new(storage);
+        let count = VALUE_FRAME_SIZE * 2 + 17;
+        let mut handles = Vec::with_capacity(count);
+        for i in 0..count {
+            handles.push(allocate_emacs_value(&mut moved, Value::fixnum(i as i64)));
+        }
+        for (i, &h) in handles.iter().enumerate() {
+            // SAFETY: `moved` has not moved since `h` was allocated and has not been finalized.
+            assert_eq!(unsafe { value_to_lisp(h) }, Value::fixnum(i as i64));
+        }
+        finalize_storage(&mut moved);
+        // Repeated finalization and Drop are idempotent.
+        finalize_storage(&mut moved);
+    }
+
+    #[test]
+    fn emacs_value_storage_gc_roots_trace_initial_and_overflow_frames() {
+        let mut env_priv = emacs_env_private::new_boxed();
+        let count = VALUE_FRAME_SIZE * 2 + 17;
+        for i in 0..count {
+            let _ = allocate_emacs_value(&mut env_priv.storage, Value::fixnum((i + 1) as i64));
+        }
+        let priv_ptr: *mut emacs_env_private = &mut *env_priv;
+        // SAFETY: `env_priv` stays boxed and live until after `_active` drops.
+        let _active = unsafe { ActiveModuleEnv::push(priv_ptr) };
+        let heap_id = neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
+        let mut roots = Vec::new();
+        collect_dynamic_module_gc_roots(&mut roots, heap_id);
+        let mut seen: Vec<i64> = roots
+            .iter()
+            .filter_map(|v| v.as_fixnum())
+            .filter(|&n| n > 0)
+            .collect();
+        seen.sort_unstable();
+        let expected: Vec<i64> = (1..=(count as i64)).collect();
+        assert_eq!(seen, expected);
     }
 }
