@@ -6,8 +6,9 @@ use super::RenderApp;
 use crate::thread_comm::{
     AssetCommand, InputEvent, LifecycleCommand, RenderCommand, ThreadComms, WindowCommand,
 };
+use neomacs_display_protocol::FrontendKey;
 use neomacs_display_protocol::ImageCacheUsage;
-use neovm_core::keyboard::{FrontendKey, InputEvent as CoreInput, Key};
+use neovm_core::keyboard::{InputEvent as CoreInput, Key};
 use serde_json::{Value, json};
 use std::{
     fs,

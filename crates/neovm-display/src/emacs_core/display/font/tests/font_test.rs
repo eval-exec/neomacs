@@ -2,9 +2,10 @@ use super::*;
 use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
 #[path = "system_font_test.rs"]
 mod system_font_test;
-use crate::emacs_core::display_host::{AvailableFontFamilyName, FontResolveRequest, FrameFontSize};
+use crate::emacs_core::display_host::{AvailableFontFamilyName, FontResolveRequest};
 use crate::emacs_core::xfaces::*;
 use crate::window::FrameId;
+use neomacs_display_protocol::FrameFontSize;
 use neovm_edit::buffer::{Buffer, CharPos0};
 use neovm_eval::emacs_core::eval::{
     Context, DisplayHost, FontEntityMetricsRequest, FontOtfCapability, FontPxProbeResult,

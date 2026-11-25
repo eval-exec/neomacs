@@ -1,9 +1,6 @@
 //! system_font_test tests re-homed to the core upper-layer harness.
 //!
 //! Re-homed from neovm-display (display upper-layer re-home).
-use crate::emacs_core::display_host::{
-    FrameFontRequest, SystemFontName, SystemFontRole, SystemFonts,
-};
 use crate::emacs_core::font::*;
 use neovm_display::test_support::authority::system_font_desktop_context_for_test as desktop_context;
 use neovm_eval::emacs_core::eval::ResolvedFrameFont;

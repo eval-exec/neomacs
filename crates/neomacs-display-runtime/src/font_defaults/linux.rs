@@ -3,7 +3,9 @@
 use gio::{Settings, SettingsBackend, SettingsSchema, SettingsSchemaSource, prelude::*};
 use neomacs_display_protocol::Dpi;
 use neomacs_font_materializer::fontconfig::{GSettingsValue, PgtkFontSettings, SurfaceFontOptions};
-use neovm_core::emacs_core::display_host::{SystemFontName, SystemFontRole, SystemFonts};
+use neomacs_display_protocol::SystemFontRole;
+use neomacs_display_protocol::SystemFontName;
+use neomacs_display_protocol::SystemFonts;
 use std::{
     cell::RefCell,
     io,

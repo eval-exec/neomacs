@@ -272,10 +272,7 @@ pub struct PresentedTextPosition {
     buffer_position: i64,
     row: i64,
     column: i64,
-    #[serde(
-        default,
-        skip_serializing_if = "crate::posn_object_extent::PosnPointRole::is_default"
-    )]
+    #[serde(default)]
     point_role: crate::posn_object_extent::PosnPointRole,
 }
 
@@ -488,7 +485,7 @@ impl PresentedUnifiedHit {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PresentedHit {
     region: PresentedHitRegion,
     text_position: Option<PresentedTextPosition>,
@@ -807,11 +804,11 @@ fn serialize_text_positions<S: serde::Serializer>(
 pub struct PresentedHitIndex {
     presentation: PresentationId,
     regions: Vec<PresentedHitRegion>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     resize_handles: Vec<PresentedResizeHandle>,
     #[serde(rename = "text_positions", serialize_with = "serialize_text_positions")]
     text: PresentedTextIndex,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     string_positions: Vec<PresentedStringPosition>,
     #[serde(skip)]
     nontext_buckets: std::sync::OnceLock<Box<NontextBuckets>>,
@@ -1673,9 +1670,9 @@ pub struct PresentedPaintSpan {
     first: u32,
     len: u32,
     clip: FrameRect,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     hover: Option<PointerDrawMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pressed: Option<PointerDrawMode>,
 }
 
@@ -1744,9 +1741,9 @@ pub struct PresentedSourcePaintSpan {
     #[serde(default = "source_span_default_len")]
     len: u32,
     clip: FrameRect,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     hover: Option<PointerDrawMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pressed: Option<PointerDrawMode>,
 }
 

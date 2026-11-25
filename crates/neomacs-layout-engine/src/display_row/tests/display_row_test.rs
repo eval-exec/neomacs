@@ -11,6 +11,7 @@ use crate::display_text_output_install::install_display_row;
 use crate::font::metrics::FontMetrics;
 use crate::glyph_advance::GlyphAdvanceQuantization;
 use crate::neovm_bridge::{FaceResolver, LayoutBufferSnapshot, LayoutBufferView};
+use neomacs_display_protocol::ResolvedImageMetadata;
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::glyph_matrix::{Glyph, GlyphArea, GlyphRow, GlyphType};
 use neomacs_display_protocol::types::Color;
@@ -23,7 +24,6 @@ use neovm_core::emacs_core::eval::{
 };
 use neovm_core::emacs_core::image_catalog::{
     ImageCatalog, ImageLookup, ImageResolveRequest, ImageSizeLimit, PendingImage, ReadyImage,
-    ResolvedImageMetadata,
 };
 use neovm_core::emacs_core::value::StringTextPropertyRun;
 use neovm_core::emacs_core::{Context, Value};

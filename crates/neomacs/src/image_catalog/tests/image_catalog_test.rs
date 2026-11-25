@@ -265,8 +265,9 @@ fn invalidating_spec_preserves_other_spec_that_uses_same_dependency() {
 
 #[test]
 fn renderer_reconciliation_upgrades_pending_to_ready_geometry() {
+    use neomacs_display_protocol::ResolvedImageMetadata;
     use neomacs_display_runtime::render_thread::ImageDecodeTerminal;
-    use neovm_core::emacs_core::image_catalog::{ImageLookup, ResolvedImageMetadata};
+    use neovm_core::emacs_core::image_catalog::ImageLookup;
 
     let (cmd_tx, _cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
@@ -302,8 +303,9 @@ fn renderer_reconciliation_upgrades_pending_to_ready_geometry() {
 
 #[test]
 fn renderer_eviction_requeues_ready_image_under_its_stable_id() {
+    use neomacs_display_protocol::ResolvedImageMetadata;
     use neomacs_display_runtime::render_thread::ImageDecodeTerminal;
-    use neovm_core::emacs_core::image_catalog::{ImageLookup, ResolvedImageMetadata};
+    use neovm_core::emacs_core::image_catalog::ImageLookup;
 
     let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
@@ -389,8 +391,8 @@ fn eviction_after_decode_but_before_evaluator_service_does_not_strand_pending_im
 
 #[test]
 fn stale_decode_completion_cannot_promote_a_replacement_load() {
+    use neomacs_display_protocol::ResolvedImageMetadata;
     use neomacs_display_runtime::render_thread::ImageDecodeTerminal;
-    use neovm_core::emacs_core::image_catalog::ResolvedImageMetadata;
 
     let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let metadata = Arc::new(ImageRenderState::default());

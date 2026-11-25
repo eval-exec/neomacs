@@ -30,6 +30,7 @@ use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 use crate::host_input::HostInputPublisher;
 use crate::keyboard::*;
 use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+use neomacs_display_protocol::FrontendKey;
 use neovm_value::error::{EvalResult, Flow};
 use neovm_value::system_vocab::input::TtyInputDecoding;
 use neovm_value::value::Value;
@@ -1853,7 +1854,8 @@ fn inhibit_quit_blocks_signal() {
 fn keysym_ctrl_x_from_control_char() {
     crate::test_utils::init_test_tracing();
     // Ctrl+x → winit gives keysym 0x18 (control character)
-    let event = keysym_to_key_event(0x18, RENDER_CTRL_MASK).unwrap();
+    let event =
+        keysym_to_key_event(0x18, neomacs_display_protocol::ModifierBits::CTRL.bits()).unwrap();
     assert_eq!(event.key, Key::Char('x'));
     assert!(event.modifiers.ctrl);
 }
@@ -1861,7 +1863,8 @@ fn keysym_ctrl_x_from_control_char() {
 #[test]
 fn keysym_ctrl_a_from_control_char() {
     crate::test_utils::init_test_tracing();
-    let event = keysym_to_key_event(0x01, RENDER_CTRL_MASK).unwrap();
+    let event =
+        keysym_to_key_event(0x01, neomacs_display_protocol::ModifierBits::CTRL.bits()).unwrap();
     assert_eq!(event.key, Key::Char('a'));
     assert!(event.modifiers.ctrl);
 }
@@ -1869,7 +1872,8 @@ fn keysym_ctrl_a_from_control_char() {
 #[test]
 fn keysym_ctrl_z_from_control_char() {
     crate::test_utils::init_test_tracing();
-    let event = keysym_to_key_event(0x1A, RENDER_CTRL_MASK).unwrap();
+    let event =
+        keysym_to_key_event(0x1A, neomacs_display_protocol::ModifierBits::CTRL.bits()).unwrap();
     assert_eq!(event.key, Key::Char('z'));
     assert!(event.modifiers.ctrl);
 }
@@ -1895,7 +1899,8 @@ fn keysym_raw_tty_escape_is_meta_prefix_char() {
 #[test]
 fn keysym_raw_tty_delete_is_del_char() {
     crate::test_utils::init_test_tracing();
-    let event = keysym_to_key_event(0x7F, RENDER_META_MASK).unwrap();
+    let event =
+        keysym_to_key_event(0x7F, neomacs_display_protocol::ModifierBits::META.bits()).unwrap();
     assert_eq!(event.key, Key::Char('\u{7f}'));
     assert!(event.modifiers.meta);
     assert_eq!(
@@ -1925,7 +1930,8 @@ fn keysym_raw_control_h_stays_help_char() {
 fn keysym_ctrl_x_from_printable_with_modifier() {
     crate::test_utils::init_test_tracing();
     // Ctrl+x when winit gives keysym 0x78 ('x') with ctrl modifier
-    let event = keysym_to_key_event(0x78, RENDER_CTRL_MASK).unwrap();
+    let event =
+        keysym_to_key_event(0x78, neomacs_display_protocol::ModifierBits::CTRL.bits()).unwrap();
     assert_eq!(event.key, Key::Char('x'));
     assert!(event.modifiers.ctrl);
 }
@@ -1933,7 +1939,11 @@ fn keysym_ctrl_x_from_printable_with_modifier() {
 #[test]
 fn keysym_shifted_uppercase_char_drops_shift_modifier() {
     crate::test_utils::init_test_tracing();
-    let event = keysym_to_key_event('A' as u32, RENDER_SHIFT_MASK).unwrap();
+    let event = keysym_to_key_event(
+        'A' as u32,
+        neomacs_display_protocol::ModifierBits::SHIFT.bits(),
+    )
+    .unwrap();
     assert_eq!(event.key, Key::Char('A'));
     assert!(!event.modifiers.shift);
 }
@@ -1949,7 +1959,12 @@ fn keysym_unicode_scalar_maps_to_character_event() {
 #[test]
 fn keysym_ctrl_shift_letter_preserves_shift_for_command_chord() {
     crate::test_utils::init_test_tracing();
-    let event = keysym_to_key_event('f' as u32, RENDER_CTRL_MASK | RENDER_SHIFT_MASK).unwrap();
+    let event = keysym_to_key_event(
+        'f' as u32,
+        neomacs_display_protocol::ModifierBits::CTRL.bits()
+            | neomacs_display_protocol::ModifierBits::SHIFT.bits(),
+    )
+    .unwrap();
     assert_eq!(event.key, Key::Char('f'));
     assert!(event.modifiers.ctrl);
     assert!(event.modifiers.shift);
@@ -1960,7 +1975,12 @@ fn keysym_ctrl_shift_letter_preserves_shift_for_command_chord() {
 #[test]
 fn keysym_ctrl_shift_control_text_preserves_shift_for_command_chord() {
     crate::test_utils::init_test_tracing();
-    let event = keysym_to_key_event(0x06, RENDER_CTRL_MASK | RENDER_SHIFT_MASK).unwrap();
+    let event = keysym_to_key_event(
+        0x06,
+        neomacs_display_protocol::ModifierBits::CTRL.bits()
+            | neomacs_display_protocol::ModifierBits::SHIFT.bits(),
+    )
+    .unwrap();
     assert_eq!(event.key, Key::Char('f'));
     assert!(event.modifiers.ctrl);
     assert!(event.modifiers.shift);
@@ -1970,7 +1990,12 @@ fn keysym_ctrl_shift_control_text_preserves_shift_for_command_chord() {
 #[test]
 fn keysym_meta_shift_letter_consumes_shift_into_uppercase() {
     crate::test_utils::init_test_tracing();
-    let event = keysym_to_key_event('f' as u32, RENDER_META_MASK | RENDER_SHIFT_MASK).unwrap();
+    let event = keysym_to_key_event(
+        'f' as u32,
+        neomacs_display_protocol::ModifierBits::META.bits()
+            | neomacs_display_protocol::ModifierBits::SHIFT.bits(),
+    )
+    .unwrap();
     assert_eq!(event.key, Key::Char('F'));
     assert!(event.modifiers.meta);
     assert!(!event.modifiers.shift);
@@ -1984,20 +2009,34 @@ fn keysym_meta_shift_punctuation_consumes_shift_into_the_shifted_character() {
     // that produced it. GNU folds that Shift into the character for every
     // ordinary chord, so `beginning-of-buffer` is reached by `M-<`, never by
     // an `M-S-<` that no keymap binds.
-    let event = keysym_to_key_event('<' as u32, RENDER_META_MASK | RENDER_SHIFT_MASK).unwrap();
+    let event = keysym_to_key_event(
+        '<' as u32,
+        neomacs_display_protocol::ModifierBits::META.bits()
+            | neomacs_display_protocol::ModifierBits::SHIFT.bits(),
+    )
+    .unwrap();
     assert_eq!(event.key, Key::Char('<'));
     assert!(event.modifiers.meta);
     assert!(!event.modifiers.shift);
     assert_eq!(event.to_description(), "M-<");
 
-    let event = keysym_to_key_event('>' as u32, RENDER_META_MASK | RENDER_SHIFT_MASK).unwrap();
+    let event = keysym_to_key_event(
+        '>' as u32,
+        neomacs_display_protocol::ModifierBits::META.bits()
+            | neomacs_display_protocol::ModifierBits::SHIFT.bits(),
+    )
+    .unwrap();
     assert_eq!(event.to_description(), "M->");
 }
 
 #[test]
 fn keysym_ctrl_uppercase_without_shift_treats_caps_lock_as_unshifted() {
     crate::test_utils::init_test_tracing();
-    let event = keysym_to_key_event('F' as u32, RENDER_CTRL_MASK).unwrap();
+    let event = keysym_to_key_event(
+        'F' as u32,
+        neomacs_display_protocol::ModifierBits::CTRL.bits(),
+    )
+    .unwrap();
     assert_eq!(event.key, Key::Char('f'));
     assert!(event.modifiers.ctrl);
     assert!(!event.modifiers.shift);
@@ -2007,7 +2046,11 @@ fn keysym_ctrl_uppercase_without_shift_treats_caps_lock_as_unshifted() {
 #[test]
 fn keysym_shift_space_preserves_gnu_distinction() {
     crate::test_utils::init_test_tracing();
-    let event = keysym_to_key_event(' ' as u32, RENDER_SHIFT_MASK).unwrap();
+    let event = keysym_to_key_event(
+        ' ' as u32,
+        neomacs_display_protocol::ModifierBits::SHIFT.bits(),
+    )
+    .unwrap();
     assert_eq!(event.key, Key::Char(' '));
     assert!(event.modifiers.shift);
     assert_eq!(event.to_description(), "S-SPC");
@@ -2016,8 +2059,11 @@ fn keysym_shift_space_preserves_gnu_distinction() {
 #[test]
 fn render_modifiers_helper_matches_transport_bit_layout() {
     crate::test_utils::init_test_tracing();
-    let mods =
-        render_modifiers_to_modifiers(RENDER_SHIFT_MASK | RENDER_CTRL_MASK | RENDER_META_MASK);
+    let mods = render_modifiers_to_modifiers(
+        neomacs_display_protocol::ModifierBits::SHIFT.bits()
+            | neomacs_display_protocol::ModifierBits::CTRL.bits()
+            | neomacs_display_protocol::ModifierBits::META.bits(),
+    );
     assert!(mods.shift);
     assert!(mods.ctrl);
     assert!(mods.meta);
@@ -2471,9 +2517,18 @@ fn keysym_to_key_event_suppresses_modifier_keysyms() {
 fn keysym_to_key_event_names_reserved_native_bands() {
     crate::test_utils::init_test_tracing();
     for (keysym, name) in [
-        (native_key_macos(0x24), "mac-36"),
-        (native_key_windows(0x5d), "win-93"),
-        (native_key_android(4), "android-4"),
+        (
+            neomacs_display_protocol::frontend_input::native_key::macos(0x24),
+            "mac-36",
+        ),
+        (
+            neomacs_display_protocol::frontend_input::native_key::windows(0x5d),
+            "win-93",
+        ),
+        (
+            neomacs_display_protocol::frontend_input::native_key::android(4),
+            "android-4",
+        ),
     ] {
         let event = keysym_to_key_event(keysym, 0).unwrap_or_else(|| panic!("{keysym:#x}"));
         assert_eq!(event.key, Key::Function(name.to_string()));
@@ -2493,13 +2548,13 @@ fn keysym_to_key_event_synthesizes_a_name_for_an_unnamed_keysym() {
 }
 
 /// Issue #442: the NS modifier policy can cook Option to `alt', and the
-/// transport carries it as RENDER_ALT_MASK; the cooked lisp event must be
+/// transport carries it as neomacs_display_protocol::ModifierBits::ALT.bits(); the cooked lisp event must be
 /// `A-x' (KEY_CHAR_ALT | ?x), never plain text.
 #[test]
 fn alt_transport_cooks_the_alt_bit_like_gnu() {
     let event = crate::emacs_core::eval::keyboard::keysym_to_key_event(
         'x' as u32,
-        crate::emacs_core::eval::keyboard::RENDER_ALT_MASK,
+        neomacs_display_protocol::ModifierBits::ALT.bits(),
     )
     .expect("A-x transport event");
     let value = event.to_emacs_event_value();
@@ -2599,7 +2654,7 @@ fn character_and_keysym_transport_keep_colliding_values_distinct() {
             FrontendKey::Keysym(keysym), 0, true, 7,
         ), Some(InputEvent::KeyPress { key, emacs_frame_id: 7 }) if key.key == expected));
         assert!(matches!(render_key_transport_to_input_event(
-            FrontendKey::Character(character), RENDER_META_MASK, true, 7,
+            FrontendKey::Character(character), neomacs_display_protocol::ModifierBits::META.bits(), true, 7,
         ), Some(InputEvent::KeyPress { key, emacs_frame_id: 7 })
             if key == KeyEvent::char_with_mods(character, Modifiers::meta())));
     }

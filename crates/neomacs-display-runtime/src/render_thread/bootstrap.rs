@@ -617,7 +617,7 @@ pub(crate) fn run_render_loop_with_event_loop(
         InitialWindow::Ready {
             preparation: InitialWindowPreparation {
                 size: InitialWindowSize { width, height },
-                visibility: crate::thread_comm::WindowVisibility::Visible,
+                visibility: neomacs_display_protocol::WindowVisibility::Visible,
                 decorated: true,
             },
             evaluator: None,

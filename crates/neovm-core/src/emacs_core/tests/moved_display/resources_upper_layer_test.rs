@@ -2,7 +2,6 @@
 //!
 //! Re-homed from neovm-display (display upper-layer re-home).
 use crate::emacs_core::display::*;
-use crate::emacs_core::display_host::GuiResourceQuery;
 use neovm_value::value::Value;
 
 #[test]

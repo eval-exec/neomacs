@@ -31,6 +31,7 @@ use neovm_edit::emacs_core::display_metrics::{LineWrap, MotionEngine};
 use neovm_eval::emacs_core::eval::VariableView;
 use neovm_eval::emacs_core::eval::data::minibuffer::MinibufferManager;
 use neovm_eval::emacs_core::eval::data::minibuffer_entry::MinibufferManagerExt;
+use neovm_value::display_vocab::FrameVisibilityLisp;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 pub(crate) use neovm_value::error::{

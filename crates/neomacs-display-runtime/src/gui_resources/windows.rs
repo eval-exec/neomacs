@@ -1,4 +1,4 @@
-use neovm_core::emacs_core::display_host::GuiResourceQuery;
+use neomacs_display_protocol::GuiResourceQuery;
 use winreg::{HKCU, HKLM, RegKey, enums::REG_SZ, types::FromRegValue};
 
 fn string(key: &RegKey, name: &str) -> Option<String> {

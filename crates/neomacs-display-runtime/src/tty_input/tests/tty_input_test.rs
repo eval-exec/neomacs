@@ -1,6 +1,6 @@
 use super::*;
 use crossterm::event::{KeyEventKind, KeyEventState};
-use neovm_core::keyboard::FrontendKey;
+use neomacs_display_protocol::FrontendKey;
 
 #[cfg(unix)]
 #[test]
@@ -48,7 +48,11 @@ fn tty_control_digit_aliases_are_raw_control_bytes() {
     for (input, expected) in cases {
         let (keysym, modifiers) = key_parts(KeyCode::Char(input), KeyModifiers::CONTROL);
         assert_eq!(keysym, FrontendKey::Keysym(expected), "input C-{input}");
-        assert_eq!(modifiers & NEOMACS_CTRL_MASK, 0, "input C-{input}");
+        assert_eq!(
+            modifiers & neomacs_display_protocol::ModifierBits::CTRL.bits(),
+            0,
+            "input C-{input}"
+        );
     }
 }
 
@@ -60,8 +64,14 @@ fn tty_meta_control_alias_preserves_meta_only() {
     );
 
     assert_eq!(keysym, FrontendKey::Keysym(0x1c));
-    assert_eq!(modifiers & NEOMACS_CTRL_MASK, 0);
-    assert_ne!(modifiers & NEOMACS_META_MASK, 0);
+    assert_eq!(
+        modifiers & neomacs_display_protocol::ModifierBits::CTRL.bits(),
+        0
+    );
+    assert_ne!(
+        modifiers & neomacs_display_protocol::ModifierBits::META.bits(),
+        0
+    );
 }
 
 #[test]
@@ -69,7 +79,10 @@ fn tty_backspace_is_raw_del_byte() {
     let (keysym, modifiers) = key_parts(KeyCode::Backspace, KeyModifiers::ALT);
 
     assert_eq!(keysym, FrontendKey::Keysym(0x7f));
-    assert_ne!(modifiers & NEOMACS_META_MASK, 0);
+    assert_ne!(
+        modifiers & neomacs_display_protocol::ModifierBits::META.bits(),
+        0
+    );
 }
 
 #[test]

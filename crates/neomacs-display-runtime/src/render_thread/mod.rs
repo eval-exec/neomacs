@@ -73,7 +73,7 @@ pub use startup::{
 use state::{FpsCounter, ImeCursorArea, RenderApp};
 pub use state::{
     ImageDecodeTerminal, ImageRenderState, ImageTerminalProbe, ImageTerminalPublication,
-    MonitorInfo, RendererPhase, SharedImageRenderState, SharedMonitorInfo,
+    RendererPhase, SharedImageRenderState, SharedMonitorInfo,
 };
 pub use thread_handle::RenderThread;
 

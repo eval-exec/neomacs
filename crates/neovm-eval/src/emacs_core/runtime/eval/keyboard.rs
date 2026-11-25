@@ -12,6 +12,7 @@
 
 use crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
 use crate::emacs_core::eval::keymap_lookup::KeymapMarker;
+use neomacs_display_protocol::FrontendKey;
 use neovm_value::error::LispCondition;
 use neovm_value::intern::{WellKnown, intern, resolve_sym};
 use neovm_value::tagged::value::SymbolMode;
@@ -28,8 +29,6 @@ mod display_service;
 mod input_method;
 mod keysym;
 mod unread;
-
-pub use keysym::{native_key_android, native_key_macos, native_key_windows};
 
 pub(crate) use neovm_value::system_vocab::input::{
     ExecutingKbdMacroRuntimeSnapshot, KeySequenceBufferSelection, ReadKeySequenceOptions,
@@ -1031,22 +1030,6 @@ pub(crate) const XK_PAGE_DOWN: u32 = 0xFF56;
 pub(crate) const XK_INSERT: u32 = 0xFF63;
 pub const XK_F1: u32 = 0xFFBE;
 
-// Render thread modifier bitmask constants.
-//
-// These are the wire values of `neomacs_display_protocol`'s
-// `TransportModifierBit` masks (`modifier_policy.rs`); `Alt` and `Hyper`
-// were appended when the NS modifier policy (issue #442) taught the
-// transport to carry the full GNU modifier set, which distinguishes
-// `alt_modifier' from `meta_modifier'.
-pub const RENDER_SHIFT_MASK: u32 = 1 << 0;
-pub const RENDER_CTRL_MASK: u32 = 1 << 1;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) const RENDER_META_MASK: u32 = 1 << 2;
-pub(crate) const RENDER_SUPER_MASK: u32 = 1 << 3;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) const RENDER_ALT_MASK: u32 = 1 << 4;
-pub(crate) const RENDER_HYPER_MASK: u32 = 1 << 5;
-
 /// Meaning of a character-shaped frontend event before it enters Emacs's
 /// command loop.
 ///
@@ -1170,23 +1153,13 @@ fn normalize_command_character_case(character: char, shift_pressed: bool) -> cha
 /// Convert frontend render/TTY modifier bits into the core modifier model.
 pub fn render_modifiers_to_modifiers(bits: u32) -> Modifiers {
     Modifiers {
-        ctrl: bits & RENDER_CTRL_MASK != 0,
-        meta: bits & RENDER_META_MASK != 0,
-        shift: bits & RENDER_SHIFT_MASK != 0,
-        super_: bits & RENDER_SUPER_MASK != 0,
-        hyper: bits & RENDER_HYPER_MASK != 0,
-        alt: bits & RENDER_ALT_MASK != 0,
+        ctrl: bits & neomacs_display_protocol::ModifierBits::CTRL.bits() != 0,
+        meta: bits & neomacs_display_protocol::ModifierBits::META.bits() != 0,
+        shift: bits & neomacs_display_protocol::ModifierBits::SHIFT.bits() != 0,
+        super_: bits & neomacs_display_protocol::ModifierBits::SUPER.bits() != 0,
+        hyper: bits & neomacs_display_protocol::ModifierBits::HYPER.bits() != 0,
+        alt: bits & neomacs_display_protocol::ModifierBits::ALT.bits() != 0,
     }
-}
-
-/// Toolkit input identity. Text and keysyms overlap numerically, so their
-/// provenance must survive transport (U+FF0D is text; XK_Return is a key).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrontendKey {
-    /// A Unicode scalar supplied as text by the toolkit or input method.
-    Character(char),
-    /// A key identity in the X11/native keysym domain, not a code point.
-    Keysym(u32),
 }
 
 /// Cook frontend input without interpreting text as a keysym.
@@ -1346,8 +1319,12 @@ impl NativeNonKeyKind {
 /// Input events from the display layer.
 #[derive(Clone, Debug)]
 pub enum InputEvent {
+    /// A tracked frontend input. The receipt is a value (DESIGN §6.14): the
+    /// evaluator records its consumption in the frontier a frame carries, and
+    /// never reaches the frontend's ledger, which a display link could not
+    /// carry anyway.
     Tracked {
-        receipt: neomacs_display_protocol::input_progress::InputDelivery,
+        receipt: neomacs_display_protocol::input_progress::InputReceipt,
         event: Box<InputEvent>,
     },
     /// Native diagnostic observation; unwrapped by the ordered command reader.
@@ -1513,7 +1490,7 @@ pub enum InputEvent {
     },
     /// Native desktop preferences, distinct from installed-font catalog changes.
     SystemFontsChanged {
-        fonts: crate::emacs_core::eval::protocol::SystemFonts,
+        fonts: neomacs_display_protocol::SystemFonts,
         display: neomacs_display_protocol::GraphicalDisplayIdentity,
     },
     /// A Wayland connection has published new font-opening/rendering options.
@@ -1559,16 +1536,16 @@ pub enum InputEvent {
     FrameShaderFailed { error: String },
     /// A compositor-owned neo-term failed to create after reserving its ID.
     TerminalCreateFailed {
-        id: crate::emacs_core::eval::protocol::TerminalId,
+        id: neomacs_display_protocol::TerminalId,
         error: String,
     },
     /// A compositor-owned neo-term child process exited.
     TerminalExited {
-        id: crate::emacs_core::eval::protocol::TerminalId,
+        id: neomacs_display_protocol::TerminalId,
     },
     /// A compositor-owned neo-term published a new title.
     TerminalTitleChanged {
-        id: crate::emacs_core::eval::protocol::TerminalId,
+        id: neomacs_display_protocol::TerminalId,
         title: String,
     },
 }
@@ -3549,10 +3526,10 @@ impl crate::emacs_core::eval::Context {
     #[doc(hidden)]
     pub fn handle_system_fonts_input_event(
         &mut self,
-        fonts: crate::emacs_core::eval::protocol::SystemFonts,
+        fonts: neomacs_display_protocol::SystemFonts,
         display: neomacs_display_protocol::GraphicalDisplayIdentity,
     ) -> Result<bool, neovm_value::error::Flow> {
-        use crate::emacs_core::eval::protocol::SystemFontRole;
+        use neomacs_display_protocol::SystemFontRole;
 
         let Some(host) = self.display_host.as_mut() else {
             return Ok(false);
@@ -3655,7 +3632,7 @@ impl crate::emacs_core::eval::Context {
     #[doc(hidden)]
     pub fn handle_terminal_exited_input_event(
         &mut self,
-        id: crate::emacs_core::eval::protocol::TerminalId,
+        id: neomacs_display_protocol::TerminalId,
     ) -> neovm_value::error::EvalResult {
         let args = [
             Value::symbol("neo-term-exit-functions"),
@@ -3667,7 +3644,7 @@ impl crate::emacs_core::eval::Context {
     #[doc(hidden)]
     pub fn handle_terminal_create_failed_input_event(
         &mut self,
-        id: crate::emacs_core::eval::protocol::TerminalId,
+        id: neomacs_display_protocol::TerminalId,
         error: &str,
     ) -> neovm_value::error::EvalResult {
         let args = [
@@ -3681,7 +3658,7 @@ impl crate::emacs_core::eval::Context {
     #[doc(hidden)]
     pub fn handle_terminal_title_changed_input_event(
         &mut self,
-        id: crate::emacs_core::eval::protocol::TerminalId,
+        id: neomacs_display_protocol::TerminalId,
         title: &str,
     ) -> neovm_value::error::EvalResult {
         let args = [

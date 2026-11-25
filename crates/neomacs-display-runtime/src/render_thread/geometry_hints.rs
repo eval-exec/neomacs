@@ -1,4 +1,4 @@
-use neovm_core::window::GuiFrameGeometryHints;
+use neomacs_display_protocol::GuiFrameGeometryHints;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 

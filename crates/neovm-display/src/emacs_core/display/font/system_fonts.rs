@@ -1,7 +1,7 @@
 //! GNU xsettings.c's Lisp queries, delegated to the current display host.
 
 use super::{EvalResult, Value, expect_args};
-use crate::emacs_core::display_host::SystemFontRole;
+use neomacs_display_protocol::SystemFontRole;
 use neovm_eval::emacs_core::eval::Context;
 
 fn system_font(eval: &Context, role: SystemFontRole) -> Value {

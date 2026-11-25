@@ -84,7 +84,7 @@ fn publish_image_cache_event(
             return None;
         }
         neomacs_renderer_wgpu::ImageCacheEvent::Ready { load, metadata } => {
-            let metadata = neovm_core::emacs_core::image_catalog::ResolvedImageMetadata {
+            let metadata = neomacs_display_protocol::ResolvedImageMetadata {
                 layout: metadata.layout,
                 reported: metadata.reported,
                 background: metadata.background,
@@ -130,7 +130,10 @@ impl RenderApp {
     #[cfg(feature = "neo-term")]
     fn expanded_terminal_glyphs_for_frame(
         frame: &FrameGlyphBuffer,
-        terminal_contents: &HashMap<crate::terminal::TerminalId, crate::terminal::TerminalContent>,
+        terminal_contents: &HashMap<
+            neomacs_display_protocol::TerminalId,
+            crate::terminal::TerminalContent,
+        >,
     ) -> (Vec<FrameGlyph>, FrameFaceMap) {
         let cell_w = frame.char_width;
         let cell_h = frame.char_height;
@@ -151,7 +154,7 @@ impl RenderApp {
             else {
                 continue;
             };
-            let Some(terminal_id) = crate::terminal::TerminalId::new(*terminal_id) else {
+            let Some(terminal_id) = neomacs_display_protocol::TerminalId::new(*terminal_id) else {
                 continue;
             };
             let Some(content) = terminal_contents.get(&terminal_id) else {
@@ -201,11 +204,14 @@ impl RenderApp {
     #[cfg(feature = "neo-term")]
     fn terminal_expansion_for_frame(
         frame: &FrameGlyphBuffer,
-        ordered_terminal_ids: &[crate::terminal::TerminalId],
-        terminal_contents: &HashMap<crate::terminal::TerminalId, crate::terminal::TerminalContent>,
+        ordered_terminal_ids: &[neomacs_display_protocol::TerminalId],
+        terminal_contents: &HashMap<
+            neomacs_display_protocol::TerminalId,
+            crate::terminal::TerminalContent,
+        >,
         terminal_targets: &HashMap<
-            crate::terminal::TerminalId,
-            crate::terminal::TerminalDisplayTarget,
+            neomacs_display_protocol::TerminalId,
+            neomacs_display_protocol::TerminalDisplayTarget,
         >,
     ) -> TerminalExpansion {
         let (extra_glyphs, extra_faces) =
@@ -243,11 +249,14 @@ impl RenderApp {
     #[cfg(feature = "neo-term")]
     fn expanded_window_terminals_for_frame(
         frame: &FrameGlyphBuffer,
-        ordered_terminal_ids: &[crate::terminal::TerminalId],
-        terminal_contents: &HashMap<crate::terminal::TerminalId, crate::terminal::TerminalContent>,
+        ordered_terminal_ids: &[neomacs_display_protocol::TerminalId],
+        terminal_contents: &HashMap<
+            neomacs_display_protocol::TerminalId,
+            crate::terminal::TerminalContent,
+        >,
         terminal_targets: &HashMap<
-            crate::terminal::TerminalId,
-            crate::terminal::TerminalDisplayTarget,
+            neomacs_display_protocol::TerminalId,
+            neomacs_display_protocol::TerminalDisplayTarget,
         >,
     ) -> (Vec<FrameGlyph>, FrameFaceMap) {
         let mut glyphs = Vec::new();
@@ -261,7 +270,7 @@ impl RenderApp {
             let Some(target) = terminal_targets.get(id) else {
                 continue;
             };
-            let crate::terminal::TerminalDisplayTarget::Window { buffer } = target else {
+            let neomacs_display_protocol::TerminalDisplayTarget::Window { buffer } = target else {
                 continue;
             };
             let Some(content) = terminal_contents.get(id) else {
@@ -270,7 +279,7 @@ impl RenderApp {
             for info in frame
                 .window_infos
                 .iter()
-                .filter(|info| info.buffer_id == buffer.0 && !info.is_minibuffer)
+                .filter(|info| info.buffer_id == *buffer && !info.is_minibuffer)
             {
                 let body = Self::window_text_body(info);
                 let paint = TerminalPaintTarget {
@@ -637,7 +646,7 @@ impl RenderApp {
     /// Update terminal content and expand Terminal glyphs into renderable cells.
     #[cfg(feature = "neo-term")]
     pub(super) fn update_terminals(&mut self) {
-        use crate::terminal::TerminalDisplayTarget;
+        use neomacs_display_protocol::TerminalDisplayTarget;
 
         // Get frame font metrics for terminal cell sizing.
         // These come from FRAME_COLUMN_WIDTH / FRAME_LINE_HEIGHT / FRAME_FONT->pixel_size.
@@ -694,14 +703,14 @@ impl RenderApp {
             let TerminalDisplayTarget::Window { buffer } = view.target else {
                 continue;
             };
-            let Some((_, body, owner_cell_w, owner_cell_h)) =
-                window_layouts.get(&buffer.0).copied()
+            let Some((_, body, owner_cell_w, owner_cell_h)) = window_layouts.get(&buffer).copied()
             else {
                 continue;
             };
             let target_cols = (body.width / owner_cell_w).floor() as u16;
             let target_rows = (body.height / owner_cell_h).floor() as u16;
-            let Some(size) = crate::terminal::TerminalGridSize::new(target_cols, target_rows)
+            let Some(size) =
+                neomacs_display_protocol::TerminalGridSize::new(target_cols, target_rows)
             else {
                 continue;
             };

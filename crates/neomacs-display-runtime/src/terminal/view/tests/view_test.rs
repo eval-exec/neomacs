@@ -74,9 +74,7 @@ fn destroying_terminal_reaps_child_and_joins_reader_thread() {
     let view = TerminalView::new(
         id,
         size,
-        TerminalDisplayTarget::Window {
-            buffer: neovm_core::buffer::BufferId(9),
-        },
+        TerminalDisplayTarget::Window { buffer: 9 },
         Some("/bin/sh"),
     )
     .expect("create real PTY shell");

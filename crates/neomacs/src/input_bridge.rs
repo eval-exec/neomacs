@@ -6,9 +6,10 @@
 
 pub(crate) mod publication;
 
+use neomacs_display_protocol::MonitorInfo as DisplayMonitorInfo;
+use neomacs_display_protocol::PointerTarget;
 use neomacs_display_runtime::thread_comm::{
-    InputEvent as DisplayEvent, MonitorInfo as DisplayMonitorInfo, PointerAction, PointerTarget,
-    PositionedPointerInput, ScrollDelta,
+    InputEvent as DisplayEvent, PointerAction, PositionedPointerInput, ScrollDelta,
 };
 use neovm_core::emacs_core::builtins::NeomacsMonitorInfo;
 use neovm_core::keyboard::{
@@ -279,9 +280,12 @@ pub(crate) fn convert_display_event(event: &DisplayEvent) -> EvaluatorInputBatch
         let mut batch = convert_display_event(event);
         if let Some(action) = batch.events.iter_mut().rev().find(|event| event.is_some()) {
             *action = Some(KbInputEvent::Tracked {
-                receipt: receipt.clone(),
+                receipt: receipt.receipt(),
                 event: Box::new(action.take().unwrap()),
             });
+        } else {
+            // Nothing reaches the evaluator's queue, so nothing will consume it.
+            receipt.cancel();
         }
         return batch;
     }

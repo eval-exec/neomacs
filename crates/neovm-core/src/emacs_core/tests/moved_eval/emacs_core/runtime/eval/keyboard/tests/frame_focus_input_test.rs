@@ -3,11 +3,10 @@
 use crate::emacs_core::Context;
 use crate::emacs_core::eval::*;
 use crate::host_input::HostInputPublisher;
-use crate::keyboard::{
-    FrontendKey, InputEvent, NativeNonKeyKind, render_key_transport_to_input_event,
-};
+use crate::keyboard::{InputEvent, NativeNonKeyKind, render_key_transport_to_input_event};
 use crate::window::DisplayFrameManagerExt;
 use crate::window::FrameId;
+use neomacs_display_protocol::FrontendKey;
 use neovm_edit::buffer::BufferId;
 use neovm_value::value::Value;
 

@@ -19,10 +19,7 @@ use self::interactive_registry::InteractiveRegistry;
 use self::keymap_lookup::{list_keymap_define, list_keymap_set_parent, make_sparse_list_keymap};
 use self::protocol::tty_host::TtyFrameHostFactory;
 pub use self::protocol::{DisplayHost, FrameFontRequest, FrameFontSelection};
-pub use self::protocol::{
-    FontOpeningSize, FrameFontSize, TerminalCreateRequest, TerminalDisplayTarget,
-    TerminalFloatPlacement, TerminalGridSize, TerminalId,
-};
+pub use self::protocol::{FontOpeningSize, TerminalCreateRequest};
 use super::advice::VariableWatcherList;
 use super::autoload::AutoloadManager;
 use super::builtins;
@@ -455,7 +452,7 @@ struct RedisplaySignature {
     fontset_generation: u64,
     compositor_scrolling_enabled: bool,
     compositor_pixel_scroll: bool,
-    input_checkpoint: Vec<neomacs_display_protocol::input_progress::InputCheckpoint>,
+    input_checkpoint: Vec<neomacs_display_protocol::input_progress::CompletedPrefix>,
     selected_frame: Option<u64>,
     selected_window: Option<u64>,
     current_buffer: Option<u64>,
@@ -2595,7 +2592,7 @@ pub struct GuiFrameHostRequest {
     pub width: u32,
     pub height: u32,
     pub title: neovm_value::heap_types::LispString,
-    pub geometry_hints: neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints,
+    pub geometry_hints: neomacs_display_protocol::GuiFrameGeometryHints,
     pub visibility: neovm_value::display_vocab::FrameVisibility,
     pub decorated: bool,
     pub fullscreen: Option<FrameFullscreen>,

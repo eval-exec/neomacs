@@ -31,6 +31,7 @@ use super::state::{
 use super::terminal_expansion::TerminalExpansion;
 use super::transitions::clear_frame_transition_textures;
 use crate::core::frame_glyphs::{FrameGlyph, FrameGlyphBuffer};
+use neomacs_display_protocol::GuiFrameGeometryHints;
 use neomacs_display_protocol::effect_config::IdleDimConfig;
 use neomacs_display_protocol::frame_time::{EventTime, observe_platform_now};
 use neomacs_display_protocol::{
@@ -39,9 +40,9 @@ use neomacs_display_protocol::{
     RetainedImageSet, SurfaceState,
 };
 use neomacs_renderer_wgpu::{WgpuGlyphAtlas, WgpuRenderer};
-use neovm_core::window::GuiFrameGeometryHints;
 
-use crate::thread_comm::{WindowFullscreenMode, WindowVisibility};
+use neomacs_display_protocol::WindowFullscreenMode;
+use neomacs_display_protocol::WindowVisibility;
 
 /// How close together two titlebar clicks must be to count as a double click.
 const TITLEBAR_DOUBLE_CLICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(400);
@@ -1864,7 +1865,7 @@ impl GuiFrameWindowState {
         &mut self,
         width: u32,
         height: u32,
-        resize_request_id: Option<neovm_core::window::GuiResizeRequestId>,
+        resize_request_id: Option<neomacs_display_protocol::GuiResizeRequestId>,
     ) -> super::surface_resize::ResizeRequestOutcome {
         use super::surface_resize::ResizeRequestOutcome;
         match &mut self.lifecycle {

@@ -8,9 +8,7 @@ pub mod content;
 pub(crate) mod view;
 
 pub use content::TerminalContent;
-pub use neovm_core::emacs_core::display_host::{
-    TerminalDisplayTarget, TerminalFloatPlacement, TerminalGridSize, TerminalId,
-};
+use neomacs_display_protocol::TerminalId;
 pub(crate) use view::{TerminalManager, TerminalView};
 
 use std::collections::HashMap;

@@ -2,11 +2,9 @@
 
 use crate::emacs_core::eval::*;
 use crate::host_input::HostInputPublisher;
-use crate::keyboard::{
-    FrontendKey, InputEvent, RENDER_CTRL_MASK, RENDER_SHIFT_MASK,
-    render_key_transport_to_input_event,
-};
+use crate::keyboard::render_key_transport_to_input_event;
 use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+use neomacs_display_protocol::FrontendKey;
 use neovm_value::value::Value;
 
 // GNU keyboard.c's function-key names and the toolkit's XF86 names, kept
@@ -118,7 +116,8 @@ fn extended_keysym_transport_retains_command_modifiers() {
         .send(
             render_key_transport_to_input_event(
                 FrontendKey::Keysym(0xffca),
-                RENDER_CTRL_MASK | RENDER_SHIFT_MASK,
+                neomacs_display_protocol::ModifierBits::CTRL.bits()
+                    | neomacs_display_protocol::ModifierBits::SHIFT.bits(),
                 true,
                 frame,
             )

@@ -1,5 +1,6 @@
 use super::super::*;
-use neovm_core::emacs_core::display_host::{FontOpeningSize, PositiveFontScalar};
+use neomacs_display_protocol::PositiveFontScalar;
+use neovm_core::emacs_core::display_host::FontOpeningSize;
 
 #[test]
 fn listing_zero_size_remains_zero_while_font_opening_stays_usable() {

@@ -23,10 +23,11 @@ use neomacs_display_protocol::frame_time::{EventTime, FrameSample, observe_platf
 use bytemuck::Zeroable;
 
 use crate::shader_surface::{
-    SURFACE_UNIFORM_BYTES, SURFACE_USER_UNIFORM_SLOTS, SurfaceShaderLanguage, SurfaceUniformInit,
-    SurfaceUniforms, uniform_accessor_name,
+    SURFACE_UNIFORM_BYTES, SURFACE_USER_UNIFORM_SLOTS, SurfaceUniforms, uniform_accessor_name,
 };
 use crate::shader_surface_cache::build_surface_pipeline;
+use neomacs_display_protocol::SurfaceShaderLanguage;
+use neomacs_display_protocol::SurfaceUniformInit;
 
 pub struct FramePost {
     pipeline: wgpu::RenderPipeline,

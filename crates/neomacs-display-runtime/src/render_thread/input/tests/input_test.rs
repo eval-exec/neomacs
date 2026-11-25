@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::frame_glyphs::FrameGlyphBuffer;
+use neomacs_display_protocol::FrontendKey;
 // FrameManager's create_frame is an upper extension trait after the display
 // split; the two real-layout tests below call it directly.
 use crate::core::types::Color;
@@ -271,7 +272,7 @@ fn wheel_input_atomically_carries_its_presented_region() {
     else {
         panic!("wheel delivery must carry its completion receipt");
     };
-    assert!(!receipt.receipt().cancelled());
+    assert!(!receipt.ledger().cancelled(receipt.receipt()));
     let event = match *event {
         crate::thread_comm::InputEvent::Observed { event, .. } => *event,
         event => event,
@@ -285,7 +286,7 @@ fn wheel_input_atomically_carries_its_presented_region() {
                     y: 40.0,
                     target_frame_id: 0x42,
                 },
-                target: crate::thread_comm::PointerTarget::Presented {
+                target: neomacs_display_protocol::PointerTarget::Presented {
                     presentation: 91,
                     hit: Some(hit),
                 },
@@ -2286,15 +2287,24 @@ fn named_backspace_does_not_use_control_text_path() {
 #[test]
 fn translate_committed_text_skips_command_modified_input() {
     assert_eq!(
-        RenderApp::translate_committed_text("x", NEOMACS_META_MASK),
+        RenderApp::translate_committed_text(
+            "x",
+            neomacs_display_protocol::ModifierBits::META.bits()
+        ),
         None
     );
     assert_eq!(
-        RenderApp::translate_committed_text("x", NEOMACS_CTRL_MASK),
+        RenderApp::translate_committed_text(
+            "x",
+            neomacs_display_protocol::ModifierBits::CTRL.bits()
+        ),
         None
     );
     assert_eq!(
-        RenderApp::translate_committed_text("x", NEOMACS_SUPER_MASK),
+        RenderApp::translate_committed_text(
+            "x",
+            neomacs_display_protocol::ModifierBits::SUPER.bits()
+        ),
         None
     );
 }
@@ -3013,15 +3023,15 @@ fn translate_key_keeps_unmapped_native_keys() {
     );
     assert_eq!(
         RenderApp::translate_keysym(&Key::Unidentified(NativeKey::MacOS(0x24))),
-        neovm_core::keyboard::native_key_macos(0x24),
+        neomacs_display_protocol::frontend_input::native_key::macos(0x24),
     );
     assert_eq!(
         RenderApp::translate_keysym(&Key::Unidentified(NativeKey::Windows(0x5d))),
-        neovm_core::keyboard::native_key_windows(0x5d),
+        neomacs_display_protocol::frontend_input::native_key::windows(0x5d),
     );
     assert_eq!(
         RenderApp::translate_keysym(&Key::Unidentified(NativeKey::Android(4))),
-        neovm_core::keyboard::native_key_android(4),
+        neomacs_display_protocol::frontend_input::native_key::android(4),
     );
 }
 
@@ -3034,7 +3044,8 @@ fn ctrl_alt_letter_cooks_to_gnu_c_m_letter() {
     let key = RenderApp::translate_key_input(&Key::Character(SmolStr::new("n"))).unwrap();
     let event = neovm_core::keyboard::render_key_transport_to_input_event(
         key,
-        NEOMACS_CTRL_MASK | NEOMACS_META_MASK,
+        neomacs_display_protocol::ModifierBits::CTRL.bits()
+            | neomacs_display_protocol::ModifierBits::META.bits(),
         true,
         42,
     )
@@ -3062,7 +3073,9 @@ fn ctrl_alt_shift_3_cooks_to_gnu_c_m_hash() {
     let key = RenderApp::translate_key_input(&Key::Character(SmolStr::new("#"))).unwrap();
     let event = neovm_core::keyboard::render_key_transport_to_input_event(
         key,
-        NEOMACS_CTRL_MASK | NEOMACS_META_MASK | crate::backend::wgpu::NEOMACS_SHIFT_MASK,
+        neomacs_display_protocol::ModifierBits::CTRL.bits()
+            | neomacs_display_protocol::ModifierBits::META.bits()
+            | neomacs_display_protocol::ModifierBits::SHIFT.bits(),
         true,
         42,
     )

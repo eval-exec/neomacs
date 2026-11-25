@@ -2,7 +2,7 @@
 
 use super::ShaderSurfaceCache;
 use crate::image_cache::ImageCache;
-use crate::shader_surface::SurfaceShaderLanguage;
+use neomacs_display_protocol::SurfaceShaderLanguage;
 
 #[test]
 fn clamp_size_is_a_pure_function_of_logical_size_and_scale() {

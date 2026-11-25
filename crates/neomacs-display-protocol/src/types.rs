@@ -5,7 +5,7 @@ use std::ops::{Add, Sub};
 
 use neovm_display_identity::display_id_type;
 
-pub use neovm_display_identity::{VideoId, WebViewId};
+pub use neovm_display_identity::{FrameVisibility, GuiResizeRequestId, VideoId, WebViewId};
 
 display_id_type!(DisplayFrameId, u64);
 display_id_type!(DisplayWindowId, i64);
@@ -41,6 +41,27 @@ display_id_type!(FaceId, u32);
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub struct LiveDisplayWindowId(std::num::NonZeroI64);
+
+/// A live frame's identity on the wire (DESIGN D40). Deliberately not named
+/// `FrameRef`: the runtime's `FrameRef` enum keeps that name until the
+/// single-protocol convergence removes it.
+#[repr(transparent)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub struct LiveDisplayFrameId(std::num::NonZeroU64);
+
+impl LiveDisplayFrameId {
+    #[must_use]
+    pub const fn new(raw: std::num::NonZeroU64) -> Self {
+        Self(raw)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
 
 /// The window identity was the `0` placeholder, which names no window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

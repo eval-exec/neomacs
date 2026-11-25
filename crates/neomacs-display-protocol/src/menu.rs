@@ -7,7 +7,7 @@ pub use text::{MeasuredMenu, MenuItemText, MenuPanelRole, MenuTextLayout, MenuTe
 
 /// Correlates a native heading intent with the evaluator's menu response.
 /// Distinct from MenuToken: one intent can produce multiple menu revisions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MenuBarRequestId(pub u64);
 
 impl MenuBarRequestId {
@@ -18,7 +18,7 @@ impl MenuBarRequestId {
 }
 
 /// Identifies one immutable revision of an evaluator-owned menu session.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MenuToken {
     pub session: u64,
     pub revision: u64,
@@ -42,7 +42,7 @@ impl MenuToken {
 }
 
 /// An item identity within a menu snapshot, independent of panel-local rows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MenuItemId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,13 +65,13 @@ impl MenuResult {
 }
 
 /// Lisp-owned button state, distinct from runtime hover or keyboard focus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MenuCheckState {
     Off,
     On,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MenuIndicator {
     #[default]
     None,
@@ -80,7 +80,7 @@ pub enum MenuIndicator {
 }
 
 /// A single item in a popup menu.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PopupMenuItem {
     pub kind: MenuItemKind,
     /// Help belongs to the item snapshot, including disabled items.

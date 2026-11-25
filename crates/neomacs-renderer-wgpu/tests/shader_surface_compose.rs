@@ -1,9 +1,10 @@
 //! CPU-only tests for shader-surface WGSL/GLSL composition and naga
 //! validation (no GPU device needed).
 
+use neomacs_display_protocol::SurfaceShaderLanguage;
 use neomacs_renderer_wgpu::shader_surface::{
-    ShaderValidationError, SurfaceContract, SurfaceShaderLanguage, compose_surface_glsl,
-    compose_surface_wgsl, uniform_accessor_name, validate_surface_glsl, validate_surface_wgsl,
+    ShaderValidationError, SurfaceContract, compose_surface_glsl, compose_surface_wgsl,
+    uniform_accessor_name, validate_surface_glsl, validate_surface_wgsl,
 };
 
 const PLASMA: &str = "fn mainImage(fragCoord: vec2<f32>) -> vec4<f32> {

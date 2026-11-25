@@ -2,6 +2,7 @@
 
 use super::frame_alpha;
 use super::layout_input::WindowDisplaySnapshotFreshness;
+use neomacs_display_protocol::GuiFrameGeometryHints;
 use neomacs_display_protocol::PresentedWindowChromeArea;
 use neomacs_display_protocol::TransitionDirection;
 use neomacs_display_protocol::frame_glyphs::PresentedWindowRegions;
@@ -12,7 +13,6 @@ use neovm_edit::buffer::{
     BufferId, BufferManager, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, LispCharPos1,
     MarkerRef, TextPositionAnchor,
 };
-use neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints;
 use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
 use neovm_edit::emacs_core::textprop::WindowBufferLookup;
 use neovm_value::display_vocab::{

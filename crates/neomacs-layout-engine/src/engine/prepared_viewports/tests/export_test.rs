@@ -863,7 +863,9 @@ fn coalesced_same_input_reexport_keeps_resolved_preview_on_the_held_publication(
             "(goto-char {destination}) (set-window-start nil {destination} t)",
         ))
         .unwrap();
-    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
     let delivery = stream.issue().unwrap();
     let intent = fixture
         .engine

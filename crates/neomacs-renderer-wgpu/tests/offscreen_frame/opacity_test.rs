@@ -273,9 +273,10 @@ fn dispatched_parallax_adds_overlapping_faded_pictures() {
     }
 }
 
+use neomacs_display_protocol::SurfaceShaderLanguage;
 use neomacs_renderer_wgpu::{
     SnapshotSize,
-    shader_surface::{SurfaceContract, SurfaceShaderLanguage, compose_surface_wgsl},
+    shader_surface::{SurfaceContract, compose_surface_wgsl},
 };
 
 #[test]

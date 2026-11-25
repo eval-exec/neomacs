@@ -32,7 +32,7 @@ impl RenderApp {
     /// of any editor window, surface permission, or GPU allocation.
     pub(super) fn collect_monitor_snapshot(
         event_loop: &dyn ActiveEventLoop,
-    ) -> Vec<crate::thread_comm::MonitorInfo> {
+    ) -> Vec<neomacs_display_protocol::MonitorInfo> {
         let mut monitors = Vec::new();
         for monitor in event_loop.available_monitors() {
             let pos = monitor.position().unwrap_or_default();
@@ -52,7 +52,7 @@ impl RenderApp {
             } else {
                 0
             };
-            monitors.push(crate::thread_comm::MonitorInfo {
+            monitors.push(neomacs_display_protocol::MonitorInfo {
                 x: pos.x,
                 y: pos.y,
                 width: size.width as i32,
@@ -171,7 +171,10 @@ impl RenderApp {
             match event_loop.create_window(attrs) {
                 Ok(window) => {
                     let window: Arc<dyn winit::window::Window> = Arc::from(window);
-                    if matches!(visibility, crate::thread_comm::WindowVisibility::Iconified) {
+                    if matches!(
+                        visibility,
+                        neomacs_display_protocol::WindowVisibility::Iconified
+                    ) {
                         window.set_minimized(true);
                     }
                     NativeTextInputPolicy::for_gui_frame().apply_to_window(window.as_ref());
@@ -1275,7 +1278,7 @@ impl RenderApp {
 /// Wake evaluator-side startup metadata readers without requiring a frame.
 pub(super) fn publish_monitor_snapshot(
     shared: &super::SharedMonitorInfo,
-    snapshot: &[crate::thread_comm::MonitorInfo],
+    snapshot: &[neomacs_display_protocol::MonitorInfo],
 ) {
     let (lock, ready) = &**shared;
     if let Ok(mut monitors) = lock.lock() {

@@ -13,15 +13,16 @@
 //! Image specs are property lists: (:type png :file "foo.png" :width 100 ...)
 
 use crate::emacs_core::image_catalog::{
-    AxisSize, EncodedBytes, ImageAnimationInvalidation, ImageAnimationPolicy, ImageBaseUri,
-    ImageColorContext, ImageDataSource, ImageFileName, ImageFrameIndex, ImageHeuristicMask,
-    ImageInvalidation, ImageLoadIdentity, ImageMaskKind, ImageMaskPolicy, ImageResolveRequest,
-    ImageResolveSource, ImageRotation, ImageScaleEnvironment, ImageScalePolicy, ImageSizeSpec,
-    ImageSpecIdentity, image_scale_environment, numeric_image_scale,
+    AxisSize, EncodedBytes, ImageAnimationInvalidation, ImageAnimationPolicy, ImageColorContext,
+    ImageFileName, ImageFrameIndex, ImageHeuristicMask, ImageInvalidation, ImageLoadIdentity,
+    ImageMaskKind, ImageMaskPolicy, ImageResolveRequest, ImageResolveSource, ImageRotation,
+    ImageScaleEnvironment, ImageScalePolicy, ImageSizeSpec, ImageSpecIdentity,
+    image_scale_environment, numeric_image_scale,
 };
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::FRAME_ID_BASE;
+use neomacs_display_protocol::ImageDataSource;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::display_vocab::ImageFilenameType;
@@ -196,7 +197,9 @@ pub fn image_resolve_source_from_items(items: &[Value]) -> Option<ImageResolveSo
                     .map(|data| EncodedBytes::new(data.as_bytes().to_vec()));
             }
             Some(ImageSpecKey::BaseUri) => {
-                base_uri = value.as_lisp_string().map(ImageBaseUri::from);
+                base_uri = value
+                    .as_lisp_string()
+                    .map(crate::emacs_core::image_catalog::image_base_uri);
             }
             _ => {}
         }

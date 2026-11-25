@@ -77,7 +77,7 @@ impl FromIterator<ImageId> for RetainedImageSet {
 ///
 /// Equality and hashing are the bytes': two handles to the same contents are
 /// one source, which is what a request keyed by them means.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EncodedBytes(Arc<Vec<u8>>);
 
 impl EncodedBytes {
@@ -1009,10 +1009,12 @@ pub struct ImageRasterSpace;
 pub struct ImageReportedSpace;
 
 /// A two-dimensional image extent whose coordinate space is part of its type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(bound = "")]
 pub struct ImageExtent<Space> {
     width: u32,
     height: u32,
+    #[serde(skip)]
     space: PhantomData<fn() -> Space>,
 }
 

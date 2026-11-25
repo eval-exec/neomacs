@@ -1,7 +1,6 @@
 use super::*;
-use neovm_core::emacs_core::image_catalog::{
-    ImageLoadAttempt, ImageLoadToken, ResolvedImageMetadata,
-};
+use neomacs_display_protocol::ResolvedImageMetadata;
+use neovm_core::emacs_core::image_catalog::{ImageLoadAttempt, ImageLoadToken};
 use std::sync::Arc;
 
 #[test]

@@ -28,14 +28,13 @@ impl ImageCatalog for ReloadingImageHost {
     fn lookup(&self, _: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
         ImageLookup::Ready(ReadyImage {
             load: test_image_load(if self.0.get() { 78 } else { 77 }),
-            metadata:
-                neovm_core::emacs_core::image_catalog::ResolvedImageMetadata::layout_is_image_pixels(
-                    if self.0.get() { 60 } else { 20 },
-                    24,
-                    0,
-                    false,
-                    Default::default(),
-                ),
+            metadata: neomacs_display_protocol::ResolvedImageMetadata::layout_is_image_pixels(
+                if self.0.get() { 60 } else { 20 },
+                24,
+                0,
+                false,
+                Default::default(),
+            ),
         })
     }
 

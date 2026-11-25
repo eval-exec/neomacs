@@ -323,7 +323,7 @@ fn gui_unassigned_primary_skips_only_zero_resize_after_recording_size() {
 fn gui_unassigned_primary_still_delivers_zero_alias_keys() {
     let mut fixture = Fixture::new(InputRoute::gui(Arc::new(Mutex::new(None))));
     delivered(fixture.publisher.publish_display(&DisplayEvent::Key {
-        key: neovm_core::keyboard::FrontendKey::Keysym(neovm_core::keyboard::XK_RETURN),
+        key: neomacs_display_protocol::FrontendKey::Keysym(neovm_core::keyboard::XK_RETURN),
         modifiers: 0,
         pressed: true,
         emacs_frame_id: 0,
@@ -389,7 +389,7 @@ fn gui_primary_alias_observes_assignment_replacement_and_clear() {
 fn gui_resize_completion_serial_follows_the_primary_frame_owner() {
     let owner = Arc::new(Mutex::new(Some(FrameId(42))));
     let mut fixture = Fixture::new(InputRoute::gui(Arc::clone(&owner)));
-    let request_id = neovm_core::window::GuiResizeRequestId::FIRST;
+    let request_id = neomacs_display_protocol::GuiResizeRequestId::FIRST;
     let completion = DisplayEvent::WindowResizeRequestCompleted {
         request_id,
         emacs_frame_id: 0,
@@ -620,7 +620,7 @@ fn runtime_primary_facts_share_the_existing_bridge_conversion() {
 fn actual_key_release_conversion_neither_enqueues_nor_requests_quit() {
     let mut fixture = Fixture::new(InputRoute::Tty);
     delivered(fixture.publisher.publish_display(&DisplayEvent::Key {
-        key: neovm_core::keyboard::FrontendKey::Keysym(neovm_core::keyboard::XK_RETURN),
+        key: neomacs_display_protocol::FrontendKey::Keysym(neovm_core::keyboard::XK_RETURN),
         modifiers: 0,
         pressed: false,
         emacs_frame_id: 0,

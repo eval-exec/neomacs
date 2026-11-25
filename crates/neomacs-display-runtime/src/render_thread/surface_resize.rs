@@ -3,7 +3,7 @@
 use super::RenderApp;
 use super::state::emacs_pixels_from_window_size;
 use crate::thread_comm::{InputEvent, RenderComms};
-use neovm_core::window::GuiResizeRequestId;
+use neomacs_display_protocol::GuiResizeRequestId;
 use winit::{dpi::PhysicalSize, window::WindowId};
 
 /// A request is not a completion. In particular, winit's immediate result may

@@ -1,7 +1,4 @@
 use super::*;
-use crate::emacs_core::display_host::{
-    FrameFontRequest, SystemFontName, SystemFontRole, SystemFonts,
-};
 use neovm_eval::emacs_core::eval::ResolvedFrameFont;
 
 fn desktop_context() -> Context {

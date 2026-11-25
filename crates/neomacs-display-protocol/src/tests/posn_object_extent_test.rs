@@ -148,9 +148,17 @@ fn retained_matrix_facts_are_independent_of_later_copy_on_write_edits() {
 fn point_roles_transport_without_changing_physical_hit_bounds_or_legacy_json() {
     let bounds = FrameRect::new(5.0, 8.0, 2.0, 1.0).unwrap();
     let base = PresentedTextPosition::new(DisplayWindowId::new(3), bounds, 7, 0, 4);
-    let legacy_json = serde_json::to_string(&base).unwrap();
-    assert!(!legacy_json.contains("point_role"));
-    let legacy: PresentedTextPosition = serde_json::from_str(&legacy_json).unwrap();
+    // A positional codec cannot omit the default role (DESIGN §6.9), so the
+    // role is always written; JSON written before that still decodes.
+    let mut legacy_json = serde_json::to_value(base).unwrap();
+    assert!(
+        legacy_json
+            .as_object_mut()
+            .unwrap()
+            .remove("point_role")
+            .is_some()
+    );
+    let legacy: PresentedTextPosition = serde_json::from_value(legacy_json).unwrap();
     assert_eq!(legacy.point_role(), PosnPointRole::Glyph);
     for role in [
         PosnPointRole::Glyph,

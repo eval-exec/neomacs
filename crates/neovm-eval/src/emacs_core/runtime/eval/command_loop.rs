@@ -1431,7 +1431,11 @@ impl Context {
                     neovm_edit::emacs_core::display_metrics::WindowId(window),
                 )
             }),
-            input_checkpoint: self.input_progress.checkpoint(),
+            // Keyed on the derived completed prefix, so presentations are
+            // triggered when the pre-value frontier moved for consumed input
+            // (a frontend cancellation no longer moves it; see
+            // `InputProgress::completed_prefixes`).
+            input_checkpoint: self.input_progress.completed_prefixes(),
             selected_frame,
             selected_window,
             current_buffer: self.edit.buffers.current_buffer_id().map(|id| id.0),

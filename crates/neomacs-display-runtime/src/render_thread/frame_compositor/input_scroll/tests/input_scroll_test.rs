@@ -1,5 +1,5 @@
 use super::*;
-use neomacs_display_protocol::input_progress::{InputProgress, InputStream};
+use neomacs_display_protocol::input_progress::{InputProgress, InputStream, InputStreamId};
 use neomacs_display_protocol::*;
 
 fn frame(presentation: u64, displacement: f32, epoch: u64) -> FrameGlyphBuffer {
@@ -118,11 +118,11 @@ fn point(frame: &FrameGlyphBuffer, y: f32) -> PresentationFramePoint {
 #[test]
 fn input_scroll_publishes_hits_only_with_pixels_and_preserves_them_on_retained_submissions() {
     let mut frame = frame(1, 0.0, 1);
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let delivery = stream.issue().unwrap();
     let retention = install_retention(&[&frame]);
     let mut scroll = InputScroll::default();
-    assert!(scroll.push(&retention, &frame, 1.0, 1.0, 12.0, delivery.receipt(), None));
+    assert!(scroll.push(&retention, &frame, 1.0, 1.0, 12.0, &delivery, None));
     assert!(scroll.hit(point(&frame, 1.0)).is_none());
     scroll.paint(&mut frame);
     assert!(scroll.hit(point(&frame, 1.0)).is_none());
@@ -138,7 +138,7 @@ fn input_scroll_publishes_hits_only_with_pixels_and_preserves_them_on_retained_s
 #[test]
 fn input_scroll_holds_target_during_mid_command_layout_and_finishes_on_frame_ack() {
     let first = frame(1, 0.0, 1);
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let delivery = stream.issue().unwrap();
     let mut progress = InputProgress::default();
     let command = progress.begin_command();
@@ -149,10 +149,10 @@ fn input_scroll_holds_target_during_mid_command_layout_and_finishes_on_frame_ack
         1.0,
         1.0,
         12.0,
-        delivery.receipt(),
+        &delivery,
         None
     ));
-    progress.consumed(delivery);
+    progress.consumed(delivery.receipt());
     let mut mid = frame(2, 5.0, 1);
     mid.input_checkpoint = progress.checkpoint();
     scroll.reconcile(&install_retention(&[&first, &mid]), Some(&mid));
@@ -173,21 +173,22 @@ fn input_scroll_holds_target_during_mid_command_layout_and_finishes_on_frame_ack
 #[test]
 fn input_scroll_cancels_on_revision_and_drop_and_clamps_reversal_at_coverage() {
     let first = frame(1, 0.0, 1);
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let delivery = stream.issue().unwrap();
     let retention = install_retention(&[&first]);
     let mut scroll = InputScroll::default();
     for _ in 0..4 {
-        assert!(scroll.push(&retention, &first, 1.0, 1.0, 18.0, delivery.receipt(), None));
+        assert!(scroll.push(&retention, &first, 1.0, 1.0, 18.0, &delivery, None));
     }
     assert_eq!(scroll.active.as_ref().unwrap().offset, 40.0);
-    scroll.push(&retention, &first, 1.0, 1.0, -4.0, delivery.receipt(), None);
+    scroll.push(&retention, &first, 1.0, 1.0, -4.0, &delivery, None);
     assert_eq!(scroll.active.as_ref().unwrap().offset, 36.0);
     let revision = frame(2, 0.0, 2);
     scroll.reconcile(&install_retention(&[&first, &revision]), Some(&revision));
     assert!(!scroll.active());
-    scroll.push(&retention, &first, 1.0, 1.0, 8.0, delivery.receipt(), None);
-    drop(delivery);
+    scroll.push(&retention, &first, 1.0, 1.0, 8.0, &delivery, None);
+    // Cancellation is the explicit `InputCancelled` of a discarded delivery.
+    delivery.cancel();
     scroll.paint(&mut first.clone());
     assert!(!scroll.active());
 }
@@ -196,7 +197,7 @@ fn input_scroll_cancels_on_revision_and_drop_and_clamps_reversal_at_coverage() {
 fn resolved_scroll_uses_authoritative_destination_without_predictable_lisp_binding() {
     let mut first = frame_with_prediction(1, 0.0, 1, false);
     // Permission for raw input is independent of evaluator-resolved movement.
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let delivery = stream.issue().unwrap();
     let make_intent =
         |presentation, epoch| neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent {
@@ -215,7 +216,7 @@ fn resolved_scroll_uses_authoritative_destination_without_predictable_lisp_bindi
     assert!(scroll.resolve(&retention, &first, make_intent(2, 1)));
     assert!(!scroll.resolve(&retention, &first, make_intent(1, 2)));
     assert!(scroll.resolve(&retention, &first, make_intent(1, 1)));
-    assert!(!scroll.push(&retention, &first, 1.0, 1.0, 4.0, delivery.receipt(), None));
+    assert!(!scroll.push(&retention, &first, 1.0, 1.0, 4.0, &delivery, None));
     scroll.paint(&mut first);
     scroll.submit();
     assert_eq!(
@@ -231,7 +232,7 @@ fn resolved_scroll_uses_authoritative_destination_without_predictable_lisp_bindi
     );
     let mut progress = InputProgress::default();
     let command = progress.begin_command();
-    progress.consumed(delivery);
+    progress.consumed(delivery.receipt());
     let mut mid = frame_with_prediction(2, 5.0, 1, false);
     mid.input_checkpoint = progress.checkpoint();
     scroll.reconcile(&install_retention(&[&first, &mid]), Some(&mid));
@@ -249,33 +250,17 @@ fn raw_prediction_survives_cursor_only_publishes_that_renew_the_epoch() {
     // with no surface, so prediction stalled until the worker exported again.
     let first = frame(1, 0.0, 1);
     let second = cursor_only_successor(&first, 1);
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let delivery = stream.issue().unwrap();
     let retention = install_retention(&[&first, &second]);
     let mut scroll = InputScroll::default();
-    assert!(scroll.push(
-        &retention,
-        &second,
-        1.0,
-        1.0,
-        12.0,
-        delivery.receipt(),
-        None
-    ));
+    assert!(scroll.push(&retention, &second, 1.0, 1.0, 12.0, &delivery, None));
     // Silence — neither a surface nor a renewal — revokes the coverage.
     let mut silent = second.clone();
     silent.presentation_id = PresentationId::new(3);
     silent.scroll_coverage_renewals.clear();
     let retention = install_retention(&[&first, &second, &silent]);
-    assert!(!scroll.push(
-        &retention,
-        &silent,
-        1.0,
-        1.0,
-        12.0,
-        delivery.receipt(),
-        None
-    ));
+    assert!(!scroll.push(&retention, &silent, 1.0, 1.0, 12.0, &delivery, None));
     // Reconcile against the silent frame drops the unacknowledged active.
     scroll.reconcile(&retention, Some(&silent));
     assert!(!scroll.active());
@@ -285,19 +270,11 @@ fn raw_prediction_survives_cursor_only_publishes_that_renew_the_epoch() {
 fn raw_prediction_projects_and_submits_against_the_renewed_presentation() {
     let first = frame(1, 0.0, 1);
     let mut second = cursor_only_successor(&first, 1);
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let delivery = stream.issue().unwrap();
     let retention = install_retention(&[&first, &second]);
     let mut scroll = InputScroll::default();
-    assert!(scroll.push(
-        &retention,
-        &second,
-        1.0,
-        1.0,
-        12.0,
-        delivery.receipt(),
-        None
-    ));
+    assert!(scroll.push(&retention, &second, 1.0, 1.0, 12.0, &delivery, None));
     scroll.reconcile(&retention, Some(&second));
     assert!(scroll.active());
     scroll.paint(&mut second);
@@ -316,7 +293,7 @@ fn resolved_intent_applies_across_intervening_cursor_only_publish() {
     // certified.
     let first = frame(1, 0.0, 1);
     let second = cursor_only_successor(&first, 1);
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let delivery = stream.issue().unwrap();
     let intent = neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent {
         frame: 1,
@@ -355,7 +332,7 @@ fn assert_resolved_intent_requires_exact_coverage_publication(
     let original = frame(1, original_origin, 1);
     let replacement = frame(2, replacement_origin, 1);
     let retention = install_retention(&[&original, &replacement]);
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let delivery = stream.issue().unwrap();
     let make_intent = |source: &FrameGlyphBuffer, offset| {
         neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent {
@@ -425,7 +402,7 @@ fn resolved_intent_requires_exact_publication_within_one_presentation() {
         replacement.scroll_surfaces[0].coverage().publication,
     );
     let retention = install_retention(&[&original, &replacement]);
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let delivery = stream.issue().unwrap();
     let make_intent = |source: &FrameGlyphBuffer, offset| {
         neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent {
@@ -464,7 +441,7 @@ fn resolved_intent_requires_exact_publication_within_one_presentation() {
 fn raw_prediction_reconciles_a_replaced_publication_before_accumulating_input() {
     let original = frame(1, 0.0, 1);
     let replacement = frame(2, 40.0, 1);
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let first_delivery = stream.issue().unwrap();
     let next_delivery = stream.issue().unwrap();
     let mut scroll = InputScroll::default();
@@ -474,7 +451,7 @@ fn raw_prediction_reconciles_a_replaced_publication_before_accumulating_input() 
         1.0,
         1.0,
         12.0,
-        first_delivery.receipt(),
+        &first_delivery,
         None,
     ));
     // Deliberately do not call reconcile: a new input can see replacement
@@ -487,7 +464,7 @@ fn raw_prediction_reconciles_a_replaced_publication_before_accumulating_input() 
         1.0,
         1.0,
         4.0,
-        next_delivery.receipt(),
+        &next_delivery,
         None,
     ));
     let active = scroll.active.as_ref().unwrap();
@@ -516,7 +493,7 @@ fn raw_prediction_reconciles_a_replaced_publication_before_accumulating_input() 
 #[test]
 fn renewal_policy_flip_blocks_raw_prediction_but_keeps_resolved_authority() {
     let first = frame(1, 0.0, 1);
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let delivery = stream.issue().unwrap();
     // Renewal with prediction revoked: raw pushes stop, a resolved intent from
     // the evaluator keeps its authority (compositor scrolling stays enabled).
@@ -524,15 +501,7 @@ fn renewal_policy_flip_blocks_raw_prediction_but_keeps_resolved_authority() {
     revoked.scroll_coverage_renewals[0].predict_pixels = false;
     let retention = install_retention(&[&first, &revoked]);
     let mut scroll = InputScroll::default();
-    assert!(!scroll.push(
-        &retention,
-        &revoked,
-        1.0,
-        1.0,
-        12.0,
-        delivery.receipt(),
-        None
-    ));
+    assert!(!scroll.push(&retention, &revoked, 1.0, 1.0, 12.0, &delivery, None));
     let intent = neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent {
         frame: 1,
         window: DisplayWindowId::new(1),
@@ -548,19 +517,11 @@ fn renewal_policy_flip_blocks_raw_prediction_but_keeps_resolved_authority() {
 #[test]
 fn renewal_naming_unknown_epoch_expires_the_retained_surface() {
     let first = frame(1, 0.0, 1);
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let delivery = stream.issue().unwrap();
     let mut rekeyed = cursor_only_successor(&first, 2);
     rekeyed.scroll_coverage_renewals[0].epoch = 2;
     let retention = install_retention(&[&first, &rekeyed]);
     let mut scroll = InputScroll::default();
-    assert!(!scroll.push(
-        &retention,
-        &rekeyed,
-        1.0,
-        1.0,
-        12.0,
-        delivery.receipt(),
-        None
-    ));
+    assert!(!scroll.push(&retention, &rekeyed, 1.0, 1.0, 12.0, &delivery, None));
 }

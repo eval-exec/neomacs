@@ -3,7 +3,7 @@
 //! A shader surface (`docs/display-engine/SHADER_SURFACES.md`) is a texture the
 //! compositor renders from a user-supplied fragment shader written against a
 //! Shadertoy-compatible contract. Two source dialects are accepted
-//! ([`SurfaceShaderLanguage`]):
+//! ([`SurfaceShaderLanguage`](neomacs_display_protocol::SurfaceShaderLanguage)):
 //!
 //! - WGSL — the user defines
 //!   `fn mainImage(fragCoord: vec2<f32>) -> vec4<f32>`;
@@ -20,13 +20,6 @@
 //! invocation below, so the three cannot describe different buffers.
 //! Composition is deterministic so the Lisp thread can validate with naga and
 //! the render thread can compile the identical source.
-
-/// Source language of a user surface shader.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SurfaceShaderLanguage {
-    Wgsl,
-    Glsl,
-}
 
 /// Which generated prelude a user shader was written against.
 ///
@@ -277,26 +270,6 @@ pub enum ShaderValidationError {
     Rejected(String),
 }
 
-/// What `iChannel0` samples: another shader surface's texture, a decoded
-/// image, or a (playing) video's current frame. Resolved per pass so late
-/// creation / decode completion / per-frame video uploads are picked up.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum SurfaceChannelSource {
-    Surface(u32),
-    Image(neomacs_display_protocol::types::ImageId),
-    Video(u32),
-}
-
-/// Initial value for one user uniform: Lisp `(name . value)` pairs arrive as
-/// a name, up to four components, and the component count (1..=4) that picks
-/// the accessor's WGSL type (f32/vec2/vec3/vec4).
-#[derive(Clone, Debug, PartialEq)]
-pub struct SurfaceUniformInit {
-    pub name: String,
-    pub value: [f32; 4],
-    pub components: u8,
-}
-
 /// WGSL identifier for a user uniform name: non-alphanumerics become `_`,
 /// prefixed `u_` (`speed` -> `u_speed`, `my-color` -> `u_my_color`).
 pub fn uniform_accessor_name(name: &str) -> String {
@@ -530,7 +503,7 @@ fn compose_surface_glsl_v1(user_source: &str, uniforms: &[(String, u8)]) -> Stri
 /// Compose and validate a Shadertoy-dialect GLSL user shader with naga
 /// (glsl-in parse as a fragment stage + full validation, no GPU device
 /// needed). Returns the composed `#version 450` source on success — the mirror
-/// of [`validate_surface_wgsl`] for [`SurfaceShaderLanguage::Glsl`].
+/// of [`validate_surface_wgsl`] for [`SurfaceShaderLanguage::Glsl`](neomacs_display_protocol::SurfaceShaderLanguage::Glsl).
 pub fn validate_surface_glsl(
     user_source: &str,
     uniforms: &[(String, u8)],

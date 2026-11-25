@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::display_host::GuiResourceQuery;
+use neomacs_display_protocol::GuiResourceQuery;
 
 struct ResourceHost(Arc<Mutex<Vec<GuiResourceQuery>>>);
 

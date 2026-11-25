@@ -13,10 +13,10 @@ fn bands_match_gnu_ranges() {
 #[test]
 fn native_bands_are_outside_the_keysym_space() {
     for keysym in [
-        native_key_macos(0x24),
-        native_key_windows(0x5d),
-        native_key_android(4),
-        native_key_ohos(7),
+        neomacs_display_protocol::frontend_input::native_key::macos(0x24),
+        neomacs_display_protocol::frontend_input::native_key::windows(0x5d),
+        neomacs_display_protocol::frontend_input::native_key::android(4),
+        neomacs_display_protocol::frontend_input::native_key::ohos(7),
     ] {
         assert!(
             keysym >= 0x2000_0000,
@@ -35,11 +35,15 @@ fn names_follow_gnu_spelling() {
     assert_eq!(function_key_name(0x1008ff26).as_deref(), Some("XF86Back"));
     assert_eq!(function_key_name(0x1008ff6d).as_deref(), Some("XF86Paste"));
     assert_eq!(
-        function_key_name(native_key_macos(0x24)).as_deref(),
+        function_key_name(neomacs_display_protocol::frontend_input::native_key::macos(
+            0x24
+        ))
+        .as_deref(),
         Some("mac-36")
     );
     assert_eq!(
-        function_key_name(native_key_windows(0x5d)).as_deref(),
+        function_key_name(neomacs_display_protocol::frontend_input::native_key::windows(0x5d))
+            .as_deref(),
         Some("win-93")
     );
 }

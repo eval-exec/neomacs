@@ -34,16 +34,6 @@ const GNU_KBD_BUFFER_SIZE: usize = 4096;
 #[cfg(unix)]
 const TTY_READER_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-// Modifier masks — must match crates/neomacs-display-runtime/src/backend/wgpu/events.rs
-// SHIFT/CTRL/SUPER are consumed only by the non-unix crossterm key mapper below.
-#[allow(dead_code)]
-const NEOMACS_SHIFT_MASK: u32 = 1 << 0;
-#[allow(dead_code)]
-const NEOMACS_CTRL_MASK: u32 = 1 << 1;
-const NEOMACS_META_MASK: u32 = 1 << 2;
-#[allow(dead_code)]
-const NEOMACS_SUPER_MASK: u32 = 1 << 3;
-
 const XK_RETURN: u32 = 0xff0d;
 const XK_TAB: u32 = 0xff09;
 #[allow(dead_code)] // used only by the non-unix crossterm key mapper below
@@ -61,23 +51,23 @@ const XK_DOWN: u32 = 0xff54;
 fn map_modifiers(mods: KeyModifiers) -> u32 {
     let mut out = 0;
     if mods.contains(KeyModifiers::SHIFT) {
-        out |= NEOMACS_SHIFT_MASK;
+        out |= neomacs_display_protocol::ModifierBits::SHIFT.bits();
     }
     if mods.contains(KeyModifiers::CONTROL) {
-        out |= NEOMACS_CTRL_MASK;
+        out |= neomacs_display_protocol::ModifierBits::CTRL.bits();
     }
     if mods.contains(KeyModifiers::ALT) {
-        out |= NEOMACS_META_MASK;
+        out |= neomacs_display_protocol::ModifierBits::META.bits();
     }
     if mods.contains(KeyModifiers::SUPER) {
-        out |= NEOMACS_SUPER_MASK;
+        out |= neomacs_display_protocol::ModifierBits::SUPER.bits();
     }
     out
 }
 
 #[allow(dead_code)]
 fn without_control(modifiers: u32) -> u32 {
-    modifiers & !NEOMACS_CTRL_MASK
+    modifiers & !neomacs_display_protocol::ModifierBits::CTRL.bits()
 }
 
 #[allow(dead_code)]
@@ -108,16 +98,16 @@ fn map_key_event(event: KeyEvent) -> Option<InputEvent> {
 
     let mut modifiers = map_modifiers(event.modifiers);
 
-    let native = |keysym| Some(neovm_core::keyboard::FrontendKey::Keysym(keysym));
+    let native = |keysym| Some(neomacs_display_protocol::FrontendKey::Keysym(keysym));
     let key = match event.code {
         KeyCode::Char(c)
             if event.modifiers.contains(KeyModifiers::CONTROL)
                 && tty_control_char_keysym(c).is_some() =>
         {
             modifiers = without_control(modifiers);
-            tty_control_char_keysym(c).map(neovm_core::keyboard::FrontendKey::Keysym)
+            tty_control_char_keysym(c).map(neomacs_display_protocol::FrontendKey::Keysym)
         }
-        KeyCode::Char(c) => Some(neovm_core::keyboard::FrontendKey::Character(c)),
+        KeyCode::Char(c) => Some(neomacs_display_protocol::FrontendKey::Character(c)),
         KeyCode::F(n) if (1..=12).contains(&n) => {
             native(0xffbe + (n as u32 - 1)) // F1=0xffbe … F12=0xffc9
         }

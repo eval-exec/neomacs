@@ -5,8 +5,9 @@
 //! pixels. Keeping this module independent prevents X11 policy from leaking
 //! into the CoreText and DirectWrite catalogs.
 
+use neomacs_display_protocol::FrameFontSize;
 use neomacs_display_protocol::{DisplayObservation, Dpi, XServerKind};
-use neovm_core::emacs_core::display_host::{FontOpeningSize, FrameFontSize};
+use neovm_core::emacs_core::display_host::FontOpeningSize;
 use neovm_core::face::{Face, FaceHeight};
 
 pub use super::frame_metrics::GraphicFontSizePx;

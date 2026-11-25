@@ -6,7 +6,9 @@
 //! prediction survives presentation churn that does not touch the rows.
 
 use super::coverage_retention::CoverageRetention;
-use neomacs_display_protocol::input_progress::InputReceipt;
+use neomacs_display_protocol::input_progress::{
+    Disposition, InputDelivery, InputReceipt, InputStream,
+};
 use neomacs_display_protocol::scroll_coverage::ScrollSurface;
 use neomacs_display_protocol::{
     FrameGlyphBuffer, PresentationFramePoint, PresentationId, PresentedHit, PresentedHitError,
@@ -24,6 +26,10 @@ pub(in crate::render_thread) struct InputScroll {
     submitted: Option<(Arc<ScrollSurface>, f32, PresentationId)>,
     staged: Option<Option<(Arc<ScrollSurface>, f32, PresentationId)>>,
     staged_tokens: Vec<neomacs_display_protocol::input_latency::InputToken>,
+    /// The ledger of the stream whose tracked inputs this window observed.
+    /// Only issued inputs can be cancelled; an input a resolved intent names
+    /// was consumed, so it can only become `Reflected`.
+    ledger: Option<InputStream>,
 }
 
 struct PendingScroll {
@@ -46,13 +52,15 @@ impl InputScroll {
         x: f32,
         y: f32,
         delta: f32,
-        receipt: InputReceipt,
+        input: &InputDelivery,
         token: Option<neomacs_display_protocol::input_latency::InputToken>,
     ) -> bool {
+        self.learn_ledger(input);
+        let receipt = input.receipt();
         if self.active.as_ref().is_some_and(|active| active.resolved) {
             return false;
         }
-        if !delta.is_finite() || delta == 0.0 || receipt.cancelled() {
+        if !delta.is_finite() || delta == 0.0 || self.cancelled(receipt) {
             return false;
         }
         let Some(entry) = retention
@@ -128,15 +136,33 @@ impl InputScroll {
 
     pub(in crate::render_thread) fn observe_input(
         &mut self,
-        input: InputReceipt,
+        input: &InputDelivery,
         token: Option<neomacs_display_protocol::input_latency::InputToken>,
     ) {
+        self.learn_ledger(input);
         let Some(token) = token else { return };
-        self.observed.retain(|(input, _)| !input.cancelled());
+        let ledger = self.ledger.clone();
+        self.observed.retain(|(input, _)| {
+            !ledger
+                .as_ref()
+                .is_some_and(|ledger| ledger.cancelled(*input))
+        });
         if self.observed.len() == 128 {
             self.observed.remove(0);
         }
-        self.observed.push((input, token));
+        self.observed.push((input.receipt(), token));
+    }
+
+    fn learn_ledger(&mut self, input: &InputDelivery) {
+        if self.ledger.is_none() {
+            self.ledger = Some(input.ledger().clone());
+        }
+    }
+
+    fn cancelled(&self, receipt: InputReceipt) -> bool {
+        self.ledger
+            .as_ref()
+            .is_some_and(|ledger| ledger.cancelled(receipt))
     }
 
     pub(in crate::render_thread) fn resolve(
@@ -182,8 +208,8 @@ impl InputScroll {
             && active.surface.coverage().publication == intent.publication
         {
             for input in &active.receipts {
-                if !intent.inputs.iter().any(|new| new.same_input(input)) {
-                    intent.inputs.push(input.clone());
+                if !intent.inputs.contains(input) {
+                    intent.inputs.push(*input);
                 }
             }
         }
@@ -191,9 +217,10 @@ impl InputScroll {
             self.active = None;
             return true;
         }
-        intent
-            .inputs
-            .retain(|input| !input.cancelled() && !input.acknowledged_by(&frame.input_checkpoint));
+        intent.inputs.retain(|input| {
+            !self.cancelled(*input)
+                && Disposition::of(*input, &frame.input_checkpoint) != Disposition::Reflected
+        });
         if intent.inputs.is_empty() {
             return false;
         }
@@ -201,7 +228,7 @@ impl InputScroll {
         let tokens = if offset != 0.0 {
             self.observed
                 .iter()
-                .filter(|(input, _)| intent.inputs.iter().any(|owner| owner.same_input(input)))
+                .filter(|(input, _)| intent.inputs.contains(input))
                 .map(|(_, token)| *token)
                 .collect()
         } else {
@@ -227,8 +254,12 @@ impl InputScroll {
         frame: Option<&FrameGlyphBuffer>,
     ) -> Option<neomacs_display_protocol::DisplayWindowId> {
         if let Some(frame) = frame {
+            let ledger = self.ledger.clone();
             self.observed.retain(|(input, _)| {
-                !input.cancelled() && !input.acknowledged_by(&frame.input_checkpoint)
+                !ledger
+                    .as_ref()
+                    .is_some_and(|ledger| ledger.cancelled(*input))
+                    && Disposition::of(*input, &frame.input_checkpoint) != Disposition::Reflected
             });
         }
         let mut active = self.active.take()?;
@@ -236,8 +267,12 @@ impl InputScroll {
         let Some(frame) = frame else {
             return Some(window);
         };
+        let ledger = self.ledger.clone();
         active.receipts.retain(|receipt| {
-            !receipt.acknowledged_by(&frame.input_checkpoint) && !receipt.cancelled()
+            Disposition::of(*receipt, &frame.input_checkpoint) != Disposition::Reflected
+                && !ledger
+                    .as_ref()
+                    .is_some_and(|ledger| ledger.cancelled(*receipt))
         });
         if active.receipts.is_empty() {
             return Some(window);
@@ -298,11 +333,12 @@ impl InputScroll {
     pub(in crate::render_thread) fn paint(&mut self, frame: &mut FrameGlyphBuffer) {
         self.staged = Some(None);
         self.staged_tokens.clear();
-        if self
-            .active
-            .as_ref()
-            .is_some_and(|active| active.receipts.iter().any(InputReceipt::cancelled))
-        {
+        if self.active.as_ref().is_some_and(|active| {
+            active
+                .receipts
+                .iter()
+                .any(|receipt| self.cancelled(*receipt))
+        }) {
             self.active = None;
         }
         let Some(active) = &self.active else {

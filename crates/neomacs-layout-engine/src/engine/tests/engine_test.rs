@@ -18892,14 +18892,13 @@ impl ImageCatalog for FixedSizeImageCatalog {
     fn lookup(&self, _request: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
         ImageLookup::Ready(ReadyImage {
             load: test_image_load(9),
-            metadata:
-                neovm_core::emacs_core::image_catalog::ResolvedImageMetadata::layout_is_image_pixels(
-                    self.width,
-                    self.height,
-                    0,
-                    false,
-                    neomacs_display_protocol::ImageMaskKind::None,
-                ),
+            metadata: neomacs_display_protocol::ResolvedImageMetadata::layout_is_image_pixels(
+                self.width,
+                self.height,
+                0,
+                false,
+                neomacs_display_protocol::ImageMaskKind::None,
+            ),
         })
     }
 }
@@ -18916,14 +18915,13 @@ impl ImageCatalog for RecordingImageCatalog {
         self.requests.borrow_mut().push(request);
         ImageLookup::Ready(ReadyImage {
             load: test_image_load(9),
-            metadata:
-                neovm_core::emacs_core::image_catalog::ResolvedImageMetadata::layout_is_image_pixels(
-                    400,
-                    300,
-                    0,
-                    false,
-                    neomacs_display_protocol::ImageMaskKind::None,
-                ),
+            metadata: neomacs_display_protocol::ResolvedImageMetadata::layout_is_image_pixels(
+                400,
+                300,
+                0,
+                false,
+                neomacs_display_protocol::ImageMaskKind::None,
+            ),
         })
     }
 }
@@ -38819,5 +38817,164 @@ fn truncated_line_overlay_past_the_window_edge_stays_out_of_the_consumed_span() 
     assert!(
         !body.contains("PAST-EDGE"),
         "a truncated line's off-screen overlay rendered; body={body:?}"
+    );
+}
+
+/// DESIGN §6.15: every presentation carries the device scale the layout
+/// engine measured it at, the scale its font metrics used.
+#[test]
+fn layout_scale_is_stamped() {
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("scaled\n");
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    for (name, scale) in [("layout-scale-hidpi", 1.75), ("layout-scale-unit", 1.0)] {
+        let frame_id = eval
+            .frame_manager_mut()
+            .create_frame(name, 400, 120, buf_id);
+        eval.frame_manager_mut()
+            .get_mut(frame_id)
+            .expect("frame")
+            .device_scale_factor = scale;
+        realize_test_gui_frame(&mut eval, frame_id);
+        bind_minibuffer_buffer(&mut eval, frame_id);
+        engine.layout_frame_rust(&mut eval, frame_id);
+        let state = engine
+            .last_frame_display_state
+            .as_ref()
+            .expect("display state");
+        assert_eq!(state.layout_scale.get(), scale as f32, "{name}");
+    }
+}
+
+thread_local! {
+    static RESCALED_DURING_LAYOUT: std::cell::Cell<Option<neovm_core::window::FrameId>> =
+        const { std::cell::Cell::new(None) };
+    static READ_DURING_LAYOUT: std::cell::Cell<
+        Option<neomacs_display_protocol::input_progress::InputReceipt>,
+    > = const { std::cell::Cell::new(None) };
+}
+
+/// Mode-line Lisp that changes its frame's device scale, as a nested reader
+/// applying a `Resize { scale_factor }` event during layout would.
+fn rescale_frame_during_layout(eval: &mut Context) -> neovm_core::emacs_core::error::EvalResult {
+    if let Some(frame) = RESCALED_DURING_LAYOUT.with(std::cell::Cell::get) {
+        eval.frame_manager_mut()
+            .get_mut(frame)
+            .expect("rescaled frame")
+            .device_scale_factor = 2.0;
+    }
+    Ok(Value::string("ML"))
+}
+
+/// Review M1 r1 (architecture A2): the stamp is the scale the frame's fonts
+/// were measured at, not the frame's scale when the frame is sealed. Layout
+/// Lisp can change the scale in between; the stamp exists so a frontend can
+/// detect exactly that mismatch (DESIGN §6.15).
+#[test]
+fn layout_scale_is_the_scale_fonts_were_measured_at() {
+    let (mut eval, frame_id, _buffer, _window) = incr_editing_frame("scaled\n", 400, 120);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .device_scale_factor = 1.0;
+    eval.register_subr(neovm_eval::emacs_core::subr::SubrSpec::fixed0(
+        "neo-test-rescale-frame-during-layout",
+        rescale_frame_during_layout,
+    ));
+    eval.eval_str(
+        "(set (make-local-variable 'mode-line-format) \
+           '((:eval (neo-test-rescale-frame-during-layout))))",
+    )
+    .expect("mode line");
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    RESCALED_DURING_LAYOUT.with(|frame| frame.set(Some(frame_id)));
+    engine.layout_frame_rust(&mut eval, frame_id);
+    RESCALED_DURING_LAYOUT.with(|frame| frame.set(None));
+    assert_eq!(
+        eval.frame_manager()
+            .get(frame_id)
+            .expect("frame")
+            .device_scale_factor,
+        2.0,
+        "the mode line changed the scale during layout"
+    );
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    assert_eq!(state.layout_scale.get(), 1.0);
+}
+
+/// Mode-line Lisp that reads one tracked input, as a nested command reader
+/// entered from layout would (`LE/engine.rs`: "Layout Lisp can enter a nested
+/// command reader").
+fn read_input_during_layout(eval: &mut Context) -> neovm_core::emacs_core::error::EvalResult {
+    if let Some(receipt) = READ_DURING_LAYOUT.with(std::cell::Cell::take) {
+        eval.input_progress.consumed(receipt);
+    }
+    Ok(Value::string("ML"))
+}
+
+/// Review M1 r1 (compat 4): the engine re-checks the frontier it captured
+/// before layout. Input consumed during layout makes the frame's stream
+/// indeterminate, but input whose command completed before layout began is
+/// still reflected, as the pre-layout checkpoint acknowledged it before M1.
+#[test]
+fn layout_that_read_input_stamps_a_settled_frontier() {
+    use neomacs_display_protocol::input_progress::{
+        Disposition, FrontierSnapshot, InputReceipt, InputSerial, InputStreamId,
+    };
+    let receipt = |serial| {
+        InputReceipt::new(
+            InputStreamId::FIRST,
+            InputSerial::new(std::num::NonZeroU64::new(serial).unwrap()),
+        )
+    };
+    let (mut eval, frame_id, _buffer, _window) = incr_editing_frame("frontier\n", 400, 120);
+    realize_test_gui_frame(&mut eval, frame_id);
+    let completed = receipt(1);
+    {
+        let _command = eval.input_progress.begin_command();
+        eval.input_progress.consumed(completed);
+    }
+    eval.register_subr(neovm_eval::emacs_core::subr::SubrSpec::fixed0(
+        "neo-test-read-input-during-layout",
+        read_input_during_layout,
+    ));
+    eval.eval_str(
+        "(set (make-local-variable 'mode-line-format) \
+           '((:eval (neo-test-read-input-during-layout))))",
+    )
+    .expect("mode line");
+    let read_by_layout = receipt(2);
+    READ_DURING_LAYOUT.with(|read| read.set(Some(read_by_layout)));
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert!(
+        READ_DURING_LAYOUT.with(std::cell::Cell::take).is_none(),
+        "layout Lisp read the input"
+    );
+    let frontier = &engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state")
+        .input_checkpoint;
+    assert!(
+        matches!(frontier.as_slice(), [FrontierSnapshot::Indeterminate { stream, .. }] if *stream == InputStreamId::FIRST),
+        "{frontier:?}"
+    );
+    assert_eq!(Disposition::of(completed, frontier), Disposition::Reflected);
+    assert_eq!(
+        Disposition::of(read_by_layout, frontier),
+        Disposition::Pending
     );
 }

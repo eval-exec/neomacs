@@ -165,7 +165,7 @@ pub fn mode_line_rendered_root_for_walk(rendered: &mut crate::emacs_core::xdisp:
 
 /// Construct the capturing frame-font fixture (moved font-size tests).
 pub fn capturing_frame_font_display_host_for_test(
-    requested_size: std::rc::Rc<std::cell::Cell<crate::emacs_core::display_host::FrameFontSize>>,
+    requested_size: std::rc::Rc<std::cell::Cell<neomacs_display_protocol::FrameFontSize>>,
     realized: neovm_eval::emacs_core::eval::ResolvedFrameFont,
 ) -> crate::test_utils::xfaces_upper_layer_helpers::CapturingFrameFontDisplayHost {
     crate::test_utils::xfaces_upper_layer_helpers::CapturingFrameFontDisplayHost {

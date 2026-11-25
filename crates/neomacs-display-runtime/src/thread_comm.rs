@@ -16,6 +16,10 @@ mod frame_mailbox;
 mod frame_opacity;
 pub use frame_mailbox::{FrameReceiver, FrameSender, QueuedPresentation, SupersededPresentation};
 pub use frame_opacity::FrameOpacityState;
+use neomacs_display_protocol::GuiResizeRequestId;
+use neomacs_display_protocol::{
+    GuiFrameGeometryHints, MonitorInfo, PointerTarget, WindowFullscreenMode, WindowVisibility,
+};
 use neomacs_display_protocol::{
     ImageColorContext, ImageId, ImageLoadToken, ImageMaskPolicy, ImageRealization, ImageRotation,
     ImageSizeSpec, SelectionOwner, VideoId,
@@ -25,8 +29,6 @@ pub use neomacs_display_protocol::{
     ToolBarItemType, VisualConfig,
 };
 use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
-use neovm_core::window::GuiFrameGeometryHints;
-use neovm_core::window::GuiResizeRequestId;
 
 /// Selection addressed by a clipboard request.
 ///
@@ -41,19 +43,6 @@ pub enum ClipboardSelection {
     Primary,
 }
 
-/// Monitor information transported from the frontend to the evaluator.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MonitorInfo {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
-    pub scale: f64,
-    pub width_mm: i32,
-    pub height_mm: i32,
-    pub name: Option<String>,
-}
-
 /// Frame-local logical coordinates shared by one pointer action and its
 /// presentation-qualified target. Keeping the coordinates here prevents the
 /// semantic hit and raw action from disagreeing about where the input occurred.
@@ -62,19 +51,6 @@ pub struct PointerPosition {
     pub x: f32,
     pub y: f32,
     pub target_frame_id: u64,
-}
-
-/// How a pointer position relates to the immutable presentation on screen.
-///
-/// `Unpresented` is explicit for exposed/native surface area. A producer cannot
-/// accidentally omit presentation state from a pointer action.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PointerTarget {
-    Presented {
-        presentation: u64,
-        hit: Option<neomacs_display_protocol::PresentedHit>,
-    },
-    Unpresented,
 }
 
 /// The unit carried by a scroll delta. This replaces the invalid state where a
@@ -135,7 +111,7 @@ pub enum InputEvent {
         emacs_frame_id: u64,
     },
     Key {
-        key: neovm_core::keyboard::FrontendKey,
+        key: neomacs_display_protocol::FrontendKey,
         modifiers: u32,
         pressed: bool,
         /// Emacs frame_id of the window that produced the key event
@@ -209,18 +185,18 @@ pub enum InputEvent {
     /// Terminal creation failed after the evaluator reserved its typed ID.
     #[cfg(feature = "neo-term")]
     TerminalCreateFailed {
-        id: crate::terminal::TerminalId,
+        id: neomacs_display_protocol::TerminalId,
         error: String,
     },
     /// Terminal child process exited
     #[cfg(feature = "neo-term")]
     TerminalExited {
-        id: crate::terminal::TerminalId,
+        id: neomacs_display_protocol::TerminalId,
     },
     /// Terminal title changed
     #[cfg(feature = "neo-term")]
     TerminalTitleChanged {
-        id: crate::terminal::TerminalId,
+        id: neomacs_display_protocol::TerminalId,
         title: String,
     },
     /// Popup menu selection made (index into menu items, -1 = cancelled)
@@ -315,40 +291,6 @@ impl FrameRef {
 impl From<FrameRef> for u64 {
     fn from(f: FrameRef) -> u64 {
         f.raw_id()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowFullscreenMode {
-    None,
-    Fullboth,
-    Fullscreen,
-    Fullwidth,
-    Fullheight,
-    Maximized,
-}
-
-/// Native-window projection of GNU's visible/iconified/invisible frame state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowVisibility {
-    Visible,
-    Iconified,
-    Invisible,
-}
-
-impl WindowVisibility {
-    pub(crate) const fn is_visible_or_iconified(self) -> bool {
-        matches!(self, Self::Visible | Self::Iconified)
-    }
-}
-
-impl From<neovm_core::window::FrameVisibility> for WindowVisibility {
-    fn from(visibility: neovm_core::window::FrameVisibility) -> Self {
-        match visibility {
-            neovm_core::window::FrameVisibility::Visible => Self::Visible,
-            neovm_core::window::FrameVisibility::Iconified => Self::Iconified,
-            neovm_core::window::FrameVisibility::Invisible => Self::Invisible,
-        }
     }
 }
 
@@ -492,10 +434,10 @@ pub enum SurfaceSource {
     /// values; `channel0` optionally names another surface sampled as
     /// `iChannel0`.
     Shader {
-        language: neomacs_renderer_wgpu::shader_surface::SurfaceShaderLanguage,
+        language: neomacs_display_protocol::SurfaceShaderLanguage,
         source: String,
-        uniforms: Vec<neomacs_renderer_wgpu::SurfaceUniformInit>,
-        channel0: Option<neomacs_renderer_wgpu::shader_surface::SurfaceChannelSource>,
+        uniforms: Vec<neomacs_display_protocol::SurfaceUniformInit>,
+        channel0: Option<neomacs_display_protocol::SurfaceChannelSource>,
     },
     /// Raw RGBA8 pixels, row-major, tightly packed.
     Pixels { data: Vec<u8> },
@@ -535,7 +477,7 @@ pub enum AssetCommand {
     /// Load image from encoded data bytes (PNG, JPEG, SVG, etc.)
     ImageLoadData {
         load: ImageLoadToken,
-        data: neovm_core::emacs_core::image_catalog::ImageDataSource,
+        data: neomacs_display_protocol::ImageDataSource,
         size: ImageSizeSpec,
         rotation: ImageRotation,
         /// Immutable logical/device geometry captured for this load.
@@ -647,8 +589,8 @@ pub enum AssetCommand {
         request: FrameShaderRequestId,
         composed: Option<(
             String,
-            neomacs_renderer_wgpu::shader_surface::SurfaceShaderLanguage,
-            Vec<neomacs_renderer_wgpu::shader_surface::SurfaceUniformInit>,
+            neomacs_display_protocol::SurfaceShaderLanguage,
+            Vec<neomacs_display_protocol::SurfaceUniformInit>,
         )>,
     },
     /// Update one named uniform on the installed full-frame post shader
@@ -668,27 +610,29 @@ pub enum AssetCommand {
 pub enum TerminalCommand {
     /// Create a terminal
     TerminalCreate {
-        id: crate::terminal::TerminalId,
-        size: crate::terminal::TerminalGridSize,
-        target: crate::terminal::TerminalDisplayTarget,
+        id: neomacs_display_protocol::TerminalId,
+        size: neomacs_display_protocol::TerminalGridSize,
+        target: neomacs_display_protocol::TerminalDisplayTarget,
         shell: Option<String>,
     },
     /// Write input to a terminal
     TerminalWrite {
-        id: crate::terminal::TerminalId,
+        id: neomacs_display_protocol::TerminalId,
         data: Vec<u8>,
     },
     /// Resize a terminal
     TerminalResize {
-        id: crate::terminal::TerminalId,
-        size: crate::terminal::TerminalGridSize,
+        id: neomacs_display_protocol::TerminalId,
+        size: neomacs_display_protocol::TerminalGridSize,
     },
     /// Destroy a terminal
-    TerminalDestroy { id: crate::terminal::TerminalId },
+    TerminalDestroy {
+        id: neomacs_display_protocol::TerminalId,
+    },
     /// Set floating terminal position and opacity
     TerminalSetFloat {
-        id: crate::terminal::TerminalId,
-        placement: crate::terminal::TerminalFloatPlacement,
+        id: neomacs_display_protocol::TerminalId,
+        placement: neomacs_display_protocol::TerminalFloatPlacement,
     },
 }
 
@@ -1105,7 +1049,11 @@ impl ThreadComms {
         };
 
         let render = RenderComms {
-            input_stream: Default::default(),
+            // The process's one in-process display session owns the first
+            // stream; a display link host allocates one per session instead.
+            input_stream: neomacs_display_protocol::input_progress::InputStream::new(
+                neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+            ),
             image_decoder: self.image_decoder,
             tooltip_context: self.tooltip_context,
             frame_opacity: self.frame_opacity,
@@ -1153,7 +1101,7 @@ impl RenderComms {
         if neomacs_display_protocol::input_latency::enabled() {
             let target = match &event {
                 InputEvent::Key {
-                    key: neovm_core::keyboard::FrontendKey::Keysym(0xff55 | 0xff56),
+                    key: neomacs_display_protocol::FrontendKey::Keysym(0xff55 | 0xff56),
                     pressed: true,
                     emacs_frame_id,
                     ..
@@ -1289,13 +1237,13 @@ impl RenderComms {
         &self,
         event: InputEvent,
     ) -> (
-        Option<neomacs_display_protocol::input_progress::InputReceipt>,
+        Option<neomacs_display_protocol::input_progress::InputDelivery>,
         Option<neomacs_display_protocol::input_latency::InputToken>,
     ) {
         let receipt = if matches!(
             &event,
             InputEvent::Key {
-                key: neovm_core::keyboard::FrontendKey::Keysym(0xff55 | 0xff56),
+                key: neomacs_display_protocol::FrontendKey::Keysym(0xff55 | 0xff56),
                 pressed: true,
                 ..
             } | InputEvent::PositionedPointer(PositionedPointerInput {
@@ -1307,7 +1255,7 @@ impl RenderComms {
         } else {
             None
         };
-        let observer = receipt.as_ref().map(|delivery| delivery.receipt());
+        let observer = receipt.clone();
         let event = Self::observe_scroll_input(event);
         let token = match &event {
             InputEvent::Observed { token, .. } => Some(*token),
@@ -1335,12 +1283,14 @@ impl RenderComms {
                         "send_input: dropped lossy {} because the input queue is full",
                         Self::event_name(&event)
                     );
+                    return (Self::cancel_undelivered(observer), token);
                 }
                 Err(TrySendError::Disconnected(event)) => {
                     tracing::warn!(
                         "send_input: dropped {} because the input queue is disconnected",
                         Self::event_name(&event)
                     );
+                    return (Self::cancel_undelivered(observer), token);
                 }
             }
             return (observer, token);
@@ -1357,9 +1307,31 @@ impl RenderComms {
                     "send_input: dropped {} because the input queue is disconnected",
                     Self::event_name(&err.0)
                 );
+                return (Self::cancel_undelivered(observer), token);
             }
         }
         (observer, token)
+    }
+
+    /// A tracked input that never reached the evaluator's queue is cancelled
+    /// explicitly, and the caller gets no receipt to predict with.
+    fn cancel_undelivered(
+        observer: Option<neomacs_display_protocol::input_progress::InputDelivery>,
+    ) -> Option<neomacs_display_protocol::input_progress::InputDelivery> {
+        if let Some(delivery) = observer {
+            delivery.cancel();
+        }
+        None
+    }
+
+    /// A frame taken from the evaluator tells this frontend how far the
+    /// evaluator consumed its tracked input. It is a fact about the
+    /// evaluator, so a frame still waiting for its parent counts as well.
+    pub(crate) fn observe_input_frontier(
+        &self,
+        frontier: &[neomacs_display_protocol::input_progress::FrontierSnapshot],
+    ) {
+        self.input_stream.observe(frontier);
     }
 }
 

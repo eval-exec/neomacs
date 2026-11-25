@@ -4,15 +4,11 @@
 //! src/eval.c, so it stays outside the GNU mirror module.
 
 pub use neomacs_display_protocol::{GraphicalFaceAttribute, SelectionOwner};
-pub use neovm_eval::emacs_core::eval::protocol::{
-    FontOpeningSize, FrameFontSize, PositiveFontScalar, TerminalCreateRequest,
-    TerminalDisplayTarget, TerminalFloatPlacement, TerminalGridSize, TerminalId,
-};
+pub use neovm_eval::emacs_core::eval::protocol::{FontOpeningSize, TerminalCreateRequest};
 
 pub use neovm_eval::emacs_core::eval::protocol::{
     AvailableFontFamilyName, DisplayHost, FontCoverage, FontCoverageRequest, FontCoverageTarget,
-    FontResolveRequest, FrameFontRequest, GuiResourceQuery, InertRowsHostAuthority,
-    InitialGuiFrameDefaults, SystemFontName, SystemFontRole, SystemFonts,
+    FontResolveRequest, FrameFontRequest, InertRowsHostAuthority, InitialGuiFrameDefaults,
 };
 
 /// Parse native/Fontconfig/XLFD names through the shared Lisp font parser.

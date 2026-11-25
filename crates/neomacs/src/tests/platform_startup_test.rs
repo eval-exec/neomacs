@@ -2,9 +2,9 @@
 //! catalog. This does not pretend to run AppKit or DirectWrite on Linux.
 
 use super::*;
+use neomacs_display_protocol::SystemFontName;
 use neomacs_display_protocol::{DisplayObservation, GraphicalBackend, GraphicalDisplayIdentity};
 use neomacs_display_runtime::font_defaults::GuiFontDefaults;
-use neovm_core::emacs_core::display_host::SystemFontName;
 use std::{fs, path::PathBuf, process::Command};
 
 #[derive(Clone, Copy, Debug, strum::EnumString, strum::AsRefStr)]

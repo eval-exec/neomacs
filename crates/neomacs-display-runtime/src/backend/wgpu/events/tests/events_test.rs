@@ -58,20 +58,20 @@ fn ffi_event_constants_match_enum() {
 
 #[test]
 fn modifier_mask_values() {
-    assert_eq!(NEOMACS_SHIFT_MASK, 1);
-    assert_eq!(NEOMACS_CTRL_MASK, 2);
-    assert_eq!(NEOMACS_META_MASK, 4);
-    assert_eq!(NEOMACS_SUPER_MASK, 8);
+    assert_eq!(neomacs_display_protocol::ModifierBits::SHIFT.bits(), 1);
+    assert_eq!(neomacs_display_protocol::ModifierBits::CTRL.bits(), 2);
+    assert_eq!(neomacs_display_protocol::ModifierBits::META.bits(), 4);
+    assert_eq!(neomacs_display_protocol::ModifierBits::SUPER.bits(), 8);
 }
 
 #[test]
 fn modifier_masks_are_distinct_bits() {
     // Each mask should be a single distinct bit (no overlap).
     let masks = [
-        NEOMACS_SHIFT_MASK,
-        NEOMACS_CTRL_MASK,
-        NEOMACS_META_MASK,
-        NEOMACS_SUPER_MASK,
+        neomacs_display_protocol::ModifierBits::SHIFT.bits(),
+        neomacs_display_protocol::ModifierBits::CTRL.bits(),
+        neomacs_display_protocol::ModifierBits::META.bits(),
+        neomacs_display_protocol::ModifierBits::SUPER.bits(),
     ];
     for i in 0..masks.len() {
         assert!(
@@ -93,12 +93,25 @@ fn modifier_masks_are_distinct_bits() {
 
 #[test]
 fn modifier_masks_can_be_combined() {
-    let ctrl_meta = NEOMACS_CTRL_MASK | NEOMACS_META_MASK;
+    let ctrl_meta = neomacs_display_protocol::ModifierBits::CTRL.bits()
+        | neomacs_display_protocol::ModifierBits::META.bits();
     assert_eq!(ctrl_meta, 6);
-    assert_ne!(ctrl_meta & NEOMACS_CTRL_MASK, 0);
-    assert_ne!(ctrl_meta & NEOMACS_META_MASK, 0);
-    assert_eq!(ctrl_meta & NEOMACS_SHIFT_MASK, 0);
-    assert_eq!(ctrl_meta & NEOMACS_SUPER_MASK, 0);
+    assert_ne!(
+        ctrl_meta & neomacs_display_protocol::ModifierBits::CTRL.bits(),
+        0
+    );
+    assert_ne!(
+        ctrl_meta & neomacs_display_protocol::ModifierBits::META.bits(),
+        0
+    );
+    assert_eq!(
+        ctrl_meta & neomacs_display_protocol::ModifierBits::SHIFT.bits(),
+        0
+    );
+    assert_eq!(
+        ctrl_meta & neomacs_display_protocol::ModifierBits::SUPER.bits(),
+        0
+    );
 }
 
 // ---- NeomacsInputEvent default ----
@@ -135,7 +148,8 @@ fn input_event_field_mutation() {
         y: 200,
         keycode: 65,  // 'A'
         keysym: 0x61, // 'a'
-        modifiers: NEOMACS_CTRL_MASK | NEOMACS_SHIFT_MASK,
+        modifiers: neomacs_display_protocol::ModifierBits::CTRL.bits()
+            | neomacs_display_protocol::ModifierBits::SHIFT.bits(),
         button: 1,
         scroll_delta_x: 1.5,
         scroll_delta_y: -2.5,
@@ -194,7 +208,7 @@ fn input_event_clone() {
     let evt = NeomacsInputEvent {
         kind: NEOMACS_EVENT_SCROLL,
         scroll_delta_y: -3.0,
-        modifiers: NEOMACS_META_MASK,
+        modifiers: neomacs_display_protocol::ModifierBits::META.bits(),
         ..Default::default()
     };
 

@@ -1,6 +1,6 @@
 //! GNU nsfns.m's native fixed-pitch default, without a hard-coded family.
 
-use neovm_core::emacs_core::display_host::SystemFontName;
+use neomacs_display_protocol::SystemFontName;
 use objc2::MainThreadMarker;
 use objc2::rc::autoreleasepool;
 use objc2_app_kit::NSFont;

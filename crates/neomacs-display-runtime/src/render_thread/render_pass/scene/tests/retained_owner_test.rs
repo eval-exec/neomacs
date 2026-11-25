@@ -523,7 +523,9 @@ fn scroll(dead: bool) {
         Default::default(),
         Default::default(),
     );
-    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
     let delivery = stream.issue().unwrap();
     assert!(render.compositor.input_scroll.push(
         &render.compositor.coverage_retention,
@@ -531,7 +533,7 @@ fn scroll(dead: bool) {
         11.0,
         11.0,
         4.0,
-        delivery.receipt(),
+        &delivery,
         None
     ));
     render.compositor.input_scroll.paint(&mut root);

@@ -1,7 +1,7 @@
 //! GNU platform resource databases. Native handles remain inside the adapter;
 //! empty strings remain present until the Lisp boundary decides their meaning.
 
-use neovm_core::emacs_core::display_host::GuiResourceQuery;
+use neomacs_display_protocol::GuiResourceQuery;
 
 #[cfg(target_os = "macos")]
 mod cocoa;

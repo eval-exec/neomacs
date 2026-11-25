@@ -1,5 +1,5 @@
 use super::*;
-use neomacs_display_protocol::input_progress::InputStream;
+use neomacs_display_protocol::input_progress::{InputStream, InputStreamId};
 use neomacs_display_protocol::*;
 
 pub(in crate::render_thread::render_pass) fn fixture() -> FrameGlyphBuffer {
@@ -270,7 +270,7 @@ fn retained_scroll_pixels_match_full_render_and_reuse_coverage_during_reversal()
             frame_time::observe_platform_now(),
         );
         let original = fixture();
-        let stream = InputStream::default();
+        let stream = InputStream::new(InputStreamId::FIRST);
         let size = SnapshotSize::new((80.0 * scale) as u32, (40.0 * scale) as u32).unwrap();
         let expected = renderer.acquire_snapshot(size).unwrap();
         let actual = renderer.acquire_snapshot(size).unwrap();
@@ -294,7 +294,7 @@ fn retained_scroll_pixels_match_full_render_and_reuse_coverage_during_reversal()
                 11.0,
                 11.0,
                 delta,
-                delivery.receipt(),
+                &delivery,
                 None
             ));
             deliveries.push(delivery);
@@ -563,7 +563,7 @@ fn changed_coverage_pixels_and_font_catalog_rebuild_the_raster() {
         false,
         frame_time::observe_platform_now(),
     );
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let mut deliveries = Vec::new();
     let mut previous = None;
     for change in 0..5 {
@@ -597,7 +597,7 @@ fn changed_coverage_pixels_and_font_catalog_rebuild_the_raster() {
             11.0,
             11.0,
             4.0,
-            delivery.receipt(),
+            &delivery,
             None
         ));
         deliveries.push(delivery);
@@ -649,7 +649,7 @@ fn changing_coverage_defers_raster_work_until_paint_is_stable() {
         false,
         frame_time::observe_platform_now(),
     );
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let mut deliveries = Vec::new();
     let mut original = None;
     for change in 0..5 {
@@ -666,7 +666,7 @@ fn changing_coverage_defers_raster_work_until_paint_is_stable() {
             11.0,
             11.0,
             4.0,
-            delivery.receipt(),
+            &delivery,
             None,
         ));
         deliveries.push(delivery);
@@ -776,7 +776,7 @@ fn scrolling_hover_resolves_projected_slots_and_draws_live_pixels() {
     );
     render.pointer_inside = true;
     render.mouse_pos = (11.0, 11.0);
-    let stream = InputStream::default();
+    let stream = InputStream::new(InputStreamId::FIRST);
     let delivery = stream.issue().unwrap();
     assert!(render.compositor.input_scroll.push(
         &render.compositor.coverage_retention,
@@ -784,7 +784,7 @@ fn scrolling_hover_resolves_projected_slots_and_draws_live_pixels() {
         11.0,
         11.0,
         10.5,
-        delivery.receipt(),
+        &delivery,
         None
     ));
     render.compositor.input_scroll.paint(&mut frame);

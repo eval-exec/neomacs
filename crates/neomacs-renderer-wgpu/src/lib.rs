@@ -69,8 +69,8 @@ pub use renderer::{
     WindowRowDamage, texture_bytes,
 };
 pub use shader_surface::{
-    SURFACE_USER_UNIFORM_SLOTS, ShaderValidationError, SurfaceContract, SurfaceUniformInit,
-    compose_surface_wgsl, validate_surface_wgsl,
+    SURFACE_USER_UNIFORM_SLOTS, ShaderValidationError, SurfaceContract, compose_surface_wgsl,
+    validate_surface_wgsl,
 };
 pub use shader_surface_cache::{MAX_SURFACE_SIZE, ShaderSurfaceCache};
 pub use tooltip_layout::TooltipLayout;

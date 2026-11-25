@@ -209,9 +209,9 @@ pub enum OptionAsAltShape {
 
 /// A modifier bit in the frontend transport.
 ///
-/// Bit positions are wire values shared with `neovm-core`'s `RENDER_*` and
-/// the display runtime's `NEOMACS_*` masks; `Shift` through `Super` keep
-/// their historical positions, `Alt` and `Hyper` appended in that order.
+/// Bit positions are wire values ([`ModifierBits`] is the one set type every
+/// frontend and the evaluator use); `Shift` through `Super` keep their
+/// historical positions, `Alt` and `Hyper` appended in that order.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TransportModifierBit {
     Shift,
@@ -249,11 +249,28 @@ impl TransportModifierBit {
     }
 }
 
-/// A cooked set of transport modifier bits.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub struct TransportModifierBits(u32);
+/// A cooked set of transport modifier bits: the single definition of the
+/// modifier wire values (frontends, TTY input and the evaluator all use it).
+#[derive(
+    Copy, Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct ModifierBits(u32);
 
-impl TransportModifierBits {
+impl ModifierBits {
+    pub const NONE: Self = Self(0);
+    pub const SHIFT: Self = Self(TransportModifierBit::Shift.mask());
+    pub const CTRL: Self = Self(TransportModifierBit::Ctrl.mask());
+    pub const META: Self = Self(TransportModifierBit::Meta.mask());
+    pub const SUPER: Self = Self(TransportModifierBit::Super.mask());
+    pub const ALT: Self = Self(TransportModifierBit::Alt.mask());
+    pub const HYPER: Self = Self(TransportModifierBit::Hyper.mask());
+
+    /// A set read from its wire value.
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits)
+    }
+
     pub const fn get(&self, bit: TransportModifierBit) -> bool {
         self.0 & bit.mask() != 0
     }
@@ -401,8 +418,8 @@ impl ModifierPolicy {
 
     /// `EV_MODIFIERS2` + `ev_modifiers_helper': cook raw facts for one event
     /// kind into transport bits.
-    pub fn cook(&self, raw: RawModifiers, kind: ModifierEventKind) -> TransportModifierBits {
-        let mut bits = TransportModifierBits::default();
+    pub fn cook(&self, raw: RawModifiers, kind: ModifierEventKind) -> ModifierBits {
+        let mut bits = ModifierBits::default();
         if raw.shift {
             bits.set(TransportModifierBit::Shift);
         }
@@ -510,7 +527,7 @@ const fn modifier_bit(value: Option<EmacsModifierKey>) -> u32 {
 
 /// `ev_modifiers_helper' (`src/nsterm.m:371-395`).
 fn cook_family(
-    bits: &mut TransportModifierBits,
+    bits: &mut ModifierBits,
     side: Option<ModifierSideState>,
     left: Option<EmacsModifierKey>,
     right: Option<EmacsModifierKey>,

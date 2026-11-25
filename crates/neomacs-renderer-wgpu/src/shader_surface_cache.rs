@@ -19,10 +19,12 @@ use std::time::{Duration, Instant};
 use bytemuck::Zeroable;
 
 use crate::shader_surface::{
-    SURFACE_UNIFORM_BYTES, SURFACE_USER_UNIFORM_SLOTS, SurfaceChannelSource, SurfaceContract,
-    SurfaceShaderLanguage, SurfaceUniformInit, SurfaceUniforms, compose_surface_glsl,
-    compose_surface_wgsl, uniform_accessor_name,
+    SURFACE_UNIFORM_BYTES, SURFACE_USER_UNIFORM_SLOTS, SurfaceContract, SurfaceUniforms,
+    compose_surface_glsl, compose_surface_wgsl, uniform_accessor_name,
 };
+use neomacs_display_protocol::SurfaceChannelSource;
+use neomacs_display_protocol::SurfaceShaderLanguage;
+use neomacs_display_protocol::SurfaceUniformInit;
 
 /// Build the render pipeline for a composed surface shader in either dialect.
 /// GLSL modules carry only the fragment stage (entry `main`), so the vertex

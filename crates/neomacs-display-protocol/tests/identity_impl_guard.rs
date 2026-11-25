@@ -13,7 +13,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const MOVED: [&str; 7] = [
+const MOVED: [&str; 9] = [
     "VideoId",
     "WebViewId",
     "FontBackendKind",
@@ -21,6 +21,8 @@ const MOVED: [&str; 7] = [
     "FontVariationCoord",
     "FontVariationSet",
     "ResolvedFontIdentity",
+    "GuiResizeRequestId",
+    "FrameVisibility",
 ];
 
 fn source_files(dir: &Path, out: &mut Vec<PathBuf>) {

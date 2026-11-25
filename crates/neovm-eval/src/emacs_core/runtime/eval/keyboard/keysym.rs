@@ -82,58 +82,25 @@ pub(crate) fn is_vendor_keysym(keysym: u32) -> bool {
 /// vendor space, or one of the reserved bands for a native key that has no
 /// keysym.  The Unicode block is handled before this and is not included.
 pub(crate) fn is_named_keysym(keysym: u32) -> bool {
-    is_named_block(keysym) || is_vendor_keysym(keysym) || keysym >= NATIVE_MACOS_BASE
+    is_named_block(keysym) || is_vendor_keysym(keysym) || keysym >= native_key::MACOS_BASE
 }
 
-/// Low range reserved for a native key that has no keysym at all.
-///
-/// macOS, Windows, Android and OpenHarmony hand the frontend a scancode or a
-/// virtual-key code, not a keysym.  X11's keysym space stops below 0x20000000
-/// (the Unicode range tops out at 0x0110ffff and the vendor bit at bit 28),
-/// so these bands cannot collide with a real keysym, and a key from one of
-/// those platforms keeps a stable identity instead of being dropped.
-const NATIVE_BAND_MASK: u32 = 0x0000_ffff;
-const NATIVE_MACOS_BASE: u32 = 0x2000_0000;
-const NATIVE_WINDOWS_BASE: u32 = 0x2100_0000;
-const NATIVE_ANDROID_BASE: u32 = 0x2200_0000;
-const NATIVE_OHOS_BASE: u32 = 0x2300_0000;
-
-/// Identity for a macOS key that winit could not name (`NativeKey::MacOS`,
-/// an Apple scancode).
-pub fn native_key_macos(scancode: u16) -> u32 {
-    NATIVE_MACOS_BASE | (scancode as u32 & NATIVE_BAND_MASK)
-}
-
-/// Identity for a Windows key that winit could not name
-/// (`NativeKey::Windows`, a virtual-key code).
-pub fn native_key_windows(virtual_key: u16) -> u32 {
-    NATIVE_WINDOWS_BASE | (virtual_key as u32 & NATIVE_BAND_MASK)
-}
-
-/// Identity for an Android key that winit could not name
-/// (`NativeKey::Android`, a keycode).
-pub fn native_key_android(keycode: u32) -> u32 {
-    NATIVE_ANDROID_BASE | (keycode & NATIVE_BAND_MASK)
-}
-
-/// Identity for an OpenHarmony key that winit could not name.
-#[cfg(test)]
-pub(crate) fn native_key_ohos(keycode: u32) -> u32 {
-    NATIVE_OHOS_BASE | (keycode & NATIVE_BAND_MASK)
-}
+/// Reserved bands for a native key that has no keysym (the frontend encodes
+/// them; see `neomacs_display_protocol::frontend_input::native_key`).
+use neomacs_display_protocol::frontend_input::native_key;
 
 /// Name a reserved-band key after the platform and number it came from, the
 /// way GNU's last resort names an unnamed keysym after its number.
 fn native_key_name(keysym: u32) -> Option<String> {
     let (platform, _base) = [
-        ("mac", NATIVE_MACOS_BASE),
-        ("win", NATIVE_WINDOWS_BASE),
-        ("android", NATIVE_ANDROID_BASE),
-        ("ohos", NATIVE_OHOS_BASE),
+        ("mac", native_key::MACOS_BASE),
+        ("win", native_key::WINDOWS_BASE),
+        ("android", native_key::ANDROID_BASE),
+        ("ohos", native_key::OHOS_BASE),
     ]
     .into_iter()
-    .find(|(_, base)| keysym & !NATIVE_BAND_MASK == *base)?;
-    Some(format!("{platform}-{}", keysym & NATIVE_BAND_MASK))
+    .find(|(_, base)| keysym & !native_key::BAND_MASK == *base)?;
+    Some(format!("{platform}-{}", keysym & native_key::BAND_MASK))
 }
 
 /// GNU's own names for the X11 special block, ported from

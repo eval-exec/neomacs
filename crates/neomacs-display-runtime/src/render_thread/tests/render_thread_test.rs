@@ -7,12 +7,12 @@ use crate::thread_comm::{
     ClipboardCommand, ClipboardSelection, RenderCommand, ThreadComms, UiCommand, WindowCommand,
 };
 use crate::thread_comm::{FrameRef, FrameShaderAvailability};
+use neomacs_display_protocol::GuiFrameGeometryHints;
 use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
 use neomacs_display_protocol::{
     Color, CursorStyle, DisplaySlotId, EffectsConfig, FrameRate, PhysCursor, PopupMenuItem,
     SealedFramePresentation,
 };
-use neovm_core::window::GuiFrameGeometryHints;
 use std::sync::{Arc, Mutex};
 use winit::keyboard::{Key, NamedKey};
 
@@ -147,7 +147,7 @@ fn suppressed_direct_frame_shader_command_reports_failure_to_evaluator() {
         request,
         composed: Some((
             "unused".to_owned(),
-            crate::shader_surface::SurfaceShaderLanguage::Wgsl,
+            neomacs_display_protocol::SurfaceShaderLanguage::Wgsl,
             Vec::new(),
         )),
     });
@@ -668,7 +668,7 @@ fn test_translate_key_named() {
     );
     assert_eq!(
         RenderApp::translate_key_input(&Key::Character(" ".into())),
-        Some(neovm_core::keyboard::FrontendKey::Character(' '))
+        Some(neomacs_display_protocol::FrontendKey::Character(' '))
     );
 }
 
@@ -676,15 +676,15 @@ fn test_translate_key_named() {
 fn test_translate_key_character() {
     assert_eq!(
         RenderApp::translate_key_input(&Key::Character("a".into())),
-        Some(neovm_core::keyboard::FrontendKey::Character('a'))
+        Some(neomacs_display_protocol::FrontendKey::Character('a'))
     );
     assert_eq!(
         RenderApp::translate_key_input(&Key::Character("A".into())),
-        Some(neovm_core::keyboard::FrontendKey::Character('A'))
+        Some(neomacs_display_protocol::FrontendKey::Character('A'))
     );
     assert_eq!(
         RenderApp::translate_key_input(&Key::Character("1".into())),
-        Some(neovm_core::keyboard::FrontendKey::Character('1'))
+        Some(neomacs_display_protocol::FrontendKey::Character('1'))
     );
 }
 
@@ -1457,6 +1457,86 @@ fn installing_frame_emits_activation_before_replaced_presentation_retirement() {
                 crate::thread_comm::InputEvent::PresentationRetired { presentation: 41 },
             ]
         ));
+    }
+}
+
+/// A sealed presentation of `frame_id` whose frontier says the evaluator
+/// consumed the first stream through `consumed_through`.
+fn presentation_with_frontier(
+    frame_id: u64,
+    parent_id: u64,
+    consumed_through: u64,
+) -> SealedFramePresentation {
+    let mut frame = FrameGlyphBuffer::with_size(800.0, 600.0);
+    frame.presentation_id = neomacs_display_protocol::PresentationId::new(7);
+    frame.set_frame_identity(
+        neomacs_display_protocol::DisplayFrameId::new(frame_id),
+        neomacs_display_protocol::DisplayFrameId::new(parent_id),
+        0.0,
+        0.0,
+        0,
+        false,
+        0.0,
+        neomacs_display_protocol::Color::BLACK,
+        false,
+        1.0,
+    );
+    let mut state = FrameDisplayState::from_frame_glyph_buffer(&frame);
+    state.input_checkpoint = vec![
+        neomacs_display_protocol::input_progress::FrontierSnapshot::Exact {
+            stream: neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+            consumed_through,
+            in_progress: Default::default(),
+        },
+    ];
+    seal_state(state)
+}
+
+/// Review M1 r1 (compat 1): the frontend's tracking capacity returns only
+/// when `poll_frame` shows its ledger a frame's frontier. A child frame that
+/// waits for its parent still reports how far the evaluator consumed, so its
+/// frontier counts before it is deferred.
+#[test]
+fn polled_frame_frontier_returns_tracking_capacity() {
+    for (frame_id, parent_id) in [(0x42, 0), (0x51, 0x50)] {
+        let comms = ThreadComms::new();
+        let (emacs, render) = comms.split();
+        let mut app = RenderApp::new(
+            render,
+            800,
+            600,
+            "test".to_string(),
+            Arc::new(crate::render_thread::ImageRenderState::default()),
+            Arc::new((Mutex::new(Vec::new()), std::sync::Condvar::new())),
+            true,
+            #[cfg(feature = "neo-term")]
+            crate::terminal::new_shared_terminals(),
+        );
+        let page_down = || crate::thread_comm::InputEvent::Key {
+            key: neomacs_display_protocol::FrontendKey::Keysym(0xff56),
+            modifiers: 0,
+            pressed: true,
+            emacs_frame_id: frame_id,
+        };
+        for _ in 0..1024 {
+            assert!(app.comms.send_input_with_receipt(page_down()).0.is_some());
+        }
+        assert!(
+            app.comms.send_input_with_receipt(page_down()).0.is_none(),
+            "the ledger is full while no frame reported progress"
+        );
+        emacs
+            .frame_tx
+            .submit(presentation_with_frontier(frame_id, parent_id, 1024))
+            .expect("queue a frame that passed every tracked input");
+        app.poll_frame();
+        let resumed = app
+            .comms
+            .send_input_with_receipt(page_down())
+            .0
+            .expect("the polled frontier returned the capacity");
+        assert_eq!(resumed.receipt().serial().get(), 1025);
+        assert_eq!(app.pending_child_frames.len(), usize::from(parent_id != 0));
     }
 }
 

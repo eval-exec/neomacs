@@ -1,9 +1,10 @@
 //! Platform defaults are not desktop preferences or explicit user overrides.
 
+use neomacs_display_protocol::FrameFontSize;
 use neomacs_display_protocol::GraphicalBackend;
-use neovm_core::emacs_core::display_host::{
-    FrameFontSize, SystemFontName, SystemFontRole, SystemFonts,
-};
+use neomacs_display_protocol::SystemFontName;
+use neomacs_display_protocol::SystemFontRole;
+use neomacs_display_protocol::SystemFonts;
 use strum::IntoEnumIterator;
 
 /// Native facts captured before the evaluator starts. No native handles or

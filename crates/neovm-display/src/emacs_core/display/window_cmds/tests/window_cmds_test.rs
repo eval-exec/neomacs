@@ -3182,7 +3182,7 @@ fn modify_frame_parameters_font_reopens_the_initial_frame_font() {
     let size = requests[0].1.size();
     assert_eq!(
         size,
-        crate::emacs_core::display_host::FrameFontSize::points(16.0).expect("16pt is a valid size")
+        neomacs_display_protocol::FrameFontSize::points(16.0).expect("16pt is a valid size")
     );
 
     let table =

@@ -4,8 +4,8 @@ use super::{
     BootstrapDisplayConfig, BootstrapDisplayKind, BootstrapFrameMetrics, FontMetricsService,
     FontWeight, FrameFontRequest, FrontendKind, SelectedFontInfo,
 };
+use neomacs_display_protocol::FrameFontSize;
 use neomacs_display_runtime::font_defaults::InitialFontFamilyMatch;
-use neovm_core::emacs_core::display_host::FrameFontSize;
 
 pub(super) struct StartupFont {
     selected: SelectedFontInfo,
@@ -94,7 +94,7 @@ impl StartupFont {
             // is an error, rather than permission to select a platform default.
             open(
                 neomacs_display_runtime::font_defaults::InitialFontCandidate::Configured(
-                    neovm_core::emacs_core::display_host::SystemFontName::new(name.to_owned())?,
+                    neomacs_display_protocol::SystemFontName::new(name.to_owned())?,
                 ),
             )
         } else {

@@ -1,5 +1,6 @@
-use super::{FrameFontRequest, FrameFontSize};
+use super::FrameFontRequest;
 use crate::face::{Face, FaceHeight};
+use neomacs_display_protocol::FrameFontSize;
 
 #[test]
 fn frame_font_size_constructors_reject_invalid_lisp_numbers() {

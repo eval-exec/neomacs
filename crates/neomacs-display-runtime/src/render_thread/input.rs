@@ -1,9 +1,6 @@
 //! Input translation and window chrome hit-testing.
 
-use crate::backend::wgpu::{
-    NEOMACS_ALT_MASK, NEOMACS_CTRL_MASK, NEOMACS_HYPER_MASK, NEOMACS_META_MASK, NEOMACS_SUPER_MASK,
-};
-use neovm_core::keyboard::FrontendKey;
+use neomacs_display_protocol::FrontendKey;
 use winit::keyboard::{Key, NamedKey, NativeKey};
 
 use super::RenderApp;
@@ -270,11 +267,15 @@ impl RenderApp {
             // bindable instead of being dropped.
             Key::Unidentified(native) => match native {
                 NativeKey::Xkb(keysym) => *keysym,
-                NativeKey::MacOS(scancode) => neovm_core::keyboard::native_key_macos(*scancode),
-                NativeKey::Windows(virtual_key) => {
-                    neovm_core::keyboard::native_key_windows(*virtual_key)
+                NativeKey::MacOS(scancode) => {
+                    neomacs_display_protocol::frontend_input::native_key::macos(*scancode)
                 }
-                NativeKey::Android(keycode) => neovm_core::keyboard::native_key_android(*keycode),
+                NativeKey::Windows(virtual_key) => {
+                    neomacs_display_protocol::frontend_input::native_key::windows(*virtual_key)
+                }
+                NativeKey::Android(keycode) => {
+                    neomacs_display_protocol::frontend_input::native_key::android(*keycode)
+                }
                 NativeKey::Unidentified => {
                     tracing::debug!("unidentified native key carries no identity");
                     0
@@ -300,11 +301,11 @@ impl RenderApp {
     /// (`src/keyboard.c:7941`).
     pub(super) fn translate_committed_text(text: &str, modifiers: u32) -> Option<Vec<FrontendKey>> {
         let command_modifiers_active = modifiers
-            & (NEOMACS_CTRL_MASK
-                | NEOMACS_META_MASK
-                | NEOMACS_SUPER_MASK
-                | NEOMACS_ALT_MASK
-                | NEOMACS_HYPER_MASK)
+            & (neomacs_display_protocol::ModifierBits::CTRL.bits()
+                | neomacs_display_protocol::ModifierBits::META.bits()
+                | neomacs_display_protocol::ModifierBits::SUPER.bits()
+                | neomacs_display_protocol::ModifierBits::ALT.bits()
+                | neomacs_display_protocol::ModifierBits::HYPER.bits())
             != 0;
         if command_modifiers_active {
             return None;

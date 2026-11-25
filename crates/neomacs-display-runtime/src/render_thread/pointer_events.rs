@@ -7,13 +7,11 @@ use super::state::PointerCursorIntent;
 use super::state::PresentedInteractionKey;
 #[cfg(feature = "webview")]
 use super::state::WebViewPointerCapture;
-use crate::backend::wgpu::NEOMACS_SUPER_MASK;
-#[cfg(feature = "webview")]
-use crate::backend::wgpu::{NEOMACS_CTRL_MASK, NEOMACS_META_MASK, NEOMACS_SHIFT_MASK};
 use crate::core::frame_glyphs::FrameGlyph;
 use crate::thread_comm::{
-    InputEvent, PointerAction, PointerPosition, PointerTarget, PositionedPointerInput, ScrollDelta,
+    InputEvent, PointerAction, PointerPosition, PositionedPointerInput, ScrollDelta,
 };
+use neomacs_display_protocol::PointerTarget;
 use neomacs_display_protocol::PresentationFramePoint;
 use neomacs_display_protocol::frame_chrome::{ChromeAction, FrameChromeKind};
 #[cfg(any(test, feature = "webview"))]
@@ -265,16 +263,16 @@ impl RenderApp {
     #[cfg(feature = "webview")]
     pub(super) fn webview_modifiers(modifiers: u32) -> WebViewModifiers {
         let mut result = WebViewModifiers::empty();
-        if modifiers & NEOMACS_SHIFT_MASK != 0 {
+        if modifiers & neomacs_display_protocol::ModifierBits::SHIFT.bits() != 0 {
             result |= WebViewModifiers::SHIFT;
         }
-        if modifiers & NEOMACS_CTRL_MASK != 0 {
+        if modifiers & neomacs_display_protocol::ModifierBits::CTRL.bits() != 0 {
             result |= WebViewModifiers::CONTROL;
         }
-        if modifiers & NEOMACS_META_MASK != 0 {
+        if modifiers & neomacs_display_protocol::ModifierBits::META.bits() != 0 {
             result |= WebViewModifiers::META;
         }
-        if modifiers & NEOMACS_SUPER_MASK != 0 {
+        if modifiers & neomacs_display_protocol::ModifierBits::SUPER.bits() != 0 {
             result |= WebViewModifiers::SUPER;
         }
         result
@@ -962,7 +960,8 @@ impl RenderApp {
 
                     if !handled_chrome
                         && !window_state.chrome().decorations_enabled
-                        && (self.modifiers & NEOMACS_SUPER_MASK) != 0
+                        && (self.modifiers & neomacs_display_protocol::ModifierBits::SUPER.bits())
+                            != 0
                     {
                         window_state.drag_window();
                         handled_chrome = true;
@@ -1691,7 +1690,7 @@ impl RenderApp {
                         .render
                         .compositor
                         .input_scroll
-                        .observe_input(receipt.clone(), token);
+                        .observe_input(receipt, token);
                 }
                 if let (
                     ScrollDelta::Pixels {
@@ -1721,7 +1720,7 @@ impl RenderApp {
                         ev_x,
                         ev_y,
                         -vertical.round(),
-                        receipt,
+                        &receipt,
                         token,
                     )
                 {

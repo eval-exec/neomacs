@@ -19,7 +19,7 @@ fn terminal_glyph_expansion_uses_frame_metrics() {
     });
     let mut contents = HashMap::new();
     contents.insert(
-        crate::terminal::TerminalId::new(7).expect("nonzero terminal id"),
+        neomacs_display_protocol::TerminalId::new(7).expect("nonzero terminal id"),
         TerminalContent {
             cells: vec![RenderCell {
                 col: 1,
@@ -141,7 +141,7 @@ fn window_terminal_is_clipped_to_windows_displaying_its_owner_buffer() {
         String::new(),
         false,
     );
-    let id = crate::terminal::TerminalId::new(7).unwrap();
+    let id = neomacs_display_protocol::TerminalId::new(7).unwrap();
     let contents = HashMap::from([(
         id,
         TerminalContent {
@@ -159,9 +159,7 @@ fn window_terminal_is_clipped_to_windows_displaying_its_owner_buffer() {
     )]);
     let targets = HashMap::from([(
         id,
-        crate::terminal::TerminalDisplayTarget::Window {
-            buffer: neovm_core::buffer::BufferId(9),
-        },
+        neomacs_display_protocol::TerminalDisplayTarget::Window { buffer: 9 },
     )]);
 
     let (glyphs, _) =

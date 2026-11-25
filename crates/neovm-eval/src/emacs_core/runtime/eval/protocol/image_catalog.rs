@@ -14,65 +14,28 @@ use neomacs_display_protocol::{
     ImageLayoutExtent, ImageLoadToken, ImageMaskKind, ImageMaskPolicy, ImageReportedExtent,
     ImageRotation, ImageSizeLimit, ImageSizeSpec, ImageStateEvent,
 };
+use neomacs_display_protocol::{
+    ImageBaseUri, ImageDataSource, ImageSourceSpelling, ImageSpellingMode, ResolvedImageMetadata,
+};
 use neovm_value::heap_types::{LispString, LispStringStorageKind};
 use neovm_value::image_identity::ImageSpecIdentity;
 
-/// Property-free image source text, preserving the Lisp cache-key spelling.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ImageSourceSpelling {
-    bytes: Vec<u8>,
-    storage_kind: LispStringStorageKind,
+/// The spelling of a Lisp string, without its properties.
+#[must_use]
+pub fn image_source_spelling(text: &LispString) -> ImageSourceSpelling {
+    ImageSourceSpelling::new(
+        text.as_bytes().to_vec(),
+        match text.storage_kind() {
+            LispStringStorageKind::Unibyte => ImageSpellingMode::Unibyte,
+            LispStringStorageKind::Multibyte => ImageSpellingMode::Multibyte,
+        },
+    )
 }
 
-static_assertions::assert_impl_all!(ImageSourceSpelling: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
-
-impl From<&LispString> for ImageSourceSpelling {
-    fn from(text: &LispString) -> Self {
-        Self {
-            bytes: text.as_bytes().to_vec(),
-            storage_kind: text.storage_kind(),
-        }
-    }
-}
-
-impl std::hash::Hash for ImageSourceSpelling {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::hash::Hash::hash(&self.bytes, state);
-        std::hash::Hash::hash(
-            &match self.storage_kind {
-                LispStringStorageKind::Unibyte => false,
-                LispStringStorageKind::Multibyte => true,
-            },
-            state,
-        );
-    }
-}
-
-/// A GNU image `:base-uri` spelling without Lisp properties or heap pointers.
-///
-/// Retain its original bytes and string mode for request identity. Decoders
-/// interpret those bytes as UTF-8 exactly as they did at the Lisp-string edge.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ImageBaseUri(ImageSourceSpelling);
-
-static_assertions::assert_impl_all!(ImageBaseUri: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
-
-impl ImageBaseUri {
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0.bytes
-    }
-
-    #[must_use]
-    pub fn as_utf8_str(&self) -> Option<&str> {
-        std::str::from_utf8(self.as_bytes()).ok()
-    }
-}
-
-impl From<&LispString> for ImageBaseUri {
-    fn from(uri: &LispString) -> Self {
-        Self(ImageSourceSpelling::from(uri))
-    }
+/// A GNU image `:base-uri` from its Lisp string.
+#[must_use]
+pub fn image_base_uri(uri: &LispString) -> ImageBaseUri {
+    ImageBaseUri::new(image_source_spelling(uri))
 }
 
 /// A Lisp image `:file` spelling, before GNU image-path resolution.
@@ -87,15 +50,15 @@ static_assertions::assert_impl_all!(ImageFileName: Send, Sync, Clone, std::fmt::
 impl ImageFileName {
     #[must_use]
     pub fn from_utf8(path: &str) -> Self {
-        Self(ImageSourceSpelling {
-            bytes: path.as_bytes().to_vec(),
-            storage_kind: LispStringStorageKind::Multibyte,
-        })
+        Self(ImageSourceSpelling::new(
+            path.as_bytes().to_vec(),
+            ImageSpellingMode::Multibyte,
+        ))
     }
 
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
-        &self.0.bytes
+        self.0.as_bytes()
     }
 
     #[must_use]
@@ -106,32 +69,7 @@ impl ImageFileName {
 
 impl From<&LispString> for ImageFileName {
     fn from(path: &LispString) -> Self {
-        Self(ImageSourceSpelling::from(path))
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ImageDataSource {
-    /// Encoded bytes with no authority to resolve external resources.
-    Isolated(EncodedBytes),
-    /// Encoded bytes whose relative resources may be resolved against the
-    /// explicitly supplied GNU image `:base-uri`.
-    WithBaseUri {
-        data: EncodedBytes,
-        base_uri: ImageBaseUri,
-    },
-}
-
-static_assertions::assert_impl_all!(ImageDataSource: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
-
-impl ImageDataSource {
-    /// The encoded bytes, whichever authority they carry.
-    #[must_use]
-    pub fn bytes(&self) -> &[u8] {
-        match self {
-            Self::Isolated(data) => data,
-            Self::WithBaseUri { data, .. } => data,
-        }
+        Self(image_source_spelling(path))
     }
 }
 
@@ -214,72 +152,6 @@ impl ImageInvalidationResult {
     #[must_use]
     pub const fn changed(self) -> bool {
         matches!(self, Self::Changed)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResolvedImageMetadata {
-    /// Logical layout size (redisplay / `frame-char-width` space).
-    pub layout: ImageLayoutExtent,
-    /// GNU `Fimage_size` with PIXELS non-nil (`img->width` / `img->height` space).
-    pub reported: ImageReportedExtent,
-    /// GNU's decoded four-corner background guess (0x00RRGGBB).
-    pub background: u32,
-    /// GNU's decoded four-corner mask classification.
-    pub background_transparent: bool,
-    /// Distinguishes a GNU-compatible clipping mask from continuous alpha.
-    pub mask: ImageMaskKind,
-    /// Format metadata owned by the decoder, never renderer geometry.
-    pub embedded: ImageEmbeddedMetadata,
-}
-
-impl ResolvedImageMetadata {
-    /// Build metadata when layout already equals GNU image-pixel size.
-    #[must_use]
-    pub const fn layout_is_image_pixels(
-        width: u32,
-        height: u32,
-        background: u32,
-        background_transparent: bool,
-        mask: ImageMaskKind,
-    ) -> Self {
-        Self {
-            layout: ImageLayoutExtent::new(width, height),
-            reported: ImageReportedExtent::new(width, height),
-            background,
-            background_transparent,
-            mask,
-            embedded: ImageEmbeddedMetadata::EMPTY,
-        }
-    }
-
-    /// Build metadata from logical layout + realization report scale.
-    #[must_use]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn from_layout(
-        layout: ImageLayoutExtent,
-        realization: ResolvedImageRealization,
-        background: u32,
-        background_transparent: bool,
-        mask: ImageMaskKind,
-    ) -> Self {
-        Self {
-            layout,
-            reported: realization.report_extent(layout),
-            background,
-            background_transparent,
-            mask,
-            embedded: ImageEmbeddedMetadata::default(),
-        }
-    }
-
-    /// Attach decoder-owned metadata without making plain-image constructors
-    /// fabricate animation state.
-    #[must_use]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    pub(crate) fn with_embedded(mut self, embedded: ImageEmbeddedMetadata) -> Self {
-        self.embedded = embedded;
-        self
     }
 }
 

@@ -2,10 +2,12 @@ use super::*;
 use crate::core::frame_glyphs::{FrameGlyph, FrameGlyphBuffer, GlyphRowRole};
 use crate::core::types::{Color, DisplayWindowId};
 use crate::render_thread::terminal_expansion::TerminalExpansion;
-use crate::terminal::{
-    TerminalDisplayTarget, TerminalFloatPlacement, TerminalGridSize, TerminalId, TerminalView,
-};
+use crate::terminal::TerminalView;
 use crate::thread_comm::ThreadComms;
+use neomacs_display_protocol::TerminalDisplayTarget;
+use neomacs_display_protocol::TerminalFloatPlacement;
+use neomacs_display_protocol::TerminalGridSize;
+use neomacs_display_protocol::TerminalId;
 use std::sync::{Arc, Mutex};
 
 fn make_test_app() -> RenderApp {

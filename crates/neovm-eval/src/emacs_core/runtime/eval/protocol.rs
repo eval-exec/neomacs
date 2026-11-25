@@ -24,20 +24,21 @@ use super::{
 };
 use neomacs_display_protocol::font::ResolvedFontIdentity;
 use neomacs_display_protocol::{
+    FrameFontSize, GuiFrameGeometryHints, GuiResourceQuery, PositiveFontScalar, SystemFontName,
+    SystemFontRole, SystemFonts, TerminalDisplayTarget, TerminalFloatPlacement, TerminalGridSize,
+    TerminalId,
+};
+use neomacs_display_protocol::{
     GraphicalDisplayIdentity, GraphicalFaceAttribute, ImageSizeLimit, ImageStateEvent,
     SelectionOwner,
 };
 use neomacs_display_protocol::{VideoId, WebViewId};
 use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
-use neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints;
 use neovm_value::display_vocab::{
     FontEntityHandle, FrameFullscreen, FrameId, FrameVisibility, XwidgetScriptRequestId,
 };
 use neovm_value::emacs_char::EmacsChar;
 use neovm_value::heap_types::LispString;
-
-mod system_fonts;
-pub use system_fonts::{SystemFontName, SystemFontRole, SystemFonts};
 
 pub mod image_catalog;
 
@@ -45,54 +46,6 @@ mod rows_authority;
 pub use rows_authority::InertRowsHostAuthority;
 pub(crate) use rows_authority::actual_rows_host_type;
 pub mod tty_host;
-
-/// The display object that owns a neo-term instance.
-///
-/// Window terminals carry their buffer identity in the variant itself, so a
-/// detached frame-wide `Window` state cannot be constructed accidentally.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TerminalDisplayTarget {
-    Window { buffer: BufferId },
-    Inline,
-    Floating,
-}
-
-/// A live terminal identifier. Zero is reserved as the Lisp failure sentinel,
-/// so it cannot cross the typed display-host boundary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TerminalId(NonZeroU32);
-
-impl TerminalId {
-    pub fn new(id: u32) -> Option<Self> {
-        NonZeroU32::new(id).map(Self)
-    }
-
-    pub fn get(self) -> u32 {
-        self.0.get()
-    }
-}
-
-impl Display for TerminalId {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
-
-/// Non-empty terminal grid dimensions validated at the Lisp boundary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TerminalGridSize {
-    pub cols: NonZeroU16,
-    pub rows: NonZeroU16,
-}
-
-impl TerminalGridSize {
-    pub fn new(cols: u16, rows: u16) -> Option<Self> {
-        Some(Self {
-            cols: NonZeroU16::new(cols)?,
-            rows: NonZeroU16::new(rows)?,
-        })
-    }
-}
 
 /// Validated terminal creation request owned by the evaluator/display-host
 /// boundary. Renderer-specific command enums stay outside `neovm-core`.
@@ -103,85 +56,11 @@ pub struct TerminalCreateRequest {
     pub shell: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TerminalFloatPlacement {
-    x: f32,
-    y: f32,
-    opacity: f32,
-}
-
-impl TerminalFloatPlacement {
-    pub fn new(x: f32, y: f32, opacity: f32) -> Option<Self> {
-        (x.is_finite() && y.is_finite() && opacity.is_finite() && (0.0..=1.0).contains(&opacity))
-            .then_some(Self { x, y, opacity })
-    }
-
-    pub fn x(self) -> f32 {
-        self.x
-    }
-
-    pub fn y(self) -> f32 {
-        self.y
-    }
-
-    pub fn opacity(self) -> f32 {
-        self.opacity
-    }
-}
-
-/// A finite, positive scalar used by point-size and relative-size requests.
-///
-/// Lisp numbers are validated once when they cross the display-host seam, so
-/// native font adapters never need to recover from NaN, infinity, zero, or a
-/// negative size.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PositiveFontScalar(f64);
-
-impl PositiveFontScalar {
-    pub fn new(value: f64) -> Option<Self> {
-        (value.is_finite() && value > 0.0).then_some(Self(value))
-    }
-
-    pub const fn get(self) -> f64 {
-        self.0
-    }
-}
-
-/// The semantic size attached to a frame-font request.
-///
-/// GNU keeps integer font-spec sizes in pixels until font realization, while
-/// floating sizes are points. Keeping those units in the type prevents a
-/// frame-independent conversion from silently assuming one platform DPI.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum FrameFontSize {
-    Default,
-    Pixels(NonZeroU32),
-    Points(PositiveFontScalar),
-    Relative(PositiveFontScalar),
-}
-
-impl FrameFontSize {
-    pub fn pixels(value: i64) -> Option<Self> {
-        u32::try_from(value)
-            .ok()
-            .and_then(NonZeroU32::new)
-            .map(Self::Pixels)
-    }
-
-    pub fn points(value: f64) -> Option<Self> {
-        let value = PositiveFontScalar::new(value)?;
-        ((1.0..=f64::from(i32::MAX)).contains(&(value.get() * 10.0))).then_some(Self::Points(value))
-    }
-
-    pub fn relative(value: f64) -> Option<Self> {
-        PositiveFontScalar::new(value).map(Self::Relative)
-    }
-
-    pub(crate) fn from_face_height(height: FaceHeight) -> Option<Self> {
-        match height {
-            FaceHeight::Absolute(tenths) => Self::points(f64::from(tenths) / 10.0),
-            FaceHeight::Relative(scale) => Self::relative(scale),
-        }
+/// The frame-font size a face height requests.
+pub(crate) fn frame_font_size_from_face_height(height: FaceHeight) -> Option<FrameFontSize> {
+    match height {
+        FaceHeight::Absolute(tenths) => FrameFontSize::points(f64::from(tenths) / 10.0),
+        FaceHeight::Relative(scale) => FrameFontSize::relative(scale),
     }
 }
 
@@ -258,30 +137,6 @@ pub struct FontCoverageRequest {
     pub frame_id: FrameId,
     pub target: FontCoverageTarget,
     pub character: EmacsChar,
-}
-
-/// Fully qualified GNU resource keys. Native backends own their database
-/// precedence, including whether explicit resources bypass inhibition.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GuiResourceQuery {
-    pub name: String,
-    pub class: String,
-    pub inhibit_native: bool,
-}
-
-impl GuiResourceQuery {
-    pub fn normalize_instance_name(name: &str) -> String {
-        let valid = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_';
-        if name.bytes().all(valid) {
-            return name.into();
-        }
-        if name.bytes().filter(|byte| valid(*byte)).count() < 2 {
-            return "emacs".into();
-        }
-        name.bytes()
-            .map(|byte| if valid(byte) { char::from(byte) } else { '_' })
-            .collect()
-    }
 }
 
 /// Typed request crossing from GNU-compatible face realization into the
@@ -873,7 +728,7 @@ impl FrameFontRequest {
         let size = face
             .height
             .take()
-            .and_then(FrameFontSize::from_face_height)
+            .and_then(frame_font_size_from_face_height)
             .unwrap_or(FrameFontSize::Default);
         Self {
             face,

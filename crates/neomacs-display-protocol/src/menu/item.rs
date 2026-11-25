@@ -1,7 +1,7 @@
 //! Closed item kinds; presentation cannot make a separator actionable.
 use super::MenuIndicator;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MenuAvailability {
     Enabled,
     Disabled,
@@ -17,7 +17,7 @@ impl From<bool> for MenuAvailability {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MenuItemKind {
     Command {
         availability: MenuAvailability,

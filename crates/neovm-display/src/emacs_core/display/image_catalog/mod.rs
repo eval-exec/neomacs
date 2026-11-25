@@ -293,9 +293,9 @@ pub fn numeric_image_scale(value: Value) -> Option<ImageScaleFactor> {
 }
 
 pub use neovm_eval::emacs_core::eval::protocol::image_catalog::{
-    FailedImage, ImageAnimationInvalidation, ImageBaseUri, ImageCatalog, ImageDataSource,
-    ImageFileName, ImageInvalidation, ImageInvalidationResult, ImageLookup, ImagePlacement,
-    ImageResolveRequest, ImageResolveSource, PendingImage, ReadyImage, ResolvedImageMetadata,
+    FailedImage, ImageAnimationInvalidation, ImageCatalog, ImageFileName, ImageInvalidation,
+    ImageInvalidationResult, ImageLookup, ImagePlacement, ImageResolveRequest, ImageResolveSource,
+    PendingImage, ReadyImage, image_base_uri,
 };
 pub use neovm_value::image_identity::ImageSpecIdentity;
 

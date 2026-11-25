@@ -53,8 +53,14 @@ pub mod window_cmds_host {
         pub visibility_changes:
             Rc<RefCell<Vec<(crate::window::FrameId, crate::window::FrameVisibility)>>>,
         pub focus_requests: Rc<RefCell<Vec<(crate::window::FrameId, bool)>>>,
-        pub geometry_hints:
-            Rc<RefCell<Vec<(crate::window::FrameId, crate::window::GuiFrameGeometryHints)>>>,
+        pub geometry_hints: Rc<
+            RefCell<
+                Vec<(
+                    crate::window::FrameId,
+                    neomacs_display_protocol::GuiFrameGeometryHints,
+                )>,
+            >,
+        >,
         pub primary_size: Option<GuiFrameHostSize>,
         pub resolved_frame_font: Option<ResolvedFrameFont>,
         pub initial_gui_defaults: Option<crate::emacs_core::display_host::InitialGuiFrameDefaults>,
@@ -204,7 +210,7 @@ pub mod window_cmds_host {
         fn set_gui_frame_geometry_hints(
             &mut self,
             frame_id: crate::window::FrameId,
-            geometry_hints: crate::window::GuiFrameGeometryHints,
+            geometry_hints: neomacs_display_protocol::GuiFrameGeometryHints,
         ) -> Result<(), String> {
             self.geometry_hints
                 .borrow_mut()
@@ -1766,7 +1772,8 @@ pub mod xfaces_upper_layer_helpers {
         }
     }
 
-    use crate::emacs_core::display_host::{FontResolveRequest, FrameFontRequest, FrameFontSize};
+    use crate::emacs_core::display_host::{FontResolveRequest, FrameFontRequest};
+    use neomacs_display_protocol::FrameFontSize;
     use neovm_eval::emacs_core::eval::{DisplayHost, GuiFrameHostRequest, ResolvedFontMatch};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -2787,7 +2794,7 @@ pub mod xdisp_test_upper_layer_helpers {
     }
     use crate::emacs_core::image_catalog::{
         ImageCatalog, ImageId, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageLookup,
-        ImageMaskKind, ImageResolveRequest, ImageSizeLimit, ReadyImage, ResolvedImageMetadata,
+        ImageMaskKind, ImageResolveRequest, ImageSizeLimit, ReadyImage,
     };
     use crate::window::DisplayFrameManagerExt;
     use neovm_edit::buffer::buffer::BUFFER_SLOT_BUFFER_FILE_CODING_SYSTEM;
@@ -2896,13 +2903,14 @@ pub mod motion_test_upper_layer_helpers {
 /// Shared upper-layer helpers for system_font_test (peer P1 precision):
 /// real bodies live here once; callers supply the harness Context where needed.
 pub mod system_font_test_upper_layer_helpers {
-    use crate::emacs_core::display_host::FrameFontSize;
-    use crate::emacs_core::display_host::{
-        FrameFontRequest, SystemFontName, SystemFontRole, SystemFonts,
-    };
+    use crate::emacs_core::display_host::FrameFontRequest;
     use crate::face::{FontSlant, FontWeight, FontWidth};
     use crate::test_utils::xfaces_upper_layer_helpers::ensure_selected_gui_frame;
     use crate::window::FrameId;
+    use neomacs_display_protocol::FrameFontSize;
+    use neomacs_display_protocol::SystemFontName;
+    use neomacs_display_protocol::SystemFontRole;
+    use neomacs_display_protocol::SystemFonts;
     use neovm_eval::emacs_core::eval::ResolvedFrameFont;
     use neovm_eval::emacs_core::eval::{
         Context, DisplayHost, FontPxProbeResult, GuiFrameHostRequest,

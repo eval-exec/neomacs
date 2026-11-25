@@ -14,6 +14,7 @@ use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 #[doc(hidden)]
 pub use cycling::{builtin_next_frame, builtin_previous_frame};
+use neovm_value::display_vocab::FrameVisibilityLisp;
 use position::{
     FrameCoordinateOrigin, FramePositionSpec, absolute_window_position, apply_frame_position,
 };

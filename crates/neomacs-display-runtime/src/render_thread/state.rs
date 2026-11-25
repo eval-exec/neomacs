@@ -1,3 +1,4 @@
+use neomacs_display_protocol::MonitorInfo;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -8,16 +9,15 @@ use neomacs_display_protocol::frame_time::EventTime;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
 
 use crate::clipboard::ClipboardService;
-pub use crate::thread_comm::MonitorInfo;
 use crate::thread_comm::{FrameShaderAvailability, RenderComms};
 pub(super) use neomacs_display_protocol::PointerAppearancePhase;
+use neomacs_display_protocol::ResolvedImageMetadata;
 use neomacs_display_protocol::{
     EffectsConfig, FrameGlyphBuffer, FrameRect, ImageCacheUsage, ImageId, ImageLoadToken,
     InteractionId, PointerAppearanceId, PointerAppearanceSelection, PresentationId,
     PresentedResizeAxis, TransitionPolicy, VisualConfig,
 };
 use neomacs_renderer_wgpu::{RowRange, WgpuRenderer};
-use neovm_core::emacs_core::image_catalog::ResolvedImageMetadata;
 
 use super::cursor::CursorState;
 use super::frame_windows::{
@@ -1211,7 +1211,7 @@ impl RenderApp {
     ) -> Self {
         let mut frame_windows = GuiFrameWindowManager::new();
         frame_windows.set_primary_pending(GuiFrameWindowState {
-            visibility: crate::thread_comm::WindowVisibility::Visible,
+            visibility: neomacs_display_protocol::WindowVisibility::Visible,
             pending_scale_factor: None,
             lifecycle: FrameLifecycle::Pending {
                 width,

@@ -232,8 +232,8 @@ fn run_gui(demo: &str) {
             if let InputEvent::Key { key, .. } = event
                 && matches!(
                     key,
-                    neovm_core::keyboard::FrontendKey::Character('q')
-                        | neovm_core::keyboard::FrontendKey::Keysym(0xff1b)
+                    neomacs_display_protocol::FrontendKey::Character('q')
+                        | neomacs_display_protocol::FrontendKey::Keysym(0xff1b)
                 )
             {
                 let _ = emacs_comms

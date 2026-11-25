@@ -692,6 +692,11 @@ fn shifted_buffer_position(value: usize, from: usize, delta: i64) -> usize {
 ///
 /// Grid-native: no pixel coordinates. Screen position is determined by
 /// the row index in `GlyphRow` and position within the area's glyph vector.
+///
+/// The serde derive serves JSON snapshots only. A display link never sends a
+/// glyph through it: the FrameSync encoder destructures `Glyph` without `..`
+/// into its row's `RowRuns` (DESIGN §6.9-§6.10), so this type's own field
+/// attributes are outside the bincode attribute rule.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Glyph {
     /// What this glyph displays.
@@ -1165,6 +1170,12 @@ impl Glyph {
 /// Contains three glyph areas (left margin, text, right margin) matching
 /// GNU's layout. Row hashing enables fast diff: if hashes match, the rows
 /// are likely identical; if they differ, the row needs redrawing.
+///
+/// The serde derive serves JSON snapshots only. A display link never sends a
+/// row through it: the FrameSync encoder destructures `GlyphRow` without `..`
+/// into `RowRuns` and replaces the process-local appearance with a content key
+/// (DESIGN §6.9-§6.10), so this type's own field attributes are outside the
+/// bincode attribute rule.
 #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GlyphRow {
     /// Glyphs per area: [left_margin, text, right_margin].
@@ -2126,7 +2137,12 @@ pub struct FrameDisplayState {
     pub scroll_coverage_renewals: Vec<crate::scroll_coverage::ScrollCoverageRenewal>,
     /// Completed native commands reflected in this immutable frame.
     #[serde(default)]
-    pub input_checkpoint: Vec<crate::input_progress::InputCheckpoint>,
+    pub input_checkpoint: Vec<crate::input_progress::FrontierSnapshot>,
+    /// The device scale the layout engine measured this frame at (DESIGN
+    /// §6.15). A frontend whose window scale differs draws at exact logical
+    /// positions and asks for a relayout.
+    #[serde(default)]
+    pub layout_scale: crate::geometry::DeviceScale,
     /// Evaluator interaction snapshot paired with these exact pixels.
     pub presentation_id: PresentationId,
     /// Why this presentation was produced.
@@ -2209,6 +2225,44 @@ pub struct FrameDisplayState {
     /// `GlyphRow::left_fringe_bitmap` references one of these by `bitmap_index`.
     pub fringe_bitmaps: HashMap<u16, FringeBitmapData>,
 }
+
+/// A condition [`FrameDisplayState::materialize`] requires and the state
+/// violates. Each variant is one of the invariants a producer guarantees,
+/// reported in the order `materialize` checks them.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MaterializeError {
+    /// The pointer map names primitives the frame does not materialize.
+    PointerSource(crate::presented_pointer::PresentedPointerMapError),
+    /// A non-empty hit index belongs to another presentation
+    /// (`StalePresentation`), or its regions and text positions disagree
+    /// with the frame's window geometry.
+    SpatialProjection(crate::PresentedHitError),
+    /// The hit index cannot bind the frame's pointer regions, for example a
+    /// region whose semantic owner it does not know. (An empty index of
+    /// another presentation is replaced, not reported.)
+    HitIndex(crate::PresentedHitError),
+}
+
+impl std::fmt::Display for MaterializeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PointerSource(error) => write!(
+                f,
+                "FrameDisplayState pointer map must match its materialized primitives: {error:?}"
+            ),
+            Self::SpatialProjection(error) => write!(
+                f,
+                "FrameDisplayState spatial projections must share canonical geometry: {error:?}"
+            ),
+            Self::HitIndex(error) => write!(
+                f,
+                "FrameDisplayState hit index must match its presentation: {error:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MaterializeError {}
 
 #[cfg(debug_assertions)]
 thread_local! {
@@ -2690,6 +2744,7 @@ impl FrameDisplayState {
             prepared_scroll_admissions: Vec::new(),
             scroll_coverage_renewals: Vec::new(),
             input_checkpoint: Vec::new(),
+            layout_scale: crate::geometry::DeviceScale::ONE,
             presentation_id: PresentationId::default(),
             origin: crate::presentation_origin::PresentationOrigin::Ordinary,
             frame_placement: crate::presented_frame::PresentedFramePlacement::default(),
@@ -2972,6 +3027,25 @@ impl FrameDisplayState {
     pub fn materialize(&self) -> FrameGlyphBuffer {
         #[cfg(debug_assertions)]
         MATERIALIZE_CALL_COUNT.with(|count| count.set(count.get() + 1));
+        match self.try_materialize() {
+            Ok(buf) => buf,
+            Err(error) => panic!("{error}"),
+        }
+    }
+
+    /// Check the conditions [`Self::materialize`] asserts as typed errors:
+    /// the pointer map, the spatial projections and the hit index.
+    ///
+    /// This is not yet a complete guard for a decoded frame: the glyph walk
+    /// it runs (`for_each_glyph`) still `expect`s a finite xwidget origin, a
+    /// valid xwidget clip and a positive finite xwidget width. A receiver must
+    /// check those before trusting a peer's frame (the FrameSync decoder,
+    /// MILESTONES M2).
+    pub fn validate_for_materialize(&self) -> Result<(), MaterializeError> {
+        self.try_materialize().map(drop)
+    }
+
+    fn try_materialize(&self) -> Result<FrameGlyphBuffer, MaterializeError> {
         let mut buf = FrameGlyphBuffer::with_size(self.frame_pixel_width, self.frame_pixel_height);
         buf.presentation_id = self.presentation_id;
         buf.scroll_input_policy = self.scroll_input_policy;
@@ -3069,11 +3143,11 @@ impl FrameDisplayState {
 
         if !self.presented_pointer_source.is_empty() {
             buf.install_presented_pointer_source_map(&self.presented_pointer_source)
-                .expect("FrameDisplayState pointer map must match its materialized primitives");
+                .map_err(MaterializeError::PointerSource)?;
         }
         if !self.presented_hit_index.is_empty() {
             self.validate_spatial_projections()
-                .expect("FrameDisplayState spatial projections must share canonical geometry");
+                .map_err(MaterializeError::SpatialProjection)?;
         }
         let hit_index = if self.presented_hit_index.is_empty()
             && self.presented_hit_index.presentation() != self.presentation_id
@@ -3083,9 +3157,9 @@ impl FrameDisplayState {
             self.presented_hit_index.clone()
         };
         buf.install_presented_hit_index(hit_index)
-            .expect("FrameDisplayState hit index must match its presentation");
+            .map_err(MaterializeError::HitIndex)?;
 
-        buf
+        Ok(buf)
     }
 
     /// Visit every `FrameGlyph` this state materializes, in the canonical

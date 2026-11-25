@@ -4,9 +4,10 @@ use crate::emacs_core::image_catalog::{
     ImageFrameIndex, ImageHeuristicMask, ImageId, ImageInvalidation, ImageInvalidationResult,
     ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageLookup, ImageMaskKind,
     ImageMaskPolicy, ImageResolveRequest, ImageResolveSource, ImageSizeLimit, ImageSizeSpec,
-    PendingImage, ReadyImage, ResolvedImageMetadata,
+    PendingImage, ReadyImage,
 };
 use crate::face::{Color, FaceTable};
+use neomacs_display_protocol::ResolvedImageMetadata;
 use neomacs_display_protocol::image_diagnostic::{
     ImageDiagnostic, ImageDiagnosticSubject, ImageFormatName,
 };
@@ -42,7 +43,7 @@ fn image_source_spellings_preserve_bytes_mode_and_decoder_input() {
     ] {
         let _ = uri.intervals_mut();
         assert!(uri.has_intervals());
-        let snapshot = ImageBaseUri::from(&uri);
+        let snapshot = crate::emacs_core::image_catalog::image_base_uri(&uri);
         assert_eq!(snapshot.as_bytes(), uri.as_bytes());
         assert_eq!(snapshot.as_utf8_str(), uri.as_utf8_str());
         assert_eq!(hash(&snapshot), hash(&uri));
@@ -53,8 +54,10 @@ fn image_source_spellings_preserve_bytes_mode_and_decoder_input() {
     }
 
     assert_ne!(
-        ImageBaseUri::from(&LispString::from_utf8("/images/")),
-        ImageBaseUri::from(&LispString::from_unibyte(b"/images/".to_vec())),
+        crate::emacs_core::image_catalog::image_base_uri(&LispString::from_utf8("/images/")),
+        crate::emacs_core::image_catalog::image_base_uri(&LispString::from_unibyte(
+            b"/images/".to_vec()
+        )),
     );
     assert_ne!(
         ImageFileName::from(&LispString::from_utf8("/images/")),

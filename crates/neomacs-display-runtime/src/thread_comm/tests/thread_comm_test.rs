@@ -184,7 +184,7 @@ fn thread_comms_input_channel_roundtrip() {
     let comms = ThreadComms::new();
 
     let event = InputEvent::Key {
-        key: neovm_core::keyboard::FrontendKey::Keysym(65), // 'A'
+        key: neomacs_display_protocol::FrontendKey::Keysym(65), // 'A'
         modifiers: 0,
         pressed: true,
         emacs_frame_id: 0,
@@ -200,7 +200,7 @@ fn thread_comms_input_channel_roundtrip() {
             pressed,
             emacs_frame_id,
         } => {
-            assert_eq!(key, neovm_core::keyboard::FrontendKey::Keysym(65));
+            assert_eq!(key, neomacs_display_protocol::FrontendKey::Keysym(65));
             assert_eq!(modifiers, 0);
             assert!(pressed);
             assert_eq!(emacs_frame_id, 0);
@@ -333,7 +333,7 @@ fn thread_comms_input_channel_bounded_capacity() {
     // Fill up the input channel to capacity
     for _ in 0..INPUT_CHANNEL_CAPACITY {
         let event = InputEvent::Key {
-            key: neovm_core::keyboard::FrontendKey::Keysym(0),
+            key: neomacs_display_protocol::FrontendKey::Keysym(0),
             modifiers: 0,
             pressed: false,
             emacs_frame_id: 0,
@@ -343,7 +343,7 @@ fn thread_comms_input_channel_bounded_capacity() {
 
     // Next try_send should fail (channel full)
     let result = comms.input_tx.try_send(InputEvent::Key {
-        key: neovm_core::keyboard::FrontendKey::Keysym(0),
+        key: neomacs_display_protocol::FrontendKey::Keysym(0),
         modifiers: 0,
         pressed: false,
         emacs_frame_id: 0,
@@ -466,8 +466,8 @@ fn render_comms_send_input_delivers_event() {
 #[test]
 fn input_event_key_construction() {
     let event = InputEvent::Key {
-        key: neovm_core::keyboard::FrontendKey::Keysym(0xFF0D), // Return
-        modifiers: 4,                                           // Ctrl
+        key: neomacs_display_protocol::FrontendKey::Keysym(0xFF0D), // Return
+        modifiers: 4,                                               // Ctrl
         pressed: true,
         emacs_frame_id: 0,
     };
@@ -478,7 +478,7 @@ fn input_event_key_construction() {
             pressed,
             emacs_frame_id,
         } => {
-            assert_eq!(key, neovm_core::keyboard::FrontendKey::Keysym(0xFF0D));
+            assert_eq!(key, neomacs_display_protocol::FrontendKey::Keysym(0xFF0D));
             assert_eq!(modifiers, 4);
             assert!(pressed);
             assert_eq!(emacs_frame_id, 0);
@@ -760,7 +760,7 @@ fn a_file_drop_reports_the_dropped_paths_and_nothing_that_stands_in_for_a_posn()
 #[test]
 fn input_event_clone() {
     let original = InputEvent::Key {
-        key: neovm_core::keyboard::FrontendKey::Keysym(42),
+        key: neomacs_display_protocol::FrontendKey::Keysym(42),
         modifiers: 8,
         pressed: false,
         emacs_frame_id: 0,
@@ -773,7 +773,7 @@ fn input_event_clone() {
             pressed,
             emacs_frame_id,
         } => {
-            assert_eq!(key, neovm_core::keyboard::FrontendKey::Keysym(42));
+            assert_eq!(key, neomacs_display_protocol::FrontendKey::Keysym(42));
             assert_eq!(modifiers, 8);
             assert!(!pressed);
             assert_eq!(emacs_frame_id, 0);
@@ -785,7 +785,7 @@ fn input_event_clone() {
 #[test]
 fn input_event_debug() {
     let event = InputEvent::Key {
-        key: neovm_core::keyboard::FrontendKey::Keysym(65),
+        key: neomacs_display_protocol::FrontendKey::Keysym(65),
         modifiers: 0,
         pressed: true,
         emacs_frame_id: 0,
@@ -1637,19 +1637,19 @@ fn channel_sends_multiple_input_events_in_order() {
 
     let events = vec![
         InputEvent::Key {
-            key: neovm_core::keyboard::FrontendKey::Keysym(1),
+            key: neomacs_display_protocol::FrontendKey::Keysym(1),
             modifiers: 0,
             pressed: true,
             emacs_frame_id: 0,
         },
         InputEvent::Key {
-            key: neovm_core::keyboard::FrontendKey::Keysym(2),
+            key: neomacs_display_protocol::FrontendKey::Keysym(2),
             modifiers: 0,
             pressed: true,
             emacs_frame_id: 0,
         },
         InputEvent::Key {
-            key: neovm_core::keyboard::FrontendKey::Keysym(3),
+            key: neomacs_display_protocol::FrontendKey::Keysym(3),
             modifiers: 0,
             pressed: true,
             emacs_frame_id: 0,
@@ -1739,7 +1739,7 @@ fn cross_thread_input_event_delivery() {
 
     let handle = std::thread::spawn(move || {
         render.send_input(InputEvent::Key {
-            key: neovm_core::keyboard::FrontendKey::Keysym(0x61), // 'a'
+            key: neomacs_display_protocol::FrontendKey::Keysym(0x61), // 'a'
             modifiers: 0,
             pressed: true,
             emacs_frame_id: 0,
@@ -1758,7 +1758,7 @@ fn cross_thread_input_event_delivery() {
     let evt1 = emacs.input_rx.try_recv().unwrap();
     match evt1 {
         InputEvent::Key { key, .. } => {
-            assert_eq!(key, neovm_core::keyboard::FrontendKey::Keysym(0x61))
+            assert_eq!(key, neomacs_display_protocol::FrontendKey::Keysym(0x61))
         }
         other => panic!("Expected Key, got {:?}", other),
     }
@@ -1814,4 +1814,53 @@ fn cross_thread_frame_delivery() {
     emacs.frame_tx.submit(sealed_test_state(state)).unwrap();
 
     handle.join().unwrap();
+}
+
+fn page_down() -> InputEvent {
+    InputEvent::Key {
+        key: neomacs_display_protocol::FrontendKey::Keysym(0xff56),
+        modifiers: 0,
+        pressed: true,
+        emacs_frame_id: 7,
+    }
+}
+
+fn first_serial(serial: u64) -> neomacs_display_protocol::input_progress::InputReceipt {
+    neomacs_display_protocol::input_progress::InputReceipt::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+        neomacs_display_protocol::input_progress::InputSerial::new(
+            std::num::NonZeroU64::new(serial).unwrap(),
+        ),
+    )
+}
+
+/// Review M1 r1 (compat 1): a tracked input that reaches the evaluator's
+/// queue travels with the receipt the caller predicts with, and the ledger
+/// does not count it as cancelled.
+#[test]
+fn queued_tracked_input_carries_the_callers_receipt() {
+    let (emacs, render) = ThreadComms::new().split();
+    let (receipt, _) = render.send_input_with_receipt(page_down());
+    let receipt = receipt.expect("PageDown is tracked");
+    assert_eq!(receipt.receipt(), first_serial(1));
+    let Ok(InputEvent::Tracked {
+        receipt: queued, ..
+    }) = emacs.input_rx.try_recv()
+    else {
+        panic!("the tracked input is queued for the evaluator");
+    };
+    assert_eq!(queued.receipt(), receipt.receipt());
+    assert!(!render.input_stream.cancelled(receipt.receipt()));
+}
+
+/// Review M1 r1 (compat 1): a tracked input that cannot reach the evaluator's
+/// queue is cancelled in the stream's ledger, and the caller gets no receipt
+/// to predict with (before M1 it got a receipt already marked cancelled).
+#[test]
+fn undeliverable_tracked_input_is_cancelled_and_yields_no_receipt() {
+    let (emacs, render) = ThreadComms::new().split();
+    drop(emacs);
+    let (receipt, _) = render.send_input_with_receipt(page_down());
+    assert!(receipt.is_none());
+    assert!(render.input_stream.cancelled(first_serial(1)));
 }

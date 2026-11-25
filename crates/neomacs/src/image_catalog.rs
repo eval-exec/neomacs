@@ -385,7 +385,7 @@ impl AsyncImageCatalog {
         match terminal {
             Ok(metadata) => Ok(Some(ReadyImage {
                 load: pending.load(),
-                metadata: neovm_core::emacs_core::image_catalog::ResolvedImageMetadata {
+                metadata: neomacs_display_protocol::ResolvedImageMetadata {
                     layout: metadata.layout,
                     reported: metadata.reported,
                     background: metadata.background,
@@ -1588,13 +1588,10 @@ fn submit_image_decode(decoder: &ImageDecodeClient, command: &RenderCommand) {
             limit,
         }) => {
             let (data, resources) = match data {
-                neovm_core::emacs_core::image_catalog::ImageDataSource::Isolated(data) => {
+                neomacs_display_protocol::ImageDataSource::Isolated(data) => {
                     (data.clone(), SvgResourceContext::Isolated)
                 }
-                neovm_core::emacs_core::image_catalog::ImageDataSource::WithBaseUri {
-                    data,
-                    base_uri,
-                } => (
+                neomacs_display_protocol::ImageDataSource::WithBaseUri { data, base_uri } => (
                     data.clone(),
                     SvgResourceContext::BaseUri(
                         base_uri.as_utf8_str().unwrap_or_default().to_owned(),

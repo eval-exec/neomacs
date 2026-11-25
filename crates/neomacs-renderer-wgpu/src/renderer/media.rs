@@ -468,14 +468,14 @@ impl WgpuRenderer {
     pub fn create_shader_surface(
         &mut self,
         id: u32,
-        language: crate::shader_surface::SurfaceShaderLanguage,
+        language: neomacs_display_protocol::SurfaceShaderLanguage,
         user_source: &str,
-        uniforms: &[crate::shader_surface::SurfaceUniformInit],
+        uniforms: &[neomacs_display_protocol::SurfaceUniformInit],
         width: u32,
         height: u32,
         animate: bool,
         fps: Option<u32>,
-        channel0: Option<crate::shader_surface::SurfaceChannelSource>,
+        channel0: Option<neomacs_display_protocol::SurfaceChannelSource>,
         recreatable: bool,
     ) -> Result<(), String> {
         let layout = self.caches.image.bind_group_layout();
@@ -640,7 +640,7 @@ impl WgpuRenderer {
     /// where every cache is visible; missing/not-ready sources fall back to
     /// transparent black inside the surface cache.
     pub fn process_shader_surfaces(&mut self) {
-        use crate::shader_surface::SurfaceChannelSource;
+        use neomacs_display_protocol::SurfaceChannelSource;
         let sample = self.frame_sample;
         self.reconcile_media_budget();
         let sources = self.caches.surface.external_channel_sources();
@@ -651,9 +651,7 @@ impl WgpuRenderer {
         #[cfg(feature = "video")]
         let video_views = self.caches.video.prepare_channel_views(
             sources.iter().filter_map(|source| match source {
-                SurfaceChannelSource::Video(id) => {
-                    Some(neomacs_display_protocol::types::VideoId::new(*id))
-                }
+                SurfaceChannelSource::Video(id) => Some(*id),
                 SurfaceChannelSource::Surface(_) | SurfaceChannelSource::Image(_) => None,
             }),
             &self.device,
@@ -669,9 +667,7 @@ impl WgpuRenderer {
                     self.caches.image.get(id).map(|cached| cached.view.clone())
                 }
                 #[cfg(feature = "video")]
-                SurfaceChannelSource::Video(id) => video_views
-                    .get(&neomacs_display_protocol::types::VideoId::new(id))
-                    .cloned(),
+                SurfaceChannelSource::Video(id) => video_views.get(&id).cloned(),
                 #[cfg(not(feature = "video"))]
                 SurfaceChannelSource::Video(_) => None,
             };
@@ -716,9 +712,9 @@ impl WgpuRenderer {
     /// name -> slot table and initial values in slot order).
     pub fn set_frame_post(
         &mut self,
-        language: crate::shader_surface::SurfaceShaderLanguage,
+        language: neomacs_display_protocol::SurfaceShaderLanguage,
         composed_source: &str,
-        uniforms: &[crate::shader_surface::SurfaceUniformInit],
+        uniforms: &[neomacs_display_protocol::SurfaceUniformInit],
     ) -> Result<(), String> {
         let post = crate::frame_post::FramePost::new(
             &self.device,

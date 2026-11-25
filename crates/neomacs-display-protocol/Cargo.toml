@@ -24,6 +24,9 @@ strum.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# The NDP/1 codec (DESIGN §6.9). Without `derive`, so no package is added:
+# bincode and unty are already in Cargo.lock.
+bincode = { version = "=2.0.1", default-features = false, features = ["std", "serde"] }
 neomacs-infra.workspace = true
 proptest.workspace = true
 

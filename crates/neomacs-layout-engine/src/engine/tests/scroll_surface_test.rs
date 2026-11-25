@@ -484,7 +484,9 @@ impl RenewedScrollPreviewFixture {
 fn resolved_scroll_preview_survives_an_activated_cursor_only_coverage_renewal() {
     let mut fixture = RenewedScrollPreviewFixture::new();
     fixture.move_destination_without_redisplay();
-    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
     let delivery = stream.issue().unwrap();
     let intent = fixture
         .preview(delivery.receipt())
@@ -512,7 +514,9 @@ fn resolved_scroll_preview_restores_renewed_coverage_after_switching_frames() {
         .get_mut(other)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
     let delivery = stream.issue().unwrap();
 
     fixture.engine.load_retained_frame(other);
@@ -558,7 +562,9 @@ fn resolved_scroll_preview_obeys_policy_from_the_latest_coverage_renewal() {
         .eval
         .eval_str("(setq neomacs-compositor-scrolling t)")
         .unwrap();
-    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
     let delivery = stream.issue().unwrap();
     assert!(fixture.preview(delivery.receipt()).is_none());
     fixture.renew_only(true);
@@ -569,7 +575,9 @@ fn resolved_scroll_preview_obeys_policy_from_the_latest_coverage_renewal() {
 #[test]
 fn resolved_scroll_preview_expires_after_content_revokes_a_renewed_epoch() {
     let mut fixture = RenewedScrollPreviewFixture::new();
-    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
     let delivery = stream.issue().unwrap();
     assert!(
         fixture.preview(delivery.receipt()).is_some(),
@@ -659,7 +667,9 @@ fn resolved_scroll_preview_for_window(other_window: bool) {
         line.len() as i64 + 1,
         line.len(),
     );
-    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
     let delivery = stream.issue().unwrap();
     // Echo/chrome repaint requests do not change the certified body rows.
     eval.eval_str("(force-mode-line-update t)").unwrap();

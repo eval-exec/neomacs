@@ -644,6 +644,9 @@ fn live_window_frame_metadata(
 struct FrameFontInputs {
     bootstrap: FrameParams,
     window_system: Option<String>,
+    /// The scale this layout's font metrics were measured at; the sealed
+    /// frame is stamped with it (DESIGN §6.15).
+    device_scale: neomacs_display_protocol::geometry::DeviceScale,
 }
 
 struct PreparedFrameFonts {
@@ -2062,14 +2065,7 @@ impl LayoutEngine {
             let ws = frame
                 .effective_window_system()
                 .and_then(|v| v.as_bare_symbol_name().map(|s| s.to_string()));
-            (
-                bootstrap,
-                ws,
-                neomacs_display_protocol::geometry::DeviceScale::new(
-                    frame.device_scale_factor as f32,
-                )
-                .unwrap_or(neomacs_display_protocol::geometry::DeviceScale::ONE),
-            )
+            (bootstrap, ws, frame_device_scale(frame))
         };
         let font_selection_changed = if let Some(font_metrics) = self.font_metrics.as_mut() {
             font_metrics.set_device_scale(device_scale);
@@ -2096,6 +2092,7 @@ impl LayoutEngine {
         Some(FrameFontInputs {
             bootstrap,
             window_system,
+            device_scale,
         })
     }
 
@@ -2274,7 +2271,7 @@ impl LayoutEngine {
         self.report_image_failures(evaluator);
         let query_window = purpose.query_window();
         // Layout Lisp can enter a nested command reader. Capture completion
-        // before gathering pixels, never from commands that finish mid-layout.
+        // before gathering pixels; it is re-checked when the frame is sealed.
         let input_checkpoint = evaluator.input_progress.checkpoint();
         self.load_retained_frame(frame_id);
         let arrow_buffer = purpose
@@ -4653,7 +4650,15 @@ impl LayoutEngine {
         // currently placing this geometry is what decides whether the
         // compositor may animate toward it.
         frame_display_state.origin = evaluator.presentation_origin();
-        frame_display_state.input_checkpoint = input_checkpoint;
+        // The scale the fonts were measured at, not the frame's scale now:
+        // layout Lisp may have rescaled the frame meanwhile, and the stamp is
+        // what lets a frontend see that mismatch.
+        frame_display_state.layout_scale = font_inputs.device_scale;
+        frame_display_state.input_checkpoint =
+            neomacs_display_protocol::input_progress::FrontierSnapshot::settle(
+                input_checkpoint,
+                &evaluator.input_progress.checkpoint(),
+            );
         self.prepared_viewports.export(
             frame_id,
             &next_retained_window_matrices,
@@ -8043,3 +8048,12 @@ mod tests;
 #[cfg(test)]
 #[path = "engine/tests/mode_line_flow_test.rs"]
 mod mode_line_flow_test;
+
+/// The device scale a frame is laid out at: the one its font metrics use and
+/// the one its presentation is stamped with.
+fn frame_device_scale(
+    frame: &neovm_core::window::Frame,
+) -> neomacs_display_protocol::geometry::DeviceScale {
+    neomacs_display_protocol::geometry::DeviceScale::new(frame.device_scale_factor as f32)
+        .unwrap_or(neomacs_display_protocol::geometry::DeviceScale::ONE)
+}

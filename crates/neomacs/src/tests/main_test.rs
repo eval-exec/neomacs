@@ -20,23 +20,32 @@ use super::super::{
     run_gnu_startup, runtime_mode_from_program_name, source_bootstrap_loadup_invocation,
     startup_dimensions, sync_live_gui_frame_titles, sync_selected_gui_chrome_state,
 };
+use neomacs_display_protocol::GuiFrameGeometryHints;
+use neomacs_display_protocol::ImageDataSource;
+use neomacs_display_protocol::ResolvedImageMetadata;
+#[cfg(feature = "neo-term")]
+use neomacs_display_protocol::TerminalDisplayTarget;
 #[cfg(feature = "video")]
 use neomacs_display_protocol::VideoId;
+use neomacs_display_protocol::WindowFullscreenMode;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageFormatName};
 use neomacs_display_protocol::{SelectionOwner, WebViewId};
+#[cfg(feature = "neo-term")]
+use neomacs_display_protocol::{
+    TerminalDisplayTarget as CoreTerminalDisplayTarget, TerminalFloatPlacement, TerminalGridSize,
+};
 use neomacs_display_runtime::render_thread::{
     ImageDecodeTerminal, ImageRenderState, SharedImageRenderState,
 };
+#[cfg(feature = "video")]
+use neomacs_display_runtime::thread_comm::VideoSessionCommand;
 use neomacs_display_runtime::thread_comm::{
     AssetCommand, ClipboardCommand, ClipboardSelection, ConfigCommand, FrameRef,
     FrameShaderAvailability, LifecycleCommand, RenderCommand, SharedRenderCapabilities, UiCommand,
-    VideoSessionCommand, WindowCommand, WindowFullscreenMode,
+    WindowCommand,
 };
 #[cfg(feature = "neo-term")]
-use neomacs_display_runtime::{
-    terminal::{TerminalDisplayTarget, new_shared_terminals},
-    thread_comm::TerminalCommand,
-};
+use neomacs_display_runtime::{terminal::new_shared_terminals, thread_comm::TerminalCommand};
 use neomacs_layout_engine::font::metrics::FontMetricsService;
 use neomacs_layout_engine::font::sizing::face_height_to_gnu_x11_fallback_pixels;
 use neomacs_video_model::{
@@ -47,10 +56,7 @@ use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::GuiFrameHostRequest;
 use neovm_core::emacs_core::Value;
 #[cfg(feature = "neo-term")]
-use neovm_core::emacs_core::display_host::{
-    TerminalCreateRequest, TerminalDisplayTarget as CoreTerminalDisplayTarget,
-    TerminalFloatPlacement, TerminalGridSize,
-};
+use neovm_core::emacs_core::display_host::TerminalCreateRequest;
 use neovm_core::emacs_core::error::EvalError;
 use neovm_core::emacs_core::eval::{
     DisplayHost, PopupMenuEntry, PopupMenuRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
@@ -59,9 +65,9 @@ use neovm_core::emacs_core::eval::{
 use neovm_core::emacs_core::image_catalog::{AxisSize, ImageRotation, ImageSizeSpec};
 use neovm_core::emacs_core::image_catalog::{
     EncodedBytes, ImageAnimationInvalidation, ImageAnimationPolicy, ImageCatalog,
-    ImageColorContext, ImageDataSource, ImageFileName, ImageFrameIndex, ImageId, ImageLoadAttempt,
+    ImageColorContext, ImageFileName, ImageFrameIndex, ImageId, ImageLoadAttempt,
     ImageLoadIdentity, ImageLoadToken, ImageLookup, ImageResolveRequest, ImageResolveSource,
-    ImageSizeLimit, ImageSpecIdentity, ResolvedImageMetadata,
+    ImageSizeLimit, ImageSpecIdentity,
 };
 use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::load::{LoadupDumpMode, LoadupInvocation};
@@ -77,7 +83,7 @@ use neovm_core::heap_types::LispString;
 use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::window::{DisplayFrameExt, DisplayFrameManagerExt};
 use neovm_core::window::{
-    FrameFullscreen, FrameId, FrameParam, FrameVisibility, GuiFrameGeometryHints, WindowId,
+    FrameFullscreen, FrameId, FrameParam, FrameVisibility, WindowId,
     default_gui_tool_bar_line_height,
 };
 use std::cell::RefCell;
@@ -8450,7 +8456,7 @@ fn primary_display_host_routes_typed_terminal_requests_to_the_renderer() {
             .unwrap_err()
             .contains("being destroyed")
     );
-    let arbitrary_id = neovm_core::emacs_core::display_host::TerminalId::new(999).unwrap();
+    let arbitrary_id = neomacs_display_protocol::TerminalId::new(999).unwrap();
     assert!(
         neovm_core::emacs_core::DisplayHost::terminal_text(&host, arbitrary_id)
             .unwrap_err()

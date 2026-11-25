@@ -3274,3 +3274,138 @@ fn scroll_input_policy_survives_matrix_materialization_and_legacy_json() {
         crate::ScrollInputPolicy::default()
     );
 }
+
+fn one_glyph_pointer_source() -> crate::PresentedPointerSourceMap {
+    let window = DisplayWindowId::new(1);
+    let appearance = crate::PresentedPointerSourceAppearance::new(
+        vec![crate::PresentedSourcePaintSpan::new(
+            crate::PresentedPrimitiveKind::Glyph,
+            GlyphRowRole::Text,
+            DisplaySlotId {
+                window_id: window,
+                row: 0,
+                col: 0,
+            },
+            crate::FrameRect::new(0.0, 0.0, 8.0, 16.0).unwrap(),
+        )],
+        crate::PointerDrawMode::Face(FaceId::new(0)),
+        crate::PointerDrawMode::Face(FaceId::new(0)),
+    );
+    crate::PresentedPointerSourceMap::new(
+        vec![crate::PresentedPointerRegion::new_owned(
+            crate::PresentedRegionId::new(Some(window), crate::PresentedRegionKind::TextBody),
+            crate::FrameRect::new(0.0, 0.0, 8.0, 16.0).unwrap(),
+            Some(crate::InteractionId::new(7)),
+            Some(crate::PointerAppearanceId::try_from(0usize).unwrap()),
+        )],
+        vec![appearance],
+    )
+}
+
+fn text_body_hit_index(presentation: PresentationId, bounds: Rect) -> crate::PresentedHitIndex {
+    crate::PresentedHitIndex::from_parts(
+        presentation,
+        vec![crate::PresentedHitRegion::new(
+            Some(DisplayWindowId::new(1)),
+            crate::PresentedRegionKind::TextBody,
+            crate::FrameRect::new(bounds.x, bounds.y, bounds.width, bounds.height).unwrap(),
+            0,
+        )],
+        Vec::new(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn validate_for_materialize_accepts_what_materialize_accepts() {
+    let mut state = FrameDisplayState::new(10, 1, 8.0, 16.0);
+    state.presentation_id = PresentationId::new(23);
+    assert_eq!(state.validate_for_materialize(), Ok(()));
+    assert_eq!(state.materialize().presentation_id, PresentationId::new(23));
+}
+
+#[test]
+fn validate_for_materialize_rejects_a_pointer_map_naming_an_unknown_appearance() {
+    let mut state = FrameDisplayState::new(10, 1, 8.0, 16.0);
+    state.presentation_id = PresentationId::new(23);
+    let appearance = crate::PointerAppearanceId::try_from(0usize).unwrap();
+    state.presented_pointer_source = crate::PresentedPointerSourceMap::new(
+        vec![crate::PresentedPointerRegion::new_owned(
+            crate::PresentedRegionId::new(
+                Some(DisplayWindowId::new(1)),
+                crate::PresentedRegionKind::TextBody,
+            ),
+            crate::FrameRect::new(0.0, 0.0, 8.0, 16.0).unwrap(),
+            Some(crate::InteractionId::new(7)),
+            Some(appearance),
+        )],
+        Vec::new(),
+    );
+    assert_eq!(
+        state.validate_for_materialize(),
+        Err(MaterializeError::PointerSource(
+            crate::PresentedPointerMapError::UnknownAppearance(appearance)
+        ))
+    );
+}
+
+#[test]
+fn validate_for_materialize_rejects_pointer_regions_the_hit_index_does_not_own() {
+    let mut state = FrameDisplayState::new(10, 1, 8.0, 16.0);
+    state.presentation_id = PresentationId::new(23);
+    state.presented_pointer_source = one_glyph_pointer_source();
+    assert!(
+        matches!(
+            state.validate_for_materialize(),
+            Err(MaterializeError::HitIndex(
+                crate::PresentedHitError::UnknownPointerSemanticOwner(_)
+            ))
+        ),
+        "{:?}",
+        state.validate_for_materialize()
+    );
+}
+
+#[test]
+fn validate_for_materialize_rejects_divergent_spatial_projections() {
+    let mut state = FrameDisplayState::new(10, 1, 8.0, 16.0);
+    state.presentation_id = PresentationId::new(23);
+    install_complete_window_geometry(
+        &mut state,
+        DisplayWindowId::new(1),
+        Rect::new(0.0, 0.0, 80.0, 16.0),
+    );
+    state.presented_hit_index =
+        text_body_hit_index(state.presentation_id, Rect::new(8.0, 0.0, 72.0, 16.0));
+    assert_eq!(
+        state.validate_for_materialize(),
+        Err(MaterializeError::SpatialProjection(
+            crate::PresentedHitError::WindowGeometryMismatch {
+                window: DisplayWindowId::new(1),
+                region: crate::PresentedRegionKind::TextBody,
+            }
+        ))
+    );
+}
+
+#[test]
+fn validate_for_materialize_rejects_a_hit_index_of_another_presentation() {
+    let mut state = FrameDisplayState::new(10, 1, 8.0, 16.0);
+    state.presentation_id = PresentationId::new(23);
+    install_complete_window_geometry(
+        &mut state,
+        DisplayWindowId::new(1),
+        Rect::new(0.0, 0.0, 80.0, 16.0),
+    );
+    state.presented_hit_index =
+        text_body_hit_index(PresentationId::new(24), Rect::new(0.0, 0.0, 80.0, 16.0));
+    assert_eq!(
+        state.validate_for_materialize(),
+        Err(MaterializeError::SpatialProjection(
+            crate::PresentedHitError::StalePresentation {
+                expected: PresentationId::new(23),
+                requested: PresentationId::new(24),
+            }
+        ))
+    );
+}

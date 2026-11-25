@@ -3,7 +3,7 @@
 //! Re-homed from neovm-display (display upper-layer re-home).
 use crate::emacs_core::image_catalog::{
     ImageCatalog, ImageId, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageLookup,
-    ImageMaskKind, ImageResolveRequest, ImageSizeLimit, ReadyImage, ResolvedImageMetadata,
+    ImageMaskKind, ImageResolveRequest, ImageSizeLimit, ReadyImage,
 };
 use crate::emacs_core::xdisp::*;
 use crate::window::DisplayFrameExt;

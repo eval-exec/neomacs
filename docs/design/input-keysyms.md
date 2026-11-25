@@ -130,8 +130,11 @@ would have handed GNU.
 `render_thread/input.rs` (frontend) gives every `Key` an identity and no longer
 relies on an unlisted key falling through to zero; modifiers are listed
 explicitly so that "a modifier" and "not in the table" stay different answers.
-`keyboard/keysym.rs` holds the band predicates, the reserved-band helpers, the
-ported GNU tables and the registry-backed name lookup; `keyboard.rs` turns a
+`keyboard/keysym.rs` holds the band predicates, the ported GNU tables and the
+registry-backed name lookup. The reserved bands for native keys without a
+keysym (their bases and the per-platform encoders) live in
+`neomacs_display_protocol::frontend_input::native_key`, which the frontend
+encodes with and `keysym.rs` names from; `keyboard.rs` turns a
 keysym into a `Key` and, for the keys no `NamedKey` variant enumerates, a
 `Key::Function` carrying the name GNU would give it — which `commands/keymap`
 interns as the event symbol, so `[undo]`, `[XF86Back]`, `[henkan]` and

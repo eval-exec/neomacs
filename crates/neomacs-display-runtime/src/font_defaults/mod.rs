@@ -2,8 +2,8 @@
 //!
 //! No native settings handles cross into the evaluator or rendering protocol.
 
+use neomacs_display_protocol::SystemFonts;
 use neomacs_display_protocol::{Dpi, GraphicalBackend};
-use neovm_core::emacs_core::display_host::SystemFonts;
 
 mod policy;
 pub use policy::{

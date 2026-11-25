@@ -2862,7 +2862,7 @@ pub fn builtin_x_get_resource(
     let mut name = dynamic_or_global_symbol_value_fixed(eval, WellKnown::XResourceName)
         .and_then(|value| display_string_text(&value))
         .unwrap_or_else(|| "emacs".into());
-    name = super::display_host::GuiResourceQuery::normalize_instance_name(&name);
+    name = neomacs_display_protocol::GuiResourceQuery::normalize_instance_name(&name);
     let mut class = dynamic_or_global_symbol_value_fixed(eval, WellKnown::XResourceClass)
         .and_then(|value| display_string_text(&value))
         .unwrap_or_else(|| "Emacs".into());
@@ -2878,7 +2878,7 @@ pub fn builtin_x_get_resource(
     }
     name.push('.');
     name.push_str(&display_string_text(&args[0]).expect("validated string"));
-    let query = super::display_host::GuiResourceQuery {
+    let query = neomacs_display_protocol::GuiResourceQuery {
         name,
         class,
         inhibit_native: dynamic_or_global_symbol_value_fixed(eval, WellKnown::InhibitXResources)

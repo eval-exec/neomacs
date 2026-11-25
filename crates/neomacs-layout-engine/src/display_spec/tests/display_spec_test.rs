@@ -1,6 +1,7 @@
 use super::*;
+use neomacs_display_protocol::ImageDataSource;
 use neomacs_display_protocol::{ImageLayoutExtent, ImageReportedExtent};
-use neovm_core::emacs_core::image_catalog::{ImageDataSource, ImageResolveSource};
+use neovm_core::emacs_core::image_catalog::ImageResolveSource;
 
 fn image_spec(ascent: Option<Value>) -> Value {
     let mut items = vec![

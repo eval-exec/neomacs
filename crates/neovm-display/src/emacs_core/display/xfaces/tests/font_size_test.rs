@@ -1,11 +1,12 @@
 use super::*;
-use crate::emacs_core::display_host::{FrameFontRequest, FrameFontSize};
+use crate::emacs_core::display_host::FrameFontRequest;
 use crate::emacs_core::font::font_spec;
 use crate::face::{FontSlant, FontWeight, FontWidth};
 use crate::test_utils::xfaces_upper_layer_helpers::{
     CapturingFrameFontDisplayHost, FrameSpecificFontDisplayHost, integer_font_spec,
 };
 use crate::window::FrameId;
+use neomacs_display_protocol::FrameFontSize;
 use neovm_eval::emacs_core::eval::{
     Context, DisplayHost, FontPxProbeResult, GuiFrameHostRequest, ResolvedFrameFont,
 };

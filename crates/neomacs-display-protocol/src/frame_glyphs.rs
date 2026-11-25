@@ -1221,7 +1221,7 @@ pub struct FrameGlyphBuffer {
     /// a surface; the compositor revalidates its retained surfaces against
     /// these instead of treating surface absence as revocation.
     pub scroll_coverage_renewals: Vec<crate::scroll_coverage::ScrollCoverageRenewal>,
-    pub input_checkpoint: Vec<crate::input_progress::InputCheckpoint>,
+    pub input_checkpoint: Vec<crate::input_progress::FrontierSnapshot>,
     /// Evaluator interaction snapshot paired with these exact pixels.
     pub presentation_id: crate::frame_chrome::PresentationId,
     /// Canonical frame ancestry/placement for this presentation.

@@ -16,10 +16,11 @@ pub use subrs::register_subrs;
 #[path = "tests/terminal_test.rs"]
 mod tests;
 
-use crate::emacs_core::display_host::{
-    DisplayHost, TerminalCreateRequest, TerminalDisplayTarget, TerminalFloatPlacement,
-    TerminalGridSize, TerminalId,
-};
+use crate::emacs_core::display_host::{DisplayHost, TerminalCreateRequest};
+use neomacs_display_protocol::TerminalDisplayTarget;
+use neomacs_display_protocol::TerminalFloatPlacement;
+use neomacs_display_protocol::TerminalGridSize;
+use neomacs_display_protocol::TerminalId;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::value::Value;
@@ -108,11 +109,16 @@ fn create(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         .ok_or_else(|| wrong_type("fixnump", args[2]))?
     {
         0 => TerminalDisplayTarget::Window {
-            buffer: eval.edit.buffers.current_buffer_id().ok_or_else(|| {
-                terminal_error(format!(
-                    "{OPERATION}: no current buffer for window terminal"
-                ))
-            })?,
+            buffer: eval
+                .edit
+                .buffers
+                .current_buffer_id()
+                .ok_or_else(|| {
+                    terminal_error(format!(
+                        "{OPERATION}: no current buffer for window terminal"
+                    ))
+                })?
+                .0,
         },
         1 => TerminalDisplayTarget::Inline,
         2 => TerminalDisplayTarget::Floating,

@@ -1,8 +1,8 @@
 //! GUI options retained by the existing argv pass for initial font preparation.
 //! Originals still reach Lisp at its normal startup phase.
 
+use neomacs_display_protocol::GuiResourceQuery;
 use neomacs_display_runtime::gui_resources::GuiResources;
-use neovm_core::emacs_core::display_host::GuiResourceQuery;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub(super) struct GuiStartupOptions {

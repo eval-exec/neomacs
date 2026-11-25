@@ -1,7 +1,8 @@
-use crate::emacs_core::display_host::{
-    DisplayHost, TerminalCreateRequest, TerminalDisplayTarget, TerminalFloatPlacement,
-    TerminalGridSize, TerminalId,
-};
+use crate::emacs_core::display_host::{DisplayHost, TerminalCreateRequest};
+use neomacs_display_protocol::TerminalDisplayTarget;
+use neomacs_display_protocol::TerminalFloatPlacement;
+use neomacs_display_protocol::TerminalGridSize;
+use neomacs_display_protocol::TerminalId;
 use neovm_eval::emacs_core::eval::{Context, GuiFrameHostRequest};
 use neovm_value::value::{Value, list_to_vec};
 use std::sync::{Arc, Mutex};
@@ -190,7 +191,7 @@ fn window_terminal_target_carries_the_current_buffer_identity() {
     };
     assert_eq!(
         request.target,
-        TerminalDisplayTarget::Window { buffer: owner }
+        TerminalDisplayTarget::Window { buffer: owner.0 }
     );
 }
 

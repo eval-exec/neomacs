@@ -3882,6 +3882,7 @@ dependencies = [
 name = "neomacs-display-protocol"
 version = "0.0.21"
 dependencies = [
+ "bincode",
  "bitflags 2.13.1",
  "neomacs-infra",
  "neovm-display-identity",

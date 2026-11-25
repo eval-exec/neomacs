@@ -3,8 +3,8 @@
 #[cfg(windows)]
 #[test]
 fn windows_resources_preserve_gnu_precedence_types_and_empty_values() {
+    use neomacs_display_protocol::GuiResourceQuery;
     use neomacs_display_runtime::gui_resources::GuiResources;
-    use neovm_core::emacs_core::display_host::GuiResourceQuery;
     use windows_sys::Win32::System::Registry::{
         HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RegOverridePredefKey,
     };
@@ -107,8 +107,8 @@ fn windows_resources_preserve_gnu_precedence_types_and_empty_values() {
 #[cfg(target_os = "macos")]
 #[test]
 fn cocoa_resources_use_standard_defaults_class_and_gnu_boolean_prefixes() {
+    use neomacs_display_protocol::GuiResourceQuery;
     use neomacs_display_runtime::gui_resources::GuiResources;
-    use neovm_core::emacs_core::display_host::GuiResourceQuery;
     use objc2::rc::{Retained, autoreleasepool};
     use objc2::runtime::AnyObject;
     use objc2_foundation::{NSArgumentDomain, NSDictionary, NSNumber, NSString, NSUserDefaults};

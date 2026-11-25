@@ -577,9 +577,37 @@ impl DeviceRect {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InvalidDeviceScale;
 
-/// Fractional logical-to-device scale, validated once at the adapter boundary.
-#[derive(Clone, Copy, Debug, PartialEq)]
+impl std::fmt::Display for InvalidDeviceScale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a device scale must be finite and positive")
+    }
+}
+
+/// Fractional logical-to-device scale, validated once at the adapter boundary
+/// and again when decoded.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "f32", into = "f32")]
 pub struct DeviceScale(f32);
+
+impl Default for DeviceScale {
+    fn default() -> Self {
+        Self::ONE
+    }
+}
+
+impl TryFrom<f32> for DeviceScale {
+    type Error = InvalidDeviceScale;
+
+    fn try_from(scale: f32) -> Result<Self, Self::Error> {
+        Self::new(scale)
+    }
+}
+
+impl From<DeviceScale> for f32 {
+    fn from(scale: DeviceScale) -> Self {
+        scale.0
+    }
+}
 
 impl DeviceScale {
     pub const ONE: Self = Self(1.0);

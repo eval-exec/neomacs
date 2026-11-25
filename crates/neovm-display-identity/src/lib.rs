@@ -54,12 +54,14 @@ macro_rules! display_id_type {
 }
 
 pub mod font;
+pub mod frame;
 pub mod video_webview;
 
 pub use font::{
     BackendFontSelector, FontBackendKind, FontVariationCoord, FontVariationSet,
     ResolvedFontIdentity,
 };
+pub use frame::{FrameVisibility, GuiResizeRequestId};
 pub use video_webview::{VideoId, WebViewId};
 
 // The moved headers embed these values by value; pin the sizes and alignments

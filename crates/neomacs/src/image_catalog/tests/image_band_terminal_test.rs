@@ -7,11 +7,11 @@
 //! moves it.
 
 use super::*;
+use neomacs_display_protocol::ResolvedImageMetadata;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageFormatName};
 use neomacs_display_runtime::render_thread::{ImageDecodeTerminal, RowRange};
 use neovm_core::emacs_core::image_catalog::{
     ImageLayoutExtent, ImageLoadAttempt, ImageLookup, ImagePlacement, PendingImage,
-    ResolvedImageMetadata,
 };
 
 fn load() -> ImageLoadToken {

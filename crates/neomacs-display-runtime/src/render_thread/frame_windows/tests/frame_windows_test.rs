@@ -7,8 +7,8 @@ use crate::render_thread::cursor::CursorTarget;
 #[cfg(feature = "neo-term")]
 use crate::render_thread::terminal_expansion::TerminalExpansionUpdate;
 use neomacs_display_protocol::FrameFaceMap;
+use neomacs_display_protocol::GuiFrameGeometryHints;
 use neomacs_display_protocol::types::Color;
-use neovm_core::window::GuiFrameGeometryHints;
 
 // =======================================================================
 // Helper: create a FrameGlyphBuffer with specified identity fields
@@ -582,7 +582,7 @@ fn suspended_surface_cannot_retain_a_drawable_present_mapping() {
 #[test]
 fn zero_size_observation_stays_suspended_after_scale_refresh() {
     let mut window = GuiFrameWindowState {
-        visibility: crate::thread_comm::WindowVisibility::Visible,
+        visibility: neomacs_display_protocol::WindowVisibility::Visible,
         pending_scale_factor: None,
         lifecycle: FrameLifecycle::Pending {
             width: 800,
@@ -1909,7 +1909,7 @@ fn request_create_adds_to_pending() {
         600,
         "Test Window".to_string(),
         default_geometry_hints(),
-        crate::thread_comm::WindowVisibility::Visible,
+        neomacs_display_protocol::WindowVisibility::Visible,
     );
 
     assert_eq!(mgr.pending_creates.len(), 1);
@@ -1928,7 +1928,7 @@ fn request_create_multiple_preserves_order() {
         600,
         "Window 1".to_string(),
         default_geometry_hints(),
-        crate::thread_comm::WindowVisibility::Visible,
+        neomacs_display_protocol::WindowVisibility::Visible,
     );
     mgr.request_create(
         2,
@@ -1936,7 +1936,7 @@ fn request_create_multiple_preserves_order() {
         768,
         "Window 2".to_string(),
         default_geometry_hints(),
-        crate::thread_comm::WindowVisibility::Visible,
+        neomacs_display_protocol::WindowVisibility::Visible,
     );
     mgr.request_create(
         3,
@@ -1944,7 +1944,7 @@ fn request_create_multiple_preserves_order() {
         1080,
         "Window 3".to_string(),
         default_geometry_hints(),
-        crate::thread_comm::WindowVisibility::Visible,
+        neomacs_display_protocol::WindowVisibility::Visible,
     );
 
     assert_eq!(mgr.pending_creates.len(), 3);
@@ -1962,7 +1962,7 @@ fn request_create_does_not_modify_windows_map() {
         600,
         "Test".to_string(),
         default_geometry_hints(),
-        crate::thread_comm::WindowVisibility::Visible,
+        neomacs_display_protocol::WindowVisibility::Visible,
     );
 
     // The window should NOT be in the windows map yet —
@@ -1980,7 +1980,7 @@ fn request_create_allows_duplicate_frame_ids() {
         600,
         "First".to_string(),
         default_geometry_hints(),
-        crate::thread_comm::WindowVisibility::Visible,
+        neomacs_display_protocol::WindowVisibility::Visible,
     );
     mgr.request_create(
         1,
@@ -1988,7 +1988,7 @@ fn request_create_allows_duplicate_frame_ids() {
         768,
         "Duplicate".to_string(),
         default_geometry_hints(),
-        crate::thread_comm::WindowVisibility::Visible,
+        neomacs_display_protocol::WindowVisibility::Visible,
     );
 
     // Both are queued (process_creates will skip duplicates)
@@ -2004,7 +2004,7 @@ fn request_create_zero_dimensions() {
         0,
         "Zero".to_string(),
         default_geometry_hints(),
-        crate::thread_comm::WindowVisibility::Visible,
+        neomacs_display_protocol::WindowVisibility::Visible,
     );
 
     assert_eq!(mgr.pending_creates.len(), 1);
@@ -2021,7 +2021,7 @@ fn request_create_empty_title() {
         600,
         String::new(),
         default_geometry_hints(),
-        crate::thread_comm::WindowVisibility::Visible,
+        neomacs_display_protocol::WindowVisibility::Visible,
     );
 
     assert_eq!(mgr.pending_creates[0].title, "");
@@ -2037,7 +2037,7 @@ fn request_create_large_frame_id() {
         600,
         "Max ID".to_string(),
         default_geometry_hints(),
-        crate::thread_comm::WindowVisibility::Visible,
+        neomacs_display_protocol::WindowVisibility::Visible,
     );
 
     assert_eq!(mgr.pending_creates[0].emacs_frame_id, large_id);
@@ -2314,7 +2314,7 @@ fn create_and_destroy_queues_are_independent() {
         600,
         "Win1".to_string(),
         default_geometry_hints(),
-        crate::thread_comm::WindowVisibility::Visible,
+        neomacs_display_protocol::WindowVisibility::Visible,
     );
     mgr.request_create(
         2,
@@ -2322,7 +2322,7 @@ fn create_and_destroy_queues_are_independent() {
         768,
         "Win2".to_string(),
         default_geometry_hints(),
-        crate::thread_comm::WindowVisibility::Visible,
+        neomacs_display_protocol::WindowVisibility::Visible,
     );
     mgr.request_destroy(3);
     mgr.request_destroy(4);
@@ -2410,7 +2410,7 @@ fn many_pending_creates() {
             600,
             format!("Window {}", i),
             default_geometry_hints(),
-            crate::thread_comm::WindowVisibility::Visible,
+            neomacs_display_protocol::WindowVisibility::Visible,
         );
     }
     assert_eq!(mgr.pending_creates.len(), 1000);

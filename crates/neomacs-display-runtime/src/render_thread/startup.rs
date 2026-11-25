@@ -36,7 +36,7 @@ impl InitialWindowSize {
 #[derive(Clone, Copy, Debug)]
 pub struct InitialWindowPreparation {
     pub size: InitialWindowSize,
-    pub visibility: crate::thread_comm::WindowVisibility,
+    pub visibility: neomacs_display_protocol::WindowVisibility,
     pub decorated: bool,
 }
 

@@ -537,16 +537,6 @@ impl WindowMargins {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GuiFrameGeometryHints {
-    pub base_width: u32,
-    pub base_height: u32,
-    pub min_width: u32,
-    pub min_height: u32,
-    pub width_inc: u32,
-    pub height_inc: u32,
-}
-
 /// One measured-motion request: all coordinates are in the source buffer,
 /// except the optional GNU window-relative goal column. The display resolver
 /// owns conversion to measured rows; the evaluator/EditHost only fills it.

@@ -144,7 +144,12 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use neomacs_display_protocol::WindowFullscreenMode;
 use neomacs_display_protocol::{SelectionOwner, VideoId, VisualConfig, WebViewId};
+use neomacs_display_protocol::{
+    SurfaceChannelSource as RendererChannelSource, SurfaceShaderLanguage as RendererShaderLanguage,
+    SurfaceUniformInit,
+};
 #[cfg(not(feature = "neo-term"))]
 use neomacs_display_runtime::render_thread::run_render_loop_current_thread;
 #[cfg(feature = "neo-term")]
@@ -153,9 +158,7 @@ use neomacs_display_runtime::render_thread::{
     RenderEventLoop, RenderEventLoopProxy, SharedImageRenderState, SharedMonitorInfo,
 };
 use neomacs_display_runtime::shader_surface::{
-    SurfaceChannelSource as RendererChannelSource, SurfaceContract,
-    SurfaceShaderLanguage as RendererShaderLanguage, SurfaceUniformInit, validate_surface_glsl,
-    validate_surface_wgsl,
+    SurfaceContract, validate_surface_glsl, validate_surface_wgsl,
 };
 #[cfg(feature = "video")]
 use neomacs_display_runtime::thread_comm::VideoSessionCommand;
@@ -163,7 +166,7 @@ use neomacs_display_runtime::thread_comm::{
     AssetCommand, ClipboardCommand, ClipboardSelection, ConfigCommand, EmacsComms, FrameRef,
     FrameShaderAvailability, FrameShaderExecution, FrameShaderRequestId,
     InputEvent as DisplayInputEvent, LifecycleCommand, RenderCommand, SharedRenderCapabilities,
-    SurfaceSource, ThreadComms, UiCommand, WindowCommand, WindowFullscreenMode,
+    SurfaceSource, ThreadComms, UiCommand, WindowCommand,
 };
 #[cfg(feature = "neo-term")]
 use neomacs_display_runtime::{
@@ -186,16 +189,16 @@ use neomacs_webview::{
     StoragePartition, WebContentSize, WebProfileId, WebViewCommand, WebViewCreate, WebViewPolicy,
 };
 
+#[cfg(feature = "neo-term")]
+use neomacs_display_protocol::{TerminalFloatPlacement, TerminalGridSize, TerminalId};
 use neovm_core::buffer::{BufferId, EmacsBytePos, EmacsByteRange, LispCharPos1};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::display::gui_window_system_symbol;
+#[cfg(feature = "neo-term")]
+use neovm_core::emacs_core::display_host::TerminalCreateRequest;
 use neovm_core::emacs_core::display_host::{
     AvailableFontFamilyName, FontCoverage, FontCoverageRequest, FontCoverageTarget,
     FontEntityHandle, FontResolveRequest, FrameFontRequest, XwidgetScriptRequestId,
-};
-#[cfg(feature = "neo-term")]
-use neovm_core::emacs_core::display_host::{
-    TerminalCreateRequest, TerminalFloatPlacement, TerminalGridSize, TerminalId,
 };
 #[cfg(feature = "video")]
 use neovm_core::emacs_core::eval::VideoResolveSource;
@@ -1497,7 +1500,7 @@ impl FontEntityCatalog {
 
 struct PrimaryWindowDisplayHost {
     resources: neomacs_display_runtime::gui_resources::GuiResources,
-    system_fonts: neovm_core::emacs_core::display_host::SystemFonts,
+    system_fonts: neomacs_display_protocol::SystemFonts,
     tooltip_client: neomacs_display_protocol::tooltip::TooltipClient,
     cmd_tx: neomacs_display_runtime::thread_comm::RenderCommandSender,
     render_waker: Option<GuiEventLoopWaker>,
@@ -1701,6 +1704,17 @@ fn renderer_shader_language(language: ShaderSurfaceLanguage) -> RendererShaderLa
     }
 }
 
+/// The native window state a GNU frame visibility asks for.
+fn native_window_visibility(
+    visibility: FrameVisibility,
+) -> neomacs_display_protocol::WindowVisibility {
+    match visibility {
+        FrameVisibility::Visible => neomacs_display_protocol::WindowVisibility::Visible,
+        FrameVisibility::Iconified => neomacs_display_protocol::WindowVisibility::Iconified,
+        FrameVisibility::Invisible => neomacs_display_protocol::WindowVisibility::Invisible,
+    }
+}
+
 fn renderer_channel_source(
     channel: Option<(SurfaceChannelKind, u32)>,
 ) -> Option<RendererChannelSource> {
@@ -1709,7 +1723,9 @@ fn renderer_channel_source(
         SurfaceChannelKind::Image => {
             RendererChannelSource::Image(neomacs_display_protocol::ImageId::new(id))
         }
-        SurfaceChannelKind::Video => RendererChannelSource::Video(id),
+        SurfaceChannelKind::Video => {
+            RendererChannelSource::Video(neomacs_display_protocol::VideoId::new(id))
+        }
     })
 }
 
@@ -1997,7 +2013,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                     width: size.width,
                     height: size.height,
                 },
-                visibility: request.visibility.into(),
+                visibility: native_window_visibility(request.visibility),
                 decorated: request.decorated,
             },
         )
@@ -2017,21 +2033,18 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         self.resources.set_database(resources);
     }
 
-    fn gui_resource(
-        &self,
-        query: &neovm_core::emacs_core::display_host::GuiResourceQuery,
-    ) -> Option<String> {
+    fn gui_resource(&self, query: &neomacs_display_protocol::GuiResourceQuery) -> Option<String> {
         self.resources.query(query)
     }
 
-    fn update_system_fonts(&mut self, fonts: neovm_core::emacs_core::display_host::SystemFonts) {
+    fn update_system_fonts(&mut self, fonts: neomacs_display_protocol::SystemFonts) {
         self.system_fonts = fonts;
     }
 
     fn system_font(
         &self,
-        role: neovm_core::emacs_core::display_host::SystemFontRole,
-    ) -> Option<&neovm_core::emacs_core::display_host::SystemFontName> {
+        role: neomacs_display_protocol::SystemFontRole,
+    ) -> Option<&neomacs_display_protocol::SystemFontName> {
         self.system_fonts.get(role)
     }
 
@@ -2102,7 +2115,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                     height: request.height,
                     title: title_string,
                     geometry_hints: request.geometry_hints,
-                    visibility: request.visibility.into(),
+                    visibility: native_window_visibility(request.visibility),
                 }),
                 "failed to create additional GUI window",
             )?;
@@ -2379,7 +2392,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
     fn set_gui_frame_geometry_hints(
         &mut self,
         frame_id: neovm_core::window::FrameId,
-        geometry_hints: neovm_core::window::GuiFrameGeometryHints,
+        geometry_hints: neomacs_display_protocol::GuiFrameGeometryHints,
     ) -> Result<(), String> {
         if let Some(request) = self.pending_primary_request_mut(frame_id) {
             request.geometry_hints = geometry_hints;
@@ -2432,7 +2445,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             self.finish_gui_frame_creation(request)?;
         }
         let frame = self.frame_ref_for_gui_frame(frame_id);
-        let visibility = visibility.into();
+        let visibility = native_window_visibility(visibility);
         self.send_render_command(
             RenderCommand::Window(WindowCommand::SetWindowVisibility { frame, visibility }),
             "failed to update GUI frame visibility",

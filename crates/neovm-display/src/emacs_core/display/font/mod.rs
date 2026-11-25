@@ -38,7 +38,7 @@ use super::xfaces::{
 };
 use neovm_value::error::{EvalResult, Flow, signal};
 
-use super::display_host::{FontOpeningSize, FrameFontRequest, FrameFontSize, PositiveFontScalar};
+use super::display_host::{FontOpeningSize, FrameFontRequest};
 use crate::emacs_core::xfaces::realization::XfacesRealizationContextExt;
 use crate::face::realization::FrameFaceRealizationCacheExt;
 use crate::face::remapping::FaceTableRemappingExt;
@@ -46,6 +46,8 @@ use crate::face::{
     Face as RuntimeFace, FaceHeight, FaceRemapping, FontSlant, FontWeight, FontWidth, LFaceAttr,
 };
 use crate::window::{FRAME_ID_BASE, FrameId, FrameManager, FrameParam, WindowId};
+use neomacs_display_protocol::FrameFontSize;
+use neomacs_display_protocol::PositiveFontScalar;
 use neomacs_display_protocol::font::ResolvedFontIdentity;
 use neovm_edit::buffer::{Buffer, CharPos0, EmacsBytePos, LispCharPos1};
 use neovm_edit::emacs_core::edit_host::EditHost;

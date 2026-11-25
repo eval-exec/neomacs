@@ -39,9 +39,12 @@ fn resolved_scroll_observer_sees_complete_commit_and_current_command_only() {
     };
     update().commit(&mut eval).unwrap();
     assert_eq!(calls.get(), 0);
-    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
     let command = eval.input_progress.begin_command();
-    eval.input_progress.consumed(stream.issue().unwrap());
+    eval.input_progress
+        .consumed(stream.issue().unwrap().receipt());
     update().commit(&mut eval).unwrap();
     assert_eq!(calls.get(), 1);
     drop(command);

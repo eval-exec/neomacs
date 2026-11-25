@@ -17,10 +17,7 @@ mod moved_eval_prelude {
     };
     pub use crate::emacs_core::eval::protocol::tty_host::TtyFrameHostFactory;
     pub use crate::emacs_core::eval::protocol::{DisplayHost, FrameFontRequest};
-    pub use crate::emacs_core::eval::protocol::{
-        FontOpeningSize, FrameFontSize, TerminalCreateRequest, TerminalDisplayTarget,
-        TerminalFloatPlacement, TerminalGridSize, TerminalId,
-    };
+    pub use crate::emacs_core::eval::protocol::{FontOpeningSize, TerminalCreateRequest};
     pub use crate::emacs_core::print::map_flow;
     pub use crate::emacs_core::process::{ProcessCodingSystemsExt, SystemProcessExt};
     pub use crate::emacs_core::threads::ThreadManager;
@@ -29561,9 +29558,9 @@ fn inlined_bobp_and_eobp_track_the_accessible_bounds_like_gnu() {
 #[test]
 fn native_input_progress_waits_through_command_hooks_and_finalization() {
     fn probe(ctx: &mut Context, _: Vec<Value>) -> EvalResult {
-        let checkpoints = ctx.input_progress.checkpoint();
+        let prefixes = ctx.input_progress.completed_prefixes();
         // The startup post-command hook runs before reading any input.
-        assert!(checkpoints.iter().all(|checkpoint| checkpoint.through == 0));
+        assert!(prefixes.iter().all(|prefix| prefix.through == 0));
         Ok(Value::NIL)
     }
     let (mut ev, global_map) = command_loop_error_test_context();
@@ -29581,13 +29578,15 @@ fn native_input_progress_waits_through_command_hooks_and_finalization() {
         neovm_value::tagged::SymbolMode::Bare,
     )
     .unwrap();
-    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
     let receipt = stream.issue().unwrap();
     let frame = ev.frame_manager().selected_frame().unwrap().id.0;
     let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
     tx.send(crate::emacs_core::eval::keyboard::InputEvent::Tracked {
-        receipt: receipt.clone(),
+        receipt: receipt.receipt(),
         event: Box::new(crate::emacs_core::eval::keyboard::InputEvent::KeyPress {
             key: crate::emacs_core::eval::keyboard::KeyEvent::char('q'),
             emacs_frame_id: frame,
@@ -29596,15 +29595,158 @@ fn native_input_progress_waits_through_command_hooks_and_finalization() {
     .unwrap();
     ev.command_loop_mut().running = true;
     ev.recursive_edit_inner().unwrap();
-    assert!(receipt.acknowledged_by(&ev.input_progress.checkpoint()));
+    assert_eq!(
+        neomacs_display_protocol::input_progress::Disposition::of(
+            receipt.receipt(),
+            &ev.input_progress.checkpoint()
+        ),
+        neomacs_display_protocol::input_progress::Disposition::Reflected
+    );
+}
+
+/// Review M1 r1 (architecture A1): the evaluator's tracked input carries the
+/// value receipt alone. A display link decodes that value from the wire and
+/// hands it over; no frontend ledger exists on the evaluator host, and the
+/// evaluator never reaches one in process either.
+#[test]
+fn tracked_input_carries_a_value_receipt_a_link_can_decode() {
+    let (mut ev, global_map) = command_loop_error_test_context();
+    neovm_eval::test_support::authority::set_noninteractive_for_test(&mut ev, false);
+    crate::emacs_core::keymap::list_keymap_define_seq(
+        global_map,
+        &[Value::fixnum('q' as i64)],
+        Value::symbol("neo-stop-command-loop-error-test-command"),
+        neovm_value::tagged::SymbolMode::Bare,
+    )
+    .unwrap();
+    let decoded: neomacs_display_protocol::input_progress::InputReceipt =
+        serde_json::from_str(r#"{"stream":1,"serial":5}"#).unwrap();
+    let frame = ev.frame_manager().selected_frame().unwrap().id.0;
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::Tracked {
+        receipt: decoded,
+        event: Box::new(crate::emacs_core::eval::keyboard::InputEvent::KeyPress {
+            key: crate::emacs_core::eval::keyboard::KeyEvent::char('q'),
+            emacs_frame_id: frame,
+        }),
+    })
+    .unwrap();
+    ev.command_loop_mut().running = true;
+    ev.recursive_edit_inner().unwrap();
+    assert_eq!(
+        neomacs_display_protocol::input_progress::Disposition::of(
+            decoded,
+            &ev.input_progress.checkpoint()
+        ),
+        neomacs_display_protocol::input_progress::Disposition::Reflected
+    );
+}
+
+/// DESIGN §6.14: a real nested command loop (the mechanism the minibuffer
+/// uses) through the command loop. Scopes open before keys are read, so the
+/// outer key's command is still running while each inner key's command
+/// completes; a frame laid out then must reflect the completed inner keys.
+#[test]
+fn command_loop_nested_reader_frontier() {
+    thread_local! {
+        static INNER_FRAME: std::cell::RefCell<
+            Option<Vec<neomacs_display_protocol::input_progress::FrontierSnapshot>>,
+        > = const { std::cell::RefCell::new(None) };
+    }
+    fn probe(ctx: &mut Context, _: Vec<Value>) -> EvalResult {
+        let frontier = ctx.input_progress.checkpoint();
+        INNER_FRAME.with(|frame| *frame.borrow_mut() = Some(frontier));
+        Ok(Value::NIL)
+    }
+    let (mut ev, global_map) = command_loop_error_test_context();
+    neovm_eval::test_support::authority::set_noninteractive_for_test(&mut ev, false);
+    ev.register_subr(SubrSpec::new(
+        "neo-frontier-probe",
+        NativeFn::ContextVec(probe),
+        SubrArity::new(0, Some(0)),
+    ));
+    ev.eval_str(
+        r#"(progn
+             (fset 'neo-frontier-outer (lambda () (interactive) (recursive-edit)))
+             (fset 'neo-frontier-inner (lambda () (interactive)))
+             (fset 'neo-frontier-inner-probe
+                   (lambda () (interactive) (neo-frontier-probe)))
+             (fset 'neo-frontier-exit (lambda () (interactive) (exit-recursive-edit))))"#,
+    )
+    .unwrap();
+    let keys = [
+        ('x', "neo-frontier-outer"),
+        ('a', "neo-frontier-inner"),
+        ('b', "neo-frontier-inner-probe"),
+        ('e', "neo-frontier-exit"),
+        ('q', "neo-stop-command-loop-error-test-command"),
+    ];
+    for (key, command) in keys {
+        crate::emacs_core::keymap::list_keymap_define_seq(
+            global_map,
+            &[Value::fixnum(key as i64)],
+            Value::symbol(command),
+            neovm_value::tagged::SymbolMode::Bare,
+        )
+        .unwrap();
+    }
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
+    let receipts = keys.map(|_| stream.issue().unwrap());
+    let frame = ev.frame_manager().selected_frame().unwrap().id.0;
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    for ((key, _), receipt) in keys.iter().zip(&receipts) {
+        tx.send(crate::emacs_core::eval::keyboard::InputEvent::Tracked {
+            receipt: receipt.receipt(),
+            event: Box::new(crate::emacs_core::eval::keyboard::InputEvent::KeyPress {
+                key: crate::emacs_core::eval::keyboard::KeyEvent::char(*key),
+                emacs_frame_id: frame,
+            }),
+        })
+        .unwrap();
+    }
+    ev.command_loop_mut().running = true;
+    ev.recursive_edit_inner().unwrap();
+
+    let inner_frame = INNER_FRAME
+        .with(|frame| frame.borrow_mut().take())
+        .expect("the probe ran inside the nested command loop");
+    use neomacs_display_protocol::input_progress::Disposition;
+    let [outer, inner, probing, exit, _] = receipts.each_ref().map(|delivery| delivery.receipt());
+    assert_eq!(
+        Disposition::of(inner, &inner_frame),
+        Disposition::Reflected,
+        "the inner key whose nested command completed is reflected"
+    );
+    assert_eq!(
+        Disposition::of(outer, &inner_frame),
+        Disposition::Partial,
+        "the outer key's command is still running"
+    );
+    assert_eq!(
+        Disposition::of(probing, &inner_frame),
+        Disposition::Partial,
+        "the probing key's own command is still running"
+    );
+    assert_eq!(Disposition::of(exit, &inner_frame), Disposition::Pending);
+    let finished = ev.input_progress.checkpoint();
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| Disposition::of(receipt.receipt(), &finished) == Disposition::Reflected)
+    );
 }
 
 #[test]
 fn native_input_progress_completion_requires_a_fresh_presentation() {
     let mut ev = crate::test_utils::new_context();
-    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
     let command = ev.input_progress.begin_command();
-    ev.input_progress.consumed(stream.issue().unwrap());
+    ev.input_progress
+        .consumed(stream.issue().unwrap().receipt());
     let during_command = ev.redisplay_signature();
     drop(command);
     let completed = ev.redisplay_signature();

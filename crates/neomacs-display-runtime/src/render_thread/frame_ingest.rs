@@ -601,6 +601,8 @@ impl RenderApp {
             let mut made_progress = false;
             while let Some(display_state) = queued.pop_front() {
                 super::frame_stats::note_scene_commit(display_state.received);
+                self.comms
+                    .observe_input_frontier(&display_state.state.input_checkpoint);
                 let frame_id = display_state.state.frame_placement.frame();
                 let parent_id = display_state
                     .state

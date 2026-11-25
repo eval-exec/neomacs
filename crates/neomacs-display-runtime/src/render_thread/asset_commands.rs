@@ -108,13 +108,10 @@ impl RenderApp {
             } => {
                 self.image_metadata.begin_image_load(load);
                 let (data, resources) = match data {
-                    neovm_core::emacs_core::image_catalog::ImageDataSource::Isolated(data) => {
+                    neomacs_display_protocol::ImageDataSource::Isolated(data) => {
                         (data, neomacs_renderer_wgpu::SvgResourceContext::Isolated)
                     }
-                    neovm_core::emacs_core::image_catalog::ImageDataSource::WithBaseUri {
-                        data,
-                        base_uri,
-                    } => (
+                    neomacs_display_protocol::ImageDataSource::WithBaseUri { data, base_uri } => (
                         data,
                         neomacs_renderer_wgpu::SvgResourceContext::BaseUri(
                             base_uri.as_utf8_str().unwrap_or_default().to_owned(),

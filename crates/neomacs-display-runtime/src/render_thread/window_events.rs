@@ -2,8 +2,8 @@ use super::RenderApp;
 use super::modifier_sides::{TrackedModifier, TrackedSide};
 use super::state::effective_window_scale_factor;
 use crate::thread_comm::InputEvent;
-use neomacs_display_protocol::{ModifierEventKind, TransportModifierBits};
-use neovm_core::keyboard::FrontendKey;
+use neomacs_display_protocol::FrontendKey;
+use neomacs_display_protocol::{ModifierBits, ModifierEventKind};
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::PhysicalKey;
@@ -42,7 +42,7 @@ impl RenderApp {
 
     /// Cook the current raw modifier facts for one GNU event kind
     /// (`EV_MODIFIERS2`, `src/nsterm.m:397-425`).
-    pub(super) fn cook_modifiers(&self, kind: ModifierEventKind) -> TransportModifierBits {
+    pub(super) fn cook_modifiers(&self, kind: ModifierEventKind) -> ModifierBits {
         let raw = self.modifier_sides.to_raw(
             self.modifier_state.shift_key(),
             self.modifier_state.control_key(),
@@ -487,7 +487,7 @@ impl RenderApp {
                                     .render
                                     .compositor
                                     .input_scroll
-                                    .observe_input(receipt, token);
+                                    .observe_input(&receipt, token);
                             }
                         } else if state == ElementState::Pressed {
                             tracing::debug!(

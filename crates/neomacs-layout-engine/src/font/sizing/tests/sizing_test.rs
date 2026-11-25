@@ -2,10 +2,12 @@ use super::{
     FontSizing, FrameFontScalePolicy, FrameFontScaleSource, LogicalFontScale,
     points_to_layout_pixels, resolve_frame_font_scale,
 };
+use neomacs_display_protocol::FrameFontSize;
+use neomacs_display_protocol::PositiveFontScalar;
 use neomacs_display_protocol::{
     DisplayHeightGeometry, DisplayObservation, Dpi, X11DisplayObservation, XServerKind,
 };
-use neovm_core::emacs_core::display_host::{FontOpeningSize, FrameFontSize, PositiveFontScalar};
+use neovm_core::emacs_core::display_host::FontOpeningSize;
 
 #[test]
 fn font_info_point_size_uses_gnu_integer_dpi_but_unsized_names_do_not() {

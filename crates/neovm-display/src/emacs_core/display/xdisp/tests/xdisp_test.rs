@@ -5,10 +5,11 @@ mod fontification_admission_test;
 use super::*;
 use crate::emacs_core::image_catalog::{
     ImageCatalog, ImageId, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageLookup,
-    ImageMaskKind, ImageResolveRequest, ImageSizeLimit, ReadyImage, ResolvedImageMetadata,
+    ImageMaskKind, ImageResolveRequest, ImageSizeLimit, ReadyImage,
 };
 use crate::window::DisplayFrameTestExt;
 use malachite::Integer;
+use neomacs_display_protocol::ResolvedImageMetadata;
 use neovm_edit::buffer::buffer::BUFFER_SLOT_BUFFER_FILE_CODING_SYSTEM;
 use neovm_edit::buffer::{BufferTextBackendKind, CharPos0, LispCharPos1};
 use neovm_eval::emacs_core::eval::Context;

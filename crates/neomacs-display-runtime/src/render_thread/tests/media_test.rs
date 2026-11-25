@@ -82,7 +82,7 @@ fn terminal_face_for_flags_and_font(
         height: 20.0,
     });
     let contents = HashMap::from([(
-        crate::terminal::TerminalId::new(7).expect("nonzero terminal id"),
+        neomacs_display_protocol::TerminalId::new(7).expect("nonzero terminal id"),
         TerminalContent {
             cells: vec![RenderCell {
                 col: 0,

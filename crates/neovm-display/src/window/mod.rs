@@ -673,8 +673,6 @@ pub use neovm_eval::emacs_core::eval::data::window_state::{
     FrameWindowHookRecord, WindowHookSnapshot,
 };
 
-pub use neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints;
-
 // ---------------------------------------------------------------------------
 // Frame
 // ---------------------------------------------------------------------------

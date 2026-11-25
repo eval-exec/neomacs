@@ -155,7 +155,7 @@ fn frame_shader_failure_reaches_the_evaluator() {
 #[test]
 #[cfg(feature = "neo-term")]
 fn terminal_lifecycle_events_reach_the_evaluator_losslessly() {
-    let id = neovm_core::emacs_core::display_host::TerminalId::new(17).unwrap();
+    let id = neomacs_display_protocol::TerminalId::new(17).unwrap();
     assert!(matches!(
         convert_display_event(&DisplayEvent::TerminalCreateFailed {
             id,
@@ -205,7 +205,7 @@ fn presentation_lifecycle_events_reach_the_evaluator_losslessly() {
 #[test]
 fn key_release_is_dropped_by_core_transport_owner() {
     let display_event = DisplayEvent::Key {
-        key: keyboard::FrontendKey::Keysym(keyboard::XK_RETURN),
+        key: neomacs_display_protocol::FrontendKey::Keysym(keyboard::XK_RETURN),
         modifiers: 0,
         pressed: false,
         emacs_frame_id: 0,
@@ -255,8 +255,8 @@ fn raw_tty_bytes_cross_the_bridge_without_interpretation() {
 #[test]
 fn key_transport_preserves_source_frame_identity() {
     let display_event = DisplayEvent::Key {
-        key: keyboard::FrontendKey::Character('a'),
-        modifiers: keyboard::RENDER_CTRL_MASK,
+        key: neomacs_display_protocol::FrontendKey::Character('a'),
+        modifiers: neomacs_display_protocol::ModifierBits::CTRL.bits(),
         pressed: true,
         emacs_frame_id: 42,
     };
@@ -284,7 +284,8 @@ fn mouse_modifiers_use_core_transport_mapping() {
         2.0,
         7,
         PointerAction::Move {
-            modifiers: keyboard::RENDER_SHIFT_MASK | keyboard::RENDER_CTRL_MASK,
+            modifiers: neomacs_display_protocol::ModifierBits::SHIFT.bits()
+                | neomacs_display_protocol::ModifierBits::CTRL.bits(),
         },
     );
     let event = convert_display_event(&display_event);
@@ -470,7 +471,7 @@ fn application_quit_preserves_native_nonkey_provenance_and_source_frame() {
 #[test]
 fn physical_super_q_remains_distinct_from_application_quit() {
     let event = convert_display_event(&DisplayEvent::Key {
-        key: keyboard::FrontendKey::Character('q'),
+        key: neomacs_display_protocol::FrontendKey::Character('q'),
         modifiers: neomacs_display_protocol::modifier_policy::TransportModifierBit::Super.mask(),
         pressed: true,
         emacs_frame_id: 42,
@@ -547,7 +548,7 @@ fn positioned_wheel_expands_to_observation_then_scroll_without_recomputing_the_h
                 y: 25.0,
                 target_frame_id: 44,
             },
-            target: neomacs_display_runtime::thread_comm::PointerTarget::Presented {
+            target: neomacs_display_protocol::PointerTarget::Presented {
                 presentation: 9,
                 hit,
             },
@@ -586,7 +587,7 @@ fn positioned_pixel_scroll_maps_typed_pixels_to_core_smooth_scroll() {
         44,
         PointerAction::Scroll {
             delta: ScrollDelta::Pixels { x: 1.5, y: -7.25 },
-            modifiers: keyboard::RENDER_SHIFT_MASK,
+            modifiers: neomacs_display_protocol::ModifierBits::SHIFT.bits(),
         },
     ))
     .into_iter()
@@ -607,7 +608,9 @@ fn positioned_pixel_scroll_maps_typed_pixels_to_core_smooth_scroll() {
 
 #[test]
 fn tracked_pointer_receipt_wraps_the_action_after_its_position_observation() {
-    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
     let receipt = stream.issue().unwrap();
     let event = DisplayEvent::Tracked {
         receipt: receipt.clone(),
@@ -634,7 +637,35 @@ fn tracked_pointer_receipt_wraps_the_action_after_its_position_observation() {
         KbInputEvent::PixelScroll { delta_y: -4.0, .. }
     ));
     let mut progress = neomacs_display_protocol::input_progress::InputProgress::default();
-    progress.consumed(delivered.clone());
+    progress.consumed(*delivered);
     drop(progress.begin_command());
-    assert!(receipt.acknowledged_by(&progress.checkpoint()));
+    assert_eq!(
+        neomacs_display_protocol::input_progress::Disposition::of(
+            receipt.receipt(),
+            &progress.checkpoint()
+        ),
+        neomacs_display_protocol::input_progress::Disposition::Reflected
+    );
+}
+
+/// Review M1 r1 (compat 1): a tracked input the bridge converts to nothing
+/// never reaches the evaluator's queue, so nothing will consume it; the bridge
+/// states the cancellation in the stream's ledger instead.
+#[test]
+fn tracked_input_that_converts_to_nothing_is_cancelled() {
+    let stream = neomacs_display_protocol::input_progress::InputStream::new(
+        neomacs_display_protocol::input_progress::InputStreamId::FIRST,
+    );
+    let delivery = stream.issue().unwrap();
+    let event = DisplayEvent::Tracked {
+        receipt: delivery.clone(),
+        event: Box::new(DisplayEvent::Key {
+            key: neomacs_display_protocol::FrontendKey::Keysym(0xff56),
+            modifiers: 0,
+            pressed: false,
+            emacs_frame_id: 0,
+        }),
+    };
+    assert_eq!(super::convert_display_event(&event).into_iter().count(), 0);
+    assert!(stream.cancelled(delivery.receipt()));
 }

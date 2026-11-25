@@ -1,12 +1,12 @@
 //! Font-size tests that need the core upper layers.
 //!
 //! Re-homed from neovm-display (display upper-layer re-home).
-use crate::emacs_core::display_host::{FrameFontRequest, FrameFontSize};
 use crate::emacs_core::xfaces::*;
 use crate::face::{FontSlant, FontWeight, FontWidth};
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::FrameId;
+use neomacs_display_protocol::FrameFontSize;
 use neovm_display::test_utils::xfaces_upper_layer_helpers::{
     frame_font_at_height, frame_font_at_height_with_line_height, integer_font_spec,
 };

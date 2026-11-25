@@ -18,7 +18,7 @@ use rio_vt::event::{EventListener, RioEvent, WindowId};
 use rio_vt::performer::handler::Processor;
 
 use super::content::TerminalContent;
-use super::{TerminalDisplayTarget, TerminalGridSize, TerminalId};
+use neomacs_display_protocol::{TerminalDisplayTarget, TerminalGridSize, TerminalId};
 
 /// Scrollback history limit, matching the previous emulator default.
 const SCROLLBACK_HISTORY: usize = 10_000;
