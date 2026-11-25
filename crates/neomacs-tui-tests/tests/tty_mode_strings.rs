@@ -1301,10 +1301,12 @@ if exit_line != b"EXITED:0":
     let hook_el = format!(
         "(progn \
            (menu-bar-mode -1) \
+           (setq resume-hook-count 0) \
            (add-hook 'suspend-resume-hook \
              (lambda () \
+               (setq resume-hook-count (1+ resume-hook-count)) \
                (with-temp-file {:?} \
-                 (insert (prin1-to-string (list (frame-width) (frame-height))))))))",
+                 (insert (prin1-to-string (list (frame-width) (frame-height) resume-hook-count)))))))",
         result_path.to_str().expect("UTF-8 result path")
     );
 
@@ -1358,7 +1360,7 @@ fn tty_mode_suspend_emacs_applies_resize_before_resume_hook_like_gnu() {
     let neo_size = run_suspend_emacs_resize_while_stopped(&neo, "Neomacs", false);
     assert_eq!(
         neo_size, gnu_size,
-        "suspend-resume-hook frame size mismatch vs GNU after PTY resize during SIGTSTP"
+        "suspend-resume-hook frame size/count mismatch vs GNU after PTY resize during SIGTSTP"
     );
-    assert_eq!(gnu_size, "(100 30)");
+    assert_eq!(gnu_size, "(100 30 1)");
 }

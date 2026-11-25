@@ -1874,12 +1874,13 @@ fn suspend_emacs_resizes_selected_frame_before_resume_hook_when_tty_resized() {
         resized_to: (100, 32),
     }));
 
-    let observed_in_hook = Rc::new(Cell::new((0u32, 0u32)));
     eval.eval_str(
         r#"
 (setq observed-resume-dims nil)
+(setq observed-resume-hook-count 0)
 (setq suspend-resume-hook
       (list (lambda ()
+              (setq observed-resume-hook-count (1+ observed-resume-hook-count))
               (setq observed-resume-dims
                     (list (frame-parameter nil 'width)
                           (frame-parameter nil 'height))))))
@@ -1889,13 +1890,104 @@ fn suspend_emacs_resizes_selected_frame_before_resume_hook_when_tty_resized() {
 
     builtin_suspend_emacs(&mut eval, vec![]).expect("suspend-emacs");
     let frame = eval.frame_manager().get(frame_id).expect("frame");
-    observed_in_hook.set((frame.width, frame.height));
-    assert_eq!(observed_in_hook.get(), (100, 32));
+    assert_eq!((frame.width, frame.height), (100, 32));
     assert_eq!(
         format!("{}", eval.eval_str("observed-resume-dims").unwrap()),
         "(100 32)",
         "suspend-resume-hook must observe the post-resume TTY dimensions (GNU src/keyboard.c:12470-12474)"
     );
+    assert_eq!(
+        format!("{}", eval.eval_str("observed-resume-hook-count").unwrap()),
+        "1",
+        "suspend-resume-hook must run exactly once on post-resume resize"
+    );
+}
+
+#[test]
+fn suspend_emacs_ignores_zero_or_missing_post_resume_winsize() {
+    crate::test_utils::init_test_tracing();
+
+    struct OptionalSizeSuspendHost {
+        size: Rc<Cell<Option<(u32, u32)>>>,
+        post_resume_size: Option<(u32, u32)>,
+    }
+    impl TerminalHost for OptionalSizeSuspendHost {
+        fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn sys_suspend(&mut self, _request: SuspendRequest<'_>) -> Result<(), String> {
+            self.size.set(self.post_resume_size);
+            Ok(())
+        }
+        fn tty_winsize_cells(&mut self) -> Option<(u32, u32)> {
+            self.size.get()
+        }
+    }
+
+    for post_resume_size in [Some((0, 0)), None] {
+        reset_terminal_thread_locals();
+        let mut eval = Context::new(crate::test_utils::unit_runtime());
+        eval.set_variable("noninteractive", Value::NIL);
+        eval.set_variable("menu-bar-mode", Value::NIL);
+        eval.set_variable("tab-bar-mode", Value::NIL);
+        configure_terminal_runtime(TerminalRuntimeConfig::interactive(
+            Some("xterm-256color".to_string()),
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+                256,
+            ),
+        ));
+        let scratch = eval.edit.buffers.create_buffer("*scratch*");
+        eval.edit.buffers.set_current(scratch);
+        let frame_id = eval.frame_manager_mut().create_frame("F1", 80, 24, scratch);
+        {
+            let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+            frame.char_width = 1.0;
+            frame.char_height = 1.0;
+            frame.set_window_system(None);
+        }
+        let _ = eval.frame_manager_mut().select_frame(frame_id);
+
+        let size = Rc::new(Cell::new(Some((80, 24))));
+        set_terminal_host(Box::new(OptionalSizeSuspendHost {
+            size: Rc::clone(&size),
+            post_resume_size,
+        }));
+
+        eval.eval_str(
+            r#"
+(setq observed-resume-dims nil)
+(setq observed-resume-hook-count 0)
+(setq suspend-resume-hook
+      (list (lambda ()
+              (setq observed-resume-hook-count (1+ observed-resume-hook-count))
+              (setq observed-resume-dims
+                    (list (frame-parameter nil 'width)
+                          (frame-parameter nil 'height))))))
+"#,
+        )
+        .expect("install suspend-resume-hook");
+
+        builtin_suspend_emacs(&mut eval, vec![]).expect("suspend-emacs");
+        let frame = eval.frame_manager().get(frame_id).expect("frame");
+        assert_eq!(
+            (frame.width, frame.height),
+            (80, 24),
+            "post-resume size {post_resume_size:?} must leave frame size unchanged"
+        );
+        assert_eq!(
+            format!("{}", eval.eval_str("observed-resume-dims").unwrap()),
+            "(80 24)",
+            "suspend-resume-hook must still see original size for {post_resume_size:?}"
+        );
+        assert_eq!(
+            format!("{}", eval.eval_str("observed-resume-hook-count").unwrap()),
+            "1",
+            "suspend-resume-hook must run exactly once for {post_resume_size:?}"
+        );
+    }
 }
 
 #[test]
@@ -1904,22 +1996,43 @@ fn tty_mode_strings_circular_list_terminates_without_hanging() {
     reset_terminal_thread_locals();
 
     let mut eval = Context::new(crate::test_utils::unit_runtime());
-    let cyclic = eval
+    let pure_cycle = eval
         .eval_str(r#"(let ((x (list "<A>" "<B>"))) (setcdr (cdr x) x) x)"#)
-        .expect("build circular list");
+        .expect("build pure circular list");
     builtin_set_terminal_parameter(
         &mut eval,
-        vec![Value::NIL, Value::symbol("tty-mode-reset-strings"), cyclic],
+        vec![
+            Value::NIL,
+            Value::symbol("tty-mode-reset-strings"),
+            pure_cycle,
+        ],
     )
-    .expect("set circular tty-mode-reset-strings");
+    .expect("set pure circular tty-mode-reset-strings");
 
     // Deliberate safety divergence from GNU `tty_send_additional_strings`
     // (which has no cycle guard and loops indefinitely): collection must
-    // terminate cleanly via Floyd's cycle detector while emitting the elements.
-    let bytes = terminal_mode_strings_bytes(TERMINAL_ID, "tty-mode-reset-strings");
-    assert!(
-        bytes.starts_with(b"<A><B>"),
-        "expected cyclic prefix bytes, got {bytes:?}"
+    // terminate deterministically via Floyd's cycle detector.
+    let pure_bytes = terminal_mode_strings_bytes(TERMINAL_ID, "tty-mode-reset-strings");
+    assert_eq!(
+        pure_bytes, b"<A><B><A><B>",
+        "Floyd cycle guard must terminate after 4 steps on 2-node cycle"
+    );
+
+    // Also verify a lasso/rho-shaped list with a non-cyclic prefix (`A -> B -> C -> B -> ...`).
+    let lasso = eval
+        .eval_str(
+            r#"(let* ((loop (list "<B>" "<C>")) (head (cons "<A>" loop))) (setcdr (cdr loop) loop) head)"#,
+        )
+        .expect("build lasso circular list");
+    builtin_set_terminal_parameter(
+        &mut eval,
+        vec![Value::NIL, Value::symbol("tty-mode-set-strings"), lasso],
+    )
+    .expect("set lasso circular tty-mode-set-strings");
+    let lasso_bytes = terminal_mode_strings_bytes(TERMINAL_ID, "tty-mode-set-strings");
+    assert_eq!(
+        lasso_bytes, b"<A><B><C><B>",
+        "Floyd cycle guard must terminate deterministically on lasso-shaped list"
     );
 }
 
