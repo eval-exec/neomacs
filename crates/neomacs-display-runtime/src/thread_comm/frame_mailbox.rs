@@ -15,7 +15,8 @@ pub struct QueuedPresentation {
 
 /// Proof that a revision was replaced while still in the mailbox. It was
 /// never acquired by the renderer and may be retired by the evaluator.
-#[must_use = "retire the superseded evaluator presentation with discard"]
+#[must_use = "retire the superseded evaluator presentation through the display host's \
+              PreparedPresentationTicket::for_unacquired(..).discard"]
 #[derive(Debug)]
 pub struct SupersededPresentation(SealedFramePresentation);
 

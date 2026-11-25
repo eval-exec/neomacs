@@ -371,8 +371,11 @@ impl RenderApp {
                         self.webview_system = Some(system);
                         // GNU re-claims SIGCHLD after WebKit/Glib touch it
                         // (src/xwidget.c:382, :3128, :4281, :4303); the WPE
-                        // stack is Neo's corresponding claim point.
-                        neovm_core::emacs_core::reclaim_child_signal();
+                        // stack is Neo's corresponding claim point. Every
+                        // render loop carries the embedder's re-claim.
+                        if let Some(child_signal) = self.webview_child_signal {
+                            child_signal.reclaim();
+                        }
                     }
                     Err(error) => {
                         tracing::warn!(?error, "failed to initialize the WebView system");
@@ -610,6 +613,7 @@ pub(crate) fn run_render_loop_with_event_loop(
     shared_monitors: SharedMonitorInfo,
     poll_when_idle: bool,
     #[cfg(feature = "neo-term")] shared_terminals: crate::terminal::SharedTerminals,
+    #[cfg(feature = "webview")] child_signal: super::WebViewChildSignal,
 ) -> Result<(), String> {
     run_render_loop_with_startup(
         event_loop.0,
@@ -628,6 +632,8 @@ pub(crate) fn run_render_loop_with_event_loop(
         poll_when_idle,
         #[cfg(feature = "neo-term")]
         shared_terminals,
+        #[cfg(feature = "webview")]
+        child_signal,
     )
     .map(|_| ())
     .map_err(|error| error.to_string())
@@ -676,6 +682,7 @@ fn run_render_loop_with_startup(
     shared_monitors: SharedMonitorInfo,
     poll_when_idle: bool,
     #[cfg(feature = "neo-term")] shared_terminals: crate::terminal::SharedTerminals,
+    #[cfg(feature = "webview")] child_signal: super::WebViewChildSignal,
 ) -> Result<super::RenderLoopExit, RenderLoopError> {
     tracing::info!("Render thread starting");
 
@@ -741,6 +748,7 @@ fn run_render_loop_with_startup(
             #[cfg(feature = "webview")]
             {
                 app.webview_wake = webview_wake;
+                app.webview_child_signal = Some(child_signal);
             }
             app
         },
@@ -769,6 +777,7 @@ pub fn run_render_loop_current_thread(
     title: String,
     image_metadata: SharedImageRenderState,
     shared_monitors: SharedMonitorInfo,
+    #[cfg(feature = "webview")] child_signal: super::WebViewChildSignal,
 ) -> Result<super::RenderLoopExit, RenderLoopError> {
     #[cfg(feature = "neo-term")]
     let shared_terminals = crate::terminal::new_shared_terminals();
@@ -781,6 +790,8 @@ pub fn run_render_loop_current_thread(
         image_metadata,
         shared_monitors,
         shared_terminals,
+        #[cfg(feature = "webview")]
+        child_signal,
     );
     #[cfg(not(feature = "neo-term"))]
     run_render_loop_with_startup(
@@ -793,6 +804,8 @@ pub fn run_render_loop_current_thread(
         false,
         #[cfg(feature = "neo-term")]
         shared_terminals,
+        #[cfg(feature = "webview")]
+        child_signal,
     )
 }
 
@@ -808,6 +821,7 @@ pub fn run_render_loop_current_thread_with_terminals(
     image_metadata: SharedImageRenderState,
     shared_monitors: SharedMonitorInfo,
     shared_terminals: crate::terminal::SharedTerminals,
+    #[cfg(feature = "webview")] child_signal: super::WebViewChildSignal,
 ) -> Result<super::RenderLoopExit, RenderLoopError> {
     run_render_loop_with_startup(
         event_loop.0,
@@ -818,6 +832,8 @@ pub fn run_render_loop_current_thread_with_terminals(
         shared_monitors,
         false,
         shared_terminals,
+        #[cfg(feature = "webview")]
+        child_signal,
     )
 }
 
@@ -829,6 +845,7 @@ pub fn run_render_loop(
     title: String,
     image_metadata: SharedImageRenderState,
     shared_monitors: SharedMonitorInfo,
+    #[cfg(feature = "webview")] child_signal: super::WebViewChildSignal,
 ) -> Result<(), String> {
     #[cfg(feature = "neo-term")]
     let shared_terminals = crate::terminal::new_shared_terminals();
@@ -844,5 +861,7 @@ pub fn run_render_loop(
         false,
         #[cfg(feature = "neo-term")]
         shared_terminals,
+        #[cfg(feature = "webview")]
+        child_signal,
     )
 }

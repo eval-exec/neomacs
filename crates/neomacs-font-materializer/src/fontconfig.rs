@@ -383,6 +383,81 @@ impl RasterFontOptions {
     }
 }
 
+/// The process configuration's LCD component order, from the match for the
+/// generic "Monospace" family (`FC_RGBA`). It is read once per catalog
+/// generation: the layout engine clears it with its own catalog caches
+/// ([`invalidate_default_subpixel_order`]), and the renderer re-reads it when
+/// it rebuilds its atlas.
+pub fn default_subpixel_order() -> crate::subpixel::FontconfigSubpixelOrder {
+    if let Some(order) = *default_subpixel_order_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    {
+        return order;
+    }
+    let order = query_default_subpixel_order();
+    *default_subpixel_order_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(order);
+    order
+}
+
+/// Drop the cached [`default_subpixel_order`], with the rest of the answers
+/// derived from the previous native catalog generation.
+pub fn invalidate_default_subpixel_order() {
+    *default_subpixel_order_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+fn default_subpixel_order_cache()
+-> &'static std::sync::Mutex<Option<crate::subpixel::FontconfigSubpixelOrder>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<Option<crate::subpixel::FontconfigSubpixelOrder>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn query_default_subpixel_order() -> crate::subpixel::FontconfigSubpixelOrder {
+    use crate::subpixel::FontconfigSubpixelOrder;
+    if FontconfigContext::system().is_none() {
+        return FontconfigSubpixelOrder::Unknown;
+    }
+    let rgba = (|| {
+        let pattern = Pattern::new()?;
+        pattern.string(fc::constants::FC_FAMILY, c"Monospace")?;
+        // SAFETY: the process configuration is initialized and the owned
+        // pattern is live; the returned match has its own owner.
+        let matched = unsafe {
+            if fc::FcConfigSubstitute(ptr::null_mut(), pattern.raw(), fc::FcMatchPattern) == 0 {
+                return None;
+            }
+            fc::FcDefaultSubstitute(pattern.raw());
+            let mut result = fc::FcResultNoMatch;
+            Pattern(NonNull::new(fc::FcFontMatch(
+                ptr::null_mut(),
+                pattern.raw(),
+                &mut result,
+            ))?)
+        };
+        let mut rgba = 0;
+        // SAFETY: the matched pattern is live and owned; Fontconfig writes
+        // one integer.
+        (unsafe {
+            fc::FcPatternGetInteger(matched.raw(), fc::constants::FC_RGBA.as_ptr(), 0, &mut rgba)
+        } == fc::FcResultMatch)
+            .then_some(rgba)
+    })();
+    match rgba {
+        Some(fc::constants::FC_RGBA_NONE) => FontconfigSubpixelOrder::None,
+        Some(fc::constants::FC_RGBA_RGB) => FontconfigSubpixelOrder::Rgb,
+        Some(fc::constants::FC_RGBA_BGR) => FontconfigSubpixelOrder::Bgr,
+        Some(fc::constants::FC_RGBA_VRGB) => FontconfigSubpixelOrder::VRgb,
+        Some(fc::constants::FC_RGBA_VBGR) => FontconfigSubpixelOrder::VBgr,
+        _ => FontconfigSubpixelOrder::Unknown,
+    }
+}
+
 /// Fontconfig authority borrowed for one policy query. No context is globalized.
 #[derive(Clone, Copy)]
 pub struct FontconfigContext<'a> {

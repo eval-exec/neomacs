@@ -7,11 +7,11 @@
 
 use super::super::frame_layout::run_tty_layout_tree;
 use super::super::{Interactivity, bootstrap_buffers, bootstrap_tty_display_config};
-use neomacs_display_runtime::backend::tty::rif::TtyRif;
-use neomacs_display_runtime::backend::tty::rif::damage::{
+use neomacs_display_host::tty_raster_policy::evaluator_tty_raster_policy;
+use neomacs_tty_render::rif::TtyRif;
+use neomacs_tty_render::rif::damage::{
     ScreenMatch, TtyDamageMode, TtyFullFrameReason, TtyRowIdentity,
 };
-use neomacs_display_runtime::redisplay::RedisplayRuntime;
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached_with_features;
 
@@ -30,7 +30,7 @@ struct Renderers {
 struct FrameRecord {
     label: String,
     damage_frame: bool,
-    full_reason: Option<neomacs_display_runtime::backend::tty::rif::damage::TtyFullFrameReason>,
+    full_reason: Option<neomacs_tty_render::rif::damage::TtyFullFrameReason>,
     rows_repainted: u32,
     full_bytes: usize,
     damage_bytes: usize,
@@ -39,7 +39,7 @@ struct FrameRecord {
 impl Renderers {
     fn new(silent: bool, identity: TtyRowIdentity) -> Self {
         let make = |mode| {
-            let mut rif = TtyRif::new(COLS, ROWS);
+            let mut rif = TtyRif::new(COLS, ROWS, evaluator_tty_raster_policy());
             rif.set_damage_mode(mode);
             rif.set_silent_frames(silent);
             rif.set_row_identity(identity);

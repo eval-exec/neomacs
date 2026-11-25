@@ -1,6 +1,7 @@
 //! GNU `max-image-size` at the load boundary: the header decides, before any
 //! CPU decoder allocates pixels (`check_image_size`, `src/image.c:1811`).
 
+use neomacs_display_protocol::types::{ImageLoadAttempt, ImageLoadToken};
 use neomacs_display_protocol::{
     ImageAnimationPolicy, ImageColorContext, ImageFrameIndex, ImageId, ImageMaskPolicy,
     ImageNativeExtent, ImageRealization, ImageRotation, ImageSequenceId, ImageSizeLimit,
@@ -9,7 +10,6 @@ use neomacs_display_protocol::{
     image_diagnostic::{ImageDiagnostic, ImageLoadIdentity},
 };
 use neomacs_renderer_wgpu::{ImageDecoder, ImageProbeSource, SvgResourceContext};
-use neovm_core::emacs_core::image_catalog::{ImageLoadAttempt, ImageLoadToken};
 use std::time::Duration;
 
 fn fixture(name: &str) -> String {

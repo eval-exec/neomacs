@@ -114,12 +114,12 @@ pub fn detect_tty_type() -> Option<String> {
 /// scroll/shift bytes an unknown terminal may not implement while the
 /// screen model assumes it did — permanent corruption. An unset TERM or
 /// unreadable terminfo therefore falls to the conservative floor.
-pub fn detect_term_caps() -> neomacs_display_runtime::backend::tty::rif::TermCaps {
+pub fn detect_term_caps() -> neomacs_tty_render::rif::TermCaps {
     detect_tty_type()
         .and_then(|term| super::terminal_capabilities::term_caps_for_term(&term))
         .unwrap_or_else(|| {
             tracing::debug!("no terminfo entry for TERM; refusing planner optimizations");
-            neomacs_display_runtime::backend::tty::rif::TermCaps::unknown_terminal()
+            neomacs_tty_render::rif::TermCaps::unknown_terminal()
         })
 }
 
@@ -517,9 +517,7 @@ pub fn tty_init_terminal() -> Result<(), String> {
     // Same record the terminal runtime carries (see
     // `detect_tty_attribute_capabilities`), so the predicate and the renderer
     // cannot disagree about what this terminal can do.
-    neomacs_display_runtime::backend::tty::rif::set_capabilities(
-        detect_tty_attribute_capabilities(),
-    );
+    neomacs_tty_render::rif::set_capabilities(detect_tty_attribute_capabilities());
 
     crossterm::terminal::enable_raw_mode().map_err(|error| error.to_string())?;
     #[cfg(windows)]

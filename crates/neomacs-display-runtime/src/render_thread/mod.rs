@@ -21,9 +21,6 @@ pub(crate) mod frame_stats;
 pub(crate) mod frame_windows;
 mod gpu_startup;
 mod input;
-#[cfg(test)]
-#[path = "tests/input_backpressure_test.rs"]
-mod input_backpressure_test;
 mod lifecycle;
 #[cfg(target_os = "macos")]
 mod macos_quit_redirect;
@@ -50,6 +47,8 @@ mod tests;
 mod texture_discipline_test;
 
 mod geometry_hints;
+#[cfg(feature = "testing")]
+mod headless;
 mod surface_resize;
 mod thread_handle;
 #[cfg(test)]
@@ -58,6 +57,8 @@ mod time_discipline_test;
 mod toolbar;
 mod transitions;
 mod ui_commands;
+#[cfg(feature = "webview")]
+mod webview_child_signal;
 mod window_commands;
 mod window_events;
 
@@ -70,12 +71,18 @@ pub use startup::{
     InitialWindowLifetime, InitialWindowPreparation, InitialWindowReceiver, InitialWindowReply,
     InitialWindowSize, RenderLoopError, RenderLoopExit,
 };
-use state::{FpsCounter, ImeCursorArea, RenderApp};
+#[cfg(feature = "testing")]
+pub use state::RenderApp;
+#[cfg(not(feature = "testing"))]
+use state::RenderApp;
+use state::{FpsCounter, ImeCursorArea};
 pub use state::{
     ImageDecodeTerminal, ImageRenderState, ImageTerminalProbe, ImageTerminalPublication,
     RendererPhase, SharedImageRenderState, SharedMonitorInfo,
 };
 pub use thread_handle::RenderThread;
+#[cfg(feature = "webview")]
+pub use webview_child_signal::WebViewChildSignal;
 
 /// Header-only image geometry, for placing an image whose pixels have not been
 /// decoded yet (see `neomacs_renderer_wgpu::image_probe`).

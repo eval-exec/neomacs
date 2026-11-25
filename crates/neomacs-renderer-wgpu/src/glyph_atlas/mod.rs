@@ -33,8 +33,8 @@ use neomacs_display_protocol::font::{
 };
 use neomacs_display_protocol::font::{FontFileAsset, FontOutlineAsset};
 use neomacs_font_materializer::FontFileCache;
+use neomacs_font_materializer::subpixel::{FontconfigSubpixelOrder, default_subpixel_order};
 use neomacs_font_materializer::{ColorGlyphRaster, ColorGlyphRasterizer, ColorGlyphRequest, Tag};
-use neomacs_layout_engine::font::subpixel::{FontconfigSubpixelOrder, default_subpixel_order};
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Angle, Format, Transform, Vector};
 
@@ -2265,7 +2265,7 @@ impl WgpuGlyphAtlas {
             // presentation via U+FE0F, else first glyph-bearing non-ASCII
             // char) so both threads make the same fallback decision.
             let repr_char =
-                neomacs_layout_engine::composition::representative_char_for_cluster(text);
+                neomacs_font_materializer::composition::representative_char_for_cluster(text);
             if let Some(ch) = repr_char {
                 // Layout-resolved per-char fallback: replay the exact font
                 // the measurement pass selected for this (face, char).
@@ -2325,21 +2325,21 @@ impl WgpuGlyphAtlas {
                 self.record_emergency_font_fallback(f, "layout published no font identity");
             }
 
-            attrs = match neomacs_layout_engine::font::font_match::select_cosmic_family(
+            attrs = match neomacs_font_materializer::font_match::select_cosmic_family(
                 &self.font_system,
                 &effective_family,
             ) {
-                neomacs_layout_engine::font::font_match::CosmicFamilySelection::Name(family) => {
+                neomacs_font_materializer::font_match::CosmicFamilySelection::Name(family) => {
                     let interned = self.intern_family(family);
                     attrs.family(Family::Name(interned))
                 }
-                neomacs_layout_engine::font::font_match::CosmicFamilySelection::Monospace => {
+                neomacs_font_materializer::font_match::CosmicFamilySelection::Monospace => {
                     attrs.family(Family::Monospace)
                 }
-                neomacs_layout_engine::font::font_match::CosmicFamilySelection::Serif => {
+                neomacs_font_materializer::font_match::CosmicFamilySelection::Serif => {
                     attrs.family(Family::Serif)
                 }
-                neomacs_layout_engine::font::font_match::CosmicFamilySelection::SansSerif => {
+                neomacs_font_materializer::font_match::CosmicFamilySelection::SansSerif => {
                     attrs.family(Family::SansSerif)
                 }
             };
@@ -2347,13 +2347,12 @@ impl WgpuGlyphAtlas {
             // Font weight: clamp to the closest available weight in this family,
             // so missing weights stay within-family instead of jumping to unrelated
             // common fallback families.
-            let effective_weight =
-                neomacs_layout_engine::font::font_match::resolve_weight_in_family(
-                    &self.font_system,
-                    &effective_family,
-                    effective_weight,
-                    effective_style.is_some(),
-                );
+            let effective_weight = neomacs_font_materializer::font_match::resolve_weight_in_family(
+                &self.font_system,
+                &effective_family,
+                effective_weight,
+                effective_style.is_some(),
+            );
             if effective_weight != f.font_weight || effective_style.is_some() != requested_italic {
                 tracing::debug!(
                     "font normalize: family='{}' requested_weight={} resolved_weight={} requested_italic={} resolved_style={:?}",

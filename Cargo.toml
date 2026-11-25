@@ -4,6 +4,7 @@ members = [
     "crates/neomacs-terminfo",
     "crates/neomacs-allocator",
     "crates/neomacs-diagnostics",
+    "crates/neomacs-display-host",
     "crates/neomacs-display-protocol",
     "crates/neomacs-display-runtime",
     "crates/neomacs-display-wire",
@@ -20,6 +21,7 @@ members = [
     "crates/neomacs-test-env",
     "crates/neomacs-test-oracle",
     "crates/neomacs-infra",
+    "crates/neomacs-tty-render",
     "crates/neomacs-tui-tests",
     "crates/neomacs-video",
     "crates/neomacs-video-model",
@@ -108,6 +110,8 @@ neovm-host-abi = { path = "crates/neovm-host-abi", default-features = false }
 neovm-oracle-tests = { path = "crates/neovm-oracle-tests", default-features = false }
 neovm-value = { path = "crates/neovm-value", default-features = false }
 neomacs-display-runtime = { path = "crates/neomacs-display-runtime", default-features = false }
+neomacs-display-host = { path = "crates/neomacs-display-host", default-features = false }
+neomacs-tty-render = { path = "crates/neomacs-tty-render" }
 neomacs-display-protocol = { path = "crates/neomacs-display-protocol", default-features = false }
 neomacs-display-wire = { path = "crates/neomacs-display-wire" }
 neomacs-session = { path = "crates/neomacs-session" }

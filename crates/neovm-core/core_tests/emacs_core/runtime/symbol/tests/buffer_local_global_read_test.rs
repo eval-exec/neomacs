@@ -408,15 +408,17 @@ fn no_production_rust_reads_a_per_buffer_name_from_the_bare_obarray() {
 
     // Every crate that can reach an `Obarray`. Sibling crates are included
     // because the ban is about the *name*, not about which crate spells it: the
-    // layout engine and the app binary both hold an evaluator, and a per-buffer
-    // read there would be exactly as wrong and exactly as silent.
+    // layout engine, the display host and the app binary all hold an
+    // evaluator, and a per-buffer read there would be exactly as wrong and
+    // exactly as silent. The display runtime no longer links the evaluator
+    // (MILESTONES M4); its redisplay code moved to the display host.
     let workspace = crate::test_utils::workspace_root().as_path().to_path_buf();
     let crates = workspace.join("crates");
     let roots = [
         "neovm-core",
         "neomacs",
         "neomacs-layout-engine",
-        "neomacs-display-runtime",
+        "neomacs-display-host",
         "neomacs-display-protocol",
         "neovm-worker",
     ];

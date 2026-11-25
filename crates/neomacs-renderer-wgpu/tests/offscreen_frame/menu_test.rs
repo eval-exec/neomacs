@@ -267,26 +267,121 @@ fn compact_bar_initial_cjk_glyphs_do_not_overlap() {
     assert_menu_heading_pixels(true);
 }
 
+/// A monospace menu label as the layout engine publishes it at the atlas's
+/// default 13 px, built from the same pinned fixtures. The renderer no
+/// longer links the layout engine (MILESTONES M4); the engine's
+/// `font::metrics::renderer_split_tests::layout_publishes_monospace_menu_label_glyphs`
+/// pins that it publishes exactly these glyphs and fonts.
+fn published_menu_label(
+    text: &str,
+    size: f32,
+) -> neomacs_display_protocol::frame_chrome::ResolvedMenuLabel {
+    use neomacs_display_protocol::font::{
+        FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedFont,
+        ResolvedFontAdvance, ResolvedFontId, ResolvedFontIdentity, ResolvedGlyph, ResolvedGlyphId,
+    };
+    assert_eq!(size, 13.0, "the published labels are recorded at 13 px");
+    let id = ResolvedFontId(1);
+    let glyph = |glyph_id: u32, x: f32, x_advance: f32, cluster: (u32, u32)| ResolvedGlyph {
+        resolved_font_id: id,
+        glyph_id: ResolvedGlyphId::new(glyph_id),
+        x,
+        y: 0.0,
+        x_advance,
+        cluster_start: cluster.0,
+        cluster_end: cluster.1,
+    };
+    struct Recorded {
+        glyphs: Vec<ResolvedGlyph>,
+        file: &'static std::path::Path,
+        postscript: &'static str,
+        family: &'static str,
+        weight: u16,
+        ascent: f32,
+        descent: f32,
+        space: f32,
+        advance: ResolvedFontAdvance,
+        spacing: i32,
+    }
+    let Recorded {
+        glyphs,
+        file,
+        postscript,
+        family,
+        weight,
+        ascent,
+        descent,
+        space,
+        advance,
+        spacing,
+    } = match text {
+        "中中" => Recorded {
+            glyphs: vec![
+                glyph(997, 0.0, 14.0, (0, 3)),
+                glyph(997, 14.0, 14.0, (3, 6)),
+            ],
+            file: neomacs_test_fonts::mplus_1_code_thin(),
+            postscript: "MPLUS1Code-Thin",
+            family: "M PLUS 1 Code",
+            weight: 100,
+            ascent: 13.0,
+            descent: 4.0,
+            space: 7.0,
+            advance: ResolvedFontAdvance::monospace_cells(7.0),
+            spacing: 100,
+        },
+        "HHH" => Recorded {
+            glyphs: vec![
+                glyph(43, 0.0, 7.8, (0, 1)),
+                glyph(43, 7.0, 7.8, (1, 2)),
+                glyph(43, 15.0, 7.8, (2, 3)),
+            ],
+            file: neomacs_test_fonts::noto_sans_mono_variable(),
+            postscript: "NotoSansMono-Regular",
+            family: "Noto Sans Mono",
+            weight: 400,
+            ascent: 14.0,
+            descent: 4.0,
+            space: 8.0,
+            advance: ResolvedFontAdvance::PerGlyph,
+            spacing: 0,
+        },
+        _ => panic!("{text:?} has no recorded published label"),
+    };
+    let identity =
+        ResolvedFontIdentity::from_file(&file.to_string_lossy(), 0, Some(postscript.to_owned()));
+    let font = ResolvedFont {
+        id,
+        replay: FontReplay::Swash {
+            asset: FontOutlineAsset::File(
+                FontFileAsset::from_identity(&identity).expect("file-backed fixture"),
+            ),
+        },
+        identity,
+        family: family.to_owned(),
+        full_name: None,
+        postscript_name: Some(postscript.to_owned()),
+        weight,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size: size,
+        ascent_px: ascent,
+        descent_px: descent,
+        space_advance_px: space,
+        glyph_advance: advance,
+        spacing: Some(spacing),
+    };
+    neomacs_display_protocol::frame_chrome::ResolvedMenuLabel::new(glyphs, vec![font], size)
+}
+
 fn assert_menu_heading_pixels(compact: bool) {
     use neomacs_display_protocol::MenuBarItem;
     let mut h = try_harness().expect("menu bar pixel test requires an offscreen GPU adapter");
-    let reference = h
-        .atlas
-        .get_or_create_composed_atlas(
-            h.renderer.device(),
-            h.renderer.queue(),
-            "中中",
-            FaceId::new(0),
-            0.0_f32.to_bits(),
-            None,
-            cosmic_text::SubpixelBin::Zero,
-            cosmic_text::SubpixelBin::Zero,
-            SubpixelRequest::Disabled,
-        )
-        .expect("requires a CJK fallback font");
-    let advance = reference[0].advance_width / 2.0;
+    // The published label carries its real font's advance: each CJK glyph
+    // is one full-width cell of that font.
+    let label = published_menu_label("中中", h.atlas.default_font_size());
+    let advance = label.glyphs()[0].x_advance;
     assert!(advance > h.atlas.default_char_width() + 2.0);
-    let mut fonts = neomacs_layout_engine::font::metrics::FontMetricsService::new();
     let items = vec![
         neomacs_display_protocol::frame_chrome::PositionedMenuHeading::measure(
             MenuBarItem {
@@ -299,13 +394,8 @@ fn assert_menu_heading_pixels(compact: bool) {
             8.0,
             |text| {
                 let size = h.atlas.default_font_size();
-                let (glyphs, fonts) = fonts
-                    .resolved_glyphs_for_cluster(text, "monospace", 400, false, size)
-                    .unwrap();
                 neomacs_display_protocol::frame_chrome::MenuHeadingText::Pixels(
-                    neomacs_display_protocol::frame_chrome::ResolvedMenuLabel::new(
-                        glyphs, fonts, size,
-                    ),
+                    published_menu_label(text, size),
                 )
             },
         ),
@@ -371,14 +461,11 @@ fn assert_menu_heading_pixels(compact: bool) {
 
 fn menu_heading_at(
     h: &mut Harness,
-    fonts: &mut neomacs_layout_engine::font::metrics::FontMetricsService,
     x: f32,
     height: f32,
     padding: f32,
 ) -> neomacs_display_protocol::frame_chrome::PositionedMenuHeading {
-    use neomacs_display_protocol::frame_chrome::{
-        MenuHeadingText, PositionedMenuHeading, ResolvedMenuLabel,
-    };
+    use neomacs_display_protocol::frame_chrome::{MenuHeadingText, PositionedMenuHeading};
     PositionedMenuHeading::measure(
         neomacs_display_protocol::MenuBarItem {
             index: 0,
@@ -390,10 +477,7 @@ fn menu_heading_at(
         padding,
         |text| {
             let size = h.atlas.default_font_size();
-            let (glyphs, resolved) = fonts
-                .resolved_glyphs_for_cluster(text, "monospace", 400, false, size)
-                .expect("monospace font for chrome menu text");
-            MenuHeadingText::Pixels(ResolvedMenuLabel::new(glyphs, resolved, size))
+            MenuHeadingText::Pixels(published_menu_label(text, size))
         },
     )
 }
@@ -437,9 +521,7 @@ fn menu_bar_text_origin_is_device_pixel_aligned_at_fractional_scales() {
         let font_size = fixed.atlas.default_font_size();
         let band_height = font_size + 5.0;
         let padding = 4.0;
-        let mut fonts = neomacs_layout_engine::font::metrics::FontMetricsService::new();
-
-        let heading = menu_heading_at(&mut fixed, &mut fonts, 0.0, band_height, padding);
+        let heading = menu_heading_at(&mut fixed, 0.0, band_height, padding);
         let text_x = padding;
         let text_y = (band_height - font_size) / 2.0;
         let label = match heading.text() {
@@ -493,14 +575,8 @@ fn menu_bar_text_origin_is_device_pixel_aligned_at_fractional_scales() {
         let mut reference = try_harness().expect("reference menu text harness");
         reference.renderer.set_scale_factor(scale);
         reference.atlas.set_scale_factor(scale);
-        let mut reference_fonts = neomacs_layout_engine::font::metrics::FontMetricsService::new();
-        let reference_heading = menu_heading_at(
-            &mut reference,
-            &mut reference_fonts,
-            reference_shift_x,
-            band_height,
-            padding,
-        );
+        let reference_heading =
+            menu_heading_at(&mut reference, reference_shift_x, band_height, padding);
         paint_heading_band(
             &mut reference,
             std::slice::from_ref(&reference_heading),

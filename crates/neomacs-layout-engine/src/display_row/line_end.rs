@@ -90,7 +90,7 @@ pub(crate) fn extend_fill_runs(
         // No `:extend` face is active. GNU's terminal branch still materializes
         // the row tail, but with the DEFAULT face — and the TTY backend already
         // produces exactly those cells when it rasterizes the row
-        // (`crates/neomacs-display-runtime/src/backend/tty/rif.rs`, GNU
+        // (`crates/neomacs-tty-render/src/rif.rs`, GNU
         // `src/xdisp.c:24681-24758`). Synthesizing a default-face stretch here
         // instead would change that backend's blank-erase classification, which
         // is derived from the last non-padding glyph's face, so the fill stays

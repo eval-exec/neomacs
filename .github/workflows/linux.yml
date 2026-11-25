@@ -162,6 +162,8 @@ jobs:
             -p neomacs-layout-engine \
             -p neomacs-renderer-wgpu \
             -p neomacs-display-runtime \
+            -p neomacs-tty-render \
+            -p neomacs-display-host \
             -p neomacs \
             --no-deps -- -D warnings
 

@@ -9,12 +9,6 @@ description = "WGPU text renderer primitives for Neomacs"
 autotests = false
 
 [features]
-# Explicit forwards for what neovm-core's dependency edges used to bring in
-# through their enabled defaults (reached here via the layout engine).  Kept
-# as features so --no-default-features stays a real no-jit build.
-default = ["jit", "sqlite"]
-jit = ["neomacs-layout-engine/jit"]
-sqlite = ["neomacs-layout-engine/sqlite"]
 video = ["dep:neomacs-video"]
 video-dmabuf = ["video"]
 webview = []
@@ -42,9 +36,10 @@ libc.workspace = true
 resvg.workspace = true
 svgtypes.workspace = true
 simplecss.workspace = true
+# The protocol and the font materializer only: the renderer never links the
+# layout engine or the Lisp machine (scripts/ci/check-crate-graph.py).
 neomacs-display-protocol.workspace = true
 neomacs-font-materializer.workspace = true
-neomacs-layout-engine.workspace = true
 neomacs-video = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

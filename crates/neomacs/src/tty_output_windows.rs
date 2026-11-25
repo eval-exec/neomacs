@@ -3,8 +3,8 @@
 use crossterm::Command;
 use crossterm_winapi::{Console, ConsoleMode, ScreenBuffer};
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
-use neomacs_display_runtime::backend::tty::rif::painter::TtyPainter;
-use neomacs_display_runtime::backend::tty::rif::{CellAttrs, TerminalCursorShape, TtyCell, TtyRif};
+use neomacs_tty_render::rif::painter::TtyPainter;
+use neomacs_tty_render::rif::{CellAttrs, TerminalCursorShape, TtyCell, TtyRif};
 use std::cell::RefCell;
 use std::io;
 

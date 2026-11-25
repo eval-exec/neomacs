@@ -4727,6 +4727,10 @@ fn font_slant_to_cosmic_style(slant: FontSlant) -> Option<Style> {
 }
 
 #[cfg(test)]
+#[path = "metrics/tests/renderer_split_test.rs"]
+mod renderer_split_tests;
+
+#[cfg(test)]
 #[path = "metrics/tests/metrics_test.rs"]
 mod tests;
 

@@ -14,27 +14,42 @@ since nothing in the compiler objects to a file being put in the wrong one.
 neovm-display-identity        (serde-only leaf)
         ^
 neomacs-display-protocol      (depends only on the identity leaf)
-        ^            ^                      ^
-        |            |                      |
-neomacs-layout-engine         neomacs-renderer-wgpu    neomacs-display-wire
-        ^                             ^                (protocol + leaf only)
-        |                             |
-        +------ neomacs-display-runtime ------+
+        ^            ^                      ^                    ^
+        |            |                      |                    |
+        |   neomacs-font-materializer   neomacs-display-wire  neomacs-tty-render
+        |            ^      ^           (protocol + leaf)     (protocol + leaf)
+        |            |      |                                    ^
+neomacs-layout-engine   neomacs-renderer-wgpu                    |
+        ^                      ^                                 |
+        |                      |                                 |
+        |       neomacs-display-runtime                          |
+        |       (no neovm-*, no layout engine)                   |
+        |                                                        |
+neomacs-display-host --------------------------------------------+
+    (evaluator side: neovm-core, layout engine, protocol, tty-render;
+     the runtime is a dev-dependency only)
 
 neomacs-session               (no workspace dependency at all)
 ```
 
+Arrows point at the dependency. Some direct edges that the drawn paths imply
+are left out: the renderer, the runtime and the display host also name the
+protocol directly.
+
 `scripts/ci/check-crate-graph.py` checks these edges on every change: the
 protocol's workspace dependencies are the identity leaf only, the session
-crate has none, the wire crate has the protocol and the leaf, and nothing on
-the frontend side (runtime, renderer, session, wire) reaches `neovm-core`,
-`neovm-eval` or the layout engine except through the three edges the crate cut
-removes (runtime → `neovm-core`, runtime → layout engine, renderer → layout
-engine), which it lists and requires to still exist.
+crate has none, the wire crate and the terminal rasterizer have the protocol
+and the leaf, the display host's are pinned to its charter, and nothing on
+the frontend side (runtime, renderer, terminal rasterizer, session, wire)
+reaches `neovm-core`, `neovm-eval` or the layout engine. Build-dependencies
+count with normal ones everywhere, since Cargo compiles them with the crate,
+and the walk includes the frontend crates' dev-dependencies, so their tests
+build without the Lisp machine too. The crate cut (MILESTONES M4) removed the last three edges that
+crossed the seam (runtime → `neovm-core`, runtime → layout engine, renderer →
+layout engine).
 
-`neomacs-renderer-wgpu` and `neomacs-layout-engine` are **dependencies of**
-`neomacs-display-runtime`, not siblings of it. Two consequences that are easy
-to get wrong:
+`neomacs-renderer-wgpu` is a **dependency of** `neomacs-display-runtime`, not
+a sibling of it. Two consequences that are easy to get wrong:
 
 1. A type shared between the runtime and the renderer **must** live in
    `neomacs-display-protocol`. The renderer cannot see runtime types. This is
@@ -84,6 +99,11 @@ Both are the compositor's job; the renderer receives the answer. A trigger that
 mints its own `observe_platform_now()` instead of taking the frame's
 `EventTime` is the recurring version of this mistake.
 
+Font helpers it shares with the layout engine — the display's subpixel
+order, the character that decides a composed cluster's font, and family and
+weight matching — live in `neomacs-font-materializer`, which the layout engine
+re-exports, so the renderer never links the layout engine.
+
 **The renderer never sees the link.** It draws sealed presentations and
 assets that have already been decoded and verified; whether they came from
 the evaluator in the same process or over a byte stream is invisible to it.
@@ -122,8 +142,14 @@ Submodule charters — a new file needs one of these to belong:
   bell, FPS, typing speed). The two interleave — the corner mask goes on after
   the visual bell — so neither owns a run of the sequence.
 - `render_thread/frame_ingest.rs` — presentations in from the evaluator.
-- `backend/tty/` — the terminal backend, which shares the protocol and nothing
-  else.
+- `tty_input/` — terminal input. It stays here, not in the display host,
+  until the uplink stops publishing through the runtime's `RenderComms`
+  (MILESTONES M13); its production code names no `neovm_*`.
+- `testing` (the `testing` feature) — the headless `RenderApp` entry and the
+  recorded evaluator output this crate's split tests consume, for the display
+  host's tests. A test that reads this crate's private items stays here and
+  consumes a recorded protocol value; the display host pins the evaluator's
+  half to the same value.
 
 ### `neomacs-session` — the session layer
 
@@ -143,18 +169,35 @@ schema id. Pure: no I/O, no threads, no evaluator. It depends on the protocol
 and the identity leaf only; the frame crosses as `RowRuns` and keyed tables,
 never through `FrameDisplayState`'s serde derive.
 
+### `neomacs-tty-render` — the terminal rasterizer
+
+The terminal backend (`rif` and its grid, damage planner and painter) as a
+pure function of a sealed presentation, so the evaluator can drive a TTY
+without the frontend runtime. It depends on the protocol only. What it needs
+from the evaluator — GNU `CHARACTER_WIDTH` and where a text row's face fill
+stops — arrives at construction as a `TtyRasterPolicy`. Its `testing` feature
+holds the closed width and composition tables its own tests use; the display
+host pins them to the evaluator.
+
+### `neomacs-display-host` — the evaluator side of a display
+
+The redisplay runtime (`redisplay.rs`, `redisplay_step.rs`, `redisplay/`),
+the production `TtyRasterPolicy`, and the Linux `desktop-font-settings`
+forward (GNU's xsettings support is window-system terminal code). Later
+milestones add terminals of type `neo`, the outbox and request correlation
+(MILESTONES M6). It may depend on `neovm-core`, the layout engine, the
+protocol, the wire and session crates, and the two pure renderers
+(`neomacs-tty-render`, `neomacs-media-cpu`). Its edge to the display runtime
+is a **dev-dependency only**: tests of runtime behaviour over live evaluator
+output use the runtime's public API and its `testing` feature, and all of its
+tests are lib tests.
+
 ### Planned crates (charters fixed now, created by later milestones)
 
-- `neomacs-display-host` — the evaluator side of a display link: terminals of
-  type `neo`, the outbox, request correlation. It may depend on `neovm-core`,
-  the layout engine, the protocol, the wire and session crates, and the two
-  pure renderers below (MILESTONES M6).
 - `neomacs-frontend` — the frontend process: a `FrontendSession` over the
   session and wire crates, presenters, the in-process endpoint, the launcher
   and reconnection. No `neovm-*` crate is in its dependency closure
   (MILESTONES M6, M11).
-- `neomacs-tty-render` — the terminal rasterizer as a pure function of a
-  sealed presentation, so the evaluator can drive a TTY without the runtime.
 - `neomacs-media-cpu` — image decoding and other CPU-only media work the
   evaluator does before pixels cross a link (MILESTONES M10).
 

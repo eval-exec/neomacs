@@ -3826,6 +3826,7 @@ dependencies = [
  "mimalloc",
  "neomacs-allocator",
  "neomacs-diagnostics",
+ "neomacs-display-host",
  "neomacs-display-protocol",
  "neomacs-display-runtime",
  "neomacs-infra",
@@ -3833,6 +3834,7 @@ dependencies = [
  "neomacs-terminfo",
  "neomacs-test-env",
  "neomacs-test-oracle",
+ "neomacs-tty-render",
  "neomacs-video-model",
  "neomacs-webview",
  "neovm-core",
@@ -3879,6 +3881,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "neomacs-display-host"
+version = "0.0.21"
+dependencies = [
+ "neomacs-display-protocol",
+ "neomacs-display-runtime",
+ "neomacs-infra",
+ "neomacs-layout-engine",
+ "neomacs-tty-render",
+ "neovm-core",
+ "neovm-eval",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "neomacs-display-protocol"
 version = "0.0.21"
 dependencies = [
@@ -3918,13 +3935,10 @@ dependencies = [
  "neomacs-display-protocol",
  "neomacs-font-materializer",
  "neomacs-infra",
- "neomacs-layout-engine",
  "neomacs-renderer-wgpu",
  "neomacs-video",
  "neomacs-video-model",
  "neomacs-webview",
- "neovm-core",
- "neovm-eval",
  "num_enum",
  "objc2",
  "objc2-app-kit",
@@ -3987,6 +4001,7 @@ dependencies = [
  "freetype-rs",
  "neomacs-display-protocol",
  "neomacs-test-fonts",
+ "once_cell",
  "resvg",
  "sys-locale",
  "tempfile",
@@ -4159,7 +4174,6 @@ dependencies = [
  "neomacs-display-protocol",
  "neomacs-font-materializer",
  "neomacs-infra",
- "neomacs-layout-engine",
  "neomacs-test-fonts",
  "neomacs-video",
  "objc2-core-foundation",
@@ -4234,6 +4248,17 @@ name = "neomacs-test-oracle"
 version = "0.0.21"
 dependencies = [
  "neomacs-parity-reference",
+]
+
+[[package]]
+name = "neomacs-tty-render"
+version = "0.0.21"
+dependencies = [
+ "neomacs-display-protocol",
+ "neomacs-infra",
+ "rustc-hash 2.1.3",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

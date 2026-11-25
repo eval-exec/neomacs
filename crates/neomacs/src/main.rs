@@ -4331,6 +4331,17 @@ fn load_neomacs_gui_term_layer(evaluator: &mut Context) {
     }
 }
 
+/// The evaluator's SIGCHLD re-claim, which the render thread runs right after
+/// it creates the WebView stack: GNU re-claims the signal after WebKit/GLib
+/// touch it (src/xwidget.c:382, :3128, :4281, :4303), and the handler and its
+/// latches belong to the evaluator's process layer, not to the runtime.
+#[cfg(feature = "webview")]
+fn webview_child_signal() -> neomacs_display_runtime::render_thread::WebViewChildSignal {
+    neomacs_display_runtime::render_thread::WebViewChildSignal::new(
+        neovm_core::emacs_core::reclaim_child_signal,
+    )
+}
+
 /// Run native dispatch on its owning thread, join the evaluator on shutdown,
 /// and preserve daemon re-exec semantics when Lisp requests a restart.
 fn run_gui_main_thread(
@@ -4408,6 +4419,8 @@ fn run_gui_main_thread(
                 Arc::clone(&gui_image_metadata),
                 Arc::clone(&shared_monitors),
                 shared_terminals,
+                #[cfg(feature = "webview")]
+                webview_child_signal(),
             )
         }
         #[cfg(not(feature = "neo-term"))]
@@ -4419,6 +4432,8 @@ fn run_gui_main_thread(
                 "Neomacs".to_string(),
                 Arc::clone(&gui_image_metadata),
                 Arc::clone(&shared_monitors),
+                #[cfg(feature = "webview")]
+                webview_child_signal(),
             )
         }
     };
@@ -6866,7 +6881,10 @@ fn publish_gui_frame(
         match frame_tx.submit(display_state) {
             Ok(superseded) => {
                 if let Some(old) = superseded {
-                    old.discard(evaluator);
+                    neomacs_display_host::redisplay::PreparedPresentationTicket::for_unacquired(
+                        &old,
+                    )
+                    .discard(evaluator);
                 }
                 sent_any = true;
             }

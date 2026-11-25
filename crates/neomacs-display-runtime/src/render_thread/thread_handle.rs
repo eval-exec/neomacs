@@ -81,6 +81,7 @@ impl RenderThread {
         title: String,
         image_metadata: SharedImageRenderState,
         shared_monitors: SharedMonitorInfo,
+        #[cfg(feature = "webview")] child_signal: super::WebViewChildSignal,
     ) -> Result<Self, String> {
         #[cfg(feature = "neo-term")]
         let shared_terminals = crate::terminal::new_shared_terminals();
@@ -93,6 +94,8 @@ impl RenderThread {
             shared_monitors,
             #[cfg(feature = "neo-term")]
             shared_terminals,
+            #[cfg(feature = "webview")]
+            child_signal,
         )
     }
 
@@ -105,6 +108,7 @@ impl RenderThread {
         image_metadata: SharedImageRenderState,
         shared_monitors: SharedMonitorInfo,
         shared_terminals: crate::terminal::SharedTerminals,
+        #[cfg(feature = "webview")] child_signal: super::WebViewChildSignal,
     ) -> Result<Self, String> {
         Self::spawn_inner(
             comms,
@@ -114,6 +118,8 @@ impl RenderThread {
             image_metadata,
             shared_monitors,
             shared_terminals,
+            #[cfg(feature = "webview")]
+            child_signal,
         )
     }
 
@@ -125,6 +131,7 @@ impl RenderThread {
         image_metadata: SharedImageRenderState,
         shared_monitors: SharedMonitorInfo,
         #[cfg(feature = "neo-term")] shared_terminals: crate::terminal::SharedTerminals,
+        #[cfg(feature = "webview")] child_signal: super::WebViewChildSignal,
     ) -> Result<Self, String> {
         let (startup_tx, startup_rx) = mpsc::sync_channel(1);
         let handle = thread::spawn(move || match build_render_event_loop_any_thread() {
@@ -141,6 +148,8 @@ impl RenderThread {
                     true,
                     #[cfg(feature = "neo-term")]
                     shared_terminals,
+                    #[cfg(feature = "webview")]
+                    child_signal,
                 ) {
                     tracing::error!("Render thread exited with error: {}", err);
                 }

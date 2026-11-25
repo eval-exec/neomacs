@@ -419,9 +419,7 @@ fn an_absent_color_count_is_monochrome_like_gnu() {
 // bytes the encoder emits, not mere capability presence.
 // ---------------------------------------------------------------------------
 
-use neomacs_display_runtime::backend::tty::rif::{
-    BlankTailMethod, RegionScrollMethod, RightMarginBehavior,
-};
+use neomacs_tty_render::rif::{BlankTailMethod, RegionScrollMethod, RightMarginBehavior};
 
 /// GNU `init_tty` reads `vi`, `ve` and `vs` (src/term.c:4572-4574) and
 /// `tty_show_cursor` emits `ve` then `vs` (src/term.c:362-372): the entry's

@@ -1,4 +1,5 @@
 use super::*;
+use neomacs_display_host::tty_raster_policy::evaluator_tty_raster_policy;
 struct Database(std::collections::BTreeMap<&'static str, &'static [u8]>);
 impl TerminalCapabilityDatabase for Database {
     fn get_string(&mut self, cap: StringCapability<'_>) -> Option<Vec<u8>> {
@@ -34,7 +35,7 @@ fn standout_closes_before_plain_text_with_dedicated_or_borrowed_exit() {
         let mut row = cells("AB");
         {
             let attrs = row[0].attrs();
-            row[0].set_attrs(neomacs_display_runtime::backend::tty::rif::CellAttrs {
+            row[0].set_attrs(neomacs_tty_render::rif::CellAttrs {
                 inverse: true,
                 ..attrs
             });
@@ -62,7 +63,7 @@ fn native_padded_output_keeps_literal_text_and_scales_clear_screen() {
     let mut row = cells("A$<10/>B");
     {
         let attrs = row[0].attrs();
-        row[0].set_attrs(neomacs_display_runtime::backend::tty::rif::CellAttrs {
+        row[0].set_attrs(neomacs_tty_render::rif::CellAttrs {
             inverse: true,
             ..attrs
         });
@@ -80,7 +81,12 @@ fn native_padded_output_keeps_literal_text_and_scales_clear_screen() {
     assert_eq!(output, b"OFF\x1b[1;1HONAOFF$<10/>B");
     output.clear();
     // ANSI cursor spelling with padding still uses the native painter.
-    render_to(&mut TtyRif::new(8, 1), &mut output, &caps).unwrap();
+    render_to(
+        &mut TtyRif::new(8, 1, evaluator_tty_raster_policy()),
+        &mut output,
+        &caps,
+    )
+    .unwrap();
     assert!(!output.windows(2).any(|pair| pair == b"$<"));
     output.clear();
     caps.leave().write_to(&mut output, &caps).unwrap();
@@ -273,7 +279,7 @@ fn retry_exits_modes_left_active_by_a_partial_write() {
         .into(),
     );
     let caps = Capabilities::from_database(&mut database, "").unwrap();
-    let mut rif = TtyRif::new(3, 1);
+    let mut rif = TtyRif::new(3, 1, evaluator_tty_raster_policy());
     let mut writer = PartialWriter {
         bytes: Vec::new(),
         fail: true,

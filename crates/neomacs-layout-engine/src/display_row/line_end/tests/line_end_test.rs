@@ -93,7 +93,7 @@ fn appended_newline_glyph_carries_line_end_provenance() {
 /// With no `:extend` face, GNU's terminal branch still materializes the row
 /// tail (`src/xdisp.c:24679-24809`) -- but with the DEFAULT face, and the
 /// TTY backend already emits exactly those cells while rasterizing the row
-/// (`crates/neomacs-display-runtime/src/backend/tty/rif.rs`, ledger 81). So this
+/// (`crates/neomacs-tty-render/src/rif.rs`, ledger 81). So this
 /// seam emitting no fill here is a LAYERING choice, not a divergence: the
 /// glyph row differs from GNU's, the resulting terminal cells do not.
 ///

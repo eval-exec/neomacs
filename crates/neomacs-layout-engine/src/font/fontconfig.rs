@@ -17,10 +17,6 @@ use crate::font::policy::{
 use crate::font::selection::{CandidateSelectionScore, candidate_selection_score};
 pub use crate::font::subpixel::FontconfigSubpixelOrder;
 use crate::font_backend::{FontFamilyName, PlatformFontSize};
-#[cfg(unix)]
-use fontconfig_sys::constants::{
-    FC_RGBA, FC_RGBA_BGR, FC_RGBA_NONE, FC_RGBA_RGB, FC_RGBA_VBGR, FC_RGBA_VRGB,
-};
 use neomacs_display_protocol::font::FontVariationCoord;
 use neovm_core::emacs_core::fontset::StoredFontSpec;
 use neovm_core::emacs_core::intern::{intern, resolve_sym};
@@ -59,7 +55,6 @@ struct FontconfigCaches {
     sorted_families: HashMap<(String, String), Vec<String>>,
     aliases: Option<HashMap<String, String>>,
     spacing: HashMap<String, Option<i32>>,
-    subpixel_order: Option<FontconfigSubpixelOrder>,
 }
 
 static FC_CACHES: OnceLock<Mutex<FontconfigCaches>> = OnceLock::new();
@@ -132,6 +127,11 @@ pub(crate) fn invalidate_catalog_caches(
     {
         caches.candidate_epoch = next;
     }
+    // The subpixel order belongs to the same catalog generation; its query
+    // and cache moved to the font materializer with the renderer's other
+    // font helpers (MILESTONES M4).
+    #[cfg(not(all(test, unix)))]
+    neomacs_font_materializer::fontconfig::invalidate_default_subpixel_order();
 }
 
 impl FontMatch {
@@ -1852,45 +1852,6 @@ fn family_spacing(family: &str) -> Option<i32> {
         .insert(family.to_string(), spacing);
 
     spacing
-}
-
-pub fn default_subpixel_order() -> FontconfigSubpixelOrder {
-    if let Some(order) = fontconfig_caches()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .subpixel_order
-    {
-        return order;
-    }
-    let order = query_default_subpixel_order();
-    fontconfig_caches()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .subpixel_order = Some(order);
-    order
-}
-
-#[cfg(unix)]
-fn query_default_subpixel_order() -> FontconfigSubpixelOrder {
-    let Some(fc) = fontconfig_handle() else {
-        return FontconfigSubpixelOrder::Unknown;
-    };
-
-    let rgba =
-        with_matched_family_pattern(fc, "Monospace", |matched| matched.get_int(FC_RGBA).ok());
-    match rgba {
-        Some(FC_RGBA_NONE) => FontconfigSubpixelOrder::None,
-        Some(FC_RGBA_RGB) => FontconfigSubpixelOrder::Rgb,
-        Some(FC_RGBA_BGR) => FontconfigSubpixelOrder::Bgr,
-        Some(FC_RGBA_VRGB) => FontconfigSubpixelOrder::VRgb,
-        Some(FC_RGBA_VBGR) => FontconfigSubpixelOrder::VBgr,
-        _ => FontconfigSubpixelOrder::Unknown,
-    }
-}
-
-#[cfg(not(unix))]
-fn query_default_subpixel_order() -> FontconfigSubpixelOrder {
-    FontconfigSubpixelOrder::Unknown
 }
 
 #[cfg(test)]

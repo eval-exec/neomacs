@@ -1,0 +1,28 @@
+[package]
+name = "neomacs-tty-render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Terminal rasterizer for Neomacs: a sealed presentation in, terminal bytes out"
+
+[features]
+default = []
+# GNU character widths and terminal compositions for the strings this crate's
+# tests use, so the display host can pin them to the evaluator
+# (MILESTONES M4, DECISIONS D44).
+testing = []
+
+[dependencies]
+# Workspace: the protocol vocabulary only (scripts/ci/check-crate-graph.py).
+neomacs-display-protocol.workspace = true
+rustc-hash.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+neomacs-infra.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

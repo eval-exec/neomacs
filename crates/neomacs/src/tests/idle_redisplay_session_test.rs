@@ -6,7 +6,6 @@
 
 use super::super::frame_layout::run_tty_layout_tree;
 use super::super::{Interactivity, bootstrap_buffers, bootstrap_tty_display_config};
-use neomacs_display_runtime::redisplay::RedisplayRuntime;
 use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached_with_features;
 
 #[test]

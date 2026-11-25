@@ -27,6 +27,45 @@ fn file_replay_for(identity: &ResolvedFontIdentity) -> FontReplay {
     }
 }
 
+/// The font the layout engine publishes for a pinned fixture file. The
+/// renderer no longer links the layout engine (MILESTONES M4); the engine's
+/// `font::metrics::renderer_split_tests` pin that it publishes exactly these
+/// values for the same fixtures.
+#[cfg(unix)]
+fn published_fixture_font(
+    file: &std::path::Path,
+    selector: u32,
+    postscript_name: &str,
+    variations: Vec<neomacs_display_protocol::font::FontVariationCoord>,
+    family: &str,
+    weight: u16,
+    pixel_size: f32,
+) -> ResolvedFont {
+    let identity = ResolvedFontIdentity::from_file_with_variations(
+        &test_font_path(file.to_path_buf()),
+        selector,
+        Some(postscript_name.to_owned()),
+        variations,
+    );
+    ResolvedFont {
+        id: ResolvedFontId(1),
+        replay: file_replay_for(&identity),
+        identity,
+        family: family.to_owned(),
+        full_name: None,
+        postscript_name: Some(postscript_name.to_owned()),
+        weight,
+        slant: neomacs_display_protocol::font::FontSlantKind::Normal,
+        width: 5,
+        pixel_size,
+        ascent_px: 0.0,
+        descent_px: 0.0,
+        space_advance_px: 0.0,
+        glyph_advance: Default::default(),
+        spacing: None,
+    }
+}
+
 fn resolved_glyph(font: u32, glyph: u32, x: f32) -> ResolvedGlyph {
     ResolvedGlyph {
         resolved_font_id: ResolvedFontId(font),
@@ -771,44 +810,32 @@ fn atlas_sampling_policy_selects_distinct_wgpu_bind_groups() {
     );
 }
 
+/// The layout engine's half is
+/// `font::metrics::renderer_split_tests::layout_publishes_the_symbols_nerd_fixture_as_the_primary_face`:
+/// the symbols-only face this test consumes is the pinned fixture the engine
+/// publishes for "Symbols Nerd Font Mono" (MILESTONES M4).
 #[cfg(target_os = "linux")]
 #[test]
 fn renderer_keeps_missing_ascii_on_primary_font() {
     use neomacs_display_protocol::face::Face;
     use neomacs_display_protocol::font::{FontSlantKind, ResolvedFont, ResolvedFontId};
-    use neomacs_layout_engine::font::metrics::FontMetricsService;
 
     let requested_family = "Symbols Nerd Font Mono";
-    let Some(platform) = neomacs_layout_engine::font::fontconfig::find_font_for_spec(
-        Some(requested_family),
-        None,
-        None,
-        None,
-        None,
-        None,
-    ) else {
-        return;
-    };
-    // `ResolvedFont::family` deliberately preserves the requested family,
-    // even when Fontconfig substitutes another face.  This test needs the
-    // actual symbols-only font because a substituted text font normally has
-    // an ASCII space glyph.
-    if !platform.family.eq_ignore_ascii_case(requested_family) {
-        return;
-    }
-
-    let Some(resolved) =
-        FontMetricsService::new().resolved_font_for_face(requested_family, 400, false, 10.0)
-    else {
-        return;
-    };
-    assert_eq!(resolved.identity.file_path, platform.file);
+    let published = published_fixture_font(
+        neomacs_test_fonts::symbols_nerd_mono_3_4_0(),
+        0,
+        "SymbolsNFM",
+        Vec::new(),
+        requested_family,
+        400,
+        10.0,
+    );
     let Some(mut atlas) = try_test_atlas() else {
         return;
     };
-    let family = resolved.family;
-    let weight = resolved.weight;
-    let identity = resolved.identity;
+    let family = published.family;
+    let weight = published.weight;
+    let identity = published.identity;
     let id = ResolvedFontId(1);
     let font = ResolvedFont {
         id,
@@ -862,19 +889,32 @@ fn renderer_keeps_missing_ascii_on_primary_font() {
     assert!(result.pixel_data.contains(&255));
 }
 
+/// The layout engine's half is
+/// `font::metrics::renderer_split_tests::layout_publishes_jetbrains_mono_fixed_cell_advance`.
 #[cfg(unix)]
 #[test]
 fn renderer_uses_layouts_published_fixed_cell_advance() {
     use neomacs_display_protocol::face::Face;
-    use neomacs_layout_engine::font::metrics::FontMetricsService;
+    use neomacs_display_protocol::font::ResolvedFontAdvance;
 
-    let Some(resolved) =
-        FontMetricsService::new().resolved_font_for_face("JetBrains Mono", 400, false, 14.0)
-    else {
-        return;
+    let resolved = ResolvedFont {
+        ascent_px: 15.0,
+        descent_px: 5.0,
+        space_advance_px: 8.0,
+        glyph_advance: ResolvedFontAdvance::monospace_cells(8.0),
+        spacing: Some(100),
+        ..published_fixture_font(
+            neomacs_test_fonts::jetbrains_mono_regular_2_304(),
+            0,
+            "JetBrainsMono-Regular",
+            Vec::new(),
+            "JetBrains Mono",
+            400,
+            14.0,
+        )
     };
     let Some(cell) = resolved.glyph_advance.cell_advance_px() else {
-        return;
+        panic!("the published JetBrains Mono face has a fixed cell");
     };
     let Some(mut atlas) = try_test_atlas() else {
         return;
@@ -897,24 +937,28 @@ fn renderer_uses_layouts_published_fixed_cell_advance() {
     assert_eq!(glyph.x_advance, cell);
 }
 
+/// The layout engine's half is
+/// `font::metrics::renderer_split_tests::layout_publishes_the_noto_sans_bold_named_instance`:
+/// Noto Sans Bold is the variable fixture's named instance `7 << 16` at
+/// `wght` 700.
 #[cfg(unix)]
 #[test]
 #[tracing_test::traced_test]
 fn renderer_replays_named_instance_weight_on_the_exact_raw_face() {
     use cosmic_text::{Buffer, Metrics, Shaping};
-    use neomacs_display_protocol::font::{FontSlantKind, ResolvedFont, ResolvedFontId};
-    use neomacs_layout_engine::font::metrics::FontMetricsService;
-
-    let Some(resolved) =
-        FontMetricsService::new().resolved_font_for_face("Noto Sans", 700, false, 18.0)
-    else {
-        tracing::info!("skipping: Noto Sans Bold is not installed");
-        return;
+    use neomacs_display_protocol::font::{
+        FontSlantKind, FontVariationCoord, ResolvedFont, ResolvedFontId,
     };
-    if resolved.identity.file_path.is_none() {
-        tracing::info!("skipping: Fontconfig match has no file");
-        return;
-    }
+
+    let resolved = published_fixture_font(
+        neomacs_test_fonts::noto_sans_variable(),
+        7 << 16,
+        "NotoSans-Bold",
+        vec![FontVariationCoord::try_new(u32::from_be_bytes(*b"wght"), 700.0).expect("finite")],
+        "Noto Sans",
+        700,
+        18.0,
+    );
     let Some(mut atlas) = try_test_atlas() else {
         tracing::info!("skipping: no headless wgpu adapter");
         return;

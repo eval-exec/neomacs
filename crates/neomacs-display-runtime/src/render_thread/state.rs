@@ -975,7 +975,11 @@ pub(super) struct RenderGpuContext {
     pub(super) queue: Arc<wgpu::Queue>,
 }
 
-pub(super) struct RenderApp {
+/// The render thread's state: windows, GPU, compositor and input.
+///
+/// Crate-private except under the `testing` feature, which makes it reachable
+/// for [`RenderApp::headless`].
+pub struct RenderApp {
     pub(super) font_raster_options: crate::display_raster::DisplayRasterOptions,
     pub(super) comms: RenderComms,
     pub(super) menus: crate::menus::MenuPresentation,
@@ -1007,6 +1011,10 @@ pub(super) struct RenderApp {
     /// or frame work. Production replaces the no-op test value before run.
     #[cfg(feature = "webview")]
     pub(super) webview_wake: neomacs_webview::WebViewWake,
+    /// The embedder's SIGCHLD re-claim, run after the WebView system is
+    /// created. Only a render loop has one; see [`super::WebViewChildSignal`].
+    #[cfg(feature = "webview")]
+    pub(super) webview_child_signal: Option<super::WebViewChildSignal>,
     /// Device generation attached to every imported native video surface.
     #[cfg(feature = "video")]
     pub(super) video_gpu_generation: neomacs_video::GpuGeneration,
@@ -1259,6 +1267,8 @@ impl RenderApp {
             video_wake: neomacs_video::VideoWake::noop(),
             #[cfg(feature = "webview")]
             webview_wake: neomacs_webview::WebViewWake::noop(),
+            #[cfg(feature = "webview")]
+            webview_child_signal: None,
             #[cfg(feature = "video")]
             video_gpu_generation: neomacs_video::GpuGeneration::INITIAL,
             #[cfg(feature = "video")]

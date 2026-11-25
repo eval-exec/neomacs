@@ -126,7 +126,6 @@ jobs:
             --exclude neomacs \
             --exclude neomacs-allocator \
             --exclude neomacs-diagnostics \
-            --exclude neomacs-font-materializer \
             --exclude neomacs-infra \
             --exclude neomacs-parity-reference \
             --exclude neomacs-perf \
@@ -1266,7 +1265,7 @@ jobs:
       NEOMACS_BINARY_PATH: ${{ github.workspace }}/target/release/neomacs
       NEOMACS_RUNTIME_ROOT: ${{ github.workspace }}
       NEOMACS_FONT_FIXTURE_CACHE: ${{ github.workspace }}/tmp/font-fixtures
-      NEXTEST_FILTER: "package(neomacs-display-protocol)|package(neomacs-display-runtime)|package(neomacs-layout-engine)|package(neomacs-renderer-wgpu)|package(neomacs-session)|package(neomacs-display-wire)"
+      NEXTEST_FILTER: "package(neomacs-display-protocol)|package(neomacs-display-runtime)|package(neomacs-layout-engine)|package(neomacs-renderer-wgpu)|package(neomacs-session)|package(neomacs-display-wire)|package(neomacs-tty-render)|package(neomacs-display-host)|package(neomacs-font-materializer)"
     steps:
       - *checkout
       - *prepare_workspace_tmp

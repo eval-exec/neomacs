@@ -90,6 +90,7 @@ fn capability_owner_allows(path: &str, capability: EffectCapability) -> bool {
 /// an allowlist of whole crates. A new semantic caller is not a native owner.
 fn owner_allows(path: &str, owner: NativeOwner) -> bool {
     let display = "neomacs-display-runtime/src/";
+    let host = "neomacs-display-host/src/";
     let frontend = "neomacs/src/";
     let layout = "neomacs-layout-engine/src/";
     let render_kernel = path.starts_with(&format!("{display}render_thread/"));
@@ -159,13 +160,16 @@ fn owner_allows(path: &str, owner: NativeOwner) -> bool {
                     "color_glyph.rs",
                     "raster_sources.rs",
                     "fontconfig.rs",
+                    // Moved from the layout engine (MILESTONES M4) so the
+                    // renderer matches families without it.
+                    "font_match.rs",
                 ]
                 .iter()
                 .any(|file| path == format!("neomacs-font-materializer/src/{file}"))
                 || path.starts_with("neomacs-renderer-wgpu/src/glyph_atlas/")
                 || path.starts_with("neomacs-renderer-wgpu/src/renderer/")
                 || path == "neomacs-renderer-wgpu/src/svg.rs"
-                || path == format!("{display}redisplay.rs")
+                || path == format!("{host}redisplay.rs")
                 || path.starts_with(&format!("{display}menus/"))
                 || path == format!("{frontend}startup_font.rs")
                 || path == format!("{frontend}frame_layout.rs")
@@ -197,11 +201,13 @@ fn owner_allows(path: &str, owner: NativeOwner) -> bool {
         NativeOwner::Layout => {
             path == format!("{frontend}frame_layout.rs")
                 || path == format!("{frontend}main.rs")
-                || path == format!("{display}redisplay.rs")
+                // The redisplay runtime moved to the evaluator side of the
+                // display seam with the crate cut (MILESTONES M4).
+                || path == format!("{host}redisplay.rs")
                 // S2 step-2 dormant RedisplayStep executor (DESIGN.md rev3).
                 // Exact file, not a directory: a declared caller of RedisplayRuntime.
-                || path == "neomacs-display-runtime/src/redisplay_step.rs"
-                || path.starts_with(&format!("{display}redisplay/"))
+                || path == format!("{host}redisplay_step.rs")
+                || path.starts_with(&format!("{host}redisplay/"))
         }
         NativeOwner::CommandTransport => {
             path == format!("{display}thread_comm/command_projection.rs")

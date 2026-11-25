@@ -1,8 +1,5 @@
 use super::*;
 use crate::core::frame_glyphs::FrameGlyphBuffer;
-use neomacs_display_protocol::FrontendKey;
-// FrameManager's create_frame is an upper extension trait after the display
-// split; the two real-layout tests below call it directly.
 use crate::core::types::Color;
 use crate::render_thread::frame_windows::{FrameLifecycle, GuiFrameRenderState};
 use crate::render_thread::pointer_events::PointerOwner;
@@ -10,8 +7,12 @@ use crate::render_thread::state::{
     ActivePointerAppearance, PointerAppearancePhase, PointerAppearanceState, PointerCursorIntent,
     PresentedAppearanceKey, PresentedInteractionKey, PresentedPressCapture,
 };
+use crate::testing::key_transport::{self, CTRL_ALT_N, CTRL_ALT_SHIFT_3};
+use crate::testing::real_layout::RealLayoutScenario;
+use neomacs_display_protocol::FrontendKey;
 use neomacs_display_protocol::frame_chrome::InteractionId;
 use neomacs_display_protocol::frame_chrome::PresentationId;
+use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
 use neomacs_display_protocol::{
     Face, FaceId, FrameRect, ImageId, PointerAppearanceId,
     PointerAppearancePhase as ProtocolPointerAppearancePhase, PointerDrawMode, PointerImageRelief,
@@ -19,7 +20,6 @@ use neomacs_display_protocol::{
     PresentedHitRegion, PresentedPaintSpan, PresentedPointerAppearance, PresentedPointerRegion,
     PresentedPrimitiveKind, PresentedRegionId, PresentedRegionKind,
 };
-use neovm_core::window::DisplayFrameManagerExt;
 use winit::keyboard::{Key, NamedKey, NativeKey, SmolStr};
 use winit::window::ResizeDirection;
 
@@ -1109,53 +1109,27 @@ fn presented_pointer_integration_topmost_child_uses_local_coordinates_then_root_
     ));
 }
 
+/// Real layout-engine output (`crate::testing::real_layout`, recorded from a
+/// live evaluator; the display host pins it to live layout).
+fn recorded_frame_id(state: &FrameDisplayState) -> u64 {
+    state.frame_placement.frame().get()
+}
+
 #[test]
 fn real_layout_publication_routes_overlapping_children_by_published_z_order() {
-    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buffer = eval.buffer_manager().current_buffer().unwrap().id();
-    eval.buffer_manager_mut()
-        .get_mut(buffer)
-        .unwrap()
-        .insert("child");
-    let root = eval
-        .frame_manager_mut()
-        .create_frame("root-hit", 200, 120, buffer);
-    let lower = eval
-        .frame_manager_mut()
-        .create_frame("lower-hit", 80, 60, buffer);
-    let upper = eval
-        .frame_manager_mut()
-        .create_frame("upper-hit", 80, 60, buffer);
-    for (frame_id, parent, z_order) in [
-        (root, None, 0),
-        (lower, Some(root), 2),
-        (upper, Some(root), 9),
-    ] {
-        let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
-        frame.set_window_system(Some(neovm_core::emacs_core::Value::symbol("neo")));
-        frame.z_order = z_order;
-        if let Some(parent) = parent {
-            frame.parent_frame = neovm_core::emacs_core::Value::make_frame(parent.0);
-            frame.left_pos = 20;
-            frame.top_pos = 15;
-        }
-    }
-    // Publication/z-order uses explicit logical metrics, as the nested-child
-    // fixture below does. No native font selection is part of this contract.
-    let mut engine = neomacs_layout_engine::LayoutEngine::new_without_font_metrics();
-    let mut layout = |frame_id| match engine.redisplay_frame_attempt(&mut eval, frame_id) {
-        neomacs_layout_engine::engine::FrameLayoutAttempt::Prepared(frame) => frame.materialize(),
-        neomacs_layout_engine::engine::FrameLayoutAttempt::Aborted => {
-            panic!("hit-test fixture layout aborted")
-        }
-    };
-    let root_frame = layout(root);
-    let lower_frame = layout(lower);
-    let upper_frame = layout(upper);
+    // A root frame and two children at z-orders 2 and 9 that overlap at
+    // (25, 20). Publication/z-order uses explicit logical metrics, as the
+    // nested-child fixture below does. No native font selection is part of
+    // this contract.
+    let [root, lower, upper] = RealLayoutScenario::OverlappingChildren.frames();
+    let (root_id, upper_id) = (recorded_frame_id(&root), recorded_frame_id(&upper));
+    let root_frame = root.materialize();
+    let lower_frame = lower.materialize();
+    let upper_frame = upper.materialize();
 
     let mut app = make_test_app(200, 120, 1.0);
     let render = ensure_primary_frame(&mut app).expect("primary render");
-    render.set_emacs_frame_id(root.0);
+    render.set_emacs_frame_id(root_id);
     render.set_current_frame(
         Some(root_frame),
         None,
@@ -1168,7 +1142,7 @@ fn real_layout_publication_routes_overlapping_children_by_published_z_order() {
     let owner = RenderApp::pointer_owner(window, 25.0, 20.0);
     assert!(matches!(
         owner,
-        PointerOwner::Child { frame_id, .. } if frame_id == upper.0
+        PointerOwner::Child { frame_id, .. } if frame_id == upper_id
     ));
     let (x, y, frame_id) = owner.target().unwrap();
     let (_, semantic) = window
@@ -1184,46 +1158,13 @@ fn real_layout_publication_routes_overlapping_children_by_published_z_order() {
 
 #[test]
 fn real_layout_publication_keeps_nested_child_parent_relative_and_runtime_places_it_in_root() {
-    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buffer = eval.buffer_manager().current_buffer().unwrap().id();
-    let root = eval
-        .frame_manager_mut()
-        .create_frame("root-nested", 800, 600, buffer);
-    let parent = eval
-        .frame_manager_mut()
-        .create_frame("parent-nested", 300, 200, buffer);
-    let nested = eval
-        .frame_manager_mut()
-        .create_frame("nested", 100, 80, buffer);
-    for frame_id in [root, parent, nested] {
-        eval.frame_manager_mut()
-            .get_mut(frame_id)
-            .unwrap()
-            .set_window_system(Some(neovm_core::emacs_core::Value::symbol("neo")));
-    }
-    {
-        let frame = eval.frame_manager_mut().get_mut(parent).unwrap();
-        frame.parent_frame = neovm_core::emacs_core::Value::make_frame(root.0);
-        frame.left_pos = 100;
-        frame.top_pos = 80;
-    }
-    {
-        let frame = eval.frame_manager_mut().get_mut(nested).unwrap();
-        frame.parent_frame = neovm_core::emacs_core::Value::make_frame(parent.0);
-        frame.left_pos = 15;
-        frame.top_pos = 12;
-    }
-
-    let mut engine = neomacs_layout_engine::LayoutEngine::new_without_font_metrics();
-    let mut layout = |frame_id| match engine.redisplay_frame_attempt(&mut eval, frame_id) {
-        neomacs_layout_engine::engine::FrameLayoutAttempt::Prepared(frame) => frame.materialize(),
-        neomacs_layout_engine::engine::FrameLayoutAttempt::Aborted => {
-            panic!("nested-frame fixture layout aborted")
-        }
-    };
-    let root_frame = layout(root);
-    let parent_frame = layout(parent);
-    let nested_frame = layout(nested);
+    // A root frame, a child at (100, 80) and a grandchild at (15, 12) inside
+    // the child.
+    let [root, parent, nested] = RealLayoutScenario::NestedChild.frames();
+    let (root_id, nested_id) = (recorded_frame_id(&root), recorded_frame_id(&nested));
+    let root_frame = root.materialize();
+    let parent_frame = parent.materialize();
+    let nested_frame = nested.materialize();
     assert_eq!(
         (
             nested_frame.frame_placement.outer_in_parent().x(),
@@ -1235,7 +1176,7 @@ fn real_layout_publication_keeps_nested_child_parent_relative_and_runtime_places
 
     let mut app = make_test_app(800, 600, 1.0);
     let render = ensure_primary_frame(&mut app).expect("primary render");
-    render.set_emacs_frame_id(root.0);
+    render.set_emacs_frame_id(root_id);
     render.set_current_frame(
         Some(root_frame),
         None,
@@ -1248,7 +1189,7 @@ fn real_layout_publication_keeps_nested_child_parent_relative_and_runtime_places
         .compositor
         .child_frames
         .frames
-        .get(&nested.0)
+        .get(&nested_id)
         .expect("nested runtime frame");
     assert_eq!((nested_entry.abs_x, nested_entry.abs_y), (115.0, 92.0));
 }
@@ -2224,28 +2165,23 @@ fn translate_key_unidentified_returns_zero() {
     assert_eq!(RenderApp::translate_keysym(&key), 0);
 }
 
+/// The runtime's half of a split test (DECISIONS D44): committed text is
+/// transported as the character. The display host pins what the evaluator
+/// cooks from that transported key (`key_transport_contract_test.rs`).
 #[test]
 fn fullwidth_committed_text_reaches_core_as_a_character() {
     let transported = RenderApp::translate_committed_text("，", 0).unwrap();
-    let event =
-        neovm_core::keyboard::render_key_transport_to_input_event(transported[0], 0, true, 42)
-            .unwrap();
-    assert!(
-        matches!(event, neovm_core::keyboard::InputEvent::KeyPress { key, emacs_frame_id: 42 } if key.key == neovm_core::keyboard::Key::Char('，'))
-    );
+    assert_eq!(transported[0], key_transport::fullwidth('，').key);
 }
 
+/// The runtime's half of a split test: each fullwidth logical key is
+/// transported as its character; the display host pins the evaluator's half.
 #[test]
 fn fullwidth_logical_keys_reach_core_as_characters() {
-    for character in "，（）；－ｦￊ".chars() {
+    for character in key_transport::FULLWIDTH_TEXT.chars() {
         let toolkit_key = Key::Character(character.to_string().into());
         let key = RenderApp::translate_key_input(&toolkit_key).unwrap();
-        let event =
-            neovm_core::keyboard::render_key_transport_to_input_event(key, 0, true, 42).unwrap();
-        assert!(
-            matches!(event, neovm_core::keyboard::InputEvent::KeyPress { key, emacs_frame_id: 42 }
-            if key.key == neovm_core::keyboard::Key::Char(character))
-        );
+        assert_eq!(key, key_transport::fullwidth(character).key);
     }
 }
 
@@ -3039,28 +2975,14 @@ fn translate_key_keeps_unmapped_native_keys() {
 /// the layout's key value with those command modifiers removed, so
 /// `Ctrl+Alt+n` arrives as `n`.  GNU's `make_lispy_event` cooks it to
 /// `C-M-n` (`src/keyboard.c:6328-6337`); issue #756.
+///
+/// The runtime's half of a split test (DECISIONS D44): the toolkit's `n` is
+/// transported as [`CTRL_ALT_N`]'s key. The display host pins that the
+/// evaluator cooks that key with Ctrl+Meta to `C-M-n`, `0x800000e`.
 #[test]
 fn ctrl_alt_letter_cooks_to_gnu_c_m_letter() {
     let key = RenderApp::translate_key_input(&Key::Character(SmolStr::new("n"))).unwrap();
-    let event = neovm_core::keyboard::render_key_transport_to_input_event(
-        key,
-        neomacs_display_protocol::ModifierBits::CTRL.bits()
-            | neomacs_display_protocol::ModifierBits::META.bits(),
-        true,
-        42,
-    )
-    .unwrap();
-    let neovm_core::keyboard::InputEvent::KeyPress {
-        key,
-        emacs_frame_id,
-    } = event
-    else {
-        panic!("expected a key press");
-    };
-    assert_eq!(emacs_frame_id, 42);
-    assert_eq!(key.to_description(), "C-M-n");
-    // The integer GNU's `(kbd "C-M-n")` produces.
-    assert_eq!(key.to_emacs_event_value().as_int(), Some(0x800_000e));
+    assert_eq!(key, CTRL_ALT_N.key);
 }
 
 /// `Ctrl+Alt+Shift+3` is the same chord as `(kbd "C-M-#")` in GNU Emacs: the
@@ -3068,24 +2990,14 @@ fn ctrl_alt_letter_cooks_to_gnu_c_m_letter() {
 /// keeps Ctrl only for characters with a basic control code, so Shift does
 /// not survive as a separate modifier bit (`src/keyboard.c:2178-2211`).
 /// winit delivers the shifted key `#`; issue #756.
+///
+/// The runtime's half of a split test: the toolkit's shifted `#` is
+/// transported as [`CTRL_ALT_SHIFT_3`]'s key; the display host pins that the
+/// evaluator cooks it with Ctrl+Meta+Shift to `C-M-#`, `0xc000023`.
 #[test]
 fn ctrl_alt_shift_3_cooks_to_gnu_c_m_hash() {
     let key = RenderApp::translate_key_input(&Key::Character(SmolStr::new("#"))).unwrap();
-    let event = neovm_core::keyboard::render_key_transport_to_input_event(
-        key,
-        neomacs_display_protocol::ModifierBits::CTRL.bits()
-            | neomacs_display_protocol::ModifierBits::META.bits()
-            | neomacs_display_protocol::ModifierBits::SHIFT.bits(),
-        true,
-        42,
-    )
-    .unwrap();
-    let neovm_core::keyboard::InputEvent::KeyPress { key, .. } = event else {
-        panic!("expected a key press");
-    };
-    assert_eq!(key.to_description(), "C-M-#");
-    // The integer GNU's `(kbd "C-M-#")` produces.
-    assert_eq!(key.to_emacs_event_value().as_int(), Some(0xc00_0023));
+    assert_eq!(key, CTRL_ALT_SHIFT_3.key);
 }
 
 /// Modifiers are not key events — they arrive through `ModifiersChanged` — and

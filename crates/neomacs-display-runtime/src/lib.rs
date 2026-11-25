@@ -25,8 +25,6 @@ pub mod macos_bundle_runtime;
 mod menus;
 mod presentation;
 mod presentation_feedback;
-pub mod redisplay;
-mod redisplay_step;
 pub mod thread_comm;
 mod tooltips;
 pub mod tty_input;
@@ -41,15 +39,8 @@ pub mod render_thread;
 #[cfg(feature = "neo-term")]
 pub mod terminal;
 
-/// Layout-facing font matching helpers (kept under the legacy module path).
-pub mod font_match {
-    pub use neomacs_layout_engine::font::font_match::*;
-}
-
-/// Rust layout engine API (kept under the legacy module path).
-pub mod layout {
-    pub use neomacs_layout_engine::*;
-}
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 
 pub use crate::core::*;
 pub use neomacs_renderer_wgpu::supports_graphical_face_attribute;

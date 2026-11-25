@@ -10,14 +10,14 @@
 //! (`combine_updates_for_frame`) and the redisplay callback wiring that
 //! normally lives in `src/xdisp.c` / `src/dispnew.c`.
 
+use neomacs_display_host::redisplay::RedisplayRuntime;
+pub use neomacs_display_host::redisplay::{FrameLayoutPurpose, PreparedFrameDisplay};
 use neomacs_display_protocol::SealedFramePresentation;
 use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
-use neomacs_display_runtime::backend::tty::rif::TtyRif;
-use neomacs_display_runtime::redisplay::RedisplayRuntime;
-pub use neomacs_display_runtime::redisplay::{FrameLayoutPurpose, PreparedFrameDisplay};
 use neomacs_display_runtime::tty_input::{
     TerminalCellSize, TerminalColumns, TerminalRows, TerminalSizeQuery,
 };
+use neomacs_tty_render::rif::TtyRif;
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::window::{FrameId, RenderFrameScope, RenderFrameVisibility};
@@ -514,6 +514,7 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
         u32::from(size.columns()) as usize,
         u32::from(size.rows()) as usize,
         super::tty_init::detect_term_caps(),
+        neomacs_display_host::tty_raster_policy::evaluator_tty_raster_policy(),
     );
     // TTY frames use 1x1 character cell metrics (GNU Emacs
     // frame.c:1184-1185). Drop the layout engine's cosmic-text

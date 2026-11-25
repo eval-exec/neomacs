@@ -306,7 +306,7 @@ struct SecondaryTtySession {
     #[cfg(unix)]
     device: TtyDevice,
     #[cfg(unix)]
-    rif: neomacs_display_runtime::backend::tty::rif::TtyRif,
+    rif: neomacs_tty_render::rif::TtyRif,
     #[cfg(unix)]
     stop: Arc<AtomicBool>,
     #[cfg(unix)]
@@ -454,13 +454,12 @@ impl SecondaryTtySession {
             super::terminal_capabilities::open_terminal_capability_database,
         );
         let term_caps = super::terminal_capabilities::term_caps_for_term(request.terminal_type())
-            .unwrap_or_else(|| {
-                neomacs_display_runtime::backend::tty::rif::TermCaps::unknown_terminal()
-            });
-        let rif = neomacs_display_runtime::backend::tty::rif::TtyRif::new_with_caps(
+            .unwrap_or_else(neomacs_tty_render::rif::TermCaps::unknown_terminal);
+        let rif = neomacs_tty_render::rif::TtyRif::new_with_caps(
             size.columns() as usize,
             size.rows() as usize,
             term_caps,
+            neomacs_display_host::tty_raster_policy::evaluator_tty_raster_policy(),
         );
         // Input has its own nonblocking open-file description.  A `dup`/clone
         // would share O_NONBLOCK with renderer output and could make redraws

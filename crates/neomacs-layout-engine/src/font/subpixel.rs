@@ -1,43 +1,10 @@
 //! Display subpixel geometry independent of font discovery.
+//!
+//! The renderer reads the subpixel order without the layout engine, so it
+//! lives in the font materializer and is re-exported here under its
+//! layout-engine path (MILESTONES M4).
 
-/// Physical color-component order used by LCD mask rasterization.
-///
-/// The historical name is retained for protocol compatibility, but the type
-/// belongs to the display surface and is not a Fontconfig result on macOS or
-/// Windows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FontconfigSubpixelOrder {
-    Unknown,
-    None,
-    Rgb,
-    Bgr,
-    VRgb,
-    VBgr,
-}
-
-impl FontconfigSubpixelOrder {
-    pub fn allows_horizontal_subpixel(self) -> bool {
-        matches!(self, Self::Rgb | Self::Bgr | Self::Unknown)
-    }
-}
-
-pub fn default_subpixel_order() -> FontconfigSubpixelOrder {
-    #[cfg(target_os = "linux")]
-    {
-        crate::font::fontconfig::default_subpixel_order()
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // macOS text uses grayscale antialiasing. Unknown is an LCD/RGB
-        // fallback elsewhere; using it here enables Swash's three-channel
-        // masks even on Retina displays.
-        FontconfigSubpixelOrder::None
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        FontconfigSubpixelOrder::Unknown
-    }
-}
+pub use neomacs_font_materializer::subpixel::{FontconfigSubpixelOrder, default_subpixel_order};
 
 #[cfg(all(test, target_os = "macos"))]
 #[path = "tests/subpixel_test.rs"]

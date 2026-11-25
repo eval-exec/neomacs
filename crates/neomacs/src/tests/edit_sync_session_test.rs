@@ -13,10 +13,11 @@
 
 use super::super::frame_layout::{current_layout_frame_id, run_tty_layout_tree};
 use super::super::{Interactivity, bootstrap_buffers, bootstrap_tty_display_config};
-use neomacs_display_runtime::backend::tty::rif::TtyRif;
-use neomacs_display_runtime::backend::tty::rif::damage::{ScreenMatch, TtyDamageMode};
-use neomacs_display_runtime::redisplay::{FrameLayoutPurpose, RedisplayRuntime};
+use neomacs_display_host::redisplay::{FrameLayoutPurpose, RedisplayRuntime};
+use neomacs_display_host::tty_raster_policy::evaluator_tty_raster_policy;
 use neomacs_layout_engine::incremental_layout::LayoutStats;
+use neomacs_tty_render::rif::TtyRif;
+use neomacs_tty_render::rif::damage::{ScreenMatch, TtyDamageMode};
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached_with_features;
 
@@ -68,11 +69,11 @@ impl Session {
             bootstrap_tty_display_config(Interactivity::Interactive),
         );
         super::super::frame_layout::disable_cosmic_metrics_for_test();
-        let mut damage = TtyRif::new(COLS, ROWS);
+        let mut damage = TtyRif::new(COLS, ROWS, evaluator_tty_raster_policy());
         damage.set_damage_mode(TtyDamageMode::Verify);
         let mut session = Self {
             eval,
-            incremental: TtyRif::new(COLS, ROWS),
+            incremental: TtyRif::new(COLS, ROWS, evaluator_tty_raster_policy()),
             damage,
         };
         session.frame("startup");
@@ -107,7 +108,7 @@ impl Session {
             .expect("a full layout")
             .activate(&mut self.eval)
             .expect("an active presentation");
-        let mut reference_rif = TtyRif::new(COLS, ROWS);
+        let mut reference_rif = TtyRif::new(COLS, ROWS, evaluator_tty_raster_policy());
         reference_rif.rasterize_presentations(&reference, &[]);
         reference_rif.diff_and_render();
         assert_ne!(

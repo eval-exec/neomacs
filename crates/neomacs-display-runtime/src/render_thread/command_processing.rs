@@ -2,8 +2,9 @@ use super::RenderApp;
 use crate::thread_comm::{ClipboardCommand, LifecycleCommand, RenderCommand, WindowCommand};
 
 impl RenderApp {
-    /// Process pending commands from Emacs.
-    pub(super) fn process_commands(&mut self) -> bool {
+    /// Process pending commands from Emacs. Returns whether the evaluator
+    /// asked the render thread to shut down.
+    pub fn process_commands(&mut self) -> bool {
         let mut should_exit = false;
 
         while let Some(cmd) = self

@@ -85,16 +85,22 @@ fn tty_backspace_is_raw_del_byte() {
     );
 }
 
+/// The runtime's half of a split test (DECISIONS D44): a terminal's
+/// fullwidth character is transported as the character with no modifier.
+/// The display host pins what the evaluator cooks from that transported key
+/// (`key_transport_contract_test.rs`).
 #[test]
 fn crossterm_fullwidth_characters_reach_core_as_text() {
-    for character in "，（）；－ｦￊ".chars() {
+    use crate::testing::key_transport::{self, TransportedKey};
+    use neomacs_display_protocol::ModifierBits;
+    for character in key_transport::FULLWIDTH_TEXT.chars() {
         let (key, modifiers) = key_parts(KeyCode::Char(character), KeyModifiers::NONE);
-        let event =
-            neovm_core::keyboard::render_key_transport_to_input_event(key, modifiers, true, 0)
-                .unwrap();
-        assert!(
-            matches!(event, neovm_core::keyboard::InputEvent::KeyPress { key, .. }
-            if key.key == neovm_core::keyboard::Key::Char(character))
+        assert_eq!(
+            TransportedKey {
+                key,
+                modifiers: ModifierBits::from_bits(modifiers),
+            },
+            key_transport::fullwidth(character)
         );
     }
 }

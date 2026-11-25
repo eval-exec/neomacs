@@ -1,0 +1,47 @@
+[package]
+name = "neomacs-display-host"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The evaluator side of a Neomacs display: the redisplay runtime and terminal policies"
+
+[features]
+# Explicit forwards for what neovm-core's dependency edges used to bring in
+# through their enabled defaults.  Kept as features so --no-default-features
+# stays a real no-jit build.  Until the crate cut (MILESTONES M4) the display
+# runtime carried them for the code that moved here.
+default = ["jit", "sqlite"]
+jit = ["neovm-core/jit"]
+sqlite = ["neovm-core/sqlite"]
+
+[dependencies]
+# Workspace: the charter in docs/design/display-crate-layout.md, pinned by
+# scripts/ci/check-crate-graph.py.  No normal edge to the display runtime.
+neovm-core.workspace = true
+neomacs-display-protocol.workspace = true
+neomacs-layout-engine.workspace = true
+neomacs-tty-render.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# GNU provides `dynamic-setting` and `system-font-setting` from xsettings.c,
+# which is window-system terminal code (src/xsettings.c:1409,1417;
+# configure.ac:7227).  This crate is the evaluator side of a `neo` terminal,
+# so it marks the native desktop-font subscription as linked (DECISIONS D45).
+neovm-core = { workspace = true, features = ["desktop-font-settings"] }
+
+[dev-dependencies]
+# Dev-only (DECISIONS D44): tests of runtime behaviour over live evaluator
+# output reach the runtime through its public API and `testing` feature.
+neomacs-display-runtime = { workspace = true, features = ["testing"] }
+neomacs-tty-render = { workspace = true, features = ["testing"] }
+# Downward eval test-support edge (TEST-SUPPORT-VIS-EVAL): the moved tests read
+# eval items that are pub only under neovm-eval's test-support feature.
+neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support"] }
+neomacs-infra.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

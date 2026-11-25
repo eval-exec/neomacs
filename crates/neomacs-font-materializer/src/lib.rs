@@ -6,10 +6,13 @@
 //! selection, and pixel-format normalization remain implementation details.
 
 pub mod color_glyph;
+pub mod composition;
+pub mod font_match;
 #[cfg(target_os = "linux")]
 pub mod fontconfig;
 mod fontdb;
 pub mod raster_sources;
+pub mod subpixel;
 
 pub use color_glyph::{
     ColorGlyphError, ColorGlyphRaster, ColorGlyphRasterizer, ColorGlyphRequest, Tag,

@@ -1,12 +1,8 @@
 //! Terminal output selected before screen operations become ANSI bytes.
 use super::terminal_capabilities::{StringCapability, TerminalCapabilityDatabase};
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
-use neomacs_display_runtime::backend::tty::rif::painter::{
-    CellOutput, TtyPainter, encode_cells_with,
-};
-use neomacs_display_runtime::backend::tty::rif::{
-    PendingPhysicalClear, TerminalCursorShape, TtyCell, TtyRif,
-};
+use neomacs_tty_render::rif::painter::{CellOutput, TtyPainter, encode_cells_with};
+use neomacs_tty_render::rif::{PendingPhysicalClear, TerminalCursorShape, TtyCell, TtyRif};
 use std::io::{self, Write};
 
 #[cfg(windows)]
@@ -531,7 +527,7 @@ pub(crate) fn popup_line(row: usize, col: usize, text: &str, inverse: bool) -> i
             .map(|ch| {
                 let mut cell = TtyCell::default();
                 cell.set_ch(ch);
-                cell.set_attrs(neomacs_display_runtime::backend::tty::rif::CellAttrs {
+                cell.set_attrs(neomacs_tty_render::rif::CellAttrs {
                     inverse,
                     ..Default::default()
                 });

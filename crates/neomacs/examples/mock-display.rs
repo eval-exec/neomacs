@@ -13,16 +13,17 @@
 // restructuring for this test binary's lint gate.
 #![allow(clippy::too_many_arguments)]
 
+use neomacs_display_host::tty_raster_policy::evaluator_tty_raster_policy;
 use neomacs_display_protocol::FrameFaceMap;
 use neomacs_display_protocol::face::{Face, FaceAttributes};
 use neomacs_display_protocol::glyph_matrix::*;
 use neomacs_display_protocol::types::FaceId;
 use neomacs_display_protocol::types::{Color, Rect};
-use neomacs_display_runtime::backend::tty::rif::TtyRif;
 use neomacs_layout_engine::engine::LayoutEngine;
 use neomacs_layout_engine::mock_frame::{
     MockChildFrameContent, MockFrameContent, MockStyledLine, MockWindowContent,
 };
+use neomacs_tty_render::rif::TtyRif;
 use std::io::{self, Read, Write};
 
 // ===================================================================
@@ -71,7 +72,7 @@ fn run_tty(demo: &str) {
         for name in &["default", "single", "hsplit", "vsplit", "triple"] {
             let ss = build_demo(name, cols, rows, 1.0, 1.0, cols as f32, rows as f32);
             let s = scene_for_tty(ss);
-            let mut tty = TtyRif::new(cols as usize, rows as usize);
+            let mut tty = TtyRif::new(cols as usize, rows as usize, evaluator_tty_raster_policy());
             tty.rasterize(&s);
             tty.diff_and_render();
             let out = tty.take_output();
@@ -83,7 +84,7 @@ fn run_tty(demo: &str) {
             let _ = io::stdin().read(&mut [0u8]);
         }
     } else {
-        let mut tty = TtyRif::new(cols as usize, rows as usize);
+        let mut tty = TtyRif::new(cols as usize, rows as usize, evaluator_tty_raster_policy());
         tty.rasterize(&state);
         tty.diff_and_render();
         let out = tty.take_output();
@@ -103,7 +104,7 @@ fn run_dump(demo: &str) {
     let (cols, rows) = query_terminal_size().unwrap_or((80, 24));
     let scene = build_demo(demo, cols, rows, 1.0, 1.0, cols as f32, rows as f32);
     let state = scene_for_tty(scene);
-    let mut tty = TtyRif::new(cols as usize, rows as usize);
+    let mut tty = TtyRif::new(cols as usize, rows as usize, evaluator_tty_raster_policy());
     tty.rasterize(&state);
     for (i, line) in tty.dump_desired().iter().enumerate() {
         println!("{:>2}: |{}|", i, line.trim_end());
@@ -184,6 +185,10 @@ fn run_gui(demo: &str) {
         format!("Neomacs Mock — {}", demo),
         Arc::clone(&image_dims),
         Arc::clone(&shared_monitors),
+        #[cfg(feature = "webview")]
+        neomacs_display_runtime::render_thread::WebViewChildSignal::new(
+            neovm_core::emacs_core::reclaim_child_signal,
+        ),
     )
     .unwrap_or_else(|err| {
         eprintln!("Failed to start render thread: {err}");

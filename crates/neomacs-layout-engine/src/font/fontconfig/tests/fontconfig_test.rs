@@ -748,10 +748,43 @@ fn invalid_fontconfig_family_is_not_classified_as_monospace() {
     ));
 }
 
+/// The renderer reads the display's LCD component order from the font
+/// materializer, which re-implements this engine's former query over raw
+/// Fontconfig (MILESTONES M4). The oracle is that former query, kept here
+/// as it was: the process configuration's match for the generic "Monospace"
+/// family, read through the `fontconfig` crate.
+#[test]
+fn materializer_subpixel_order_matches_layout_engine() {
+    use super::FontconfigSubpixelOrder;
+    use fontconfig_sys::constants::{
+        FC_RGBA, FC_RGBA_BGR, FC_RGBA_NONE, FC_RGBA_RGB, FC_RGBA_VBGR, FC_RGBA_VRGB,
+    };
+
+    let rgba = fontconfig::Fontconfig::new().and_then(|fc| {
+        let mut pattern = fontconfig::Pattern::new(&fc).ok()?;
+        let family = CString::new("Monospace").ok()?;
+        pattern.add_string(fontconfig::FC_FAMILY, &family).ok()?;
+        let matched = pattern.font_match().ok()?;
+        matched.get_int(FC_RGBA).ok()
+    });
+    let oracle = match rgba {
+        Some(FC_RGBA_NONE) => FontconfigSubpixelOrder::None,
+        Some(FC_RGBA_RGB) => FontconfigSubpixelOrder::Rgb,
+        Some(FC_RGBA_BGR) => FontconfigSubpixelOrder::Bgr,
+        Some(FC_RGBA_VRGB) => FontconfigSubpixelOrder::VRgb,
+        Some(FC_RGBA_VBGR) => FontconfigSubpixelOrder::VBgr,
+        _ => FontconfigSubpixelOrder::Unknown,
+    };
+    assert_eq!(
+        neomacs_font_materializer::subpixel::default_subpixel_order(),
+        oracle
+    );
+}
+
 #[test]
 fn default_subpixel_order_resolves_to_known_variant() {
     assert!(matches!(
-        super::default_subpixel_order(),
+        crate::font::subpixel::default_subpixel_order(),
         super::FontconfigSubpixelOrder::Unknown
             | super::FontconfigSubpixelOrder::None
             | super::FontconfigSubpixelOrder::Rgb

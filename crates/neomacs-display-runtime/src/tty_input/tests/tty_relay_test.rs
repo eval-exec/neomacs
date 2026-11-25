@@ -532,14 +532,13 @@ fn real_reader_full_private_wake_keeps_pending_capacity_observable() {
 
 #[test]
 fn real_reader_preserves_bytes_split_across_actual_host_reads() {
-    let raw = neovm_core::emacs_core::emacs_char::EmacsChar::from_byte8(0xa4);
-    let mut internal = [0; neovm_core::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH];
-    let count = raw.char_string(&mut internal);
+    // The evaluator's internal encoding of the raw byte 0xa4, pinned to the
+    // evaluator by the display host's contract test (DECISIONS D44).
     let cases = [
         "中".as_bytes(),
         "😀".as_bytes(),
         &[0xa4, 0x40],
-        &internal[..count],
+        crate::testing::raw_bytes::RAW_BYTE_A4_INTERNAL,
     ];
     for encoded in cases {
         let mut fixture = ReaderFixture::start(InitialQueue::Empty, Hooks::new());

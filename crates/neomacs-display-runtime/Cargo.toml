@@ -55,11 +55,10 @@ crossterm = "0.29"
 # FFI / system
 libc.workspace = true
 
-# NeoVM Elisp evaluator
-neovm-core.workspace = true
+# The display protocol and the drawing adapter.  The frontend runtime links no
+# Lisp machine and no layout engine (scripts/ci/check-crate-graph.py).
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true
-neomacs-layout-engine.workspace = true
 neomacs-renderer-wgpu.workspace = true
 neomacs-video = { workspace = true, optional = true }
 neomacs-webview.workspace = true
@@ -71,10 +70,6 @@ portable-pty = { workspace = true, optional = true }
 
 [dev-dependencies]
 neomacs-infra.workspace = true
-# Downward eval test-support edge (TEST-SUPPORT-VIS-EVAL): the unit tests here
-# read eval items that are pub(crate) in production and pub only under
-# neovm-eval's test-support feature, so a per-crate test build enables it here.
-neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support"] }
 
 [features]
 # Live Wayland compositor tests.  These create real windows and need a running
@@ -86,12 +81,11 @@ wayland-live-tests = []
 
 # Native video remains opt-in at this crate boundary. Linux production builds
 # enable it through neomacs's `cargo xtask fresh-build` pipeline.
-default = ["neo-term", "jit", "sqlite"]
-# Explicit forwards for what neovm-core's dependency edges used to bring in
-# through their enabled defaults.  Kept as features so --no-default-features
-# stays a real no-jit build.
-jit = ["neovm-core/jit"]
-sqlite = ["neovm-core/sqlite"]
+default = ["neo-term"]
+# The headless `RenderApp` entry and the recorded evaluator output this
+# crate's split tests consume, for the display host's tests (DECISIONS D44).
+# MILESTONES M11b extends the same entry.
+testing = []
 tty-backend = []
 # Cross-platform native GPU-resident video
 video = [
@@ -113,7 +107,6 @@ neo-term = [
     "parking_lot",
     "portable-pty",
     "neomacs-display-protocol/neo-term",
-    "neomacs-layout-engine/neo-term",
 ]
 
 [target.'cfg(windows)'.dependencies]
@@ -141,7 +134,6 @@ objc2-app-kit = { workspace = true, features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 neomacs-font-materializer.workspace = true
-neovm-core = { workspace = true, features = ["desktop-font-settings"] }
 # 0.22.9 references GDBusActionGroupClass absent from gio-sys 0.22.8.
 gio = { version = "=0.22.8", default-features = false }
 smithay-clipboard.workspace = true
