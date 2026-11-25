@@ -467,6 +467,14 @@ impl CollectionReads {
         self.reads.full_validation_invocations_for_test()
     }
 
+    /// Total mutation-journal slots scanned by this lease across incremental
+    /// validations. The counter stays in pooled heap storage, outside TLS.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn journal_slots_scanned_for_test(&self) -> usize {
+        self.reads.journal_slots_scanned_for_test()
+    }
+
     /// A nested cache hit reads its original dependencies transitively.
     pub fn unchanged_and_observe(&self) -> bool {
         if !self.unchanged() {
@@ -499,24 +507,35 @@ impl Drop for CollectionReads {
     }
 }
 
-fn unchanged_since(
+/// Check whether any journal slot in `(after_sequence, target_sequence]`
+/// mutated a dependency in `reads`.
+///
+/// Returns `(unchanged, slots_scanned)`. Callers must enforce the bounded
+/// `JOURNAL_SIZE` horizon from the certificate's original capture revision;
+/// `delta <= JOURNAL_SIZE` is also checked here defensively.
+fn unchanged_in_range(
     reads: &FxHashSet<usize>,
-    revision: LispCollectionRevision,
+    after_sequence: u64,
+    target_sequence: u64,
     store: &StoreState,
-) -> bool {
+) -> (bool, usize) {
     // An observation that read zero mutable collections cannot be invalidated
     // by unrelated writes in its own World even after the bounded journal wraps.
     if reads.is_empty() {
-        return true;
+        return (true, 0);
     }
-    let count = store.sequence().wrapping_sub(revision.sequence());
-    if count > JOURNAL_SIZE as u64 {
-        return false;
+    let delta = target_sequence.wrapping_sub(after_sequence);
+    if delta > JOURNAL_SIZE as u64 {
+        return (false, 0);
     }
-    (1..=count).all(|offset| {
-        let slot = revision.sequence().wrapping_add(offset) as usize % JOURNAL_SIZE;
-        !reads.contains(&store.journal()[slot].get())
-    })
+    let journal = store.journal();
+    for offset in 1..=delta {
+        let slot = after_sequence.wrapping_add(offset) as usize % JOURNAL_SIZE;
+        if reads.contains(&journal[slot].get()) {
+            return (false, offset as usize);
+        }
+    }
+    (true, delta as usize)
 }
 
 /// Nested observations contribute reads to their enclosing observation too.

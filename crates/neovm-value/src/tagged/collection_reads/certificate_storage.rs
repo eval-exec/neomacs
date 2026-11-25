@@ -7,19 +7,33 @@ use rustc_hash::FxHashSet;
 use std::cell::Cell;
 use std::mem::{MaybeUninit, align_of, size_of};
 
-#[derive(Clone, Copy, Debug)]
-struct Validation {
-    sequence: u64,
-    unchanged: bool,
+/// Monotonic incremental validation state for one immutable certificate.
+///
+/// A certificate's `storage.revision` is fixed at capture completion and its
+/// `storage.reads` set never changes while leased. The mutator's mutation
+/// journal only appends at strictly increasing sequence numbers, so:
+/// - Any prefix `(storage.revision, sequence]` already checked and found clean
+///   stays clean for all future validations while
+///   `store.sequence() - storage.revision <= JOURNAL_SIZE`.
+/// - Once invalidated (a dependency mutated or the `JOURNAL_SIZE` horizon from
+///   `storage.revision` was exceeded), the certificate can never become valid
+///   again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ValidationState {
+    Unchecked,
+    VerifiedThrough { sequence: u64 },
+    Invalid,
 }
 
 #[derive(Debug)]
 struct CertificateStorage {
     reads: FxHashSet<usize>,
     revision: LispCollectionRevision,
-    validation: Cell<Option<Validation>>,
+    validation: Cell<ValidationState>,
     #[cfg(any(test, feature = "test-support"))]
     full_validation_invocations: Cell<usize>,
+    #[cfg(any(test, feature = "test-support"))]
+    journal_slots_scanned: Cell<usize>,
 }
 
 #[derive(Default)]
@@ -58,16 +72,20 @@ impl CertificatePool {
             Box::new(CertificateStorage {
                 reads: FxHashSet::default(),
                 revision,
-                validation: Cell::new(None),
+                validation: Cell::new(ValidationState::Unchecked),
                 #[cfg(any(test, feature = "test-support"))]
                 full_validation_invocations: Cell::new(0),
+                #[cfg(any(test, feature = "test-support"))]
+                journal_slots_scanned: Cell::new(0),
             })
         });
         storage.reads.extend(reads.keys().copied());
         storage.revision = revision;
-        storage.validation.set(None);
+        storage.validation.set(ValidationState::Unchecked);
         #[cfg(any(test, feature = "test-support"))]
         storage.full_validation_invocations.set(0);
+        #[cfg(any(test, feature = "test-support"))]
+        storage.journal_slots_scanned.set(0);
         CertificateLease {
             storage: Some(storage),
             _reserve: [MaybeUninit::uninit(); LEASE_RESERVE],
@@ -106,26 +124,57 @@ impl CertificateLease {
             return false;
         };
         let sequence = store.sequence();
-        if let Some(validation) = storage.validation.get()
-            && validation.sequence == sequence
-        {
-            return validation.unchanged;
-        }
+        let scan_from = match storage.validation.get() {
+            ValidationState::Invalid => return false,
+            ValidationState::VerifiedThrough { sequence: verified } if verified == sequence => {
+                return true;
+            }
+            ValidationState::VerifiedThrough { sequence: verified } => {
+                // An observation that read zero mutable collections cannot be
+                // invalidated by unrelated writes even after the bounded
+                // journal wraps.
+                if storage.reads.is_empty() {
+                    storage
+                        .validation
+                        .set(ValidationState::VerifiedThrough { sequence });
+                    return true;
+                }
+                verified
+            }
+            ValidationState::Unchecked => storage.revision.sequence(),
+        };
         #[cfg(any(test, feature = "test-support"))]
         storage
             .full_validation_invocations
             .set(storage.full_validation_invocations.get() + 1);
         // The owner's journal cannot change without advancing its sequence;
         // this numeric validation runs no callbacks or safepoints. Keep the
-        // ORIGINAL capture revision: successful checks never renew its bounded
-        // history. World admission, lifetime and transitive observation remain
-        // the caller's responsibility even when this predicate is memoized.
-        let unchanged = super::unchanged_since(&storage.reads, storage.revision, store);
-        storage.validation.set(Some(Validation {
-            sequence,
-            unchanged,
-        }));
-        unchanged
+        // ORIGINAL capture revision: incremental checks never rebase or extend
+        // its bounded `JOURNAL_SIZE` history. World admission, lifetime and
+        // transitive observation remain the caller's responsibility even when
+        // this predicate is memoized.
+        if !storage.reads.is_empty()
+            && sequence.wrapping_sub(storage.revision.sequence()) > super::JOURNAL_SIZE as u64
+        {
+            storage.validation.set(ValidationState::Invalid);
+            return false;
+        }
+        let (unchanged, scanned) =
+            super::unchanged_in_range(&storage.reads, scan_from, sequence, store);
+        #[cfg(any(test, feature = "test-support"))]
+        storage
+            .journal_slots_scanned
+            .set(storage.journal_slots_scanned.get() + scanned);
+        let _ = scanned;
+        if unchanged {
+            storage
+                .validation
+                .set(ValidationState::VerifiedThrough { sequence });
+            true
+        } else {
+            storage.validation.set(ValidationState::Invalid);
+            false
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -133,6 +182,13 @@ impl CertificateLease {
         self.storage
             .as_ref()
             .map_or(0, |storage| storage.full_validation_invocations.get())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn journal_slots_scanned_for_test(&self) -> usize {
+        self.storage
+            .as_ref()
+            .map_or(0, |storage| storage.journal_slots_scanned.get())
     }
 
     #[cfg(test)]

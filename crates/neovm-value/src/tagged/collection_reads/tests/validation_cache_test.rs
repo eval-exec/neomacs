@@ -70,6 +70,52 @@ fn repeated_validation_never_rebases_original_journal_history() {
     }
     assert_eq!(reads.reads.dependencies().expect("live lease").1, original);
     assert_eq!(reads.full_validation_invocations_for_test(), 4);
+    assert_eq!(
+        reads.journal_slots_scanned_for_test(),
+        JOURNAL_SIZE,
+        "incremental validation must scan each journal slot at most once (0->4096->8192 = 8192, not 12288)"
+    );
+}
+
+#[test]
+fn incremental_validation_scans_only_new_journal_delta_and_latches_invalidation() {
+    let source = Value::cons(Value::NIL, Value::NIL);
+    let unrelated = Value::cons(Value::NIL, Value::NIL);
+    let (_, reads) = capture(|| source.cons_car());
+    let reads = reads.expect("source certificate");
+
+    const STEPS: usize = 256;
+    for i in 0..STEPS {
+        unrelated.set_car(Value::fixnum(i as i64));
+        assert!(reads.unchanged());
+    }
+    assert_eq!(
+        reads.journal_slots_scanned_for_test(),
+        STEPS,
+        "validating after every unrelated write must scan O(N) total slots, not O(N^2)"
+    );
+
+    // Mutating the dependency invalidates the certificate on the next check
+    // (scanning only the 1 new slot), and invalidation is terminal even across
+    // subsequent unrelated writes.
+    source.set_car(Value::T);
+    assert!(!reads.unchanged());
+    assert_eq!(reads.journal_slots_scanned_for_test(), STEPS + 1);
+    let invocations_at_invalidation = reads.full_validation_invocations_for_test();
+
+    for i in 0..16 {
+        unrelated.set_car(Value::fixnum((STEPS + i) as i64));
+        assert!(!reads.unchanged());
+    }
+    assert_eq!(
+        reads.journal_slots_scanned_for_test(),
+        STEPS + 1,
+        "terminal invalidation must never re-scan later journal writes"
+    );
+    assert_eq!(
+        reads.full_validation_invocations_for_test(),
+        invocations_at_invalidation
+    );
 }
 
 #[test]
