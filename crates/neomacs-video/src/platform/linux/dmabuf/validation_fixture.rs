@@ -597,6 +597,7 @@ pub(super) fn exercise(format: BiPlanarVideoFormat) {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let (texture, imported) = import_dmabuf(
             &device,
+            &queue,
             producer.surface.as_ref().expect("completed producer"),
             VideoGeometry::packed(WIDTH, HEIGHT),
             crate::VideoFrameFormat::BiPlanar420(format),

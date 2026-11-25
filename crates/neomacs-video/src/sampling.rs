@@ -46,7 +46,13 @@ impl LinuxDrmDevice {
 /// Backend-specific release operation that must be encoded after the last
 /// compositor read and before a foreign producer may reuse its surface.
 pub(crate) trait GpuFrameRelease: Send + Sync {
-    fn record(&self, encoder: &mut wgpu::CommandEncoder);
+    /// Record the backend release operation into `encoder`.
+    ///
+    /// Callers must pass a fresh, raw-only `wgpu::CommandEncoder` created from
+    /// `device` with no wgpu passes or commands recorded on it, because
+    /// implementations may call `encoder.as_hal_mut(...)` (mixing `Wgpu` and
+    /// `Raw` encoding APIs in one encoder panics in `wgpu-core`).
+    fn record(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder);
 }
 
 /// Affine owner waiting for the queue's submitted-work completion boundary.
@@ -292,7 +298,7 @@ impl GpuVideoContext {
                     label: Some("Neomacs video foreign-surface release"),
                 });
             for frame in &retired {
-                frame.record_release(&mut encoder);
+                frame.record_release(&self.device, &mut encoder);
             }
             // Queue order places these release barriers after every draw
             // submitted so far. The completion callback below therefore
@@ -782,9 +788,9 @@ impl GpuVideoFrame {
         self.release.is_some()
     }
 
-    fn record_release(&self, encoder: &mut wgpu::CommandEncoder) {
+    fn record_release(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
         if let Some(release) = &self.release {
-            release.record(encoder);
+            release.record(device, encoder);
         }
     }
 }

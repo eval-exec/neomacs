@@ -8,7 +8,7 @@ use std::sync::Arc;
 use ash::vk;
 
 use super::frame::DmaBufSurface;
-use crate::sampling::GpuFrameRelease;
+use crate::sampling::{GpuFrameRelease, SubmittedWorkRetirement};
 use crate::{BiPlanarVideoFormat, PackedVideoFormat, VideoFrameFormat, VideoGeometry};
 
 struct ImportParams<'a> {
@@ -265,6 +265,9 @@ struct ImportedResources {
     image: vk::Image,
     memories: Vec<vk::DeviceMemory>,
     queue_family: u32,
+    // Keep the owning `wgpu::Device` alive until after `Drop::drop` destroys
+    // the raw `vk::Image` and `vk::DeviceMemory` handles.
+    wgpu_device: wgpu::Device,
 }
 
 impl Drop for ImportedResources {
@@ -281,9 +284,19 @@ impl Drop for ImportedResources {
 struct ForeignRelease(Arc<ImportedResources>);
 
 impl GpuFrameRelease for ForeignRelease {
-    fn record(&self, encoder: &mut wgpu::CommandEncoder) {
+    fn record(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
         let resources = &self.0;
+        // SAFETY: `device` is verified to match `resources.device` and `encoder`
+        // is a fresh raw-only Vulkan encoder owned by `GpuVideoContext`.
         unsafe {
+            let hal_device = device
+                .as_hal::<wgpu::hal::api::Vulkan>()
+                .expect("DMA-BUF release requires wgpu's Vulkan backend");
+            assert_eq!(
+                hal_device.raw_device().handle(),
+                resources.device.handle(),
+                "DMA-BUF release encoder must belong to the owning Vulkan device"
+            );
             encoder.as_hal_mut::<wgpu::hal::api::Vulkan, _, _>(|hal| {
                 let hal = hal.expect("DMA-BUF release requires a Vulkan command encoder");
                 let barrier = vk::ImageMemoryBarrier {
@@ -316,19 +329,30 @@ impl GpuFrameRelease for ForeignRelease {
 /// FOREIGN ownership and every retired frame must release it again.
 pub(super) struct ImportedDmaBufSurface {
     resources: Arc<ImportedResources>,
+    queue: wgpu::Queue,
 }
 
 impl ImportedDmaBufSurface {
-    pub(super) fn acquire(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), String> {
+    pub(super) fn acquire(&self) -> Result<(), String> {
+        // SAFETY: `self.resources` owns `wgpu_device`, `device`, `image`, and
+        // `queue_family` from the same Vulkan device as `self.queue`, and the
+        // completion callback below keeps `self.resources` alive until the
+        // submitted barrier finishes.
         unsafe {
             submit_foreign_acquire(
-                device,
-                queue,
+                &self.resources.wgpu_device,
+                &self.queue,
                 &self.resources.device,
                 self.resources.queue_family,
                 self.resources.image,
-            )
+            )?;
         }
+        // Retain the imported image and memory until the raw acquire barrier
+        // finishes executing on the GPU queue (VUID-vkDestroyImage-image-01000).
+        let retirement = SubmittedWorkRetirement::new(Arc::clone(&self.resources));
+        self.queue
+            .on_submitted_work_done(retirement.into_completion_callback());
+        Ok(())
     }
 
     pub(super) fn release(&self) -> Box<dyn GpuFrameRelease> {
@@ -338,6 +362,7 @@ impl ImportedDmaBufSurface {
 
 pub(super) fn import_dmabuf(
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
     surface: &DmaBufSurface,
     geometry: VideoGeometry,
     format: VideoFrameFormat,
@@ -476,6 +501,7 @@ pub(super) fn import_dmabuf(
             image,
             memories,
             queue_family: hal.queue_family_index(),
+            wgpu_device: device.clone(),
         });
         let hal_desc = wgpu_hal::TextureDescriptor {
             label: Some("Neomacs imported video DMA-BUF"),
@@ -494,6 +520,7 @@ pub(super) fn import_dmabuf(
         };
         let imported = ImportedDmaBufSurface {
             resources: Arc::clone(&resources),
+            queue: queue.clone(),
         };
         let mut resources = Some(resources);
         let drop_callback: wgpu_hal::DropCallback = Box::new(move || drop(resources.take()));
@@ -783,6 +810,14 @@ unsafe fn import_memory(
     }
 }
 
+/// Record and submit a `QUEUE_FAMILY_FOREIGN_EXT` -> `queue_family` acquire
+/// barrier for `image` in a fresh raw Vulkan command encoder.
+///
+/// # Safety
+/// `wgpu_device`, `queue`, `device`, and `queue_family` must belong to the same
+/// live Vulkan device with `VK_EXT_queue_family_foreign` enabled, `image` must
+/// be a live `vk::Image` owned by that device, and the caller must keep `image`
+/// alive until the submitted work completes on `queue`.
 unsafe fn submit_foreign_acquire(
     wgpu_device: &wgpu::Device,
     queue: &wgpu::Queue,

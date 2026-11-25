@@ -84,19 +84,24 @@ impl FrameImporter<LinuxFrameLease> for LinuxFrameImporter {
                 let cached = match self.imported.acquire(key) {
                     SurfacePoolAcquire::Reused(lease) => lease,
                     SurfacePoolAcquire::Allocate(reservation) => {
-                        let (texture, imported) =
-                            match import_dmabuf(self.gpu.device(), surface, geometry, format) {
-                                Ok(imported) => imported,
-                                Err(reason) => {
-                                    return Ok(FrameImportOutcome::ReconfigureDecoder {
-                                        rejection: DecoderOutputRejection {
-                                            generation: output_generation,
-                                            format,
-                                            reason,
-                                        },
-                                    });
-                                }
-                            };
+                        let (texture, imported) = match import_dmabuf(
+                            self.gpu.device(),
+                            self.gpu.queue(),
+                            surface,
+                            geometry,
+                            format,
+                        ) {
+                            Ok(imported) => imported,
+                            Err(reason) => {
+                                return Ok(FrameImportOutcome::ReconfigureDecoder {
+                                    rejection: DecoderOutputRejection {
+                                        generation: output_generation,
+                                        format,
+                                        reason,
+                                    },
+                                });
+                            }
+                        };
                         let prepared = match format {
                             VideoFrameFormat::Packed(_) => PreparedLinuxSample::Packed(
                                 self.gpu.prepare_texture(texture, allocation_bytes),
@@ -116,10 +121,7 @@ impl FrameImporter<LinuxFrameLease> for LinuxFrameImporter {
                         return Ok(FrameImportOutcome::Backpressured);
                     }
                 };
-                cached
-                    .value()
-                    .imported
-                    .acquire(self.gpu.device(), self.gpu.queue())?;
+                cached.value().imported.acquire()?;
                 let prepared = cached.value().prepared.clone();
                 let release = cached.value().imported.release();
                 let sampled = match prepared {
