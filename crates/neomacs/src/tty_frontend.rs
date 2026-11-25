@@ -204,7 +204,8 @@ impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
         self.cmd_tx
             .send(RenderCommand::Lifecycle(LifecycleCommand::SuspendTty))
             .map_err(|err| format!("failed to suspend tty frontend: {err}"))?;
-        super::tty_init::tty_suspend_terminal(reset_strings)
+        super::tty_init::tty_suspend_terminal(reset_strings);
+        Ok(())
     }
 
     fn resume_tty(&mut self, set_strings: &[u8]) -> Result<(), String> {
@@ -224,9 +225,11 @@ impl neovm_core::emacs_core::terminal::pure::TerminalHost for TtyTerminalHost {
         Ok(())
     }
 
-    fn sys_suspend(&mut self) -> Result<(), String> {
-        super::tty_init::tty_sys_suspend();
-        Ok(())
+    fn sys_suspend(
+        &mut self,
+        request: neovm_core::emacs_core::terminal::pure::SuspendRequest<'_>,
+    ) -> Result<(), String> {
+        super::tty_init::tty_sys_suspend(request.stuffstring, request.cannot_suspend, request.cwd)
     }
 
     // GNU writes `tty->output' directly (src/dispnew.c:6838-6843); here that

@@ -398,8 +398,6 @@ impl TtyDevice {
     }
 
     fn suspend(&mut self, reset_strings: &[u8]) -> Result<(), String> {
-        use std::os::fd::AsRawFd;
-
         if !self.active {
             return Ok(());
         }
@@ -408,14 +406,6 @@ impl TtyDevice {
             .leave_with(reset_strings)
             .write_to(&mut self.file, &self.capabilities)
             .map_err(|error| format!("cannot suspend TTY renderer: {error}"));
-        loop {
-            // SAFETY: `self.file` owns a live TTY descriptor.
-            let rc = unsafe { libc::tcdrain(self.file.as_raw_fd()) };
-            if rc == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
-            {
-                break;
-            }
-        }
         let restore_result = rustix::termios::tcsetattr(
             &self.file,
             rustix::termios::OptionalActions::Now,

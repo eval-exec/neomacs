@@ -297,9 +297,6 @@ impl Capabilities {
         for name in ["ti", "ks", "vi", "cl"] {
             output.control(self.control(name), if name == "cl" { height } else { 1 });
         }
-        if self.ansi {
-            output.extend_from_slice(b"\x1b[?2004h");
-        }
         output.extend_from_slice(set_strings);
         output
     }
@@ -315,9 +312,6 @@ impl Capabilities {
         let mut output = Output::default();
         output.extend_from_slice(reset_strings);
         self.reset_modes(&mut output);
-        if self.ansi {
-            output.extend_from_slice(b"\x1b[?2004l");
-        }
         for name in ["ke", "ve", "te"] {
             self.append(&mut output, name);
         }

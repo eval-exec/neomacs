@@ -512,20 +512,60 @@ enum PrimaryTtyState {
     Suspended = 2,
 }
 
-static PRIMARY_TTY_STATE: std::sync::atomic::AtomicU8 =
-    std::sync::atomic::AtomicU8::new(PrimaryTtyState::Uninitialized as u8);
-
-fn primary_tty_state() -> PrimaryTtyState {
-    match PRIMARY_TTY_STATE.load(std::sync::atomic::Ordering::Acquire) {
-        1 => PrimaryTtyState::Active,
-        2 => PrimaryTtyState::Suspended,
-        _ => PrimaryTtyState::Uninitialized,
+impl PrimaryTtyState {
+    fn from_u8(raw: u8) -> Self {
+        match raw {
+            0 => Self::Uninitialized,
+            1 => Self::Active,
+            2 => Self::Suspended,
+            other => unreachable!("invalid PrimaryTtyState discriminant: {other}"),
+        }
     }
 }
 
+struct AtomicPrimaryTtyState(std::sync::atomic::AtomicU8);
+
+impl AtomicPrimaryTtyState {
+    const fn new(initial: PrimaryTtyState) -> Self {
+        Self(std::sync::atomic::AtomicU8::new(initial as u8))
+    }
+
+    fn load(&self, ordering: std::sync::atomic::Ordering) -> PrimaryTtyState {
+        PrimaryTtyState::from_u8(self.0.load(ordering))
+    }
+
+    fn store(&self, state: PrimaryTtyState, ordering: std::sync::atomic::Ordering) {
+        self.0.store(state as u8, ordering);
+    }
+
+    fn swap(
+        &self,
+        state: PrimaryTtyState,
+        ordering: std::sync::atomic::Ordering,
+    ) -> PrimaryTtyState {
+        PrimaryTtyState::from_u8(self.0.swap(state as u8, ordering))
+    }
+
+    fn compare_exchange(
+        &self,
+        current: PrimaryTtyState,
+        new: PrimaryTtyState,
+        success: std::sync::atomic::Ordering,
+        failure: std::sync::atomic::Ordering,
+    ) -> Result<PrimaryTtyState, PrimaryTtyState> {
+        self.0
+            .compare_exchange(current as u8, new as u8, success, failure)
+            .map(PrimaryTtyState::from_u8)
+            .map_err(PrimaryTtyState::from_u8)
+    }
+}
+
+static PRIMARY_TTY_STATE: AtomicPrimaryTtyState =
+    AtomicPrimaryTtyState::new(PrimaryTtyState::Uninitialized);
+
 /// Whether the primary interactive TTY is currently active (entered and not suspended).
 pub fn is_primary_tty_active() -> bool {
-    primary_tty_state() == PrimaryTtyState::Active
+    PRIMARY_TTY_STATE.load(std::sync::atomic::Ordering::Acquire) == PrimaryTtyState::Active
 }
 
 #[cfg(unix)]
@@ -593,7 +633,7 @@ pub fn tty_init_terminal() -> Result<(), String> {
 
     crossterm::terminal::enable_raw_mode().map_err(|error| error.to_string())?;
     PRIMARY_TTY_STATE.store(
-        PrimaryTtyState::Active as u8,
+        PrimaryTtyState::Active,
         std::sync::atomic::Ordering::Release,
     );
     if let Err(error) = write_primary_enter(&[]) {
@@ -606,23 +646,22 @@ pub fn tty_init_terminal() -> Result<(), String> {
 
 /// Temporarily restore the primary TTY for `suspend-tty` / `suspend-emacs`,
 /// emitting `tty-mode-reset-strings` first as in GNU `tty_reset_terminal_modes`.
-pub fn tty_suspend_terminal(reset_strings: &[u8]) -> Result<(), String> {
+pub fn tty_suspend_terminal(reset_strings: &[u8]) {
     if PRIMARY_TTY_STATE
         .compare_exchange(
-            PrimaryTtyState::Active as u8,
-            PrimaryTtyState::Suspended as u8,
+            PrimaryTtyState::Active,
+            PrimaryTtyState::Suspended,
             std::sync::atomic::Ordering::AcqRel,
             std::sync::atomic::Ordering::Acquire,
         )
         .is_err()
     {
-        return Ok(());
+        return;
     }
     write_primary_leave(reset_strings);
     if let Err(e) = crossterm::terminal::disable_raw_mode() {
         tracing::warn!("tty_suspend_terminal: disable_raw_mode failed: {}", e);
     }
-    Ok(())
 }
 
 /// Re-enter raw mode and terminal modes for `resume-tty` / `suspend-emacs`
@@ -630,8 +669,8 @@ pub fn tty_suspend_terminal(reset_strings: &[u8]) -> Result<(), String> {
 pub fn tty_resume_terminal(set_strings: &[u8]) -> Result<(), String> {
     if PRIMARY_TTY_STATE
         .compare_exchange(
-            PrimaryTtyState::Suspended as u8,
-            PrimaryTtyState::Active as u8,
+            PrimaryTtyState::Suspended,
+            PrimaryTtyState::Active,
             std::sync::atomic::Ordering::AcqRel,
             std::sync::atomic::Ordering::Acquire,
         )
@@ -641,23 +680,62 @@ pub fn tty_resume_terminal(set_strings: &[u8]) -> Result<(), String> {
     }
     if let Err(error) = crossterm::terminal::enable_raw_mode() {
         PRIMARY_TTY_STATE.store(
-            PrimaryTtyState::Suspended as u8,
+            PrimaryTtyState::Suspended,
             std::sync::atomic::Ordering::Release,
         );
         return Err(format!("could not re-enable TTY raw mode: {error}"));
     }
     if let Err(error) = write_primary_enter(set_strings) {
-        let _ = tty_suspend_terminal(&[]);
+        tty_suspend_terminal(&[]);
         return Err(format!("could not resume TTY output: {error}"));
     }
     Ok(())
 }
 
-/// Stop the process group with `SIGTSTP` when the primary interactive TTY has
-/// just been suspended (GNU `sys_suspend`, `src/sysdep.c:629`).
-pub fn tty_sys_suspend() {
-    if primary_tty_state() != PrimaryTtyState::Suspended {
-        return;
+#[cfg(unix)]
+fn stuff_tty_input(stuff: &[u8]) {
+    // GNU `stuff_buffered_input` (`src/keyboard.c:12485-12495`): push each byte
+    // plus `\n` back into the terminal input queue via `TIOCSTI`, silently
+    // stopping if the kernel refuses (e.g. `dev.tty.legacy_tiocsti=0`).
+    for &byte in stuff.iter().chain(std::iter::once(&b'\n')) {
+        let ch = byte as libc::c_char;
+        // SAFETY: `STDIN_FILENO` is a valid fd and `TIOCSTI` reads one byte.
+        if unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCSTI as _, &ch) } < 0 {
+            break;
+        }
+    }
+}
+
+/// Stop the process group with `SIGTSTP`, or spawn `$SHELL` when
+/// `cannot_suspend` is set, after the primary interactive TTY has been
+/// suspended (GNU `sys_suspend` / `sys_subshell`, `src/sysdep.c:629-750`).
+pub fn tty_sys_suspend(
+    stuffstring: Option<&[u8]>,
+    cannot_suspend: bool,
+    cwd: Option<&std::path::Path>,
+) -> Result<(), String> {
+    if PRIMARY_TTY_STATE.load(std::sync::atomic::Ordering::Acquire) != PrimaryTtyState::Suspended {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    if let Some(stuff) = stuffstring {
+        stuff_tty_input(stuff);
+    }
+    #[cfg(not(unix))]
+    let _ = stuffstring;
+
+    if cannot_suspend {
+        let shell = std::env::var_os("SHELL")
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| std::ffi::OsString::from("sh"));
+        let mut command = std::process::Command::new(&shell);
+        if let Some(dir) = cwd {
+            command.current_dir(dir);
+        }
+        return command
+            .status()
+            .map(|_| ())
+            .map_err(|_| "Can't spawn subshell".to_owned());
     }
     #[cfg(unix)]
     // SAFETY: `kill(0, SIGTSTP)` sends SIGTSTP to the caller's process group,
@@ -665,6 +743,7 @@ pub fn tty_sys_suspend() {
     unsafe {
         libc::kill(0, libc::SIGTSTP);
     }
+    Ok(())
 }
 
 /// Restore the terminal to its original state: show cursor, leave alt screen,
@@ -677,10 +756,10 @@ pub fn tty_shutdown_terminal() {
 /// `tty-mode-reset-strings` first when the terminal is still active.
 pub fn tty_shutdown_terminal_with(reset_strings: &[u8]) {
     let previous = PRIMARY_TTY_STATE.swap(
-        PrimaryTtyState::Uninitialized as u8,
+        PrimaryTtyState::Uninitialized,
         std::sync::atomic::Ordering::AcqRel,
     );
-    if previous != PrimaryTtyState::Active as u8 {
+    if previous != PrimaryTtyState::Active {
         return;
     }
     write_primary_leave(reset_strings);

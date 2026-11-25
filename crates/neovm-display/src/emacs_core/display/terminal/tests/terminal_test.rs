@@ -1589,6 +1589,7 @@ fn tty_mode_strings_forwarded_on_suspend_resume_suspend_emacs_and_delete() {
 
     struct ModeRecordingHost {
         events: Rc<RefCell<Vec<(&'static str, Vec<u8>)>>>,
+        suspend_requests: Rc<RefCell<Vec<(Option<Vec<u8>>, bool, Option<std::path::PathBuf>)>>>,
     }
     impl TerminalHost for ModeRecordingHost {
         fn suspend_tty(&mut self, reset_strings: &[u8]) -> Result<(), String> {
@@ -1609,8 +1610,13 @@ fn tty_mode_strings_forwarded_on_suspend_resume_suspend_emacs_and_delete() {
                 .push(("delete", reset_strings.to_vec()));
             Ok(())
         }
-        fn sys_suspend(&mut self) -> Result<(), String> {
+        fn sys_suspend(&mut self, request: SuspendRequest<'_>) -> Result<(), String> {
             self.events.borrow_mut().push(("sys_suspend", Vec::new()));
+            self.suspend_requests.borrow_mut().push((
+                request.stuffstring.map(|s| s.to_vec()),
+                request.cannot_suspend,
+                request.cwd.map(|p| p.to_path_buf()),
+            ));
             Ok(())
         }
     }
@@ -1623,8 +1629,10 @@ fn tty_mode_strings_forwarded_on_suspend_resume_suspend_emacs_and_delete() {
         ),
     ));
     let events = Rc::new(RefCell::new(Vec::new()));
+    let suspend_requests = Rc::new(RefCell::new(Vec::new()));
     set_terminal_host(Box::new(ModeRecordingHost {
         events: Rc::clone(&events),
+        suspend_requests: Rc::clone(&suspend_requests),
     }));
 
     // Mix strings, non-strings, and improper list tail; GNU walks car-to-cdr,
@@ -1658,7 +1666,9 @@ fn tty_mode_strings_forwarded_on_suspend_resume_suspend_emacs_and_delete() {
 
     builtin_suspend_tty(&mut eval, vec![]).unwrap();
     builtin_resume_tty(&mut eval, vec![]).unwrap();
-    builtin_suspend_emacs(&mut eval, vec![]).unwrap();
+    eval.set_variable("cannot-suspend", Value::T);
+    eval.set_variable("default-directory", Value::string("/tmp"));
+    builtin_suspend_emacs(&mut eval, vec![Value::string("echo hi")]).unwrap();
     builtin_delete_terminal(&mut eval, vec![Value::NIL, Value::T]).unwrap();
 
     assert_eq!(
@@ -1671,6 +1681,106 @@ fn tty_mode_strings_forwarded_on_suspend_resume_suspend_emacs_and_delete() {
             ("resume", b"<S1><S2>".to_vec()),
             ("delete", b"<R1><R2>".to_vec()),
         ]
+    );
+    assert_eq!(
+        suspend_requests.borrow().as_slice(),
+        &[(
+            Some(b"echo hi".to_vec()),
+            true,
+            Some(std::path::PathBuf::from("/tmp")),
+        )]
+    );
+}
+
+#[test]
+fn suspend_emacs_rejects_bad_stuffstring_and_suspended_other_tty() {
+    crate::test_utils::init_test_tracing();
+    reset_terminal_thread_locals();
+
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    configure_terminal_runtime(TerminalRuntimeConfig::interactive(
+        Some("xterm-256color".to_string()),
+        neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(
+            256,
+        ),
+    ));
+    let log = Rc::new(RefCell::new(Vec::new()));
+    set_terminal_host(Box::new(RecordingTerminalHost {
+        log: Rc::clone(&log),
+    }));
+    eval.eval_str(
+        r#"
+(setq suspend-events nil)
+(setq suspend-hook (list (lambda () (setq suspend-events (cons 'suspend suspend-events)))))
+(setq suspend-resume-hook (list (lambda () (setq suspend-events (cons 'resume suspend-events)))))
+"#,
+    )
+    .expect("install suspend hooks");
+
+    // Non-string stuffstring must signal wrong-type-argument before suspend-hook runs.
+    match builtin_suspend_emacs(&mut eval, vec![Value::fixnum(123)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(123)]);
+        }
+        other => panic!("expected wrong-type-argument, got {other:?}"),
+    }
+    assert_eq!(
+        eval.eval_str("suspend-events").unwrap(),
+        Value::NIL,
+        "bad stuffstring must error before suspend-hook runs"
+    );
+
+    // Open a second Termcap TTY via make-terminal-frame and suspend it; GNU
+    // checks `tty_list && tty_list->next` across ALL live TTYs (including
+    // suspended ones).
+    eval.set_variable("noninteractive", Value::NIL);
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(scratch);
+    let sec_requests = Rc::new(RefCell::new(Vec::new()));
+    let sec_log = Rc::new(RefCell::new(Vec::new()));
+    eval.set_tty_frame_host_factory(Box::new(RecordingTtyFrameHostFactory {
+        requests: Rc::clone(&sec_requests),
+        lifecycle: Rc::clone(&sec_log),
+    }));
+    let sec_params = Value::list(vec![
+        Value::cons(Value::symbol("tty"), Value::string("/dev/pts/7")),
+        Value::cons(Value::symbol("tty-type"), Value::string("xterm-256color")),
+    ]);
+    let sec_frame =
+        crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![sec_params])
+            .expect("open secondary tty");
+    let secondary = builtin_frame_terminal(&mut eval, vec![sec_frame]).expect("secondary terminal");
+    builtin_suspend_tty(&mut eval, vec![secondary]).unwrap();
+    match builtin_suspend_emacs(&mut eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "error");
+            assert_eq!(
+                sig.data,
+                vec![Value::string(
+                    "There are other tty frames open; close them before suspending Emacs"
+                )]
+            );
+        }
+        other => panic!("expected other tty error, got {other:?}"),
+    }
+    assert_eq!(
+        eval.eval_str("suspend-events").unwrap(),
+        Value::NIL,
+        "other tty error must signal before suspend-hook runs"
+    );
+
+    // Deleting the suspended second TTY without `force` must succeed while the
+    // primary TTY is still active (GNU `src/terminal.c:395-403`), after which
+    // suspend-emacs runs hooks in order.
+    builtin_delete_terminal(&mut eval, vec![secondary]).unwrap();
+    assert_eq!(
+        builtin_suspend_emacs(&mut eval, vec![]).unwrap(),
+        Value::NIL
+    );
+    assert_eq!(
+        format!("{}", eval.eval_str("(nreverse suspend-events)").unwrap()),
+        "(suspend resume)"
     );
 }
 

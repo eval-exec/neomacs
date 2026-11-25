@@ -166,8 +166,8 @@ impl TerminalRuntime {
 pub use super::config::{TerminalRuntimeConfig, TtyTerminalConfig};
 
 pub use neovm_eval::emacs_core::eval::protocol::tty_host::{
-    EmergencyEscapeOps, OpenedTtyFrameHost, TerminalHost, TtyFrameHostFactory, TtyFrameOpenRequest,
-    TtyFrameSize,
+    EmergencyEscapeOps, OpenedTtyFrameHost, SuspendRequest, TerminalHost, TtyFrameHostFactory,
+    TtyFrameOpenRequest, TtyFrameSize,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -364,10 +364,9 @@ impl TerminalManager {
         self.terminals.iter().filter(|terminal| terminal.is_live())
     }
 
-    fn active_live_terminal_count(&self) -> usize {
+    fn has_other_active_terminal(&self, terminal_id: u64) -> bool {
         self.live_terminals()
-            .filter(|terminal| terminal.is_active())
-            .count()
+            .any(|terminal| terminal.id != terminal_id && terminal.is_active())
     }
 
     fn live_terminal_ids_in_keyboard_poll_order(&self) -> Vec<u64> {
@@ -1825,25 +1824,33 @@ pub fn builtin_resume_tty(
 
 /// `(suspend-emacs &optional STUFFSTRING)` -> nil.
 ///
-/// Mirrors GNU `Fsuspend_emacs` (`src/keyboard.c:12427-12476`): validates
-/// `stuffstring` and single-TTY preconditions, runs `suspend-hook`, resets
-/// active TTY modes (including `tty-mode-reset-strings`), suspends the
-/// process via the terminal host, re-initializes active TTY modes (including
+/// Mirrors GNU `Fsuspend_emacs` (`src/keyboard.c:12427-12476`): rejects when
+/// more than one live TTY terminal exists (including suspended TTYs, matching
+/// GNU `tty_list && tty_list->next`), validates `stuffstring`, runs
+/// `suspend-hook`, resets active TTY modes (including
+/// `tty-mode-reset-strings`), suspends or spawns a subshell (`cannot-suspend`)
+/// with optional `stuffstring`, re-initializes active TTY modes (including
 /// `tty-mode-set-strings`), invalidates redisplay, and runs
 /// `suspend-resume-hook`.
+///
+/// When no live hosted Termcap terminal exists (batch, GUI, daemon, or unit
+/// tests), hooks still run and OS suspend/subshell is skipped rather than
+/// aborting on a null `CURTTY()` as GNU does in `--batch`.
 #[doc(hidden)]
 pub fn builtin_suspend_emacs(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("suspend-emacs", &args, 0, 1)?;
-    let active_tty_count = with_terminal_manager(|slot| {
+    // GNU `keyboard.c:12446`: `if (tty_list && tty_list->next)` counts every
+    // live TTY terminal, including suspended ones.
+    let live_tty_count = with_terminal_manager(|slot| {
         slot.borrow()
             .live_terminals()
-            .filter(|t| t.output_method == TerminalOutputMethod::Termcap && t.is_active())
+            .filter(|t| t.output_method == TerminalOutputMethod::Termcap)
             .count()
     });
-    if active_tty_count > 1 {
+    if live_tty_count > 1 {
         return Err(signal(
             "error",
             vec![Value::string(
@@ -1851,19 +1858,33 @@ pub fn builtin_suspend_emacs(
             )],
         ));
     }
-    if let Some(&stuff) = args.first()
-        && !stuff.is_nil()
-        && !stuff.is_string()
-    {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("stringp"), stuff],
-        ));
-    }
+    let stuffstring = match args.first().copied() {
+        None => None,
+        Some(v) if v.is_nil() => None,
+        Some(v) => match v.as_lisp_string() {
+            Some(s) => Some(s.as_bytes().to_vec()),
+            None => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), v],
+                ));
+            }
+        },
+    };
 
     let suspend_hook =
         neovm_eval::emacs_core::hook_runtime::hook_symbol_by_name(eval, "suspend-hook");
     let _ = neovm_eval::emacs_core::hook_runtime::run_named_hook(eval, suspend_hook, &[])?;
+
+    let cannot_suspend = eval
+        .eval_symbol_by_id(neovm_value::intern::intern("cannot-suspend"))
+        .is_ok_and(|value| !value.is_nil());
+    let cwd = eval
+        .eval_symbol_by_id(neovm_value::intern::intern("default-directory"))
+        .ok()
+        .and_then(|value| value.as_lisp_string().map(|s| s.as_bytes().to_vec()))
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(std::path::PathBuf::from);
 
     let active_hosted_tty = with_terminal_manager(|slot| {
         slot.borrow()
@@ -1878,9 +1899,15 @@ pub fn builtin_suspend_emacs(
     if let Some(terminal_id) = active_hosted_tty {
         let reset_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-reset-strings");
         with_terminal_host_for_id(terminal_id, |host| host.suspend_tty(&reset_strings))?;
-        let suspend_result = with_terminal_host_for_id(terminal_id, |host| host.sys_suspend());
+        let request = SuspendRequest {
+            stuffstring: stuffstring.as_deref(),
+            cannot_suspend,
+            cwd: cwd.as_deref(),
+        };
+        let suspend_result =
+            with_terminal_host_for_id(terminal_id, |host| host.sys_suspend(request));
         // Mirror GNU's `record_unwind_protect_void (init_all_sys_modes)`:
-        // always restore TTY modes after `sys_suspend` returns.
+        // always restore TTY modes after `sys_suspend` / `sys_subshell` returns.
         let set_strings = terminal_mode_strings_bytes(terminal_id, "tty-mode-set-strings");
         let resume_result =
             with_terminal_host_for_id(terminal_id, |host| host.resume_tty(&set_strings));
@@ -1904,9 +1931,12 @@ pub(crate) fn delete_terminal_owned(
     terminal_id: u64,
     mode: DeleteTerminalMode,
 ) -> EvalResult {
-    let active_live_count =
-        with_terminal_manager(|slot| slot.borrow().active_live_terminal_count());
-    if !mode.bypasses_active_terminal_check() && active_live_count <= 1 {
+    // GNU `Fdelete_terminal` (`src/terminal.c:395-403`) refuses only when no
+    // OTHER active display terminal remains, so deleting a suspended terminal
+    // while another active terminal exists is permitted without `force`.
+    let has_other_active =
+        with_terminal_manager(|slot| slot.borrow().has_other_active_terminal(terminal_id));
+    if !mode.bypasses_active_terminal_check() && !has_other_active {
         return Err(signal(
             "error",
             vec![Value::string(

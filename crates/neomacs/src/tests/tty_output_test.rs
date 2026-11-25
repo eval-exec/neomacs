@@ -57,7 +57,7 @@ fn native_padded_output_keeps_literal_text_and_scales_clear_screen() {
     caps.attach(&file).unwrap();
     let mut output = Vec::new();
     caps.enter(2).write_to(&mut output, &caps).unwrap();
-    assert_eq!(output, b"CLEAR\x1b[?2004h");
+    assert_eq!(output, b"CLEAR");
     output.clear();
     let mut row = cells("A$<10/>B");
     {
@@ -84,7 +84,7 @@ fn native_padded_output_keeps_literal_text_and_scales_clear_screen() {
     assert!(!output.windows(2).any(|pair| pair == b"$<"));
     output.clear();
     caps.leave().write_to(&mut output, &caps).unwrap();
-    assert_eq!(output, b"OFF\x1b[?2004l");
+    assert_eq!(output, b"OFF");
 }
 
 #[test]
@@ -318,16 +318,13 @@ fn mode_strings_respect_gnu_order_and_bypass_padding() {
     assert!(leave.padded.is_empty());
     assert_eq!(
         leave.bytes,
-        b"<RESET-A>$<10/><RESET-B>NOINSSGR0\x1b[?2004lNORMALSHOWLEAVE"
+        b"<RESET-A>$<10/><RESET-B>NOINSSGR0NORMALSHOWLEAVE"
     );
 
     let set = b"<SET-A>$<10/><SET-B>";
     let enter = caps.enter_with(24, set);
     assert!(enter.padded.is_empty());
-    assert_eq!(
-        enter.bytes,
-        b"ENTERKEYSHIDECLEAR\x1b[?2004h<SET-A>$<10/><SET-B>"
-    );
+    assert_eq!(enter.bytes, b"ENTERKEYSHIDECLEAR<SET-A>$<10/><SET-B>");
 }
 
 #[cfg(test)]

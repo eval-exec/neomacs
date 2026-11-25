@@ -30,6 +30,14 @@ pub trait EmergencyEscapeOps {
     fn abort_orderly(&mut self) -> !;
 }
 
+/// Arguments forwarded from `suspend-emacs` to the controlling terminal host
+/// (GNU `Fsuspend_emacs`, `src/keyboard.c:12427-12476`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SuspendRequest<'a> {
+    pub stuffstring: Option<&'a [u8]>,
+    pub cannot_suspend: bool,
+    pub cwd: Option<&'a std::path::Path>,
+}
 pub trait TerminalHost {
     fn suspend_tty(&mut self, reset_strings: &[u8]) -> Result<(), String>;
     fn resume_tty(&mut self, set_strings: &[u8]) -> Result<(), String>;
@@ -37,12 +45,12 @@ pub trait TerminalHost {
         Ok(())
     }
     /// Stop the process and yield the controlling TTY to its superior
-    /// (GNU `sys_suspend`, `src/sysdep.c:629`).
+    /// (GNU `sys_suspend` / `sys_subshell`, `src/sysdep.c:629-750`).
     ///
-    /// Only the primary interactive TTY host stops the process; test and
-    /// secondary hosts leave this as a no-op so unit tests never send
-    /// `SIGTSTP` to the test runner.
-    fn sys_suspend(&mut self) -> Result<(), String> {
+    /// Only the primary interactive TTY host stops the process or spawns a
+    /// subshell; test and secondary hosts leave this as a no-op so unit tests
+    /// never send `SIGTSTP` to the test runner.
+    fn sys_suspend(&mut self, _request: SuspendRequest<'_>) -> Result<(), String> {
         Ok(())
     }
     /// GNU `Fsend_string_to_terminal`'s `fwrite`+`fflush` on the terminal's
