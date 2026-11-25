@@ -2215,7 +2215,7 @@ fn div_core_divergence_surface_quit_process_sentinel_message() {
 (let ((log nil))
   (let ((proc (make-process
                :name "probe-quit-sent"
-               :command '("sleep" "30")
+               :command '("sleep" "60")
                :connection-type 'pipe
                :sentinel (lambda (p e)
                            (push (list e
@@ -2223,15 +2223,17 @@ fn div_core_divergence_surface_quit_process_sentinel_message() {
                                        (process-exit-status p))
                                  log)))))
     (set-process-query-on-exit-flag proc nil)
-    (quit-process proc)
-    (neovm--oracle-settle-process proc 600)
-    (let ((j 0))
-      (while (and (null log) (< j 20))
-        (accept-process-output proc 0.05)
-        (setq j (1+ j))))
-    (prog1 (list (process-status proc)
-                 (process-exit-status proc)
-                 (nreverse log))
+    (unwind-protect
+        (progn
+          (quit-process proc)
+          (neovm--oracle-settle-process proc 600)
+          (let ((j 0))
+            (while (and (null log) (< j 20))
+              (accept-process-output proc 0.05)
+              (setq j (1+ j))))
+          (list (process-status proc)
+                (process-exit-status proc)
+                (nreverse log)))
       (when (process-live-p proc) (delete-process proc)))))
 "##,
         expect,

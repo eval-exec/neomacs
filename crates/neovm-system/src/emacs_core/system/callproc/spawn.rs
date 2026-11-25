@@ -868,7 +868,7 @@ mod posix {
                 // through valid pointers; both sets are then fully initialized.
                 unsafe {
                     libc::sigemptyset(defaults.as_mut_ptr());
-                    for signal in [libc::SIGINT, libc::SIGQUIT, libc::SIGPIPE, libc::SIGPROF] {
+                    for &signal in super::super::super::CHILD_DEFAULT_SIGNALS {
                         libc::sigaddset(defaults.as_mut_ptr(), signal);
                     }
                     libc::sigemptyset(empty.as_mut_ptr());

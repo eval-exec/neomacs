@@ -442,3 +442,136 @@ fn signals_the_editor_ignores_are_default_in_the_child() {
     assert_eq!(output.stdout, b"done");
     assert!(output.status.success());
 }
+
+struct SigActionGuard {
+    saved: Vec<(libc::c_int, libc::sigaction)>,
+}
+
+impl SigActionGuard {
+    fn ignore(signals: &[libc::c_int]) -> Self {
+        let mut saved = Vec::with_capacity(signals.len());
+        let mut ign: libc::sigaction = unsafe { std::mem::zeroed() };
+        ign.sa_sigaction = libc::SIG_IGN;
+        assert_eq!(unsafe { libc::sigemptyset(&mut ign.sa_mask) }, 0);
+        for &sig in signals {
+            let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+            assert_eq!(unsafe { libc::sigaction(sig, &ign, &mut old) }, 0);
+            saved.push((sig, old));
+        }
+        Self { saved }
+    }
+}
+
+impl Drop for SigActionGuard {
+    fn drop(&mut self) {
+        for (sig, old) in self.saved.drain(..).rev() {
+            unsafe {
+                libc::sigaction(sig, &old, std::ptr::null_mut());
+            }
+        }
+    }
+}
+
+struct SigMaskGuard {
+    old: libc::sigset_t,
+}
+
+impl SigMaskGuard {
+    fn block(signals: &[libc::c_int]) -> Self {
+        let mut set = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        let mut old = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        unsafe {
+            assert_eq!(libc::sigemptyset(set.as_mut_ptr()), 0);
+            for &sig in signals {
+                assert_eq!(libc::sigaddset(set.as_mut_ptr(), sig), 0);
+            }
+            assert_eq!(
+                libc::sigprocmask(libc::SIG_BLOCK, set.as_ptr(), old.as_mut_ptr()),
+                0
+            );
+            Self {
+                old: old.assume_init(),
+            }
+        }
+    }
+}
+
+impl Drop for SigMaskGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::sigprocmask(libc::SIG_SETMASK, &self.old, std::ptr::null_mut());
+        }
+    }
+}
+
+fn assert_child_dies_from_signal(use_fork: bool, sig: libc::c_int) {
+    use std::os::unix::process::ExitStatusExt;
+
+    let mut command = ChildCommand::new("sleep");
+    command
+        .arg("60")
+        .stdin(ChildStdio::Null)
+        .stdout(ChildStdio::Null)
+        .stderr(ChildStdio::Null);
+    let mut child = if use_fork {
+        super::super::SpawnedChild::from_std(
+            command
+                .into_forking_command()
+                .expect("retain child exit status")
+                .spawn()
+                .expect("spawn forked sleep"),
+        )
+    } else {
+        command.spawn().expect("spawn sleep")
+    };
+    let pid = child.id() as libc::pid_t;
+    assert_eq!(unsafe { libc::kill(pid, sig) }, 0, "kill({pid}, {sig})");
+
+    let mut exited = None;
+    for _ in 0..40 {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            exited = Some(status);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let Some(status) = exited else {
+        let _ = child.kill();
+        let _ = child.wait();
+        let mode = if use_fork {
+            "into_forking_command"
+        } else {
+            "ChildCommand::spawn"
+        };
+        panic!(
+            "child ({mode}) did not terminate on signal {sig}; likely inherited SIG_IGN or blocked mask"
+        );
+    };
+    assert_eq!(
+        status.signal(),
+        Some(sig),
+        "child should terminate with signal {sig}, got {status:?}"
+    );
+}
+
+#[test]
+fn child_resets_ignored_signals_to_default() {
+    let signals = [libc::SIGINT, libc::SIGQUIT, libc::SIGPROF];
+    let _guard = SigActionGuard::ignore(&signals);
+    for use_fork in [false, true] {
+        for sig in signals {
+            assert_child_dies_from_signal(use_fork, sig);
+        }
+    }
+}
+
+#[test]
+fn child_unblocks_blocked_signals() {
+    let signals = [libc::SIGINT, libc::SIGQUIT];
+    let _guard = SigMaskGuard::block(&signals);
+    for use_fork in [false, true] {
+        for sig in signals {
+            assert_child_dies_from_signal(use_fork, sig);
+        }
+    }
+}

@@ -108,9 +108,26 @@ pub(crate) fn new_child_command<S: AsRef<std::ffi::OsStr>>(program: S) -> ChildC
     ChildCommand::new(program)
 }
 
-/// Apply the platform's "own process group" isolation to an already-built
-/// command. Split out so callers that need portable_pty (which already
-/// `setsid`s the child) or a pre-configured command can opt in explicitly.
+/// Signals reset to `SIG_DFL` in every spawned child process, matching GNU
+/// `emacs_posix_spawn_init_attributes` (`src/callproc.c:1387-1406`) and the
+/// `vfork`/`fork` child path before `child_setup` (`src/callproc.c:1624-1643`).
+///
+/// Shared by both `posix::Attributes::gnu` (`spawn.rs`) and
+/// [`isolate_child_command`] so the `posix_spawn` and `fork` paths cannot drift.
+#[cfg(unix)]
+pub(super) const CHILD_DEFAULT_SIGNALS: &[libc::c_int] = &[
+    #[cfg(target_os = "macos")]
+    libc::SIGCHLD,
+    libc::SIGINT,
+    libc::SIGQUIT,
+    libc::SIGPIPE,
+    libc::SIGPROF,
+];
+
+/// Apply the platform's "own process group" isolation and GNU child signal
+/// hygiene to an already-built command. Split out so callers that need
+/// portable_pty (which already `setsid`s the child) or a pre-configured command
+/// can opt in explicitly.
 pub(crate) fn isolate_child_command(command: &mut Command) {
     #[cfg(unix)]
     {
@@ -128,12 +145,36 @@ pub(crate) fn isolate_child_command(command: &mut Command) {
         // `setsid` subsumes `setpgid(0, 0)`. PTY children that *need* a
         // controlling terminal go through portable_pty instead, not this path.
         //
+        // Also reset `CHILD_DEFAULT_SIGNALS` to `SIG_DFL` and clear the child
+        // signal mask, matching GNU `emacs_spawn`'s `vfork`/`fork` child setup
+        // (`src/callproc.c:1624-1645`) and `posix::Attributes::gnu` (`spawn.rs`).
+        //
         // SAFETY: the closure runs in the forked child before exec and calls
-        // only the async-signal-safe `setsid`. A freshly forked process is
-        // never a process-group leader, so `setsid` cannot fail with EPERM.
+        // only async-signal-safe POSIX functions (`setsid`, `sigemptyset`,
+        // `sigaction`, `sigprocmask`). A freshly forked process is never a
+        // process-group leader, so `setsid` cannot fail with EPERM; returning
+        // `io::Error::last_os_error()` stores only the raw errno without
+        // allocating on the heap.
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let mut action: libc::sigaction = std::mem::zeroed();
+                action.sa_sigaction = libc::SIG_DFL;
+                if libc::sigemptyset(&mut action.sa_mask) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                for &sig in CHILD_DEFAULT_SIGNALS {
+                    if libc::sigaction(sig, &action, std::ptr::null_mut()) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                let mut empty = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+                if libc::sigemptyset(empty.as_mut_ptr()) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::sigprocmask(libc::SIG_SETMASK, empty.as_ptr(), std::ptr::null_mut()) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
