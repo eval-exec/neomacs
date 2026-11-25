@@ -893,7 +893,9 @@ impl Context {
             stow_carried_state(&baton);
             if parked_era_tls {
                 self.publish_parked_roots_retaining(&baton, key, publication);
-                super::carrier_tls::park_carrier_tls();
+                // SAFETY: owner state and carried World state are stowed above and no
+                // TLS heap loan is live; the prologue resets carrier TLS before reuse.
+                unsafe { super::carrier_tls::park_carrier_tls() };
                 let proof =
                     super::super::parallel_entry::world_seat::prove_stowed_for_era_switch(self);
                 baton.set_stowed_for_return(proof);
@@ -1531,7 +1533,9 @@ impl Context {
         self.green_release_seat();
         self.retire_green_owner();
         stow_carried_state(&baton);
-        super::carrier_tls::park_carrier_tls();
+        // SAFETY: the seat is released and retired and World state is stowed, so no
+        // TLS heap loan is live; the prologue resets carrier TLS before reuse.
+        unsafe { super::carrier_tls::park_carrier_tls() };
         let proof =
             super::super::parallel_entry::world_seat::prove_retired_worker_stowed_for_era(&baton);
         baton.set_stowed_for_return(proof);
@@ -2040,7 +2044,10 @@ impl Context {
         //    `GreenRuntime::parked`, stows World carriers to
         //    `CarriedHolder::Stowed`, parks carrier TLS, and mints
         //    `WorldReturned` via `WorldReturned::from_stowed_seat`.
-        let (parked, lend, returned) = active.exit(self);
+        // SAFETY: the active seat is the caller-owned `self` turn, its World carriers
+        // are stowed by `exit` itself under the same contract as `switch_out`, and the
+        // returned lend is consumed before this frame yields.
+        let (parked, lend, returned) = unsafe { active.exit(self) };
 
         // 5. Ask the keeper to collect first in its next stop and re-lend the
         //    World to this Baton group at ring HEAD. `Control::collect_era_interval`

@@ -1191,7 +1191,9 @@ fn l67b_b43_active_world_seat_from_active_green_seat_roundtrip_and_wrong_heap_re
 
     let active = ActiveWorldSeat::from_active_green_seat(&main, turn1, lend1, real_retention)
         .expect("matching ActiveWorldSeat adoption succeeds");
-    let (parked, lend1, returned1) = active.exit(&mut main);
+    // SAFETY: test fixture drives the seat through its own turn; World carriers
+    // are stowed by `exit` under the same contract as `switch_out`.
+    let (parked, lend1, returned1) = unsafe { active.exit(&mut main) };
 
     let (turn2, got_epoch, lend2) = std::thread::scope(|scope| {
         let ctrl = Arc::clone(&control);
@@ -1242,7 +1244,9 @@ fn l67b_b43_prove_stowed_for_era_switch_panics_without_published_parked_roots() 
     main.tagged_heap.close_alloc_regions();
     let _parked = main.park_owner();
     assert!(main.stow_serial_world_state());
-    crate::emacs_core::eval::green::carrier_tls::park_carrier_tls();
+    // SAFETY: owner is parked and World state stowed immediately above, so no TLS
+    // heap loan is live; the fixture resets carrier TLS before reusing the thread.
+    unsafe { crate::emacs_core::eval::green::carrier_tls::park_carrier_tls() };
     // Deliberately skip publishing parked roots into GreenRuntime::parked:
     // prove_stowed_for_era_switch MUST refuse rather than silently minting
     // StowedForReturn without parked roots.

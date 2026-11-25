@@ -573,7 +573,9 @@ pub unsafe fn hold_admission_for_test<'a>(
     permit: &'a crate::tagged::gc::mutator_registration::MutatorPermit<'_>,
     state: AdmissionProbeState,
 ) -> AdmissionProbeGuard<'a> {
-    permit.hold_admission_for_test(state)
+    // SAFETY: callers of this test-only entry point hold the owner admission
+    // contract required by `MutatorPermit::hold_admission_for_test`.
+    unsafe { permit.hold_admission_for_test(state) }
 }
 
 /// C1 FENCE for the re-homed lifecycle tests: mint this owner's young worker

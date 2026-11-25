@@ -306,7 +306,9 @@ impl Context {
         } else {
             DetachedWorldCarriers::NotStowed
         };
-        park_carrier_tls();
+        // SAFETY: owner bindings are parked and World state stowed under
+        // `AbortOnPanic`; `reattach_serial_owner` resets carrier TLS before reuse.
+        unsafe { park_carrier_tls() };
         Ok(DetachedOwner {
             host: DetachedHostBindings { parked },
             tls: DetachedTls {
