@@ -132,6 +132,20 @@ impl Context {
 }
 
 impl Baton {
+    /// Visit every registered owner slab under `AllStopped` for C1 slab-lease
+    /// tests, proving `stopped` excludes every `RunAccess`/`OwnerSlabLease`.
+    #[cfg(test)]
+    pub(crate) fn trace_owner_slabs_stopped_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        visit: &mut dyn FnMut(Value),
+    ) -> Result<(), RendezvousError> {
+        self.world.owner_slabs.borrow().trace_roots_for_heap(
+            stopped,
+            self.parallel_heap_identity(),
+            visit,
+        )
+    }
     /// Capture the original manager identities once while this keeper is held.
     /// The returned proof cannot outlive this retained Baton or cross threads.
     #[cold]

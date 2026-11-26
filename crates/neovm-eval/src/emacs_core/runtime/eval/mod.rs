@@ -7646,6 +7646,11 @@ pub use green::{SelectTurn, green_make_thread, green_world};
 mod keyboard_forwarding;
 mod owner_bindings;
 pub(crate) use owner_bindings::{Channel, UndoTarget};
+#[cfg(not(feature = "contract-fixtures"))]
+pub(crate) use owner_bindings::{OwnerSlabHandle, OwnerSlabLease, OwnerSlabLeaseError};
+#[cfg(feature = "contract-fixtures")]
+#[doc(hidden)]
+pub use owner_bindings::{OwnerSlabHandle, OwnerSlabLease, OwnerSlabLeaseError};
 mod owner_mirrors;
 pub(crate) use owner_mirrors::ParkedOwner;
 mod variable_access;

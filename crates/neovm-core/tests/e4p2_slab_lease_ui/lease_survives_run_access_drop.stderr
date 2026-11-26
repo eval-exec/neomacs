@@ -1,0 +1,11 @@
+error[E0505]: cannot move out of `run` because it is borrowed
+ --> tests/e4p2_slab_lease_ui/lease_survives_run_access_drop.rs:7:10
+  |
+5 |     let mut run = mutator.run_access().unwrap();
+  |         ------- binding `run` declared here
+6 |     let lease = handle.lease(&mut run).unwrap();
+  |                              -------- borrow of `run` occurs here
+7 |     drop(run);
+  |          ^^^ move out of `run` occurs here
+8 |     let _ = lease.heap_identity();
+  |             ----- borrow later used here

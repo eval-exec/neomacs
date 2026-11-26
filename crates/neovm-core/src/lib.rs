@@ -26,6 +26,9 @@ pub(crate) use neovm_display::image_identity;
 pub use neovm_eval::host_effect;
 #[cfg(feature = "contract-fixtures")]
 #[doc(hidden)]
+pub use neovm_eval::owner_slab_lease_contract;
+#[cfg(feature = "contract-fixtures")]
+#[doc(hidden)]
 pub use neovm_eval::pentry_e2_custody;
 pub use neovm_value::logging;
 #[cfg(test)]

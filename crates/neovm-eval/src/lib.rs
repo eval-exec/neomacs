@@ -89,3 +89,11 @@ pub mod pentry_e2_custody {
         RestoredKeeper, ReturnedSerialTicket, StoppedKeeper, SuspendedKeeper,
     };
 }
+
+/// Contract-fixture names for the dormant E4-P2 C1 owner-slab lease.
+/// Production builds keep these types crate-private; items stay `#[doc(hidden)]`.
+#[cfg(feature = "contract-fixtures")]
+#[doc(hidden)]
+pub mod owner_slab_lease_contract {
+    pub use crate::emacs_core::eval::{OwnerSlabHandle, OwnerSlabLease, OwnerSlabLeaseError};
+}

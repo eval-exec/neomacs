@@ -2851,9 +2851,14 @@ impl Context {
 /// panics loudly in production, rather than corrupting silently.
 impl Drop for Context {
     fn drop(&mut self) {
-        // A Green World's main thread ends its other threads first.
-        self.green_teardown();
-        self.green_release_seat();
+        // A Green World's main thread ends its other threads first. Skip slab
+        // access if a parallel OwnerSlabLease is still marked active (for
+        // example after `std::mem::forget(lease)` or during an unwind) so
+        // `Drop` never aliases or aborts on double-panic.
+        if !self.owner.is_parallel_lease_active() {
+            self.green_teardown();
+            self.green_release_seat();
+        }
         super::data::dynamic_module_registry::retire_dynamic_module_registry(
             &self.dynamic_module_registry,
         );

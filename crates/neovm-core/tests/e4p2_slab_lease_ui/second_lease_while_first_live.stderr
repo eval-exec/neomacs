@@ -1,0 +1,19 @@
+error[E0499]: cannot borrow `*handle` as mutable more than once at a time
+ --> tests/e4p2_slab_lease_ui/second_lease_while_first_live.rs:7:18
+  |
+6 |     let first = handle.lease(&mut run).unwrap();
+  |                 ------ first mutable borrow occurs here
+7 |     let second = handle.lease(&mut run).unwrap();
+  |                  ^^^^^^ second mutable borrow occurs here
+8 |     let _ = (first.heap_identity(), second.heap_identity());
+  |              ----- first borrow later used here
+
+error[E0499]: cannot borrow `run` as mutable more than once at a time
+ --> tests/e4p2_slab_lease_ui/second_lease_while_first_live.rs:7:31
+  |
+6 |     let first = handle.lease(&mut run).unwrap();
+  |                              -------- first mutable borrow occurs here
+7 |     let second = handle.lease(&mut run).unwrap();
+  |                               ^^^^^^^^ second mutable borrow occurs here
+8 |     let _ = (first.heap_identity(), second.heap_identity());
+  |              ----- first borrow later used here
