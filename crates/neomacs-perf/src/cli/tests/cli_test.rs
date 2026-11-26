@@ -142,6 +142,7 @@ fn compare_command_requires_two_editors_and_parses_repetition_controls() {
             timeout: Duration::from_secs(180),
             machine: MachinePolicy::default(),
             counters: None,
+            gate_metric: crate::SuiteGateMetric::ScenarioPrimary,
             video_file: None,
             journal_file: None,
             baseline_execution_overrides: crate::ExecutionOverrides::default(),
@@ -655,4 +656,125 @@ fn editor_arguments_are_run_only_until_comparison_transport_is_explicit() {
     assert!(parse(&arguments).is_ok());
     arguments.push("--editor-arg=--rows-query-admission=exact-proven");
     assert!(parse(&arguments).is_err());
+}
+
+#[test]
+fn compare_command_supports_instruction_gate_metric_and_requires_hardware_counters() {
+    let err = parse(&[
+        "compare",
+        "org-editing",
+        "--baseline-editor",
+        "base",
+        "--candidate-editor",
+        "cand",
+        "--gate-metric",
+        "instructions",
+    ])
+    .expect_err("--gate-metric instructions without --hardware-counters must fail");
+    assert!(
+        err.to_string().contains("--hardware-counters"),
+        "expected --hardware-counters error, got {err}"
+    );
+
+    let PerfCommand::Compare {
+        gate_metric,
+        counters,
+        ..
+    } = parse(&[
+        "compare",
+        "org-editing",
+        "--baseline-editor",
+        "base",
+        "--candidate-editor",
+        "cand",
+        "--hardware-counters",
+        "--gate-metric",
+        "instructions",
+    ])
+    .expect("parse instruction-gated compare")
+    else {
+        panic!("expected compare");
+    };
+    assert_eq!(gate_metric, crate::SuiteGateMetric::Instructions);
+    assert_eq!(counters, Some(CounterScope::EditLoop));
+
+    // Startup defaults to WholeProcess when --counter-scope is omitted.
+    let PerfCommand::Compare {
+        gate_metric: startup_gate,
+        counters: startup_counters,
+        ..
+    } = parse(&[
+        "compare",
+        "startup",
+        "--baseline-editor",
+        "base",
+        "--candidate-editor",
+        "cand",
+        "--hardware-counters",
+        "--gate-metric",
+        "instructions",
+    ])
+    .expect("parse instruction-gated startup compare")
+    else {
+        panic!("expected compare");
+    };
+    assert_eq!(startup_gate, crate::SuiteGateMetric::Instructions);
+    assert_eq!(startup_counters, Some(CounterScope::WholeProcess));
+}
+
+#[test]
+fn cli_formatting_preserves_small_mad_precision_and_non_convertible_label() {
+    let small_summary = crate::ComparisonMetricSummary {
+        metric: crate::MetricName::PerBytecodeCallCpuTime,
+        unit: crate::MetricUnit::MicrosecondsPerBytecodeCall,
+        baseline_samples: vec![0.019, 0.0192, 0.0194],
+        candidate_samples: vec![0.020, 0.0203, 0.0206],
+        paired_samples: vec![],
+        baseline_median: 0.0192,
+        candidate_median: 0.0203,
+        baseline_median_absolute_deviation: 0.0002,
+        candidate_median_absolute_deviation: 0.0003,
+        candidate_to_baseline_ratio: 0.0203 / 0.0192,
+        percent_change: ((0.0203 / 0.0192) - 1.0) * 100.0,
+    };
+    let lines = super::format_comparison_summary_lines(&small_summary, &[], 20_000_000);
+    assert!(
+        lines[1].contains("0.019200 ± 0.000200 MAD"),
+        "small-scale MAD must not round to 0.000: {}",
+        lines[1]
+    );
+
+    let latency_row = crate::SuiteScenarioResult {
+        scenario: ScenarioId::GuiInputLatency,
+        maximum_regression_percent: 0.0,
+        maximum_drift_percent: None,
+        gate_metric: crate::SuiteGateMetric::NonGatingReport,
+        non_convertible_reason: Some(crate::NonConvertibleTimingReason::InputToRedisplayLatency),
+        iterations: Some(1000),
+        percent_change: Some(23.51),
+        gate_summary: Some(crate::ComparisonMetricSummary {
+            metric: crate::MetricName::P99InputToRedisplayLatency,
+            unit: crate::MetricUnit::Microseconds,
+            baseline_samples: vec![1000.0, 1500.0, 1744.0],
+            candidate_samples: vec![1200.0, 2154.0, 2341.0],
+            paired_samples: vec![],
+            baseline_median: 1744.0,
+            candidate_median: 2154.0,
+            baseline_median_absolute_deviation: 439.0,
+            candidate_median_absolute_deviation: 686.0,
+            candidate_to_baseline_ratio: 2154.0 / 1744.0,
+            percent_change: 23.51,
+        }),
+        context_metrics: vec![],
+        comparison_artifact: PathBuf::from("gui-input-latency/comparison.json"),
+    };
+    let line = super::format_suite_row_summary(&latency_row);
+    assert!(
+        line.contains("REPORT [non-gating: input-to-redisplay-latency]"),
+        "non-gating report row stdout must display REPORT label: {line}"
+    );
+    assert!(
+        line.contains("span=134.1%"),
+        "non-gating report row stdout must print sample span: {line}"
+    );
 }

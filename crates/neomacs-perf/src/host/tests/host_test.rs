@@ -22,6 +22,38 @@ fn host() -> HostProvenance {
 }
 
 #[test]
+fn host_provenance_captures_linux_loadavg_and_deserializes_legacy_artifacts() {
+    let collected = crate::host::collect_host_provenance(&MachinePolicy::default());
+    if cfg!(target_os = "linux") {
+        let loadavg = collected
+            .loadavg
+            .as_deref()
+            .expect("Linux host provenance must record /proc/loadavg");
+        assert_eq!(
+            loadavg.split_whitespace().count(),
+            3,
+            "unexpected /proc/loadavg triplet format: {loadavg:?}"
+        );
+    }
+
+    let legacy_json = serde_json::json!({
+        "operating_system": "linux",
+        "architecture": "x86_64",
+        "kernel_release": "6.0-test",
+        "cpu_model": "test-cpu",
+        "logical_cpu_count": 8,
+        "allowed_cpus": "0-7",
+        "selected_cpu": 0,
+        "scaling_governor": "performance",
+        "perf_event_paranoid": 1,
+        "continuous_integration": false
+    });
+    let decoded: HostProvenance =
+        serde_json::from_value(legacy_json).expect("legacy HostProvenance without loadavg");
+    assert_eq!(decoded.loadavg, None);
+}
+
+#[test]
 fn linux_cpu_list_parser_handles_singletons_and_ranges() {
     for cpu in [0, 1, 2, 4, 6, 7] {
         assert!(cpu_list_contains("0-2,4,6-7", cpu));

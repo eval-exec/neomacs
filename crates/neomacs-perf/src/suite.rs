@@ -11,9 +11,10 @@ use sha2::{Digest, Sha256};
 use crate::artifact_store::{unix_time_ms, write_json_atomically};
 use crate::host::{collect_host_provenance, validate_cohort_load_policy};
 use crate::{
-    BaselineManifest, ComparisonRequest, ComparisonSampleCount, ComparisonVerdict, CounterScope,
-    MachinePolicy, MeasurementProvenance, MetricName, PerfError, PerfHarness, ResolvedGuardTools,
-    ScenarioId, VerifiedBaselineManifest, resolve_guard_tools, scenario,
+    BaselineManifest, ComparisonMetricSummary, ComparisonRequest, ComparisonSampleCount,
+    ComparisonVerdict, CounterScope, MachinePolicy, MeasurementProvenance, MetricName, PerfError,
+    PerfHarness, ResolvedGuardTools, ScenarioId, VerifiedBaselineManifest, resolve_guard_tools,
+    scenario,
 };
 
 static SUITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -64,16 +65,48 @@ impl FromStr for SuiteId {
     }
 }
 
-/// Which metric a suite row gates against its regression budget.
+/// Why a suite row cannot be gated on instruction count alone.
+///
+/// Only rows whose contract is an actual elapsed-time property (input-to-present
+/// latency, vsync cadence, or stall-avoidance deadline) remain time-gated; every
+/// compute/editing/rendering-work row converts to `SuiteGateMetric::Instructions`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NonConvertibleTimingReason {
+    /// Per-keystroke command-dispatch-to-redisplay `p99` tail-latency
+    /// distribution across 1,000 `self-insert-command` + `font-lock-ensure` +
+    /// `(redisplay t)` steps under headless Weston (capturing GC, redisplay,
+    /// and GPU-submission tail stalls that an aggregate instruction count
+    /// cannot express).
+    InputToRedisplayLatency,
+}
+
+impl fmt::Display for NonConvertibleTimingReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InputToRedisplayLatency => f.write_str("input-to-redisplay-latency"),
+        }
+    }
+}
+
+/// Which metric (and gating mode) a suite row applies.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SuiteGateMetric {
-    /// Gate on the scenario's default primary metric (wall or CPU time).
+    /// Gate on the scenario's default primary metric (legacy wall/CPU mode).
     #[default]
     ScenarioPrimary,
     /// Gate on retired user-space instructions (`MetricName::Instructions`),
     /// requiring `--hardware-counters` and rejecting any run that omits it.
+    /// Wall/CPU time and cycles remain recorded in `context_metrics` with full
+    /// spread (median + MAD) for human interpretation, never as a pass gate.
     Instructions,
+    /// Non-gating report row: executes the full scenario and still rejects the
+    /// suite if any correctness or infrastructure invariant fails (state
+    /// assertion), while reporting the primary timing metric (with median, MAD,
+    /// and full sample span) and hardware-counter context without failing the
+    /// suite on timing regressions or drift.
+    NonGatingReport,
 }
 
 impl SuiteGateMetric {
@@ -81,11 +114,152 @@ impl SuiteGateMetric {
         matches!(self, Self::Instructions)
     }
 
+    pub const fn is_gating(self) -> bool {
+        matches!(self, Self::ScenarioPrimary | Self::Instructions)
+    }
+
     pub fn metric_for(self, scenario_id: ScenarioId) -> MetricName {
         match self {
-            Self::ScenarioPrimary => scenario(scenario_id).primary_metric,
+            Self::ScenarioPrimary | Self::NonGatingReport => scenario(scenario_id).primary_metric,
             Self::Instructions => MetricName::Instructions,
         }
+    }
+}
+
+/// Measured multi-run A/A calibration inputs for an instruction-gated row.
+///
+/// Budgets are computed directly in code from these recorded measurements rather
+/// than hand-typed as unverified literals:
+/// - `budget = ceil_to_0.5%(max(tier_floor, 10 * max_rel_mad, 2 * max_span))`
+/// - `drift  = ceil_to_0.5%(max(0.5, 2 * max_aa_drift, max_span))` when strictly
+///   less than `budget`, else `None` (a drift ceiling >= per-run budget is
+///   redundant).
+///
+/// The `tier_floor_percent` (`1.0%` for deterministic rows) is an explicit
+/// noise-independent engineering policy tolerance for routine compiler/codegen
+/// churn and instruction-for-cycle trade-offs, shared identically between
+/// `SuiteId::Standard` and `SuiteId::OrgEditingGuard`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InstructionCalibration {
+    /// Independent clean A/A runs backing these maxima (must be >= 2).
+    pub runs: u32,
+    /// Maximum samples per side across the calibration runs (must be >= 5).
+    pub samples_per_side: u32,
+    /// Maximum relative MAD (% of median) across baseline/candidate arms and runs.
+    pub max_rel_mad_percent: f64,
+    /// Maximum within-run sample span `(max - min) / min * 100` across runs.
+    pub max_span_percent: f64,
+    /// Maximum `|A/A percent_change|` across runs.
+    pub max_aa_delta_percent: f64,
+    /// Maximum `|drift|` between clean A/A runs.
+    pub max_aa_drift_percent: f64,
+    /// Noise-independent engineering floor (`%`).
+    pub tier_floor_percent: f64,
+}
+
+const fn max_f64(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else if a >= b {
+        a
+    } else {
+        b
+    }
+}
+
+const fn ceil_to_half_percent(value: f64) -> f64 {
+    if !value.is_finite() || value <= 0.0 {
+        return f64::NAN;
+    }
+    let doubled = value * 2.0;
+    let truncated = doubled as u64;
+    let ceiled = if doubled - (truncated as f64) > 1e-12 {
+        truncated + 1
+    } else {
+        truncated
+    };
+    (ceiled as f64) / 2.0
+}
+
+impl InstructionCalibration {
+    pub const fn budget_percent(&self) -> f64 {
+        let raw = max_f64(
+            self.tier_floor_percent,
+            max_f64(10.0 * self.max_rel_mad_percent, 2.0 * self.max_span_percent),
+        );
+        ceil_to_half_percent(raw)
+    }
+
+    pub const fn drift_budget_percent(&self) -> Option<f64> {
+        let budget = self.budget_percent();
+        let raw = max_f64(
+            0.5,
+            max_f64(2.0 * self.max_aa_drift_percent, self.max_span_percent),
+        );
+        let drift = ceil_to_half_percent(raw);
+        if drift.is_finite() && budget.is_finite() && drift < budget {
+            Some(drift)
+        } else {
+            None
+        }
+    }
+
+    /// Deny-by-default validation: every calibrated instruction row must come
+    /// from >= `min_runs` independent runs with >= 5 samples per side, finite
+    /// non-negative measurements, a positive floor, and a computed budget
+    /// strictly wider than its observed A/A span.
+    pub fn validate(&self, min_runs: u32) -> Result<(), String> {
+        if self.runs < min_runs {
+            return Err(format!(
+                "calibration requires at least {min_runs} independent clean A/A runs, got {}",
+                self.runs
+            ));
+        }
+        if self.samples_per_side < 5 {
+            return Err(format!(
+                "calibration requires at least 5 samples per side, got {}",
+                self.samples_per_side
+            ));
+        }
+        for (name, value) in [
+            ("max_rel_mad_percent", self.max_rel_mad_percent),
+            ("max_span_percent", self.max_span_percent),
+            ("max_aa_delta_percent", self.max_aa_delta_percent),
+            ("max_aa_drift_percent", self.max_aa_drift_percent),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(format!(
+                    "{name} must be finite and non-negative, got {value}"
+                ));
+            }
+        }
+        if !self.tier_floor_percent.is_finite() || self.tier_floor_percent <= 0.0 {
+            return Err(format!(
+                "tier_floor_percent must be finite and positive, got {}",
+                self.tier_floor_percent
+            ));
+        }
+        let budget = self.budget_percent();
+        if !budget.is_finite() || budget <= 0.0 {
+            return Err(format!(
+                "computed budget_percent must be finite and positive, got {budget}"
+            ));
+        }
+        if budget <= self.max_span_percent {
+            return Err(format!(
+                "computed budget ({budget:.2}%) must strictly exceed observed max_span_percent ({:.3}%)",
+                self.max_span_percent
+            ));
+        }
+        if let Some(drift) = self.drift_budget_percent() {
+            if !drift.is_finite() || drift <= 0.0 || drift <= self.max_aa_drift_percent {
+                return Err(format!(
+                    "computed drift_budget_percent ({drift:.2}%) must exceed observed max_aa_drift_percent ({:.2}%)",
+                    self.max_aa_drift_percent
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -97,54 +271,333 @@ pub struct SuiteScenario {
     /// suite fails, or `None` to record the drift without gating on it.
     ///
     /// The budget above compares the candidate against the baseline within one
-    /// run, so a row that regresses a little every time never trips it: five
-    /// 2% regressions against a 10% budget all pass individually. This is the
-    /// ratchet that catches the accumulation.
-    ///
-    /// It is armed per row rather than globally because a gate that fires on
-    /// noise gets switched off. `rust-lsp-typing` spans 6.6% between runs of
-    /// the same binary and `sustained-editing` about 0.8%, so arming those
-    /// would produce false failures; the batch rows reproduce to ~0.03%.
+    /// run, so a row that regresses a little every time never trips it. This is
+    /// the ratchet that catches the accumulation, sized from multi-run clean
+    /// A/A drift + span so clean A/A runs never false-trip it.
     pub maximum_drift_percent: Option<f64>,
     pub gate_metric: SuiteGateMetric,
+    /// Per-row counter scope override when `EditLoop` does not cover the
+    /// workload's measured phase (for example, `Startup` must count
+    /// `WholeProcess` instructions because `editor-workloads.el` only runs a
+    /// single `(redisplay t)` inside the edit-loop gate after startup ends).
+    pub counter_scope_override: Option<CounterScope>,
+    /// Required explanation whenever `gate_metric` is not `Instructions`.
+    pub non_convertible_reason: Option<NonConvertibleTimingReason>,
+    /// Required multi-run calibration descriptor for every `Instructions` row.
+    pub calibration: Option<InstructionCalibration>,
 }
 
+impl SuiteScenario {
+    /// Resolve the hardware counter scope for this row, preserving main-thread
+    /// selection when a whole-process override applies.
+    pub const fn effective_counter_scope(
+        &self,
+        requested: Option<CounterScope>,
+    ) -> Option<CounterScope> {
+        match (requested, self.counter_scope_override) {
+            (Some(req), Some(CounterScope::WholeProcess)) if req.main_thread_only() => {
+                Some(CounterScope::WholeProcessMainThread)
+            }
+            (Some(_), Some(override_scope)) => Some(override_scope),
+            (counters, _) => counters,
+        }
+    }
+}
+
+const ORG_EDITING_CALIBRATION: InstructionCalibration = InstructionCalibration {
+    runs: 2,
+    samples_per_side: 5,
+    max_rel_mad_percent: 0.0073,
+    max_span_percent: 0.068,
+    max_aa_delta_percent: 0.00,
+    max_aa_drift_percent: 0.00,
+    tier_floor_percent: 1.0,
+};
+
+const ORG_EDITING_HEAVY_CALIBRATION: InstructionCalibration = InstructionCalibration {
+    runs: 2,
+    samples_per_side: 5,
+    max_rel_mad_percent: 0.0259,
+    max_span_percent: 0.075,
+    max_aa_delta_percent: 0.01,
+    max_aa_drift_percent: 0.00,
+    tier_floor_percent: 1.0,
+};
+
+// All 22 instruction-gated rows compute their budgets directly in Rust via
+// `InstructionCalibration::budget_percent()` and `drift_budget_percent()` from
+// multi-run clean A/A maxima on Matrix (Intel i9-14900K, Linux 6.18.64, CPU 0,
+// governor=performance):
+// - 2 independent full-suite n=5 clean A/A runs (loadavg 53.9->25.7 and
+//   27.6->9.4), plus
+// - an additional n=10 clean A/A run for all 5 bimodal/higher-spread rows
+//   (`startup`, `mx-tab-completion`, `magit-status-heavy`,
+//   `rust-lsp-typing-heavy`, `sustained-editing`).
+//
+// `GuiInputLatency` stays in the suite as `SuiteGateMetric::NonGatingReport`:
+// it still executes all 1,000 edits + redisplays under Weston (failing the
+// suite on any correctness/infra rejection) while reporting its `p99` latency
+// and full span non-gating because clean A/A spanned 73.0%-411.6%
+// (`(max - min) / min * 100`).
 const STANDARD_SCENARIOS: &[SuiteScenario] = &[
-    suite_scenario(ScenarioId::RustLspTyping, 8.0),
-    suite_scenario(ScenarioId::RustLspTypingHeavy, 8.0),
-    suite_scenario(ScenarioId::MxTabCompletion, 8.0),
-    // The steady row reproduces to a few percent (warm-up amortized away),
-    // so it carries the same budget as the cold row it complements.
-    suite_scenario(ScenarioId::MxTabCompletionSteady, 8.0),
-    // Scrolling wobbles a few percent with ambient load (TUI redisplay), in
-    // line with the other TUI rows.
-    suite_scenario(ScenarioId::Scrolling, 8.0),
-    suite_scenario(ScenarioId::BytecodeCallLoop, 5.0),
-    suite_scenario(ScenarioId::EditingSimulation, 8.0),
-    suite_scenario(ScenarioId::Startup, 12.0),
-    suite_scenario(ScenarioId::SustainedEditing, 8.0),
-    suite_scenario(ScenarioId::GuiInputLatency, 15.0),
-    ratcheted(ScenarioId::OrgEditing, 8.0, 2.0),
-    ratcheted(ScenarioId::OrgEditingHeavy, 8.0, 2.0),
-    ratcheted(ScenarioId::MagitStatus, 10.0, 2.0),
-    ratcheted(ScenarioId::OrgJournalOpen, 10.0, 2.0),
-    ratcheted(ScenarioId::LargeFileEditing, 8.0, 2.0),
-    ratcheted(ScenarioId::Indentation, 8.0, 2.0),
-    ratcheted(ScenarioId::RegexSearch, 8.0, 2.0),
-    // Byte-code rows carry the same budgets as the source rows they mirror.
-    ratcheted(ScenarioId::MagitStatusCompiled, 10.0, 2.0),
-    ratcheted(ScenarioId::MagitStatusHeavy, 10.0, 2.0),
-    ratcheted(ScenarioId::FileOpen, 8.0, 2.0),
-    ratcheted(ScenarioId::ProcessOutput, 10.0, 2.0),
-    ratcheted(ScenarioId::OrgJournalOpenCompiled, 10.0, 2.0),
-    // A pure compute round trip in batch, so it reproduces as tightly as the
-    // other batch rows and can carry the same drift ratchet.
-    ratcheted(ScenarioId::LspJsonRpc, 8.0, 2.0),
+    instruction_calibrated(
+        ScenarioId::RustLspTyping,
+        InstructionCalibration {
+            runs: 4,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.0567,
+            max_span_percent: 0.620,
+            max_aa_delta_percent: 0.07,
+            max_aa_drift_percent: 0.07,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated(
+        ScenarioId::RustLspTypingHeavy,
+        InstructionCalibration {
+            runs: 3,
+            samples_per_side: 10,
+            max_rel_mad_percent: 0.3960,
+            max_span_percent: 1.710,
+            max_aa_delta_percent: 0.06,
+            max_aa_drift_percent: 0.04,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated(
+        ScenarioId::MxTabCompletion,
+        InstructionCalibration {
+            runs: 3,
+            samples_per_side: 10,
+            max_rel_mad_percent: 1.2655,
+            max_span_percent: 4.865,
+            max_aa_delta_percent: 1.78,
+            max_aa_drift_percent: 3.45,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated(
+        ScenarioId::MxTabCompletionSteady,
+        InstructionCalibration {
+            runs: 4,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.2065,
+            max_span_percent: 0.470,
+            max_aa_delta_percent: 0.21,
+            max_aa_drift_percent: 0.27,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated(
+        ScenarioId::Scrolling,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.1706,
+            max_span_percent: 0.649,
+            max_aa_delta_percent: 0.17,
+            max_aa_drift_percent: 0.22,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated(
+        ScenarioId::BytecodeCallLoop,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.0001,
+            max_span_percent: 0.000,
+            max_aa_delta_percent: 0.00,
+            max_aa_drift_percent: 0.00,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated(
+        ScenarioId::EditingSimulation,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.0059,
+            max_span_percent: 0.036,
+            max_aa_delta_percent: 0.00,
+            max_aa_drift_percent: 0.00,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    // Startup work happens before the edit-loop gate opens; counting
+    // WholeProcess instructions gates real startup instead of an empty redisplay.
+    instruction_calibrated_with_scope(
+        ScenarioId::Startup,
+        InstructionCalibration {
+            runs: 5,
+            samples_per_side: 10,
+            max_rel_mad_percent: 2.9247,
+            max_span_percent: 16.134,
+            max_aa_delta_percent: 13.68,
+            max_aa_drift_percent: 16.69,
+            tier_floor_percent: 1.0,
+        },
+        CounterScope::WholeProcess,
+    ),
+    instruction_calibrated(
+        ScenarioId::SustainedEditing,
+        InstructionCalibration {
+            runs: 5,
+            samples_per_side: 10,
+            max_rel_mad_percent: 0.1554,
+            max_span_percent: 5.285,
+            max_aa_delta_percent: 0.07,
+            max_aa_drift_percent: 0.12,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    // Non-convertible & non-gating report: p99 command-dispatch-to-redisplay
+    // tail latency under Weston spanned 73.0%-411.6% (`(max - min) / min * 100`)
+    // on clean A/A. Keep the row in the suite as a correctness/state assertion
+    // (rejecting failed redisplays) while reporting p99 latency + span non-gating.
+    non_gating_report(
+        ScenarioId::GuiInputLatency,
+        NonConvertibleTimingReason::InputToRedisplayLatency,
+    ),
+    instruction_calibrated_ratcheted(ScenarioId::OrgEditing, ORG_EDITING_CALIBRATION),
+    instruction_calibrated_ratcheted(ScenarioId::OrgEditingHeavy, ORG_EDITING_HEAVY_CALIBRATION),
+    instruction_calibrated_ratcheted(
+        ScenarioId::MagitStatus,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.0640,
+            max_span_percent: 0.191,
+            max_aa_delta_percent: 0.04,
+            max_aa_drift_percent: 0.02,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated_ratcheted(
+        ScenarioId::OrgJournalOpen,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.0101,
+            max_span_percent: 0.116,
+            max_aa_delta_percent: 0.02,
+            max_aa_drift_percent: 0.02,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated_ratcheted(
+        ScenarioId::LargeFileEditing,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.0085,
+            max_span_percent: 0.034,
+            max_aa_delta_percent: 0.01,
+            max_aa_drift_percent: 0.01,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated_ratcheted(
+        ScenarioId::Indentation,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.0278,
+            max_span_percent: 0.074,
+            max_aa_delta_percent: 0.01,
+            max_aa_drift_percent: 0.01,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated_ratcheted(
+        ScenarioId::RegexSearch,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.0443,
+            max_span_percent: 0.188,
+            max_aa_delta_percent: 0.00,
+            max_aa_drift_percent: 0.00,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated_ratcheted(
+        ScenarioId::MagitStatusCompiled,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.1442,
+            max_span_percent: 0.335,
+            max_aa_delta_percent: 0.07,
+            max_aa_drift_percent: 0.08,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated_ratcheted(
+        ScenarioId::MagitStatusHeavy,
+        InstructionCalibration {
+            runs: 3,
+            samples_per_side: 10,
+            max_rel_mad_percent: 0.5535,
+            max_span_percent: 2.427,
+            max_aa_delta_percent: 1.67,
+            max_aa_drift_percent: 1.86,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated_ratcheted(
+        ScenarioId::FileOpen,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.0145,
+            max_span_percent: 0.037,
+            max_aa_delta_percent: 0.00,
+            max_aa_drift_percent: 0.00,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated_ratcheted(
+        ScenarioId::ProcessOutput,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.0498,
+            max_span_percent: 0.148,
+            max_aa_delta_percent: 0.02,
+            max_aa_drift_percent: 0.01,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated_ratcheted(
+        ScenarioId::OrgJournalOpenCompiled,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.0514,
+            max_span_percent: 0.157,
+            max_aa_delta_percent: 0.03,
+            max_aa_drift_percent: 0.05,
+            tier_floor_percent: 1.0,
+        },
+    ),
+    instruction_calibrated_ratcheted(
+        ScenarioId::LspJsonRpc,
+        InstructionCalibration {
+            runs: 2,
+            samples_per_side: 5,
+            max_rel_mad_percent: 0.1364,
+            max_span_percent: 0.375,
+            max_aa_delta_percent: 0.15,
+            max_aa_drift_percent: 0.14,
+            tier_floor_percent: 1.0,
+        },
+    ),
 ];
 
 const ORG_EDITING_GUARD_SCENARIOS: &[SuiteScenario] = &[
-    instruction_gated(ScenarioId::OrgEditing, 1.0),
-    instruction_gated(ScenarioId::OrgEditingHeavy, 1.0),
+    instruction_calibrated(ScenarioId::OrgEditing, ORG_EDITING_CALIBRATION),
+    instruction_calibrated(ScenarioId::OrgEditingHeavy, ORG_EDITING_HEAVY_CALIBRATION),
 ];
 
 /// Issue #702 long-line truncated scroll regression guard.
@@ -165,36 +618,87 @@ const ORG_EDITING_GUARD_SCENARIOS: &[SuiteScenario] = &[
 const SCROLLING_LONG_LINES_GUARD_SCENARIOS: &[SuiteScenario] =
     &[instruction_gated(ScenarioId::ScrollingLongLines, 2.0)];
 
-const fn suite_scenario(scenario: ScenarioId, maximum_regression_percent: f64) -> SuiteScenario {
-    SuiteScenario {
-        scenario,
-        maximum_regression_percent,
-        maximum_drift_percent: None,
-        gate_metric: SuiteGateMetric::ScenarioPrimary,
-    }
-}
-
-/// A row whose run-to-run variance is small enough to ratchet against history.
-const fn ratcheted(
-    scenario: ScenarioId,
-    maximum_regression_percent: f64,
-    maximum_drift_percent: f64,
-) -> SuiteScenario {
-    SuiteScenario {
-        scenario,
-        maximum_regression_percent,
-        maximum_drift_percent: Some(maximum_drift_percent),
-        gate_metric: SuiteGateMetric::ScenarioPrimary,
-    }
-}
-
-/// A deterministic guard row gated directly on retired user-space instructions.
+/// A standalone guard row gated directly on retired user-space instructions
+/// with an explicit fixed regression budget.
 const fn instruction_gated(scenario: ScenarioId, maximum_regression_percent: f64) -> SuiteScenario {
     SuiteScenario {
         scenario,
         maximum_regression_percent,
         maximum_drift_percent: None,
         gate_metric: SuiteGateMetric::Instructions,
+        counter_scope_override: None,
+        non_convertible_reason: None,
+        calibration: None,
+    }
+}
+
+/// A row whose contract is a genuine elapsed-time / tail-latency property that
+/// instruction counts cannot express and whose relative A/A noise cannot gate
+/// CI reliably: kept in the suite as a correctness/state assertion with
+/// non-gating latency + span reporting.
+const fn non_gating_report(
+    scenario: ScenarioId,
+    reason: NonConvertibleTimingReason,
+) -> SuiteScenario {
+    SuiteScenario {
+        scenario,
+        maximum_regression_percent: 0.0,
+        maximum_drift_percent: None,
+        gate_metric: SuiteGateMetric::NonGatingReport,
+        counter_scope_override: None,
+        non_convertible_reason: Some(reason),
+        calibration: None,
+    }
+}
+
+/// A deterministic row gated on retired user-space instructions with both
+/// per-run budget and drift ratchet derived in code from multi-run calibration.
+const fn instruction_calibrated_ratcheted(
+    scenario: ScenarioId,
+    calibration: InstructionCalibration,
+) -> SuiteScenario {
+    SuiteScenario {
+        scenario,
+        maximum_regression_percent: calibration.budget_percent(),
+        maximum_drift_percent: calibration.drift_budget_percent(),
+        gate_metric: SuiteGateMetric::Instructions,
+        counter_scope_override: None,
+        non_convertible_reason: None,
+        calibration: Some(calibration),
+    }
+}
+
+/// A deterministic row gated directly on retired user-space instructions using
+/// a budget derived in code from multi-run calibration.
+const fn instruction_calibrated(
+    scenario: ScenarioId,
+    calibration: InstructionCalibration,
+) -> SuiteScenario {
+    SuiteScenario {
+        scenario,
+        maximum_regression_percent: calibration.budget_percent(),
+        maximum_drift_percent: None,
+        gate_metric: SuiteGateMetric::Instructions,
+        counter_scope_override: None,
+        non_convertible_reason: None,
+        calibration: Some(calibration),
+    }
+}
+
+/// An instruction-gated row that requires a specific hardware counter scope.
+const fn instruction_calibrated_with_scope(
+    scenario: ScenarioId,
+    calibration: InstructionCalibration,
+    counter_scope: CounterScope,
+) -> SuiteScenario {
+    SuiteScenario {
+        scenario,
+        maximum_regression_percent: calibration.budget_percent(),
+        maximum_drift_percent: None,
+        gate_metric: SuiteGateMetric::Instructions,
+        counter_scope_override: Some(counter_scope),
+        non_convertible_reason: None,
+        calibration: Some(calibration),
     }
 }
 
@@ -227,8 +731,9 @@ impl SuiteId {
 
     pub const fn required_counter_scope(self) -> Option<CounterScope> {
         match self {
-            Self::Standard => None,
-            Self::OrgEditingGuard | Self::ScrollingLongLinesGuard => Some(CounterScope::EditLoop),
+            Self::Standard | Self::OrgEditingGuard | Self::ScrollingLongLinesGuard => {
+                Some(CounterScope::EditLoop)
+            }
         }
     }
 }
@@ -326,13 +831,59 @@ impl SuiteRequest {
             });
         }
         if let (Some(expected), Some(actual)) = (self.suite.required_counter_scope(), self.counters)
-            && actual != expected
         {
-            return Err(PerfError::CounterScopeMismatch {
-                suite: self.suite,
-                expected,
-                actual,
-            });
+            let allowed = match self.suite {
+                SuiteId::Standard => {
+                    matches!(
+                        actual,
+                        CounterScope::EditLoop | CounterScope::EditLoopMainThread
+                    )
+                }
+                SuiteId::OrgEditingGuard | SuiteId::ScrollingLongLinesGuard => actual == expected,
+            };
+            if !allowed {
+                return Err(PerfError::CounterScopeMismatch {
+                    suite: self.suite,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        for row in self.suite.scenarios() {
+            if row.gate_metric == SuiteGateMetric::Instructions {
+                match row.calibration {
+                    Some(calibration) => {
+                        if let Err(reason) = calibration.validate(2) {
+                            return Err(PerfError::SuiteCalibrationInvalid {
+                                suite: self.suite,
+                                scenario: row.scenario,
+                                reason,
+                            });
+                        }
+                    }
+                    None if matches!(self.suite, SuiteId::Standard | SuiteId::OrgEditingGuard) => {
+                        return Err(PerfError::SuiteCalibrationInvalid {
+                            suite: self.suite,
+                            scenario: row.scenario,
+                            reason: "instruction-gated row is missing InstructionCalibration"
+                                .to_string(),
+                        });
+                    }
+                    None => {}
+                }
+                if !row.maximum_regression_percent.is_finite()
+                    || row.maximum_regression_percent <= 0.0
+                {
+                    return Err(PerfError::SuiteCalibrationInvalid {
+                        suite: self.suite,
+                        scenario: row.scenario,
+                        reason: format!(
+                            "maximum_regression_percent must be finite and positive, got {}",
+                            row.maximum_regression_percent
+                        ),
+                    });
+                }
+            }
         }
         if self.suite.requires_baseline_manifest() && self.baseline_manifest.is_none() {
             return Err(PerfError::BaselineManifestRequired { suite: self.suite });
@@ -369,7 +920,7 @@ impl SuiteRequest {
         .with_frontend(spec.default_frontend)
         .with_timeout(self.timeout)
         .with_machine_policy(self.machine.clone())
-        .with_counters(self.counters)
+        .with_counters(suite_scenario.effective_counter_scope(self.counters))
         .with_primary_metric(
             suite_scenario
                 .gate_metric
@@ -391,7 +942,21 @@ pub struct SuiteScenarioResult {
     pub maximum_drift_percent: Option<f64>,
     #[serde(default)]
     pub gate_metric: SuiteGateMetric,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub non_convertible_reason: Option<NonConvertibleTimingReason>,
+    /// Iteration count executed per run so readers can compute per-operation /
+    /// per-key instruction rates directly from `gate_summary`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iterations: Option<u32>,
     pub percent_change: Option<f64>,
+    /// Full median + MAD spread summary for the gating metric.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_summary: Option<ComparisonMetricSummary>,
+    /// Non-gating context summaries (wall/CPU time and cycles with full median
+    /// + MAD spread). Reported for human inspection; never evaluated by
+    /// `evaluate_suite`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_metrics: Vec<ComparisonMetricSummary>,
     pub comparison_artifact: PathBuf,
 }
 
@@ -402,6 +967,40 @@ pub struct SuiteHistoryLink {
     pub retained_path: PathBuf,
     pub suite_id: String,
     pub sha256: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SuiteDriftSkipReason {
+    SuiteChanged,
+    BaselineEditorChanged,
+    CounterScopeChanged,
+    PreviousRowMissing,
+    GateMetricChanged,
+    IterationsChanged,
+    PreviousValueInvalid,
+}
+
+impl fmt::Display for SuiteDriftSkipReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            Self::SuiteChanged => "previous suite id differs from current suite",
+            Self::BaselineEditorChanged => "previous baseline editor differs from current baseline",
+            Self::CounterScopeChanged => "previous hardware counter scope differs from current",
+            Self::PreviousRowMissing => "scenario missing from previous suite artifact",
+            Self::GateMetricChanged => "gate_metric changed between previous and current suite",
+            Self::IterationsChanged => "scenario iteration count changed since previous suite",
+            Self::PreviousValueInvalid => "previous scenario measurement was missing or invalid",
+        };
+        f.write_str(text)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuiteDriftSkip {
+    pub scenario: ScenarioId,
+    pub reason: SuiteDriftSkipReason,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -469,6 +1068,8 @@ pub struct SuiteArtifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard_tools: Option<ResolvedGuardTools>,
     pub scenarios: Vec<SuiteScenarioResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped_drifts: Vec<SuiteDriftSkip>,
     pub verdict: SuiteVerdict,
 }
 
@@ -557,28 +1158,48 @@ impl PerfHarness {
                 canonical_candidate.as_deref(),
             );
             let report = self.compare(&comparison)?;
-            let percent_change = match &report.artifact.verdict {
-                ComparisonVerdict::Valid { summary } => Some(summary.percent_change),
-                ComparisonVerdict::Rejected { .. } => None,
+            let (percent_change, gate_summary, context_metrics) = match &report.artifact.verdict {
+                ComparisonVerdict::Valid {
+                    summary,
+                    context_metrics,
+                } => (
+                    Some(summary.percent_change),
+                    Some(summary.clone()),
+                    context_metrics.clone(),
+                ),
+                ComparisonVerdict::Rejected { .. } => (None, None, Vec::new()),
             };
             scenario_results.push(SuiteScenarioResult {
                 scenario: suite_scenario.scenario,
                 maximum_regression_percent: suite_scenario.maximum_regression_percent,
                 maximum_drift_percent: suite_scenario.maximum_drift_percent,
                 gate_metric: suite_scenario.gate_metric,
+                non_convertible_reason: suite_scenario.non_convertible_reason,
+                iterations: Some(report.artifact.input.iterations.get()),
                 percent_change,
+                gate_summary,
+                context_metrics,
                 comparison_artifact: report.artifact_path,
             });
         }
-        let verdict = evaluate_suite(&scenario_results, previous_artifact.as_ref());
+        let baseline_editor = baseline_manifest.as_ref().map_or_else(
+            || request.baseline_editor.clone(),
+            |v| v.binary_path.clone(),
+        );
+        let (verdict, skipped_drifts) = evaluate_suite_with_context(
+            &scenario_results,
+            previous_artifact.as_ref(),
+            Some(SuiteEvaluationContext {
+                suite: request.suite,
+                baseline_editor: &baseline_editor,
+                counters: request.counters,
+            }),
+        );
         let artifact = SuiteArtifact {
             schema_version: SUITE_ARTIFACT_SCHEMA_VERSION,
             suite_id,
             suite: request.suite,
-            baseline_editor: baseline_manifest.as_ref().map_or_else(
-                || request.baseline_editor.clone(),
-                |v| v.binary_path.clone(),
-            ),
+            baseline_editor,
             candidate_editor: canonical_candidate
                 .unwrap_or_else(|| request.candidate_editor.clone()),
             samples_per_side: request.samples,
@@ -592,6 +1213,7 @@ impl PerfHarness {
             baseline_manifest,
             guard_tools,
             scenarios: scenario_results,
+            skipped_drifts,
             verdict,
         };
         let artifact_path = directory.join("suite.json");
@@ -603,24 +1225,83 @@ impl PerfHarness {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SuiteEvaluationContext<'a> {
+    pub(crate) suite: SuiteId,
+    pub(crate) baseline_editor: &'a Path,
+    pub(crate) counters: Option<CounterScope>,
+}
+
+impl SuiteScenarioResult {
+    /// Percentage change evaluated by the suite gate: prefers `gate_summary`
+    /// when present (verifying its metric matches `gate_metric.metric_for`),
+    /// falling back to `percent_change` for legacy or minimal fixtures.
+    /// Rejects non-finite values so `NaN` / `Infinity` never silently passes.
+    pub(crate) fn effective_percent_change(&self) -> Option<f64> {
+        let value = match &self.gate_summary {
+            Some(summary) => {
+                if summary.metric != self.gate_metric.metric_for(self.scenario) {
+                    return None;
+                }
+                summary.percent_change
+            }
+            None => self.percent_change?,
+        };
+        value.is_finite().then_some(value)
+    }
+
+    fn has_valid_gate_budgets(&self) -> bool {
+        if !self.gate_metric.is_gating() {
+            return true;
+        }
+        if !self.maximum_regression_percent.is_finite() || self.maximum_regression_percent <= 0.0 {
+            return false;
+        }
+        if let Some(drift) = self.maximum_drift_percent
+            && (!drift.is_finite() || drift <= 0.0)
+        {
+            return false;
+        }
+        true
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn evaluate_suite(
     scenarios: &[SuiteScenarioResult],
     previous: Option<&SuiteArtifact>,
 ) -> SuiteVerdict {
+    evaluate_suite_with_context(scenarios, previous, None).0
+}
+
+pub(crate) fn evaluate_suite_with_context(
+    scenarios: &[SuiteScenarioResult],
+    previous: Option<&SuiteArtifact>,
+    context: Option<SuiteEvaluationContext<'_>>,
+) -> (SuiteVerdict, Vec<SuiteDriftSkip>) {
+    // Fail closed on any rejected/missing/non-finite observation OR any
+    // non-finite/non-positive gating budget (including NaN/Infinity).
+    // NonGatingReport rows still fail here on correctness/infra rejection.
     let rejected = scenarios
         .iter()
-        .filter(|scenario| scenario.percent_change.is_none())
+        .filter(|scenario| {
+            scenario.effective_percent_change().is_none() || !scenario.has_valid_gate_budgets()
+        })
         .map(|scenario| scenario.scenario)
         .collect::<Vec<_>>();
     if !rejected.is_empty() {
-        return SuiteVerdict::Rejected {
-            scenarios: rejected,
-        };
+        return (
+            SuiteVerdict::Rejected {
+                scenarios: rejected,
+            },
+            Vec::new(),
+        );
     }
     let regressions = scenarios
         .iter()
+        .filter(|scenario| scenario.gate_metric.is_gating())
         .filter_map(|scenario| {
-            let percent_change = scenario.percent_change?;
+            let percent_change = scenario.effective_percent_change()?;
             (percent_change > scenario.maximum_regression_percent).then_some(SuiteRegression {
                 scenario: scenario.scenario,
                 maximum_regression_percent: scenario.maximum_regression_percent,
@@ -629,39 +1310,99 @@ pub(crate) fn evaluate_suite(
         })
         .collect::<Vec<_>>();
     if !regressions.is_empty() {
-        return SuiteVerdict::Regressed { regressions };
+        return (SuiteVerdict::Regressed { regressions }, Vec::new());
     }
     // Only now consider drift: a row already over its own budget is reported as
-    // a regression rather than as history.
-    let drifts = previous
-        .map(|previous| {
-            scenarios
-                .iter()
-                .filter_map(|scenario| {
-                    let maximum_drift_percent = scenario.maximum_drift_percent?;
-                    let current = scenario.percent_change?;
-                    let before = previous
-                        .scenarios
-                        .iter()
-                        .find(|earlier| earlier.scenario == scenario.scenario)?
-                        .percent_change?;
-                    let drift_percent = current - before;
-                    (drift_percent > maximum_drift_percent).then_some(SuiteDrift {
+    // a regression rather than as history. Verify full lineage compatibility
+    // (suite, baseline_editor, counters, gate_metric, iterations, valid value)
+    // and record every skipped drift check explicitly so stale/mismatched
+    // history can never silently disarm the ratchet.
+    let mut drifts = Vec::new();
+    let mut skipped = Vec::new();
+    if let Some(previous) = previous {
+        for scenario in scenarios {
+            if !scenario.gate_metric.is_gating() {
+                continue;
+            }
+            let Some(maximum_drift_percent) = scenario.maximum_drift_percent else {
+                continue;
+            };
+            let Some(current) = scenario.effective_percent_change() else {
+                continue;
+            };
+            if let Some(ctx) = context {
+                if previous.suite != ctx.suite {
+                    skipped.push(SuiteDriftSkip {
                         scenario: scenario.scenario,
-                        previous_percent_change: before,
-                        current_percent_change: current,
-                        drift_percent,
-                        maximum_drift_percent,
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if drifts.is_empty() {
+                        reason: SuiteDriftSkipReason::SuiteChanged,
+                    });
+                    continue;
+                }
+                if previous.baseline_editor != ctx.baseline_editor {
+                    skipped.push(SuiteDriftSkip {
+                        scenario: scenario.scenario,
+                        reason: SuiteDriftSkipReason::BaselineEditorChanged,
+                    });
+                    continue;
+                }
+                if previous.counters != ctx.counters {
+                    skipped.push(SuiteDriftSkip {
+                        scenario: scenario.scenario,
+                        reason: SuiteDriftSkipReason::CounterScopeChanged,
+                    });
+                    continue;
+                }
+            }
+            let Some(earlier) = previous
+                .scenarios
+                .iter()
+                .find(|earlier| earlier.scenario == scenario.scenario)
+            else {
+                skipped.push(SuiteDriftSkip {
+                    scenario: scenario.scenario,
+                    reason: SuiteDriftSkipReason::PreviousRowMissing,
+                });
+                continue;
+            };
+            if earlier.gate_metric != scenario.gate_metric {
+                skipped.push(SuiteDriftSkip {
+                    scenario: scenario.scenario,
+                    reason: SuiteDriftSkipReason::GateMetricChanged,
+                });
+                continue;
+            }
+            if earlier.iterations != scenario.iterations {
+                skipped.push(SuiteDriftSkip {
+                    scenario: scenario.scenario,
+                    reason: SuiteDriftSkipReason::IterationsChanged,
+                });
+                continue;
+            }
+            let Some(before) = earlier.effective_percent_change() else {
+                skipped.push(SuiteDriftSkip {
+                    scenario: scenario.scenario,
+                    reason: SuiteDriftSkipReason::PreviousValueInvalid,
+                });
+                continue;
+            };
+            let drift_percent = current - before;
+            if drift_percent > maximum_drift_percent {
+                drifts.push(SuiteDrift {
+                    scenario: scenario.scenario,
+                    previous_percent_change: before,
+                    current_percent_change: current,
+                    drift_percent,
+                    maximum_drift_percent,
+                });
+            }
+        }
+    }
+    let verdict = if drifts.is_empty() {
         SuiteVerdict::Passed
     } else {
         SuiteVerdict::Drifted { drifts }
-    }
+    };
+    (verdict, skipped)
 }
 
 fn resolve_canonical_candidate_editor(path: &Path) -> Result<PathBuf, PerfError> {

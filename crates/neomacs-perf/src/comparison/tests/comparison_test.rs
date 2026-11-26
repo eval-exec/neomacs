@@ -301,7 +301,8 @@ fn valid_repetitions_produce_medians_and_candidate_ratio() {
                 candidate_median_absolute_deviation: 3.0,
                 candidate_to_baseline_ratio: 0.6,
                 percent_change: -40.0,
-            }
+            },
+            context_metrics: Vec::new(),
         }
     );
 }
@@ -677,7 +678,8 @@ fn native_video_identity_is_content_based_not_path_based() {
 fn paired_comparison_samples_follow_indexes_despite_observation_order() {
     let mut observations = valid_observations();
     observations.reverse();
-    let ComparisonVerdict::Valid { summary } = evaluate_comparison(&input(), &observations) else {
+    let ComparisonVerdict::Valid { summary, .. } = evaluate_comparison(&input(), &observations)
+    else {
         panic!("valid runs remain valid in a different observation order");
     };
     for (pair, (index, baseline, candidate, change)) in summary.paired_samples.iter().zip([
@@ -769,4 +771,75 @@ fn comparisons_reject_missing_or_changing_execution_environment() {
                 .contains("paired_samples")
         );
     }
+}
+
+#[test]
+fn instruction_gated_cpu_primary_scenario_still_reports_wall_time_context_with_spread() {
+    let mut cmp_input = input();
+    cmp_input.scenario = ScenarioId::BytecodeCallLoop;
+    cmp_input.primary_metric = MetricName::Instructions;
+    cmp_input.counters = Some(crate::CounterScope::EditLoop);
+
+    let mut observations = Vec::new();
+    for sample_index in 0..3 {
+        for role in [ComparisonRunRole::Baseline, ComparisonRunRole::Candidate] {
+            let scale = if role == ComparisonRunRole::Candidate {
+                1.05
+            } else {
+                1.0
+            };
+            let jitter = 1.0 + f64::from(sample_index) * 0.01;
+            let mut obs = valid_observation(role, sample_index, 0.020 * scale * jitter);
+            obs.run.scenario = ScenarioId::BytecodeCallLoop;
+            obs.verdict = RunVerdict::Valid {
+                measurements: vec![
+                    Measurement {
+                        name: MetricName::Instructions,
+                        value: 10_000_000_000.0 * scale,
+                        unit: MetricUnit::Count,
+                    },
+                    Measurement {
+                        name: MetricName::PerBytecodeCallCpuTime,
+                        value: 0.020 * scale * jitter,
+                        unit: MetricUnit::MicrosecondsPerBytecodeCall,
+                    },
+                    Measurement {
+                        name: MetricName::ProcessWallTime,
+                        value: 520_000.0 * scale * jitter,
+                        unit: MetricUnit::Microseconds,
+                    },
+                    Measurement {
+                        name: MetricName::CpuCycles,
+                        value: 2_000_000_000.0 * scale * jitter,
+                        unit: MetricUnit::Count,
+                    },
+                ],
+            };
+            observations.push(obs);
+        }
+    }
+
+    let ComparisonVerdict::Valid {
+        summary,
+        context_metrics,
+    } = evaluate_comparison(&cmp_input, &observations)
+    else {
+        panic!("valid instruction comparison expected");
+    };
+    assert_eq!(summary.metric, MetricName::Instructions);
+    let context_names: Vec<MetricName> = context_metrics.iter().map(|c| c.metric).collect();
+    assert!(
+        context_names.contains(&MetricName::PerBytecodeCallCpuTime),
+        "CPU-time primary must remain in context_metrics: {context_names:?}"
+    );
+    let wall = context_metrics
+        .iter()
+        .find(|c| c.metric == MetricName::ProcessWallTime)
+        .expect("CPU-time-primary scenario must include ProcessWallTime in context_metrics");
+    assert!(wall.baseline_median_absolute_deviation > 0.0);
+    assert!(wall.candidate_median_absolute_deviation > 0.0);
+    assert!(
+        context_names.contains(&MetricName::CpuCycles),
+        "CpuCycles must remain in context_metrics: {context_names:?}"
+    );
 }

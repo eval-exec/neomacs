@@ -195,13 +195,14 @@ playback has no query or readback cost.
 
 `perf compare` runs both editors once per sample and reverses their order for
 each odd-numbered pair. This interleaving reduces time-order bias from thermal
-or background-load drift. The primary statistic is the median of the
-scenario's primary metric: `per-edit-cpu-time` for `rust-lsp-typing`,
-`per-completion-cpu-time` for `mx-tab-completion`, and
-`per-bytecode-call-cpu-time` for `bytecode-call-loop`. The promoted editor
-workflows use per-operation wall time, and sustained editing uses per-edit wall
-time, so the thresholded suite tracks the campaign's wall-clock objective. At
-least three samples per editor are required. The artifact reports the sorted raw samples, both
+or background-load drift. By default `perf compare` summarizes the scenario's
+primary timing metric (`per-edit-cpu-time` for `rust-lsp-typing`,
+`per-completion-cpu-time` for `mx-tab-completion`, `per-bytecode-call-cpu-time`
+for `bytecode-call-loop`, per-operation/per-edit wall time for the editor
+workloads); pass `--hardware-counters --gate-metric instructions` to gate on
+retired user-space instructions while reporting wall/CPU time and cycles as
+`[non-gating]` context (which is what `perf suite standard` does for all 22
+convertible rows). At least three samples per editor are required. The artifact reports the sorted raw samples, both
 medians, median absolute deviation (MAD), candidate-to-baseline ratio, and
 percentage change. These are descriptive measurements, not a
 statistical-significance claim; use more than the default five samples for
@@ -372,20 +373,127 @@ working GNU Emacs and drop the parity pin for the session:
 
 ## Thresholded suites and history
 
-`perf suite standard` runs interleaved comparisons for the portable catalogued
+`perf suite standard` runs interleaved comparisons for the 23 portable catalogued
 scenarios. The physical-display `sustained-native-video` workload remains an
 explicit standalone run or comparison because it requires a retained input
-asset and a controlled GPU/display host. Each suite scenario owns an explicit
-maximum regression percentage. The
-suite passes only when every child comparison is valid and no candidate median
-exceeds its budget. `tmp/perf-suites/<suite-id>/suite.json` records every
-threshold, observed percentage change, and immutable child comparison path.
-The standard budgets are 5% for `bytecode-call-loop`, 10% for `magit-status`
-and `org-journal-open`, 12% for `startup`, 15% for `gui-input-latency`, and 8%
-for every other scenario. Pass `--previous-suite PATH` to retain lineage to an earlier suite
+asset and a controlled GPU/display host.
+
+**Gate metric vs. reported context:**
+- **22 of the 23 `standard` rows gate on retired user-space instructions
+  (`MetricName::Instructions`)**, requiring `--hardware-counters` and rejecting
+  any run that omits instructions rather than falling back to wall time:
+  - 21 rows use the requested edit-loop counter scope (`CounterScope::EditLoop`):
+    the 6 TUI rows (`rust-lsp-typing`, `rust-lsp-typing-heavy`,
+    `mx-tab-completion`, `mx-tab-completion-steady`, `scrolling`,
+    `sustained-editing`), the bytecode VM loop (`bytecode-call-loop`), and the
+    14 batch editor-workload rows (`editing-simulation`, `org-editing`,
+    `org-editing-heavy`, `magit-status`, `magit-status-compiled`,
+    `magit-status-heavy`, `org-journal-open`, `org-journal-open-compiled`,
+    `large-file-editing`, `indentation`, `regex-search`, `file-open`,
+    `process-output`, `lsp-json-rpc`).
+  - `startup` overrides its counter scope to `CounterScope::WholeProcess` (or
+    `WholeProcessMainThread` when main-thread-only was requested) because real
+    startup completes before the edit-loop gate opens.
+  - Every instruction-gated row preserves the scenario's wall/CPU time and
+    `CpuCycles` (with full baseline/candidate medians, MAD spreads, and paired
+    deltas) in `context_metrics` and prints both `GATE` and `CONTEXT [non-gating]`
+    on its own output line.
+- **Non-convertible duration-property rows** (not representable by retired
+  instruction count):
+  - `gui-input-latency` (`SuiteGateMetric::NonGatingReport` in `standard`):
+    measures the per-keystroke command-dispatch-to-redisplay `p99` tail-latency
+    distribution across 1,000 `self-insert-command` + `font-lock-ensure` +
+    `(redisplay t)` steps under headless Weston (capturing GC, redisplay, and
+    GPU-submission tail stalls). Because clean A/A spanned `73.0%–411.6%`
+    (`(max - min) / min * 100`) on `Matrix`, it is **removed from timing
+    gating** and kept in `standard` as a correctness/state assertion (rejecting
+    the suite if any edit or redisplay fails) while printing
+    `REPORT [non-gating: input-to-redisplay-latency]` with median, MAD, and
+    full sample span (`span=...%`) plus hardware-counter context.
+  - `sustained-native-video` (`P99VideoPresentationInterval`, standalone):
+    measures 60 Hz video decode and presentation cadence (vsync intervals).
+  - Outside `neomacs-perf`: `neomacs-gui-tests`'s `continuous_120hz_scroll_*`
+    (120 Hz trackpad presentation latency & <= 3.25-interval cadence) and
+    `*_presents_while_command_is_stalled` / `*_have_confirmed_input_latency`
+    (render-thread stall deadlines and live compositor receipt latency).
+
+Each instruction-gated row computes its budget and drift ratchet directly in
+code (`InstructionCalibration::budget_percent()` and `drift_budget_percent()`
+in `src/suite.rs`) from multi-run clean A/A maxima on `Matrix` (Intel i9-14900K,
+Linux `6.18.64`, CPU 0, `performance` governor; 2 full-suite `n=5` runs at
+`loadavg` `53.9->25.7` and `27.6->9.4`, plus `n=10` runs on the 5 bimodal rows
+at `loadavg` `20.8->31.7`, verified by two additional clean-tip `n=5` suites
+including live `--previous-suite` drift at `loadavg` `52.3->37.9` and
+`37.9->22.9`, both exiting `suite_rc=0`):
+
+- `budget = ceil_to_0.5%(max(1.0%, 10 * max_rel_mad, 2 * max_span))`
+- `drift  = ceil_to_0.5%(max(0.5%, 2 * max_aa_drift, max_span))` (when `< budget`)
+- The `1.0%` tier floor is an explicit noise-independent engineering policy
+  tolerance for normal compiler/codegen churn and instruction-for-cycle
+  trade-offs, shared identically by `SuiteId::Standard` and
+  `SuiteId::OrgEditingGuard`.
+
+**Honest detection envelope:** This suite detects regressions above each row's
+calibrated instruction budget (folding in all out-of-sample clean A/A runs) —
+12 tight rows detect `> 1.0%`, 3 rows detect `> 1.5%`, `scrolling` detects
+`> 2.0%`, `mx-tab-completion-steady` detects `> 2.5%`, and 5 bimodal /
+whole-process rows only detect `> 4.0%–32.5%` (`rust-lsp-typing-heavy`,
+`magit-status-heavy`, `sustained-editing`, `mx-tab-completion`, `startup`).
+
+*Mutation isolation note:* Live RED proofs use two strictly separated throwaway
+builds on `da4a1d4e58` so no hot-loop selector check contaminates other groups:
+(1) a standalone `Op::Call(n)`-only build (`+6.02%` on `bytecode-call-loop`,
+zero selector branch), and (2) a non-`Op::Call` template covering only the 5
+low-frequency sites (`re-search-forward`, `self-insert-command`, `scroll-up`,
+`main()`, `call-process`) whose inactive `slot=0` control measures `+0.00%` on
+`bytecode-call-loop` and `+0.02%` on `org-editing`. Running the full 23-row
+`perf suite standard` against `re-search-forward` alone fails (`suite_rc=1`)
+strictly on the 4 regex-exercising rows (`org-editing` `+3.67%`,
+`org-editing-heavy` `+1.61%`, `editing-simulation` `+2.69%`, `regex-search`
+`+12.10%`) while `bytecode-call-loop` stays `-0.00%` (PASS).
+
+| Scenario | Gate | Budget (drift) | Calibration A/A span (max MAD) | Clean-tip verification A/A span (`run1`/`run2`) | Smallest isolated live RED proof (zero `Op::Call` cross-talk) |
+| --- | --- | ---: | ---: | ---: | --- |
+| `bytecode-call-loop` | Instructions | 1.0% (—) | 0.000% (0.0001%) | 0.000% / 0.000% | `+6.02%` (standalone `Op::Call(n)` build; `-0.00%` in `g1` `suite_rc=1`; `+0.99%`/`+1.01%` unit-tested) |
+| `org-editing` | Instructions | 1.0% (0.5%) | 0.068% (0.0073%) | 0.033% / 0.099% | `+1.62%` (`re-search-forward`; `+3.67%` in `suite_rc=1`) |
+| `org-editing-heavy` | Instructions | 1.0% (0.5%) | 0.075% (0.0259%) | 0.050% / 0.082% | `+1.61%` (`re-search-forward`; `+1.61%` in `suite_rc=1`) |
+| `editing-simulation` | Instructions | 1.0% (—) | 0.036% (0.0059%) | 0.025% / 0.017% | `+2.69%` (`re-search-forward` `suite_rc=1`) |
+| `regex-search` | Instructions | 1.0% (0.5%) | 0.188% (0.0443%) | 0.130% / 0.121% | `+12.10%` (`re-search-forward` `suite_rc=1`) |
+| `process-output` | Instructions | 1.0% (0.5%) | 0.148% (0.0498%) | 0.141% / 0.140% | `+1.72%` (`call-process`) |
+| `magit-status` | Instructions | 1.0% (0.5%) | 0.191% (0.0640%) | 0.188% / 0.105% | `+1.68%` (`call-process`) |
+| `large-file-editing` | Instructions | 1.0% (0.5%) | 0.034% (0.0085%) | 0.042% / 0.016% | large regressions only (no dedicated isolated live RED proof) |
+| `indentation` | Instructions | 1.0% (0.5%) | 0.074% (0.0278%) | 0.097% / 0.052% | large regressions only (no dedicated isolated live RED proof) |
+| `file-open` | Instructions | 1.0% (0.5%) | 0.037% (0.0145%) | 0.028% / 0.061% | large regressions only (no dedicated isolated live RED proof) |
+| `org-journal-open` | Instructions | 1.0% (0.5%) | 0.116% (0.0101%) | 0.058% / 0.128% | large regressions only (no dedicated isolated live RED proof) |
+| `org-journal-open-compiled` | Instructions | 1.0% (0.5%) | 0.157% (0.0514%) | 0.048% / 0.165% | large regressions only (no dedicated isolated live RED proof) |
+| `rust-lsp-typing` | Instructions | 1.5% (—) | 0.620% (0.0567%) | 0.620% / 0.282% | `+2.20%` (`self-insert-command`; large regressions only for `< 1.5%`) |
+| `magit-status-compiled` | Instructions | 1.5% (0.5%) | 0.335% (0.1442%) | 0.303% / 0.201% | large regressions only (no dedicated isolated live RED proof) |
+| `lsp-json-rpc` | Instructions | 1.5% (0.5%) | 0.375% (0.1364%) | 0.207% / 0.077% | large regressions only (no dedicated isolated live RED proof) |
+| `scrolling` | Instructions | 2.0% (—) | 0.649% (0.1706%) | 0.548% / 0.823% | `+2.85%` (`scroll-up`) |
+| `mx-tab-completion-steady` | Instructions | 2.5% (—) | 0.470% (0.2065%) | 0.333% / 0.470% | `+3.80%` (`self-insert-command`, large regressions only) |
+| `rust-lsp-typing-heavy` | Instructions | 4.0% (—) | 1.710% (0.3960%) | 1.383% / 0.325% | `+5.73%` (`self-insert-command`, large regressions only) |
+| `magit-status-heavy` | Instructions | 6.0% (4.0%) | 2.427% (0.5535%) | 1.302% / 1.389% | `+8.32%` (`call-process`, large regressions only) |
+| `sustained-editing` | Instructions | 11.0% (—) | 5.285% (0.1554%) | 5.285% / 3.647% | `+14.61%` (`self-insert-command`, large regressions only) |
+| `mx-tab-completion` (cold) | Instructions | 13.0% (—) | 4.865% (1.2655%) | 2.261% / 2.689% | large regressions only (cold warm-up; steady row detects `> 2.5%`) |
+| `startup` (`WholeProcess`) | Instructions | 32.5% (—) | 16.134% (2.9247%) | 11.052% / 16.134% | `+35.71%` (`main()`, large regressions only) |
+| `gui-input-latency` | `NonGatingReport` | non-gating | 188.4% / 73.0% | 244.2% / 411.6% | non-gating (state assertion only; rejects failed redisplays) |
+
+The suite passes only when every child comparison is valid (including
+correctness/state checks on `gui-input-latency`), every gating budget is finite
+and positive (failing closed to `SuiteVerdict::Rejected` on any `NaN`,
+infinite, non-positive, or metric-mismatched budget/summary), and no candidate
+median exceeds its calibrated budget or drift ratchet.
+`tmp/perf-suites/<suite-id>/suite.json` records every threshold, gate summary,
+non-gating wall/CPU context summary (including `ProcessWallTime` on
+CPU-time-primary rows so all 22 converted rows carry wall-time spread),
+observed percentage change, `skipped_drifts`, and immutable child comparison
+path. Pass `--previous-suite PATH` to retain lineage to an earlier suite
 artifact. The new suite copies that predecessor beside `suite.json` and records
 its SHA-256, suite ID, and source path; missing, malformed, or unknown-schema
-history is rejected.
+history is rejected. Drift ratchets verify matching suite ID, baseline editor,
+counter scope, `gate_metric`, and iteration count, recording every skipped row
+explicitly in `skipped_drifts` and printing a stdout `warning =` line so stale
+or mismatched history never silently disarms drift detection.
 
 The `neomacs performance suite` GitHub Actions workflow runs only on a
 `self-hosted, linux, x64, neomacs-perf` runner. That runner supplies the
@@ -398,7 +506,7 @@ deliberately excluded from regression decisions.
 
 A dedicated `org-editing-guard` suite (`perf suite org-editing-guard`) gates
 `org-editing` and `org-editing-heavy` directly on retired user-space
-instructions (`MetricName::Instructions`) with a `+1.0%` maximum regression
+instructions (`MetricName::Instructions`) with the same `+1.0%` calibrated
 budget against the frozen `v0.0.21` release asset pinned in
 `.github/perf-baselines/v0.0.21.json`. Both `--hardware-counters` and
 `--baseline-manifest .github/perf-baselines/v0.0.21.json` are required at the
@@ -415,8 +523,9 @@ candidate arms (no `LD_LIBRARY_PATH`, `PATH`, `NEOMACS_RUNTIME_ROOT`, or
 `NEOVM_*`/`NEOMACS_*` knobs forwarded), and set-compares the full recorded
 `passthrough_environment` alongside canonical executable paths, baseline
 executable SHA-256/size, and loaded portable dump SHA-256/size on every
-sample. `SuiteId::Standard` keeps its existing `2.0%` wall-time drift ratchet
-and environment forwarding untouched.
+sample. `SuiteId::Standard` uses calibration-derived drift ratchets (`0.5%` on
+tight rows, `4.0%` on `magit-status-heavy`) and leaves environment forwarding
+untouched.
 
 ## `rust-lsp-typing`
 
