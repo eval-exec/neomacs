@@ -1,0 +1,10 @@
+error[E0616]: field `purpose` of struct `CharTableObj` is private
+ --> tests/chartable_write_ui/direct_purpose_store.rs:8:10
+  |
+8 |         .purpose
+  |          ^^^^^^^ private field
+  |
+help: a method `purpose` also exists, call it with parentheses
+  |
+8 |         .purpose()
+  |                 ++

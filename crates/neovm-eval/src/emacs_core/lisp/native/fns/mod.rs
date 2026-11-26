@@ -1347,11 +1347,11 @@ impl CompareStringsCase {
             .is_none_or(|buf| buf.get_multibyte());
         let up = crate::emacs_core::eval::case_tables::current_case_upcase_table(ctx)?;
         let ascii = match up.as_char_table_obj() {
-            Some(obj) if obj.defalt.get().is_nil() && obj.parent.get().is_nil() => {
-                if obj.ascii.get().as_sub_char_table_obj().is_some() {
-                    CompareStringsAsciiCase::Values(obj.ascii.get())
+            Some(obj) if obj.defalt().is_nil() && obj.parent().is_nil() => {
+                if obj.ascii().as_sub_char_table_obj().is_some() {
+                    CompareStringsAsciiCase::Values(obj.ascii())
                 } else {
-                    CompareStringsAsciiCase::Uniform(obj.ascii.get())
+                    CompareStringsAsciiCase::Uniform(obj.ascii())
                 }
             }
             _ => CompareStringsAsciiCase::Lookup,

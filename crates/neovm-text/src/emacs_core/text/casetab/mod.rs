@@ -620,8 +620,8 @@ pub fn is_case_table_with_symbols(v: &Value, mode: SymbolMode) -> bool {
     };
     let purpose = case_table_sym_id();
     // GNU EQ accepts identical bits before consulting positioned-symbol policy.
-    let purpose_matches = obj.purpose.get().bits() == Value::from_sym_id(purpose).bits()
-        || obj.purpose.get().as_symbol_id(mode) == Some(purpose);
+    let purpose_matches = obj.purpose().bits() == Value::from_sym_id(purpose).bits()
+        || obj.purpose().as_symbol_id(mode) == Some(purpose);
     if !purpose_matches || obj.extras.len() < 3 {
         return false;
     }

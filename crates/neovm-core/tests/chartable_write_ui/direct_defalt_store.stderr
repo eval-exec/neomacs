@@ -1,0 +1,10 @@
+error[E0616]: field `defalt` of struct `CharTableObj` is private
+ --> tests/chartable_write_ui/direct_defalt_store.rs:8:10
+  |
+8 |         .defalt
+  |          ^^^^^^ private field
+  |
+help: a method `defalt` also exists, call it with parentheses
+  |
+8 |         .defalt()
+  |                ++

@@ -1487,26 +1487,27 @@ impl MappedHeapBuilder {
                         // heap refs via the fixup machinery, exactly like
                         // mapped cons car/cdr words).
                         self.write_dump_value_word(
-                            base + std::mem::offset_of!(CharTableObj, defalt),
+                            base + neovm_value::tagged::header::CHAR_TABLE_DEFALT_OFFSET,
                             defalt,
                             heap,
                         );
                         self.write_dump_value_word(
-                            base + std::mem::offset_of!(CharTableObj, parent),
+                            base + neovm_value::tagged::header::CHAR_TABLE_PARENT_OFFSET,
                             parent,
                             heap,
                         );
                         self.write_dump_value_word(
-                            base + std::mem::offset_of!(CharTableObj, purpose),
+                            base + neovm_value::tagged::header::CHAR_TABLE_PURPOSE_OFFSET,
                             purpose,
                             heap,
                         );
                         self.write_dump_value_word(
-                            base + std::mem::offset_of!(CharTableObj, ascii),
+                            base + neovm_value::tagged::header::CHAR_TABLE_ASCII_OFFSET,
                             ascii,
                             heap,
                         );
-                        let mut offset = base + std::mem::offset_of!(CharTableObj, contents);
+                        let mut offset =
+                            base + neovm_value::tagged::header::CHAR_TABLE_CONTENTS_OFFSET;
                         for slot in contents {
                             self.write_dump_value_word(offset, slot, heap);
                             offset += std::mem::size_of::<TaggedValue>();

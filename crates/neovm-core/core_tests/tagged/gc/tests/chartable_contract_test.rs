@@ -46,15 +46,14 @@ fn image_with_child(
     initial_child: TaggedValue,
 ) -> (TaggedValue, ImageBacking) {
     let image = Box::leak(Box::new(ChartableImage {
-        table: CharTableObj {
-            header: VecLikeHeader::new(VecLikeType::CharTable),
-            defalt: TaggedValue::NIL.into(),
-            parent: TaggedValue::NIL.into(),
-            purpose: TaggedValue::NIL.into(),
-            ascii: TaggedValue::NIL.into(),
-            contents: [TaggedValue::NIL; CHAR_TABLE_TOP_SLOTS].map(AtomicTaggedValue::new),
-            extras: LispValueVec::owned(vec![TaggedValue::NIL; 3]),
-        },
+        table: CharTableObj::new_for_test(
+            TaggedValue::NIL,
+            TaggedValue::NIL,
+            TaggedValue::NIL,
+            TaggedValue::NIL,
+            [TaggedValue::NIL; CHAR_TABLE_TOP_SLOTS],
+            LispValueVec::owned(vec![TaggedValue::NIL; 3]),
+        ),
         child: SubCharTableObj {
             header: VecLikeHeader::new(VecLikeType::SubCharTable),
             depth: 3,
@@ -77,7 +76,7 @@ fn image_with_child(
     // SAFETY: headers are fully initialized in process-lifetime storage and are
     // exclusively owned until registration and the admitted collection start.
     let child = unsafe { TaggedValue::from_veclike_ptr(&image.child.header) };
-    image.table.ascii.store_atomic(child);
+    image.table.set_ascii_for_test(child);
     // SAFETY: the registered extents are adjacent, live, initialized image
     // headers. The leaked allocation outlives the heap and its marker.
     unsafe {
@@ -148,12 +147,12 @@ fn mapped_char_table_fields_and_extras_mutation_follows_collector_contract() {
     }
     heap.join_concurrent_mark();
     let obj = table.as_char_table_obj().unwrap();
-    assert_eq!(obj.defalt.get(), TaggedValue::fixnum(4_095));
-    assert_eq!(obj.ascii.get(), TaggedValue::fixnum(4_095));
+    assert_eq!(obj.defalt(), TaggedValue::fixnum(4_095));
+    assert_eq!(obj.ascii(), TaggedValue::fixnum(4_095));
     assert!(
-        obj.contents
-            .iter()
-            .all(|value| value.get() == TaggedValue::fixnum(4_095))
+        obj.contents_values()
+            .into_iter()
+            .all(|value| value == TaggedValue::fixnum(4_095))
     );
     assert_eq!(obj.extras[1], TaggedValue::fixnum(4_095));
 }
@@ -303,15 +302,23 @@ fn miriub3_char_table_fixed_slots_keep_cell_provenance() {
     let table = heap.alloc_char_table(TaggedValue::NIL, TaggedValue::NIL, 1);
     let object = table.as_veclike_ptr().unwrap().cast::<CharTableObj>();
     // SAFETY: the live table owns these initialized fixed cells until heap drop.
-    // Raw field projection retains the allocation's provenance across stores.
+    // Byte offsets come from `std::mem::offset_of!(CharTableObj, ...)` constants
+    // in `neovm-value`, and raw pointer arithmetic retains the allocation's
+    // provenance across stores (no other thread mutates or frees `table`).
+    let base = object.cast::<u8>();
     let slots = unsafe {
         [
-            std::ptr::addr_of!((*object).defalt),
-            std::ptr::addr_of!((*object).parent),
-            std::ptr::addr_of!((*object).purpose),
-            std::ptr::addr_of!((*object).ascii),
-            std::ptr::addr_of!((*object).contents).cast::<AtomicTaggedValue>(),
-            std::ptr::addr_of!((*object).contents)
+            base.add(neovm_value::tagged::header::CHAR_TABLE_DEFALT_OFFSET)
+                .cast::<AtomicTaggedValue>(),
+            base.add(neovm_value::tagged::header::CHAR_TABLE_PARENT_OFFSET)
+                .cast::<AtomicTaggedValue>(),
+            base.add(neovm_value::tagged::header::CHAR_TABLE_PURPOSE_OFFSET)
+                .cast::<AtomicTaggedValue>(),
+            base.add(neovm_value::tagged::header::CHAR_TABLE_ASCII_OFFSET)
+                .cast::<AtomicTaggedValue>(),
+            base.add(neovm_value::tagged::header::CHAR_TABLE_CONTENTS_OFFSET)
+                .cast::<AtomicTaggedValue>(),
+            base.add(neovm_value::tagged::header::CHAR_TABLE_CONTENTS_OFFSET)
                 .cast::<AtomicTaggedValue>()
                 .add(63),
         ]

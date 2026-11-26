@@ -1419,11 +1419,11 @@ fn assert_core_copy_syntax_table_matches_canonical_descriptor(
     assert!(char_table_default(&defaulted).is_nil());
     assert!(char_table_default(&nil_source).is_nil());
     assert_eq!(
-        defaulted.as_char_table_obj().unwrap().parent.get().bits(),
+        defaulted.as_char_table_obj().unwrap().parent().bits(),
         standard.bits()
     );
     assert_eq!(
-        nil_source.as_char_table_obj().unwrap().parent.get().bits(),
+        nil_source.as_char_table_obj().unwrap().parent().bits(),
         standard.bits()
     );
     assert_eq!(ct_ref(&defaulted, 'a' as i64).bits(), standard_a.bits());
@@ -1442,13 +1442,13 @@ fn assert_core_copy_syntax_table_matches_canonical_descriptor(
     let copied = actual_fn(context, vec![source]).expect("explicit source");
     assert_ne!(copied.bits(), source.bits());
     assert_eq!(
-        copied.as_char_table_obj().unwrap().purpose.get().bits(),
+        copied.as_char_table_obj().unwrap().purpose().bits(),
         purpose.bits()
     );
     assert!(char_table_default(&copied).is_nil());
     assert_eq!(char_table_default(&source), Value::fixnum(31));
     assert_eq!(
-        copied.as_char_table_obj().unwrap().parent.get().bits(),
+        copied.as_char_table_obj().unwrap().parent().bits(),
         parent.bits()
     );
     assert_eq!(
@@ -1466,8 +1466,18 @@ fn assert_core_copy_syntax_table_matches_canonical_descriptor(
         "ordinary leaf Values remain shared"
     );
     assert_ne!(
-        copied.as_char_table_obj().unwrap().contents[0].get().bits(),
-        source.as_char_table_obj().unwrap().contents[0].get().bits(),
+        copied
+            .as_char_table_obj()
+            .unwrap()
+            .content(0)
+            .unwrap()
+            .bits(),
+        source
+            .as_char_table_obj()
+            .unwrap()
+            .content(0)
+            .unwrap()
+            .bits(),
         "subtable storage must be fresh"
     );
     char_table_set_char_direct(copied, 0x1234, Value::fixnum(44), SymbolMode::Bare);
@@ -1513,8 +1523,7 @@ fn assert_core_copy_syntax_table_matches_canonical_descriptor(
         positioned_copy
             .as_char_table_obj()
             .unwrap()
-            .purpose
-            .get()
+            .purpose()
             .bits(),
         positioned_purpose.bits()
     );

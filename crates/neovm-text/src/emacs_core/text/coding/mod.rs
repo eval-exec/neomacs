@@ -680,7 +680,7 @@ fn left_single_quote_display(table: Value, mode: SymbolMode) -> LeftSingleQuoteD
     let Some(obj) = table.as_char_table_obj() else {
         return LeftSingleQuoteDisplay::NotAsciiBacktick;
     };
-    let purpose = obj.purpose.get();
+    let purpose = obj.purpose();
     if !eq_value_swp(
         &purpose,
         &Value::symbol("display-table"),

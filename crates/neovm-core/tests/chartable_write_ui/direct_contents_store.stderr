@@ -1,0 +1,5 @@
+error[E0616]: field `contents` of struct `CharTableObj` is private
+ --> tests/chartable_write_ui/direct_contents_store.rs:5:40
+  |
+5 |     table.as_char_table_obj().unwrap().contents[0].store_atomic(Value::T);
+  |                                        ^^^^^^^^ private field

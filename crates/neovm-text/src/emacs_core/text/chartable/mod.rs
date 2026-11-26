@@ -411,7 +411,7 @@ pub fn builtin_char_table_parent(args: Vec<Value>) -> EvalResult {
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
-    Ok(table.as_char_table_obj().unwrap().parent.get())
+    Ok(table.as_char_table_obj().unwrap().parent())
 }
 /// `(set-char-table-parent CHAR-TABLE PARENT)` -- set the parent table.
 #[doc(hidden)]
@@ -440,7 +440,7 @@ pub fn builtin_set_char_table_parent(args: Vec<Value>) -> EvalResult {
                     )],
                 ));
             }
-            cursor = cursor.as_char_table_obj().unwrap().parent.get();
+            cursor = cursor.as_char_table_obj().unwrap().parent();
         }
     }
 

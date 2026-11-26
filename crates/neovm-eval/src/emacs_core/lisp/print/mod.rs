@@ -2718,13 +2718,13 @@ impl<'value> LiteralSlots<'value> {
         match self.source {
             LiteralSlotSource::CharTable(owner) => owner.as_char_table_obj().map_or(0, |table| {
                 [
-                    table.defalt.get(),
-                    table.parent.get(),
-                    table.purpose.get(),
-                    table.ascii.get(),
+                    table.defalt(),
+                    table.parent(),
+                    table.purpose(),
+                    table.ascii(),
                 ]
                 .len()
-                    + table.contents.len()
+                    + table.contents_len()
                     + table.extras.len()
             }),
             LiteralSlotSource::SubCharTable(owner) => owner
@@ -2745,21 +2745,21 @@ impl<'value> LiteralSlots<'value> {
             LiteralSlotSource::CharTable(owner) => {
                 let table = owner.as_char_table_obj()?;
                 let header = [
-                    table.defalt.get(),
-                    table.parent.get(),
-                    table.purpose.get(),
-                    table.ascii.get(),
+                    table.defalt(),
+                    table.parent(),
+                    table.purpose(),
+                    table.ascii(),
                 ];
                 if let Some(value) = header.get(index) {
                     return Some(*value);
                 }
                 let index = index.checked_sub(header.len())?;
-                if let Some(value) = table.contents.get(index) {
-                    return Some(value.get());
+                if let Some(value) = table.content(index) {
+                    return Some(value);
                 }
                 table
                     .extras
-                    .get(index.checked_sub(table.contents.len())?)
+                    .get(index.checked_sub(table.contents_len())?)
                     .copied()
             }
             LiteralSlotSource::SubCharTable(owner) => {
