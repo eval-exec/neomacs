@@ -185,7 +185,12 @@ SELF_TEST_CASES = {
             overrides={("thread_safety_contracts", 0): "FAIL"},
             replay=[("thread_safety_contracts", 0)],
         ),
-        "thread_safety_contracts: 19 runners (expected 19)",
+        # Interpolate EXPECTED rather than restating the number: a hardcoded 19 here
+        # survived the bump to 20 and made `--self-test` fail on main (da4a1d4e58,
+        # found by threadsig). The self-test's job is the replay accounting, not the
+        # count, and the count is EXPECTED's to own.
+        f"thread_safety_contracts: {EXPECTED['thread_safety_contracts']} runners "
+        f"(expected {EXPECTED['thread_safety_contracts']})",
     ),
     "timeout-runner": (False, _nextest_log(overrides={("p1rv_contracts", 0): "TIMEOUT"})),
     "missing-runner": (
