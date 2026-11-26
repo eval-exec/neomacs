@@ -91,7 +91,8 @@ fn clear_font_cache_resets_face_caches() {
         assert!(!slot.borrow().selected_overrides.is_empty());
     });
 
-    let result = clear_font_cache(vec![]).unwrap();
+    let mut eval = Context::new(crate::test_utils::unit_runtime());
+    let result = clear_font_cache(&mut eval, vec![]).unwrap();
     assert!(result.is_nil());
 
     FACE_ATTR_STATE.with(|slot| assert!(slot.borrow().created_lisp_faces.is_empty()));

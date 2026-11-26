@@ -231,9 +231,7 @@ impl TaggedHeap {
     /// and cdr. Nothing is charged or marked per cell (the region was).
     #[inline(always)]
     pub(super) fn take_cons_cell(&mut self) -> *mut ConsCell {
-        let cur = self.jit.cons_cur.get();
-        if cur < self.jit.cons_lim.get() {
-            self.jit.cons_cur.set(cur + size_of::<ConsCell>());
+        if let Some(cur) = self.jit.take_cons_cell() {
             return cur as *mut ConsCell;
         }
         self.refill_cons_region()
@@ -318,10 +316,15 @@ impl TaggedHeap {
         let first_addr = first as usize;
         self.region_book
             .set_cons_recording_and_color(recorded_block, color);
-        self.jit.cons_cur.set(first_addr + size_of::<ConsCell>());
-        self.jit
-            .cons_lim
-            .set(first_addr + n * size_of::<ConsCell>());
+        // SAFETY: `reserve_cons_run` granted `[first, first + n)` exclusively in
+        // a live owned cons block; `first` is handed out now and the remainder
+        // is closed via `close_cons_region` before any collector phase change.
+        unsafe {
+            self.jit.install_cons_region(
+                first_addr + size_of::<ConsCell>(),
+                first_addr + n * size_of::<ConsCell>(),
+            );
+        }
         first
     }
 
@@ -415,13 +418,13 @@ impl TaggedHeap {
     /// Cells of the open cons region not handed out yet (0 when closed).
     #[inline]
     pub(super) fn open_cons_unused(&self) -> usize {
-        (self.jit.cons_lim.get() - self.jit.cons_cur.get()) / size_of::<ConsCell>()
+        (self.jit.cons_lim() - self.jit.cons_cur()) / size_of::<ConsCell>()
     }
 
     /// Slots of the open float region not handed out yet (0 when closed).
     #[inline]
     pub(super) fn open_float_unused(&self) -> usize {
-        (self.jit.float_lim.get() - self.jit.float_cur.get()) / FLOAT_SLOT
+        (self.jit.float_lim() - self.jit.float_cur()) / FLOAT_SLOT
     }
 
     /// Whether any allocation region is open.
@@ -449,9 +452,7 @@ impl TaggedHeap {
     /// already written), else a refill.
     #[inline(always)]
     pub(super) fn take_float_slot(&mut self) -> *mut FloatObj {
-        let cur = self.jit.float_cur.get();
-        if cur < self.jit.float_lim.get() {
-            self.jit.float_cur.set(cur + FLOAT_SLOT);
+        if let Some(cur) = self.jit.take_float_slot() {
             return cur as *mut FloatObj;
         }
         self.refill_float_region()
@@ -510,8 +511,13 @@ impl TaggedHeap {
         stats.float_slots_granted += run.count as u64;
         stats.float_short_runs += u64::from(run.count < 8);
         let first_addr = first as usize;
-        self.jit.float_cur.set(first_addr + FLOAT_SLOT);
-        self.jit.float_lim.set(first_addr + run.count * FLOAT_SLOT);
+        // SAFETY: `float_arena.reserve_run` granted `0..run.count` exclusively
+        // and the loop above initialized every slot's full `FloatObj` header;
+        // `close_float_region` closes the region before any phase flip or sweep.
+        unsafe {
+            self.jit
+                .install_float_region(first_addr + FLOAT_SLOT, first_addr + run.count * FLOAT_SLOT);
+        }
         first
     }
 
@@ -536,13 +542,10 @@ impl TaggedHeap {
     #[inline(never)]
     fn close_float_region(&mut self) {
         let book = self.region_book.float;
-        let cur = self.jit.float_cur.get();
-        let lim = self.jit.float_lim.get();
+        let (cur, lim) = self.jit.clear_float_region();
         if self.generational.enabled {
             self.close_black_float_region(cur);
         }
-        self.jit.float_cur.set(0);
-        self.jit.float_lim.set(0);
         self.region_book.float = FloatRegionSource::Closed;
         let FloatRegionSource::Run { page, source } = book else {
             debug_assert!(cur == 0 && lim == 0, "a closed region has no cursor");
@@ -570,11 +573,8 @@ impl TaggedHeap {
     #[inline(never)]
     fn close_cons_region(&mut self) {
         let source = self.region_book.cons;
-        let cur = self.jit.cons_cur.get();
-        let lim = self.jit.cons_lim.get();
+        let (cur, lim) = self.jit.clear_cons_region();
         self.close_black_cons_region(cur);
-        self.jit.cons_cur.set(0);
-        self.jit.cons_lim.set(0);
         self.region_book.clear_cons_block();
         self.region_book.cons = ConsRegionSource::Closed;
         if source == ConsRegionSource::Closed {
@@ -674,14 +674,14 @@ impl TaggedHeap {
     #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn cons_region_for_test(&self) -> (usize, usize) {
-        (self.jit.cons_cur.get(), self.jit.cons_lim.get())
+        (self.jit.cons_cur(), self.jit.cons_lim())
     }
 
     /// Test hook: the open float region, `(cursor, limit)` (zeros when
     /// closed).
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn float_region_for_test(&self) -> (usize, usize) {
-        (self.jit.float_cur.get(), self.jit.float_lim.get())
+        (self.jit.float_cur(), self.jit.float_lim())
     }
 
     /// Return the live-cons count, excluding unused cells in an open region.

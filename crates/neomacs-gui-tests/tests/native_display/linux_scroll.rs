@@ -10,7 +10,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 pub(super) fn run_rich_pixel_contracts() -> Vec<GuiRunResult> {
@@ -164,7 +164,7 @@ fn capture_stage(
     origin: Option<&RgbaImage>,
     finished: &impl Fn() -> bool,
 ) -> Result<(RgbaImage, Value), String> {
-    let deadline = Instant::now() + Duration::from_secs(18);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(18));
     let origin_sample = origin.map(body_sample);
     let mut previous = Vec::new();
     let mut stable = 0;
@@ -203,7 +203,7 @@ fn capture_stage(
                 stable = 0;
             }
         }
-        if finished() || Instant::now() >= deadline {
+        if finished() || deadline.is_expired() {
             return Err(format!(
                 "no stable rich {stage} presentation before deadline"
             ));

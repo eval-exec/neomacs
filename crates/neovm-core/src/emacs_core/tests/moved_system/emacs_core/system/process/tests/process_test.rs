@@ -954,7 +954,7 @@ fn process_send_region_accepts_get_process_designators_like_gnu() {
     ] {
         builtin_process_send_region_impl(
             &mut pm,
-            &mut buffers,
+            &mut crate::buffer::BufferManagerMut::new(&mut buffers),
             vec![target, Value::fixnum(1), Value::fixnum(4)],
         )
         .expect("process-send-region");
@@ -1509,7 +1509,7 @@ fn connection_process_mutators_keep_childp_plist_in_sync() {
 
     builtin_set_process_buffer_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         vec![Value::make_process(id), Value::NIL],
     )
     .expect("set-process-buffer");
@@ -1606,7 +1606,7 @@ fn process_buffer_storage_uses_buffer_objects() {
 
     builtin_set_process_buffer_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         vec![Value::make_process(id), Value::NIL],
     )
     .expect("set-process-buffer should accept nil");
@@ -1641,7 +1641,7 @@ fn process_mark_storage_uses_marker_objects() {
 
     builtin_set_process_buffer_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         vec![Value::make_process(id), Value::make_buffer(first)],
     )
     .expect("attach first process buffer");
@@ -1660,7 +1660,7 @@ fn process_mark_storage_uses_marker_objects() {
 
     builtin_set_process_buffer_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         vec![Value::make_process(id), Value::make_buffer(second)],
     )
     .expect("attach second process buffer");
@@ -1690,9 +1690,9 @@ fn internal_default_process_filter_moves_stored_process_mark() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let (processes, buffers) = ev.processes_and_buffers_mut();
+    let (processes, mut buffers) = ev.processes_and_buffer_view_mut();
     processes
-        .sync_process_mark(buffers, pid)
+        .sync_process_mark(&mut buffers, pid)
         .expect("sync process mark");
     assert_eq!(
         eval_one_in_context(
@@ -1793,9 +1793,9 @@ fn internal_default_process_sentinel_inserts_status_at_process_mark() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let (processes, buffers) = ev.processes_and_buffers_mut();
+    let (processes, mut buffers) = ev.processes_and_buffer_view_mut();
     processes
-        .sync_process_mark(buffers, pid)
+        .sync_process_mark(&mut buffers, pid)
         .expect("sync process mark");
     let mark = builtin_process_mark_impl(
         &ev.processes(),
@@ -1857,9 +1857,9 @@ fn process_status_notification_runs_default_sentinel_and_reaps() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let (processes, buffers) = ev.processes_and_buffers_mut();
+    let (processes, mut buffers) = ev.processes_and_buffer_view_mut();
     processes
-        .sync_process_mark(buffers, pid)
+        .sync_process_mark(&mut buffers, pid)
         .expect("sync process mark");
     ev.processes_mut()
         .set_child_status_pending(pid, process_status_exit_value(0));
@@ -1918,7 +1918,7 @@ fn make_process_stores_pipe_stderr_process_value() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let process = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2128,7 +2128,7 @@ fn make_process_stderr_pipe_name_preserves_raw_unibyte_owner_bytes() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let process = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2172,7 +2172,7 @@ fn make_process_accepts_existing_pipe_process_for_stderr() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let stderrproc = builtin_make_pipe_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         crate::emacs_core::process::ConnectionProcessCodingVariables::unbound(),
@@ -2187,7 +2187,7 @@ fn make_process_accepts_existing_pipe_process_for_stderr() {
     .expect("make-pipe-process");
     let process = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2214,7 +2214,7 @@ fn make_process_merges_stderr_when_deleted_stderr_pipe_is_stale() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let stderrproc = builtin_make_pipe_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         ConnectionProcessCodingVariables::unbound(),
@@ -2232,7 +2232,7 @@ fn make_process_merges_stderr_when_deleted_stderr_pipe_is_stale() {
 
     let process = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2275,7 +2275,7 @@ fn make_process_merges_stderr_when_pipe_writer_was_already_consumed() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let stderrproc = builtin_make_pipe_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         ConnectionProcessCodingVariables::unbound(),
@@ -2291,7 +2291,7 @@ fn make_process_merges_stderr_when_pipe_writer_was_already_consumed() {
 
     let first = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2311,7 +2311,7 @@ fn make_process_merges_stderr_when_pipe_writer_was_already_consumed() {
 
     let second = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2360,7 +2360,7 @@ fn stderr_pipe_uses_child_stdout_as_its_live_source() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let stderrproc = builtin_make_pipe_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         ConnectionProcessCodingVariables::unbound(),
@@ -2376,7 +2376,7 @@ fn stderr_pipe_uses_child_stdout_as_its_live_source() {
     let stderr_id = stderrproc.as_process_id().expect("stderr pipe process id");
     let process = builtin_make_process_impl(
         &mut pm,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2533,11 +2533,11 @@ fn module_pipe_service_polling_is_nonblocking_before_write_and_services_data() {
     let worker = std::thread::spawn(move || {
         let mut ev = crate::emacs_core::eval_hook_installers::new_context();
         let (buffer_id, id, fd) = {
-            let (processes, threads, buffers) = ev.processes_threads_and_buffers_mut();
+            let (processes, threads, mut buffers) = ev.processes_threads_and_buffer_view_mut();
             let buffer_id = buffers.create_buffer(" *module-service-idle*");
             let process = builtin_make_pipe_process_impl(
                 processes,
-                buffers,
+                &mut buffers,
                 threads,
                 None,
                 ConnectionProcessCodingVariables::unbound(),
@@ -2620,7 +2620,7 @@ fn module_channel_writes_to_make_pipe_process() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let process = builtin_make_pipe_process_impl(
         &mut processes,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         ConnectionProcessCodingVariables::unbound(),
@@ -2723,7 +2723,7 @@ fn stderr_pipe_writer_is_restored_after_pipe_spawn_failure() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let stderrproc = builtin_make_pipe_process_impl(
         &mut processes,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         ConnectionProcessCodingVariables::unbound(),
@@ -2738,7 +2738,7 @@ fn stderr_pipe_writer_is_restored_after_pipe_spawn_failure() {
     .expect("make-pipe-process");
     let result = builtin_make_process_impl(
         &mut processes,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -2800,7 +2800,7 @@ fn stderr_pipe_writer_is_restored_after_pty_spawn_failure() {
     let threads = neovm_eval::emacs_core::threads::ThreadManager::new();
     let stderrproc = builtin_make_pipe_process_impl(
         &mut processes,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         None,
         ConnectionProcessCodingVariables::unbound(),
@@ -2815,7 +2815,7 @@ fn stderr_pipe_writer_is_restored_after_pty_spawn_failure() {
     .expect("make-pipe-process");
     let result = builtin_make_process_impl(
         &mut processes,
-        &mut buffers,
+        &mut crate::buffer::BufferManagerMut::new(&mut buffers),
         &threads,
         vec![
             Value::keyword(":name"),
@@ -9368,9 +9368,9 @@ fn make_network_process_nowait_hostname_dns_failure_is_async_like_gnu() {
         .expect("wait for dns failure");
 
     assert_eq!(outcome, ProcessOutputWaitOutcome::NoProcessActivity);
-    let (processes, buffers) = eval.processes_and_buffers_mut();
+    let (processes, buffers) = eval.processes_and_buffer_view_mut();
     assert_eq!(
-        builtin_process_status_impl(processes, buffers, vec![Value::make_process(id)])
+        builtin_process_status_impl(processes, &buffers, vec![Value::make_process(id)])
             .expect("status"),
         Value::symbol("failed")
     );
@@ -11785,9 +11785,9 @@ fn internal_default_process_filter_inserts_while_another_buffer_is_read_only() {
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let (processes, buffers) = ev.processes_and_buffers_mut();
+    let (processes, mut buffers) = ev.processes_and_buffer_view_mut();
     processes
-        .sync_process_mark(buffers, pid)
+        .sync_process_mark(&mut buffers, pid)
         .expect("sync process mark");
 
     // A different, read-only buffer is current -- the blamed source file.
@@ -20621,6 +20621,160 @@ fn b5_gnutls_deinit_and_boot_failure_unregister_socket_before_dropping() {
     drop(keep_open2);
 }
 
+/// Condvar-backed phase gate shared between a test thread and its loopback
+/// peer thread. Owned by [`TestServerHandle`] so panic unwinding ALWAYS wakes
+/// both phase waits and teardown waits before `join()` regardless of local
+/// variable drop order (preventing AB-BA channel-sender/join deadlocks).
+#[cfg(unix)]
+struct GateState {
+    stage: usize,
+    done: bool,
+    cancelled: bool,
+}
+
+#[cfg(unix)]
+#[derive(Clone)]
+struct ServerGate {
+    inner: std::sync::Arc<(std::sync::Mutex<GateState>, std::sync::Condvar)>,
+}
+
+#[cfg(unix)]
+impl ServerGate {
+    fn new() -> Self {
+        Self {
+            inner: std::sync::Arc::new((
+                std::sync::Mutex::new(GateState {
+                    stage: 0,
+                    done: false,
+                    cancelled: false,
+                }),
+                std::sync::Condvar::new(),
+            )),
+        }
+    }
+
+    fn advance_to(&self, stage: usize) {
+        let (lock, cvar) = &*self.inner;
+        let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if stage > state.stage {
+            state.stage = stage;
+        }
+        cvar.notify_all();
+    }
+
+    fn is_stopped(&self) -> bool {
+        let (lock, _) = &*self.inner;
+        let state = lock.lock().unwrap_or_else(|e| e.into_inner());
+        state.done || state.cancelled
+    }
+
+    /// Block until `stage` is reached. Returns `false` if the handle finished
+    /// or cancelled before `stage` was reached.
+    fn wait_for(&self, stage: usize) -> bool {
+        let (lock, cvar) = &*self.inner;
+        let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = cvar
+            .wait_while(guard, |s| !s.cancelled && !s.done && s.stage < stage)
+            .unwrap_or_else(|e| e.into_inner());
+        !guard.cancelled && !guard.done && guard.stage >= stage
+    }
+
+    /// Block until `finish()` or panic-`Drop` signals teardown.
+    fn wait_done(&self) {
+        let (lock, cvar) = &*self.inner;
+        let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = cvar
+            .wait_while(guard, |s| !s.cancelled && !s.done)
+            .unwrap_or_else(|e| e.into_inner());
+        drop(guard);
+    }
+
+    fn signal_done(&self) {
+        let (lock, cvar) = &*self.inner;
+        let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+        state.done = true;
+        cvar.notify_all();
+    }
+
+    fn cancel(&self) {
+        let (lock, cvar) = &*self.inner;
+        let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+        state.cancelled = true;
+        cvar.notify_all();
+    }
+}
+
+/// Panic-safe handle for a loopback TLS test server thread.
+///
+/// - Normal path (`finish()`): signals `done`, joins the server thread, then
+///   drops `listener_guard`. Subsequent `Drop` sees `handle.is_none()` and
+///   performs zero syscalls (never pokes an already-released port).
+/// - Panic/early-return path (`Drop` while `handle.is_some()`): cancels the
+///   owned [`ServerGate`] (waking any parked `wait_for`/`wait_done` before
+///   joining), pokes our still-bound `listener_guard` on `127.0.0.1:self.port`
+///   to unblock any pending `accept()` without risking port-recycling races,
+///   joins the server thread, and only then releases `listener_guard`.
+#[cfg(unix)]
+struct TestServerHandle {
+    port: u16,
+    gate: ServerGate,
+    listener_guard: Option<TcpListener>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+impl TestServerHandle {
+    fn spawn<F>(listener: TcpListener, f: F) -> Self
+    where
+        F: FnOnce(TcpListener, ServerGate) + Send + 'static,
+    {
+        let port = listener.local_addr().expect("listener local addr").port();
+        let listener_guard = listener.try_clone().expect("clone listener guard");
+        let gate = ServerGate::new();
+        let gate_for_thread = gate.clone();
+        let handle = std::thread::spawn(move || f(listener, gate_for_thread));
+        Self {
+            port,
+            gate,
+            listener_guard: Some(listener_guard),
+            handle: Some(handle),
+        }
+    }
+
+    fn advance_to(&self, stage: usize) {
+        self.gate.advance_to(stage);
+    }
+
+    fn wait_for(&self, stage: usize) -> bool {
+        self.gate.wait_for(stage)
+    }
+
+    fn finish(mut self) {
+        self.gate.signal_done();
+        if let Some(handle) = self.handle.take() {
+            handle.join().expect("server thread finished cleanly");
+        }
+        drop(self.listener_guard.take());
+    }
+}
+
+#[cfg(unix)]
+impl Drop for TestServerHandle {
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            drop(self.listener_guard.take());
+            return;
+        };
+        // Panic/early-return path only: cancel all gate waits first, then wake
+        // any blocked `listener.accept()` while `self.listener_guard` still
+        // keeps `self.port` exclusively bound to this test.
+        self.gate.cancel();
+        let _ = std::net::TcpStream::connect(("127.0.0.1", self.port));
+        let _ = handle.join();
+        drop(self.listener_guard.take());
+    }
+}
+
 #[cfg(unix)]
 fn drive_rustls_server_handshake(
     server: &mut rustls::ServerConnection,
@@ -20628,10 +20782,10 @@ fn drive_rustls_server_handshake(
 ) {
     use std::io::Write;
     stream
-        .set_read_timeout(Some(Duration::from_secs(3)))
+        .set_read_timeout(Some(Duration::from_secs(30)))
         .expect("set read timeout");
     stream
-        .set_write_timeout(Some(Duration::from_secs(3)))
+        .set_write_timeout(Some(Duration::from_secs(30)))
         .expect("set write timeout");
     while server.is_handshaking() {
         while server.wants_write() {
@@ -20648,6 +20802,41 @@ fn drive_rustls_server_handshake(
         server.write_tls(stream).expect("flush final server tls");
     }
     stream.flush().expect("flush server stream");
+}
+
+#[cfg(unix)]
+fn read_tls_line(
+    server: &mut rustls::ServerConnection,
+    stream: &mut std::net::TcpStream,
+    eof_context: &str,
+) -> Vec<u8> {
+    use std::io::Read;
+    let mut line = Vec::new();
+    let mut tmp = [0u8; 256];
+    loop {
+        // Always drain already-decrypted plaintext BEFORE calling `read_tls()`:
+        // during TLS 1.3 handshake (`drive_rustls_server_handshake`), a coalesced
+        // TCP segment can deliver the client's `Finished` and first application
+        // data record together, leaving the payload buffered in `server.reader()`.
+        loop {
+            match server.reader().read(&mut tmp) {
+                Ok(0) => break,
+                Ok(k) => line.extend_from_slice(&tmp[..k]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("tls reader error ({eof_context}): {e}"),
+            }
+        }
+        if line.ends_with(b"\n") {
+            return line;
+        }
+        let n = server
+            .read_tls(stream)
+            .unwrap_or_else(|e| panic!("read_tls failed ({eof_context}): {e}"));
+        assert!(n > 0, "{eof_context}");
+        server
+            .process_new_packets()
+            .unwrap_or_else(|e| panic!("process_new_packets failed ({eof_context}): {e}"));
+    }
 }
 
 #[cfg(unix)]
@@ -20684,27 +20873,15 @@ fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deini
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().expect("local addr").port();
 
-    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-    let server_handle = std::thread::spawn(move || {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (mut stream, _) = listener.accept().expect("accept client");
+        if gate.is_stopped() {
+            return;
+        }
         let mut server = rustls::ServerConnection::new(server_cfg).expect("server conn");
         drive_rustls_server_handshake(&mut server, &mut stream);
 
-        let mut ping = Vec::new();
-        while !ping.ends_with(b"\n") {
-            let n = server.read_tls(&mut stream).expect("read tls ping");
-            assert!(n > 0, "eof waiting for encrypted PING1");
-            server.process_new_packets().expect("process tls ping");
-            let mut tmp = [0u8; 256];
-            loop {
-                match server.reader().read(&mut tmp) {
-                    Ok(0) => break,
-                    Ok(k) => ping.extend_from_slice(&tmp[..k]),
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(e) => panic!("tls reader error: {e}"),
-                }
-            }
-        }
+        let ping = read_tls_line(&mut server, &mut stream, "eof waiting for encrypted PING1");
         assert_eq!(ping, b"PING1\n");
         server.writer().write_all(b"PONG1\n").expect("write PONG1");
         while server.wants_write() {
@@ -20733,10 +20910,10 @@ fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deini
         assert_eq!(plain2, b"PLAIN2\n");
         stream.write_all(b"ECHO2\n").expect("write ECHO2");
         stream.flush().expect("flush ECHO2");
-        let _ = done_rx.recv_timeout(Duration::from_secs(3));
+        gate.wait_done();
     });
 
-    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let mut eval = crate::test_utils::runtime_startup_context();
     let poller = eval.processes().wait_backend.poller_arc().expect("poller");
     let ca_pem = loopback::resources().join("ca.pem");
 
@@ -20766,7 +20943,11 @@ fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deini
         .eval_str(&format!(
             r#"(let ((b (gnutls-boot test-tls-p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{}") :complete-negotiation t))))
                  (process-send-string test-tls-p "PING1\n")
-                 (accept-process-output test-tls-p 1)
+                 (let ((deadline (+ (float-time) 15.0)))
+                   (while (and (< (float-time) deadline)
+                               (with-current-buffer test-tls-b
+                                 (not (string-match-p "PONG1\n" (buffer-string)))))
+                     (accept-process-output test-tls-p 0.1)))
                  (set-buffer test-tls-b)
                  (let ((pong (prog1 (buffer-string) (erase-buffer))))
                    (list b (gnutls-get-initstage test-tls-p) pong)))"#,
@@ -20793,7 +20974,7 @@ fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deini
         .expect("send PLAIN1");
     let mut events = polling::Events::new();
     poller
-        .wait(&mut events, Some(Duration::from_secs(2)))
+        .wait(&mut events, Some(Duration::from_secs(15)))
         .expect("poll unwrapped plaintext socket for ECHO1");
     assert!(
         events.iter().any(|ev| ev.key == id as usize && ev.readable),
@@ -20801,7 +20982,16 @@ fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deini
     );
 
     let r1 = eval
-        .eval_str(r#"(progn (accept-process-output test-tls-p 1) (set-buffer test-tls-b) (prog1 (buffer-string) (erase-buffer)))"#)
+        .eval_str(
+            r#"(progn
+                 (let ((deadline (+ (float-time) 15.0)))
+                   (while (and (< (float-time) deadline)
+                               (with-current-buffer test-tls-b
+                                 (not (string-match-p "ECHO1\n" (buffer-string)))))
+                     (accept-process-output test-tls-p 0.1)))
+                 (set-buffer test-tls-b)
+                 (prog1 (buffer-string) (erase-buffer)))"#,
+        )
         .expect("read ECHO1");
     assert_eq!(crate::emacs_core::print::print_value(&r1), "\"ECHO1\n\"");
 
@@ -20809,7 +20999,11 @@ fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deini
         .eval_str(
             r#"(let ((res (gnutls-deinit test-tls-p)))
                  (process-send-string test-tls-p "PLAIN2\n")
-                 (accept-process-output test-tls-p 1)
+                 (let ((deadline (+ (float-time) 15.0)))
+                   (while (and (< (float-time) deadline)
+                               (with-current-buffer test-tls-b
+                                 (not (string-match-p "ECHO2\n" (buffer-string)))))
+                     (accept-process-output test-tls-p 0.1)))
                  (set-buffer test-tls-b)
                  (list res (gnutls-get-initstage test-tls-p) (process-status test-tls-p)
                        (buffer-string)))"#,
@@ -20835,10 +21029,7 @@ fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deini
         "stale poller event remained after delete-process on unwrapped socket"
     );
     drop(keep_open);
-    let _ = done_tx.send(());
-    server_handle
-        .join()
-        .expect("server thread finished cleanly");
+    server.finish();
 }
 
 /// Regression (#14600 condition 3, GNU `src/gnutls.c:2083`): after
@@ -20849,7 +21040,7 @@ fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deini
 #[test]
 fn gnutls_deinit_clears_boot_state_and_allows_fresh_reboot() {
     use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::net::TcpListener;
 
     crate::test_utils::init_test_tracing();
@@ -20857,9 +21048,11 @@ fn gnutls_deinit_clears_boot_state_and_allows_fresh_reboot() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().expect("local addr").port();
 
-    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-    let server_handle = std::thread::spawn(move || {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (mut stream, _) = listener.accept().expect("accept client");
+        if gate.is_stopped() {
+            return;
+        }
         for (expected, reply) in [
             (b"PING1\n", b"PONG1\n"),
             (b"PING2\n", b"PONG2\n"),
@@ -20868,21 +21061,7 @@ fn gnutls_deinit_clears_boot_state_and_allows_fresh_reboot() {
             let mut server =
                 rustls::ServerConnection::new(std::sync::Arc::clone(&server_cfg)).expect("server");
             drive_rustls_server_handshake(&mut server, &mut stream);
-            let mut got = Vec::new();
-            while !got.ends_with(b"\n") {
-                let n = server.read_tls(&mut stream).expect("read tls");
-                assert!(n > 0, "eof during tls session");
-                server.process_new_packets().expect("process packets");
-                let mut tmp = [0u8; 256];
-                loop {
-                    match server.reader().read(&mut tmp) {
-                        Ok(0) => break,
-                        Ok(k) => got.extend_from_slice(&tmp[..k]),
-                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                        Err(e) => panic!("tls read err: {e}"),
-                    }
-                }
-            }
+            let got = read_tls_line(&mut server, &mut stream, "eof during tls session");
             assert_eq!(got, expected);
             server.writer().write_all(reply).expect("write reply");
             while server.wants_write() {
@@ -20890,29 +21069,35 @@ fn gnutls_deinit_clears_boot_state_and_allows_fresh_reboot() {
             }
             stream.flush().expect("flush tcp");
         }
-        let _ = done_rx.recv_timeout(Duration::from_secs(3));
+        gate.wait_done();
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
     let result = eval_one(&format!(
         r#"
 (let* ((buf (generate-new-buffer " *gnutls-reboot*"))
-       (p (make-network-process :name "reb" :host "127.0.0.1" :service {port} :buffer buf :noquery t :sentinel #'ignore)))
+       (p (make-network-process :name "reb" :host "127.0.0.1" :service {port} :buffer buf :noquery t :sentinel #'ignore))
+       (wait-for (lambda (needle)
+                   (let ((deadline (+ (float-time) 15.0)))
+                     (while (and (< (float-time) deadline)
+                                 (with-current-buffer buf
+                                   (not (string-match-p needle (buffer-string)))))
+                       (accept-process-output p 0.1))))))
   (unwind-protect
       (let* ((b1 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
              (_ (process-send-string p "PING1\n"))
-             (_ (accept-process-output p 1))
+             (_ (funcall wait-for "PONG1\n"))
              (r1 (with-current-buffer buf (prog1 (buffer-string) (erase-buffer))))
              (d1 (gnutls-deinit p))
              ;; Re-boot after explicit gnutls-deinit
              (b2 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
              (_ (process-send-string p "PING2\n"))
-             (_ (accept-process-output p 1))
+             (_ (funcall wait-for "PONG2\n"))
              (r2 (with-current-buffer buf (prog1 (buffer-string) (erase-buffer))))
              ;; Direct re-boot on an already-Ready TLS process (GNU gnutls.c:2083)
              (b3 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
              (_ (process-send-string p "PING3\n"))
-             (_ (accept-process-output p 1))
+             (_ (funcall wait-for "PONG3\n"))
              (r3 (with-current-buffer buf (buffer-string))))
         (list b1 r1 d1 b2 r2 b3 (gnutls-get-initstage p) r3))
     (ignore-errors (delete-process p))
@@ -20921,8 +21106,7 @@ fn gnutls_deinit_clears_boot_state_and_allows_fresh_reboot() {
         port = port,
         ca = ca_pem.display()
     ));
-    let _ = done_tx.send(());
-    server_handle.join().expect("server thread finished");
+    server.finish();
     assert_eq!(result, "OK (t \"PONG1\n\" t t \"PONG2\n\" t 9 \"PONG3\n\")");
 }
 
@@ -20942,7 +21126,7 @@ fn gnutls_deinit_does_not_flush_pending_tls_write_queue_in_plaintext() {
     let server_handle = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept client");
         stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
+            .set_read_timeout(Some(Duration::from_secs(30)))
             .expect("read timeout");
         let mut received = Vec::new();
         let mut tmp = [0u8; 512];
@@ -21001,10 +21185,13 @@ fn gnutls_deinit_during_incomplete_handshake_restores_plaintext_socket() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let server_handle = std::thread::spawn(move || {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (mut stream, _) = listener.accept().expect("accept client");
+        if gate.is_stopped() {
+            return;
+        }
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_secs(30)))
             .expect("read timeout");
         let mut buf = Vec::new();
         let mut chunk = [0u8; 512];
@@ -21017,6 +21204,7 @@ fn gnutls_deinit_during_incomplete_handshake_restores_plaintext_socket() {
             .write_all(b"PLAIN_OK\n")
             .expect("write plaintext reply");
         stream.flush().expect("flush plaintext reply");
+        gate.wait_done();
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
@@ -21035,7 +21223,7 @@ fn gnutls_deinit_during_incomplete_handshake_restores_plaintext_socket() {
                (deinit-2 (gnutls-deinit p))
                (status-after (process-status p)))
           (process-send-string p "PLAIN\n")
-          (let ((deadline (+ (float-time) 3.0)))
+          (let ((deadline (+ (float-time) 15.0)))
             (while (and (< (float-time) deadline)
                         (with-current-buffer buf
                           (not (string-match-p "PLAIN_OK" (buffer-string)))))
@@ -21048,7 +21236,7 @@ fn gnutls_deinit_during_incomplete_handshake_restores_plaintext_socket() {
         port = port,
         ca = ca_pem.display()
     ));
-    server_handle.join().expect("server thread finished");
+    server.finish();
     assert_eq!(result, "OK (gnutls-e-again 8 t 3 nil open \"PLAIN_OK\n\")");
 }
 
@@ -21063,91 +21251,140 @@ fn gnutls_boot_nonblocking_advances_in_accept_process_output_and_delivers_data()
     use std::net::TcpListener;
 
     crate::test_utils::init_test_tracing();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind delayed TLS peer");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind gated TLS peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
     let server_cfg = build_loopback_rustls_server_config();
-    let server_handle = std::thread::spawn(move || {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let mut keep_alive = Vec::new();
-        for expected in [b"PING\n".as_slice(), b"EARLY\n".as_slice()] {
-            let (stream, _) = listener.accept().expect("accept client");
-            std::thread::sleep(Duration::from_millis(60));
-            let conn = rustls::ServerConnection::new(std::sync::Arc::clone(&server_cfg))
+        for (stage, expected, reply) in [
+            (1usize, b"PING\n".as_slice(), b"PONG\n".as_slice()),
+            (2usize, b"EARLY\n".as_slice(), b"EARLY_OK\n".as_slice()),
+        ] {
+            let (mut stream, _) = listener.accept().expect("accept client");
+            // Stay silent until client finishes initial non-blocking gnutls-boot.
+            if !gate.wait_for(stage) {
+                return;
+            }
+            let mut conn = rustls::ServerConnection::new(std::sync::Arc::clone(&server_cfg))
                 .expect("server conn");
+            drive_rustls_server_handshake(&mut conn, &mut stream);
             let mut tls = rustls::StreamOwned::new(conn, stream);
+            let mut got = Vec::new();
             let mut buf = [0u8; 64];
-            let n = tls.read(&mut buf).expect("read encrypted payload");
-            assert_eq!(&buf[..n], expected);
-            let reply = if expected == b"PING\n" {
-                b"PONG\n".as_slice()
-            } else {
-                b"EARLY_OK\n".as_slice()
-            };
+            while !got.ends_with(b"\n") {
+                let n = tls.read(&mut buf).expect("read encrypted payload");
+                assert!(n > 0, "unexpected EOF reading encrypted payload");
+                got.extend_from_slice(&buf[..n]);
+            }
+            assert_eq!(got.as_slice(), expected);
             tls.write_all(reply).expect("write encrypted reply");
             tls.flush().expect("flush encrypted reply");
             keep_alive.push(tls);
         }
-        let _ = done_rx.recv_timeout(Duration::from_secs(5));
+        gate.wait_done();
         drop(keep_alive);
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
-    let result = eval_one(&format!(
-        r#"
-(let* ((events1 nil)
-       (buf1 (generate-new-buffer "*tls-case-e1*"))
-       (p1 (make-network-process
-            :name "case-e1" :buffer buf1 :host "127.0.0.1" :service {port} :nowait t :noquery t
-            :sentinel (lambda (_proc ev) (push ev events1))))
-       (events2 nil)
-       (buf2 (generate-new-buffer "*tls-case-e2*"))
-       (p2 (make-network-process
-            :name "case-e2" :buffer buf2 :host "127.0.0.1" :service {port} :nowait t :noquery t
-            :sentinel (lambda (_proc ev) (push ev events2)))))
-  (unwind-protect
-      (progn
-        (while (eq (process-status p1) 'connect)
-          (accept-process-output p1 0.1))
-        (setq events1 nil)
-        (let ((boot1 (gnutls-boot p1 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))))
-          (let ((deadline (+ (float-time) 3.0)))
-            (while (and (< (float-time) deadline) (< (gnutls-get-initstage p1) 9))
-              (accept-process-output p1 0.1)))
-          (process-send-string p1 "PING\n")
-          (let ((deadline (+ (float-time) 3.0)))
-            (while (and (< (float-time) deadline)
-                        (with-current-buffer buf1 (not (string-match-p "PONG" (buffer-string)))))
-              (accept-process-output p1 0.1)))
-          (while (eq (process-status p2) 'connect)
-            (accept-process-output p2 0.1))
-          (setq events2 nil)
-          (let ((boot2 (gnutls-boot p2 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))))
-            ;; Send directly while still at stage 8: `send_process` waits for
-            ;; async TLS negotiation, fires `"open\n"`, then transmits.
-            (process-send-string p2 "EARLY\n")
-            (let ((deadline (+ (float-time) 3.0)))
-              (while (and (< (float-time) deadline)
-                          (with-current-buffer buf2 (not (string-match-p "EARLY_OK" (buffer-string)))))
-                (accept-process-output p2 0.1)))
-            (list boot1 (gnutls-get-initstage p1) (nreverse events1)
-                  (with-current-buffer buf1 (buffer-string))
-                  boot2 (gnutls-get-initstage p2) (nreverse events2)
-                  (with-current-buffer buf2 (buffer-string))))))
-    (ignore-errors (delete-process p1))
-    (ignore-errors (delete-process p2))
-    (ignore-errors (kill-buffer buf1))
-    (ignore-errors (kill-buffer buf2))))
+    let mut ev = crate::test_utils::runtime_startup_context();
+
+    // Connection 1: initial gnutls-boot must return gnutls-e-again while peer is gated.
+    let boot1 = ev
+        .eval_str(&format!(
+            r#"
+(progn
+  (setq test-e-events1 nil
+        test-e-buf1 (generate-new-buffer "*tls-case-e1*")
+        test-e-p1 (make-network-process
+                   :name "case-e1" :buffer test-e-buf1 :host "127.0.0.1" :service {port} :nowait t :noquery t
+                   :sentinel (lambda (_proc ev) (push ev test-e-events1))))
+  (while (eq (process-status test-e-p1) 'connect)
+    (accept-process-output test-e-p1 0.1))
+  (setq test-e-events1 nil)
+  (gnutls-boot test-e-p1 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
 "#,
-        port = port,
-        ca = ca_pem.display()
-    ));
-    let _ = done_tx.send(());
-    server_handle.join().expect("server thread finished");
+            port = port,
+            ca = ca_pem.display()
+        ))
+        .expect("start non-blocking boot1");
+    assert_eq!(boot1, Value::symbol("gnutls-e-again"));
+
+    server.advance_to(1);
+
+    let res1 = ev
+        .eval_str(
+            r#"
+(progn
+  (let ((deadline (+ (float-time) 15.0)))
+    (while (and (< (float-time) deadline) (< (gnutls-get-initstage test-e-p1) 9))
+      (accept-process-output test-e-p1 0.1)))
+  (process-send-string test-e-p1 "PING\n")
+  (let ((deadline (+ (float-time) 15.0)))
+    (while (and (< (float-time) deadline)
+                (with-current-buffer test-e-buf1 (not (string-match-p "PONG\n" (buffer-string)))))
+      (accept-process-output test-e-p1 0.1)))
+  (list (gnutls-get-initstage test-e-p1) (nreverse test-e-events1)
+        (with-current-buffer test-e-buf1 (buffer-string))))
+"#,
+        )
+        .expect("complete boot1 + PING/PONG");
     assert_eq!(
-        result,
-        "OK (gnutls-e-again 9 (\"open\n\") \"PONG\n\" gnutls-e-again 9 (\"open\n\") \"EARLY_OK\n\")"
+        crate::emacs_core::print::print_value(&res1),
+        "(9 (\"open\n\") \"PONG\n\")"
     );
+
+    // Connection 2: initial gnutls-boot returns gnutls-e-again while peer is gated,
+    // then `process-send-string` waits for async TLS negotiation, fires `"open\n"`,
+    // and transmits `"EARLY\n"`.
+    let boot2 = ev
+        .eval_str(&format!(
+            r#"
+(progn
+  (setq test-e-events2 nil
+        test-e-buf2 (generate-new-buffer "*tls-case-e2*")
+        test-e-p2 (make-network-process
+                   :name "case-e2" :buffer test-e-buf2 :host "127.0.0.1" :service {port} :nowait t :noquery t
+                   :sentinel (lambda (_proc ev) (push ev test-e-events2))))
+  (while (eq (process-status test-e-p2) 'connect)
+    (accept-process-output test-e-p2 0.1))
+  (setq test-e-events2 nil)
+  (gnutls-boot test-e-p2 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+"#,
+            port = port,
+            ca = ca_pem.display()
+        ))
+        .expect("start non-blocking boot2");
+    assert_eq!(boot2, Value::symbol("gnutls-e-again"));
+
+    server.advance_to(2);
+
+    let res2 = ev
+        .eval_str(
+            r#"
+(progn
+  (process-send-string test-e-p2 "EARLY\n")
+  (let ((deadline (+ (float-time) 15.0)))
+    (while (and (< (float-time) deadline)
+                (with-current-buffer test-e-buf2 (not (string-match-p "EARLY_OK\n" (buffer-string)))))
+      (accept-process-output test-e-p2 0.1)))
+  (list (gnutls-get-initstage test-e-p2) (nreverse test-e-events2)
+        (with-current-buffer test-e-buf2 (buffer-string))))
+"#,
+        )
+        .expect("complete boot2 + EARLY/EARLY_OK");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&res2),
+        "(9 (\"open\n\") \"EARLY_OK\n\")"
+    );
+
+    let _ = ev.eval_str(
+        "(progn (ignore-errors (delete-process test-e-p1))
+                (ignore-errors (delete-process test-e-p2))
+                (ignore-errors (kill-buffer test-e-buf1))
+                (ignore-errors (kill-buffer test-e-buf2)))",
+    );
+    server.finish();
 }
 
 /// Regression (CASE F): calling `gnutls-boot` directly on a process still in
@@ -21164,55 +21401,96 @@ fn gnutls_boot_direct_reboot_from_nonblocking_stage_8() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind reboot peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let server_handle = std::thread::spawn(move || {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (mut stream, _) = listener.accept().expect("accept client");
+        if !gate.wait_for(1) {
+            return;
+        }
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_secs(30)))
             .expect("read timeout");
-        // Drain the first ClientHello bytes from the abandoned non-blocking boot.
-        let mut discard = [0u8; 2048];
-        let _ = stream
-            .read(&mut discard)
-            .expect("read abandoned ClientHello");
-        std::thread::sleep(Duration::from_millis(80));
+        // Drain the complete abandoned TLS ClientHello record (5-byte header +
+        // exact record payload length) before signaling the client to reboot.
+        let mut header = [0u8; 5];
+        stream
+            .read_exact(&mut header)
+            .expect("read abandoned ClientHello TLS record header");
+        let record_len = u16::from_be_bytes([header[3], header[4]]) as usize;
+        let mut discard = vec![0u8; record_len];
+        stream
+            .read_exact(&mut discard)
+            .expect("read abandoned ClientHello TLS record payload");
+        gate.advance_to(2);
         let server_cfg = build_loopback_rustls_server_config();
-        let conn = rustls::ServerConnection::new(server_cfg).expect("server conn");
+        let mut conn = rustls::ServerConnection::new(server_cfg).expect("server conn");
+        drive_rustls_server_handshake(&mut conn, &mut stream);
         let mut tls = rustls::StreamOwned::new(conn, stream);
+        let mut got = Vec::new();
         let mut buf = [0u8; 64];
-        let n = tls.read(&mut buf).expect("read reboot payload");
-        assert_eq!(&buf[..n], b"REBOOT\n");
+        while !got.ends_with(b"\n") {
+            let n = tls.read(&mut buf).expect("read reboot payload");
+            assert!(n > 0, "unexpected EOF reading reboot payload");
+            got.extend_from_slice(&buf[..n]);
+        }
+        assert_eq!(got.as_slice(), b"REBOOT\n");
         tls.write_all(b"REBOOT_OK\n").expect("write reboot reply");
         tls.flush().expect("flush reboot reply");
+        gate.wait_done();
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
-    let result = eval_one(&format!(
-        r#"
-(let* ((buf (generate-new-buffer "*tls-case-f*"))
-       (p (make-network-process :name "case-f" :buffer buf :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore)))
-  (unwind-protect
-      (progn
-        (while (eq (process-status p) 'connect)
-          (accept-process-output p 0.1))
-        (let* ((b1 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
-               (s1 (gnutls-get-initstage p))
-               (_ (sleep-for 0.04))
-               (b2 (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
-               (s2 (gnutls-get-initstage p)))
-          (process-send-string p "REBOOT\n")
-          (let ((deadline (+ (float-time) 3.0)))
-            (while (and (< (float-time) deadline)
-                        (with-current-buffer buf (not (string-match-p "REBOOT_OK" (buffer-string)))))
-              (accept-process-output p 0.1)))
-          (list b1 s1 b2 s2 (with-current-buffer buf (buffer-string)))))
-    (ignore-errors (delete-process p))
-    (ignore-errors (kill-buffer buf))))
+    let mut ev = crate::test_utils::runtime_startup_context();
+
+    let stage1 = ev
+        .eval_str(&format!(
+            r#"
+(progn
+  (setq test-f-buf (generate-new-buffer "*tls-case-f*")
+        test-f-p (make-network-process :name "case-f" :buffer test-f-buf :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore))
+  (while (eq (process-status test-f-p) 'connect)
+    (accept-process-output test-f-p 0.1))
+  (list (gnutls-boot test-f-p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))
+        (gnutls-get-initstage test-f-p)))
 "#,
-        port = port,
-        ca = ca_pem.display()
-    ));
-    server_handle.join().expect("server thread finished");
-    assert_eq!(result, "OK (gnutls-e-again 8 t 9 \"REBOOT_OK\n\")");
+            port = port,
+            ca = ca_pem.display()
+        ))
+        .expect("initial non-blocking gnutls-boot");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&stage1),
+        "(gnutls-e-again 8)"
+    );
+
+    server.advance_to(1);
+    assert!(
+        server.wait_for(2),
+        "server exited before draining ClientHello 1"
+    );
+
+    let stage2 = ev
+        .eval_str(&format!(
+            r#"
+(let* ((b2 (gnutls-boot test-f-p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}") :complete-negotiation t)))
+       (s2 (gnutls-get-initstage test-f-p)))
+  (process-send-string test-f-p "REBOOT\n")
+  (let ((deadline (+ (float-time) 15.0)))
+    (while (and (< (float-time) deadline)
+                (with-current-buffer test-f-buf (not (string-match-p "REBOOT_OK\n" (buffer-string)))))
+      (accept-process-output test-f-p 0.1)))
+  (list b2 s2 (with-current-buffer test-f-buf (buffer-string))))
+"#,
+            ca = ca_pem.display()
+        ))
+        .expect("direct reboot gnutls-boot");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&stage2),
+        "(t 9 \"REBOOT_OK\n\")"
+    );
+
+    let _ = ev.eval_str(
+        "(progn (ignore-errors (delete-process test-f-p)) (ignore-errors (kill-buffer test-f-buf)))",
+    );
+    server.finish();
 }
 
 /// Regression (#14790 HIGH-1): `process-send-string` and `process-send-region`
@@ -21230,48 +21508,92 @@ fn gnutls_nonblocking_send_during_failing_handshake_signals_not_drops() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind failing peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let server_handle = std::thread::spawn(move || {
-        for _ in 0..2 {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
+        let mut keep_alive = Vec::new();
+        for stage in [1usize, 2usize] {
             let (mut stream, _) = listener.accept().expect("accept client");
-            std::thread::sleep(Duration::from_millis(60));
+            if !gate.wait_for(stage) {
+                return;
+            }
             let _ = stream.write_all(b"NOT_TLS_GARBAGE\r\n");
             let _ = stream.flush();
-            std::thread::sleep(Duration::from_millis(80));
+            keep_alive.push(stream);
         }
+        gate.wait_done();
+        drop(keep_alive);
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
-    let result = eval_one(&format!(
-        r#"
-(let* ((p1 (make-network-process :name "fail-send" :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore))
-       (p2 (make-network-process :name "fail-region" :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore)))
-  (unwind-protect
-      (progn
-        (while (eq (process-status p1) 'connect) (accept-process-output p1 0.1))
-        (let* ((b1 (gnutls-boot p1 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
-               (e1 (condition-case err
-                       (progn (process-send-string p1 "hello\n") 'unexpected-nil)
-                     (error err))))
-          (while (eq (process-status p2) 'connect) (accept-process-output p2 0.1))
-          (let* ((b2 (gnutls-boot p2 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
-                 (e2 (with-temp-buffer
-                       (insert "hello-region\n")
-                       (condition-case err
-                           (progn (process-send-region p2 (point-min) (point-max)) 'unexpected-nil)
-                         (error err)))))
-            (list b1 e1 (process-status p1) (process-exit-status p1)
-                  b2 e2 (process-status p2) (process-exit-status p2)))))
-    (ignore-errors (delete-process p1))
-    (ignore-errors (delete-process p2))))
+    let mut ev = crate::test_utils::runtime_startup_context();
+
+    let b1 = ev
+        .eval_str(&format!(
+            r#"
+(progn
+  (setq test-fs-p1 (make-network-process :name "fail-send" :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore))
+  (while (eq (process-status test-fs-p1) 'connect) (accept-process-output test-fs-p1 0.1))
+  (gnutls-boot test-fs-p1 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
 "#,
-        port = port,
-        ca = ca_pem.display()
-    ));
-    server_handle.join().expect("server thread finished");
+            port = port,
+            ca = ca_pem.display()
+        ))
+        .expect("boot p1");
+    assert_eq!(b1, Value::symbol("gnutls-e-again"));
+
+    server.advance_to(1);
+
+    let r1 = ev
+        .eval_str(
+            r#"
+(let ((e1 (condition-case err
+              (progn (process-send-string test-fs-p1 "hello\n") 'unexpected-nil)
+            (error err))))
+  (list e1 (process-status test-fs-p1) (process-exit-status test-fs-p1)))
+"#,
+        )
+        .expect("send on failing p1");
     assert_eq!(
-        result,
-        "OK (gnutls-e-again (error \"Process fail-send not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\" gnutls-e-again (error \"Process fail-region not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\")"
+        crate::emacs_core::print::print_value(&r1),
+        "((error \"Process fail-send not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\")"
     );
+
+    let b2 = ev
+        .eval_str(&format!(
+            r#"
+(progn
+  (setq test-fs-p2 (make-network-process :name "fail-region" :host "127.0.0.1" :service {port} :nowait t :noquery t :sentinel #'ignore))
+  (while (eq (process-status test-fs-p2) 'connect) (accept-process-output test-fs-p2 0.1))
+  (gnutls-boot test-fs-p2 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+"#,
+            port = port,
+            ca = ca_pem.display()
+        ))
+        .expect("boot p2");
+    assert_eq!(b2, Value::symbol("gnutls-e-again"));
+
+    server.advance_to(2);
+
+    let r2 = ev
+        .eval_str(
+            r#"
+(let ((e2 (with-temp-buffer
+            (insert "hello-region\n")
+            (condition-case err
+                (progn (process-send-region test-fs-p2 (point-min) (point-max)) 'unexpected-nil)
+              (error err)))))
+  (list e2 (process-status test-fs-p2) (process-exit-status test-fs-p2)))
+"#,
+        )
+        .expect("send-region on failing p2");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&r2),
+        "((error \"Process fail-region not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\")"
+    );
+
+    let _ = ev.eval_str(
+        "(progn (ignore-errors (delete-process test-fs-p1)) (ignore-errors (delete-process test-fs-p2)))",
+    );
+    server.finish();
 }
 
 /// Regression (#14790 HIGH-2): async TLS handshake failure in
@@ -21291,62 +21613,79 @@ fn gnutls_nonblocking_handshake_failure_deactivates_without_deleting_and_preserv
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind failing peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let server_handle = std::thread::spawn(move || {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (mut stream, _) = listener.accept().expect("accept client");
-        std::thread::sleep(Duration::from_millis(60));
+        if !gate.wait_for(1) {
+            return;
+        }
         let _ = stream.write_all(b"NOT_TLS_GARBAGE\r\n");
         let _ = stream.flush();
-        std::thread::sleep(Duration::from_millis(80));
+        gate.wait_done();
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
-    let result = eval_one(&format!(
-        r#"
-(let* ((events nil)
-       (p (make-network-process
-           :name "fail-state" :host "127.0.0.1" :service {port} :nowait t :noquery t
-           :sentinel (lambda (_proc ev) (push ev events)))))
-  (unwind-protect
-      (progn
-        (while (eq (process-status p) 'connect) (accept-process-output p 0.1))
-        (setq events nil)
-        (let ((boot (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))))
-          (let ((deadline (+ (float-time) 3.0)))
-            (while (and (< (float-time) deadline) (eq (process-status p) 'open))
-              (accept-process-output p 0.1)))
-          (let ((in-list-after-fail (not (null (memq p (process-list)))))
-                (get-proc-after-fail (eq (get-process "fail-state") p))
-                (stage-after-fail (gnutls-get-initstage p))
-                (status-after-fail (process-status p))
-                (exit-after-fail (process-exit-status p))
-                (events-after-fail (nreverse events)))
-            (setq events nil)
-            (delete-process p)
-            (list boot
-                  in-list-after-fail
-                  get-proc-after-fail
-                  stage-after-fail
-                  status-after-fail
-                  exit-after-fail
-                  events-after-fail
-                  (process-status p)
-                  (nreverse events)
-                  (not (null (memq p (process-list))))))))
-    (ignore-errors (delete-process p))))
+    let mut ev = crate::test_utils::runtime_startup_context();
+
+    let boot = ev
+        .eval_str(&format!(
+            r#"
+(progn
+  (setq test-fh-events nil
+        test-fh-p (make-network-process
+                   :name "fail-state" :host "127.0.0.1" :service {port} :nowait t :noquery t
+                   :sentinel (lambda (_proc ev) (push ev test-fh-events))))
+  (while (eq (process-status test-fh-p) 'connect) (accept-process-output test-fh-p 0.1))
+  (setq test-fh-events nil)
+  (gnutls-boot test-fh-p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
 "#,
-        port = port,
-        ca = ca_pem.display()
-    ));
-    server_handle.join().expect("server thread finished");
+            port = port,
+            ca = ca_pem.display()
+        ))
+        .expect("start non-blocking boot");
+    assert_eq!(boot, Value::symbol("gnutls-e-again"));
+
+    server.advance_to(1);
+
+    let result = ev
+        .eval_str(
+            r#"
+(progn
+  (let ((deadline (+ (float-time) 15.0)))
+    (while (and (< (float-time) deadline) (eq (process-status test-fh-p) 'open))
+      (accept-process-output test-fh-p 0.1)))
+  (let ((in-list-after-fail (not (null (memq test-fh-p (process-list)))))
+        (get-proc-after-fail (eq (get-process "fail-state") test-fh-p))
+        (stage-after-fail (gnutls-get-initstage test-fh-p))
+        (status-after-fail (process-status test-fh-p))
+        (exit-after-fail (process-exit-status test-fh-p))
+        (events-after-fail (nreverse test-fh-events)))
+    (setq test-fh-events nil)
+    (delete-process test-fh-p)
+    (list in-list-after-fail
+          get-proc-after-fail
+          stage-after-fail
+          status-after-fail
+          exit-after-fail
+          events-after-fail
+          (process-status test-fh-p)
+          (nreverse test-fh-events)
+          (not (null (memq test-fh-p (process-list)))))))
+"#,
+        )
+        .expect("observe failure and delete-process");
     assert_eq!(
-        result,
-        "OK (gnutls-e-again t t 3 failed \"TLS negotiation failed\" nil closed (\"deleted\n\") nil)"
+        crate::emacs_core::print::print_value(&result),
+        "(t t 3 failed \"TLS negotiation failed\" nil closed (\"deleted\n\") nil)"
     );
+    server.finish();
 }
 
-/// Regression (#14790 HIGH-2 Flow propagation): a `throw` (non-local `Flow`)
-/// from the `"open\n"` sentinel run on async TLS `8 -> 9` completion must
-/// propagate out of `accept-process-output` instead of being swallowed.
+/// Regression (#14790 HIGH-2 Flow propagation, #15048 deterministic gating):
+/// a `throw` or `quit` (non-local `Flow`) from the `"open\n"` sentinel run on
+/// async TLS `8 -> 9` completion must propagate out of `accept-process-output`
+/// instead of being swallowed. The peer thread is strictly channel-gated so
+/// `gnutls-boot` is provably `gnutls-e-again` before the sentinel is armed and
+/// the peer remains provably open until after assertions complete.
 #[cfg(unix)]
 #[test]
 fn gnutls_nonblocking_open_sentinel_propagates_throw_and_quit() {
@@ -21354,49 +21693,130 @@ fn gnutls_nonblocking_open_sentinel_propagates_throw_and_quit() {
     use std::net::TcpListener;
 
     crate::test_utils::init_test_tracing();
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind delayed TLS peer");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind gated TLS peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let server_handle = std::thread::spawn(move || {
-        let (stream, _) = listener.accept().expect("accept client");
-        std::thread::sleep(Duration::from_millis(50));
-        let server_cfg = build_loopback_rustls_server_config();
-        let conn = rustls::ServerConnection::new(server_cfg).expect("server conn");
-        let mut tls = rustls::StreamOwned::new(conn, stream);
-        let _ = tls.conn.complete_io(&mut tls.sock);
-        std::thread::sleep(Duration::from_millis(60));
+    let server_cfg = build_loopback_rustls_server_config();
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
+        let mut keep_alive = Vec::new();
+        for stage in [1usize, 2usize] {
+            let (mut stream, _) = listener.accept().expect("accept client");
+            // Stay completely silent until client verifies gnutls-e-again and arms sentinel.
+            if !gate.wait_for(stage) {
+                return;
+            }
+            let mut conn = rustls::ServerConnection::new(std::sync::Arc::clone(&server_cfg))
+                .expect("server conn");
+            drive_rustls_server_handshake(&mut conn, &mut stream);
+            // Keep both TLS state and TCP socket open until test signals teardown.
+            keep_alive.push((conn, stream));
+        }
+        gate.wait_done();
+        drop(keep_alive);
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
-    let result = eval_one(&format!(
-        r#"
-(let* ((armed nil)
-       (p (make-network-process
-           :name "throw-sentinel" :host "127.0.0.1" :service {port} :nowait t :noquery t
-           :sentinel (lambda (proc ev)
-                       (when armed
-                         (throw 'tls-open-tag
-                                (list (process-status proc) ev (gnutls-get-initstage proc))))))))
-  (unwind-protect
-      (progn
-        (while (eq (process-status p) 'connect) (accept-process-output p 0.1))
-        (let ((boot (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}")))))
-          (setq armed t)
-          (let ((caught
-                 (catch 'tls-open-tag
-                   (let ((deadline (+ (float-time) 3.0)))
-                     (while (< (float-time) deadline)
-                       (accept-process-output p 0.1)))
-                   'not-thrown)))
-            (list boot caught))))
-    (setq armed nil)
-    (ignore-errors (delete-process p))))
+    let mut ev = crate::test_utils::runtime_startup_context();
+
+    // 1. Non-local `throw` from the `"open\n"` sentinel propagates out of `accept-process-output`.
+    let boot_throw = ev
+        .eval_str(&format!(
+            r#"
+(progn
+  (setq test-throw-armed nil
+        test-throw-p (make-network-process
+                      :name "throw-sentinel" :host "127.0.0.1" :service {port} :nowait t :noquery t
+                      :sentinel (lambda (proc ev)
+                                  (when test-throw-armed
+                                    (throw 'tls-open-tag
+                                           (list (process-status proc) ev (gnutls-get-initstage proc)))))))
+  (while (eq (process-status test-throw-p) 'connect) (accept-process-output test-throw-p 0.1))
+  (gnutls-boot test-throw-p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
 "#,
-        port = port,
-        ca = ca_pem.display()
-    ));
-    server_handle.join().expect("server thread finished");
-    assert_eq!(result, "OK (gnutls-e-again (open \"open\n\" 9))");
+            port = port,
+            ca = ca_pem.display()
+        ))
+        .expect("start non-blocking boot for throw sentinel");
+    assert_eq!(boot_throw, Value::symbol("gnutls-e-again"));
+
+    ev.eval_str("(setq test-throw-armed t)")
+        .expect("arm throw sentinel");
+    server.advance_to(1);
+
+    let caught_throw = ev
+        .eval_str(
+            r#"
+(unwind-protect
+    (catch 'tls-open-tag
+      (let ((deadline (+ (float-time) 15.0)))
+        (while (< (float-time) deadline)
+          (accept-process-output test-throw-p 0.1)))
+      'not-thrown)
+  (setq test-throw-armed nil)
+  (ignore-errors (delete-process test-throw-p)))
+"#,
+        )
+        .expect("run accept-process-output for throw sentinel");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&caught_throw),
+        "(open \"open\n\" 9)"
+    );
+
+    // 2. Non-local `quit` from the `"open\n"` sentinel propagates out of `accept-process-output`.
+    let boot_quit = ev
+        .eval_str(&format!(
+            r#"
+(progn
+  (setq test-quit-armed nil
+        test-quit-event nil
+        test-quit-p (make-network-process
+                     :name "quit-sentinel" :host "127.0.0.1" :service {port} :nowait t :noquery t
+                     :sentinel (lambda (proc ev)
+                                 (when test-quit-armed
+                                   (setq test-quit-event
+                                         (list (process-status proc) ev (gnutls-get-initstage proc)))
+                                   (signal 'quit nil)))))
+  (while (eq (process-status test-quit-p) 'connect) (accept-process-output test-quit-p 0.1))
+  (gnutls-boot test-quit-p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+"#,
+            port = port,
+            ca = ca_pem.display()
+        ))
+        .expect("start non-blocking boot for quit sentinel");
+    assert_eq!(boot_quit, Value::symbol("gnutls-e-again"));
+
+    ev.eval_str("(setq test-quit-armed t)")
+        .expect("arm quit sentinel");
+    server.advance_to(2);
+
+    let quit_res = ev.eval_str(
+        r#"
+(unwind-protect
+    (progn
+      (let ((deadline (+ (float-time) 15.0)))
+        (while (< (float-time) deadline)
+          (accept-process-output test-quit-p 0.1)))
+      'not-quitted)
+  (setq test-quit-armed nil)
+  (ignore-errors (delete-process test-quit-p)))
+"#,
+    );
+    assert!(
+        matches!(
+            quit_res,
+            Err(neovm_value::error::EvalError::Shutdown(ref req)) if req.exit_code == -1
+        ),
+        "quit from async TLS open sentinel must propagate out of accept-process-output, got {quit_res:?}"
+    );
+    let quit_event = ev
+        .eval_str("test-quit-event")
+        .expect("read test-quit-event");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&quit_event),
+        "(open \"open\n\" 9)"
+    );
+
+    server.finish();
 }
 
 /// Regression (#14790 HIGH-3): a pending non-blocking TLS handshake
@@ -21413,10 +21833,9 @@ fn gnutls_nonblocking_pending_handshake_does_not_busy_spin_command_input_wait() 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind silent peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-    let server_handle = std::thread::spawn(move || {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (_stream, _) = listener.accept().expect("accept client");
-        let _ = done_rx.recv_timeout(Duration::from_secs(5));
+        gate.wait_done();
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
@@ -21450,24 +21869,46 @@ fn gnutls_nonblocking_pending_handshake_does_not_busy_spin_command_input_wait() 
         "StillPending non-blocking TLS handshake must not mark service outcome active"
     );
 
-    let started = Instant::now();
     let wait_outcome = ev
         .wait_for_command_input(Some(Instant::now() + Duration::from_millis(60)))
         .expect("wait_for_command_input");
-    let elapsed = started.elapsed();
     assert_eq!(
         wait_outcome,
         CommandInputWaitOutcome::DeadlineElapsed,
         "command input wait must sleep until deadline instead of spinning on StillPending TLS"
     );
-    assert!(
-        elapsed >= Duration::from_millis(40),
-        "command input wait returned too quickly ({elapsed:?}), indicating a busy-spin"
-    );
+
+    // Deterministic kernel-wait proof: unbounded `wait_for_command_input(None)`
+    // must enter `WaitWitness::InputWaitEntered` rather than exiting early via
+    // `DisplayActivity` as happens when `StillPending` calls `record_serviced()`.
+    {
+        use crate::test_utils::input_wait::{InputGateOwner, WaitWitness};
+        let input_owner = InputGateOwner::install(&mut ev);
+        let (gate, publication) = input_owner.gate(vec![
+            neovm_eval::emacs_core::eval::keyboard::InputEvent::key_press(
+                neovm_eval::emacs_core::eval::keyboard::KeyEvent::char('z'),
+            ),
+        ]);
+        gate.arm(&mut ev, WaitWitness::InputWaitEntered);
+        let unbounded_outcome = ev
+            .wait_for_command_input(None)
+            .expect("unbounded wait_for_command_input");
+        assert_eq!(
+            unbounded_outcome,
+            CommandInputWaitOutcome::InputPending,
+            "unbounded wait must block until synthetic input arrives rather than exiting early on StillPending TLS"
+        );
+        assert_eq!(
+            publication
+                .finish()
+                .expect("unbounded command-input wait must enter kernel wait instead of spinning")
+                .witness,
+            WaitWitness::InputWaitEntered
+        );
+    }
 
     let _ = ev.eval_str("(delete-process test-idle-tls-proc)");
-    let _ = done_tx.send(());
-    server_handle.join().expect("server thread finished");
+    server.finish();
 }
 
 /// Regression (#14790 MEDIUM-2): initial non-blocking `gnutls-boot` against a
@@ -21486,42 +21927,179 @@ fn gnutls_boot_nonblocking_handshake_failure_returns_protocol_error_and_send_doe
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind non-TLS peer");
     let port = listener.local_addr().expect("local addr").port();
 
-    let server_handle = std::thread::spawn(move || {
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
         let (mut stream, _) = listener.accept().expect("accept client");
+        if gate.is_stopped() {
+            return;
+        }
         let _ = stream.write_all(b"NOT_TLS_GARBAGE\r\n");
         let _ = stream.flush();
-        std::thread::sleep(Duration::from_millis(200));
+        gate.advance_to(1);
+        gate.wait_done();
     });
 
     let ca_pem = loopback::resources().join("ca.pem");
-    let result = eval_one(&format!(
-        r#"
-(let ((p (make-network-process :name "fail-boot-send" :host "127.0.0.1" :service {port} :nowait t :noquery t :filter t :sentinel #'ignore)))
-  (unwind-protect
-      (progn
-        (while (eq (process-status p) 'connect) (accept-process-output p 0.1))
-        (sleep-for 0.05)
-        (let* ((ret (gnutls-boot p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
-               (errp (gnutls-errorp ret))
-               (fatalp (gnutls-error-fatalp ret))
-               (errstr (gnutls-error-string ret))
-               (stage-after-boot (gnutls-get-initstage p))
-               (status-after-boot (process-status p))
-               (send-err (condition-case err
-                             (progn (process-send-string p "hello\n") 'unexpected-ok)
-                           (error err))))
-          (list ret errp fatalp errstr stage-after-boot status-after-boot
-                send-err (process-status p) (process-exit-status p) (gnutls-get-initstage p))))
-    (ignore-errors (delete-process p))))
+    let mut ev = crate::test_utils::runtime_startup_context();
+
+    let proc_val = ev
+        .eval_str(&format!(
+            r#"
+(progn
+  (setq test-fb-p (make-network-process :name "fail-boot-send" :host "127.0.0.1" :service {port} :nowait t :noquery t :filter t :sentinel #'ignore))
+  (while (eq (process-status test-fb-p) 'connect) (accept-process-output test-fb-p 0.1))
+  test-fb-p)
 "#,
-        port = port,
-        ca = ca_pem.display()
-    ));
-    server_handle.join().expect("server thread finished");
-    assert_eq!(
-        result,
-        "OK (-15 t t \"An unexpected TLS packet was received.\" 8 open (error \"Process fail-boot-send not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\" 3)"
+            port = port
+        ))
+        .expect("connect non-TLS peer");
+    let id = proc_val.as_process_id().expect("process id");
+    let client_sock = {
+        let proc = ev.processes().get(id).expect("proc");
+        let sock = proc.live_io().network_socket().expect("tcp socket");
+        match &**sock {
+            NetworkSocket::TcpStream(tcp) => tcp.try_clone().expect("dup client tcp socket"),
+            _ => panic!("expected TcpStream"),
+        }
+    };
+
+    // Wait until the peer has flushed `NOT_TLS_GARBAGE\r\n` AND the kernel
+    // receive buffer holds at least the 5-byte TLS record header (without
+    // consuming bytes; `:filter t` intentionally keeps poller read interest off).
+    assert!(
+        server.wait_for(1),
+        "peer exited before writing non-TLS garbage"
     );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut peek_buf = [0u8; 5];
+    loop {
+        match client_sock.peek(&mut peek_buf) {
+            Ok(n) if n >= 5 => break,
+            Ok(0) => panic!("unexpected EOF peeking non-TLS garbage"),
+            Ok(_) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for 5-byte non-TLS header in client receive buffer"
+                );
+                std::thread::yield_now();
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for non-TLS garbage in client receive buffer"
+                );
+                std::thread::yield_now();
+            }
+            Err(e) => panic!("peek non-TLS garbage failed: {e}"),
+        }
+    }
+    drop(client_sock);
+
+    let result = ev
+        .eval_str(&format!(
+            r#"
+(unwind-protect
+    (let* ((ret (gnutls-boot test-fb-p 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{ca}"))))
+           (errp (gnutls-errorp ret))
+           (fatalp (gnutls-error-fatalp ret))
+           (errstr (gnutls-error-string ret))
+           (stage-after-boot (gnutls-get-initstage test-fb-p))
+           (status-after-boot (process-status test-fb-p))
+           (send-err (condition-case err
+                         (progn (process-send-string test-fb-p "hello\n") 'unexpected-ok)
+                       (error err))))
+      (list ret errp fatalp errstr stage-after-boot status-after-boot
+            send-err (process-status test-fb-p) (process-exit-status test-fb-p) (gnutls-get-initstage test-fb-p)))
+  (ignore-errors (delete-process test-fb-p)))
+"#,
+            ca = ca_pem.display()
+        ))
+        .expect("run failing gnutls-boot + send");
+    server.finish();
+    assert_eq!(
+        crate::emacs_core::print::print_value(&result),
+        "(-15 t t \"An unexpected TLS packet was received.\" 8 open (error \"Process fail-boot-send not running: failed with code TLS negotiation failed\n\") failed \"TLS negotiation failed\" 3)"
+    );
+}
+
+/// Regression (#15178): proves `TestServerHandle` unwinds promptly on a
+/// deliberate assertion panic while the server thread is parked in `accept()`,
+/// in `gate.wait_for(1)` after accepting a client, or in `gate.wait_done()`,
+/// AND proves `Drop` performs zero port pokes after a normal `finish()`.
+#[cfg(unix)]
+#[test]
+fn gnutls_test_server_handle_unwinds_cleanly_on_panic_and_never_pokes_after_finish() {
+    use std::net::{TcpListener, TcpStream};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // 1. Panic while server is parked in `listener.accept()`.
+    let exited_accept = Arc::new(AtomicBool::new(false));
+    let exited_accept_bg = Arc::clone(&exited_accept);
+    let r1 = catch_unwind(AssertUnwindSafe(move || {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind accept-panic listener");
+        let _server = TestServerHandle::spawn(listener, move |listener, gate| {
+            let _ = listener.accept();
+            if gate.is_stopped() {
+                exited_accept_bg.store(true, Ordering::SeqCst);
+            }
+        });
+        panic!("deliberate assertion failure before client connect");
+    }));
+    assert!(r1.is_err(), "deliberate panic must unwind");
+    assert!(
+        exited_accept.load(Ordering::SeqCst),
+        "server parked in accept() must observe cancel and exit cleanly on panic"
+    );
+
+    // 2. Panic while server accepted a live client AND is parked in `gate.wait_for(1)`
+    // (the exact AB-BA deadlock scenario when phase senders lived outside the handle).
+    let exited_gate = Arc::new(AtomicBool::new(false));
+    let exited_gate_bg = Arc::clone(&exited_gate);
+    let r2 = catch_unwind(AssertUnwindSafe(move || {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind gate-panic listener");
+        let port = listener.local_addr().expect("local addr").port();
+        let server = TestServerHandle::spawn(listener, move |listener, gate| {
+            let (_stream, _) = listener.accept().expect("accept client");
+            gate.advance_to(1);
+            // Park on stage 2, which the panicking client will never release.
+            let reached = gate.wait_for(2);
+            assert!(!reached, "cancelled gate wait must return false");
+            exited_gate_bg.store(true, Ordering::SeqCst);
+        });
+        let _client = TcpStream::connect(("127.0.0.1", port)).expect("connect client");
+        assert!(
+            server.wait_for(1),
+            "server must have accepted client and entered stage-2 wait"
+        );
+        panic!("deliberate assertion failure while server is parked on gate.wait_for(2)");
+    }));
+    assert!(r2.is_err(), "deliberate panic must unwind");
+    assert!(
+        exited_gate.load(Ordering::SeqCst),
+        "server parked on gate.wait_for must exit cleanly on panic without AB-BA deadlock"
+    );
+
+    // 3. Normal `finish()` path: Drop must NOT poke the released port.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind normal-finish listener");
+    let port = listener.local_addr().expect("local addr").port();
+    let server = TestServerHandle::spawn(listener, move |listener, gate| {
+        let (_stream, _) = listener.accept().expect("accept client");
+        gate.wait_done();
+    });
+    let client = TcpStream::connect(("127.0.0.1", port)).expect("connect client");
+    server.finish();
+    drop(client);
+    // Re-bind the exact same port (if not taken by another process) and verify
+    // zero stray/phantom connections were queued by `TestServerHandle::drop`.
+    if let Ok(rebound) = TcpListener::bind(("127.0.0.1", port)) {
+        rebound.set_nonblocking(true).expect("set nonblocking");
+        match rebound.accept() {
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Ok(_) => panic!("phantom connection arrived on recycled port after finish()"),
+            Err(e) => panic!("unexpected accept error on rebound port: {e}"),
+        }
+    }
 }
 
 #[cfg(unix)]

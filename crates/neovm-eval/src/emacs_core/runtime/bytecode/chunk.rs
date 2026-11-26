@@ -493,11 +493,15 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
             .take_gnu_bytecode_bytes()
             .expect("restored GNU bytecode requires original bytes");
         let decoded = if eager_gnu_bytecode() {
-            super::decode::decode_gnu_bytecode_with_offset_map(
+            let mut constants = self.constants_mut().ensure_owned().to_vec();
+            let result = super::decode::decode_gnu_bytecode_with_offset_map(
                 raw_bytes.as_slice(),
-                &mut self.constants_mut().ensure_owned(),
-            )
-            .map(Some)
+                &mut constants,
+            );
+            if result.is_ok() {
+                self.constants_mut().replace_owned(constants);
+            }
+            result.map(Some)
         } else {
             Ok(None)
         };

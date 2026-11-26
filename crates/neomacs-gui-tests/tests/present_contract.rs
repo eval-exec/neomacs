@@ -18,9 +18,10 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::thread;
+use std::time::Duration;
 
-use neomacs_gui_tests::DisplayHarness;
+use neomacs_gui_tests::{DisplayHarness, HangCap};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
@@ -55,7 +56,7 @@ struct ContractApp {
     frame: Option<ContractFrame>,
     phase: Phase,
     red_confirmed: Arc<AtomicBool>,
-    start: Instant,
+    hang_cap: HangCap,
 }
 
 fn configure_and_present(frame: &mut ContractFrame) {
@@ -161,7 +162,7 @@ impl ApplicationHandler for ContractApp {
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-        if self.start.elapsed() > Duration::from_secs(30) {
+        if self.hang_cap.is_expired() {
             event_loop.exit();
             return;
         }
@@ -171,7 +172,7 @@ impl ApplicationHandler for ContractApp {
         };
         configure_and_present(frame);
         match self.phase {
-            Phase::PresentingRed if self.start.elapsed() > Duration::from_millis(500) => {
+            Phase::PresentingRed => {
                 let xid = x_window_id(&frame.window);
                 capture(&self.display_env, &xid, &self.artifacts.join("red.png"));
                 let image = image::open(self.artifacts.join("red.png")).unwrap();
@@ -189,17 +190,26 @@ impl ApplicationHandler for ContractApp {
                             .window
                             .request_surface_size(PhysicalSize::new(RESIZED.0, RESIZED.1).into());
                     }
+                } else {
+                    thread::sleep(Duration::from_millis(20));
                 }
             }
-            Phase::PresentingBlue if self.start.elapsed() > Duration::from_millis(1000) => {
+            Phase::PresentingBlue => {
+                if frame.last_size != RESIZED {
+                    thread::sleep(Duration::from_millis(20));
+                    return;
+                }
                 let xid = x_window_id(&frame.window);
                 capture(&self.display_env, &xid, &self.artifacts.join("blue.png"));
                 let image = image::open(self.artifacts.join("blue.png")).unwrap();
-                if near_color_ratio(&image, [0, 0, 255]) > 0.90 {
+                if (image.width(), image.height()) == RESIZED
+                    && near_color_ratio(&image, [0, 0, 255]) > 0.90
+                {
                     event_loop.exit();
+                } else {
+                    thread::sleep(Duration::from_millis(20));
                 }
             }
-            _ => {}
         }
     }
 }
@@ -287,7 +297,7 @@ fn resize_then_present_shows_the_new_frame_on_the_current_backend() {
         frame: None,
         phase: Phase::PresentingRed,
         red_confirmed: Arc::clone(&red_confirmed),
-        start: Instant::now(),
+        hang_cap: HangCap::from_secs(30),
     };
     event_loop.run_app(app).unwrap();
 

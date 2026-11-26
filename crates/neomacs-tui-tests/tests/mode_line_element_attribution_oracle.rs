@@ -4,7 +4,7 @@
 //! Run the owning test invocation through the campaign sandbox-run.sh.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use neomacs_tui_tests::{TuiLaunch, TuiProcessOutcome, TuiSession, TuiTerminalConfig};
 
@@ -693,9 +693,9 @@ fn run_probe(
         TuiTerminalConfig::new("xterm-256color", 24, 80),
     );
     wait_for_file(&mut session, &ready);
-    let deadline = Instant::now() + Duration::from_secs(180);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(180));
     for sequence in 1..=200 {
-        assert!(Instant::now() < deadline, "bounded W100 deadline expired");
+        assert!(!deadline.is_expired(), "bounded W100 deadline expired");
         session.send(if sequence % 2 == 1 { b"x" } else { b"\x7f" });
         let expected = format!("{sequence}\n");
         session.read_until(Duration::from_secs(5), |_| {

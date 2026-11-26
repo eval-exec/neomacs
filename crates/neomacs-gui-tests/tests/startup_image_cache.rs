@@ -14,7 +14,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 #[test]
@@ -44,10 +44,7 @@ fn early_init_image_cache_queries_complete_through_gui_startup_against_gnu() {
     )
     .expect("Neomacs runtime root");
     assert!(neo.is_file() && runtime.is_dir());
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nonce = neomacs_gui_tests::unique_nonce();
     let artifacts = root.join(format!(
         "tmp/neomacs-gui-tests/startup-image-cache-{}-{nonce}",
         std::process::id()

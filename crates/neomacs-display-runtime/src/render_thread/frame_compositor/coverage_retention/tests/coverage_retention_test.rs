@@ -379,21 +379,33 @@ fn auxiliary_resource_refusal_revokes_its_previous_surface() {
     assert!(retention.entries.is_empty());
 }
 
+fn try_surface_with_coverage_edit(
+    window: u64,
+    epoch: u64,
+    presentation: u64,
+    edit_state: impl FnOnce(&mut FrameDisplayState),
+    edit_cov: impl FnOnce(&mut ScrollCoverage),
+) -> Option<Arc<ScrollSurface>> {
+    let base = surface(window, epoch, presentation);
+    let mut cov = base.coverage().clone();
+    let mut state = FrameDisplayState::new(10, 2, 10.0, 10.0);
+    state.presentation_id = PresentationId::new(presentation);
+    state.faces = cov.faces.clone();
+    edit_state(&mut state);
+    edit_cov(&mut cov);
+    state.window_matrices.push(cov.content.clone());
+    state.scroll_coverage.push(Arc::new(cov));
+    state.materialize().scroll_surfaces.pop()
+}
+
 fn surface_with_coverage_edit(
     window: u64,
     epoch: u64,
     presentation: u64,
     edit: impl FnOnce(&mut ScrollCoverage),
 ) -> Arc<ScrollSurface> {
-    let base = surface(window, epoch, presentation);
-    let mut cov = base.coverage().clone();
-    edit(&mut cov);
-    let mut state = FrameDisplayState::new(10, 2, 10.0, 10.0);
-    state.presentation_id = PresentationId::new(presentation);
-    state.window_matrices.push(cov.content.clone());
-    state.scroll_coverage.push(Arc::new(cov));
-    let mut frame = state.materialize();
-    frame.scroll_surfaces.pop().unwrap()
+    try_surface_with_coverage_edit(window, epoch, presentation, |_| {}, edit)
+        .expect("coverage fixture should materialize")
 }
 
 #[test]
@@ -475,14 +487,31 @@ fn auxiliary_accepts_self_closed_additive_resources_without_modifying_base() {
 
 #[test]
 fn auxiliary_rejects_conflicting_or_dangling_resources_and_revokes_previous() {
-    let mut base = surface_frame(1, 7, 3);
     let mut conflicting_face = Face::new(FaceId::new(0));
     conflicting_face.background = Color::RED;
+    let base_surface = try_surface_with_coverage_edit(
+        7,
+        3,
+        1,
+        |state| {
+            state.faces.insert(FaceId::new(0), conflicting_face.clone());
+        },
+        |cov| {
+            cov.faces.insert(FaceId::new(0), conflicting_face.clone());
+        },
+    )
+    .expect("base primary surface matching FrameDisplayState should materialize");
+    let mut base = FrameGlyphBuffer::with_size(100.0, 100.0);
+    base.presentation_id = PresentationId::new(1);
+    base.char_width = 10.0;
+    base.char_height = 10.0;
     base.faces.insert(FaceId::new(0), conflicting_face);
+    base.scroll_surfaces = vec![base_surface];
 
     // 1. Conflicting FaceId binding against base FrameGlyphBuffer is rejected.
     let mut retention = CoverageRetention::default();
     retention.refresh(&base);
+    assert_eq!(retention.entries.len(), 1);
     let candidate = surface(7, 3, 1);
     let changes = retention.apply_auxiliary(auxiliary(1, vec![candidate]), Some(&base));
     assert_eq!(
@@ -495,22 +524,21 @@ fn auxiliary_rejects_conflicting_or_dangling_resources_and_revokes_previous() {
     );
     assert!(retention.entries.is_empty());
 
-    // 2. Dangling FaceId in coverage.content.matrix (missing from coverage.faces) is rejected.
-    let clean_base = surface_frame(1, 7, 3);
-    retention.refresh(&clean_base);
-    let dangling = surface_with_coverage_edit(7, 3, 1, |cov| {
-        cov.faces.remove(&FaceId::new(0));
-    });
-    let changes = retention.apply_auxiliary(auxiliary(1, vec![dangling]), Some(&clean_base));
-    assert_eq!(
-        changes,
-        AuxiliaryCoverageChanges {
-            installed: 0,
-            revoked: 1,
-            conservative_revocations: 0,
-        }
+    // 2. Dangling FaceId in coverage.content.matrix (missing from coverage.faces)
+    // is now unrepresentable: ScrollCoverage::materialize refuses it before any
+    // ScrollSurface can be constructed.
+    assert!(
+        try_surface_with_coverage_edit(
+            7,
+            3,
+            1,
+            |_| {},
+            |cov| {
+                cov.faces.remove(&FaceId::new(0));
+            },
+        )
+        .is_none()
     );
-    assert!(retention.entries.is_empty());
 }
 
 #[test]
@@ -546,91 +574,73 @@ fn auxiliary_rejects_mismatched_face_or_font_key_id_and_revokes_previous() {
     let additive_face_key = FaceId::new(77);
     let base_face_id = FaceId::new(0);
 
-    let mut base = surface_frame(1, 7, 3);
-    base.fonts
-        .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
-    if let Some(face) = base.faces.get_mut(&base_face_id) {
-        face.default_resolved_font_id = Some(base_font_id);
-    }
+    // 1. Mismatched font key/id: fonts[99] has embedded id=1; refused at
+    // ScrollCoverage::materialize so no invalid ScrollSurface can exist.
+    let bad_font_key = try_surface_with_coverage_edit(
+        7,
+        3,
+        1,
+        |state| {
+            state
+                .fonts
+                .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+            state
+                .faces
+                .get_mut(&base_face_id)
+                .unwrap()
+                .default_resolved_font_id = Some(base_font_id);
+        },
+        |cov| {
+            cov.fonts
+                .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+            cov.faces
+                .get_mut(&base_face_id)
+                .unwrap()
+                .default_resolved_font_id = Some(base_font_id);
+            cov.fonts.insert(
+                aliased_font_key,
+                make_font(base_font_id, "WRONG STALE FONT"),
+            );
+            let mut additive_face = Face::new(additive_face_key);
+            additive_face.default_resolved_font_id = Some(aliased_font_key);
+            cov.faces.insert(additive_face_key, additive_face);
+        },
+    );
+    assert!(bad_font_key.is_none());
 
-    // 1. Mismatched font key/id: fonts[99] has embedded id=1; must be rejected and revoke prior entry.
-    let mut retention = CoverageRetention::default();
-    retention.refresh(&base);
-    let bad_font_key = surface_with_coverage_edit(7, 3, 1, |cov| {
-        cov.fonts
-            .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
-        cov.faces
-            .get_mut(&base_face_id)
-            .unwrap()
-            .default_resolved_font_id = Some(base_font_id);
-        cov.fonts.insert(
-            aliased_font_key,
-            make_font(base_font_id, "WRONG STALE FONT"),
-        );
-        let mut additive_face = Face::new(additive_face_key);
-        additive_face.default_resolved_font_id = Some(aliased_font_key);
-        cov.faces.insert(additive_face_key, additive_face);
-    });
-    let bad_font_pub = bad_font_key.coverage().publication;
-    let changes = retention.apply_auxiliary(auxiliary(1, vec![bad_font_key]), Some(&base));
-    assert_eq!(
-        changes,
-        AuxiliaryCoverageChanges {
-            installed: 0,
-            revoked: 1,
-            conservative_revocations: 0,
-        }
+    // 2. Mismatched face key/id: faces[77] has embedded id=0; refused at
+    // ScrollCoverage::materialize so no invalid ScrollSurface can exist.
+    let bad_face_key = try_surface_with_coverage_edit(
+        7,
+        3,
+        1,
+        |state| {
+            state
+                .fonts
+                .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+            state
+                .faces
+                .get_mut(&base_face_id)
+                .unwrap()
+                .default_resolved_font_id = Some(base_font_id);
+        },
+        |cov| {
+            cov.fonts
+                .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+            cov.faces
+                .get_mut(&base_face_id)
+                .unwrap()
+                .default_resolved_font_id = Some(base_font_id);
+            cov.fonts.insert(
+                aliased_font_key,
+                make_font(aliased_font_key, "Valid additive font"),
+            );
+            let mut aliased_face = Face::new(base_face_id);
+            aliased_face.default_resolved_font_id = Some(aliased_font_key);
+            cov.faces.insert(additive_face_key, aliased_face);
+        },
     );
-    assert!(retention.entries.is_empty());
-    assert!(
-        retention
-            .certified_publication_at(
-                base.presentation_id,
-                DisplayWindowId::new(7),
-                3,
-                bad_font_pub
-            )
-            .is_none()
-    );
-
-    // 2. Mismatched face key/id: faces[77] has embedded id=0; must be rejected and revoke prior entry.
-    retention.refresh(&base);
-    let bad_face_key = surface_with_coverage_edit(7, 3, 1, |cov| {
-        cov.fonts
-            .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
-        cov.faces
-            .get_mut(&base_face_id)
-            .unwrap()
-            .default_resolved_font_id = Some(base_font_id);
-        cov.fonts.insert(
-            aliased_font_key,
-            make_font(aliased_font_key, "Valid additive font"),
-        );
-        let mut aliased_face = Face::new(base_face_id);
-        aliased_face.default_resolved_font_id = Some(aliased_font_key);
-        cov.faces.insert(additive_face_key, aliased_face);
-    });
-    let bad_face_pub = bad_face_key.coverage().publication;
-    let changes = retention.apply_auxiliary(auxiliary(1, vec![bad_face_key]), Some(&base));
-    assert_eq!(
-        changes,
-        AuxiliaryCoverageChanges {
-            installed: 0,
-            revoked: 1,
-            conservative_revocations: 0,
-        }
-    );
-    assert!(retention.entries.is_empty());
-    assert!(
-        retention
-            .certified_publication_at(
-                base.presentation_id,
-                DisplayWindowId::new(7),
-                3,
-                bad_face_pub
-            )
-            .is_none()
-    );
+    assert!(bad_face_key.is_none());
 }
 
 #[test]
@@ -666,33 +676,60 @@ fn auxiliary_realized_gui_frame_refuses_unresolved_additive_face_and_accepts_res
     let base_font_id = ResolvedFontId(1);
     let additive_font_id = ResolvedFontId(77);
 
-    // Realized GUI base (`!base.fonts.is_empty()` and `FaceId(0)` present in `base.faces`
-    // so `FaceId(0)` exercises `Some(base) => base == face` while `FaceId(77)` is additive).
-    let mut gui_base = surface_frame(1, 7, 3);
-    gui_base
+    // 1a. Negative GUI direction at materialize: realized GUI state refuses
+    // an additive face with `default_resolved_font_id: None`.
+    assert!(
+        try_surface_with_coverage_edit(
+            7,
+            3,
+            1,
+            |state| {
+                state
+                    .fonts
+                    .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+                state
+                    .faces
+                    .get_mut(&base_face_id)
+                    .unwrap()
+                    .default_resolved_font_id = Some(base_font_id);
+            },
+            |cov| {
+                cov.fonts
+                    .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+                cov.faces
+                    .get_mut(&base_face_id)
+                    .unwrap()
+                    .default_resolved_font_id = Some(base_font_id);
+                cov.faces
+                    .insert(additive_face_id, Face::new(additive_face_id));
+            },
+        )
+        .is_none()
+    );
+
+    // 1b. Negative GUI direction at apply_auxiliary: a surface materialized validly
+    // on an empty-fonts state (carrying matching base `FaceId(0)` with `None` and an
+    // unresolved additive `FaceId(77)`) delivered against a realized-font base
+    // `FrameGlyphBuffer` is refused by `apply_auxiliary` and revokes the previous entry.
+    let mut gui_base_for_unresolved = surface_frame(1, 7, 3);
+    gui_base_for_unresolved
         .fonts
         .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
-    let mut base_face = Face::new(base_face_id);
-    base_face.default_resolved_font_id = Some(base_font_id);
-    gui_base.faces.insert(base_face_id, base_face);
-    assert!(gui_base.faces.contains_key(&base_face_id));
-
-    // 1. Negative GUI direction: additive face with `default_resolved_font_id: None`
-    // is refused and revokes the previous surface.
+    gui_base_for_unresolved
+        .faces
+        .insert(base_face_id, Face::new(base_face_id));
     let mut retention = CoverageRetention::default();
-    retention.refresh(&gui_base);
+    retention.refresh(&gui_base_for_unresolved);
+    assert_eq!(retention.entries.len(), 1);
     let unresolved_gui = surface_with_coverage_edit(7, 3, 1, |cov| {
-        cov.fonts
-            .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
-        cov.faces
-            .get_mut(&base_face_id)
-            .unwrap()
-            .default_resolved_font_id = Some(base_font_id);
         cov.faces
             .insert(additive_face_id, Face::new(additive_face_id));
     });
     let unresolved_pub = unresolved_gui.coverage().publication;
-    let changes = retention.apply_auxiliary(auxiliary(1, vec![unresolved_gui]), Some(&gui_base));
+    let changes = retention.apply_auxiliary(
+        auxiliary(1, vec![unresolved_gui]),
+        Some(&gui_base_for_unresolved),
+    );
     assert_eq!(
         changes,
         AuxiliaryCoverageChanges {
@@ -705,7 +742,7 @@ fn auxiliary_realized_gui_frame_refuses_unresolved_additive_face_and_accepts_res
     assert!(
         retention
             .certified_publication_at(
-                gui_base.presentation_id,
+                gui_base_for_unresolved.presentation_id,
                 DisplayWindowId::new(7),
                 3,
                 unresolved_pub,
@@ -715,22 +752,75 @@ fn auxiliary_realized_gui_frame_refuses_unresolved_additive_face_and_accepts_res
 
     // 2. Positive GUI direction: realized GUI base + additive face with
     // `default_resolved_font_id: Some(additive_font_id)` installs cleanly.
+    let gui_primary_surface = try_surface_with_coverage_edit(
+        7,
+        3,
+        1,
+        |state| {
+            state
+                .fonts
+                .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+            state
+                .faces
+                .get_mut(&base_face_id)
+                .unwrap()
+                .default_resolved_font_id = Some(base_font_id);
+        },
+        |cov| {
+            cov.fonts
+                .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+            cov.faces
+                .get_mut(&base_face_id)
+                .unwrap()
+                .default_resolved_font_id = Some(base_font_id);
+        },
+    )
+    .expect("realized GUI primary surface should materialize");
+    let mut gui_base = FrameGlyphBuffer::with_size(100.0, 100.0);
+    gui_base.presentation_id = PresentationId::new(1);
+    gui_base.char_width = 10.0;
+    gui_base.char_height = 10.0;
+    gui_base
+        .fonts
+        .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+    let mut base_face = Face::new(base_face_id);
+    base_face.default_resolved_font_id = Some(base_font_id);
+    gui_base.faces.insert(base_face_id, base_face);
+    gui_base.scroll_surfaces = vec![gui_primary_surface];
+
     retention.refresh(&gui_base);
-    let resolved_gui = surface_with_coverage_edit(7, 3, 1, |cov| {
-        cov.fonts
-            .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
-        cov.faces
-            .get_mut(&base_face_id)
-            .unwrap()
-            .default_resolved_font_id = Some(base_font_id);
-        cov.fonts.insert(
-            additive_font_id,
-            make_font(additive_font_id, "Additive GUI font"),
-        );
-        let mut additive_face = Face::new(additive_face_id);
-        additive_face.default_resolved_font_id = Some(additive_font_id);
-        cov.faces.insert(additive_face_id, additive_face);
-    });
+    assert_eq!(retention.entries.len(), 1);
+    let resolved_gui = try_surface_with_coverage_edit(
+        7,
+        3,
+        1,
+        |state| {
+            state
+                .fonts
+                .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+            state
+                .faces
+                .get_mut(&base_face_id)
+                .unwrap()
+                .default_resolved_font_id = Some(base_font_id);
+        },
+        |cov| {
+            cov.fonts
+                .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+            cov.faces
+                .get_mut(&base_face_id)
+                .unwrap()
+                .default_resolved_font_id = Some(base_font_id);
+            cov.fonts.insert(
+                additive_font_id,
+                make_font(additive_font_id, "Additive GUI font"),
+            );
+            let mut additive_face = Face::new(additive_face_id);
+            additive_face.default_resolved_font_id = Some(additive_font_id);
+            cov.faces.insert(additive_face_id, additive_face);
+        },
+    )
+    .expect("resolved additive GUI surface should materialize");
     let resolved_pub = resolved_gui.coverage().publication;
     let changes = retention.apply_auxiliary(auxiliary(1, vec![resolved_gui]), Some(&gui_base));
     assert_eq!(
@@ -812,46 +902,172 @@ fn auxiliary_asymmetric_realized_fonts_rejects_unresolved_additive_face_and_revo
         spacing: None,
     };
 
-    let base_face_id = FaceId::new(0);
     let resolved_face_id = FaceId::new(77);
     let unresolved_face_id = FaceId::new(78);
 
     // Base has `fonts.is_empty()` while coverage carries a realized font (`!cov.fonts.is_empty()`)
     // alongside an unresolved additive face (`FaceId(78)` with `default_resolved_font_id: None`).
-    let mut base = surface_frame(1, 7, 3);
-    base.faces.insert(base_face_id, Face::new(base_face_id));
-    assert!(base.fonts.is_empty());
-
-    let mut retention = CoverageRetention::default();
-    retention.refresh(&base);
-    let asymmetric = surface_with_coverage_edit(7, 3, 1, |cov| {
-        cov.fonts.insert(bitmap_font_id, bitmap_font);
-        let mut resolved_face = Face::new(resolved_face_id);
-        resolved_face.default_resolved_font_id = Some(bitmap_font_id);
-        cov.faces.insert(resolved_face_id, resolved_face);
-        cov.faces
-            .insert(unresolved_face_id, Face::new(unresolved_face_id));
-    });
-    assert!(!asymmetric.coverage().fonts.is_empty());
-    let asymmetric_pub = asymmetric.coverage().publication;
-    let changes = retention.apply_auxiliary(auxiliary(1, vec![asymmetric]), Some(&base));
-    assert_eq!(
-        changes,
-        AuxiliaryCoverageChanges {
-            installed: 0,
-            revoked: 1,
-            conservative_revocations: 0,
-        }
+    // ScrollCoverage::materialize now refuses this asymmetric invalid coverage directly.
+    assert!(
+        try_surface_with_coverage_edit(
+            7,
+            3,
+            1,
+            |_| {},
+            |cov| {
+                cov.fonts.insert(bitmap_font_id, bitmap_font);
+                let mut resolved_face = Face::new(resolved_face_id);
+                resolved_face.default_resolved_font_id = Some(bitmap_font_id);
+                cov.faces.insert(resolved_face_id, resolved_face);
+                cov.faces
+                    .insert(unresolved_face_id, Face::new(unresolved_face_id));
+            },
+        )
+        .is_none()
     );
+}
+
+#[test]
+fn primary_refresh_rejects_incompatible_or_unresolved_surfaces_and_revokes_previous() {
+    use neomacs_display_protocol::font::{
+        FontFileAsset, FontOutlineAsset, FontReplay, FontSlantKind, ResolvedFont, ResolvedFontId,
+        ResolvedFontIdentity,
+    };
+    let make_font = |id: ResolvedFontId, family: &str| ResolvedFont {
+        id,
+        identity: ResolvedFontIdentity::from_file("/fixture/primary-refresh.ttf", 0, None),
+        replay: FontReplay::Swash {
+            asset: FontOutlineAsset::File(
+                FontFileAsset::new("/fixture/primary-refresh.ttf", 0).unwrap(),
+            ),
+        },
+        family: family.into(),
+        full_name: None,
+        postscript_name: None,
+        weight: 400,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size: 10.0,
+        ascent_px: 8.0,
+        descent_px: 2.0,
+        space_advance_px: 10.0,
+        glyph_advance: Default::default(),
+        spacing: None,
+    };
+
+    let base_face_id = FaceId::new(0);
+    let additive_face_id = FaceId::new(77);
+    let base_font_id = ResolvedFontId(1);
+    let additive_font_id = ResolvedFontId(77);
+
+    let make_gui_frame = |presentation: u64, scroll_surface: Arc<ScrollSurface>| {
+        let mut frame = FrameGlyphBuffer::with_size(100.0, 100.0);
+        frame.presentation_id = PresentationId::new(presentation);
+        frame.char_width = 10.0;
+        frame.char_height = 10.0;
+        frame
+            .fonts
+            .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+        let mut base_face = Face::new(base_face_id);
+        base_face.default_resolved_font_id = Some(base_font_id);
+        frame.faces.insert(base_face_id, base_face);
+        frame.scroll_surfaces = vec![scroll_surface];
+        frame
+    };
+
+    let valid_gui_surface = |presentation: u64| {
+        let base = surface(7, 3, presentation);
+        let mut cov = base.coverage().clone();
+        cov.fonts
+            .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+        cov.faces
+            .get_mut(&base_face_id)
+            .unwrap()
+            .default_resolved_font_id = Some(base_font_id);
+        cov.fonts.insert(
+            additive_font_id,
+            make_font(additive_font_id, "Additive GUI font"),
+        );
+        let mut additive_face = Face::new(additive_face_id);
+        additive_face.default_resolved_font_id = Some(additive_font_id);
+        cov.faces.insert(additive_face_id, additive_face);
+        let mut state = FrameDisplayState::new(10, 2, 10.0, 10.0);
+        state.presentation_id = PresentationId::new(presentation);
+        state
+            .fonts
+            .insert(base_font_id, make_font(base_font_id, "DejaVu Sans Mono"));
+        let mut base_face = Face::new(base_face_id);
+        base_face.default_resolved_font_id = Some(base_font_id);
+        state.faces.insert(base_face_id, base_face);
+        state.window_matrices.push(cov.content.clone());
+        state.scroll_coverage.push(Arc::new(cov));
+        state.materialize().scroll_surfaces.pop().unwrap()
+    };
+
+    // 1. Positive realized GUI primary surface installs cleanly.
+    let mut retention = CoverageRetention::default();
+    let good_surface = valid_gui_surface(1);
+    let good_pub = good_surface.coverage().publication;
+    let good_frame = make_gui_frame(1, good_surface);
+    retention.refresh(&good_frame);
+    assert!(
+        retention
+            .certified_publication_at(PresentationId::new(1), DisplayWindowId::new(7), 3, good_pub)
+            .is_some()
+    );
+
+    // 2. Negative: a surface materialized validly on an empty-fonts state (carrying
+    // matching base `FaceId(0)` with `None` and an additive `FaceId(77)` with
+    // `default_resolved_font_id: None`) delivered on a realized-font GUI primary
+    // `FrameGlyphBuffer` must be rejected by F2 and revoke the previous entry.
+    let unresolved_surface = surface_with_coverage_edit(7, 3, 2, |cov| {
+        cov.faces
+            .insert(additive_face_id, Face::new(additive_face_id));
+    });
+    let mut bad_unresolved = make_gui_frame(2, unresolved_surface);
+    bad_unresolved
+        .faces
+        .insert(base_face_id, Face::new(base_face_id));
+    retention.refresh(&bad_unresolved);
     assert!(retention.entries.is_empty());
     assert!(
         retention
-            .certified_publication_at(
-                base.presentation_id,
-                DisplayWindowId::new(7),
-                3,
-                asymmetric_pub,
-            )
+            .certified_at(PresentationId::new(2), DisplayWindowId::new(7))
             .is_none()
+    );
+
+    // 3. Negative: conflicting base face binding on primary `refresh` rejects and revokes.
+    let good_surface = valid_gui_surface(3);
+    retention.refresh(&make_gui_frame(3, good_surface));
+    assert_eq!(retention.entries.len(), 1);
+    let mut conflicting = make_gui_frame(4, valid_gui_surface(4));
+    conflicting.faces.get_mut(&base_face_id).unwrap().background = Color::RED;
+    retention.refresh(&conflicting);
+    assert!(retention.entries.is_empty());
+
+    // 4. Negative: stale `hit_index.presentation()` on primary `refresh` rejects and revokes.
+    let good_surface = valid_gui_surface(5);
+    retention.refresh(&make_gui_frame(5, good_surface));
+    assert_eq!(retention.entries.len(), 1);
+    let stale_pres_frame = make_gui_frame(6, valid_gui_surface(5));
+    retention.refresh(&stale_pres_frame);
+    assert!(retention.entries.is_empty());
+
+    // 5. Positive TTY/headless primary surface (`fonts.is_empty()` on both) installs cleanly.
+    let mut tty_frame = surface_frame(7, 7, 3);
+    tty_frame
+        .faces
+        .insert(base_face_id, Face::new(base_face_id));
+    let tty_surface = surface_with_coverage_edit(7, 3, 7, |cov| {
+        cov.faces
+            .insert(additive_face_id, Face::new(additive_face_id));
+    });
+    let tty_pub = tty_surface.coverage().publication;
+    tty_frame.scroll_surfaces = vec![tty_surface];
+    retention.refresh(&tty_frame);
+    assert!(
+        retention
+            .certified_publication_at(PresentationId::new(7), DisplayWindowId::new(7), 3, tty_pub)
+            .is_some()
     );
 }

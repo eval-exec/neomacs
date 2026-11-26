@@ -151,17 +151,17 @@ fn observed_off_certificate_replay_does_not_hide_first_real_owner_read() {
     force_compiled_journal_for_test(Some(CompiledJournalMode::Off));
     let (_, old_certificate) = capture(|| owner.cons_car());
     let old_certificate = old_certificate.expect("coherent Off-mode read");
-    assert!(!is_observed(owner.bits()));
+    assert!(!unsafe { is_observed(owner.bits()) });
 
     force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));
     let (value, certificate) = capture(|| {
         assert!(old_certificate.unchanged_and_observe());
         // Replaying identities cannot dereference their old headers. The
         // following actual owner read must still publish before its snapshot.
-        assert!(!is_observed(owner.bits()));
+        assert!(!unsafe { is_observed(owner.bits()) });
         let value = owner.cons_car();
         assert!(
-            is_observed(owner.bits()),
+            unsafe { is_observed(owner.bits()) },
             "an Off-mode replay must not hide the first real Observed read",
         );
         value
@@ -182,10 +182,10 @@ fn observed_mode_change_inside_capture_still_publishes_unmarked_owner() {
     let (value, certificate) = capture(|| {
         force_compiled_journal_for_test(Some(CompiledJournalMode::Off));
         assert_eq!(owner.cons_car(), TaggedValue::make_int(97));
-        assert!(!is_observed(owner.bits()));
+        assert!(!unsafe { is_observed(owner.bits()) });
         force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));
         let value = owner.cons_car();
-        assert!(is_observed(owner.bits()));
+        assert!(unsafe { is_observed(owner.bits()) });
         value
     });
     assert_eq!(value, TaggedValue::make_int(97));

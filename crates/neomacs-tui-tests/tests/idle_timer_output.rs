@@ -6,16 +6,16 @@ use std::{fs, time::Duration};
 #[test]
 fn idle_timer_fires_amid_ordinary_timers_and_subprocess_output() {
     let root = neomacs_infra::workspace_root();
-    let run_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let run_id = neomacs_tui_tests::unique_nonce();
     let artifacts = root.join(format!("tmp/idle-tui-{}-{run_id}", std::process::id()));
     let fixture = root.join("crates/neomacs-gui-tests/fixtures/idle-timer-output.el");
     let neo = std::env::var_os("NEOMACS_TUI_NEOMACS_BIN")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
-    for (name, program) in [("GNU", std::path::PathBuf::from("emacs")), ("NEO", neo)] {
+    for (name, program) in [
+        ("GNU", neomacs_tui_tests::oracle::gnu_oracle_program()),
+        ("NEO", neo),
+    ] {
         let control = artifacts.join(name);
         fs::create_dir_all(control.join("home/.emacs.d")).unwrap();
         fs::create_dir_all(control.join("tmp")).unwrap();

@@ -44,10 +44,10 @@ fn observed_cached_other_eligibility_promotes_from_a_live_record_projection() {
     let bits = record.bits();
     let address = bits & !TAG_MASK;
     assert_eq!(
-        native_window_collection_owner(bits),
+        unsafe { native_window_collection_owner(bits) },
         NativeWindowCollectionOwner::Slots
     );
-    assert!(mark_collection_observed(bits));
+    assert!(unsafe { mark_collection_observed(bits) });
     assert!(collection_observed_metadata(bits));
 
     let mut state = State::default();
@@ -70,7 +70,7 @@ fn observed_cached_other_eligibility_promotes_from_a_live_record_projection() {
 
     // The shared mark is already set: the return value describes whether that
     // bit was newly set, not whether this ledger's gate was republished.
-    assert!(!publish_observed_owner_in_state(&mut state, bits));
+    assert!(!unsafe { publish_observed_owner_in_state(&mut state, bits) });
     assert!(
         state.observed.has_slot_geometry(bits),
         "cached identity membership must not suppress live Record slot eligibility"
@@ -101,7 +101,7 @@ fn observed_cached_other_eligibility_promotes_from_a_live_record_projection() {
     // Once positive geometry has been retained, the ordinary cached hit needs
     // no repeated publication. Native Record journaling is covered separately
     // by the gen0_inline_record_aset_invalidates_collection_read_certificates test.
-    assert!(!publish_observed_owner_in_state(&mut state, bits));
+    assert!(!unsafe { publish_observed_owner_in_state(&mut state, bits) });
     assert_eq!(
         OBSERVED_OWNER_PUBLICATIONS.with(std::cell::Cell::get),
         publications + 1

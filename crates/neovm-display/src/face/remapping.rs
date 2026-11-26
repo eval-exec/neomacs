@@ -27,6 +27,10 @@ pub(crate) enum FaceRemapEntry {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FaceRemapping {
     map: HashMap<Value, Vec<FaceRemapEntry>>,
+    /// Raw Lisp CDRs from `face-remapping-alist`, keyed by exact `eq` face
+    /// symbol (first match wins, matching GNU `assq_no_quit` in
+    /// `get_lface_attributes`, `src/xfaces.c:2140-2160`).
+    raw: HashMap<Value, Value>,
 }
 
 impl FaceRemapping {
@@ -37,7 +41,7 @@ impl FaceRemapping {
 
     /// Whether there are any remappings.
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        self.map.is_empty() && self.raw.is_empty()
     }
 
     /// Insert a remapping for the given face name.
@@ -50,6 +54,11 @@ impl FaceRemapping {
         self.map
             .get(&face_symbol_value(face_name))
             .map(|v| v.as_slice())
+    }
+
+    /// Look up the raw Lisp remapping specification by exact `eq` key.
+    pub fn raw_spec_by_key(&self, key: Value) -> Option<Value> {
+        self.raw.get(&key).copied()
     }
 
     /// Parse `face-remapping-alist` from its Lisp value.
@@ -74,16 +83,25 @@ impl FaceRemapping {
             };
             let cell_car = entry.cons_car();
             let cell_cdr = entry.cons_cdr();
+            let is_sym = matches!(cell_car.kind(), ValueKind::Symbol(_) | ValueKind::T);
+            // GNU `assq_no_quit (face_name, Vface_remapping_alist)` matches the
+            // exact Lisp symbol object; first entry wins.
+            if is_sym {
+                remapping.raw.entry(cell_car).or_insert(cell_cdr);
+            }
             let Some(face_name) = normalized_face_name_value(&cell_car) else {
                 continue;
             };
             if face_name.is_bare_symbol_named("nil") {
                 continue;
             }
+            if !is_sym {
+                remapping.raw.entry(face_name).or_insert(cell_cdr);
+            }
 
             let entries = Self::parse_remap_spec(&cell_cdr);
             if !entries.is_empty() {
-                remapping.insert(face_name, entries);
+                remapping.map.entry(face_name).or_insert(entries);
             }
         }
 
@@ -240,6 +258,7 @@ impl FaceTableRemappingExt for FaceTable {
                 };
                 result = result.merge(&contribution);
             }
+            seen.remove(&key);
             return result;
         }
         match base {

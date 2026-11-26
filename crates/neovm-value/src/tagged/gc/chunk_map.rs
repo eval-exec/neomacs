@@ -219,6 +219,21 @@ impl ChunkMap {
             if leaf.is_null() {
                 alloc::handle_alloc_error(layout);
             }
+            // Free the unpublished candidate if a test hook panics or if
+            // another thread wins the CAS below.
+            struct UnpublishedLeaf {
+                ptr: *mut ChunkLeaf,
+                layout: Layout,
+            }
+            impl Drop for UnpublishedLeaf {
+                fn drop(&mut self) {
+                    // SAFETY: `self.ptr` was allocated with `self.layout` and
+                    // was never published into `self.l1`, so no other thread
+                    // can observe it.
+                    unsafe { alloc::dealloc(self.ptr.cast::<u8>(), self.layout) };
+                }
+            }
+            let candidate = UnpublishedLeaf { ptr: leaf, layout };
             #[cfg(any(test, feature = "test-support"))]
             BEFORE_LEAF_INSTALL.with(|slot| {
                 let hook = slot.borrow_mut().take();
@@ -228,16 +243,18 @@ impl ChunkMap {
             });
             match slot.compare_exchange(
                 std::ptr::null_mut(),
-                leaf,
+                candidate.ptr,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
-                Ok(_) => {}
+                Ok(_) => {
+                    std::mem::forget(candidate);
+                }
                 Err(installed) => {
-                    // SAFETY: our losing candidate was never published, so
-                    // no other thread can hold it. Acquire observes the
-                    // winner's initialized leaf, which lives until map Drop.
-                    unsafe { alloc::dealloc(leaf.cast::<u8>(), layout) };
+                    // `candidate` drops here, freeing our losing leaf.
+                    // Acquire observes the winner's initialized leaf, which
+                    // lives until map Drop.
+                    drop(candidate);
                     leaf = installed;
                 }
             }

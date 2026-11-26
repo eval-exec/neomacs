@@ -83,8 +83,8 @@ impl TaggedHeap {
         }
         for object in &self.mapped_veclike_objects {
             // SAFETY: loader-registered headers remain live until heap teardown.
-            if unsafe { (*object.header).type_tag } == VecLikeType::HashTable {
-                expected.insert(object.header as usize);
+            if unsafe { (*object.header()).type_tag } == VecLikeType::HashTable {
+                expected.insert(object.header() as usize);
             }
         }
         assert_eq!(

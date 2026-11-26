@@ -16,7 +16,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 #[test]
@@ -39,10 +39,7 @@ fn check_text_scale(name: &str, factor: &str, dpi: u32, point_pixels: u32) {
     let artifacts = root.join(format!(
         "tmp/neomacs-gui-tests/desktop-text-scaling-{name}-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        neomacs_gui_tests::unique_nonce()
     ));
     fs::create_dir_all(&artifacts).unwrap();
     let schemas = artifacts.join("schemas");

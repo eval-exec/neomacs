@@ -9,7 +9,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 #[test]
@@ -28,10 +28,7 @@ fn paired_rejection(backend: GuiBackend) {
         "target/neomacs-gui-tests/native-resize-rejection-{}-{}-{}",
         backend.slug(),
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        neomacs_gui_tests::unique_nonce()
     ));
     fs::create_dir_all(&artifacts).unwrap();
     assert!(

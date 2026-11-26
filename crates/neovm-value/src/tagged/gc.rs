@@ -1521,7 +1521,7 @@ impl TaggedHeap {
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn jit_cons_window_for_test(&self) -> (usize, usize) {
-        (self.jit.cons_cur.get(), self.jit.cons_lim.get())
+        (self.jit.cons_cur(), self.jit.cons_lim())
     }
 
     /// Era follow-up row: copied snapshot of the heap's region statistics.
@@ -2489,8 +2489,11 @@ mod pacing;
 pub use concurrent::MarkFinishError;
 #[doc(hidden)]
 pub use concurrent::MarkPhase;
+mod collector_tables_slot;
 mod heap_identity;
 pub use heap_identity::HeapIdentity;
+mod heap_ptr;
+use heap_ptr::HeapPtr;
 mod mark_channel;
 use mark_channel::{ConcurrentMarkFlag, MarkExitSlot};
 mod mark_word;

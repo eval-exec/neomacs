@@ -1567,6 +1567,83 @@ fn scrolling_row_validates_phases_checksums_and_restoration() {
 }
 
 #[test]
+fn scrolling_long_lines_row_validates_scrolling_contract_and_provenance() {
+    let workspace_tmp = crate::workspace_root().join("tmp");
+    fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
+    let workspace = tempfile::Builder::new()
+        .prefix("neomacs-perf-scrolling-long-lines-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let harness = PerfHarness::new(workspace.path());
+    let request = RunRequest::new(
+        ScenarioId::ScrollingLongLines,
+        workspace.path().join("fake-neomacs"),
+        NonZeroU32::new(2).expect("non-zero iterations"),
+    )
+    .with_frontend(Frontend::Tui {
+        rows: 50,
+        columns: 200,
+    });
+    let result_json = r##"{
+              "schema_version": 1,
+              "scenario": "scrolling-long-lines",
+              "status": "ok",
+              "iterations": 2,
+              "elapsed_us": 2400000,
+              "elapsed_wall_us": 2500000,
+              "operation_count": 260,
+              "cold_scroll_us": 600000,
+              "warm_scroll_us": 1800000,
+              "cold_scroll_commands": 52,
+              "warm_scroll_commands": 208,
+              "initial_checksum": "deadbeef",
+              "final_checksum": "deadbeef",
+              "point_restored": true,
+              "window_start_restored": true,
+              "expected_major_mode": "fundamental-mode",
+              "actual_major_mode": "fundamental-mode",
+              "error": null
+            }"##;
+
+    let report = harness
+        .record_fixture_result(&request, result_json)
+        .expect("record fixture result");
+    let RunVerdict::Valid { measurements } = report.artifact.verdict else {
+        panic!("correct scrolling-long-lines run was rejected")
+    };
+    for expected in [
+        crate::MetricName::PerOperationWallTime,
+        crate::MetricName::ColdScrollPhaseCpuTime,
+        crate::MetricName::WarmScrollPhaseCpuTime,
+        crate::MetricName::ScrollCommandCount,
+    ] {
+        assert!(
+            measurements
+                .iter()
+                .any(|measurement| measurement.name == expected),
+            "scrolling-long-lines must report {expected:?}"
+        );
+    }
+
+    let wrong_scenario = result_json.replace("scrolling-long-lines", "scrolling");
+    let workspace2 = tempfile::Builder::new()
+        .prefix("neomacs-perf-scrolling-long-lines-bad-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let report = PerfHarness::new(workspace2.path())
+        .record_fixture_result(&request, &wrong_scenario)
+        .expect("record fixture result");
+    match report.artifact.verdict {
+        RunVerdict::CorrectnessMismatch { mismatches } => assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.invariant == "scenario-id")
+        ),
+        verdict => panic!("wrong scenario id was accepted: {verdict:?}"),
+    }
+}
+
+#[test]
 fn cjk_font_lock_pulse_requires_font_lock_and_ten_face_writes_per_iteration() {
     let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");

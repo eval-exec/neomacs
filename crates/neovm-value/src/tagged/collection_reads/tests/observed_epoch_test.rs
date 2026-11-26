@@ -348,7 +348,7 @@ fn incremental_sweep_without_observed_reclamation_keeps_epoch_and_recent_hits() 
     }
     assert!(reads.unchanged());
     for owner in owners {
-        assert!(is_observed(owner.bits()));
+        assert!(unsafe { is_observed(owner.bits()) });
     }
 }
 

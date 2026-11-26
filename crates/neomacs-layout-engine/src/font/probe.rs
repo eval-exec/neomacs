@@ -262,6 +262,20 @@ std::cfg_select! {
             })
         }
 
+        #[cfg(test)]
+        static FONT_PX_METRIC_PROBES: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+
+        #[cfg(test)]
+        pub(crate) fn font_px_metric_probes() -> usize {
+            FONT_PX_METRIC_PROBES.load(std::sync::atomic::Ordering::Relaxed)
+        }
+
+        #[cfg(test)]
+        pub(crate) fn reset_font_px_metric_probes() {
+            FONT_PX_METRIC_PROBES.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+
         /// The font backend supplies policy from the authority that selected it.
         pub(crate) fn probe_font_px_metrics_with_policy(
             file: &str,
@@ -270,6 +284,8 @@ std::cfg_select! {
             wght: Option<f32>,
             mut policy: impl FnMut(u32) -> Option<FontRenderOptions>,
         ) -> Option<FontPxMetrics> {
+            #[cfg(test)]
+            FONT_PX_METRIC_PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let library = Library::init().ok()?;
             let mut face = library.new_face(file, face_index as isize).ok()?;
             // Variable fonts: GNU probes the MATCHED named instance (the

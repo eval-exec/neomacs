@@ -9,7 +9,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 // MELPA source commits; only package-version header comments differ.
@@ -68,10 +68,7 @@ fn melpa_agent_shell_resume_paints_without_false_source_mutation_like_gnu() {
     let runtime = std::env::var_os("NEOMACS_RUNTIME_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.clone());
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nonce = neomacs_gui_tests::unique_nonce();
     let artifacts = root.join(format!(
         "tmp/neomacs-gui-tests/agent-shell-832-{}-{nonce}",
         std::process::id()

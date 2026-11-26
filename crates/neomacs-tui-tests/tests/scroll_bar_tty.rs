@@ -34,7 +34,7 @@ use crate::support;
 
 use neomacs_tui_tests::TuiSession;
 use std::fs;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use support::{boot_pair, eval_expression, read_both, write_home_file};
 
 const ORACLE_FILE: &str = "scroll-bar-tty-oracle.el";
@@ -145,9 +145,9 @@ fn wait_for_results(gnu: &mut TuiSession, neo: &mut TuiSession) -> (String, Stri
     let neo_path = neo.home_dir().join(RESULT_FILE);
     let gnu_done = gnu.home_dir().join(DONE_FILE);
     let neo_done = neo.home_dir().join(DONE_FILE);
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(20));
 
-    while Instant::now() < deadline {
+    while !deadline.is_expired() {
         if gnu_done.exists() && neo_done.exists() {
             break;
         }

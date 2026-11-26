@@ -749,7 +749,7 @@ fn interactive_current_buffer_default(buffers: &crate::buffer::BufferManager) ->
         .unwrap_or(Value::NIL)
 }
 
-fn interactive_other_buffer_default(buffers: &mut crate::buffer::BufferManager) -> Value {
+fn interactive_other_buffer_default(buffers: &mut crate::buffer::BufferManagerMut<'_>) -> Value {
     let avoid = interactive_current_buffer_default(buffers);
     super::builtins::other_buffer_impl(buffers, vec![avoid]).unwrap_or(Value::NIL)
 }
@@ -780,7 +780,7 @@ fn interactive_next_event_with_parameters_in_state(
 fn interactive_args_from_string_code_in_state(
     vars: VariableView<'_>,
     dynamic: &mut Vec<OrderedRuntimeBindingMap>,
-    buffers: &mut crate::buffer::BufferManager,
+    buffers: &mut crate::buffer::BufferManagerMut<'_>,
     _custom: &crate::emacs_core::custom::CustomManager,
     _specpdl: &[crate::emacs_core::eval::SpecBinding],
     code: &crate::heap_types::LispString,
@@ -916,7 +916,8 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     )?);
                 }
                 InteractiveControlLetter::Buffer => {
-                    let default = interactive_other_buffer_default(&mut shared.edit.buffers);
+                    let default =
+                        interactive_other_buffer_default(&mut shared.buffer_manager_view_mut());
                     let letter_args = [Value::heap_string(prompt.clone()), default, Value::NIL];
                     args.push(super::minibuffer::finish_read_buffer_in_vm_runtime(
                         shared,
@@ -1503,7 +1504,8 @@ fn interactive_args_from_string_code(
                     )?)
                 }
                 InteractiveControlLetter::Buffer => {
-                    let default = interactive_other_buffer_default(&mut eval.edit.buffers);
+                    let default =
+                        interactive_other_buffer_default(&mut eval.buffer_manager_view_mut());
                     args.push(super::minibuffer::builtin_read_buffer(
                         eval,
                         vec![Value::heap_string(prompt), default, Value::NIL],
@@ -1850,7 +1852,7 @@ pub(crate) fn resolve_call_interactively_target_and_args_in_eval(
 pub(crate) fn resolve_call_interactively_target_and_args_in_state(
     vars: VariableView<'_>,
     dynamic: &mut Vec<OrderedRuntimeBindingMap>,
-    buffers: &mut crate::buffer::BufferManager,
+    buffers: &mut crate::buffer::BufferManagerMut<'_>,
     custom: &crate::emacs_core::custom::CustomManager,
     specpdl: &[crate::emacs_core::eval::SpecBinding],
     plan: &mut CallInteractivelyPlan,

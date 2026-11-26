@@ -199,6 +199,8 @@ mod p640n1_probe_row_oracle;
 #[cfg(test)]
 #[path = "tty_relay.rs"]
 mod tty_relay;
+#[path = "tty_tab_bar_face.rs"]
+mod tty_tab_bar_face;
 #[path = "window_divider_overlay_arrow.rs"]
 mod window_divider_overlay_arrow;
 #[path = "window_end_oracle.rs"]

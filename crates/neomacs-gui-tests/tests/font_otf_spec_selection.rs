@@ -11,11 +11,7 @@ use neomacs_gui_tests::{
     GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
 };
 use serde_json::Value;
-use std::{
-    fs,
-    path::PathBuf,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{fs, path::PathBuf, time::Duration};
 
 #[derive(Clone, Copy)]
 enum Engine {
@@ -79,10 +75,7 @@ fn run(engine: Engine) {
     let artifacts = root.join(format!(
         "target/neomacs-gui-tests/font-otf-spec-{name}-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        neomacs_gui_tests::unique_nonce()
     ));
     let fonts = artifacts.join("fonts");
     fs::create_dir_all(&fonts).unwrap();

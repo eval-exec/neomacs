@@ -49,6 +49,7 @@ fn run_command_parses_into_a_typed_workload_request() {
             machine: MachinePolicy {
                 cpu: Some(3),
                 required_governor: Some("performance".to_string()),
+                allow_local: false,
             },
             counters: Some(CounterScope::WholeProcess),
             video_file: None,
@@ -308,6 +309,7 @@ fn suite_command_parses_regression_and_history_controls() {
             machine: MachinePolicy {
                 cpu: Some(4),
                 required_governor: Some("performance".to_string()),
+                allow_local: false,
             },
             counters: Some(CounterScope::EditLoop),
             previous_suite: Some(PathBuf::from("tmp/perf-suites/previous/suite.json")),
@@ -348,12 +350,63 @@ fn suite_command_parses_org_editing_guard_with_baseline_manifest() {
             machine: MachinePolicy {
                 cpu: Some(0),
                 required_governor: Some("performance".to_string()),
+                allow_local: false,
             },
             counters: Some(CounterScope::EditLoop),
             previous_suite: None,
             baseline_manifest: Some(PathBuf::from(".github/perf-baselines/v0.0.21.json")),
         }
     );
+}
+
+#[test]
+fn suite_command_parses_scrolling_long_lines_guard() {
+    assert_eq!(
+        parse(&[
+            "suite",
+            "scrolling-long-lines-guard",
+            "--baseline-editor",
+            "/tmp/baseline/emacs",
+            "--candidate-editor",
+            "target/release/neomacs",
+            "--samples",
+            "5",
+            "--allow-local",
+            "--hardware-counters",
+            "--counter-scope",
+            "edit-loop",
+        ])
+        .expect("parse scrolling-long-lines-guard suite"),
+        PerfCommand::Suite {
+            suite: SuiteId::ScrollingLongLinesGuard,
+            baseline_editor: PathBuf::from("/tmp/baseline/emacs"),
+            candidate_editor: PathBuf::from("target/release/neomacs"),
+            samples: ComparisonSampleCount::new(5).expect("valid sample count"),
+            timeout: Duration::from_secs(300),
+            machine: MachinePolicy {
+                cpu: None,
+                required_governor: None,
+                allow_local: true,
+            },
+            counters: Some(CounterScope::EditLoop),
+            previous_suite: None,
+            baseline_manifest: None,
+        }
+    );
+
+    let PerfCommand::Compare { machine, .. } = parse(&[
+        "compare",
+        "scrolling-long-lines",
+        "--baseline-editor",
+        "/tmp/baseline/emacs",
+        "--candidate-editor",
+        "target/release/neomacs",
+        "--allow-local",
+    ])
+    .expect("parse compare scrolling-long-lines with --allow-local") else {
+        panic!("expected compare command");
+    };
+    assert!(machine.allow_local);
 }
 
 #[test]

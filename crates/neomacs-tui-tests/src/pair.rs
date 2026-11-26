@@ -3,7 +3,7 @@
 use crate::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Maximum total time for GNU Emacs to reach the startup predicate.
 const GNU_STARTUP_TIMEOUT: Duration = Duration::from_secs(12);
@@ -75,24 +75,27 @@ fn settle_started_pair(mut gnu: TuiSession, mut neo: TuiSession) -> (TuiSession,
     };
 
     // Phase 1 — interleaved concurrent poll
-    let gnu_deadline = Instant::now() + GNU_STARTUP_TIMEOUT;
-    let neo_deadline = Instant::now() + NEO_STARTUP_TIMEOUT;
+    let gnu_cap = HangCap::new(GNU_STARTUP_TIMEOUT);
+    let neo_cap = HangCap::new(NEO_STARTUP_TIMEOUT);
     let mut gnu_ready = false;
     let mut neo_ready = false;
 
     while !gnu_ready || !neo_ready {
-        let now = Instant::now();
-        if now >= gnu_deadline && now >= neo_deadline {
+        let gnu_slice = (!gnu_ready)
+            .then(|| gnu_cap.poll_slice(POLL_SLICE))
+            .flatten();
+        let neo_slice = (!neo_ready)
+            .then(|| neo_cap.poll_slice(POLL_SLICE))
+            .flatten();
+        if gnu_slice.is_none() && neo_slice.is_none() {
             break;
         }
-        if !gnu_ready && now < gnu_deadline {
-            let cap = gnu_deadline.saturating_duration_since(now).min(POLL_SLICE);
-            gnu.read(cap);
+        if let Some(slice) = gnu_slice {
+            gnu.read(slice);
             gnu_ready = startup_ready(&gnu.text_grid());
         }
-        if !neo_ready && now < neo_deadline {
-            let cap = neo_deadline.saturating_duration_since(now).min(POLL_SLICE);
-            neo.read(cap);
+        if let Some(slice) = neo_slice {
+            neo.read(slice);
             neo_ready = startup_ready(&neo.text_grid());
         }
     }
@@ -189,20 +192,20 @@ pub fn resize_both(gnu: &mut TuiSession, neo: &mut TuiSession, rows: u16, cols: 
 ///
 /// On timeout this returns normally (the loop breaks) and does not panic:
 /// callers that depend on the postcondition must assert it themselves, as
-/// [`eval_expression`] does for the minibuffer exit barrier.
+/// [`eval_expression`] does for the minibuffer exit barrier. `timeout` is a
+/// hang cap and must be at least [`MIN_HANG_CAP`].
+#[track_caller]
 pub fn wait_for_both<F>(gnu: &mut TuiSession, neo: &mut TuiSession, timeout: Duration, predicate: F)
 where
     F: Fn(&[String]) -> bool + Copy,
 {
-    let deadline = Instant::now() + timeout;
+    let hang_cap = HangCap::new(timeout);
     let mut gnu_ok = predicate(&gnu.text_grid());
     let mut neo_ok = predicate(&neo.text_grid());
     while !gnu_ok || !neo_ok {
-        let now = Instant::now();
-        if now >= deadline {
+        let Some(cap) = hang_cap.poll_slice(POLL_SLICE) else {
             break;
-        }
-        let cap = deadline.saturating_duration_since(now).min(POLL_SLICE);
+        };
         if !gnu_ok {
             gnu.read(cap);
             gnu_ok = predicate(&gnu.text_grid());
@@ -388,7 +391,11 @@ pub fn eval_expression_one(session: &mut TuiSession, expression: &str) {
 }
 
 /// [`eval_expression_one`] with an explicit barrier bound.
+#[track_caller]
 pub fn eval_expression_one_within(session: &mut TuiSession, expression: &str, timeout: Duration) {
+    // Floor the barrier before any input, so a short bound fails at the call
+    // site instead of after the expression has been typed.
+    let _ = HangCap::new(timeout);
     type_expression_one(session, expression);
     let exited = |grid: &[String]| minibuffer_exited(grid, expression);
     session.read_until(timeout, exited);
@@ -848,7 +855,9 @@ impl CommandTrace {
     }
 
     /// Block until both editors have executed `delta` more commands than
-    /// `baseline`, re-reading their PTYs while waiting.
+    /// `baseline`, re-reading their PTYs while waiting. `timeout` is a hang
+    /// cap and must be at least [`MIN_HANG_CAP`].
+    #[track_caller]
     pub fn wait_for(
         &self,
         gnu: &mut TuiSession,
@@ -857,17 +866,16 @@ impl CommandTrace {
         delta: usize,
         timeout: Duration,
     ) {
-        let deadline = Instant::now() + timeout;
+        let cap = HangCap::new(timeout);
         loop {
             let now = self.mark();
             if now.0 >= baseline.0 + delta && now.1 >= baseline.1 + delta {
                 return;
             }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
+            let Some(slice) = cap.poll_slice(Duration::from_millis(100)) else {
                 break;
-            }
-            read_both(gnu, neo, remaining.min(Duration::from_millis(100)));
+            };
+            read_both(gnu, neo, slice);
         }
         panic!(
             "command trace did not advance: baseline {baseline:?} want +{delta}, got {:?}\n\

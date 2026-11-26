@@ -12,7 +12,7 @@
 
 use crate::support::{boot_pair, eval_expression_one, settle_session};
 use neomacs_tui_tests::TuiSession;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Unlikely enough that no startup, mode-line or dialog text contains it.
 const MARKER: &[u8] = b"KKP-PROBE-4Q3F-MARKER";
@@ -29,7 +29,7 @@ fn send_marker_and_read(session: &mut TuiSession, label: &str) {
             std::str::from_utf8(MARKER).unwrap()
         ),
     );
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(15));
     loop {
         session.read(Duration::from_millis(100));
         if session
@@ -40,7 +40,7 @@ fn send_marker_and_read(session: &mut TuiSession, label: &str) {
             return;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "{label}: send-string-to-terminal bytes never reached the PTY; \
              recent output: {:?}",
             String::from_utf8_lossy(session.recent_output())

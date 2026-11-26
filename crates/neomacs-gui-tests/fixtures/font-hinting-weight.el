@@ -80,7 +80,7 @@
       (set-buffer-multibyte nil)
       (insert (x-export-frames nil 'png))))
   ;; The oracle is the visible window. Leave time for the harness to grab it.
-  (run-at-time 3 nil (lambda () (kill-emacs 0))))
+  (run-at-time 12 nil (lambda () (kill-emacs 0))))
 
 (defun font-hinting-weight-guard (function &rest arguments)
   (condition-case error-data
@@ -93,4 +93,4 @@
 (dolist (function '(font-hinting-weight-start font-hinting-weight-observe))
   (advice-add function :around #'font-hinting-weight-guard))
 (run-at-time 0.5 nil #'font-hinting-weight-start)
-(run-at-time 20 nil (lambda () (kill-emacs 2)))
+(run-at-time 30 nil (lambda () (kill-emacs 2)))

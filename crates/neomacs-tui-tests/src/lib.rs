@@ -45,20 +45,29 @@ use std::time::{Duration, Instant};
 pub mod launch;
 mod observation;
 pub mod oracle;
+#[cfg(test)]
+mod oracle_guard_test;
 mod pty_output;
 mod recording;
 pub mod startup;
+pub mod timing;
+#[cfg(test)]
+mod wall_clock_guard_test;
 
 pub use launch::TuiLaunch;
 pub use observation::{FencedTerminal, TuiObservationError};
 pub use oracle::{assert_neomacs_dumped_runtime, gnu_oracle_program, gnu_oracle_stamp};
-pub use pty_output::write_all_nonblocking_pty;
+pub use pty_output::{NonblockingWriteError, write_all_nonblocking_pty_within};
 use pty_output::{ObservationCursor, PtyOutputEvent, PtyOutputKind, PtyOutputPump};
 pub use recording::TuiRecordingScope;
 use recording::{
     RecordingConfig, RecordingExitStatus, RecordingIdentity, SessionRecording, TerminalSize,
 };
 use startup::{SessionName, StartupObservation};
+pub use timing::{
+    HangCap, MAX_POLL_SLICE, MIN_HANG_CAP, MIN_NEGATIVE_SOAK, NegativeSoak, NegativeSoakReceipt,
+    unique_nonce,
+};
 
 // ── Session ──────────────────────────────────────────────────────────
 
@@ -326,6 +335,10 @@ pub struct TuiSession {
     // records, so `send` sleeps nowhere on a graded run. Only
     // `RecordingConfig` can produce a non-zero value.
     recording_delay: Duration,
+    #[cfg(test)]
+    committed_inputs: usize,
+    #[cfg(test)]
+    pacing_observer: Option<std::sync::Arc<std::sync::Mutex<Vec<(Duration, usize)>>>>,
     home: SessionDirectory,
     // Keep TMPDIR isolated per session: interactive Org chooses one of only
     // 1,000 babel-stable names there and cleans it from kill-emacs-hook. A
@@ -553,6 +566,10 @@ impl TuiSession {
             },
             startup,
             recording_delay: recording.delay(),
+            #[cfg(test)]
+            committed_inputs: 0,
+            #[cfg(test)]
+            pacing_observer: None,
             home,
             _tmp: tmp,
             finished: false,
@@ -776,6 +793,14 @@ impl TuiSession {
         self.startup
     }
 
+    #[cfg(test)]
+    fn set_pacing_observer(
+        &mut self,
+        observer: std::sync::Arc<std::sync::Mutex<Vec<(Duration, usize)>>>,
+    ) {
+        self.pacing_observer = Some(observer);
+    }
+
     /// Send raw bytes through the sole PTY owner.
     ///
     /// Earlier output is applied to the parser and recording before each
@@ -793,12 +818,24 @@ impl TuiSession {
             data.len(),
             "PTY success must cover the exact requested input"
         );
+        #[cfg(test)]
+        {
+            self.committed_inputs += 1;
+        }
         self.pace_recording();
     }
 
     /// Wait out the recording delay, if this session has one.
     fn pace_recording(&self) {
         if !self.recording_delay.is_zero() {
+            #[cfg(test)]
+            if let Some(observer) = &self.pacing_observer {
+                observer
+                    .lock()
+                    .unwrap()
+                    .push((self.recording_delay, self.committed_inputs));
+                return;
+            }
             std::thread::sleep(self.recording_delay);
         }
     }
@@ -836,11 +873,13 @@ impl TuiSession {
     /// entire deadline — the editor that reached the state first and then
     /// went quiet pays the bound, while its noisier peer sails through on
     /// the idle cut-off.)
+    #[track_caller]
     pub fn read_until<F>(&mut self, max_timeout: Duration, predicate: F)
     where
         F: Fn(&[String]) -> bool,
     {
-        self.read_until_screen(max_timeout, |grid, _screen| predicate(grid));
+        let cap = HangCap::new(max_timeout);
+        self.read_until_screen_within(&cap, |grid, _screen| predicate(grid));
     }
 
     /// [`Self::read_until`] with the parsed screen as well as the text grid.
@@ -849,7 +888,18 @@ impl TuiSession {
     /// background colour, not text -- must look at the same screen the later
     /// assertion will read.  A frame caught between two paints can satisfy a
     /// text-only predicate while still showing the previous highlight.
+    #[track_caller]
     pub fn read_until_screen<F>(&mut self, max_timeout: Duration, predicate: F)
+    where
+        F: Fn(&[String], &vt100::Screen) -> bool,
+    {
+        let cap = HangCap::new(max_timeout);
+        self.read_until_screen_within(&cap, predicate);
+    }
+
+    /// [`Self::read_until_screen`] bounded by a caller-owned [`HangCap`], so
+    /// several consecutive waits can share one budget.
+    pub fn read_until_screen_within<F>(&mut self, cap: &HangCap, predicate: F)
     where
         F: Fn(&[String], &vt100::Screen) -> bool,
     {
@@ -858,13 +908,8 @@ impl TuiSession {
         /// promptly, large enough not to spin on grid snapshots.
         const PREDICATE_POLL: Duration = Duration::from_millis(50);
 
-        let deadline = Instant::now() + max_timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            self.read(remaining.min(PREDICATE_POLL));
+        while let Some(slice) = cap.poll_slice(PREDICATE_POLL) {
+            self.read(slice);
             if predicate(&self.text_grid(), self.screen()) {
                 break;
             }
@@ -874,9 +919,6 @@ impl TuiSession {
                 self.name,
                 self.text_grid().join("\n")
             );
-            if Instant::now() >= deadline {
-                break;
-            }
         }
     }
 
@@ -886,10 +928,11 @@ impl TuiSession {
     /// A timed-out child is terminated and reaped before this returns. Keeping
     /// reads and lifecycle management in the harness prevents a verbose child
     /// from deadlocking on a full PTY and ensures direct probes are recorded.
+    #[track_caller]
     pub fn run_to_completion(&mut self, max_timeout: Duration) -> TuiProcessOutcome {
         const READ_SLICE: Duration = Duration::from_millis(100);
 
-        let deadline = Instant::now() + max_timeout;
+        let cap = HangCap::new(max_timeout);
         loop {
             if self
                 ._child
@@ -902,14 +945,13 @@ impl TuiSession {
                 return TuiProcessOutcome::Exited;
             }
 
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
+            let Some(slice) = cap.poll_slice(READ_SLICE) else {
                 self.finish()
                     .expect("terminate, reap and finish timed-out TUI process");
                 return TuiProcessOutcome::TimedOut;
-            }
+            };
 
-            self.read(remaining.min(READ_SLICE));
+            self.read(slice);
         }
     }
 
@@ -1010,13 +1052,14 @@ impl TuiSession {
     }
 
     /// Drain raw PTY output until `needle` appears in [`Self::recent_output`]
-    /// or `timeout` elapses.
+    /// or `timeout` (at least [`MIN_HANG_CAP`]) elapses.
+    #[track_caller]
     pub fn wait_for_raw_output(&mut self, needle: &[u8], timeout: Duration) -> bool {
         const SLICE: Duration = Duration::from_millis(20);
+        let cap = HangCap::new(timeout);
         if needle.is_empty() {
             return true;
         }
-        let deadline = Instant::now() + timeout;
         loop {
             if self
                 .terminal
@@ -1026,11 +1069,10 @@ impl TuiSession {
             {
                 return true;
             }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
+            let Some(slice) = cap.poll_slice(SLICE) else {
                 return false;
-            }
-            self.read(remaining.min(SLICE));
+            };
+            self.read(slice);
         }
     }
 

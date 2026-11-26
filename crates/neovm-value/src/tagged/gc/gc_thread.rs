@@ -30,14 +30,6 @@ fn concurrent_hash_scan_hook_for_test() {
     }
 }
 
-/// A raw `*mut TaggedHeap` that can cross to the GC thread. The heap is `!Send`
-/// (raw pointers), but during a handshake the mutator is BLOCKED waiting for the
-/// GC thread, so the two threads never touch the heap at the same time — the GC
-/// thread has exclusive access for the duration. (Phase 5 makes access genuinely
-/// concurrent via the atomic slots + SATB built in Phases 1-3.)
-pub(super) struct HeapPtr(pub(super) *mut TaggedHeap);
-unsafe impl Send for HeapPtr {}
-
 /// A non-blocking concurrent-mark job (Phase 5). Carries everything the GC
 /// thread needs WITHOUT a `&mut TaggedHeap` — two threads holding `&mut` to the
 /// same heap is UB in Rust's model even with atomic fields. The GC thread reads
@@ -482,7 +474,8 @@ fn serve_gc_requests(heap: HeapIdentity, rx: std::sync::mpsc::Receiver<GcRequest
 /// One implementation of the request protocol for both possible executors.
 fn run_gc_request(heap: HeapIdentity, req: GcRequest) {
     match req {
-        GcRequest::MarkAll(HeapPtr(p), done) => {
+        GcRequest::MarkAll(heap_ptr, done) => {
+            let p = heap_ptr.into_raw();
             // SAFETY: the requester either executes this directly with
             // its exclusive heap loan or blocks on done until the sole
             // worker signals. No other heap access overlaps marking.
@@ -2580,7 +2573,7 @@ fn generation_only_cons_is_old(heap: &TaggedHeap, owner: TaggedValue) -> bool {
     if heap.region_book.no_old_cons_block_contains(addr) {
         return false;
     }
-    let cur = heap.jit.cons_cur.get();
+    let cur = heap.jit.cons_cur();
     let ptr = addr as *const ConsCell;
     let base = ConsBlock::block_base_for_ptr(ptr);
     // An open region's cursor belongs to a live owned block, even when it
@@ -3102,7 +3095,6 @@ mod worker_symbol_classification_tests {
 /// the GC's per-thread helper state.
 #[doc(hidden)]
 pub fn reset_carrier_tls() {
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
     crate::tagged::mutate::reset_carrier_tls();
     cold_gc::reset_carrier_tls();
 }

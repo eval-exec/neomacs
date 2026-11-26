@@ -45,10 +45,6 @@ const ALLOWED_SAFE_STRING_OBJ_CASTS: &[(&str, &str)] = &[
         "aref_fast",
     ),
     (
-        "crates/neovm-value/src/tagged/gc/collection_observed.rs",
-        "mark_collection_observed",
-    ),
-    (
         "crates/neovm-value/src/tagged/gc/collector_reads.rs",
         "gc_string_ptr",
     ),
@@ -78,7 +74,7 @@ const ALLOWED_SAFE_STRING_OBJ_CASTS: &[(&str, &str)] = &[
     ),
     (
         "crates/neovm-value/src/tagged/mutate.rs",
-        "with_string_text_props_mut",
+        "with_string_text_props_mut_with_had",
     ),
     ("crates/neovm-value/src/tagged/value.rs", "as_string_ptr"),
 ];

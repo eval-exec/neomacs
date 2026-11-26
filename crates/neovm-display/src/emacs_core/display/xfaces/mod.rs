@@ -13,7 +13,6 @@ pub(crate) mod height;
 pub mod realization;
 
 use crate::emacs_core::xfaces::realization::XfacesRealizationContextExt;
-use crate::face::remapping::FaceTableRemappingExt;
 use crate::face::{LFACE_VECTOR_SIZE, LFaceAttr};
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
@@ -363,7 +362,7 @@ use strum::{EnumIter, EnumString, IntoEnumIterator, IntoStaticStr};
 #[cfg(test)]
 use super::font::alternative_font_registry_alist;
 use super::font::{
-    FrameFontRealization, default_face_font_attr_affects_frame_font,
+    FONT_SPEC_TAG, FrameFontRealization, default_face_font_attr_affects_frame_font,
     face_remapping_for_current_buffer, font_name_value, font_spec_from_name, font_string_text,
     font_value_fields, font_value_text, font_vector_get_flexible, frame_device_designator_p,
     frame_id_from_designator, frame_parameter_for_face_attribute, is_font, is_font_entity,
@@ -376,7 +375,8 @@ use neovm_value::error::{Flow, LispCondition, signal, signal_error_with_arg};
 
 use crate::face::realization::FrameFaceClass;
 use crate::face::{
-    BoxStyle, Face as RuntimeFace, FontSlant, FontWeight, FontWidth, LFACE_ATTRS, UnderlineStyle,
+    BoxStyle, Face as RuntimeFace, FaceRemapping, FontSlant, FontWeight, FontWidth, LFACE_ATTRS,
+    UnderlineStyle,
 };
 use crate::window::{FrameId, FrameManager, FrameParam};
 use neomacs_display_protocol::TerminalColor;
@@ -1825,10 +1825,16 @@ pub(crate) fn make_lisp_face_vector() -> Value {
 
 fn reset_lisp_face_vector(vector: Value) {
     let unspecified = unspecified_face_symbol();
+    let needs_replace = vector
+        .as_vector_data()
+        .is_some_and(|slots| slots.len() != LISP_FACE_VECTOR_LEN);
+    if needs_replace {
+        let mut values = vec![unspecified; LISP_FACE_VECTOR_LEN];
+        values[0] = face_tag_symbol();
+        let _ = vector.replace_vector_data(values);
+        return;
+    }
     let _ = vector.with_vector_data_mut(|slots| {
-        if slots.len() != LISP_FACE_VECTOR_LEN {
-            *slots = vec![unspecified; LISP_FACE_VECTOR_LEN];
-        }
         // The bulk seam retired any captured backing before this exclusive
         // view; no marker can read these plain temporary owner words.
         slots[0] = face_tag_symbol();
@@ -1855,6 +1861,96 @@ pub(crate) fn set_lisp_face_vector_attr(vector: Value, attr: LFaceAttr, value: V
     let _ = vector.set_vector_slot(attr as usize, value);
 }
 
+/// Mirrors GNU `font_clear_prop` (`src/font.c:3116-3164`, invoked from
+/// `Finternal_set_lisp_face_attribute` at `src/xfaces.c:3754-3763`).
+///
+/// When a font-related face attribute (`:family`, `:foundry`, `:height`,
+/// `:weight`, `:slant`, `:width`) is set while `vector[LFaceAttr::Font]` holds
+/// a font, clone it into a `font-spec` with the overridden property (and any
+/// dependent properties) cleared so the stored font no longer masks the edit
+/// and subsequent `(set-face-font ...)` calls see a changed `:font` slot.
+fn clear_lisp_face_font_prop(vector: Value, attr: LFaceAttr) -> Option<Value> {
+    let primary_prop = match attr {
+        LFaceAttr::Family => "family",
+        LFaceAttr::Foundry => "foundry",
+        LFaceAttr::Height => "size",
+        LFaceAttr::Weight => "weight",
+        LFaceAttr::Slant => "slant",
+        LFaceAttr::Width => "width",
+        _ => return None,
+    };
+    let font = lisp_face_vector_attr(vector, LFaceAttr::Font)?;
+    if !is_font(&font) {
+        return None;
+    }
+    let fields = font_value_fields(&font)?;
+    let always_clear = matches!(
+        attr,
+        LFaceAttr::Family | LFaceAttr::Foundry | LFaceAttr::Width | LFaceAttr::Height
+    );
+    let has_primary = font_vector_get_flexible(fields, primary_prop).is_some_and(|v| !v.is_nil())
+        || (attr == LFaceAttr::Height
+            && font_vector_get_flexible(fields, "height").is_some_and(|v| !v.is_nil()));
+    if !always_clear && !has_primary {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(fields.len());
+    out.push(Value::keyword(FONT_SPEC_TAG));
+    let mut i = 1;
+    while i + 1 < fields.len() {
+        let key = fields.at(i);
+        let val = fields.at(i + 1);
+        let key_norm = key.as_bare_symbol_name().map(|s| s.trim_start_matches(':'));
+        let drop_prop = match key_norm {
+            // GNU `copy_font_spec` drops font-object-only slots and clears `:name`.
+            Some("name" | "full-name" | "file") => true,
+            Some(prop) => match attr {
+                LFaceAttr::Family => matches!(
+                    prop,
+                    "family"
+                        | "foundry"
+                        | "width"
+                        | "adstyle"
+                        | "registry"
+                        | "size"
+                        | "height"
+                        | "dpi"
+                        | "spacing"
+                        | "avgwidth"
+                ),
+                LFaceAttr::Foundry => matches!(
+                    prop,
+                    "foundry"
+                        | "adstyle"
+                        | "registry"
+                        | "size"
+                        | "height"
+                        | "dpi"
+                        | "spacing"
+                        | "avgwidth"
+                ),
+                LFaceAttr::Height => {
+                    matches!(prop, "size" | "height" | "dpi" | "spacing" | "avgwidth")
+                }
+                LFaceAttr::Weight => prop == "weight",
+                LFaceAttr::Slant => prop == "slant",
+                LFaceAttr::Width => matches!(prop, "width" | "avgwidth"),
+                _ => false,
+            },
+            None => false,
+        };
+        if !drop_prop {
+            out.push(key);
+            out.push(val);
+        }
+        i += 2;
+    }
+    let cleared = Value::vector(out);
+    set_lisp_face_vector_attr(vector, LFaceAttr::Font, cleared);
+    Some(cleared)
+}
+
 fn set_lisp_face_vector_attr_with_font_derivatives(
     face_name: &str,
     vector: Value,
@@ -1862,8 +1958,10 @@ fn set_lisp_face_vector_attr_with_font_derivatives(
     attr_value: Value,
     font_derivation_value: Value,
     mode: neovm_value::tagged::SymbolMode,
-) -> Result<(), Flow> {
+) -> Result<(bool, Option<Value>), Flow> {
+    let mut changed = lisp_face_vector_attr(vector, attr) != Some(attr_value);
     set_lisp_face_vector_attr(vector, attr, attr_value);
+    let mut cleared_font = None;
     if attr == LFaceAttr::Font && !is_reset_like_face_attr_value(&attr_value, mode) {
         for (derived_attr, derived_value) in
             derived_face_attrs_from_font_value(&font_derivation_value)
@@ -1873,10 +1971,16 @@ fn set_lisp_face_vector_attr_with_font_derivatives(
                 SetFaceAttr::LFace(derived_attr),
                 derived_value,
             )?;
+            if lisp_face_vector_attr(vector, canonical_attr) != Some(canonical_value) {
+                changed = true;
+            }
             set_lisp_face_vector_attr(vector, canonical_attr, canonical_value);
         }
+    } else if let Some(cleared) = clear_lisp_face_font_prop(vector, attr) {
+        changed = true;
+        cleared_font = Some(cleared);
     }
-    Ok(())
+    Ok((changed, cleared_font))
 }
 
 fn sync_face_overrides_from_lisp_face_vector(
@@ -2502,25 +2606,385 @@ pub(crate) fn runtime_face_table_from_frame_lisp_faces_incremental(
     dirty: &rustc_hash::FxHashSet<Box<str>>,
 ) -> crate::face::FaceTable {
     let mut table = previous.clone();
-    for (face_name, lisp_face_id, vector) in frame_lisp_face_table_entries(eval, frame_id) {
+    let Some(frame_table) = eval
+        .frame_manager()
+        .get(frame_id)
+        .map(|frame| frame.face_hash_table())
+    else {
+        return table;
+    };
+    let Some(hash_table) = frame_table.as_hash_table() else {
+        return table;
+    };
+    for (key, entry) in &hash_table.data {
+        let HashKey::Symbol(symbol) = key else {
+            continue;
+        };
+        let Some(vector) = face_hash_entry_lisp_vector(*entry) else {
+            continue;
+        };
+        let face_name = resolve_sym(*symbol);
+        let sym_val = Value::from_sym_id(*symbol);
         if face_name != "default"
-            && !dirty.contains(face_name.as_str())
-            && previous.get(&face_name).is_some()
+            && !dirty.contains(face_name)
+            && previous.faces.map.contains_key(&sym_val)
         {
             continue;
         }
+        let lisp_face_id = entry
+            .is_cons()
+            .then(|| entry.cons_car().as_fixnum())
+            .flatten()
+            .or_else(|| {
+                eval.obarray()
+                    .get_property_id(*symbol, intern("face"))
+                    .and_then(|value| value.as_fixnum())
+            })
+            .and_then(crate::face::LispFaceId::new);
         let runtime_face = runtime_face_from_lisp_face_vector_resolved(
-            &face_name,
+            face_name,
             vector,
             FaceColorResolver::Standard,
         );
         if let Some(lisp_face_id) = lisp_face_id {
-            table.define_lisp_face(lisp_face_id, &face_name, runtime_face);
+            table.define_lisp_face(lisp_face_id, face_name, runtime_face);
         } else {
-            table.define(&face_name, runtime_face);
+            table.define(face_name, runtime_face);
         }
     }
     table
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MergePointKind {
+    Normal,
+    Remap,
+}
+
+/// Active named-face / remapping recursion stack, mirroring GNU
+/// `push_named_merge_point` (`src/xfaces.c:1976-2004`).
+///
+/// Stack-scoped (`push` on entry, `pop` on return) so diamond DAGs like
+/// `((a b c) (b d) (c d) (d (:weight bold)))` resolve `d` on both branches,
+/// while self-remapping `((x (:weight bold) x))` reaches unremapped `x` once
+/// and breaks infinite `Remap -> Remap` or `Normal -> Normal` cycles.
+struct MergeStack {
+    frames: Vec<(Value, MergePointKind)>,
+}
+
+impl MergeStack {
+    fn new() -> Self {
+        Self { frames: Vec::new() }
+    }
+
+    fn push(&mut self, key: Value, kind: MergePointKind) -> bool {
+        if self.frames.len() >= 64 {
+            return false;
+        }
+        for &(prev_key, prev_kind) in self.frames.iter().rev() {
+            if prev_key == key {
+                if prev_kind == kind {
+                    return false;
+                } else if prev_kind == MergePointKind::Remap {
+                    break;
+                }
+            }
+        }
+        self.frames.push((key, kind));
+        true
+    }
+
+    fn pop(&mut self) {
+        self.frames.pop();
+    }
+}
+
+enum FrameFaceSource<'a> {
+    Cached(&'a crate::face::FaceTable),
+    Demand {
+        frame_id: FrameId,
+        preserve_default_baseline: bool,
+        bootstrap: std::cell::OnceCell<crate::face::FaceTable>,
+    },
+}
+
+/// Read-only per-face view of a live frame's Lisp face definitions.
+///
+/// Reuses the frame's warm `FrameFaceRealizationCache` when its generation is
+/// current (`Cached`), and otherwise decodes only the faces touched by the
+/// query directly from `frame->face_hash_table` (`Demand`). Both arms share
+/// the exact same GNU `merge_face_ref` / `merge_named_face` resolution engine
+/// so `Demand` and `Cached` produce identical resolved faces without ever
+/// walking all faces in `frame->face_hash_table`.
+pub(crate) struct FrameFaceView<'a> {
+    eval: &'a neovm_eval::emacs_core::eval::Context,
+    source: FrameFaceSource<'a>,
+}
+
+impl<'a> FrameFaceView<'a> {
+    pub(crate) fn new(
+        eval: &'a neovm_eval::emacs_core::eval::Context,
+        frame_id: FrameId,
+        preserve_default_baseline: bool,
+    ) -> Self {
+        let generation = eval.face_change_count();
+        let source = match eval
+            .frame_manager()
+            .get(frame_id)
+            .and_then(|frame| frame.face_realization.table(generation))
+        {
+            Some(table) => FrameFaceSource::Cached(table),
+            None => FrameFaceSource::Demand {
+                frame_id,
+                preserve_default_baseline,
+                bootstrap: std::cell::OnceCell::new(),
+            },
+        };
+        Self { eval, source }
+    }
+
+    pub(crate) fn from_cached(
+        eval: &'a neovm_eval::emacs_core::eval::Context,
+        table: &'a crate::face::FaceTable,
+    ) -> Self {
+        Self {
+            eval,
+            source: FrameFaceSource::Cached(table),
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn new_demand_for_test(
+        eval: &'a neovm_eval::emacs_core::eval::Context,
+        frame_id: FrameId,
+        preserve_default_baseline: bool,
+    ) -> Self {
+        Self {
+            eval,
+            source: FrameFaceSource::Demand {
+                frame_id,
+                preserve_default_baseline,
+                bootstrap: std::cell::OnceCell::new(),
+            },
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn is_cached(&self) -> bool {
+        matches!(self.source, FrameFaceSource::Cached(_))
+    }
+
+    fn tty_palette(&self) -> Option<&neomacs_display_protocol::TtyPalette> {
+        match &self.source {
+            FrameFaceSource::Cached(table) => table.tty_palette(),
+            FrameFaceSource::Demand { .. } => None,
+        }
+    }
+
+    fn raw_face_by_key(&self, key: Value, name: &str) -> Option<RuntimeFace> {
+        match &self.source {
+            FrameFaceSource::Cached(table) => table.faces.map.get(&key).cloned(),
+            FrameFaceSource::Demand {
+                frame_id,
+                preserve_default_baseline,
+                bootstrap,
+            } => {
+                let default_key = Value::symbol(&WellKnown::Default);
+                // Preserve the unseeded unit-test default baseline ONLY when
+                // the frame has never been seeded, realized, or mutated (so
+                // `frame->face_hash_table['default']` still holds only the
+                // synthetic TTY placeholder `:height 1`). Once any live font
+                // seed, redisplay, or face edit occurs, decode directly from
+                // the frame's own `face_hash_table` (falling back only to
+                // bootstrap `FaceTable::new()`), identically to `Cached` and
+                // without leaking another frame's `eval.face_table()`.
+                let unseeded_placeholder = *preserve_default_baseline
+                    && self.eval.frame_manager().get(*frame_id).is_some_and(|f| {
+                        !f.default_face_done
+                            && f.face_realization.generation.is_none()
+                            && f.face_realization.dirty_definitions.is_empty()
+                            && !f.face_realization.definitions_all_dirty
+                    });
+                if unseeded_placeholder && key == default_key {
+                    return self.eval.face_table().faces.map.get(&key).cloned();
+                }
+                if let Some(vector) =
+                    lookup_frame_lisp_face_vector_by_symbol(self.eval, *frame_id, key)
+                        .and_then(face_hash_entry_lisp_vector)
+                {
+                    return Some(runtime_face_from_lisp_face_vector_resolved(
+                        name,
+                        vector,
+                        FaceColorResolver::Standard,
+                    ));
+                }
+                if unseeded_placeholder {
+                    self.eval.face_table().faces.map.get(&key).cloned()
+                } else {
+                    bootstrap
+                        .get_or_init(crate::face::FaceTable::new)
+                        .faces
+                        .map
+                        .get(&key)
+                        .cloned()
+                }
+            }
+        }
+    }
+
+    fn raw_default(&self) -> RuntimeFace {
+        let default_key = Value::symbol(&WellKnown::Default);
+        self.raw_face_by_key(default_key, "default")
+            .unwrap_or_else(|| RuntimeFace::new("default"))
+    }
+
+    /// Resolve the `default` face with `remapping` applied.
+    pub(crate) fn resolve_default(&self, remapping: &FaceRemapping) -> RuntimeFace {
+        let mut target = self.raw_default();
+        if !remapping.is_empty() {
+            let default_key = Value::symbol(&WellKnown::Default);
+            let mut stack = MergeStack::new();
+            self.merge_named_face_value(default_key, "default", &mut target, remapping, &mut stack);
+        }
+        target
+    }
+
+    /// Resolve a named face reference starting from the unremapped `default`
+    /// face, matching GNU `lookup_named_face` (`src/xfaces.c:5145-5173`).
+    pub(crate) fn resolve_named_with_remapping(
+        &self,
+        face_ref: Value,
+        remapping: &FaceRemapping,
+    ) -> RuntimeFace {
+        let mut target = self.raw_default();
+        let default_key = Value::symbol(&WellKnown::Default);
+        if face_ref == default_key && remapping.is_empty() {
+            return target;
+        }
+        let mut stack = MergeStack::new();
+        self.merge_face_ref(face_ref, &mut target, remapping, &mut stack);
+        target
+    }
+
+    /// Resolve a sequence of Lisp `face` property values (text property then
+    /// priority-sorted overlays) on top of the remapped `default` face,
+    /// matching GNU `face_at_buffer_position` / `face_at_string_position`.
+    pub(crate) fn resolve_face_values_with_remapping(
+        &self,
+        face_values: &[Value],
+        remapping: &FaceRemapping,
+    ) -> RuntimeFace {
+        let mut target = self.resolve_default(remapping);
+        let mut stack = MergeStack::new();
+        for &face_val in face_values {
+            self.merge_face_ref(face_val, &mut target, remapping, &mut stack);
+        }
+        target
+    }
+
+    fn merge_named_face_value(
+        &self,
+        key: Value,
+        name: &str,
+        target: &mut RuntimeFace,
+        remapping: &FaceRemapping,
+        stack: &mut MergeStack,
+    ) {
+        if !stack.push(key, MergePointKind::Normal) {
+            return;
+        }
+        if let Some(remap_spec) = remapping.raw_spec_by_key(key)
+            && stack.push(key, MergePointKind::Remap)
+        {
+            self.merge_face_ref(remap_spec, target, remapping, stack);
+            stack.pop();
+            stack.pop();
+            return;
+        }
+        if let Some(mut raw) = self.raw_face_by_key(key, name) {
+            let inherit_ref = raw.inherit.take();
+            if let Some(inherit_ref) = inherit_ref {
+                self.merge_face_ref(inherit_ref, target, remapping, stack);
+            }
+            *target = target.merge(&raw);
+        }
+        stack.pop();
+    }
+
+    fn merge_face_ref(
+        &self,
+        face_ref: Value,
+        target: &mut RuntimeFace,
+        remapping: &FaceRemapping,
+        stack: &mut MergeStack,
+    ) {
+        if face_ref.is_nil() {
+            return;
+        }
+        if !face_ref.is_cons() {
+            if let Ok(resolved) =
+                resolve_face_designator(self.eval, face_ref, FaceAliasCyclePolicy::UseDefault)
+                && let Some(resolved_name) = resolved.name()
+            {
+                self.merge_named_face_value(
+                    resolved_name.symbol(),
+                    resolved_name.name(),
+                    target,
+                    remapping,
+                    stack,
+                );
+            }
+            return;
+        }
+
+        let symbol_mode = self.eval.symbol_mode();
+        let first = face_ref.cons_car();
+        if face_id_eq(first, WellKnown::ForegroundColor.id(), symbol_mode) {
+            let color_val = face_ref.cons_cdr();
+            if color_val.is_string() {
+                let inline = RuntimeFace::from_plist_realized(
+                    "--inline--",
+                    &[Value::keyword("foreground-color"), color_val],
+                    self.tty_palette(),
+                );
+                *target = target.merge(&inline);
+            }
+            return;
+        }
+        if face_id_eq(first, WellKnown::BackgroundColor.id(), symbol_mode) {
+            let color_val = face_ref.cons_cdr();
+            if color_val.is_string() {
+                let inline = RuntimeFace::from_plist_realized(
+                    "--inline--",
+                    &[Value::keyword("background-color"), color_val],
+                    self.tty_palette(),
+                );
+                *target = target.merge(&inline);
+            }
+            return;
+        }
+
+        if first
+            .as_symbol_name(symbol_mode)
+            .is_some_and(|name| name.starts_with(':'))
+        {
+            if let Some(items) = list_to_vec(&face_ref) {
+                let mut inline =
+                    RuntimeFace::from_plist_realized("--inline--", &items, self.tty_palette());
+                let inherit_ref = inline.inherit.take();
+                if let Some(inherit_ref) = inherit_ref {
+                    self.merge_face_ref(inherit_ref, target, remapping, stack);
+                }
+                *target = target.merge(&inline);
+            }
+            return;
+        }
+
+        // GNU `merge_face_ref` (`src/xfaces.c:3005-3014`): merge CDR first,
+        // then CAR so earlier entries take precedence over later ones.
+        self.merge_face_ref(face_ref.cons_cdr(), target, remapping, stack);
+        self.merge_face_ref(first, target, remapping, stack);
+    }
 }
 
 /// Rebuild the display-facing runtime face cache from GNU-shaped frame-local
@@ -2812,7 +3276,7 @@ fn set_realized_font_for_target(
     face_symbol: Value,
     face_name: &str,
     font_value: Value,
-) -> Result<(), Flow> {
+) -> Result<bool, Flow> {
     let vector = match target {
         FontFaceRealizationTarget::NewFrameDefaults { .. } => {
             ensure_global_lisp_face_vector(eval, face_name)
@@ -2827,7 +3291,7 @@ fn set_realized_font_for_target(
         }
     };
     if let Some(vector) = vector {
-        set_lisp_face_vector_attr_with_font_derivatives(
+        let (changed, _) = set_lisp_face_vector_attr_with_font_derivatives(
             face_name,
             vector,
             LFaceAttr::Font,
@@ -2835,8 +3299,9 @@ fn set_realized_font_for_target(
             font_value,
             eval.symbol_mode(),
         )?;
+        return Ok(changed);
     }
-    Ok(())
+    Ok(false)
 }
 
 fn normalize_face_attribute_name(
@@ -3892,7 +4357,7 @@ pub fn builtin_internal_set_lisp_face_attribute(
             set_face_override_id(face_id, canonical_attr, canonical_value, defaults_frame);
             if defaults_frame {
                 if let Some(vector) = ensure_global_lisp_face_vector(eval, &face_name) {
-                    set_lisp_face_vector_attr_with_font_derivatives(
+                    let (_, cleared_font) = set_lisp_face_vector_attr_with_font_derivatives(
                         &face_name,
                         vector,
                         canonical_attr,
@@ -3900,6 +4365,9 @@ pub fn builtin_internal_set_lisp_face_attribute(
                         canonical_value,
                         symbol_mode,
                     )?;
+                    if let Some(cleared) = cleared_font {
+                        set_face_override_id(face_id, LFaceAttr::Font, cleared, true);
+                    }
                 }
             } else {
                 let frame_ids = live_frame_ids.expect("live mutation target must have frame IDs");
@@ -3908,6 +4376,7 @@ pub fn builtin_internal_set_lisp_face_attribute(
                 } else {
                     FrameFaceInitial::Empty
                 };
+                let mut published_cleared_font = false;
                 for frame_id in frame_ids {
                     if let Some(vector) = ensure_frame_lisp_face_vector_by_symbol(
                         eval,
@@ -3916,16 +4385,21 @@ pub fn builtin_internal_set_lisp_face_attribute(
                         &face_name,
                         initial,
                     ) {
-                        let changed =
-                            lisp_face_vector_attr(vector, canonical_attr) != Some(canonical_value);
-                        set_lisp_face_vector_attr_with_font_derivatives(
-                            &face_name,
-                            vector,
-                            canonical_attr,
-                            canonical_value,
-                            canonical_value,
-                            symbol_mode,
-                        )?;
+                        let (changed, cleared_font) =
+                            set_lisp_face_vector_attr_with_font_derivatives(
+                                &face_name,
+                                vector,
+                                canonical_attr,
+                                canonical_value,
+                                canonical_value,
+                                symbol_mode,
+                            )?;
+                        if let Some(cleared) = cleared_font
+                            && !published_cleared_font
+                        {
+                            set_face_override_id(face_id, LFaceAttr::Font, cleared, false);
+                            published_cleared_font = true;
+                        }
                         if changed && !changed_live_frames.contains(&frame_id) {
                             changed_live_frames.push(frame_id);
                         }
@@ -3974,15 +4448,20 @@ pub fn builtin_internal_set_lisp_face_attribute(
             if canonical_attr == LFaceAttr::Font {
                 let mut published_live_override = false;
                 for (target, resolution) in opened_fonts {
-                    let frame_id = target.reference_frame();
                     let effective_value = resolution.font_value;
-                    set_realized_font_for_target(
+                    let changed = set_realized_font_for_target(
                         eval,
                         target,
                         face_symbol,
                         &face_name,
                         effective_value,
                     )?;
+                    if changed
+                        && let FontFaceRealizationTarget::LiveFrame(live_frame_id) = target
+                        && !changed_live_frames.contains(&live_frame_id)
+                    {
+                        changed_live_frames.push(live_frame_id);
+                    }
 
                     // FACE_ATTR_STATE has one new-frame-default domain and one
                     // live-frame compatibility domain. Publish the selected
@@ -5349,16 +5828,10 @@ pub fn builtin_face_font(
         };
     }
 
-    let face_name = resolve_face_name_for_domain(eval, &args[0], false)?
-        .name()
-        .to_owned();
+    let resolved_face = resolve_face_name_for_domain(eval, &args[0], false)?;
     let remapping = face_remapping_for_current_buffer(eval);
-    let face_table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, false);
-    let face = if remapping.is_empty() {
-        face_table.resolve(&face_name)
-    } else {
-        face_table.resolve_with_remapping(&face_name, &remapping)
-    };
+    let face = FrameFaceView::new(eval, frame_id, false)
+        .resolve_named_with_remapping(resolved_face.symbol(), &remapping);
     let character = if let Some(character) = args.get(2).filter(|value| !value.is_nil()) {
         let code = neovm_eval::emacs_core::builtins::expect_character_code(character)? as u32;
         let Some(ch) = neovm_value::emacs_char::EmacsChar::from_code(code) else {

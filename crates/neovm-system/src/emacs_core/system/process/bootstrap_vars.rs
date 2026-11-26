@@ -543,7 +543,7 @@ pub(super) fn parse_make_process_buffer(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     value: &Value,
 ) -> Result<Value, Flow> {
-    parse_make_process_buffer_in_state(&mut eval.edit.buffers, value)
+    parse_make_process_buffer_in_state(&mut eval.buffer_manager_view_mut(), value)
 }
 
 /// Every process constructor's `:buffer`, which in GNU is one call to
@@ -563,7 +563,7 @@ pub(super) fn parse_make_process_buffer(
 /// dead buffer here made all three unreachable and turned `make-process` into
 /// a signal where GNU returns a process.
 pub(super) fn parse_make_process_buffer_in_state(
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     value: &Value,
 ) -> Result<Value, Flow> {
     match value.kind() {

@@ -44,10 +44,9 @@ fn capture_benchmarks(c: &mut Criterion) {
     for (name, setup) in cases {
         let mut eval = eval_hook_installers::new_context();
         let buffer = eval.buffer_manager().current_buffer().unwrap().id();
-        eval.buffer_manager_mut()
-            .get_mut(buffer)
-            .unwrap()
-            .insert("hello\n");
+        eval.buffer_manager_view_mut()
+            .insert_into_buffer(buffer, "hello\n")
+            .unwrap();
         let frame = eval
             .frame_manager_mut()
             .create_frame("capture-bench", 800, 600, buffer);

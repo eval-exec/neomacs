@@ -208,6 +208,13 @@ impl FrameOutputOwner {
         self.builder.publish_output_face(face);
     }
 
+    pub(crate) fn install_frame_chrome_face(
+        &mut self,
+        face: &crate::frame_face_arena::RealizedFrameFace,
+    ) {
+        self.builder.publish_output_face(face);
+    }
+
     pub(crate) fn render_frame_tab_bar_row(
         &mut self,
         request: FrameTabBarDisplayRowRequest<'_>,

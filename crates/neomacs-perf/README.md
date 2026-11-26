@@ -559,6 +559,67 @@ The run is rejected unless `type-phase-time` is positive,
 suite until it has a measured baseline so it does not move the board's
 geometric mean.
 
+## `scrolling-long-lines` and `scrolling-long-lines-guard`
+
+Pins the Issue #702 long-line truncated scrolling band identified in the
+pinned `emacs-31.1` `magit-log -n65536 --graph --decorate` region (lines
+35729..44529), where `C-v 65536` measured 15.563 ms/key vs GNU Emacs 31.1
+5.152 ms/key (3.02x; `overlay_live_records` = 961,030 over 200 frames) on
+`8471a2c0d1` while `C-n 65536` in the same 71,459-overlay buffer stayed flat
+at 1.38x GNU.
+
+Before the timed window opens, the fixture constructs a deterministic
+2,400-line buffer (120 repetitions of a 20-line length profile with exact
+mean 179.30 chars, 55.0% strictly > 200 columns, max 319 chars, and dense
+alternating-face `| ` graph-lane prefixes), sets `truncate-lines = t`,
+`word-wrap = nil`, `hl-line-mode = 1`, a 30-column right margin, and one
+`before-string` `(display ((margin right-margin) ...))` overlay per line on
+a 200x50 TUI. Both CPU time and `per-operation-wall-time` bracket strictly the
+cold + warm scroll phases (after buffer setup, initial `(redisplay t)`,
+`(garbage-collect)`, and sampling-gate `enable`). It runs one cold pass and
+`iterations` (default 2) warm down/up passes of `scroll-up-command` /
+`scroll-down-command` + `(redisplay t)` with `pre-command-hook` /
+`post-command-hook`, verifying buffer checksum, point/window-start
+restoration, and command counts.
+
+**Scope boundary:** `scrolling-long-lines` runs in `fundamental-mode` with
+pre-propertized lines so it cleanly isolates and guards the Issue #702
+layout / truncation / horizon-exhaustion / right-edge-marker / overlay-route
+slice (`84.60%` of instructions and `52.08%` of cycles on `C-v 65536`). It
+intentionally does **not** run `jit-lock` fontification during scrolling and
+therefore does **not** guard the `RowsFontificationDemand::ensure` CoW-clone /
+`IntervalTree` reallocation hotspot (`58.99%` of cache misses / `31.67%` of
+cycles on 71k-line Magit logs), which requires a large-buffer lazy-fontification
+/ cache-miss check or the 71k-line Magit matrix.
+
+**Cohort load gate & guard hardening:** `scrolling-long-lines` and
+`scrolling-long-lines-guard` enforce the calibrated-cohort rule: `neomacs-perf`
+records `/proc/loadavg` (`1m 5m 15m`) in `HostProvenance`, `ComparisonArtifact`,
+and `SuiteArtifact`, and refuses with a non-zero exit before launching any
+editor when 1-minute loadavg is `>= 2.00` unless `--allow-local` is passed
+explicitly. Any `--allow-local` invocation stamps `provenance = local-UNTRUSTED`
+on all emitted artifacts and CLI summaries so loaded local runs cannot be
+mistaken for calibrated idle-host (`treeroot`) baselines. In addition,
+`SuiteId::ScrollingLongLinesGuard` enables guard provenance hardening
+(`resolve_guard_tools` canonical `perf`/`taskset` resolution with `PATH`
+shadowing rejection, canonical candidate resolution, narrowed TUI tool `PATH`,
+and stripping of all `NEOVM_*`/`NEOMACS_*` runtime overrides; passing
+`--baseline-manifest` further strips loader library paths via the full
+manifest-pinned guard contract).
+
+This row stays out of `SuiteId::Standard` so it does not move the standard
+board's geometric mean. Regression gating uses `SuiteId::ScrollingLongLinesGuard`
+(`cargo xtask perf suite scrolling-long-lines-guard --hardware-counters --counter-scope edit-loop`),
+which gates on `MetricName::Instructions` with a **+2.0%** maximum regression
+budget. Retired user-space instructions on this deterministic `EditLoop` are
+load-insensitive (< 0.1% run-to-run variance, vs 5-17% wall-time wobble on
+loaded TUI runs), so +2.0% catches real long-line layout/horizon/right-edge/overlay
+regressions without generating flakes.
+
+See [`docs/performance/2026-11-26-issue-702-long-line-scroll-attribution.md`](../../docs/performance/2026-11-26-issue-702-long-line-scroll-attribution.md)
+for the full per-symbol cycles/instructions/cache-miss attribution and
+baseline evidence.
+
 ## Adding a workload
 
 Add a `ScenarioId` and `ScenarioSpec` (including the scenario-owned iteration

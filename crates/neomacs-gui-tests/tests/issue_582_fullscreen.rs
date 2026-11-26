@@ -1,13 +1,13 @@
 #![cfg(target_os = "linux")]
 
-use neomacs_gui_tests::{DisplayHarness, GuiBackend};
+use neomacs_gui_tests::{DisplayHarness, GuiBackend, StabilityHold};
 use std::{
     fs,
     os::unix::{fs::DirBuilderExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 /// Plasma titlebar-to-top snapping maximizes a window through the WM.  A Lisp
@@ -328,9 +328,12 @@ impl Desktop {
 
     fn wait_for_edges(&self, expected: Rect, state: &str) {
         let mut last = None;
-        let mut correct_since = None;
-        poll(
-            &format!("native {state} outer edges equal {expected:?}"),
+        let cap = neomacs_gui_tests::HangCap::from_secs(20);
+        StabilityHold::wait_until_stable(
+            &cap,
+            Duration::from_millis(350),
+            Duration::from_millis(25),
+            format!("native {state} outer edges equal {expected:?}"),
             || {
                 let actual = self.outer_rect();
                 if last != Some(actual) {
@@ -343,13 +346,7 @@ impl Desktop {
                 } else {
                     property.contains(state)
                 };
-                if correct_state && actual == expected {
-                    let start = correct_since.get_or_insert_with(Instant::now);
-                    (start.elapsed() >= Duration::from_millis(350)).then_some(())
-                } else {
-                    correct_since = None;
-                    None
-                }
+                correct_state && actual == expected
             },
         );
         fs::write(
@@ -508,12 +505,12 @@ fn log(artifacts: &Path, name: &str) -> Stdio {
 }
 
 fn poll<T>(description: &str, mut observe: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(15));
     loop {
         if let Some(value) = observe() {
             return value;
         }
-        assert!(Instant::now() < deadline, "timed out: {description}");
+        assert!(!deadline.is_expired(), "timed out: {description}");
         thread::sleep(Duration::from_millis(25));
     }
 }

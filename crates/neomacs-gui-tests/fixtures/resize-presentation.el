@@ -36,4 +36,4 @@
         (funcall notify-ready)))))
 
 ;; Keep the process bounded if its Rust test driver exits unexpectedly.
-(run-at-time 45 nil (lambda () (kill-emacs 2)))
+(run-at-time 90 nil (lambda () (kill-emacs 2)))

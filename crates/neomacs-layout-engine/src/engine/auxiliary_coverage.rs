@@ -132,6 +132,7 @@ pub(super) struct StagedAuxiliaryExport {
     pub(super) window: DisplayWindowId,
     pub(super) backward_start: Option<CharPos0>,
     pub(super) published: bool,
+    pub(super) last_export: super::prepared_viewports::StagedAuxiliaryLastExport,
 }
 
 /// A complete desired auxiliary snapshot staged for native transport delivery.
@@ -246,7 +247,9 @@ impl LayoutEngine {
         let refused_key = self.current_refused_auxiliary_key(evaluator);
         match self.try_build_auxiliary_update(evaluator) {
             Ok((frame_id, update, staged_exports)) => {
-                if update.surfaces.is_empty() && !self.scroll_preview_coverage.has_any_for(frame_id)
+                if (update.surfaces.is_empty()
+                    && !self.scroll_preview_coverage.has_any_for(frame_id))
+                    || self.scroll_preview_coverage.matches_auxiliary(&update)
                 {
                     self.scroll_coverage.clear_publication_pending();
                     return AuxiliaryPreparation::NoChange;
@@ -313,7 +316,7 @@ impl LayoutEngine {
             .apply_auxiliary(&prepared.update);
         if let Some(staged) = prepared.staged_exports {
             self.prepared_viewports
-                .commit_auxiliary_exports(prepared.frame_id, &staged);
+                .commit_auxiliary_exports(prepared.frame_id, staged);
         } else {
             // Refusal withdrawal: revoke certified export state without
             // dropping prepared pages (#832 / design review §5).

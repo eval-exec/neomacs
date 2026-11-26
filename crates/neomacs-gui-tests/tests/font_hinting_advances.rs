@@ -10,7 +10,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 #[test]
@@ -21,10 +21,7 @@ fn fontconfig_hintstyle_preserves_scaled_noto_advances_against_attested_gnu() {
     assert!(oracle.is_attested(), "attested GNU oracle required");
     assert_eq!(fs::canonicalize(&gnu).unwrap(), oracle.executable_path());
     let root = neomacs_infra::workspace_root();
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nonce = neomacs_gui_tests::unique_nonce();
     let dir = root.join(format!(
         "tmp/neomacs-gui-tests/font-hinting-advances-{}-{nonce}",
         std::process::id()
@@ -210,10 +207,7 @@ fn fontconfig_frame_columns_follow_native_average_width_against_attested_gnu() {
     assert!(oracle.is_attested(), "attested GNU oracle required");
     assert_eq!(fs::canonicalize(&gnu).unwrap(), oracle.executable_path());
     let root = neomacs_infra::workspace_root();
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nonce = neomacs_gui_tests::unique_nonce();
     let dir = root.join(format!(
         "tmp/neomacs-gui-tests/frame-native-average-{}-{nonce}",
         std::process::id()

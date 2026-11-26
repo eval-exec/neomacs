@@ -1,0 +1,15 @@
+error[E0133]: call to unsafe function `JitHeapState::install_cons_region` is unsafe and requires unsafe block
+  --> tests/heap_capability_ui/b13_jit_state_install_needs_unsafe.rs:46:5
+   |
+46 |     jit.install_cons_region(0x1000, 0x1010);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior
+
+error[E0133]: call to unsafe function `JitHeapState::install_float_region` is unsafe and requires unsafe block
+  --> tests/heap_capability_ui/b13_jit_state_install_needs_unsafe.rs:47:5
+   |
+47 |     jit.install_float_region(0x2000, 0x2020);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior

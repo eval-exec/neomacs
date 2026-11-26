@@ -8,8 +8,8 @@ use crate::heap_types::LispString;
 use crate::heap_types::{LispMarker, OverlayData};
 #[cfg(any(test, feature = "test-support"))]
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
+use crate::value::LispHashTable;
 use crate::value::text_props::TextPropertyTable;
-use crate::value::{HydratedHashTable, LispHashTable};
 
 use super::collection_reads::{StoreState, WriteProjection, record_projected_write_in_store};
 #[cfg(any(test, feature = "test-support"))]
@@ -87,70 +87,198 @@ impl LispCollectionRevision {
     }
 }
 
-#[cfg(any(test, debug_assertions, feature = "test-support"))]
+/// Sentinel used by anonymous test/probe scopes (`HeapMutClosureGuard::enter`)
+/// that do not correspond to a specific heap object address.
+const ANONYMOUS_HEAP_MUT_OWNER: usize = usize::MAX;
+
+struct ActiveHeapMutClosures {
+    /// Fast-path active object pointer (`0` when idle, `ANONYMOUS_HEAP_MUT_OWNER`
+    /// for anonymous scopes). The common 0 -> 1 -> 0 extent touches only this
+    /// `Cell<usize>` and `nested_len` with zero `RefCell` or heap traffic.
+    primary: std::cell::Cell<usize>,
+    /// Mirror of `nested.borrow().len()` so fast-path `Drop` and idle checks
+    /// never touch `RefCell`.
+    nested_len: std::cell::Cell<u32>,
+    /// Cold overflow stack for nested mutations on *distinct* heap objects.
+    nested: std::cell::RefCell<Vec<usize>>,
+}
+
+impl ActiveHeapMutClosures {
+    const fn new() -> Self {
+        Self {
+            primary: std::cell::Cell::new(0),
+            nested_len: std::cell::Cell::new(0),
+            nested: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    #[inline(always)]
+    fn is_active(&self) -> bool {
+        self.primary.get() != 0 || self.nested_len.get() != 0
+    }
+
+    #[inline(always)]
+    fn enter(&self, object: usize) -> bool {
+        assert_ne!(object, 0, "heap object pointer must be non-null");
+        let current = self.primary.get();
+        if current == 0 {
+            self.primary.set(object);
+            return true;
+        }
+        self.enter_nested(current, object);
+        false
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn enter_nested(&self, current: usize, object: usize) {
+        if object != ANONYMOUS_HEAP_MUT_OWNER {
+            assert_ne!(
+                current, object,
+                "re-entrant with_*_mut on the same heap object (U3)"
+            );
+            let mut nested = self.nested.borrow_mut();
+            assert!(
+                !nested.contains(&object),
+                "re-entrant with_*_mut on the same heap object (U3)"
+            );
+            nested.push(object);
+            self.nested_len.set(nested.len() as u32);
+        } else {
+            let mut nested = self.nested.borrow_mut();
+            nested.push(object);
+            self.nested_len.set(nested.len() as u32);
+        }
+    }
+
+    #[inline(always)]
+    fn exit(&self, object: usize, was_primary: bool) {
+        if was_primary && self.nested_len.get() == 0 && self.primary.get() == object {
+            self.primary.set(0);
+            return;
+        }
+        self.exit_slow(object);
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn exit_slow(&self, object: usize) {
+        let mut nested = self.nested.borrow_mut();
+        if let Some(pos) = nested.iter().rposition(|&active| active == object) {
+            nested.remove(pos);
+            self.nested_len.set(nested.len() as u32);
+            return;
+        }
+        if self.primary.get() == object {
+            let next_primary = nested.pop().unwrap_or(0);
+            self.nested_len.set(nested.len() as u32);
+            self.primary.set(next_primary);
+        }
+    }
+}
+
 std::thread_local! {
-    /// GEN-5: a bulk mutation may install new children after its pre-write
-    /// barrier, so no collector safe point may occur until the closure ends.
-    static IN_HEAP_MUT_CLOSURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Phase 0c / GEN-5: tracks live `with_*_mut` mutation extents on this
+    /// thread in both debug and release builds so:
+    /// - re-entering `with_*_mut` on the same heap object panics before a
+    ///   second `&mut` reference is formed (closing U3), and
+    /// - GC collection entry panics while any bulk mutation closure is active.
+    static IN_HEAP_MUT_CLOSURE: ActiveHeapMutClosures = const { ActiveHeapMutClosures::new() };
 }
 
 /// Test hook: is a bulk heap mutation closure active on this thread?
 ///
 /// C1: a pure test-only reader takes `any(test, feature = "test-support")`
 /// rather than the family gate; it must not compile in plain debug, where
-/// it is unused.  The family gate is for the instrumentation callees and
-/// enter sites.
+/// it is unused.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn in_heap_mut_closure_for_test() -> bool {
-    IN_HEAP_MUT_CLOSURE.with(|active| active.get())
+    IN_HEAP_MUT_CLOSURE.with(ActiveHeapMutClosures::is_active)
 }
 
-#[cfg(any(test, debug_assertions, feature = "test-support"))]
-#[must_use = "the thread-local extent ends when this guard drops"]
+#[must_use = "the thread-local mutation extent ends when this guard drops"]
 #[derive(Debug)]
 #[doc(hidden)]
 pub struct HeapMutClosureGuard {
-    _scope: crate::tls_scope::TlsScope<bool, std::cell::Cell<bool>>,
+    object: usize,
+    was_primary: bool,
+    _not_send_sync: std::marker::PhantomData<*mut ()>,
 }
-#[cfg(any(test, debug_assertions, feature = "test-support"))]
 static_assertions::assert_not_impl_any!(HeapMutClosureGuard: Send, Sync);
 
-#[cfg(any(test, debug_assertions, feature = "test-support"))]
 impl HeapMutClosureGuard {
     #[inline]
     #[doc(hidden)]
     pub fn enter() -> Self {
+        Self::enter_object(ANONYMOUS_HEAP_MUT_OWNER)
+    }
+
+    #[inline(always)]
+    pub(crate) fn enter_object(object: usize) -> Self {
+        let was_primary = IN_HEAP_MUT_CLOSURE.with(|state| state.enter(object));
         Self {
-            _scope: crate::tls_scope::TlsScope::new(&IN_HEAP_MUT_CLOSURE, true),
+            object,
+            was_primary,
+            _not_send_sync: std::marker::PhantomData,
         }
     }
 }
 
-#[cfg(any(test, debug_assertions, feature = "test-support"))]
-#[inline]
+impl Drop for HeapMutClosureGuard {
+    #[inline(always)]
+    fn drop(&mut self) {
+        let _ = IN_HEAP_MUT_CLOSURE.try_with(|state| state.exit(self.object, self.was_primary));
+    }
+}
+
+/// Release backstop (Phase 0c / GEN-5): panic if a GC safe point, collection,
+/// or carrier handoff runs while any `with_*_mut` mutation closure is live.
+#[inline(always)]
 #[doc(hidden)]
-pub fn debug_assert_no_heap_mut_closure() {
-    IN_HEAP_MUT_CLOSURE.with(|active| {
+pub fn assert_no_heap_mut_closure() {
+    IN_HEAP_MUT_CLOSURE.with(|state| {
         assert!(
-            !active.get(),
+            !state.is_active(),
             "GC safe point inside a with_*_mut heap mutation closure (GEN-5)"
         );
     });
 }
 
+#[inline(always)]
+#[doc(hidden)]
+pub fn debug_assert_no_heap_mut_closure() {
+    assert_no_heap_mut_closure();
+}
+
 /// A reused carrier must have finished every previous mutation extent.
 /// Diagnose a leaked guard before changing its flag so the failed boundary
 /// leaves the invariant available for diagnosis and the guard's own cleanup.
-#[cfg(any(test, debug_assertions, feature = "test-support"))]
 pub(super) fn reset_carrier_tls() {
-    IN_HEAP_MUT_CLOSURE.with(|active| {
+    IN_HEAP_MUT_CLOSURE.with(|state| {
         assert!(
-            !active.get(),
+            !state.is_active(),
             "carrier reuse with a live heap mutation closure (GEN-5)"
         );
-        active.set(false);
+        state.primary.set(0);
+        state.nested_len.set(0);
+        state.nested.borrow_mut().clear();
     });
+}
+
+/// Read `VecLikeHeader::type_tag` directly while holding
+/// `HeapMutClosureGuard::enter_object(raw)`, without calling
+/// `collection_reads::observe` before `LispCollectionRevision::changed`.
+///
+/// # Safety
+/// `raw` must be the untagged address of a live veclike object, and the
+/// caller must already hold `HeapMutClosureGuard::enter_object(raw)`.
+#[inline(always)]
+pub(crate) unsafe fn checked_veclike_type_under_guard(raw: usize) -> VecLikeType {
+    // SAFETY: caller proved `raw` is a live `VecLikeHeader` and holds
+    // `HeapMutClosureGuard::enter_object(raw)`, excluding any active `&mut`
+    // loan of this object on this thread.
+    unsafe { (*(raw as *const VecLikeHeader)).type_tag }
 }
 
 /// Mutate packed bits through the same collection journal as other mutable
@@ -162,15 +290,19 @@ pub(crate) fn with_bool_vector_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut super::header::BoolVectorObj) -> R,
 ) -> Option<R> {
-    if value.veclike_type()? != VecLikeType::BoolVector {
+    if !value.is_veclike() {
+        return None;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    if unsafe { checked_veclike_type_under_guard(raw) } != VecLikeType::BoolVector {
         return None;
     }
     LispCollectionRevision::changed(value);
-    let ptr = value.as_veclike_ptr()? as *mut BoolVectorObj;
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
-    // SAFETY: the type was validated above. The mutation closure cannot run
-    // Lisp or collect, as enforced by the ordinary heap mutation contract.
+    let ptr = value.as_veclike_ptr().unwrap() as *mut BoolVectorObj;
+    // SAFETY: the type was validated above and `_guard` excludes re-entry on
+    // `ptr`. The mutation closure cannot run Lisp or collect.
     Some(f(unsafe { &mut *ptr }))
 }
 
@@ -306,7 +438,9 @@ pub fn set_compiled_cons_cdr(cell: TaggedValue, value: TaggedValue) -> bool {
     }
     let address = cell.bits() & !TAG_MASK;
     let (lo, hi) = super::collection_reads::compiled_observation_window();
-    let observed = lo <= address && address < hi && is_observed(cell.bits());
+    // SAFETY: `cell` passed the Cons tag check above; cons observation queries
+    // side-bitmap metadata only and never dereferences `cell`.
+    let observed = lo <= address && address < hi && unsafe { is_observed(cell.bits()) };
     if !observed {
         // SAFETY: `cell` passed the cons check above and is a live word this mutator owns.
         unsafe {
@@ -325,12 +459,19 @@ pub fn set_compiled_cons_cdr(cell: TaggedValue, value: TaggedValue) -> bool {
 #[inline]
 pub fn with_vector_data_mut<R>(
     value: TaggedValue,
-    f: impl FnOnce(&mut Vec<TaggedValue>) -> R,
+    f: impl FnOnce(&mut [TaggedValue]) -> R,
 ) -> Option<R> {
-    LispCollectionRevision::changed(value);
-    if value.veclike_type()? != VecLikeType::Vector {
+    if !value.is_veclike() {
         return None;
     }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    if unsafe { checked_veclike_type_under_guard(raw) } != VecLikeType::Vector {
+        return None;
+    }
+    LispCollectionRevision::changed(value);
+    let ptr = value.as_veclike_ptr().unwrap() as *mut VectorObj;
     // SATB reachability barrier (pre-image children) — must fire before the mutation.
     note_heap_write(value, HeapWriteKind::VectorBulk);
     // Stage 2 Tier B CONCURRENT VECTOR SCAN clone-on-write: during a concurrent mark
@@ -347,10 +488,10 @@ pub fn with_vector_data_mut<R>(
         // `with_tagged_heap`, or minting capability tokens.
         unsafe { super::gc::with_tagged_heap(|heap| heap.concurrent_clone_on_write_vector(value)) };
     }
-    let ptr = value.as_veclike_ptr().unwrap() as *mut VectorObj;
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
-    Some(unsafe { f(&mut (*ptr).data.ensure_owned()) })
+    // SAFETY: `ptr` was validated as a live `VectorObj`, `_guard` excludes
+    // re-entry or collection, and any concurrent marker snapshot was retired
+    // above before exposing `&mut [TaggedValue]` in place.
+    Some(unsafe { f((*ptr).data.ensure_owned().as_mut_slice()) })
 }
 
 /// Bulk slot mutation without retaining a Rust reference to the Vec header
@@ -368,14 +509,35 @@ pub unsafe fn with_vector_slots_mut<R>(
     f: impl FnOnce(*mut TaggedValue, usize) -> R,
 ) -> Option<R> {
     let (slots, len) = with_vector_data_mut(value, |data| (data.as_mut_ptr(), data.len()))?;
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
     Some(f(slots, len))
 }
 
 #[inline]
 pub fn replace_vector_data(value: TaggedValue, items: Vec<TaggedValue>) -> bool {
-    with_vector_data_mut(value, |data| *data = items).is_some()
+    if !value.is_veclike() {
+        return false;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    if unsafe { checked_veclike_type_under_guard(raw) } != VecLikeType::Vector {
+        return false;
+    }
+    LispCollectionRevision::changed(value);
+    let ptr = value.as_veclike_ptr().unwrap() as *mut VectorObj;
+    note_heap_write(value, HeapWriteKind::VectorBulk);
+    if super::gc::concurrent_mark_active() {
+        // SAFETY: exclusive vector bulk replacement; clones and retires any
+        // concurrent marker snapshot before replacing the backing.
+        unsafe { super::gc::with_tagged_heap(|heap| heap.concurrent_clone_on_write_vector(value)) };
+    }
+    // SAFETY: `ptr` was validated as a live `VectorObj`, `_guard` excludes
+    // re-entry or collection, and any concurrent marker snapshot was retired
+    // before replacing the owned backing.
+    unsafe { (*ptr).data.replace_owned(items) };
+    true
 }
 
 #[inline]
@@ -435,22 +597,43 @@ pub(crate) fn set_vector_slot_in_store(
 #[inline]
 pub fn with_record_data_mut<R>(
     value: TaggedValue,
-    f: impl FnOnce(&mut Vec<TaggedValue>) -> R,
+    f: impl FnOnce(&mut [TaggedValue]) -> R,
 ) -> Option<R> {
-    LispCollectionRevision::changed(value);
-    if value.veclike_type()? != VecLikeType::Record {
+    if !value.is_veclike() {
         return None;
     }
-    note_heap_write(value, HeapWriteKind::RecordBulk);
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    if unsafe { checked_veclike_type_under_guard(raw) } != VecLikeType::Record {
+        return None;
+    }
+    LispCollectionRevision::changed(value);
     let ptr = value.as_veclike_ptr().unwrap() as *mut RecordObj;
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
-    Some(unsafe { f(&mut (*ptr).data.ensure_owned()) })
+    note_heap_write(value, HeapWriteKind::RecordBulk);
+    // SAFETY: `ptr` was validated as a live `RecordObj`, and `_guard` excludes
+    // re-entry or collection while `&mut [TaggedValue]` is live in place.
+    Some(unsafe { f((*ptr).data.ensure_owned().as_mut_slice()) })
 }
 
 #[inline]
 pub fn replace_record_data(value: TaggedValue, items: Vec<TaggedValue>) -> bool {
-    with_record_data_mut(value, |data| *data = items).is_some()
+    if !value.is_veclike() {
+        return false;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    if unsafe { checked_veclike_type_under_guard(raw) } != VecLikeType::Record {
+        return false;
+    }
+    LispCollectionRevision::changed(value);
+    let ptr = value.as_veclike_ptr().unwrap() as *mut RecordObj;
+    note_heap_write(value, HeapWriteKind::RecordBulk);
+    // SAFETY: `ptr` was validated as a live `RecordObj`, and `_guard` excludes
+    // re-entry or collection while replacing the owned backing.
+    unsafe { (*ptr).data.replace_owned(items) };
+    true
 }
 
 #[inline]
@@ -509,29 +692,37 @@ pub(crate) fn set_record_slot_in_store(
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn with_closure_slots_mut<R>(
     value: TaggedValue,
-    f: impl FnOnce(&mut Vec<TaggedValue>) -> R,
+    f: impl FnOnce(&mut [TaggedValue]) -> R,
 ) -> Option<R> {
-    LispCollectionRevision::changed(value);
-    note_heap_write(value, HeapWriteKind::ClosureBulk);
-    match value.veclike_type()? {
+    if !value.is_veclike() {
+        return None;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    match unsafe { checked_veclike_type_under_guard(raw) } {
         VecLikeType::Lambda => {
+            LispCollectionRevision::changed(value);
             let ptr = value.as_veclike_ptr().unwrap() as *mut LambdaObj;
+            note_heap_write(value, HeapWriteKind::ClosureBulk);
+            // SAFETY: `ptr` was validated as a live `LambdaObj`, and `_guard`
+            // excludes re-entry or collection while `&mut [TaggedValue]` is live.
             unsafe {
                 let obj = &mut *ptr;
                 let _ = obj.parsed_params.take();
-                #[cfg(any(test, debug_assertions, feature = "test-support"))]
-                let _guard = HeapMutClosureGuard::enter();
-                Some(f(&mut obj.data.ensure_owned()))
+                Some(f(obj.data.ensure_owned().as_mut_slice()))
             }
         }
         VecLikeType::Macro => {
+            LispCollectionRevision::changed(value);
             let ptr = value.as_veclike_ptr().unwrap() as *mut MacroObj;
+            note_heap_write(value, HeapWriteKind::ClosureBulk);
+            // SAFETY: `ptr` was validated as a live `MacroObj`, and `_guard`
+            // excludes re-entry or collection while `&mut [TaggedValue]` is live.
             unsafe {
                 let obj = &mut *ptr;
                 let _ = obj.parsed_params.take();
-                #[cfg(any(test, debug_assertions, feature = "test-support"))]
-                let _guard = HeapMutClosureGuard::enter();
-                Some(f(&mut obj.data.ensure_owned()))
+                Some(f(obj.data.ensure_owned().as_mut_slice()))
             }
         }
         _ => None,
@@ -540,7 +731,41 @@ pub(crate) fn with_closure_slots_mut<R>(
 
 #[inline]
 pub fn replace_closure_slots(value: TaggedValue, slots: Vec<TaggedValue>) -> bool {
-    with_closure_slots_mut(value, |data| *data = slots).is_some()
+    if !value.is_veclike() {
+        return false;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    match unsafe { checked_veclike_type_under_guard(raw) } {
+        VecLikeType::Lambda => {
+            LispCollectionRevision::changed(value);
+            let ptr = value.as_veclike_ptr().unwrap() as *mut LambdaObj;
+            note_heap_write(value, HeapWriteKind::ClosureBulk);
+            // SAFETY: `ptr` was validated as a live `LambdaObj`, and `_guard`
+            // excludes re-entry or collection while replacing owned slots.
+            unsafe {
+                let obj = &mut *ptr;
+                let _ = obj.parsed_params.take();
+                obj.data.replace_owned(slots);
+            }
+            true
+        }
+        VecLikeType::Macro => {
+            LispCollectionRevision::changed(value);
+            let ptr = value.as_veclike_ptr().unwrap() as *mut MacroObj;
+            note_heap_write(value, HeapWriteKind::ClosureBulk);
+            // SAFETY: `ptr` was validated as a live `MacroObj`, and `_guard`
+            // excludes re-entry or collection while replacing owned slots.
+            unsafe {
+                let obj = &mut *ptr;
+                let _ = obj.parsed_params.take();
+                obj.data.replace_owned(slots);
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 #[inline]
@@ -549,16 +774,26 @@ pub(crate) fn with_string_text_props_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut TextPropertyTable) -> R,
 ) -> Option<R> {
+    with_string_text_props_mut_with_had(value, f).map(|(_, result)| result)
+}
+
+#[inline]
+pub(crate) fn with_string_text_props_mut_with_had<R>(
+    value: TaggedValue,
+    f: impl FnOnce(&mut TextPropertyTable) -> R,
+) -> Option<(bool, R)> {
     let ptr = value.as_string_ptr()? as *mut StringObj;
+    let _guard = HeapMutClosureGuard::enter_object(ptr as usize);
+    // SAFETY: `as_string_ptr` validated `ptr` as a live `StringObj`, and `_guard`
+    // excludes re-entry or collection before inspecting `has_intervals`.
+    let had = unsafe { (*ptr).data.has_intervals() };
     note_heap_write(value, HeapWriteKind::StringTextProps);
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
     // SAFETY: the published string is exclusively borrowed until `f` returns.
     // The journal sentinel is armed here and recorded by the caller only when
     // the closure changes property contents. The GC barrier stays first.
     let table = unsafe { (*ptr).data.intervals_mut() };
     table.arm_journal_mark();
-    Some(f(table))
+    Some((had, f(table)))
 }
 
 /// Fixture-only unrestricted edits; production callers use typed string operations.
@@ -568,15 +803,21 @@ pub fn with_lisp_string_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut LispString) -> R,
 ) -> Option<R> {
+    if !value.is_string() {
+        return None;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    if raw == 0 {
+        return None;
+    }
+    let _guard = HeapMutClosureGuard::enter_object(raw);
     LispCollectionRevision::changed(value);
     let ptr = value.as_string_ptr()? as *mut StringObj;
     note_heap_write(value, HeapWriteKind::StringData);
     // SAFETY: this published string and its serial owner outlive the payload
-    // edit, with no callback or safepoint. Declaring this before the mutation
-    // guard ends the payload loan first, including while unwinding.
+    // edit, with no callback or safepoint. Declaring `_storage_charge` after
+    // `_guard` ensures accounting runs while `_guard` still protects `ptr`.
     let _storage_charge = unsafe { SerialStringStorageCharge::new(ptr) };
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { &mut (*ptr).data }))
 }
 
@@ -584,11 +825,17 @@ pub fn with_lisp_string_mut<R>(
 /// grow its backing; only borrowed bytes need allocation accounting.
 #[inline]
 pub fn with_string_bytes_mut<R>(value: TaggedValue, f: impl FnOnce(&mut [u8]) -> R) -> Option<R> {
+    if !value.is_string() {
+        return None;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    if raw == 0 {
+        return None;
+    }
+    let _guard = HeapMutClosureGuard::enter_object(raw);
     LispCollectionRevision::changed(value);
     let ptr = value.as_string_ptr()? as *mut StringObj;
     note_heap_write(value, HeapWriteKind::StringData);
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
     // SAFETY: the published string is exclusively borrowed until the closure
     // ends. No callback, collector safepoint, or escaping payload loan is allowed.
     let string = unsafe { &mut (*ptr).data };
@@ -603,13 +850,19 @@ pub fn with_string_bytes_mut<R>(value: TaggedValue, f: impl FnOnce(&mut [u8]) ->
 /// Clear bytes and properties through the published owner's mutation barrier.
 #[inline]
 pub fn clear_string_contents(value: TaggedValue) -> bool {
+    if !value.is_string() {
+        return false;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    if raw == 0 {
+        return false;
+    }
+    let _guard = HeapMutClosureGuard::enter_object(raw);
     LispCollectionRevision::changed(value);
     let Some(ptr) = value.as_string_ptr() else {
         return false;
     };
     note_heap_write(value, HeapWriteKind::StringData);
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
     // SAFETY: this operation has serial access to the initialized string,
     // with no callback or safepoint before the payload loan ends.
     let allocated = unsafe {
@@ -626,13 +879,19 @@ pub fn clear_string_contents(value: TaggedValue) -> bool {
 /// Pin published bytecode storage; an owned payload remains in place.
 #[inline]
 pub fn pin_string_immovable(value: TaggedValue) -> bool {
+    if !value.is_string() {
+        return false;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    if raw == 0 {
+        return false;
+    }
+    let _guard = HeapMutClosureGuard::enter_object(raw);
     LispCollectionRevision::changed(value);
     let Some(ptr) = value.as_string_ptr() else {
         return false;
     };
     note_heap_write(value, HeapWriteKind::StringData);
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
     // SAFETY: serial bytecode construction keeps the string live and uniquely
     // mutated, with no callback, collection, or escaping payload loan.
     let string = unsafe { &mut (*ptr.cast_mut()).data };
@@ -653,22 +912,29 @@ pub fn pin_string_immovable(value: TaggedValue) -> bool {
 /// canonical empty string.
 #[inline]
 pub fn clear_string_intervals(value: TaggedValue) -> bool {
-    if value.is_string() {
-        let ptr = (value.bits() & !TAG_MASK) as *const StringObj;
-        // SAFETY: `is_string` means this word addresses a live `StringObj`.
-        // The load is atomic and records no collection read, so a string that
-        // does have intervals keeps the journal-before-read order below.
-        if unsafe { !(*ptr).data.has_intervals() } {
-            return false;
-        }
+    if !value.is_string() {
+        return false;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    if raw == 0 {
+        return false;
+    }
+    let ptr = raw as *const StringObj;
+    // Acquire the release re-entrancy guard BEFORE reading `(*ptr).data` so a
+    // re-entrant call while `&mut LispString` is live panics without aliasing.
+    let _guard = HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_string` means this word addresses a live `StringObj`, and
+    // `_guard` proves no mutable loan of this object is active on this thread.
+    // The load is atomic and records no collection read, so a string that
+    // does have intervals keeps the journal-before-read order below.
+    if unsafe { !(*ptr).data.has_intervals() } {
+        return false;
     }
     LispCollectionRevision::changed(value);
     let Some(ptr) = value.as_string_ptr() else {
         return false;
     };
     note_heap_write(value, HeapWriteKind::StringTextProps);
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
     // SAFETY: serial owner access outlives this metadata-only mutation, and
     // clear_intervals enforces its interval-child SATB preimage barrier.
     unsafe { (*ptr.cast_mut()).data.clear_intervals() };
@@ -684,9 +950,8 @@ pub(crate) fn drop_unmodified_string_intervals(value: TaggedValue) {
     let Some(ptr) = value.as_string_ptr() else {
         return;
     };
+    let _guard = HeapMutClosureGuard::enter_object(ptr as usize);
     note_heap_write(value, HeapWriteKind::StringTextProps);
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
     // SAFETY: same exclusive string borrow as `clear_string_intervals`.
     unsafe { (*ptr.cast_mut()).data.clear_intervals() };
 }
@@ -801,7 +1066,19 @@ unsafe fn with_hash_table_mut_inactive_impl<const METERED: bool, R>(
     value: TaggedValue,
     f: impl FnOnce(&mut LispHashTable) -> R,
 ) -> Option<R> {
-    let ptr = prepare_hash_table_mut_inactive(value)?;
+    if !value.is_veclike() {
+        return None;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    // Acquire the release re-entrancy guard BEFORE reading `(*header).type_tag`,
+    // write-barrier reads, or dereferencing `ptr` so re-entry panics without
+    // forming an aliasing reference.
+    let _guard = HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    if unsafe { checked_veclike_type_under_guard(raw) } != VecLikeType::HashTable {
+        return None;
+    }
+    let ptr = record_hash_table_mut_inactive(value);
     // SAFETY: validation established this initialized table; the serialized
     // barrier enumerates pending entries directly and does not hydrate them.
     if unsafe { (*ptr).table.needs_hydration() } {
@@ -814,37 +1091,69 @@ unsafe fn with_hash_table_mut_inactive_impl<const METERED: bool, R>(
     Some(unsafe { with_verified_hash_table_mut::<METERED, R>(ptr, f) })
 }
 
-/// Typed writers have already completed the charged read-access hydration.
-/// Keeping that fact in the entry contract avoids preparing a pending-table
-/// callback environment on every already-hydrated edit.
+/// Typed inactive hash-table write path (`Value::with_hash_table_write_inactive`).
 ///
-/// The witness is constructed only inside the existing inactive typed Value
-/// accessor, after hydration and before any callback, GC or owner transition.
+/// Acquires `HeapMutClosureGuard::enter_object` strictly BEFORE reading
+/// `(*header).type_tag`, hydrating pending storage, or forming `&mut LispHashTable`
+/// so re-entering through `with_hash_table_write_inactive` while an outer
+/// `with_hash_table_mut` (or another write) is live panics without aliasing.
+///
+/// # Safety
+/// Same inactive-owner and no-callback/no-GC contract as `with_hash_table_mut_inactive`.
 #[inline]
-pub(crate) fn with_hydrated_hash_table_mut_inactive<R>(
-    hydrated: HydratedHashTable<'_>,
+pub(crate) unsafe fn with_hash_table_write_inactive_impl<R>(
+    value: TaggedValue,
     f: impl FnOnce(&mut LispHashTable) -> R,
 ) -> Option<R> {
-    let ptr = prepare_hash_table_mut_inactive(hydrated.into_value())?;
-    // SAFETY: validation established the initialized table; the witness
-    // establishes hydration in the uninterrupted inactive typed extent.
-    debug_assert!(!unsafe { (*ptr).table.needs_hydration() });
-    // SAFETY: the typed capability reports its own growth and cannot replace
-    // the table. Its payload borrow ends before the serialized extent ends.
+    if !value.is_veclike() {
+        return None;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    if unsafe { checked_veclike_type_under_guard(raw) } != VecLikeType::HashTable {
+        return None;
+    }
+    let ptr = record_hash_table_mut_inactive(value);
+    // SAFETY: `_guard` excludes re-entry on `ptr`, and validation above proved
+    // `ptr` is a live `HashTableObj`.
+    if unsafe { (*ptr).table.needs_hydration() } {
+        // SAFETY: cold hydration bills lazy dump materialization separately from
+        // `HashTableWrite`'s own growth accounting, then runs the unmetered body.
+        return Some(unsafe { with_pending_hash_table_write_inactive(ptr, f) });
+    }
+    // SAFETY: the validated table is hydrated, and `HashTableWrite` reports its
+    // own growth and cannot replace the table.
     Some(unsafe { with_verified_hash_table_mut::<false, R>(ptr, f) })
 }
 
-/// Keep revision and write-barrier ordering shared by both serial entries.
-///
+/// Keep revision, observation, and write-barrier ordering shared by both serial entries.
 #[inline(always)]
-fn prepare_hash_table_mut_inactive(value: TaggedValue) -> Option<*mut HashTableObj> {
+fn record_hash_table_mut_inactive(value: TaggedValue) -> *mut HashTableObj {
     debug_assert!(!super::gc::concurrent_hash_mutation_active());
     LispCollectionRevision::changed(value);
-    if value.veclike_type()? != VecLikeType::HashTable {
-        return None;
-    }
+    let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
     note_heap_write(value, HeapWriteKind::HashTableData);
-    Some(value.as_veclike_ptr().unwrap() as *mut HashTableObj)
+    ptr
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn with_pending_hash_table_write_inactive<R>(
+    ptr: *mut HashTableObj,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> R {
+    {
+        // SAFETY: `ptr` is exclusively guarded by the caller's `HeapMutClosureGuard`;
+        // this guard charges only pending hydration so `HashTableWrite`'s own
+        // per-growth accounting is not double-billed during `f`.
+        let _hydration_charge = unsafe { super::gc::SerialHashTableStorageCharge::new(ptr) };
+        // SAFETY: pending hydration precedes publication of the mutable payload.
+        unsafe { (*ptr).table.hydrate_pending() };
+    }
+    // SAFETY: `ptr` is now hydrated and still guarded by the caller's outer
+    // `HeapMutClosureGuard` across `f` and any unwind.
+    unsafe { with_verified_hash_table_mut::<false, R>(ptr, f) }
 }
 
 #[cold]
@@ -862,8 +1171,8 @@ unsafe fn with_pending_hash_table_mut<const METERED: bool, R>(
     };
     // SAFETY: pending hydration precedes publication of the mutable payload.
     unsafe { (*ptr).table.hydrate_pending() };
-    // SAFETY: the cold outer guard is the sole generic net biller. The inner
-    // debug closure guard ends before this storage guard, also on unwind.
+    // SAFETY: the cold outer guard is the sole generic net biller. The outer
+    // `HeapMutClosureGuard` covers the entire scope including unwind.
     unsafe { with_verified_hash_table_mut::<false, R>(ptr, f) }
 }
 
@@ -872,7 +1181,8 @@ unsafe fn with_pending_hash_table_mut<const METERED: bool, R>(
 ///
 /// # Safety
 /// `ptr` names a live, hydrated table in the caller's exclusive inactive-owner
-/// extent. The callback must not call Lisp, collect, or escape its payload loan.
+/// extent (guarded by `HeapMutClosureGuard`). The callback must not call Lisp,
+/// collect, or escape its payload loan.
 #[inline(always)]
 unsafe fn with_verified_hash_table_mut<const METERED: bool, R>(
     ptr: *mut HashTableObj,
@@ -892,12 +1202,10 @@ unsafe fn with_verified_hash_table_mut<const METERED: bool, R>(
     let epoch = unsafe { (*ptr).table.data.switch_epoch.wrapping_add(1) };
     unsafe { (*ptr).table.data.switch_epoch = epoch };
     // Both concrete extents use the same payload loan. Expanding its lexical
-    // scope keeps the debug guard inside the metered charge's drop scope,
+    // scope keeps the payload loan inside the metered charge's drop scope,
     // without constructing an Option<charge> in the unmetered extent.
     macro_rules! payload_loan {
         () => {{
-            #[cfg(any(test, debug_assertions, feature = "test-support"))]
-            let _guard = HeapMutClosureGuard::enter();
             // SAFETY: the caller retains the verified hydrated payload loan.
             let result = f(unsafe { &mut (*ptr).table });
             // SAFETY: the loan ended above; restore this table's write epoch.
@@ -906,8 +1214,6 @@ unsafe fn with_verified_hash_table_mut<const METERED: bool, R>(
         }};
     }
     if METERED {
-        // Declare this before the debug closure guard in the payload loan:
-        // reverse-drop must end that extent before accounting reads it again.
         // Retain the existing metered representation and unwind consumer;
         // only the unmetered branch needs to omit the optional charge object.
         // SAFETY: all non-payload bookkeeping is complete; the callback may
@@ -929,20 +1235,26 @@ pub(crate) fn with_hash_table_mut_concurrent<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut LispHashTable) -> R,
 ) -> Option<R> {
-    if value.veclike_type()? != VecLikeType::HashTable {
+    if !value.is_veclike() {
+        return None;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    if unsafe { checked_veclike_type_under_guard(raw) } != VecLikeType::HashTable {
         return None;
     }
     let snapshot = super::gc::concurrent_hash_snapshot(value);
     let mut mutation = snapshot
         .as_ref()
-        .and_then(|snapshot| snapshot.lock_mutation(value.as_veclike_ptr().unwrap() as usize));
+        .and_then(|snapshot| snapshot.lock_mutation(raw));
     // The shared entry mutex must precede even journal/SATB preimage reads.
     LispCollectionRevision::changed(value);
+    let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
     note_heap_write(value, HeapWriteKind::HashTableData);
     if let Some(guard) = mutation.as_mut() {
         super::gc::prepare_concurrent_hash_write(value, guard);
     }
-    let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
     // SAFETY: serial Tier-H access holds the mutation lease through this
     // scope; the table's mutable borrow ends before the charge guard drops.
     let _storage_charge = unsafe { super::gc::SerialHashTableStorageCharge::new(ptr) };
@@ -964,8 +1276,6 @@ pub(crate) fn with_hash_table_mut_concurrent<R>(
     // equal one compiled against this object.
     let epoch = unsafe { (*ptr).table.data.switch_epoch.wrapping_add(1) };
     unsafe { (*ptr).table.data.switch_epoch = epoch };
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
     let result = f(unsafe { &mut (*ptr).table });
     unsafe { (*ptr).table.data.switch_epoch = epoch };
     Some(result)
@@ -1055,13 +1365,17 @@ pub fn with_bytecode_data_mut_for_test<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut ByteCodeFunction) -> R,
 ) -> Option<R> {
+    if !value.is_veclike() {
+        return None;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
     if value.veclike_type()? != VecLikeType::ByteCode {
         return None;
     }
+    let ptr = raw as *mut ByteCodeObj;
     note_heap_write(value, HeapWriteKind::ByteCodeData);
-    let ptr = value.as_veclike_ptr().unwrap() as *mut ByteCodeObj;
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: `ptr` was validated as a live `ByteCodeObj` and `_guard` excludes re-entry.
     Some(f(unsafe { &mut (*ptr).data }))
 }
 
@@ -1070,13 +1384,17 @@ pub fn with_marker_data_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut LispMarker) -> R,
 ) -> Option<R> {
+    if !value.is_veclike() {
+        return None;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
     if value.veclike_type()? != VecLikeType::Marker {
         return None;
     }
+    let ptr = raw as *mut MarkerObj;
     note_heap_write(value, HeapWriteKind::LispMarker);
-    let ptr = value.as_veclike_ptr().unwrap() as *mut MarkerObj;
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: `ptr` was validated as a live `MarkerObj` and `_guard` excludes re-entry.
     Some(f(unsafe { &mut (*ptr).data }))
 }
 
@@ -1085,26 +1403,35 @@ pub fn with_overlay_data_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut OverlayData) -> R,
 ) -> Option<R> {
-    LispCollectionRevision::changed(value);
-    if value.veclike_type()? != VecLikeType::Overlay {
+    if !value.is_veclike() {
         return None;
     }
-    note_heap_write(value, HeapWriteKind::OverlayData);
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
+    // SAFETY: `is_veclike()` proved `raw` is a live veclike header and `_guard` excludes re-entry.
+    if unsafe { checked_veclike_type_under_guard(raw) } != VecLikeType::Overlay {
+        return None;
+    }
+    LispCollectionRevision::changed(value);
     let ptr = value.as_veclike_ptr().unwrap() as *mut OverlayObj;
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
+    note_heap_write(value, HeapWriteKind::OverlayData);
+    // SAFETY: `ptr` was validated as a live `OverlayObj` and `_guard` excludes re-entry.
     Some(f(unsafe { &mut (*ptr).data }))
 }
 
 #[inline]
 pub fn with_xwidget_mut<R>(value: TaggedValue, f: impl FnOnce(&mut XwidgetObj) -> R) -> Option<R> {
+    if !value.is_veclike() {
+        return None;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
     if value.veclike_type()? != VecLikeType::Xwidget {
         return None;
     }
+    let ptr = raw as *mut XwidgetObj;
     note_heap_write(value, HeapWriteKind::XwidgetData);
-    let ptr = value.as_veclike_ptr().unwrap() as *mut XwidgetObj;
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: `ptr` was validated as a live `XwidgetObj` and `_guard` excludes re-entry.
     Some(f(unsafe { &mut *ptr }))
 }
 
@@ -1113,13 +1440,17 @@ pub fn with_xwidget_view_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut XwidgetViewObj) -> R,
 ) -> Option<R> {
+    if !value.is_veclike() {
+        return None;
+    }
+    let raw = (value.bits() & !TAG_MASK) as usize;
+    let _guard = HeapMutClosureGuard::enter_object(raw);
     if value.veclike_type()? != VecLikeType::XwidgetView {
         return None;
     }
+    let ptr = raw as *mut XwidgetViewObj;
     note_heap_write(value, HeapWriteKind::XwidgetViewData);
-    let ptr = value.as_veclike_ptr().unwrap() as *mut XwidgetViewObj;
-    #[cfg(any(test, debug_assertions, feature = "test-support"))]
-    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: `ptr` was validated as a live `XwidgetViewObj` and `_guard` excludes re-entry.
     Some(f(unsafe { &mut *ptr }))
 }
 

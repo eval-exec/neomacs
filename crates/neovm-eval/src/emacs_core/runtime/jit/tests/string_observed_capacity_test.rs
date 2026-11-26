@@ -149,9 +149,7 @@ fn detached_observed_string_storage_is_unobserved_at_a_fresh_identity() {
     assert!(!reads.expect("old read").unchanged());
     let fresh = context.tagged_heap.alloc_string(detached);
     context.push_specpdl_root(fresh);
-    assert!(!neovm_value::tagged::collection_reads::is_observed(
-        fresh.bits()
-    ));
+    assert!(!unsafe { neovm_value::tagged::collection_reads::is_observed(fresh.bits()) });
     let before = LispCollectionRevision::current();
     let shims = super::super::dispatch::ASET_SHIM_CALLS.with(|count| count.get());
     assert_eq!(

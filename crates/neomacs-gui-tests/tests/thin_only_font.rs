@@ -7,20 +7,14 @@ use neomacs_gui_tests::{
 };
 use neomacs_melpa_test_support::{EmacsRuntime, PreparedPackageSet};
 use neomacs_test_env::CanonicalPin;
-use std::{
-    fs, thread,
-    time::{Duration, Instant},
-};
+use std::{fs, thread, time::Duration};
 
 const VERTICO_PIN: (&str, &str) = ("vertico", "20260805.1129");
 
 #[test]
 fn thin_only_family_metrics_and_vertico_completion_match_gnu() {
     let root = neomacs_infra::workspace_root();
-    let run_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let run_id = neomacs_gui_tests::unique_nonce();
     let control = root.join(format!(
         "tmp/thin-only-font-gui-{}-{run_id}",
         std::process::id()
@@ -51,7 +45,11 @@ fn thin_only_family_metrics_and_vertico_completion_match_gnu() {
         format!(
             "{}\n{}",
             packages.startup_elisp(),
-            include_str!("../fixtures/thin-only-font-vertico.el")
+            fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/fixtures/thin-only-font-vertico.el"
+            ))
+            .unwrap()
         ),
     )
     .unwrap();
@@ -143,10 +141,10 @@ fn thin_only_family_metrics_and_vertico_completion_match_gnu() {
                 GuiRunOptions::with_timeout(Duration::from_secs(120)),
             )
         });
-        let deadline = Instant::now() + Duration::from_secs(115);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(115));
         let mut presentation =
             Err("Thin-only font metrics did not produce a green presentation".to_owned());
-        while !run.is_finished() && Instant::now() < deadline {
+        while !run.is_finished() && !deadline.is_expired() {
             if let Ok(error) = fs::read_to_string(control.join("error.el")) {
                 presentation = Err(format!("public font/Vertico error: {error}"));
                 break;

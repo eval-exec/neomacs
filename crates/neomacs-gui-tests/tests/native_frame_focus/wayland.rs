@@ -2,7 +2,6 @@
 
 use super::*;
 use neomacs_gui_tests::{CommandSpec, GuiArtifactSet, GuiCommandRunner};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn native_wayland_focus_routes_typing_to_new_and_reactivated_frames() {
@@ -10,10 +9,7 @@ fn native_wayland_focus_routes_typing_to_new_and_reactivated_frames() {
     let artifacts = root.join(format!(
         "tmp/neomacs-gui-tests/issue395-wayland-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        neomacs_gui_tests::unique_nonce()
     ));
     fs::create_dir_all(&artifacts).unwrap();
     let session = neomacs_infra::display::start_sway(
@@ -182,7 +178,7 @@ impl WaylandInput {
         exclude: Option<u64>,
         finished: &impl Fn() -> bool,
     ) -> Result<u64, String> {
-        let deadline = Instant::now() + Duration::from_secs(12);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(12));
         loop {
             if let Some((id, _)) = self
                 .windows(pid)?
@@ -191,7 +187,7 @@ impl WaylandInput {
             {
                 return Ok(id);
             }
-            if finished() || Instant::now() >= deadline {
+            if finished() || deadline.is_expired() {
                 return Err(format!(
                     "Wayland window for PID {pid}, excluding {exclude:?}, absent"
                 ));
@@ -211,12 +207,12 @@ impl WaylandInput {
                     .is_some_and(|children| children.iter().any(|child| is_focused(child, id)))
             })
         }
-        let deadline = Instant::now() + Duration::from_secs(12);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(12));
         loop {
             if is_focused(&self.ipc(&["-t", "get_tree"])?, id) {
                 return Ok(());
             }
-            if finished() || Instant::now() >= deadline {
+            if finished() || deadline.is_expired() {
                 return Err(format!(
                     "Wayland container {id} did not receive compositor focus"
                 ));
@@ -246,7 +242,7 @@ impl WaylandInput {
 }
 
 fn wait_for_sway_ipc(artifacts: &Path, runtime: &Path) -> Result<PathBuf, String> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(5));
     loop {
         if let Some(socket) = fs::read_dir(artifacts)
             .map_err(|error| error.to_string())?
@@ -262,7 +258,7 @@ fn wait_for_sway_ipc(artifacts: &Path, runtime: &Path) -> Result<PathBuf, String
             // sockaddr_un's limit even though that directory lists the socket.
             return Ok(runtime.join(socket.file_name().expect("listed socket name")));
         }
-        if Instant::now() >= deadline {
+        if deadline.is_expired() {
             return Err("private Sway IPC socket absent".into());
         }
         thread::sleep(Duration::from_millis(20));

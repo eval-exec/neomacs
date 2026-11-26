@@ -1,5 +1,10 @@
-//! Exclusive bulk views transfer ownership of the allocation; they never cast
-//! a reference between Vec instantiations or provide marker provenance.
+//! Exclusive in-place bulk views over owned `Vec<AtomicTaggedValue>` storage.
+//!
+//! `OwnedValueVec` never moves the `Vec` out via `std::mem::take`: the
+//! allocation stays in place inside the heap object at all times, and
+//! `&[TaggedValue]` / `&mut [TaggedValue]` are projected directly over its
+//! buffer while exclusive `&mut` access guarantees no concurrent marker
+//! snapshot is reading it.
 
 use super::{AtomicTaggedValue, TaggedValue};
 use std::mem::ManuallyDrop;
@@ -14,54 +19,76 @@ pub(super) fn into_cells(values: Vec<TaggedValue>) -> Vec<AtomicTaggedValue> {
     unsafe { Vec::from_raw_parts(values.as_mut_ptr().cast(), values.len(), values.capacity()) }
 }
 
-#[inline(always)]
-fn into_values(cells: Vec<AtomicTaggedValue>) -> Vec<TaggedValue> {
-    let mut cells = ManuallyDrop::new(cells);
-    // SAFETY: identical allocation layout, initialized words and no drop glue.
-    // The caller exclusively owns this uncaptured allocation.
-    unsafe { Vec::from_raw_parts(cells.as_mut_ptr().cast(), cells.len(), cells.capacity()) }
-}
-
-/// A sole-owner bulk view that restores typed storage even if its caller unwinds.
+/// A sole-owner in-place bulk view over a `Vec<AtomicTaggedValue>`.
+///
 /// Captured backings must be retired before this view is constructed.
+/// Nothing is moved out of `destination`, so the backing remains live and
+/// rooted in place across every operation and unwind without requiring `Drop`.
 pub struct OwnedValueVec<'a> {
     destination: &'a mut Vec<AtomicTaggedValue>,
-    values: ManuallyDrop<Vec<TaggedValue>>,
 }
 
 impl<'a> OwnedValueVec<'a> {
     #[inline(always)]
     pub(super) fn new(destination: &'a mut Vec<AtomicTaggedValue>) -> Self {
-        let cells = std::mem::take(destination);
-        Self {
-            destination,
-            values: ManuallyDrop::new(into_values(cells)),
+        Self { destination }
+    }
+
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[TaggedValue] {
+        // SAFETY: `&self` holds exclusive ownership of `destination` (captured
+        // marker snapshots were retired before constructing `OwnedValueVec`),
+        // and `AtomicTaggedValue` is `#[repr(transparent)]` over
+        // `UnsafeCell<TaggedValue>`.
+        unsafe {
+            &*(self.destination.as_slice() as *const [AtomicTaggedValue] as *const [TaggedValue])
         }
+    }
+
+    #[inline(always)]
+    pub fn as_mut_slice(&mut self) -> &mut [TaggedValue] {
+        // SAFETY: `&mut self` holds exclusive access to `destination` (no
+        // concurrent marker snapshot), and `AtomicTaggedValue` has identical
+        // size, alignment, and bit validity to `TaggedValue`.
+        unsafe {
+            &mut *(self.destination.as_mut_slice() as *mut [AtomicTaggedValue]
+                as *mut [TaggedValue])
+        }
+    }
+
+    #[inline(always)]
+    pub fn push(&mut self, value: TaggedValue) {
+        self.destination.push(AtomicTaggedValue::new(value));
+    }
+
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.destination.clear();
+    }
+
+    #[inline(always)]
+    pub fn truncate(&mut self, len: usize) {
+        self.destination.truncate(len);
+    }
+
+    #[inline(always)]
+    pub fn replace(&mut self, values: Vec<TaggedValue>) {
+        *self.destination = into_cells(values);
     }
 }
 
 impl Deref for OwnedValueVec<'_> {
-    type Target = Vec<TaggedValue>;
+    type Target = [TaggedValue];
 
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
-        &self.values
+        self.as_slice()
     }
 }
 
 impl DerefMut for OwnedValueVec<'_> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.values
-    }
-}
-
-impl Drop for OwnedValueVec<'_> {
-    #[inline(always)]
-    fn drop(&mut self) {
-        // SAFETY: the guard owns this Vec, and Drop runs exactly once. Nothing
-        // after the take can panic before the cell allocation is restored.
-        let values = unsafe { ManuallyDrop::take(&mut self.values) };
-        *self.destination = into_cells(values);
+        self.as_mut_slice()
     }
 }

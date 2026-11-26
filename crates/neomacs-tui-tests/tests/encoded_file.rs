@@ -4,9 +4,14 @@ use crate::support::*;
 use neomacs_tui_tests::TuiSession;
 use std::{fs, time::Duration};
 
-const VALID: &[u8] = include_bytes!("../../neovm-oracle-tests/fixtures/encoded-file/valid.elc");
-const OVERSIZED: &[u8] =
-    include_bytes!("../../neovm-oracle-tests/fixtures/encoded-file/oversized.elc");
+const VALID_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neovm-oracle-tests/fixtures/encoded-file/valid.elc"
+);
+const OVERSIZED_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../neovm-oracle-tests/fixtures/encoded-file/oversized.elc"
+);
 
 fn visible(grid: &[String], marker: &str) -> bool {
     grid.iter().any(|row| row.contains(marker))
@@ -25,7 +30,7 @@ fn assert_visible(session: &mut TuiSession, marker: &str) {
 fn compiled_file_character_boundaries_survive_terminal_input() {
     let (mut gnu, mut neo) = boot_pair("");
     for session in [&gnu, &neo] {
-        fs::write(session.home_dir().join("encoded-file.elc"), VALID).unwrap();
+        fs::copy(VALID_PATH, session.home_dir().join("encoded-file.elc")).unwrap();
     }
     eval_expression(
         &mut gnu,
@@ -62,7 +67,7 @@ fn oversized_compiled_file_recovers_and_accepts_terminal_input() {
     // outside that assumption is not a portable oracle for our recovery policy.
     let mut neo = TuiSession::neomacs("");
     assert_visible(&mut neo, "*scratch*");
-    fs::write(neo.home_dir().join("oversized.elc"), OVERSIZED).unwrap();
+    fs::copy(OVERSIZED_PATH, neo.home_dir().join("oversized.elc")).unwrap();
     eval_expression_one(
         &mut neo,
         r#"(progn

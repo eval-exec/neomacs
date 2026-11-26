@@ -44,12 +44,9 @@ fn holding_shift_across_right_keys_extends_the_visible_region() {
     let env = session.env().to_vec();
     let input_artifacts = artifacts.clone();
     let input = std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(30));
         while !ready.exists() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "fixture did not become ready"
-            );
+            assert!(!deadline.is_expired(), "fixture did not become ready");
             std::thread::sleep(Duration::from_millis(20));
         }
         // Lisp readiness can precede native mapping during asynchronous

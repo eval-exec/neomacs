@@ -37,6 +37,7 @@ use rustc_hash::FxHashMap;
 use std::marker::PhantomData;
 use std::num::NonZeroU32;
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Slots per page of an owner's default-channel table.
 const SLOT_PAGE: usize = 256;
@@ -282,6 +283,14 @@ pub struct OwnerSlab {
     /// trace it. The clipboard stubs do not read it. Absent until this
     /// owner allocates a slab, and uninstalled when the slab is new.
     pub(crate) selection_activation: super::activation::SelectionActivation,
+    /// Whether this slab's unique parallel [`OwnerSlabHandle`] has already
+    /// been handed out (E4-P2 C1). At most one handle may exist per slab.
+    parallel_handle_issued: bool,
+    /// Whether a parallel [`OwnerSlabLease`] currently holds exclusive access
+    /// to this slab (E4-P2 C1). Checked via raw pointer before materializing
+    /// any `&OwnerSlab` / `&mut OwnerSlab` through `OwnerSlot`, so aliasing UB
+    /// is impossible even under synthetic test tickets or forgotten leases.
+    parallel_lease_active: AtomicBool,
     _thread_confined: PhantomData<*const ()>,
 }
 
@@ -332,6 +341,8 @@ impl OwnerSlab {
             native_fileio: AutoSaveNativeWritePolicy::Ordinary { preserved_mode: 0 },
             native_fileio_dir_umask: 0,
             selection_activation: super::activation::SelectionActivation::dormant(),
+            parallel_handle_issued: false,
+            parallel_lease_active: AtomicBool::new(false),
             _thread_confined: PhantomData,
         }
     }
@@ -820,19 +831,31 @@ impl OwnerSlabRegistry {
     #[doc(hidden)]
     pub fn trace_roots(&self, heap: usize, visit: &mut dyn FnMut(Value)) {
         for slab in &self.slabs {
-            // SAFETY: the registry owns every registered allocation until it
-            // drops. Its owner mutates a slab only through an exclusive
-            // Context borrow, and the root phase runs on the owner's thread
-            // with no such borrow live (`Context::trace_roots` takes `&self`).
+            // SAFETY (E4-P2 C1): the registry owns every registered allocation
+            // until World drop. This legacy serial root walk runs only on a
+            // serial World with no parallel `OwnerSlabLease` live (parallel
+            // eras trace exclusively via `trace_roots_for_heap` under
+            // `AllStopped`, after every `RunAccess` and its `OwnerSlabLease`
+            // have ended). On the serial path, the owner mutates a slab only
+            // through an exclusive `&mut Context` borrow, which this `&self`
+            // root phase excludes on the owner's thread.
+            debug_assert!(
+                !unsafe {
+                    (*slab.as_ptr())
+                        .parallel_lease_active
+                        .load(Ordering::Acquire)
+                },
+                "OwnerSlabRegistry::trace_roots observed an active parallel OwnerSlabLease"
+            );
             let slab = unsafe { slab.as_ref() };
             debug_assert_eq!(slab.heap, heap, "an owner slab traced for another heap");
             slab.trace_roots(visit);
         }
     }
 
-    /// Visit every registered slab's values under `AllStopped` in a stowed
-    /// Green World, validating that `stopped` proves exclusive stopped-world
-    /// access for `heap` before reading any slab.
+    /// Visit every registered slab's values under `AllStopped` in a parallel
+    /// or stowed Green World, validating that `stopped` proves exclusive
+    /// stopped-world access for `heap` before reading any slab.
     pub(crate) fn trace_roots_for_heap(
         &self,
         stopped: &neovm_value::tagged::gc::AllStopped<'_>,
@@ -841,9 +864,13 @@ impl OwnerSlabRegistry {
     ) -> Result<(), neovm_value::tagged::gc::RendezvousError> {
         stopped.check_world_roots(heap)?;
         for slab in &self.slabs {
-            // SAFETY: the registry owns every registered slab until World drop,
-            // and `stopped.check_world_roots(heap)` proved `AllStopped` excludes
-            // every mutator on this heap from mutating any slab.
+            // SAFETY (E4-P2 C1): the registry owns every registered slab until
+            // World drop, and `stopped.check_world_roots(heap)` proved
+            // `AllStopped` excludes every `RunAccess` on `heap`. Every
+            // `OwnerSlabLease` borrows `&mut RunAccess` (and `slab_mut`
+            // borrows `&mut lease`), so no `&mut OwnerSlab` can coexist with
+            // this stopped-world read — including if a lease was `mem::forget`ted
+            // (moving `lease` into `forget` ends all slab references).
             let slab = unsafe { slab.as_ref() };
             debug_assert_eq!(
                 neovm_value::tagged::gc::HeapIdentity::from_legacy_word(slab.heap),
@@ -902,22 +929,302 @@ impl OwnerSlot {
         self.0.is_none()
     }
 
+    /// Whether a parallel [`OwnerSlabLease`] currently marks this slab active
+    /// (checked via raw pointer without materializing a reference).
+    #[inline]
+    pub(crate) fn is_parallel_lease_active(&self) -> bool {
+        self.0.is_some_and(|slab| {
+            // SAFETY: the World's registry retains the allocation while this
+            // Context holds its World lease; only the atomic flag is read.
+            unsafe {
+                (*slab.as_ptr())
+                    .parallel_lease_active
+                    .load(Ordering::Acquire)
+            }
+        })
+    }
+
     /// The slab, for reading.
     #[inline]
     pub(crate) fn slab(&self) -> Option<&OwnerSlab> {
-        // SAFETY: the World's registry keeps the allocation alive for as long
-        // as this Context holds its World lease, and only this owner mutates
-        // it, through `slab_mut`, which a shared borrow of the slot excludes.
-        self.0.map(|slab| unsafe { slab.as_ref() })
+        // SAFETY (E4-P2 C1): the World's registry keeps the allocation alive
+        // for as long as this Context holds its World lease. No parallel
+        // `OwnerSlabLease` is active (structurally excluded by `DormantContext`
+        // and `NativeStopped` during serial turns, and checked via raw pointer
+        // before materializing `&OwnerSlab`), and this shared borrow excludes
+        // `slab_mut`.
+        self.0.map(|slab| {
+            assert!(
+                !unsafe {
+                    (*slab.as_ptr())
+                        .parallel_lease_active
+                        .load(Ordering::Acquire)
+                },
+                "OwnerSlot accessed while a parallel OwnerSlabLease is active"
+            );
+            unsafe { slab.as_ref() }
+        })
     }
 
     /// The slab, for this owner's writes.
     #[inline]
     pub(crate) fn slab_mut(&mut self) -> Option<&mut OwnerSlab> {
-        // SAFETY: as in `slab`; the exclusive borrow of the slot is the
-        // owner's exclusive access, and the registry reads the slab only in
-        // the root phase, which no `&mut Context` borrow overlaps.
-        self.0.map(|mut slab| unsafe { slab.as_mut() })
+        // SAFETY (E4-P2 C1): as in `slab`; the exclusive borrow of the slot is
+        // the serial owner's exclusive access. No parallel `OwnerSlabLease` is
+        // active (structurally excluded by `DormantContext` and `NativeStopped`
+        // during serial turns, and checked via raw pointer before materializing
+        // `&mut OwnerSlab`), and the collector reads slabs only in a serial
+        // root phase or under `AllStopped`, neither of which overlaps a live
+        // `&mut Context` borrow.
+        self.0.map(|mut slab| {
+            assert!(
+                !unsafe {
+                    (*slab.as_ptr())
+                        .parallel_lease_active
+                        .load(Ordering::Acquire)
+                },
+                "OwnerSlot accessed while a parallel OwnerSlabLease is active"
+            );
+            unsafe { slab.as_mut() }
+        })
+    }
+}
+
+/// Why an [`OwnerSlabHandle`] or [`OwnerSlabLease`] could not be minted
+/// (E4-P2 C1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnerSlabLeaseError {
+    /// This owner already handed out its unique parallel [`OwnerSlabHandle`].
+    HandleAlreadyIssued,
+    /// The slab's legacy heap word is not a valid parallel [`HeapIdentity`].
+    InvalidHeapIdentity,
+    /// The [`RunAccess`](neovm_value::tagged::gc::RunAccess) belongs to a
+    /// different heap than the slab.
+    WrongHeap,
+    /// A prior [`OwnerSlabLease`] on this slab is still marked active (for
+    /// example because it was leaked with `std::mem::forget`).
+    ActiveLease,
+}
+
+/// Unique, thread-confined capability to lease one owner's [`OwnerSlab`]
+/// during an admitted [`RunAccess`](neovm_value::tagged::gc::RunAccess)
+/// stretch (E4-P2 C1).
+///
+/// Extracted once from a `Context` before moving it into `OwnerSerialState::new`,
+/// preserving E5.1's zero-accessor `DormantContext` invariant. Holding this
+/// handle never dereferences the slab; exclusive access exists only through
+/// [`Self::lease`], whose [`OwnerSlabLease`] borrows `&mut RunAccess` for its
+/// entire lifetime.
+pub struct OwnerSlabHandle {
+    slab: NonNull<OwnerSlab>,
+    heap: neovm_value::tagged::gc::HeapIdentity,
+    _thread_confined: PhantomData<std::rc::Rc<()>>,
+}
+
+static_assertions::assert_not_impl_any!(OwnerSlabHandle: Send, Sync, Clone, Copy);
+
+impl std::fmt::Debug for OwnerSlabHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnerSlabHandle")
+            .field("heap", &self.heap)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg_attr(
+    not(any(test, feature = "contract-fixtures")),
+    expect(
+        dead_code,
+        reason = "dormant E4-P2 C1; Slice 2 CanonicalPlain wires this"
+    )
+)]
+impl OwnerSlabHandle {
+    /// The parallel heap identity that owns this slab.
+    #[inline]
+    pub fn heap_identity(&self) -> neovm_value::tagged::gc::HeapIdentity {
+        self.heap
+    }
+
+    /// Mint an exclusive [`OwnerSlabLease`] anchored to an admitted
+    /// [`RunAccess`](neovm_value::tagged::gc::RunAccess) stretch.
+    ///
+    /// While the returned lease is live:
+    /// - `run` (and therefore its `Mutator`) is mutably borrowed, so
+    ///   `Mutator::poll`, `Mutator::enter_native`, and dropping `run` are
+    ///   rejected at compile time (`E0499`/`E0505`);
+    /// - `self` is mutably borrowed, so a second lease on the same handle is
+    ///   rejected at compile time (`E0499`);
+    /// - `RunAccess` holds `AdmissionWord::IN_SLICE` with the Dekker exit
+    ///   fence, so the collector cannot reach `AllStopped` or call
+    ///   `OwnerSlabRegistry::trace_roots_for_heap` until the lease and its
+    ///   `RunAccess` drop and the owner ACKs the stop.
+    pub fn lease<'run, 'owner, 'era>(
+        &'run mut self,
+        run: &'run mut neovm_value::tagged::gc::RunAccess<'owner, 'era>,
+    ) -> Result<OwnerSlabLease<'run, 'owner, 'era>, OwnerSlabLeaseError> {
+        if run.heap_identity() != self.heap {
+            return Err(OwnerSlabLeaseError::WrongHeap);
+        }
+        // SAFETY: `run.heap_identity() == self.heap` proves the World's
+        // `EraWorldLoan` (and therefore its `OwnerSlabRegistry`, which retains
+        // every registered `Box::leak`ed `OwnerSlab` until World drop) is alive
+        // for all of `'era`. We access only the atomic flag through a raw
+        // pointer before creating any `&OwnerSlab`/`&mut OwnerSlab`.
+        let acquired = unsafe {
+            (*self.slab.as_ptr())
+                .parallel_lease_active
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        };
+        if !acquired {
+            return Err(OwnerSlabLeaseError::ActiveLease);
+        }
+        Ok(OwnerSlabLease {
+            slab: self.slab,
+            run,
+            _handle: PhantomData,
+            _thread_confined: PhantomData,
+        })
+    }
+}
+
+/// Exclusive parallel lease of one owner's [`OwnerSlab`], anchored to an
+/// admitted [`RunAccess`](neovm_value::tagged::gc::RunAccess) stretch
+/// (E4-P2 C1).
+///
+/// The lease cannot cross a safepoint poll (`Mutator::poll`), a native-stop
+/// boundary (`Mutator::enter_native`), or `RunAccess` drop, and cannot cross
+/// threads (`!Send`, `!Sync`).
+#[must_use = "drop the owner slab lease before polling or entering a serial turn"]
+pub struct OwnerSlabLease<'run, 'owner, 'era> {
+    slab: NonNull<OwnerSlab>,
+    run: &'run mut neovm_value::tagged::gc::RunAccess<'owner, 'era>,
+    _handle: PhantomData<&'run mut OwnerSlabHandle>,
+    _thread_confined: PhantomData<std::rc::Rc<()>>,
+}
+
+static_assertions::assert_not_impl_any!(
+    OwnerSlabLease<'static, 'static, 'static>: Send, Sync, Clone, Copy
+);
+
+impl std::fmt::Debug for OwnerSlabLease<'_, '_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnerSlabLease")
+            .field("heap", &self.run.heap_identity())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for OwnerSlabLease<'_, '_, '_> {
+    fn drop(&mut self) {
+        // SAFETY: `self.slab` stays valid for `'era` (proven by `self.run`).
+        // Clear through the raw pointer without forming `&mut OwnerSlab`.
+        unsafe {
+            (*self.slab.as_ptr())
+                .parallel_lease_active
+                .store(false, Ordering::Release);
+        }
+    }
+}
+
+impl<'owner, 'era> OwnerSlabLease<'_, 'owner, 'era> {
+    /// The parallel heap identity of this leased slab and run stretch.
+    #[inline]
+    #[cfg_attr(
+        not(any(test, feature = "contract-fixtures")),
+        expect(
+            dead_code,
+            reason = "dormant E4-P2 C1; Slice 2 CanonicalPlain wires this"
+        )
+    )]
+    pub fn heap_identity(&self) -> neovm_value::tagged::gc::HeapIdentity {
+        self.run.heap_identity()
+    }
+
+    /// Read the leased [`OwnerSlab`]. The returned reference cannot outlive
+    /// this lease.
+    #[inline]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "dormant E4-P2 C1; Slice 2 CanonicalPlain wires this"
+        )
+    )]
+    pub(crate) fn slab(&self) -> &OwnerSlab {
+        // SAFETY: `self` owns the unique active parallel lease for this slab
+        // on a live `'era` `RunAccess`, excluding both `AllStopped` root scans
+        // and any `OwnerSlot` reference.
+        unsafe { self.slab.as_ref() }
+    }
+
+    /// Mutate the leased [`OwnerSlab`]. The returned reference cannot outlive
+    /// this lease.
+    #[inline]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "dormant E4-P2 C1; Slice 2 CanonicalPlain wires this"
+        )
+    )]
+    pub(crate) fn slab_mut(&mut self) -> &mut OwnerSlab {
+        // SAFETY: as in `slab`; `&mut self` grants exclusive access for the
+        // duration of the returned borrow.
+        unsafe { self.slab.as_mut() }
+    }
+
+    /// Read the underlying [`RunAccess`](neovm_value::tagged::gc::RunAccess).
+    #[inline]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "dormant E4-P2 C1; Slice 2 CanonicalPlain wires this"
+        )
+    )]
+    pub(crate) fn run_access(&self) -> &neovm_value::tagged::gc::RunAccess<'owner, 'era> {
+        self.run
+    }
+
+    /// Mutably borrow the underlying
+    /// [`RunAccess`](neovm_value::tagged::gc::RunAccess) for same-stretch
+    /// authority calls (such as Slice 2's canonical symbol seam).
+    #[inline]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "dormant E4-P2 C1; Slice 2 CanonicalPlain wires this"
+        )
+    )]
+    pub(crate) fn run_access_mut(
+        &mut self,
+    ) -> &mut neovm_value::tagged::gc::RunAccess<'owner, 'era> {
+        self.run
+    }
+
+    /// Split-borrow the leased [`OwnerSlab`] and its anchoring
+    /// [`RunAccess`](neovm_value::tagged::gc::RunAccess) simultaneously.
+    #[inline]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "dormant E4-P2 C1; Slice 2 CanonicalPlain wires this"
+        )
+    )]
+    pub(crate) fn parts_mut(
+        &mut self,
+    ) -> (
+        &mut OwnerSlab,
+        &mut neovm_value::tagged::gc::RunAccess<'owner, 'era>,
+    ) {
+        // SAFETY: `self.slab` is disjoint from `self.run` (`RunAccess` holds
+        // GC registration state, never an `OwnerSlab` reference) and `&mut self`
+        // bounds both returned references to this lease.
+        let slab = unsafe { self.slab.as_mut() };
+        (slab, self.run)
     }
 }
 
@@ -1089,6 +1396,44 @@ impl Context {
         self.owner
             .slab_mut()
             .expect("the owner slab was just installed")
+    }
+
+    /// Extract this owner's unique parallel [`OwnerSlabHandle`] (E4-P2 C1),
+    /// allocating and registering the slab in the World if it is still dormant.
+    ///
+    /// Call once before moving the `Context` into `OwnerSerialState::new` so
+    /// E5.1's zero-accessor `DormantContext` stays untouched. A second call on
+    /// the same owner refuses with
+    /// [`OwnerSlabLeaseError::HandleAlreadyIssued`].
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "dormant E4-P2 C1; Slice 2 CanonicalPlain and E6-P wire this"
+        )
+    )]
+    pub(crate) fn take_parallel_owner_slab_handle(
+        &mut self,
+    ) -> Result<OwnerSlabHandle, OwnerSlabLeaseError> {
+        let heap = {
+            let slab = self.ensure_owner_slab();
+            if slab.parallel_handle_issued {
+                return Err(OwnerSlabLeaseError::HandleAlreadyIssued);
+            }
+            let heap = neovm_value::tagged::gc::HeapIdentity::from_legacy_word(slab.heap)
+                .ok_or(OwnerSlabLeaseError::InvalidHeapIdentity)?;
+            slab.parallel_handle_issued = true;
+            heap
+        };
+        let slab = self
+            .owner
+            .0
+            .expect("ensure_owner_slab installed the owner slab");
+        Ok(OwnerSlabHandle {
+            slab,
+            heap,
+            _thread_confined: PhantomData,
+        })
     }
 
     /// GNU `specbind` (`src/eval.c:3656-3715`) of the projected variable

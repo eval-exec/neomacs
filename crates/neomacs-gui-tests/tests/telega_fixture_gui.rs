@@ -41,7 +41,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Minimum interior pixels for one rendered 256px-source avatar (the visible
 /// circle is ~13px across, so ~130 interior pixels survive clipping).
@@ -470,19 +470,19 @@ impl CleanupProbe {
     }
 
     fn assert_released(self) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
         while process_group_alive(self.pgid) {
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "process group {} leaked after fixture teardown",
                 self.pgid
             );
             thread::sleep(Duration::from_millis(50));
         }
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
         while self.display_alive() {
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "private display {} leaked after fixture teardown",
                 self.display
             );
@@ -725,7 +725,7 @@ impl Fixture {
 
     fn wait_for_window(&mut self) -> String {
         let pid = self.child_pid().to_string();
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(30));
         loop {
             self.assert_alive("waiting for the editor window");
             let mut command = Command::new("xdotool");
@@ -743,7 +743,7 @@ impl Fixture {
                 return id;
             }
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "no private X11 window appeared for pid {pid}: {}",
                 self.diagnostics()
             );
@@ -801,7 +801,7 @@ impl Fixture {
         timeout: Duration,
         mut probe: impl FnMut() -> Option<T>,
     ) -> T {
-        let deadline = Instant::now() + timeout;
+        let deadline = neomacs_gui_tests::HangCap::new(timeout);
         loop {
             if let Some(value) = probe() {
                 return value;
@@ -810,7 +810,7 @@ impl Fixture {
                 panic!("scenario failed while {what}: {error}");
             }
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "timed out after {timeout:?} while {what}; {}",
                 self.diagnostics()
             );
@@ -942,7 +942,7 @@ impl Fixture {
     fn page_down_advances_or_bottom(&self) -> bool {
         let before = self.window_start();
         self.press_page_down();
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(15));
         loop {
             let start = self.window_start();
             if start > before {
@@ -952,7 +952,7 @@ impl Fixture {
                 return false;
             }
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "PageDown neither advanced nor reached the buffer end; {}",
                 self.diagnostics()
             );
@@ -1114,14 +1114,14 @@ impl Fixture {
     }
 
     fn wait_for_pixels(&self, predicate: impl Fn(&PixelCounts) -> bool) -> PixelCounts {
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(20));
         loop {
             let counts = PixelCounts::measure(&self.screenshot("pixel-poll.png"));
             if predicate(&counts) {
                 return counts;
             }
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "timed out waiting for rendered pixels: {counts:?}; {}",
                 self.diagnostics()
             );
@@ -1306,10 +1306,10 @@ impl Fixture {
         }
         // Graceful quit first; only then signal the recorded group.
         let _ = fs::write(self.root.join("quit-request"), "quit");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(5));
         let mut exited = false;
         if let Some(child) = self.child.as_mut() {
-            while Instant::now() < deadline {
+            while !deadline.is_expired() {
                 if child.try_wait().ok().flatten().is_some() {
                     exited = true;
                     break;
@@ -1319,9 +1319,9 @@ impl Fixture {
         }
         if !exited {
             signal_process_group(self.pgid, libc::SIGTERM);
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let grace = neomacs_gui_tests::HangCap::from_secs(5);
             if let Some(child) = self.child.as_mut() {
-                while Instant::now() < deadline {
+                while !grace.is_expired() {
                     if child.try_wait().ok().flatten().is_some() {
                         exited = true;
                         break;
@@ -1340,8 +1340,8 @@ impl Fixture {
         // session) a moment to observe the editor's shutdown signal or the
         // closed pipe and record its terminal stage; then kill anything left
         // in the recorded group.  Never signal anything else.
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline && !self.mock_session_ended() {
+        let mock_grace = neomacs_gui_tests::HangCap::from_secs(5);
+        while !mock_grace.is_expired() && !self.mock_session_ended() {
             thread::sleep(Duration::from_millis(25));
         }
         if process_group_alive(self.pgid) {

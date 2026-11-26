@@ -5,14 +5,16 @@
 //! Use one pinned, single-face TrueType font so fallback cannot hide a miss.
 #![cfg(target_os = "linux")]
 
-use neomacs_gui_tests::{DisplayHarness, GuiArtifactSet, GuiBackend, GuiScenario, GuiTestPlan};
+use neomacs_gui_tests::{
+    DisplayHarness, GuiArtifactSet, GuiBackend, GuiScenario, GuiTestPlan, HangCap,
+};
 use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 const READBACK_ENV: [&str; 3] = [
@@ -31,10 +33,7 @@ fn blank_braille_keeps_advance_without_ink_or_rasterize_retries_like_gnu() {
     assert!(oracle.is_attested(), "attested GNU oracle required");
     assert_eq!(fs::canonicalize(&gnu).unwrap(), oracle.executable_path());
     let root = neomacs_infra::workspace_root();
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nonce = neomacs_gui_tests::unique_nonce();
     let dir = root.join(format!(
         "tmp/neomacs-gui-tests/braille-blank-{}-{nonce}",
         std::process::id()
@@ -235,7 +234,7 @@ fn run_editor(
         command.env_remove(variable);
     }
     let mut child = OwnedEditor(command.spawn().unwrap());
-    let deadline = Instant::now() + Duration::from_secs(45);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(45));
     let state = loop {
         if let Ok(bytes) = fs::read(&files.gui_state)
             && let Ok(state) = serde_json::from_slice::<Value>(&bytes)
@@ -247,7 +246,7 @@ fn run_editor(
             "{editor} exited before final state; {dir:?}"
         );
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "{editor} final state timeout; {dir:?}"
         );
         thread::sleep(Duration::from_millis(20));
@@ -265,7 +264,7 @@ fn run_editor(
     assert!(search.status.success(), "{search:?}; {dir:?}");
     let windows = String::from_utf8(search.stdout).unwrap();
     let window = windows.lines().next().expect("visible editor window");
-    let capture_deadline = Instant::now() + Duration::from_secs(2);
+    let capture_cap = HangCap::from_secs(10);
     let mut previous = None;
     let (row_ink, neighbor_ink) = loop {
         assert!(
@@ -301,10 +300,8 @@ fn run_editor(
         {
             break observation;
         }
-        assert!(
-            Instant::now() < capture_deadline,
-            "{editor} visible controls did not settle; {dir:?}"
-        );
+        capture_cap
+            .assert_not_expired(format!("{editor} visible controls did not settle; {dir:?}"));
         previous = Some(observation);
         thread::sleep(Duration::from_millis(50));
     };
@@ -313,7 +310,7 @@ fn run_editor(
             assert!(status.success(), "{editor} exit {status}; {dir:?}");
             break;
         }
-        assert!(Instant::now() < deadline, "{editor} exit timeout; {dir:?}");
+        assert!(!deadline.is_expired(), "{editor} exit timeout; {dir:?}");
         thread::sleep(Duration::from_millis(20));
     }
     // Neo's default logger writes warnings to stdout. Read both streams only

@@ -49,9 +49,7 @@ fn save_in_terminal(binary: PathBuf) -> Vec<u8> {
 
 #[test]
 fn shift_jis_save_matches_gnu_after_keyboard_edit_and_save() {
-    let gnu = std::env::var_os("NEOMACS_GNU_EMACS_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| "emacs".into());
+    let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
     let expected = vec![
         0x8a, 0xbf, 0x8e, 0x9a, 0x87, 0x40, 0x0a, 0x61, 0x62, 0x63, 0x0a,
     ];

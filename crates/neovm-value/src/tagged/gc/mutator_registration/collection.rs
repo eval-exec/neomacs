@@ -259,7 +259,7 @@ fn supported(heap: &TaggedHeap) -> Result<(), CollectionError> {
         inspect(address as *const GcHeader)?;
     }
     for item in &heap.mapped_veclike_objects {
-        inspect(item.header.cast::<GcHeader>())?;
+        inspect(item.header().cast::<GcHeader>())?;
     }
     Ok(())
 }

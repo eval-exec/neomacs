@@ -2,6 +2,10 @@ use std::time::Duration;
 
 pub(super) const STAGE_TIMEOUT: Duration = Duration::from_secs(45);
 
+pub(super) fn stage_hang_cap() -> neomacs_tui_tests::HangCap {
+    neomacs_tui_tests::HangCap::new(STAGE_TIMEOUT)
+}
+
 /// `helm-gitignore' is a thin interactive client, so its public seam is the
 /// complete `M-x helm-gitignore' session.  The package, Helm, Request,
 /// url-retrieve, JSON parser, callbacks, generated buffer, and file writing all

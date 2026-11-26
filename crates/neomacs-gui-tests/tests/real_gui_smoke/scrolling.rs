@@ -1,11 +1,6 @@
 //! Exercise the command loop, redisplay and GPU presentation together.
 
-use std::{
-    fs,
-    path::Path,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{fs, path::Path, thread, time::Duration};
 
 use neomacs_gui_tests::{
     DisplayHarness, GuiArtifactSet, GuiRunOptions, GuiRunStatus, GuiScenario, GuiTestPlan,
@@ -129,7 +124,7 @@ fn observe_presentations(
     finished: impl Fn() -> bool,
 ) -> Result<(), String> {
     for (stage, visible) in [("initial", true), ("away", false), ("returned", true)] {
-        let deadline = Instant::now() + Duration::from_secs(18);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(18));
         let ready = control.join(format!("{stage}.ready"));
         let snapshot = control.join(format!("{stage}.json"));
         let mut last_observation = String::from("no stage snapshot yet");
@@ -183,7 +178,7 @@ fn observe_presentations(
                     }
                 }
             }
-            if finished() || Instant::now() >= deadline {
+            if finished() || deadline.is_expired() {
                 return Err(format!(
                     "{stage}: presentation did not arrive ({last_observation})"
                 ));

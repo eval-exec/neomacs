@@ -51,7 +51,7 @@ neovm_eval::emacs_core::subr::define_subrs! {
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
         "clear-font-cache",
-        NativeFn::NoContextVec(clear_font_cache),
+        NativeFn::ContextVec(clear_font_cache),
         SubrArity::new(0, Some(0)),
     )),
     neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(

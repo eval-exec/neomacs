@@ -1,13 +1,11 @@
 //! Terminal callers retain the full Emacs character validation contract.
 #![cfg(unix)]
 use neomacs_tui_tests::{TuiLaunch, TuiSession, TuiTempDirectory, TuiTerminalConfig};
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 #[test]
 fn font_coverage_validates_non_unicode_characters_before_frame_in_terminal() {
-    let gnu = std::env::var_os("NEOMACS_GNU_EMACS_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| "emacs".into());
+    let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
     for binary in [gnu, neomacs_tui_tests::neomacs_binary()] {
         let home = TuiTempDirectory::new("font-coverage-");
         let launch = TuiLaunch::new(binary.as_os_str())

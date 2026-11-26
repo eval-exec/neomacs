@@ -7,7 +7,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::{net::UnixStream, process::CommandExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 const INITIAL_IDENTITY_FORM: &str = r#"
 (let ((initial frame-initial-frame))
@@ -51,10 +51,7 @@ fn neomacs_binary() -> PathBuf {
 
 fn owned_artifacts(scenario: &str) -> PathBuf {
     let root = workspace_root().join("target/neomacs-gui-tests");
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("artifact timestamp")
-        .as_nanos();
+    let unique = neomacs_gui_tests::unique_nonce();
     neomacs_gui_tests::fresh_artifact_dir(root.join(format!(
         "terminal-identity-{}-{scenario}-{unique}",
         std::process::id()
@@ -128,13 +125,13 @@ fn spawn_gui(command: &mut Command, artifacts: &Path) -> OwnedChild {
 }
 
 fn wait_for_gui(child: &mut OwnedChild, artifacts: &Path) -> ExitStatus {
-    let deadline = Instant::now() + Duration::from_secs(25);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(25));
     loop {
         if let Some(status) = child.0.try_wait().unwrap() {
             return status;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "GUI probe timed out; artifacts: {}",
             artifacts.display()
         );

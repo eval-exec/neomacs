@@ -157,10 +157,15 @@ pub fn arm_bytecode_backtraces_for_test(n: usize) {
 /// envelope before any subsequent compiled mutation. Returns whether the
 /// shared mark is new.
 ///
-/// This is the existing `pub(crate)` driver under the signed fence spelling;
-/// body and contract are unchanged.
-pub fn mark_collection_observed(bits: usize) -> bool {
-    crate::tagged::gc::mark_collection_observed(bits)
+/// # Safety
+/// If `bits` carries `TAG_STRING`, `TAG_FLOAT`, or `TAG_VECLIKE` with a
+/// non-zero address, `bits & !TAG_MASK` must point to a live, properly
+/// aligned heap object of that tag whose leading `GcHeader` (or `StringObj`)
+/// remains valid for the duration of this call. `TAG_CONS` and immediate tags
+/// do not dereference `bits`.
+pub unsafe fn mark_collection_observed(bits: usize) -> bool {
+    // SAFETY: caller upholds the live-header contract of `gc::mark_collection_observed`.
+    unsafe { crate::tagged::gc::mark_collection_observed(bits) }
 }
 
 /// FENCE forge (LEAD 12:3xZ/14:0xZ): hand the caller the exact shared

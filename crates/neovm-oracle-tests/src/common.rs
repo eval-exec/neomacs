@@ -1307,6 +1307,10 @@ pub(crate) fn run_oracle_eval(form: &str) -> Result<String, String> {
     }
 }
 
+pub(crate) fn run_neomacs_eval(form: &str) -> Result<String, String> {
+    run_neomacs_binary_eval_inner(form, &[])
+}
+
 pub(crate) fn run_oracle_eval_with_load(form: &str, load_files: &[&str]) -> Result<String, String> {
     match OracleMode::from_env() {
         OracleMode::Snapshot => run_neomacs_binary_eval_inner(form, load_files),

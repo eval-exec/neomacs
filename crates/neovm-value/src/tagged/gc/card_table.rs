@@ -155,11 +155,30 @@ impl CardTable {
         self.bytes.as_ptr() as usize
     }
 
+    const TOTAL_BYTES: usize = CARD_TABLE_BYTES + CHUNK_SUMMARY_BYTES;
+
     #[inline(always)]
     fn byte(&self, index: usize) -> &AtomicU8 {
-        debug_assert!(index < CARD_TABLE_BYTES + CHUNK_SUMMARY_BYTES);
-        // SAFETY: `index` is masked into the allocation, which outlives `self`.
+        assert!(
+            index < Self::TOTAL_BYTES,
+            "card table byte index {index} out of bounds ({})",
+            Self::TOTAL_BYTES
+        );
+        // SAFETY: `index < Self::TOTAL_BYTES` is within the live allocation
+        // owned by `self`; every read and write in the table uses `AtomicU8`.
         unsafe { &*self.bytes.as_ptr().add(index) }
+    }
+
+    #[inline(always)]
+    fn slice_range(&self, start: usize, len: usize) -> &[AtomicU8] {
+        assert!(
+            start <= Self::TOTAL_BYTES && len <= Self::TOTAL_BYTES - start,
+            "card table slice range {start}..+{len} exceeds {}",
+            Self::TOTAL_BYTES
+        );
+        // SAFETY: `start..start + len` lies within the live allocation owned
+        // by `self`; every read and write in the table uses `AtomicU8`.
+        unsafe { std::slice::from_raw_parts(self.bytes.as_ptr().add(start), len) }
     }
 
     #[inline(always)]
@@ -182,61 +201,89 @@ impl CardTable {
         self.byte(card_index(owner_addr)).load(Ordering::Relaxed) != CARD_CLEAN
     }
 
-    /// The card words of SLOT. With every mutator stopped.
-    #[inline]
-    fn card_words(&self, slot: ChunkSlot) -> *mut u64 {
-        // SAFETY: a slot's cards are CHUNK_CARDS consecutive in-table bytes
-        // starting at a CHUNK_CARDS-aligned index, so the words are aligned
-        // and in bounds.
-        unsafe { self.bytes.as_ptr().add(slot.first_card()).cast::<u64>() }
-    }
-
-    /// The 128 card bytes of SLOT, or `None` when every one is clean: one
-    /// chunk's cards are contiguous, read as sixteen words. Collector side,
-    /// with every mutator stopped, so no store races the reads.
+    /// The 128 card bytes of SLOT, or `None` when every one is clean, packed
+    /// into sixteen little-endian words. Uses `AtomicU8` Relaxed loads so
+    /// `&CardTable` remains data-race-free under `Sync`; calling with every
+    /// mutator stopped observes a quiescent snapshot.
     #[inline]
     pub(crate) fn dirty_cards(&self, slot: ChunkSlot) -> Option<ChunkCards> {
-        let words = self.card_words(slot);
-        // SAFETY: see `card_words`.
-        let word = |index: usize| unsafe { words.add(index).read() };
-        if (0..CHUNK_CARD_WORDS).fold(0, |any, index| any | word(index)) == 0 {
+        const WORD_BYTES: usize = size_of::<u64>();
+        let cards = self.slice_range(slot.first_card(), CHUNK_CARDS);
+        let mut packed = [0u64; CHUNK_CARD_WORDS];
+        let mut any = 0u64;
+        for (dst, chunk) in packed.iter_mut().zip(cards.chunks_exact(WORD_BYTES)) {
+            let mut bytes = [0u8; WORD_BYTES];
+            for (byte_dst, atomic) in bytes.iter_mut().zip(chunk) {
+                *byte_dst = atomic.load(Ordering::Relaxed);
+            }
+            let word = u64::from_le_bytes(bytes);
+            *dst = word;
+            any |= word;
+        }
+        if any == 0 {
             return None;
         }
-        Some(ChunkCards(std::array::from_fn(word)))
+        Some(ChunkCards(packed))
     }
 
-    /// Clean SLOT's summary and every one of its cards. Collector side,
-    /// with every mutator stopped.
+    /// Clean SLOT's summary and every one of its cards via `AtomicU8` Relaxed
+    /// stores (data-race-free under `Sync`; called by the collector with every
+    /// mutator stopped so no concurrent mark is lost).
     #[inline]
     pub(crate) fn clear_slot(&self, slot: ChunkSlot) {
         self.summary(slot).store(CARD_CLEAN, Ordering::Relaxed);
-        let words = self.card_words(slot);
-        for index in 0..CHUNK_CARD_WORDS {
-            // SAFETY: see `card_words`; no mutator runs.
-            unsafe { words.add(index).write(0) };
+        let cards = self.slice_range(slot.first_card(), CHUNK_CARDS);
+        for byte in cards {
+            byte.store(CARD_CLEAN, Ordering::Relaxed);
         }
     }
 
     /// Append every slot whose summary is dirty to OUT, in slot order. The
-    /// 64 KiB of summaries are read a cache line (eight words) at a time
-    /// and clean lines skipped. With every mutator stopped.
+    /// 64 KiB of summaries are scanned a cache line (eight words) at a time
+    /// via `AtomicU8` Relaxed loads so `&CardTable` remains data-race-free
+    /// under `Sync`.
     pub(crate) fn collect_dirty_slots(&self, out: &mut Vec<ChunkSlot>) {
+        self.collect_dirty_slots_in_lines(0..CHUNK_SUMMARY_BYTES / 64, out);
+    }
+
+    /// Scan summary cache lines `lines` (each 64 summary bytes) via `AtomicU8`
+    /// Relaxed loads. Factored out so Miri can exercise the exact production
+    /// summary-scan loop concurrently with `mark()` on a bounded line range.
+    pub(super) fn collect_dirty_slots_in_lines(
+        &self,
+        lines: std::ops::Range<usize>,
+        out: &mut Vec<ChunkSlot>,
+    ) {
+        const WORD_BYTES: usize = size_of::<u64>();
         const LINE_WORDS: usize = 8;
-        // SAFETY: the summaries are CHUNK_SUMMARY_BYTES in-table bytes at a
-        // 64-byte-aligned offset of the 64-byte-aligned allocation, so the
-        // words are aligned and in bounds; no mutator runs.
-        let words = unsafe { self.bytes.as_ptr().add(CHUNK_SUMMARY_OFFSET).cast::<u64>() };
-        let word = |index: usize| u64::from_le(unsafe { words.add(index).read() });
-        for line in (0..CHUNK_SUMMARY_BYTES / size_of::<u64>()).step_by(LINE_WORDS) {
-            if (line..line + LINE_WORDS).fold(0, |any, index| any | word(index)) == 0 {
+        const LINE_BYTES: usize = LINE_WORDS * WORD_BYTES;
+        let total_lines = CHUNK_SUMMARY_BYTES / LINE_BYTES;
+        assert!(
+            lines.end <= total_lines,
+            "summary line range {lines:?} exceeds {total_lines}"
+        );
+        for line_idx in lines {
+            let line_base = line_idx * LINE_BYTES;
+            let line = self.slice_range(CHUNK_SUMMARY_OFFSET + line_base, LINE_BYTES);
+            let mut words = [0u64; LINE_WORDS];
+            let mut any = 0u64;
+            for (dst, chunk) in words.iter_mut().zip(line.chunks_exact(WORD_BYTES)) {
+                let mut bytes = [0u8; WORD_BYTES];
+                for (byte_dst, atomic) in bytes.iter_mut().zip(chunk) {
+                    *byte_dst = atomic.load(Ordering::Relaxed);
+                }
+                let word = u64::from_le_bytes(bytes);
+                *dst = word;
+                any |= word;
+            }
+            if any == 0 {
                 continue;
             }
-            for index in line..line + LINE_WORDS {
-                let mut bytes = word(index);
+            for (word_idx, mut bytes) in words.into_iter().enumerate() {
                 while bytes != 0 {
                     let byte = bytes.trailing_zeros() as usize / 8;
                     bytes &= !(0xff << (byte * 8));
-                    out.push(ChunkSlot((index * size_of::<u64>() + byte) as u16));
+                    out.push(ChunkSlot((line_base + word_idx * WORD_BYTES + byte) as u16));
                 }
             }
         }
@@ -271,9 +318,8 @@ impl ChunkCards {
         self.0
             .into_iter()
             .enumerate()
-            .flat_map(|(word_index, word)| {
+            .flat_map(|(word_index, mut bytes)| {
                 // Byte k of the word is card 8 * word_index + k in memory order.
-                let mut bytes = u64::from_le(word);
                 std::iter::from_fn(move || {
                     if bytes == 0 {
                         return None;

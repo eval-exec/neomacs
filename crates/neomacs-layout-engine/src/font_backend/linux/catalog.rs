@@ -61,6 +61,24 @@ impl FontconfigCatalogMonitor {
         }
         self.poller.publish_detected(&CATALOG_CHANGES)
     }
+
+    /// Force an immediate Fontconfig reload for explicit cache clears such as
+    /// Lisp `(clear-font-cache)`, bypassing `CATALOG_POLL_INTERVAL` and
+    /// same-second `FcConfigUptoDate` mtime granularity, and publishing a
+    /// generation edge so secondary `FontMetricsService` instances invalidate
+    /// on their next safe point.
+    pub(super) fn force_refresh(&mut self) -> FontCatalogChange {
+        // SAFETY: `FcInitReinitialize` takes no pointers, runs on the evaluator
+        // thread at an explicit safe point matching `poll()`, and concurrent
+        // Fontconfig readers hold their own `FcConfigReference` snapshots.
+        if unsafe { fontconfig_sys::FcInitReinitialize() } == 0 {
+            tracing::warn!(
+                target: "font_catalog",
+                "Fontconfig forced catalog refresh failed"
+            );
+        }
+        self.poller.publish_detected(&CATALOG_CHANGES)
+    }
 }
 
 struct ReferencedFontconfigConfig(*mut fontconfig_sys::FcConfig);

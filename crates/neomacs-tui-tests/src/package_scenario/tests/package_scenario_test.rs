@@ -67,6 +67,12 @@ fn pair_timeout_requires_asymmetry_to_be_explicit() {
 }
 
 #[test]
+#[should_panic(expected = "MIN_HANG_CAP")]
+fn pair_timeout_rejects_sub_floor_duration() {
+    let _ = PairTimeout::same(std::time::Duration::from_millis(200));
+}
+
+#[test]
 fn editor_identity_rejects_accidental_same_binary_but_allows_calibration() {
     let gnu = Path::new("/canonical/gnu-emacs");
     let neo = Path::new("/canonical/neomacs");

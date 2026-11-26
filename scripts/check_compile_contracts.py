@@ -33,14 +33,16 @@ EXPECTED = {
     "p0s3_contracts": 1,
     "p1rv_contracts": 3,
     # 19 since rt A3 2c(d) Slice 1 Commit A added
-    # `buffer_manager_view_compile_contracts` (BufferManagerMut/EditRuntimeMut).
-    "thread_safety_contracts": 19,
+    # `buffer_manager_view_compile_contracts` (BufferManagerMut/EditRuntimeMut);
+    # 20 since gcfix E4-P2 Slice 1 (C1) added
+    # `e4p2_slab_lease_contracts::e4p2_slab_lease_compile_contracts` (OwnerSlabLease).
+    "thread_safety_contracts": 20,
     "chartable_write_contracts": 1,
     "mint_seal_contracts": 1,
     "heap_capability_contracts": 1,
     "retained_leaf_contracts": 1,
 }
-EXPECTED_TOTAL = sum(EXPECTED.values())  # 27 nextest test functions
+EXPECTED_TOTAL = sum(EXPECTED.values())  # 28 nextest test functions
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 STATUS = re.compile(
@@ -183,7 +185,12 @@ SELF_TEST_CASES = {
             overrides={("thread_safety_contracts", 0): "FAIL"},
             replay=[("thread_safety_contracts", 0)],
         ),
-        "thread_safety_contracts: 19 runners (expected 19)",
+        # Interpolate EXPECTED rather than restating the number: a hardcoded 19 here
+        # survived the bump to 20 and made `--self-test` fail on main (da4a1d4e58,
+        # found by threadsig). The self-test's job is the replay accounting, not the
+        # count, and the count is EXPECTED's to own.
+        f"thread_safety_contracts: {EXPECTED['thread_safety_contracts']} runners "
+        f"(expected {EXPECTED['thread_safety_contracts']})",
     ),
     "timeout-runner": (False, _nextest_log(overrides={("p1rv_contracts", 0): "TIMEOUT"})),
     "missing-runner": (

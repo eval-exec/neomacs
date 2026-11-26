@@ -1,0 +1,23 @@
+error[E0616]: field `start` of struct `MappedConsRange` is private
+  --> tests/heap_capability_ui/c8_mapped_ranges_fields_private.rs:37:10
+   |
+37 |     cons.start = std::ptr::null_mut();
+   |          ^^^^^ private field
+
+error[E0616]: field `len` of struct `MappedFloatRange` is private
+  --> tests/heap_capability_ui/c8_mapped_ranges_fields_private.rs:38:11
+   |
+38 |     float.len = 1;
+   |           ^^^ private field
+
+error[E0616]: field `header` of struct `MappedVecLikeObject` is private
+  --> tests/heap_capability_ui/c8_mapped_ranges_fields_private.rs:39:13
+   |
+39 |     veclike.header = std::ptr::null_mut();
+   |             ^^^^^^ private field
+
+error[E0616]: field `ptr` of struct `MappedStringObject` is private
+  --> tests/heap_capability_ui/c8_mapped_ranges_fields_private.rs:40:12
+   |
+40 |     string.ptr = std::ptr::null_mut();
+   |            ^^^ private field

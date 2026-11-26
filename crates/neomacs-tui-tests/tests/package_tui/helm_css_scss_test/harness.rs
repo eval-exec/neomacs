@@ -4,13 +4,13 @@ use super::preludes::*;
 use expect_test::expect;
 use neomacs_tui_tests::{RawTerminalSnapshot, TuiSession};
 use std::fs;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub(super) fn wait_for<F>(session: &mut TuiSession, label: &str, predicate: F)
 where
     F: Fn(&[String]) -> bool + Copy,
 {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(20));
     loop {
         let observed = session
             .observe_at_fence()
@@ -20,15 +20,13 @@ where
             return;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "{label} did not reach the expected terminal state:\n{}",
             grid.join("\n")
         );
-        session.read(
-            deadline
-                .saturating_duration_since(Instant::now())
-                .min(Duration::from_millis(50)),
-        );
+        if let Some(slice) = deadline.poll_slice(Duration::from_millis(50)) {
+            session.read(slice);
+        }
     }
 }
 

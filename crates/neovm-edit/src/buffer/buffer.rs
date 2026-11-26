@@ -9292,6 +9292,68 @@ impl BufferManager {
         Some(())
     }
 
+    pub(crate) fn unchain_marker_value(&mut self, marker: &Value) {
+        if !marker.is_marker() {
+            return;
+        }
+        let Some(ptr) = marker
+            .as_veclike_ptr()
+            .map(|p| p as *mut neovm_value::tagged::header::MarkerObj)
+        else {
+            return;
+        };
+        // SAFETY: `marker.is_marker()` was verified above, so `ptr` is the
+        // live `MarkerObj` veclike payload.
+        let marker_ref = unsafe { MarkerRef::new(ptr) };
+        if let Some(buffer_id) = marker_ref.buffer_id() {
+            let _ = self.unlink_marker_ptr(buffer_id, ptr);
+            let _ = marker.with_marker_data_mut(|data| data.detach());
+        }
+        if marker_ref.is_chained() {
+            self.remove_marker(marker_ref);
+        }
+    }
+
+    pub(crate) fn register_marker_value_at_emacs_byte_pos(
+        &mut self,
+        marker: &Value,
+        buffer_id: Option<BufferId>,
+        byte_pos: Option<EmacsBytePos>,
+    ) {
+        if !marker.is_marker() {
+            return;
+        }
+        let Some(ptr) = marker
+            .as_veclike_ptr()
+            .map(|p| p as *mut neovm_value::tagged::header::MarkerObj)
+        else {
+            return;
+        };
+        // SAFETY: `marker.is_marker()` was verified above, so `ptr` is the
+        // live `MarkerObj` veclike payload.
+        let marker_ref = unsafe { MarkerRef::new(ptr) };
+        let ins_type = marker_ref.insertion_type();
+
+        if let (Some(buf_id), Some(pos)) = (buffer_id, byte_pos)
+            && marker_ref.is_chained()
+            && marker_ref.buffer_id() == Some(buf_id)
+        {
+            // SAFETY: `ptr` is the live marker Value's object, already chained
+            // on `buf_id`.
+            let _ = unsafe { self.move_marker_ptr_to_emacs_byte_pos(buf_id, ptr, pos) };
+            return;
+        }
+
+        if marker_ref.is_chained() || marker_ref.buffer_id().is_some() {
+            self.unchain_marker_value(marker);
+        }
+
+        if let (Some(buf_id), Some(pos)) = (buffer_id, byte_pos) {
+            // SAFETY: `ptr` is the live marker Value, unchained above when attached.
+            let _ = unsafe { self.register_marker_at_emacs_byte_pos(ptr, buf_id, pos, ins_type) };
+        }
+    }
+
     /// Phase 10D: write the global default for a `BUFFER_OBJFWD`
     /// slot, propagating the new default to every live buffer
     /// whose `local_flags` bit for that slot is clear.

@@ -933,3 +933,348 @@ fn tty_physical_redraw_does_not_refuse_gui_auxiliary_publication() {
         "GUI auxiliary publication must commit despite pending TTY physical redraw"
     );
 }
+
+#[test]
+fn auxiliary_export_reuses_unchanged_window_surface_and_short_circuits_duplicate_publish() {
+    let _policy = RedisplayHookPolicyGuard::legacy();
+    let line = "ordinary offscreen auxiliary line\n";
+    let (mut eval, frame, _, window) = incr_editing_frame(&line.repeat(200), 800, 600);
+    let other_buffer = eval.buffer_manager_mut().create_buffer("aux-reuse-sibling");
+    eval.buffer_manager_mut()
+        .get_mut(other_buffer)
+        .unwrap()
+        .insert(&line.repeat(200));
+    let sibling = eval
+        .frame_manager_mut()
+        .split_window(
+            frame,
+            window,
+            neovm_core::window::SplitDirection::Vertical,
+            other_buffer,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .unwrap();
+    assert!(eval.frame_manager_mut().select_frame(frame));
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    eval.eval_str("(setq timer-list nil timer-idle-list nil mode-line-format nil)")
+        .unwrap();
+
+    let engine = Rc::new(RefCell::new(
+        crate::font::metrics::test_catalog::layout_engine(),
+    ));
+    let prod_engine = Rc::clone(&engine);
+    eval.redisplay_fn = Some(Box::new(move |eval| {
+        let mut eng = prod_engine.borrow_mut();
+        eng.layout_frame_rust(eval, frame);
+        activate_last_engine_presentation(eval, &eng, frame);
+    }));
+    eval.redisplay().expect("initial redisplay");
+
+    let owner = DisplayWindowId::new(window.0 as i64);
+    let sibling_owner = DisplayWindowId::new(sibling.0 as i64);
+
+    let prepare_window = |engine: &Rc<RefCell<LayoutEngine>>,
+                          eval: &Context,
+                          win: WindowId,
+                          disp: DisplayWindowId| {
+        let target = {
+            let eng = engine.borrow();
+            let body: Vec<_> = eng.retained_window_matrices[&disp]
+                .matrix
+                .rows
+                .iter()
+                .filter(|r| r.enabled && r.role == GlyphRowRole::Text)
+                .collect();
+            neovm_core::buffer::CharPos0::new(body[body.len() - 2].start_charpos)
+        };
+        engine
+            .borrow_mut()
+            .request_scroll_coverage(eval, frame, win, target)
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let ready = {
+                let mut eng = engine.borrow_mut();
+                let eng = &mut *eng;
+                eng.scroll_coverage
+                    .drain(&mut eng.prepared_viewports)
+                    .unwrap()
+            };
+            if ready {
+                break;
+            }
+            assert!(Instant::now() < deadline, "worker page timed out");
+            std::thread::yield_now();
+        }
+    };
+
+    // 1. Certify `owner` on an ordinary activated frame so it has an Active receipt.
+    prepare_window(&engine, &eval, window, owner);
+    eval.invalidate_redisplay();
+    eval.redisplay().expect("certifying redisplay");
+    let owner_pub_before = engine
+        .borrow()
+        .published_scroll_coverage(frame, owner)
+        .expect("ordinary frame published owner coverage")
+        .publication;
+
+    // 2. A duplicate/no-op pending auxiliary publication over unchanged state
+    //    must short-circuit to NoChange rather than rebuilding and resending.
+    engine
+        .borrow_mut()
+        .scroll_coverage
+        .note_publication_pending();
+    match engine.borrow_mut().prepare_auxiliary_scroll_coverage(&eval) {
+        AuxiliaryPreparation::NoChange => {}
+        AuxiliaryPreparation::Ready(_) => {
+            panic!(
+                "duplicate auxiliary publish with identical surfaces must return NoChange, got Ready"
+            )
+        }
+        AuxiliaryPreparation::Refused(refusal) => {
+            panic!(
+                "duplicate auxiliary publish with identical surfaces must return NoChange, got Refused({refusal:?})"
+            )
+        }
+    }
+
+    // 3. When `sibling` completes a worker page on the same active base,
+    //    `export_auxiliary` must reuse `owner`'s cached ScrollSurface (identical
+    //    CoveragePublicationId) while minting `sibling`'s new surface.
+    prepare_window(&engine, &eval, sibling, sibling_owner);
+    let prepared = match engine.borrow_mut().prepare_auxiliary_scroll_coverage(&eval) {
+        AuxiliaryPreparation::Ready(prepared) => prepared,
+        AuxiliaryPreparation::NoChange => panic!("expected Ready with new sibling surface"),
+        AuxiliaryPreparation::Refused(refusal) => {
+            panic!("unexpected refusal for sibling auxiliary publish: {refusal:?}")
+        }
+    };
+    let aux_owner = prepared
+        .update()
+        .surfaces
+        .iter()
+        .find(|s| s.coverage().content.window_id == owner)
+        .expect("owner surface retained in complete auxiliary snapshot");
+    assert_eq!(
+        aux_owner.coverage().publication,
+        owner_pub_before,
+        "unchanged owner surface must be reused instead of rebuilt in export_auxiliary"
+    );
+    assert!(
+        prepared
+            .update()
+            .surfaces
+            .iter()
+            .any(|s| s.coverage().content.window_id == sibling_owner),
+        "sibling surface must be published"
+    );
+    engine
+        .borrow_mut()
+        .commit_auxiliary_scroll_coverage(prepared);
+
+    // 4. Next ordinary CursorOnly redisplay:
+    //    - `owner` (whose Active receipt was preserved) must renew with 0 export_window calls.
+    //    - `sibling` (AuxiliaryOnly, un-ACKed by renderer PresentationId) must NOT renew;
+    //      it must conservatively export once on the ordinary frame.
+    let next_pt = line.len() as i64 + 1;
+    eval.eval_str(&format!("(goto-char {next_pt})")).unwrap();
+    eval.invalidate_redisplay();
+    eval.redisplay()
+        .expect("post-auxiliary cursor-only redisplay");
+    let eng = engine.borrow();
+    let stats = eng.last_layout_stats();
+    assert_eq!(
+        stats
+            .coverage_export_calls
+            .get(&owner)
+            .copied()
+            .unwrap_or(0),
+        0,
+        "preserved Active receipt on unchanged owner must renew without rebuilding"
+    );
+    assert_eq!(
+        stats
+            .coverage_export_calls
+            .get(&sibling_owner)
+            .copied()
+            .unwrap_or(0),
+        1,
+        "AuxiliaryOnly sibling must not renew before ordinary frame activation"
+    );
+    let state = eng.last_frame_display_state.as_ref().unwrap();
+    assert!(
+        state
+            .scroll_coverage_renewals
+            .iter()
+            .any(|r| r.window == owner),
+        "owner should emit a ScrollCoverageRenewal"
+    );
+    assert!(
+        state
+            .scroll_coverage
+            .iter()
+            .any(|c| c.content.window_id == sibling_owner),
+        "sibling should emit a full ordinary ScrollCoverage export"
+    );
+    drop(eng);
+    eval.redisplay_fn = None;
+}
+
+#[test]
+fn auxiliary_only_window_does_not_renew_after_prepared_page_eviction() {
+    let _policy = RedisplayHookPolicyGuard::legacy();
+    let line = "ordinary offscreen auxiliary eviction line\n";
+    let (mut eval, frame, _, window) = incr_editing_frame(&line.repeat(200), 800, 600);
+    let other_buffer = eval.buffer_manager_mut().create_buffer("aux-evict-sibling");
+    eval.buffer_manager_mut()
+        .get_mut(other_buffer)
+        .unwrap()
+        .insert(&line.repeat(200));
+    let sibling = eval
+        .frame_manager_mut()
+        .split_window(
+            frame,
+            window,
+            neovm_core::window::SplitDirection::Vertical,
+            other_buffer,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .unwrap();
+    assert!(eval.frame_manager_mut().select_frame(frame));
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    eval.eval_str("(setq timer-list nil timer-idle-list nil mode-line-format nil)")
+        .unwrap();
+
+    let engine = Rc::new(RefCell::new(
+        crate::font::metrics::test_catalog::layout_engine(),
+    ));
+    let prod_engine = Rc::clone(&engine);
+    eval.redisplay_fn = Some(Box::new(move |eval| {
+        let mut eng = prod_engine.borrow_mut();
+        eng.layout_frame_rust(eval, frame);
+        activate_last_engine_presentation(eval, &eng, frame);
+    }));
+    eval.redisplay().expect("initial redisplay");
+
+    let sibling_owner = DisplayWindowId::new(sibling.0 as i64);
+    let target = {
+        let eng = engine.borrow();
+        let body: Vec<_> = eng.retained_window_matrices[&sibling_owner]
+            .matrix
+            .rows
+            .iter()
+            .filter(|r| r.enabled && r.role == GlyphRowRole::Text)
+            .collect();
+        neovm_core::buffer::CharPos0::new(body[body.len() - 2].start_charpos)
+    };
+    engine
+        .borrow_mut()
+        .request_scroll_coverage(&eval, frame, sibling, target)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let ready = {
+            let mut eng = engine.borrow_mut();
+            let eng = &mut *eng;
+            eng.scroll_coverage
+                .drain(&mut eng.prepared_viewports)
+                .unwrap()
+        };
+        if ready {
+            break;
+        }
+        assert!(Instant::now() < deadline, "worker page timed out");
+        std::thread::yield_now();
+    }
+
+    // Publish `sibling` ONLY via the un-ACKed auxiliary channel (`ExportReceipt::AuxiliaryOnly`).
+    let prepared = match engine.borrow_mut().prepare_auxiliary_scroll_coverage(&eval) {
+        AuxiliaryPreparation::Ready(prepared) => prepared,
+        AuxiliaryPreparation::NoChange => panic!("expected Ready for sibling auxiliary publish"),
+        AuxiliaryPreparation::Refused(refusal) => {
+            panic!("unexpected refusal for sibling auxiliary publish: {refusal:?}")
+        }
+    };
+    assert!(
+        prepared
+            .update()
+            .surfaces
+            .iter()
+            .any(|s| s.coverage().content.window_id == sibling_owner),
+        "sibling surface must be present in auxiliary publish"
+    );
+    engine
+        .borrow_mut()
+        .commit_auxiliary_scroll_coverage(prepared);
+
+    // Drive real `PreparedViewports::trim()` cache pressure (`MAX_VIEWPORTS = 8`)
+    // on `window` so `sibling`'s prepared page is evicted before the next
+    // ordinary CursorOnly redisplay.
+    for page in 0..9usize {
+        let start = neovm_core::buffer::CharPos0::new((40 + page * 12) * line.len());
+        engine
+            .borrow_mut()
+            .request_scroll_coverage(&eval, frame, window, start)
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let ready = {
+                let mut eng = engine.borrow_mut();
+                let eng = &mut *eng;
+                eng.scroll_coverage
+                    .drain(&mut eng.prepared_viewports)
+                    .unwrap()
+            };
+            if ready {
+                break;
+            }
+            assert!(Instant::now() < deadline, "eviction worker page timed out");
+            std::thread::yield_now();
+        }
+    }
+    assert!(
+        !engine
+            .borrow()
+            .prepared_viewports
+            .has_computed(frame, sibling_owner),
+        "real trim() cache pressure must evict sibling's prepared page"
+    );
+
+    let next_pt = line.len() as i64 + 1;
+    eval.eval_str(&format!("(goto-char {next_pt})")).unwrap();
+    eval.invalidate_redisplay();
+    eval.redisplay()
+        .expect("post-eviction cursor-only redisplay");
+
+    let eng = engine.borrow();
+    let state = eng.last_frame_display_state.as_ref().unwrap();
+    assert!(
+        state
+            .scroll_coverage_renewals
+            .iter()
+            .all(|r| r.window != sibling_owner),
+        "evicted AuxiliaryOnly sibling must NEVER emit a ScrollCoverageRenewal on the None fallback arm"
+    );
+    assert!(
+        state
+            .scroll_coverage
+            .iter()
+            .all(|c| c.content.window_id != sibling_owner),
+        "evicted sibling has no eligible prepared pages to export"
+    );
+    assert!(
+        eng.published_scroll_coverage(frame, sibling_owner)
+            .is_none(),
+        "evicted AuxiliaryOnly sibling must clear published coverage"
+    );
+    drop(eng);
+    eval.redisplay_fn = None;
+}

@@ -493,7 +493,10 @@ pub fn builtin_copy_marker_in_buffers(buffers: &mut BufferManager, args: &[Value
 /// Registered with fixed arity 3 and called straight off the bytecode stack
 /// like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
 #[doc(hidden)]
-pub fn builtin_set_marker_in_buffers(buffers: &mut BufferManager, args: &[Value]) -> EvalResult {
+pub fn builtin_set_marker_in_view(
+    buffers: &mut crate::buffer::BufferManagerMut<'_>,
+    args: &[Value],
+) -> EvalResult {
     expect_args_range("set-marker", args, 2, 3)?;
     expect_marker("set-marker", &args[0])?;
 
@@ -510,11 +513,9 @@ pub fn builtin_set_marker_in_buffers(buffers: &mut BufferManager, args: &[Value]
             }
         }
     } else {
-        // Default to current buffer
         buffers.current_buffer().map(|b| b.id)
     };
 
-    // Resolve position
     let position: Option<LispCharPos1> = match args[1].kind() {
         ValueKind::Nil => None,
         ValueKind::Fixnum(n) => Some(LispCharPos1::new(n)),
@@ -531,33 +532,20 @@ pub fn builtin_set_marker_in_buffers(buffers: &mut BufferManager, args: &[Value]
         }
     };
 
-    // GNU Emacs: when position is nil, the marker is detached from its buffer.
     let buffer_id = position.and(buffer_id);
-
-    // Clamp position to the full buffer range (1 .. total_chars+1), matching
-    // GNU Emacs which clamps to the whole buffer, ignoring narrowing.
-    let position = match (position, buffer_id) {
-        (Some(pos), Some(buf_id)) => {
-            if let Some(buf) = buffers.get(buf_id) {
-                let max_pos = buf.z_lisp_char_pos().as_i64();
-                Some(LispCharPos1::new(pos.as_i64().clamp(1, max_pos)))
-            } else {
-                Some(pos)
-            }
-        }
-        (other, _) => other,
+    let byte_pos = match (position, buffer_id) {
+        (Some(pos), Some(buf_id)) => buffers.get(buf_id).map(|buf| {
+            let max_pos = buf.z_lisp_char_pos().as_i64();
+            let clamped = LispCharPos1::new(pos.as_i64().clamp(1, max_pos));
+            lisp_pos_to_byte(buf, clamped)
+        }),
+        _ => None,
     };
 
-    register_marker_in_buffers(buffers, &args[0], buffer_id, position);
+    buffers.register_marker_value_at_emacs_byte_pos(&args[0], buffer_id, byte_pos);
 
     if args[0].is_marker() {
         let _ = args[0].with_marker_data_mut(|data| {
-            // GNU `unchain_marker` (marker.c:684) preserves the marker's
-            // last attached charpos when it's detached, so
-            // `marker-last-position` keeps reporting it.  Stamp
-            // `last_position_valid` here whenever a real position is
-            // supplied (or buffer is set to a live buffer); never clear
-            // charpos/bytepos on detach.
             if position.is_some() || buffer_id.is_some() {
                 data.set_last_position_valid(true);
             }
@@ -565,6 +553,11 @@ pub fn builtin_set_marker_in_buffers(buffers: &mut BufferManager, args: &[Value]
     }
 
     Ok(args[0])
+}
+
+#[doc(hidden)]
+pub fn builtin_set_marker_in_buffers(buffers: &mut BufferManager, args: &[Value]) -> EvalResult {
+    builtin_set_marker_in_view(&mut crate::buffer::BufferManagerMut::new(buffers), args)
 }
 
 // `move-marker' is NOT a subr.  GNU has no DEFUN of that name; it is

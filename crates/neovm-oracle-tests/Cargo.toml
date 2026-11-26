@@ -17,6 +17,14 @@ autotests = false
 name = "oracle"
 path = "tests/oracle.rs"
 
+[features]
+default = []
+# Opt-in full Cartesian oracle matrices (zero #[ignore]).
+exhaustive-oracle = []
+# Opt-in known-divergence GNU parity suites (fail RED on current main until
+# their tracked GitHub issues are fixed, then graduate into the default suite).
+coding-known-divergences = []
+
 [dependencies]
 colored.workspace = true
 expect-test.workspace = true

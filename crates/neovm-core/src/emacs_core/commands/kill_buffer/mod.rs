@@ -348,16 +348,19 @@ pub(crate) fn builtin_kill_buffer(
         .collect_killed_buffer_ids(id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
     {
-        let (buffers, mut obarray_view) = eval.buffers_and_obarray_view_mut();
+        let (mut buffers, mut obarray_view) = eval.buffer_view_and_obarray_view_mut();
         // SAFETY: killed-buffer retirement only resets buffer/BLV value
         // caches and reads properties. All process/Lisp callbacks finished
         // above; no function or canonical descriptor writer runs in this phase.
         unsafe {
             obarray_view.with_legacy_value_write(|obarray| {
                 for killed_id in &killed_ids_to_reset {
-                    if let Some(buffer) = buffers.get_mut(*killed_id) {
-                        buffer.kill_all_local_variables(obarray, true, &buffer_defaults);
-                    }
+                    let _ = buffers.kill_all_buffer_local_variables(
+                        *killed_id,
+                        obarray,
+                        true,
+                        &buffer_defaults,
+                    );
                 }
             });
         }

@@ -267,6 +267,56 @@ fn neomacsclient_create_frame_requests_window_system_without_display_arg() {
     assert!(request.ends_with(" \n"));
 }
 
+/// Accept a single connection from a client expected to reject its TTY before
+/// writing any request bytes. If a regression lets the client proceed and send
+/// a request, reply `-print FRAME_OK\n` so the test fails immediately on the
+/// status/stderr/`request.is_empty()` assertions instead of wedging until the
+/// runner timeout.
+#[cfg(unix)]
+fn spawn_tolerant_rejection_server(
+    listener: std::os::unix::net::UnixListener,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    use std::io::{Read, Write};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    listener
+        .set_nonblocking(true)
+        .expect("set listener non-blocking");
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut request = Vec::new();
+                    let mut byte = [0u8; 1];
+                    loop {
+                        match stream.read(&mut byte) {
+                            Ok(0) => break,
+                            Ok(_) => {
+                                request.push(byte[0]);
+                                if byte[0] == b'\n' {
+                                    let _ = stream.write_all(b"-print FRAME_OK\n");
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    return request;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Vec::new();
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept client: {error}"),
+            }
+        }
+    })
+}
+
 #[cfg(unix)]
 #[test]
 fn neomacsclient_fatal_tty_error_matches_gnu_when_stdout_is_not_a_terminal() {
@@ -274,6 +324,7 @@ fn neomacsclient_fatal_tty_error_matches_gnu_when_stdout_is_not_a_terminal() {
 
     let (_dir, socket) = socket_tempdir("neomacsclient-fatal-tty-");
     let listener = UnixListener::bind(&socket).expect("bind local socket");
+    let server = spawn_tolerant_rejection_server(listener);
 
     let output = Command::new(env!("CARGO_BIN_EXE_neomacsclient"))
         .arg("--socket-name")
@@ -287,6 +338,7 @@ fn neomacsclient_fatal_tty_error_matches_gnu_when_stdout_is_not_a_terminal() {
         .output()
         .expect("neomacsclient should run");
 
+    let request = server.join().expect("server thread should finish");
     // GNU find_tty (lib-src/emacsclient.c:1136-1146) fails with
     // "<progname>: could not get terminal name\n" and EXIT_FAILURE when a
     // tty frame was requested and stdout is not a terminal; progname is
@@ -300,7 +352,10 @@ fn neomacsclient_fatal_tty_error_matches_gnu_when_stdout_is_not_a_terminal() {
         )
     );
     assert!(output.stdout.is_empty(), "{output:?}");
-    drop(listener);
+    assert!(
+        request.is_empty(),
+        "the rejected request sent bytes: {request:?}"
+    );
 }
 
 #[cfg(unix)]
@@ -310,6 +365,7 @@ fn neomacsclient_fatal_tty_checks_the_terminal_name_before_term() {
 
     let (_dir, socket) = socket_tempdir("neomacsclient-tty-order-");
     let listener = UnixListener::bind(&socket).expect("bind local socket");
+    let server = spawn_tolerant_rejection_server(listener);
 
     let output = Command::new(env!("CARGO_BIN_EXE_neomacsclient"))
         .arg("--socket-name")
@@ -323,6 +379,7 @@ fn neomacsclient_fatal_tty_checks_the_terminal_name_before_term() {
         .output()
         .expect("neomacsclient should run");
 
+    let request = server.join().expect("server thread should finish");
     // GNU find_tty checks ttyname (lib-src/emacsclient.c:1139-1146) BEFORE
     // TERM (:1149-1155): with stdout not a terminal and TERM unset, the
     // terminal name is the reported failure.
@@ -334,7 +391,10 @@ fn neomacsclient_fatal_tty_checks_the_terminal_name_before_term() {
             env!("CARGO_BIN_EXE_neomacsclient")
         )
     );
-    drop(listener);
+    assert!(
+        request.is_empty(),
+        "the rejected request sent bytes: {request:?}"
+    );
 }
 
 #[cfg(unix)]
@@ -346,6 +406,7 @@ fn neomacsclient_tty_requires_term_when_stdout_is_a_terminal() {
 
     let (_dir, socket) = socket_tempdir("neomacsclient-tty-term-");
     let listener = UnixListener::bind(&socket).expect("bind local socket");
+    let server = spawn_tolerant_rejection_server(listener);
 
     let master = File::from(
         rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
@@ -376,6 +437,8 @@ fn neomacsclient_tty_requires_term_when_stdout_is_a_terminal() {
         .output()
         .expect("neomacsclient should run");
 
+    let request = server.join().expect("server thread should finish");
+    drop(master);
     // A terminal with no TERM reaches GNU find_tty's second failure
     // (lib-src/emacsclient.c:1149-1155).
     assert_eq!(output.status.code(), Some(1), "{output:?}");
@@ -386,7 +449,10 @@ fn neomacsclient_tty_requires_term_when_stdout_is_a_terminal() {
             env!("CARGO_BIN_EXE_neomacsclient")
         )
     );
-    drop(master);
+    assert!(
+        request.is_empty(),
+        "the rejected request sent bytes: {request:?}"
+    );
 }
 
 #[cfg(unix)]
@@ -465,53 +531,15 @@ fn neomacsclient_tty_accepts_an_empty_term() {
 #[test]
 fn neomacsclient_term_buffer_tty_is_rejected_like_gnu() {
     use std::fs::File;
-    use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
     use std::process::Stdio;
-    use std::thread;
-    use std::time::{Duration, Instant};
 
     let (_dir, socket) = socket_tempdir("neomacsclient-term-buffer-");
     let listener = UnixListener::bind(&socket).expect("bind local socket");
-    listener
-        .set_nonblocking(true)
-        .expect("set listener non-blocking");
-
     // The client connects before find_tty, so a tolerant server drains the
     // connection and replies only if a full request was actually sent.  The
     // GNU :1158-1168 rejection path sends nothing and closes.
-    let server = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    let mut request = Vec::new();
-                    let mut byte = [0u8; 1];
-                    loop {
-                        match stream.read(&mut byte) {
-                            Ok(0) => break,
-                            Ok(_) => {
-                                request.push(byte[0]);
-                                if byte[0] == b'\n' {
-                                    let _ = stream.write_all(b"-print FRAME_OK\n");
-                                    break;
-                                }
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                    return request;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return Vec::new();
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => panic!("accept client: {error}"),
-            }
-        }
-    });
+    let server = spawn_tolerant_rejection_server(listener);
 
     let master = File::from(
         rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)

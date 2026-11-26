@@ -205,7 +205,7 @@ pub fn finish_format_mode_line_in_state_with_eval_for_test(
     vars: neovm_eval::emacs_core::eval::VariableView<'_>,
     dynamic: &[neovm_value::value::OrderedRuntimeBindingMap],
     frames: &crate::window::FrameManager,
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     processes: &neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
     args: &[neovm_value::value::Value],
     eval_form: impl FnMut(

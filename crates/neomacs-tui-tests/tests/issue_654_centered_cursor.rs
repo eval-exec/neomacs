@@ -18,7 +18,7 @@
 
 use std::io::ErrorKind;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use neomacs_tui_tests::TuiSession;
 use neomacs_tui_tests::pair::{boot_pair, eval_expression_one};
@@ -77,13 +77,13 @@ fn centered_cursor_samples() -> (String, String) {
 fn published_samples(session: &mut TuiSession, path: &Path, editor: &str) -> String {
     const DEADLINE: Duration = Duration::from_secs(60);
     const POLL: Duration = Duration::from_millis(100);
-    let deadline = Instant::now() + DEADLINE;
+    let deadline = neomacs_tui_tests::HangCap::new(DEADLINE);
     loop {
         match std::fs::read_to_string(path) {
             Ok(text) => return text,
-            Err(error) if error.kind() == ErrorKind::NotFound && Instant::now() < deadline => {
+            Err(error) if error.kind() == ErrorKind::NotFound && !deadline.is_expired() => {
                 // Keep draining the editor's output while waiting.
-                session.read_until(POLL, |_| false);
+                session.read(POLL);
             }
             Err(error) => panic!(
                 "{editor} centered-cursor samples at {}: {error}\n{}",

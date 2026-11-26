@@ -235,13 +235,15 @@ filter = 'package(neomacs-gui-tests) and test(~macos_native_menus::)'
 platform = { host = 'cfg(target_os = "macos")' }
 threads-required = "num-test-threads"
 
-# Input-to-presentation budgets and calibrated raster outputs are measurements
-# of a live compositor.  The CI job runs them in its serial pass; reserve the
-# whole nextest pool here as well so a developer run at the default thread
-# count cannot let a sibling test steal the cores the budget is measured on.
-# The continuous_120hz_ rows are calibrated-host gates and are not included.
+# Calibrated 120 Hz scroll pacing gates measure software-Vulkan (llvmpipe)
+# input-to-presentation latency and glmark2 capacity on a live compositor.
+# Reserve the whole nextest pool so sibling tests cannot contend for CPU cores
+# during the pacing measurement.  All other Linux GUI rows (stalled scroll,
+# page-key receipts, resize presentation, Wayland font raster, sustained-stream
+# state checks) own private Xvfb/Sway compositors and assert state transitions
+# with generous hang-avoidance caps, so they run safely in parallel.
 [[profile.default.overrides]]
-filter = 'package(neomacs-gui-tests) and (test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::) or test(~wayland_font_raster::))'
+filter = 'package(neomacs-gui-tests) and test(~continuous_120hz_)'
 threads-required = "num-test-threads"
 
 # A signature-exact GNU ime miss is non-fatal, so its ::warning:: line has to

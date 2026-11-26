@@ -1,6 +1,9 @@
-//! Hardware X11 timing validation on an owned editor window. Opt in explicitly:
-//! NEOMACS_REQUIRE_X11_TIMING=1 cargo nextest run -p neomacs-gui-tests --test x11_presentation
-//! Requires a built editor/pdump, DISPLAY, xdotool and Vulkan EXT_present_timing.
+//! Pre-release hardware X11 presentation-timing gate on an owned editor window.
+//! Owned by the Linux release owner (pre-release cadence, and on changes to
+//! `presentation_feedback/x11.rs` or `native_presentation/`; see
+//! `docs/releasing-linux.md#pre-release-hardware-x11-presentation-timing-gate`):
+//!   NEOMACS_REQUIRE_X11_TIMING=1 cargo nextest run -p neomacs-gui-tests --test gui -E 'test(x11_presentation::)'
+//! Requires a built editor/pdump, live DISPLAY, xdotool, and hardware Vulkan VK_EXT_present_timing.
 #![cfg(target_os = "linux")]
 use serde_json::Value;
 use std::{
@@ -8,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 struct Editor(Child);
@@ -20,12 +23,12 @@ impl Drop for Editor {
 }
 
 fn wait<T>(artifacts: &Path, reason: &str, mut observe: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let cap = neomacs_gui_tests::HangCap::from_secs(12);
     loop {
         if let Some(value) = observe() {
             return value;
         }
-        assert!(Instant::now() < deadline, "{reason}: {artifacts:?}");
+        cap.assert_not_expired(format_args!("{reason}: {artifacts:?}"));
         thread::sleep(Duration::from_millis(20));
     }
 }

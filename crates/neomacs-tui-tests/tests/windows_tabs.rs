@@ -996,7 +996,8 @@ fn global_tab_line_from_init_survives_startup_and_visiting_a_new_buffer() {
         (home, session)
     }
 
-    let (_gnu_home, mut gnu) = boot(std::path::Path::new("emacs"), "GNU");
+    let gnu_program = neomacs_tui_tests::oracle::gnu_oracle_program();
+    let (_gnu_home, mut gnu) = boot(&gnu_program, "GNU");
     let (_neo_home, mut neo) = boot(&neomacs_binary(), "NEO");
     wait_for_both(&mut gnu, &mut neo, Duration::from_secs(20), |grid| {
         grid.iter()

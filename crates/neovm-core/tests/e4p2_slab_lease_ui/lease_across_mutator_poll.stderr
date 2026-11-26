@@ -1,0 +1,11 @@
+error[E0499]: cannot borrow `*mutator` as mutable more than once at a time
+ --> tests/e4p2_slab_lease_ui/lease_across_mutator_poll.rs:7:13
+  |
+5 |     let mut run = mutator.run_access().unwrap();
+  |                   ------- first mutable borrow occurs here
+6 |     let lease = handle.lease(&mut run).unwrap();
+7 |     let _ = mutator.poll(|| Ok(Vec::new()));
+  |             ^^^^^^^ second mutable borrow occurs here
+8 |     let _ = lease.heap_identity();
+9 | }
+  | - first borrow might be used here, when `run` is dropped and runs the `Drop` code for type `RunAccess`

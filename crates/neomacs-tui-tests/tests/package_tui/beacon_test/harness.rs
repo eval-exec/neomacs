@@ -6,7 +6,7 @@ pub(super) use neomacs_tui_tests::package_harness::{
     both, catch_phase, exact_row, invoke, wait_for,
 };
 use neomacs_tui_tests::{RawTerminalSnapshot, TuiSession};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub(super) fn push_rows(
     pair: &PackageTuiPair,
@@ -224,13 +224,13 @@ pub(super) fn wait_for_pair_background(
     width: usize,
     present: bool,
 ) -> Option<(String, String)> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(5));
     let target = Some(present);
     let mut gnu_seen = cell_span_background_state(&pair.gnu, needle, offset, width) == target;
     let mut neo_seen = cell_span_background_state(&pair.neo, needle, offset, width) == target;
     let mut gnu_style = gnu_seen.then(|| styled_span(&pair.gnu, needle, offset, width));
     let mut neo_style = neo_seen.then(|| styled_span(&pair.neo, needle, offset, width));
-    while Instant::now() < deadline {
+    while !deadline.is_expired() {
         if gnu_seen && neo_seen {
             return present.then(|| {
                 (
@@ -278,13 +278,13 @@ pub(super) fn wait_for_background(
     width: usize,
     present: bool,
 ) -> Option<String> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(5));
     let target = Some(present);
     loop {
         if cell_span_background_state(session, needle, offset, width) == target {
             return present.then(|| styled_span(session, needle, offset, width));
         }
-        if Instant::now() >= deadline {
+        if deadline.is_expired() {
             panic!(
                 "Beacon {} never reached background present={present}; state={:?}\nGrid:\n{}\nOutput: {:?}",
                 session.name,
@@ -298,8 +298,8 @@ pub(super) fn wait_for_background(
 }
 
 pub(super) fn wait_for_pair_marker(pair: &mut PackageTuiPair, marker: &str) {
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while Instant::now() < deadline {
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(8));
+    while !deadline.is_expired() {
         let gnu = pair.gnu.text_grid().iter().any(|row| row.contains(marker));
         let neo = pair.neo.text_grid().iter().any(|row| row.contains(marker));
         if gnu && neo {

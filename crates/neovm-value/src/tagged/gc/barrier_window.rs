@@ -304,12 +304,164 @@ impl TaggedHeap {
         }
     }
 
+    /// Raw-place equivalent of [`Self::barrier_window`] for TLS callers that
+    /// must not create `&TaggedHeap` over sibling fields (value-gc C4).
+    ///
+    /// # Safety
+    /// `heap` must point to a live `TaggedHeap` installed on the calling
+    /// mutator thread.
+    unsafe fn barrier_window_from_raw(heap: *const Self) -> BarrierWindow {
+        const _: () = assert!(
+            size_of::<Option<Box<GenCensus>>>() == size_of::<*const GenCensus>(),
+            "Option<Box<GenCensus>> uses the null-pointer niche layout"
+        );
+        // SAFETY: caller upholds that `heap` is live on this mutator thread;
+        // each read projects only the single barrier-input field via `addr_of!`.
+        unsafe {
+            let concurrent_running = ConcurrentMarkFlag::is_running_from_raw(std::ptr::addr_of!(
+                (*heap).concurrent_mark_running
+            ));
+            let write_tracking = std::ptr::read(std::ptr::addr_of!((*heap).write_tracking_mode));
+            let census_raw =
+                std::ptr::read(std::ptr::addr_of!((*heap).census).cast::<*const GenCensus>());
+            let remset_probe =
+                !census_raw.is_null() && GenCensus::remset_probe_from_raw(census_raw);
+            if concurrent_running || write_tracking != WriteTrackingMode::Disabled || remset_probe {
+                BarrierWindow::ALL
+            } else {
+                Self::collection_dump_window_from_raw(heap)
+            }
+        }
+    }
+
+    /// Raw-place equivalent of [`Self::collection_dump_window`] for TLS
+    /// callers that must not materialize `&TaggedHeap` (value-gc C4).
+    ///
+    /// # Safety
+    /// `heap` must point to a live `TaggedHeap` installed on the calling
+    /// mutator thread.
+    unsafe fn collection_dump_window_from_raw(heap: *const Self) -> BarrierWindow {
+        // SAFETY: caller upholds that `heap` is live on this mutator thread;
+        // raw field projections avoid retagging unrelated heap fields.
+        unsafe {
+            if std::ptr::read(std::ptr::addr_of!((*heap).partition_dump)) {
+                let lo = std::ptr::read(std::ptr::addr_of!((*heap).dump_addr_lo));
+                let hi = std::ptr::read(std::ptr::addr_of!((*heap).dump_addr_hi));
+                BarrierWindow::span(lo, hi)
+            } else {
+                BarrierWindow::NONE
+            }
+        }
+    }
+
+    /// Raw-place equivalent of [`Self::set_compiled_barrier_window`] for TLS
+    /// callers that must not materialize `&TaggedHeap` (value-gc C4).
+    ///
+    /// # Safety
+    /// `heap` must point to a live `TaggedHeap` installed on the calling
+    /// mutator thread, with no concurrent reader or writer of its compiled
+    /// barrier-window `Cell`s.
+    unsafe fn set_compiled_barrier_window_from_raw(
+        heap: *const Self,
+        ordinary: BarrierWindow,
+        gate: CompiledObservationGate,
+    ) {
+        // SAFETY: caller upholds that `heap` is live on this mutator thread;
+        // reading `generational.enabled` and writing the individual `Cell`
+        // fields via `addr_of!` never retags sibling `TaggedHeap` fields.
+        unsafe {
+            let generational_enabled =
+                std::ptr::read(std::ptr::addr_of!((*heap).generational.enabled));
+            let negatives_enabled = !generational_enabled
+                && ordinary != BarrierWindow::ALL
+                && gate.observed.iter().any(|range| range.len != 0);
+            let gap = if negatives_enabled {
+                gate.excluded.unwrap_or(BarrierWindow::NONE)
+            } else {
+                BarrierWindow::NONE
+            };
+            let single = if negatives_enabled {
+                gate.single_cons
+            } else {
+                0
+            };
+            let slot_window = Self::compiled_barrier_window_for(
+                ordinary,
+                CompiledObservationGate {
+                    observed: gate.slots,
+                    ..CompiledObservationGate::NONE
+                },
+            );
+            let mut bytes = [0; 40];
+            bytes[..size_of::<usize>()].copy_from_slice(&gap.lo.to_ne_bytes());
+            bytes[size_of::<usize>()..2 * size_of::<usize>()]
+                .copy_from_slice(&gap.len.to_ne_bytes());
+            bytes[2 * size_of::<usize>()..3 * size_of::<usize>()]
+                .copy_from_slice(&single.to_ne_bytes());
+            bytes[3 * size_of::<usize>()..4 * size_of::<usize>()]
+                .copy_from_slice(&slot_window.lo.to_ne_bytes());
+            bytes[4 * size_of::<usize>()..5 * size_of::<usize>()]
+                .copy_from_slice(&slot_window.len.to_ne_bytes());
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_00)).set(bytes[0]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_01)).set(bytes[1]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_02)).set(bytes[2]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_03)).set(bytes[3]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_04)).set(bytes[4]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_05)).set(bytes[5]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_06)).set(bytes[6]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_07)).set(bytes[7]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_08)).set(bytes[8]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_09)).set(bytes[9]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_10)).set(bytes[10]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_11)).set(bytes[11]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_12)).set(bytes[12]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_13)).set(bytes[13]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_14)).set(bytes[14]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_15)).set(bytes[15]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_16)).set(bytes[16]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_17)).set(bytes[17]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_18)).set(bytes[18]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_19)).set(bytes[19]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_20)).set(bytes[20]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_21)).set(bytes[21]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_22)).set(bytes[22]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_23)).set(bytes[23]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_24)).set(bytes[24]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_25)).set(bytes[25]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_26)).set(bytes[26]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_27)).set(bytes[27]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_28)).set(bytes[28]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_29)).set(bytes[29]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_30)).set(bytes[30]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_31)).set(bytes[31]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_32)).set(bytes[32]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_33)).set(bytes[33]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_34)).set(bytes[34]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_35)).set(bytes[35]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_36)).set(bytes[36]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_37)).set(bytes[37]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_38)).set(bytes[38]);
+            (*std::ptr::addr_of!((*heap).compiled_observation_exclusion_39)).set(bytes[39]);
+            jit_state::JitHeapState::set_barrier_window_raw(
+                std::ptr::addr_of!((*heap).jit),
+                Self::compiled_barrier_window_for(ordinary, gate),
+            );
+        }
+    }
+
     /// Native GEN0 and GEN1 stores share the existing window test with
     /// certificate owners. The enclosing span is only a coarse rejection
     /// filter: its outlined setter checks the exact sticky mark before
     /// journaling. GEN1 keeps its remembered-set test after this window.
     pub(super) fn compiled_barrier_window(
         &self,
+        ordinary: BarrierWindow,
+        gate: CompiledObservationGate,
+    ) -> BarrierWindow {
+        Self::compiled_barrier_window_for(ordinary, gate)
+    }
+
+    fn compiled_barrier_window_for(
         ordinary: BarrierWindow,
         gate: CompiledObservationGate,
     ) -> BarrierWindow {
@@ -550,10 +702,12 @@ pub(crate) fn publish_collection_observation_window(observed: CompiledObservatio
             return;
         }
         // SAFETY: installation retains this heap; only its executing mutator
-        // publishes JitHeapState Cells. The collector never reads that state.
-        let heap = unsafe { &*heap };
-        let ordinary = heap.barrier_window();
-        heap.set_compiled_barrier_window(ordinary, observed);
+        // publishes JitHeapState/exclusion Cells, and raw field projections
+        // avoid creating `&TaggedHeap` over unrelated fields.
+        unsafe {
+            let ordinary = TaggedHeap::barrier_window_from_raw(heap);
+            TaggedHeap::set_compiled_barrier_window_from_raw(heap, ordinary, observed);
+        }
     });
 }
 
@@ -600,16 +754,17 @@ pub unsafe extern "C" fn neovm_jit_unobserved_collection_owner(owner_bits: i64) 
             return false;
         }
         // SAFETY: this leaf executes under the installed Context's exclusive
-        // mutator scope. The collector does not change these heap protocol
-        // inputs; ordinary ALL preserves tracking and concurrent SATB writes.
-        let heap = unsafe { &*heap };
-        let ordinary = heap.barrier_window();
-        // GEN1 refines the same hull: its native gate keeps the remembered-set
-        // test after the window, so an excluded gap admits no unbarriered store.
-        if ordinary.covers(address) {
-            return false;
+        // mutator scope; raw field projections avoid creating `&TaggedHeap`.
+        unsafe {
+            let ordinary = TaggedHeap::barrier_window_from_raw(heap);
+            // GEN1 refines the same hull: its native gate keeps the remembered-set
+            // test after the window, so an excluded gap admits no unbarriered store.
+            if ordinary.covers(address) {
+                return false;
+            }
+            let dump = TaggedHeap::collection_dump_window_from_raw(heap);
+            original_hull_covers_refused_owner(dump, ordinary, address)
         }
-        original_hull_covers_refused_owner(heap, ordinary, address)
     });
     i8::from(eligible && super::super::collection_reads::exclude_unobserved_compiled_cons(bits))
 }
@@ -621,7 +776,7 @@ pub unsafe extern "C" fn neovm_jit_unobserved_collection_owner(owner_bits: i64) 
 #[cold]
 #[inline(never)]
 fn original_hull_covers_refused_owner(
-    heap: &TaggedHeap,
+    dump: BarrierWindow,
     ordinary: BarrierWindow,
     address: usize,
 ) -> bool {
@@ -629,11 +784,9 @@ fn original_hull_covers_refused_owner(
     // from refinement. Do not let that exterior gap occupy the single
     // useful interior slot. This is a cold native refusal; publication
     // contains no callback or safepoint before the subsequent store.
-    let mut observed =
-        super::super::collection_reads::compiled_observation_gate(heap.collection_dump_window());
+    let mut observed = super::super::collection_reads::compiled_observation_gate(dump);
     observed.excluded = None;
-    heap.compiled_barrier_window(ordinary, observed)
-        .covers(address)
+    TaggedHeap::compiled_barrier_window_for(ordinary, observed).covers(address)
 }
 
 /// Classify this mutator's observations against the currently installed
@@ -645,8 +798,9 @@ pub(crate) fn current_collection_dump_window() -> BarrierWindow {
             BarrierWindow::NONE
         } else {
             // SAFETY: exclusive Context installation retains this heap for
-            // its executing mutator; only immutable dump bounds are read.
-            unsafe { &*heap }.collection_dump_window()
+            // its executing mutator; raw field projections read only the dump
+            // bounds without creating `&TaggedHeap`.
+            unsafe { TaggedHeap::collection_dump_window_from_raw(heap) }
         }
     })
 }

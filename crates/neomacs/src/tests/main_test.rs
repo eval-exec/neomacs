@@ -185,10 +185,9 @@ fn initialized_redisplay_test_frame(
         .current_buffer()
         .expect("current buffer")
         .id();
-    eval.buffer_manager_mut()
-        .get_mut(buffer_id)
-        .expect("buffer")
-        .insert(&line.repeat(line_count));
+    eval.buffer_manager_view_mut()
+        .insert_into_buffer(buffer_id, &line.repeat(line_count))
+        .expect("buffer");
     let frame_id = eval
         .frame_manager_mut()
         .create_frame(frame_name, width, height, buffer_id);
@@ -1700,7 +1699,7 @@ fn inactive_echo_layout_preserves_live_minibuffer_positions_and_query_source() {
     // minibuffer buffer; reproduce that ownership boundary here so the local
     // hook below cannot be observed by the ordinary root window.
     let minibuffer_buffer = eval
-        .buffer_manager_mut()
+        .buffer_manager_view_mut()
         .create_buffer(" *inactive echo live minibuffer*");
     eval.eval_form(Value::list(vec![
         Value::symbol("set-window-buffer"),
@@ -1708,10 +1707,9 @@ fn inactive_echo_layout_preserves_live_minibuffer_positions_and_query_source() {
         Value::make_buffer(minibuffer_buffer),
     ]))
     .expect("install distinct live minibuffer buffer");
-    eval.buffer_manager_mut()
-        .get_mut(minibuffer_buffer)
-        .expect("live minibuffer buffer")
-        .insert(&"live minibuffer text\n".repeat(20));
+    eval.buffer_manager_view_mut()
+        .insert_into_buffer(minibuffer_buffer, &"live minibuffer text\n".repeat(20))
+        .expect("live minibuffer buffer");
     eval.set_current_message(Some(neovm_core::heap_types::LispString::from_utf8("x\n")));
     assert!(
         eval.has_current_message(),
@@ -5196,8 +5194,8 @@ fn tty_terminal_host_delete_terminal_sends_shutdown() {
 #[test]
 fn current_layout_frame_follows_selected_frame() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let b1 = eval.buffer_manager_mut().create_buffer("*one*");
-    let b2 = eval.buffer_manager_mut().create_buffer("*two*");
+    let b1 = eval.buffer_manager_view_mut().create_buffer("*one*");
+    let b2 = eval.buffer_manager_view_mut().create_buffer("*two*");
     let f1 = eval.frame_manager_mut().create_frame("F1", 80, 24, b1);
     let f2 = eval.frame_manager_mut().create_frame("F2", 80, 24, b2);
 
@@ -5209,8 +5207,8 @@ fn current_layout_frame_follows_selected_frame() {
 #[test]
 fn current_layout_frame_tracks_surrogate_after_bootstrap_frame_deletion() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let b1 = eval.buffer_manager_mut().create_buffer("*one*");
-    let b2 = eval.buffer_manager_mut().create_buffer("*two*");
+    let b1 = eval.buffer_manager_view_mut().create_buffer("*one*");
+    let b2 = eval.buffer_manager_view_mut().create_buffer("*two*");
     let f1 = eval.frame_manager_mut().create_frame("F1", 80, 24, b1);
     let f2 = eval.frame_manager_mut().create_frame("F2", 80, 24, b2);
 
@@ -5271,7 +5269,9 @@ fn publish_gui_frame_sends_every_visible_top_level_frame_tree() {
         .id;
     configure_gnu_startup_state(&mut eval, selected, &gui_startup());
 
-    let second_buffer = eval.buffer_manager_mut().create_buffer("*second-frame*");
+    let second_buffer = eval
+        .buffer_manager_view_mut()
+        .create_buffer("*second-frame*");
     let second = eval
         .frame_manager_mut()
         .create_frame("second", 960, 640, second_buffer);
@@ -5395,7 +5395,9 @@ fn second_unselected_frame_allocates_its_tool_bar_on_its_own_redisplay() {
         .id;
     configure_gnu_startup_state(&mut eval, selected, &gui_startup());
 
-    let second_buffer = eval.buffer_manager_mut().create_buffer("*second-frame*");
+    let second_buffer = eval
+        .buffer_manager_view_mut()
+        .create_buffer("*second-frame*");
     let second = eval
         .frame_manager_mut()
         .create_frame("second", 960, 640, second_buffer);
@@ -5814,7 +5816,7 @@ fn configure_gnu_startup_state_defers_current_window_system_until_gui_creation()
 #[test]
 fn gui_startup_terminal_frame_uses_separate_terminal_owner() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let buffer_id = eval.buffer_manager_mut().create_buffer("*scratch*");
+    let buffer_id = eval.buffer_manager_view_mut().create_buffer("*scratch*");
     let gui_frame_id = eval
         .frame_manager_mut()
         .create_frame("F1", 960, 640, buffer_id);
@@ -6232,7 +6234,7 @@ fn neo_selection_backend_treats_an_owned_empty_primary_as_existing() {
 #[test]
 fn configure_gnu_startup_state_clears_window_system_for_tty_boots() {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
-    let scratch = eval.buffer_manager_mut().create_buffer("*scratch*");
+    let scratch = eval.buffer_manager_view_mut().create_buffer("*scratch*");
     let frame_id = eval.frame_manager_mut().create_frame("F1", 80, 25, scratch);
     let startup = StartupOptions {
         frontend: FrontendKind::Tty,
@@ -6661,7 +6663,7 @@ fn bootstrap_default_font_name_uses_pixel_size_field() {
 fn bootstrap_buffers_reuses_selected_startup_frame_when_one_already_exists() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(BOOTSTRAP_CORE_FEATURES)
         .expect("cached bootstrap evaluator");
-    let old_buffer = eval.buffer_manager_mut().create_buffer("*old*");
+    let old_buffer = eval.buffer_manager_view_mut().create_buffer("*old*");
     let old_frame = eval
         .frame_manager_mut()
         .create_frame("old", 320, 200, old_buffer);
@@ -6703,7 +6705,7 @@ fn bootstrap_buffers_reuses_selected_startup_frame_when_one_already_exists() {
 fn bootstrap_buffers_reuses_cached_surrogate_frame_when_it_is_the_only_selected_frame() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(BOOTSTRAP_CORE_FEATURES)
         .expect("cached bootstrap evaluator");
-    let old_buffer = eval.buffer_manager_mut().create_buffer("*old*");
+    let old_buffer = eval.buffer_manager_view_mut().create_buffer("*old*");
     let surrogate = eval
         .frame_manager_mut()
         .create_frame("F1", 80, 25, old_buffer);
@@ -6733,7 +6735,7 @@ fn bootstrap_buffers_reuses_cached_surrogate_frame_when_it_is_the_only_selected_
 fn bootstrap_buffers_names_reused_initial_tty_frame_f1_after_surrogate_allocation() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(BOOTSTRAP_CORE_FEATURES)
         .expect("cached bootstrap evaluator");
-    let old_buffer = eval.buffer_manager_mut().create_buffer("*old*");
+    let old_buffer = eval.buffer_manager_view_mut().create_buffer("*old*");
     let dump_only = eval
         .frame_manager_mut()
         .create_frame("dump-only", 80, 25, old_buffer);
@@ -6796,13 +6798,13 @@ fn bootstrap_buffers_clears_predump_messages_buffer_contents() {
         .find_buffer_by_name("*Messages*")
         .expect("bootstrap messages");
     {
-        let messages = eval
-            .buffer_manager_mut()
-            .get_mut(messages_id)
+        let mut buffers = eval.buffer_manager_view_mut();
+        buffers
+            .widen_and_goto_end(messages_id)
             .expect("live messages buffer");
-        messages.widen();
-        messages.goto_emacs_byte_pos(messages.point_max_emacs_byte_pos());
-        messages.insert("stale predump log\n");
+        buffers
+            .insert_into_buffer(messages_id, "stale predump log\n")
+            .expect("live messages buffer");
     }
 
     let _bootstrap = bootstrap_buffers(&mut eval, 960, 640, gui_display());

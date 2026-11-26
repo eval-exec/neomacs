@@ -3842,7 +3842,7 @@ pub(crate) fn format_mode_line_from_state(
     vars: VariableView<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
     frames: &crate::window::FrameManager,
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     processes: &neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
     args: Vec<Value>,
 ) -> Result<Option<Value>, Flow> {
@@ -3875,8 +3875,12 @@ pub(crate) fn format_mode_line_from_state(
         // dynamic `symbols-with-pos-enabled` binding.
         neovm_value::tagged::SymbolMode::Bare,
     );
-    let pctx =
-        build_mode_line_percent_context(frames, &*buffers, args.get(2), StoredTarget::NoProperties);
+    let pctx = build_mode_line_percent_context(
+        frames,
+        &**buffers,
+        args.get(2),
+        StoredTarget::NoProperties,
+    );
     let mut result = ModeLineRendered::default();
     let needs_eval = format_mode_line_recursive_in_state(
         vars,
@@ -4406,7 +4410,7 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
     vars: VariableView<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
     frames: &crate::window::FrameManager,
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     processes: &neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
     args: &[Value],
     mut eval_form: impl FnMut(&Value, &neovm_edit::buffer::BufferManager) -> Result<Value, Flow>,
@@ -4446,7 +4450,7 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
         );
         let pctx = build_mode_line_percent_context(
             frames,
-            &*buffers,
+            &**buffers,
             args.get(2),
             StoredTarget::NoProperties,
         );

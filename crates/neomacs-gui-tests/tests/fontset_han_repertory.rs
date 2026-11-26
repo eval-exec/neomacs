@@ -7,18 +7,12 @@ use neomacs_gui_tests::{
 };
 use neomacs_melpa_test_support::EmacsRuntime;
 use neomacs_test_env::CanonicalPin;
-use std::{
-    fs, thread,
-    time::{Duration, Instant},
-};
+use std::{fs, thread, time::Duration};
 
 #[test]
 fn han_fontset_rule_with_absent_registry_selects_same_face_as_unicode_registry() {
     let root = neomacs_infra::workspace_root();
-    let run_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let run_id = neomacs_gui_tests::unique_nonce();
     let control = root.join(format!(
         "tmp/fontset-han-gui-{}-{run_id}",
         std::process::id()
@@ -53,9 +47,12 @@ fn han_fontset_rule_with_absent_registry_selects_same_face_as_unicode_registry()
     )
     .unwrap();
     let script = control.join("fixture.el");
-    fs::write(
+    fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/fixtures/fontset-han-repertory.el"
+        ),
         &script,
-        include_str!("../fixtures/fontset-han-repertory.el"),
     )
     .unwrap();
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
@@ -139,10 +136,10 @@ fn han_fontset_rule_with_absent_registry_selects_same_face_as_unicode_registry()
                 GuiRunOptions::with_timeout(Duration::from_secs(120)),
             )
         });
-        let deadline = Instant::now() + Duration::from_secs(115);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(115));
         let mut presentation =
             Err("Han fontset selection did not produce a green presentation".to_owned());
-        while !run.is_finished() && Instant::now() < deadline {
+        while !run.is_finished() && !deadline.is_expired() {
             if let Ok(error) = fs::read_to_string(control.join("error.el")) {
                 presentation = Err(format!("public fontset/selected-glyph error: {error}"));
                 break;

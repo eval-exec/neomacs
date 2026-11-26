@@ -951,11 +951,13 @@ impl<T: PagedObject> ObjectArena<T> {
         };
         page.next_index = ObjectPage::<T>::SLOTS;
         let base = page.base_addr();
+        let index = self.pages.len();
+        self.pages.reserve(1);
+        self.page_index_by_base.reserve(1);
+        self.chunk_map_set(base, index);
         self.pages.push(page);
-        let index = self.pages.len() - 1;
         let previous = self.page_index_by_base.insert(base, index);
         debug_assert!(previous.is_none(), "numeric page registered twice");
-        self.chunk_map_set(base, index);
         index
     }
 
@@ -1053,11 +1055,13 @@ impl<T: PagedObject> ObjectArena<T> {
             };
         page.next_index = ObjectPage::<T>::SLOTS;
         let actual_base = page.base_addr();
+        let index = self.pages.len();
+        self.pages.reserve(1);
+        self.page_index_by_base.reserve(1);
+        self.chunk_map_set(actual_base, index);
         self.pages.push(page);
-        let index = self.pages.len() - 1;
         let previous = self.page_index_by_base.insert(actual_base, index);
         debug_assert!(previous.is_none(), "retained numeric page registered twice");
-        self.chunk_map_set(actual_base, index);
         index
     }
 
@@ -1292,14 +1296,21 @@ impl<T: PagedObject> ObjectArena<T> {
             }
             None => ObjectPage::<T>::new(),
         };
+        let base = page.base_addr();
+        let page_index = self.pages.len();
+        // Reserve and publish the chunk-map entry BEFORE marking any
+        // uninitialized slot allocated or pushing `page`, so a panic in
+        // `chunk_map_set` (or map/vec growth) unwinds cleanly with zero
+        // alloc bits set (value-gc C7).
+        self.pages.reserve(1);
+        self.page_index_by_base.reserve(1);
+        self.chunk_map_set(base, page_index);
         let index = page.bump().expect("fresh arena page must have space");
         page.set_allocated(index);
         let ptr = page.slot_ptr(index);
-        let base = page.base_addr();
         self.pages.push(page);
-        let prev = self.page_index_by_base.insert(base, self.pages.len() - 1);
+        let prev = self.page_index_by_base.insert(base, page_index);
         debug_assert!(prev.is_none(), "arena page base registered twice");
-        self.chunk_map_set(base, self.pages.len() - 1);
         ptr
     }
 
@@ -1378,15 +1389,21 @@ impl<T: PagedObject> ObjectArena<T> {
             }
             None => ObjectPage::<T>::new(),
         };
+        let base = page.base_addr();
+        let page_index = self.pages.len();
+        // Reserve and publish the chunk-map entry BEFORE marking any
+        // uninitialized slot allocated or pushing `page`, so a panic in
+        // `chunk_map_set` (or map/vec growth) unwinds cleanly with zero
+        // alloc bits set (value-gc C7).
+        self.pages.reserve(1);
+        self.page_index_by_base.reserve(1);
+        self.chunk_map_set(base, page_index);
         let count = want.min(ObjectPage::<T>::SLOTS);
         page.next_index = count;
         page.set_allocated_range(0, count);
-        let base = page.base_addr();
         self.pages.push(page);
-        let page_index = self.pages.len() - 1;
         let prev = self.page_index_by_base.insert(base, page_index);
         debug_assert!(prev.is_none(), "arena page base registered twice");
-        self.chunk_map_set(base, page_index);
         ArenaRun {
             page: page_index,
             first: 0,
@@ -1811,195 +1828,11 @@ pub(super) struct ArenaSweepRanges {
     pub(super) bignum: PageRange,
 }
 
-pub(super) struct MappedConsRange {
-    pub(super) start: *mut ConsCell,
-    pub(super) len: usize,
-    pub(super) mark_bits: Vec<usize>,
-}
-
-impl MappedConsRange {
-    pub(super) fn new(start: *mut ConsCell, len: usize) -> Self {
-        Self {
-            start,
-            len,
-            mark_bits: vec![0; cons_mark_words(len)],
-        }
-    }
-
-    #[inline]
-    pub(super) fn contains_ptr(&self, ptr: *const ConsCell) -> bool {
-        if ptr.is_null() || self.len == 0 {
-            return false;
-        }
-        let start = self.start as usize;
-        let end = start + self.len * size_of::<ConsCell>();
-        let ptr = ptr as usize;
-        start <= ptr && ptr < end && (ptr - start).is_multiple_of(size_of::<ConsCell>())
-    }
-
-    #[inline]
-    pub(super) fn index_of_ptr(&self, ptr: *const ConsCell) -> usize {
-        (ptr as usize - self.start as usize) / size_of::<ConsCell>()
-    }
-
-    #[inline]
-    pub(super) fn is_marked_ptr(&self, ptr: *const ConsCell) -> bool {
-        let index = self.index_of_ptr(ptr);
-        let mark = ConsBlock::mark_bit(index);
-        (self.mark_bits[mark.word_index] & mark.mask) != 0
-    }
-
-    #[inline]
-    pub(super) fn mark_ptr(&mut self, ptr: *const ConsCell) {
-        let index = self.index_of_ptr(ptr);
-        let mark = ConsBlock::mark_bit(index);
-        self.mark_bits[mark.word_index] |= mark.mask;
-    }
-
-    pub(super) fn clear_marks(&mut self) {
-        self.mark_bits.fill(0);
-    }
-
-    /// Mark every cell in the range live (dump-partition: born black). Sets
-    /// exactly `len` bits so `live_count` stays exact.
-    pub(super) fn mark_all(&mut self) {
-        self.mark_bits.fill(!0);
-        let rem = self.len % CONS_MARK_BITS_PER_WORD;
-        if rem != 0
-            && let Some(last) = self.mark_bits.last_mut()
-        {
-            *last = (1usize << rem) - 1;
-        }
-    }
-
-    pub(super) fn live_count(&self) -> usize {
-        self.mark_bits
-            .iter()
-            .enumerate()
-            .map(|(word_index, word)| {
-                let full_words = self.len / CONS_MARK_BITS_PER_WORD;
-                let tail_bits = self.len % CONS_MARK_BITS_PER_WORD;
-                if word_index < full_words || tail_bits == 0 {
-                    word.count_ones() as usize
-                } else {
-                    let mask = (1usize << tail_bits) - 1;
-                    (word & mask).count_ones() as usize
-                }
-            })
-            .sum()
-    }
-}
-
-pub(super) struct MappedFloatRange {
-    pub(super) start: *mut FloatObj,
-    pub(super) len: usize,
-    pub(super) mark_bits: Vec<usize>,
-}
-
-impl MappedFloatRange {
-    pub(super) fn new(start: *mut FloatObj, len: usize) -> Self {
-        Self {
-            start,
-            len,
-            mark_bits: vec![0; cons_mark_words(len)],
-        }
-    }
-
-    #[inline]
-    pub(super) fn contains_ptr(&self, ptr: *const FloatObj) -> bool {
-        if ptr.is_null() || self.len == 0 {
-            return false;
-        }
-        let start = self.start as usize;
-        let end = start + self.len * size_of::<FloatObj>();
-        let ptr = ptr as usize;
-        start <= ptr && ptr < end && (ptr - start).is_multiple_of(size_of::<FloatObj>())
-    }
-
-    #[inline]
-    pub(super) fn index_of_ptr(&self, ptr: *const FloatObj) -> usize {
-        (ptr as usize - self.start as usize) / size_of::<FloatObj>()
-    }
-
-    #[inline]
-    pub(super) fn is_marked_ptr(&self, ptr: *const FloatObj) -> bool {
-        let index = self.index_of_ptr(ptr);
-        let mark = ConsBlock::mark_bit(index);
-        (self.mark_bits[mark.word_index] & mark.mask) != 0
-    }
-
-    #[inline]
-    pub(super) fn mark_ptr(&mut self, ptr: *const FloatObj) {
-        let index = self.index_of_ptr(ptr);
-        let mark = ConsBlock::mark_bit(index);
-        self.mark_bits[mark.word_index] |= mark.mask;
-    }
-
-    pub(super) fn clear_marks(&mut self) {
-        self.mark_bits.fill(0);
-    }
-
-    /// Mark every cell in the range live (dump-partition: born black). Sets
-    /// exactly `len` bits so `live_count` stays exact.
-    pub(super) fn mark_all(&mut self) {
-        self.mark_bits.fill(!0);
-        let rem = self.len % CONS_MARK_BITS_PER_WORD;
-        if rem != 0
-            && let Some(last) = self.mark_bits.last_mut()
-        {
-            *last = (1usize << rem) - 1;
-        }
-    }
-
-    pub(super) fn live_count(&self) -> usize {
-        self.mark_bits
-            .iter()
-            .enumerate()
-            .map(|(word_index, word)| {
-                let full_words = self.len / CONS_MARK_BITS_PER_WORD;
-                let tail_bits = self.len % CONS_MARK_BITS_PER_WORD;
-                if word_index < full_words || tail_bits == 0 {
-                    word.count_ones() as usize
-                } else {
-                    let mask = (1usize << tail_bits) - 1;
-                    (word & mask).count_ones() as usize
-                }
-            })
-            .sum()
-    }
-}
-
-pub(super) struct MappedVecLikeObject {
-    pub(super) header: *mut VecLikeHeader,
-    pub(super) byte_len: usize,
-    pub(super) marked: bool,
-}
-
-impl MappedVecLikeObject {
-    pub(super) fn new(header: *mut VecLikeHeader, byte_len: usize) -> Self {
-        Self {
-            header,
-            byte_len,
-            marked: false,
-        }
-    }
-}
-
-pub(super) struct MappedStringObject {
-    pub(super) ptr: *mut StringObj,
-    pub(super) byte_len: usize,
-    pub(super) marked: bool,
-}
-
-impl MappedStringObject {
-    pub(super) fn new(ptr: *mut StringObj, byte_len: usize) -> Self {
-        Self {
-            ptr,
-            byte_len,
-            marked: false,
-        }
-    }
-}
+#[path = "mapped_ranges.rs"]
+mod mapped_ranges;
+pub(super) use mapped_ranges::{
+    MappedConsRange, MappedFloatRange, MappedStringObject, MappedVecLikeObject,
+};
 
 /// Per-kind breakdown of the values the GC thread parked in `deferred` for the
 /// STW termination drain, taken as `join_concurrent_mark` folds the buffer into
@@ -2672,6 +2505,71 @@ mod arena_pages_soundness_tests {
                     value: 2.0,
                 },
             );
+        }
+    }
+
+    /// value-gc C7: if `chunk_map_set` panics while adding a fresh arena page
+    /// in `alloc_slot_new_page` or `reserve_run_in_new_page`, unwinding must
+    /// not leave any uninitialized slot marked allocated (which would run
+    /// `drop_in_place::<VectorObj>` on uninitialized bytes when the page or
+    /// arena drops).
+    #[test]
+    fn c7_chunk_map_set_panic_does_not_drop_uninitialized_arena_slots() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        use std::sync::Arc;
+
+        // 1. `alloc_slot_new_page` unwind path with a Drop-bearing `VectorObj`.
+        {
+            let map = Arc::new(ChunkMap::new());
+            let mut arena = ObjectArena::<VectorObj>::new(Some(Arc::clone(&map)));
+            super::chunk_map::BEFORE_LEAF_INSTALL.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(|| {
+                    panic!("injected chunk_map_set panic during alloc_slot")
+                }));
+            });
+            let res = catch_unwind(AssertUnwindSafe(|| {
+                // SAFETY: if `alloc_slot` returned normally we would write the
+                // slot immediately; here `chunk_map_set` panics first.
+                let _ = unsafe { arena.alloc_slot() };
+            }));
+            assert!(res.is_err(), "injected chunk_map_set panic must propagate");
+            assert_eq!(
+                arena.pages.len(),
+                0,
+                "failed chunk_map_set must not leave an unmapped page in arena.pages"
+            );
+            assert!(
+                arena.page_index_by_base.is_empty(),
+                "failed chunk_map_set must not register an unmapped page base"
+            );
+            drop(arena);
+        }
+
+        // 2. `reserve_run_in_new_page` unwind path with a Drop-bearing `VectorObj`.
+        {
+            let map = Arc::new(ChunkMap::new());
+            let mut arena = ObjectArena::<VectorObj>::new(Some(Arc::clone(&map)));
+            super::chunk_map::BEFORE_LEAF_INSTALL.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(|| {
+                    panic!("injected chunk_map_set panic during reserve_run")
+                }));
+            });
+            let res = catch_unwind(AssertUnwindSafe(|| {
+                // SAFETY: if `reserve_run` returned normally we would write
+                // every slot immediately; here `chunk_map_set` panics first.
+                let _ = unsafe { arena.reserve_run(2) };
+            }));
+            assert!(res.is_err(), "injected chunk_map_set panic must propagate");
+            assert_eq!(
+                arena.pages.len(),
+                0,
+                "failed chunk_map_set must not leave an unmapped page in arena.pages"
+            );
+            assert!(
+                arena.page_index_by_base.is_empty(),
+                "failed chunk_map_set must not register an unmapped page base"
+            );
+            drop(arena);
         }
     }
 }

@@ -215,10 +215,7 @@ fn validate_closed(
     if !owner.is_closed()
         || regions.cons != ConsRegionSource::Closed
         || regions.float != FloatRegionSource::Closed
-        || jit.cons_cur.get() != 0
-        || jit.cons_lim.get() != 0
-        || jit.float_cur.get() != 0
-        || jit.float_lim.get() != 0
+        || jit.has_open_cursors()
         || hot.black_cons_region_start.is_some()
         || hot.black_float_region_start.is_some()
     {
@@ -613,6 +610,27 @@ impl OwnerGcState {
             MarkWord::from_immediate(value)
                 .expect("push_immediate_root_slot_for_test requires an immediate"),
         );
+    }
+
+    /// Test-only synthetic cursor probe for `image_tests` open-region refusal checks.
+    ///
+    /// Safe because `OwnerGcState` is an offline fact container whose `jit`
+    /// field is only inspected by `validate_closed` (never dereferenced by
+    /// `TaggedHeap` allocation or JIT code).
+    #[cfg(test)]
+    pub(super) fn set_synthetic_jit_cursors_for_test(
+        &mut self,
+        cons_cur: usize,
+        cons_lim: usize,
+        float_cur: usize,
+        float_lim: usize,
+    ) {
+        // SAFETY: `OwnerGcState.jit` is never allocated from by Rust or JIT
+        // code; only `validate_closed` reads `has_open_cursors()`.
+        unsafe {
+            self.jit
+                .set_raw_cursors_for_test(cons_cur, cons_lim, float_cur, float_lim);
+        }
     }
 }
 

@@ -290,8 +290,8 @@ struct MutatorSatbRegistry {
     #[cfg(any(test, feature = "test-support"))]
     registered: Vec<RegisteredMutatorGc>,
     /// Scoped pointer to the actual AllStopped guard; never a manufactured proof.
-    /// Access and lifetime erasure are confined to collector_tables.
-    collector_tables: Option<std::rc::Rc<Cell<*const ()>>>,
+    /// Access and lifetime erasure are confined to `collector_tables_slot`.
+    collector_tables: super::collector_tables_slot::CollectorTablesSlot,
     /// The World's carried collection protocol, outside the pinned hot heap.
     observations: std::cell::OnceCell<super::super::collection_reads::ObservationWorld>,
     /// Explicit return-row observer state, outside the pinned heap layout.
@@ -342,18 +342,13 @@ impl MutatorSatbSlot {
     }
 
     pub(super) fn collector_tables(&self) -> *const () {
-        self.0
-            .collector_tables
-            .as_ref()
-            .map_or(std::ptr::null(), |slot| slot.get())
+        self.0.collector_tables.raw_ptr()
     }
 
-    pub(super) fn collector_tables_slot(&mut self) -> std::rc::Rc<Cell<*const ()>> {
-        std::rc::Rc::clone(
-            self.0
-                .collector_tables
-                .get_or_insert_with(|| std::rc::Rc::new(Cell::new(std::ptr::null()))),
-        )
+    pub(super) fn collector_tables_slot(
+        &self,
+    ) -> &super::collector_tables_slot::CollectorTablesSlot {
+        &self.0.collector_tables
     }
 
     #[inline]
@@ -377,7 +372,7 @@ impl MutatorSatbSlot {
             last_termination_partial_words: 0,
             #[cfg(any(test, feature = "test-support"))]
             registered: Vec::new(),
-            collector_tables: None,
+            collector_tables: super::collector_tables_slot::CollectorTablesSlot::new(),
             observations: std::cell::OnceCell::new(),
             gc_rows: Default::default(),
             image_hash_tables: Default::default(),

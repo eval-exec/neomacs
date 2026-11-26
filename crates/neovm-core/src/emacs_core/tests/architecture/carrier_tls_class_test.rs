@@ -670,12 +670,12 @@ const TLS_CLASSIFICATION: &[(&str, &str, TlsClass)] = &[
         "PROBE_RUNNER",
         TlsClass::SourceOnly,
     ),
-    // Invariant flag: the real deferred GC boundary rejects a live mutation
-    // closure before zeroing it; never silently hide a leaked extent.
+    // Phase 0c / GEN-5 release re-entrancy backstop: tracks live `with_*_mut`
+    // extents unconditionally in debug and release builds. The deferred GC
+    // boundary rejects a live mutation closure before zeroing it; never silently
+    // hide a leaked extent.
     // MustReset: gc_thread::reset_carrier_tls calls mutate::reset_carrier_tls
-    // at deferred reuse, asserting GEN-5 before zeroing. Static, reset and call share
-    // cfg(any(test, debug_assertions, feature = "test-support")); plain optimized
-    // production without test-support contains neither the flag nor this reset.
+    // at deferred reuse, asserting GEN-5 before zeroing.
     (
         "neovm-value/src/tagged/mutate.rs",
         "IN_HEAP_MUT_CLOSURE",

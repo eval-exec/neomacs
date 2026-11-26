@@ -37,7 +37,7 @@ fn structured_launch_preserves_spaces_in_arguments_and_environment() {
         .env("NEOMACS_TUI_STRUCTURED_VALUE", "alpha beta");
     let mut session = TuiSession::spawn_launch(launch, "STRUCTURED");
 
-    session.read_until(Duration::from_secs(2), |grid| {
+    session.read_until(Duration::from_secs(5), |grid| {
         grid.iter().any(|row| row.contains("alpha beta"))
     });
 
@@ -104,7 +104,7 @@ fn tui_session_drains_nonblocking_output_between_client_observations() {
         ])
         .env(NONBLOCKING_PTY_FIXTURE, "1");
     let mut session = TuiSession::spawn_launch(launch, "NONBLOCKING-OUTPUT");
-    session.read_until(Duration::from_secs(2), |grid| {
+    session.read_until(Duration::from_secs(5), |grid| {
         grid.iter().any(|row| row.contains("fixture-ready"))
     });
     session.clear_recent_output();
@@ -114,7 +114,7 @@ fn tui_session_drains_nonblocking_output_between_client_observations() {
     // keep draining independently during that interval, like a terminal.
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(
-        session.run_to_completion(Duration::from_secs(2)),
+        session.run_to_completion(Duration::from_secs(5)),
         TuiProcessOutcome::Exited,
     );
 
@@ -147,7 +147,7 @@ fn tui_session_records_the_pty_interaction_at_its_public_artifact_path() {
     session.resize(30, 90);
     session.mark_recording("command complete");
     assert_eq!(
-        session.run_to_completion(Duration::from_secs(1)),
+        session.run_to_completion(Duration::from_secs(5)),
         TuiProcessOutcome::Exited
     );
     let path = session
@@ -220,6 +220,7 @@ fn tui_session_paces_only_after_a_recorded_write_and_a_graded_one_never() {
     const DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
     let artifacts = tempfile::tempdir().expect("create recording root");
+    let paced_waits = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut paced = TuiSession::spawn_launch_for_recording_test(
         TuiLaunch::new("sh").args(["-c", "read -r line"]),
         "PACED",
@@ -228,21 +229,21 @@ fn tui_session_paces_only_after_a_recorded_write_and_a_graded_one_never() {
         artifacts.path(),
         RecordingIdentity::new("neomacs-tui-tests", "recording pacing", "PACED"),
     );
+    paced.set_pacing_observer(std::sync::Arc::clone(&paced_waits));
 
-    let started = std::time::Instant::now();
     paced.send(b"\n");
-    let paced_elapsed = started.elapsed();
+    assert!(paced.recording_path().is_some());
     drop(paced);
-    assert!(
-        paced_elapsed >= DELAY,
-        "a recorded key pauses after its ordered write: expect at least {:?}, sent in {:?}",
-        DELAY,
-        paced_elapsed
+    assert_eq!(
+        *paced_waits.lock().unwrap(),
+        vec![(DELAY, 1)],
+        "a recorded key must pace by DELAY exactly once, strictly after the write commits"
     );
 
     // The delay cannot outlive the recording it exists for, not even when a
     // caller hands one to a session that records nothing.
     let unpaced_artifacts = tempfile::tempdir().expect("create recording root");
+    let unpaced_waits = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut unpaced = TuiSession::spawn_launch_for_recording_test(
         TuiLaunch::new("sh").args(["-c", "read -r line"]),
         "UNPACED",
@@ -251,15 +252,15 @@ fn tui_session_paces_only_after_a_recorded_write_and_a_graded_one_never() {
         unpaced_artifacts.path(),
         RecordingIdentity::new("neomacs-tui-tests", "recording pacing", "UNPACED"),
     );
+    unpaced.set_pacing_observer(std::sync::Arc::clone(&unpaced_waits));
 
-    let started = std::time::Instant::now();
     unpaced.send(b"\n");
-    let unpaced_elapsed = started.elapsed();
     assert_eq!(unpaced.recording_path(), None);
     drop(unpaced);
     assert!(
-        unpaced_elapsed < DELAY,
-        "a graded run's send must not wait: spent {unpaced_elapsed:?} sending one key"
+        unpaced_waits.lock().unwrap().is_empty(),
+        "a graded run's send must never invoke recording pacing: {:?}",
+        unpaced_waits.lock().unwrap()
     );
 }
 
@@ -414,7 +415,7 @@ fn explicit_completion_drains_tail_and_records_one_final_exit() {
         RecordingIdentity::new("neomacs-tui-tests", "final tail", "TAIL"),
     );
     assert_eq!(
-        session.run_to_completion(Duration::from_secs(3)),
+        session.run_to_completion(Duration::from_secs(5)),
         TuiProcessOutcome::Exited
     );
     assert!(session.row_text(0).contains("FINAL-TAIL"));

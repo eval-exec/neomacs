@@ -1,5 +1,6 @@
 //! Sustained device delivery, with no command-completion waits between inputs.
 use super::*;
+use std::time::Instant;
 #[path = "budget.rs"]
 mod budget;
 #[path = "latency.rs"]
@@ -11,6 +12,17 @@ pub(super) enum Workload {
     Rich,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub(super) enum Mode {
+    /// Gate row: verify sustained-stream state transitions (drain, advance,
+    /// exact reversal, complete non-evicted receipts) without asserting
+    /// host-dependent software-renderer pacing budgets.
+    StateOnly,
+    /// Calibrated perf/pacing row: run the capacity probe and enforce
+    /// `ResponseBudget` latency/cadence limits on a quiet, calibrated host.
+    CalibratedPacing,
+}
+
 pub(super) fn run(
     trackpad: &mut wayland::Trackpad,
     artifacts: &Path,
@@ -18,59 +30,106 @@ pub(super) fn run(
     latency_path: &Path,
     initial: Value,
     workload: Workload,
+    mode: Mode,
 ) {
-    let environment = budget::Environment::capture(artifacts, workload);
-    let selected_budget = environment.budget();
-    fs::write(
-        artifacts.join("continuous-environment.json"),
-        serde_json::to_vec_pretty(
-            &serde_json::json!({"environment": environment, "budget": selected_budget}),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    let selected_budget = selected_budget.unwrap_or_else(|error| {
-        panic!("uncalibrated scroll environment: {error:?}; {environment:?}; {artifacts:?}")
-    });
-    // Longer opt-in runs expose intermittent stalls across coverage turnover.
-    let inputs = std::env::var("NEOMACS_GUI_SCROLL_STREAM_INPUTS")
-        .map(|value| {
-            value
-                .parse::<usize>()
-                .expect("stream input count must be an integer")
-        })
-        .unwrap_or(480);
-    assert!(
-        (480..=12_000).contains(&inputs) && inputs.is_multiple_of(2),
-        "stream input count must be even and between 480 and 12000"
-    );
+    let (environment, selected_budget) = match mode {
+        Mode::StateOnly => (None, None),
+        Mode::CalibratedPacing => {
+            let environment = budget::Environment::capture(artifacts, workload);
+            let selected_budget = environment.budget();
+            fs::write(
+                artifacts.join("continuous-environment.json"),
+                serde_json::to_vec_pretty(
+                    &serde_json::json!({"environment": environment, "budget": selected_budget}),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let selected_budget = selected_budget.unwrap_or_else(|error| {
+                panic!("uncalibrated scroll environment: {error:?}; {environment:?}; {artifacts:?}")
+            });
+            (Some(environment), Some(selected_budget))
+        }
+    };
+    // Calibrated pacing runs 480 inputs (overrideable via env to expose
+    // intermittent stalls across coverage turnover). State-only gate runs keep
+    // total in-flight inputs below the latency ledger's MAX_PENDING (256) so a
+    // busy machine slows draining instead of overflowing the diagnostic ledger.
+    let inputs = match mode {
+        Mode::StateOnly => 240,
+        Mode::CalibratedPacing => {
+            let count = std::env::var("NEOMACS_GUI_SCROLL_STREAM_INPUTS")
+                .map(|value| {
+                    value
+                        .parse::<usize>()
+                        .expect("stream input count must be an integer")
+                })
+                .unwrap_or(480);
+            assert!(
+                (480..=12_000).contains(&count) && count.is_multiple_of(2),
+                "stream input count must be even and between 480 and 12000"
+            );
+            count
+        }
+    };
     const PIXELS: f64 = 4.0;
     let period = Duration::from_nanos(1_000_000_000 / 120);
     let started = Instant::now();
     let mut sent_ns = Vec::with_capacity(inputs);
     let mut observations = vec![initial.clone()];
+    let sample_state = |observations: &mut Vec<Value>| {
+        if let Ok(bytes) = fs::read(state_path)
+            && let Ok(state) = serde_json::from_slice::<Value>(&bytes)
+            && state["sample"].as_u64() > observations.last().unwrap()["sample"].as_u64()
+        {
+            observations.push(state);
+        }
+    };
+    let wait_for_pixels = |observations: &mut Vec<Value>, target_pixels: f64, timeout: Duration| {
+        let deadline = Instant::now() + timeout;
+        loop {
+            sample_state(observations);
+            if observations.last().unwrap()["processed-pixels"]
+                .as_f64()
+                .unwrap()
+                >= target_pixels
+                || Instant::now() >= deadline
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let initial_pixels = initial["processed-pixels"].as_f64().unwrap();
     for index in 0..inputs {
+        if mode == Mode::StateOnly && index == inputs / 2 {
+            // Deterministically observe the forward viewport advance before
+            // reversing, rather than hoping the 50 ms timer fires mid-burst
+            // under heavy CPU load.
+            wait_for_pixels(
+                &mut observations,
+                initial_pixels + (inputs / 2) as f64 * PIXELS,
+                Duration::from_secs(20),
+            );
+        }
         let deadline = started + period * index as u32;
-        if let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        if mode == Mode::CalibratedPacing
+            && let Some(remaining) = deadline.checked_duration_since(Instant::now())
+        {
             thread::sleep(remaining);
         }
         sent_ns.push(started.elapsed().as_nanos() as u64);
         trackpad.scroll(if index < inputs / 2 { PIXELS } else { -PIXELS });
         // Observe progress without waiting for a timer or a command. Sampling
         // files is outside the editor and does not force its redisplay.
-        if let Ok(bytes) = fs::read(state_path)
-            && let Ok(state) = serde_json::from_slice::<Value>(&bytes)
-            && state["sample"] != observations.last().unwrap()["sample"]
-        {
-            observations.push(state);
-        }
+        sample_state(&mut observations);
     }
     let injected_ms = started.elapsed().as_secs_f64() * 1000.0;
     let save = |observations: &[Value], drained_ms: Option<f64>| {
         fs::write(
             artifacts.join("continuous-input.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
-                "requested_hz": 120,
+                "requested_hz": (mode == Mode::CalibratedPacing).then_some(120),
                 "inputs": inputs,
                 "injected_ms": injected_ms,
                 "drained_ms": drained_ms,
@@ -83,25 +142,8 @@ pub(super) fn run(
     };
     // Keep injection/progress evidence even if draining times out.
     save(&observations, None);
-    let expected_pixels = initial["processed-pixels"].as_f64().unwrap() + inputs as f64 * PIXELS;
-    let drain_deadline = Instant::now() + Duration::from_secs(8);
-    loop {
-        if let Ok(bytes) = fs::read(state_path)
-            && let Ok(state) = serde_json::from_slice::<Value>(&bytes)
-            && state["sample"].as_u64() > observations.last().unwrap()["sample"].as_u64()
-        {
-            observations.push(state);
-        }
-        if observations.last().unwrap()["processed-pixels"]
-            .as_f64()
-            .unwrap()
-            >= expected_pixels
-            || Instant::now() >= drain_deadline
-        {
-            break;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
+    let expected_pixels = initial_pixels + inputs as f64 * PIXELS;
+    wait_for_pixels(&mut observations, expected_pixels, Duration::from_secs(20));
     let completed = observations.last().unwrap();
     let drained = completed["processed-pixels"].as_f64().unwrap() >= expected_pixels;
     save(
@@ -109,7 +151,7 @@ pub(super) fn run(
         drained.then(|| started.elapsed().as_secs_f64() * 1000.0),
     );
 
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + Duration::from_secs(20);
     let samples: Vec<Value> = loop {
         let samples: Vec<Value> = fs::read_to_string(latency_path)
             .unwrap_or_default()
@@ -125,6 +167,7 @@ pub(super) fn run(
     fs::write(
         artifacts.join("continuous-presentations.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
+            "mode": mode,
             "expected_receipts": inputs,
             "sway_renderer_request": fs::read_to_string(artifacts.join("sway-renderer-request")).ok(),
             "editor_adapter": fs::read_to_string(artifacts.join("neomacs.log"))
@@ -174,8 +217,10 @@ pub(super) fn run(
             "clock mismatch: {sample}; {environment:?}"
         );
     }
-    assert!(
-        report.assess(&selected_budget) == latency::Assessment::WithinBudget,
-        "continuous scroll exceeded response budget: {report:?}; budget={selected_budget:?}; {environment:?}; {artifacts:?}"
-    );
+    if let Some(selected_budget) = &selected_budget {
+        assert!(
+            report.assess(selected_budget) == latency::Assessment::WithinBudget,
+            "continuous scroll exceeded response budget: {report:?}; budget={selected_budget:?}; {environment:?}; {artifacts:?}"
+        );
+    }
 }

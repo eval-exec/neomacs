@@ -262,7 +262,7 @@ pub fn ensure_standard_case_table_object_in_state_with_symbols(
 #[doc(hidden)]
 pub fn current_case_table_for_buffer_in_state_with_symbols(
     obarray: &mut neovm_value::symbol::Obarray,
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    mut buffers: neovm_edit::buffer::BufferManagerMut<'_>,
     mode: SymbolMode,
 ) -> Result<Value, Flow> {
     use neovm_edit::buffer::buffer::BUFFER_SLOT_CASE_TABLE;
@@ -270,13 +270,13 @@ pub fn current_case_table_for_buffer_in_state_with_symbols(
     let current_id = buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let buf = buffers
-        .get_mut(current_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let value = buffers
+        .get(current_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+        .slots()[BUFFER_SLOT_CASE_TABLE.index()];
 
     // Mirrors GNU `Fcurrent_case_table` (`casetab.c:65-72`):
     //     return BVAR (current_buffer, downcase_table);
-    let value = buf.slots()[BUFFER_SLOT_CASE_TABLE.index()];
     if is_case_table_with_symbols(&value, mode) {
         return Ok(value);
     }
@@ -284,7 +284,7 @@ pub fn current_case_table_for_buffer_in_state_with_symbols(
     // Slot unset or invalid: seed from the standard table —
     // matches GNU `reset_buffer` cloning the standard tables
     // into a fresh buffer (`buffer.c:1149-1157`).
-    buf.slots_mut()[BUFFER_SLOT_CASE_TABLE.index()] = fallback;
+    let _ = buffers.set_buffer_slot(current_id, BUFFER_SLOT_CASE_TABLE, fallback);
     Ok(fallback)
 }
 

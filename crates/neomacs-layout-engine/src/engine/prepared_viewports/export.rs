@@ -67,15 +67,43 @@ enum ExportReceipt {
     // (frame_windows.rs::clear_gpu_resident_state drops GPU history only).
     // An activation older than this receipt must not authorize renewal.
     Active { first: u64 },
+    // Published only through the un-ACKed auxiliary channel: reusable across
+    // repeated auxiliary snapshots on the same base presentation, but never
+    // authorized to emit a renewal on the next ordinary frame.
+    AuxiliaryOnly,
 }
 
-pub(super) struct CoverageExportInputs {
+pub(in crate::engine) struct CoverageExportInputs {
     key: RetainedWindowKey,
     placement: ExportPlacement,
     pages: Vec<Rc<PreparedViewportPayload>>,
     font_catalog: neomacs_display_protocol::font::FontCatalogGeneration,
     surface: Arc<neomacs_display_protocol::scroll_coverage::ScrollSurface>,
     receipt: ExportReceipt,
+}
+
+pub(in crate::engine) enum StagedAuxiliaryLastExport {
+    PreserveExisting,
+    Set(Option<CoverageExportInputs>),
+    Clear,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(in crate::engine) struct ContiguousHeadroom {
+    pub(in crate::engine) backward_px: f32,
+    pub(in crate::engine) backward_reaches_begin: bool,
+    pub(in crate::engine) forward_px: f32,
+    pub(in crate::engine) forward_reaches_end: bool,
+    pub(in crate::engine) forward_edge: Option<CharPos0>,
+}
+
+struct SelectedCoverageRows<'a> {
+    attempt: crate::frame_face_arena::FrameFaceAttempt,
+    all: Vec<(&'a RetainedWindowMatrix, usize)>,
+    anchor_index: usize,
+    visible_end: usize,
+    begin: usize,
+    end: usize,
 }
 
 impl CoverageExportInputs {
@@ -145,7 +173,7 @@ impl CoverageExportInputs {
                 true
             }
             ExportReceipt::Active { first } => active.get() >= first,
-            ExportReceipt::AwaitingActivation { .. } => false,
+            ExportReceipt::AwaitingActivation { .. } | ExportReceipt::AuxiliaryOnly => false,
         }
     }
 }
@@ -176,12 +204,13 @@ impl PreparedViewports {
         let mut staged = Vec::with_capacity(windows.len());
         for window in windows {
             let current = &retained[&window];
-            let epoch = match self
+            let index = match self
                 .exports
-                .iter_mut()
-                .find(|export| export.frame == frame && export.window == window)
+                .iter()
+                .position(|export| export.frame == frame && export.window == window)
             {
-                Some(export) => {
+                Some(index) => {
+                    let export = &mut self.exports[index];
                     if !RetainedWindowKey::row_content_eligible(&export.key, &current.key) {
                         export.key = current.key.clone();
                         export.epoch = next_epoch();
@@ -189,7 +218,7 @@ impl PreparedViewports {
                         export.last_export = None;
                     }
                     export.visible_source = text_source_range(current);
-                    export.epoch
+                    index
                 }
                 None => {
                     let epoch = next_epoch();
@@ -203,16 +232,60 @@ impl PreparedViewports {
                         backward_start: None,
                         visible_source: text_source_range(current),
                     });
-                    epoch
+                    self.exports.len() - 1
                 }
             };
+            let epoch = self.exports[index].epoch;
             if !reuse_enabled {
                 staged.push(StagedAuxiliaryExport {
                     window,
                     backward_start: None,
                     published: false,
+                    last_export: StagedAuxiliaryLastExport::Clear,
                 });
                 continue;
+            }
+            let pages: Vec<_> = self
+                .entries
+                .iter()
+                .filter(|entry| entry.export_eligible(frame, window, &current.key))
+                .collect();
+            if pages.is_empty() {
+                staged.push(StagedAuxiliaryExport {
+                    window,
+                    backward_start: None,
+                    published: false,
+                    last_export: StagedAuxiliaryLastExport::Clear,
+                });
+                continue;
+            }
+            let (compositor_enabled, predict_pixels) = window_policy(window);
+            if self.exports[index].certified
+                && let Some(inputs) = self.exports[index].last_export.as_ref()
+                && inputs.matches(window, current, template, &pages)
+            {
+                let held = inputs.surface.coverage();
+                if held.epoch == epoch
+                    && held.hit_index.presentation() == template.presentation_id
+                    && held.compositor_enabled == compositor_enabled
+                    && held.predict_pixels == predict_pixels
+                    && held.resources_compatible_with_frame_state(template)
+                {
+                    let backward_start = held
+                        .content
+                        .matrix
+                        .rows
+                        .first()
+                        .map(|row| CharPos0::new(row.start_charpos));
+                    surfaces.push(Arc::clone(&inputs.surface));
+                    staged.push(StagedAuxiliaryExport {
+                        window,
+                        backward_start,
+                        published: true,
+                        last_export: StagedAuxiliaryLastExport::PreserveExisting,
+                    });
+                    continue;
+                }
             }
             let Some(mut coverage) =
                 self.export_window(frame, window, current, template, arena, metrics, epoch)
@@ -221,10 +294,10 @@ impl PreparedViewports {
                     window,
                     backward_start: None,
                     published: false,
+                    last_export: StagedAuxiliaryLastExport::Clear,
                 });
                 continue;
             };
-            let (compositor_enabled, predict_pixels) = window_policy(window);
             coverage.compositor_enabled = compositor_enabled;
             coverage.predict_pixels = predict_pixels;
             if !coverage.resources_compatible_with_frame_state(template) {
@@ -240,11 +313,20 @@ impl PreparedViewports {
             let Some(surface) = coverage.materialize(template) else {
                 return Err(Refusal::SurfaceMaterializationRejected(window));
             };
+            let inputs = CoverageExportInputs::new(
+                window,
+                current,
+                template,
+                &pages,
+                &surface,
+                ExportReceipt::AuxiliaryOnly,
+            );
             surfaces.push(surface);
             staged.push(StagedAuxiliaryExport {
                 window,
                 backward_start,
                 published: true,
+                last_export: StagedAuxiliaryLastExport::Set(inputs),
             });
         }
         Ok((surfaces, staged))
@@ -253,7 +335,7 @@ impl PreparedViewports {
     pub(in crate::engine) fn commit_auxiliary_exports(
         &mut self,
         frame: neovm_core::window::FrameId,
-        staged: &[super::super::auxiliary_coverage::StagedAuxiliaryExport],
+        staged: Vec<super::super::auxiliary_coverage::StagedAuxiliaryExport>,
     ) {
         self.exports.retain(|export| {
             export.frame != frame || staged.iter().any(|entry| entry.window == export.window)
@@ -265,9 +347,11 @@ impl PreparedViewports {
                 .find(|export| export.frame == frame && export.window == entry.window)
             {
                 export.certified = entry.published;
-                // Conservative receipt (no ACK in v1): the next ordinary frame
-                // re-exports cleanly instead of assuming renderer ingestion.
-                export.last_export = None;
+                match entry.last_export {
+                    StagedAuxiliaryLastExport::PreserveExisting => {}
+                    StagedAuxiliaryLastExport::Set(inputs) => export.last_export = inputs,
+                    StagedAuxiliaryLastExport::Clear => export.last_export = None,
+                }
                 export.backward_start = entry.backward_start;
             }
         }
@@ -456,7 +540,10 @@ impl PreparedViewports {
                     && self.exports[index]
                         .last_export
                         .as_ref()
-                        .is_some_and(|inputs| inputs.matches_surface(*window, current, state)) =>
+                        .is_some_and(|inputs| {
+                            !matches!(inputs.receipt, ExportReceipt::AuxiliaryOnly)
+                                && inputs.matches_surface(*window, current, state)
+                        }) =>
                 {
                     let (compositor_enabled, predict_pixels) = window_policy(*window);
                     state.scroll_coverage_renewals.push(ScrollCoverageRenewal {
@@ -477,20 +564,18 @@ impl PreparedViewports {
         }
     }
 
-    fn export_window(
-        &self,
+    /// Single source of truth for merging eligible prepared pages around
+    /// `current`, validating face admission, resolving paragraph conflicts,
+    /// checking source adjacency, and enforcing `MAX_COVERAGE_ROWS`.
+    /// Shared by both `contiguous_headroom` (scheduling) and `export_window`.
+    fn select_connected_rows<'a>(
+        &'a self,
         frame: neovm_core::window::FrameId,
         window: DisplayWindowId,
-        current: &RetainedWindowMatrix,
-        state: &FrameDisplayState,
+        current: &'a RetainedWindowMatrix,
         arena: &FrameFaceArena,
-        metrics: &mut Option<crate::font::metrics::FontMetricsService>,
-        epoch: u64,
-    ) -> Option<ScrollCoverage> {
-        tracing::trace!(target: "neomacs_layout_engine::coverage_cost",
-            window = window.get(), start = current.key.window_start,
-            hscroll = current.key.hscroll, vscroll = current.key.vscroll,
-            epoch, "building scroll coverage");
+        epoch: Option<u64>,
+    ) -> Option<SelectedCoverageRows<'a>> {
         let entries: Vec<_> = self
             .entries
             .iter()
@@ -502,10 +587,6 @@ impl PreparedViewports {
         if entries.is_empty() {
             return None;
         }
-        let original = state
-            .window_matrices
-            .iter()
-            .find(|entry| entry.window_id == window)?;
         let body: Vec<_> = current
             .matrix
             .rows
@@ -514,6 +595,7 @@ impl PreparedViewports {
             .filter(|(_, row)| row.enabled && row.role == GlyphRowRole::Text)
             .collect();
         let (_, anchor) = *body.first()?;
+        let last_visible_start = body.last()?.1.start_charpos;
         let mut rows = std::collections::BTreeMap::new();
         let mut attempt = arena.begin_attempt();
         attempt
@@ -587,19 +669,21 @@ impl PreparedViewports {
                             })
                 });
                 if let Some((_, row)) = conflict {
-                    tracing::debug!(target: "neomacs_layout_engine::scroll_coverage",
-                        window = window.get(), epoch,
-                        body_start = anchor.start_charpos,
-                        prepared_start = entry.retained.key.window_start,
-                        paragraph_start = ?paragraph.first().map(|(_, row)| row.start_charpos),
-                        row_start = row.start_charpos, row_end = row.end_charpos,
-                        row_next = ?row.next_buffer_row_start(), row_continued = row.continued,
-                        previous = ?rows.range(..=row.start_charpos).next_back().map(|(_, (source, index))| {
-                            let row = &source.matrix.rows[*index];
-                            (row.start_charpos, row.end_charpos, row.continued, row.height_px)
-                        }),
-                        next = ?rows.range((std::ops::Bound::Excluded(row.start_charpos), std::ops::Bound::Unbounded)).next().map(|(start, _)| *start),
-                        "prepared paragraph conflicts with selected coverage");
+                    if let Some(epoch) = epoch {
+                        tracing::debug!(target: "neomacs_layout_engine::scroll_coverage",
+                            window = window.get(), epoch,
+                            body_start = anchor.start_charpos,
+                            prepared_start = entry.retained.key.window_start,
+                            paragraph_start = ?paragraph.first().map(|(_, row)| row.start_charpos),
+                            row_start = row.start_charpos, row_end = row.end_charpos,
+                            row_next = ?row.next_buffer_row_start(), row_continued = row.continued,
+                            previous = ?rows.range(..=row.start_charpos).next_back().map(|(_, (source, index))| {
+                                let row = &source.matrix.rows[*index];
+                                (row.start_charpos, row.end_charpos, row.continued, row.height_px)
+                            }),
+                            next = ?rows.range((std::ops::Bound::Excluded(row.start_charpos), std::ops::Bound::Unbounded)).next().map(|(start, _)| *start),
+                            "prepared paragraph conflicts with selected coverage");
+                    }
                     continue;
                 }
                 for (index, row) in paragraph {
@@ -612,6 +696,9 @@ impl PreparedViewports {
         let anchor_index = all.iter().position(|(source, index)| {
             source.matrix.rows[*index].start_charpos == anchor.start_charpos
         })?;
+        let visible_end = all.iter().position(|(source, index)| {
+            source.matrix.rows[*index].start_charpos == last_visible_start
+        })? + 1;
         let adjacent = |left: usize, right: usize| {
             let (a, ai) = all[left];
             let (b, bi) = all[right];
@@ -621,7 +708,9 @@ impl PreparedViewports {
         while begin > 0 && adjacent(begin - 1, begin) {
             begin -= 1;
         }
-        if begin > 0 {
+        if begin > 0
+            && let Some(epoch) = epoch
+        {
             let (left, li) = all[begin - 1];
             let (right, ri) = all[begin];
             tracing::debug!(target: "neomacs_layout_engine::scroll_coverage",
@@ -643,10 +732,6 @@ impl PreparedViewports {
             // More prepared pages must not revoke an already usable surface.
             // Keep the complete visible body, divide spare rows around it,
             // then use any unfilled allowance on the available side.
-            let last_visible = body.last()?.1.start_charpos;
-            let visible_end = all.iter().position(|(source, index)| {
-                source.matrix.rows[*index].start_charpos == last_visible
-            })? + 1;
             let visible_rows = visible_end.checked_sub(anchor_index)?;
             if visible_end > end || visible_rows > MAX_COVERAGE_ROWS {
                 return None;
@@ -656,6 +741,122 @@ impl PreparedViewports {
             end = end.min(first + MAX_COVERAGE_ROWS);
             begin = begin.max(end.saturating_sub(MAX_COVERAGE_ROWS));
         }
+        Some(SelectedCoverageRows {
+            attempt,
+            all,
+            anchor_index,
+            visible_end,
+            begin,
+            end,
+        })
+    }
+
+    /// Measure contiguous certified off-screen pixel headroom connected to
+    /// `current` via `select_connected_rows`, matching `export_window`'s exact
+    /// face-admission, conflict, adjacency, and `MAX_COVERAGE_ROWS` rules.
+    pub(in crate::engine) fn contiguous_headroom(
+        &self,
+        frame: neovm_core::window::FrameId,
+        window: DisplayWindowId,
+        current: &RetainedWindowMatrix,
+        arena: &FrameFaceArena,
+        begin_char: CharPos0,
+        end_char: CharPos0,
+    ) -> ContiguousHeadroom {
+        let mut body = current
+            .matrix
+            .rows
+            .iter()
+            .filter(|row| row.enabled && row.role == GlyphRowRole::Text);
+        let Some(anchor) = body.next() else {
+            return ContiguousHeadroom {
+                backward_px: 0.0,
+                backward_reaches_begin: true,
+                forward_px: 0.0,
+                forward_reaches_end: true,
+                forward_edge: None,
+            };
+        };
+        let last_visible = body.last().unwrap_or(anchor);
+        let Some(selected) = self.select_connected_rows(frame, window, current, arena, None) else {
+            return ContiguousHeadroom {
+                backward_px: 0.0,
+                backward_reaches_begin: anchor.start_charpos <= begin_char.get(),
+                forward_px: 0.0,
+                forward_reaches_end: last_visible
+                    .next_buffer_row_start()
+                    .is_none_or(|p| p >= end_char.get()),
+                forward_edge: None,
+            };
+        };
+        let backward_px: f32 = selected.all[selected.begin..selected.anchor_index]
+            .iter()
+            .map(|(source, index)| source.matrix.rows[*index].height_px)
+            .sum();
+        let (first_src, first_idx) = selected.all[selected.begin];
+        let backward_reaches_begin =
+            first_src.matrix.rows[first_idx].start_charpos <= begin_char.get();
+        let (forward_px, forward_reaches_end, forward_edge) =
+            if selected.visible_end <= selected.end {
+                let px: f32 = selected.all[selected.visible_end..selected.end]
+                    .iter()
+                    .map(|(source, index)| source.matrix.rows[*index].height_px)
+                    .sum();
+                let (tail_src, tail_idx) = selected.all[selected.end - 1];
+                let tail_next = tail_src.matrix.rows[tail_idx].next_buffer_row_start();
+                let reaches_end = tail_next.is_none_or(|p| p >= end_char.get());
+                let edge = if px > 0.0 && !reaches_end {
+                    tail_next.map(CharPos0::new)
+                } else {
+                    None
+                };
+                (px, reaches_end, edge)
+            } else {
+                (
+                    0.0,
+                    last_visible
+                        .next_buffer_row_start()
+                        .is_none_or(|p| p >= end_char.get()),
+                    None,
+                )
+            };
+        ContiguousHeadroom {
+            backward_px,
+            backward_reaches_begin,
+            forward_px,
+            forward_reaches_end,
+            forward_edge,
+        }
+    }
+
+    fn export_window(
+        &self,
+        frame: neovm_core::window::FrameId,
+        window: DisplayWindowId,
+        current: &RetainedWindowMatrix,
+        state: &FrameDisplayState,
+        arena: &FrameFaceArena,
+        metrics: &mut Option<crate::font::metrics::FontMetricsService>,
+        epoch: u64,
+    ) -> Option<ScrollCoverage> {
+        tracing::trace!(target: "neomacs_layout_engine::coverage_cost",
+            window = window.get(), start = current.key.window_start,
+            hscroll = current.key.hscroll, vscroll = current.key.vscroll,
+            epoch, "building scroll coverage");
+        let original = state
+            .window_matrices
+            .iter()
+            .find(|entry| entry.window_id == window)?;
+        let SelectedCoverageRows {
+            attempt,
+            all,
+            anchor_index,
+            begin,
+            end,
+            ..
+        } = self.select_connected_rows(frame, window, current, arena, Some(epoch))?;
+        let (anchor_src, anchor_row_idx) = all[anchor_index];
+        let anchor = &anchor_src.matrix.rows[anchor_row_idx];
         let mut y = anchor.pixel_y
             - all[begin..anchor_index]
                 .iter()

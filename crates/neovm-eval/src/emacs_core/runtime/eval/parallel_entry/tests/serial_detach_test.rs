@@ -846,3 +846,60 @@ fn l67c_nit1_active_serial_turn_refuses_same_address_same_heap_foreign_context()
     reattach(&mut main, main_detached);
     main.seat_green_main_for_test(baton);
 }
+
+#[test]
+fn phase_0c_gc_collect_from_current_roots_panics_inside_heap_mut_closure() {
+    // Run inside an active raw `SerialTurn` so `in_active_serial_turn()` returns
+    // `Ok(())` early before `mark_sweep::begin_collection_with()`. That isolates
+    // revert-sensitivity specifically to `command_loop.rs`'s top-of-function
+    // `assert_no_heap_mut_closure()`.
+    let mut state: State = OwnerSerialState::new(7, Box::new(owner()))
+        .ok()
+        .expect("owner detaches cleanly");
+    let mut turn = state.begin((7, "ticket-0c")).ok().expect("own ticket");
+    turn.with_world(|ev| {
+        assert!(ev.in_active_serial_turn());
+        let v = ev.eval_str("(vector 1 2)").expect("allocate vector");
+        neovm_value::tagged::mutate::with_vector_data_mut(v, |outer| {
+            outer[0] = Value::fixnum(10);
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = ev.gc_collect_from_current_roots_impl_flow(true);
+            }));
+            assert!(
+                panicked.is_err(),
+                "gc_collect_from_current_roots_impl_flow inside active heap mutation closure must panic"
+            );
+            assert_eq!(outer[0], Value::fixnum(10));
+        })
+        .expect("vector mutation succeeded");
+        assert!(
+            ev.gc_collect_from_current_roots_impl_flow(true).is_ok(),
+            "gc_collect_from_current_roots_impl_flow must succeed after outer heap mutation closure exits"
+        );
+    });
+    assert_eq!(ended(turn), (7, "ticket-0c"));
+}
+
+#[test]
+fn phase_0c_detach_serial_owner_panics_inside_heap_mut_closure() {
+    let mut ev = owner();
+    let v = ev.eval_str("(vector 1 2)").expect("allocate vector");
+    neovm_value::tagged::mutate::with_vector_data_mut(v, |outer| {
+        outer[0] = Value::fixnum(20);
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = ev.detach_serial_owner();
+        }));
+        assert!(
+            panicked.is_err(),
+            "detach_serial_owner inside active heap mutation closure must panic before AbortOnPanic"
+        );
+        assert!(
+            owns_the_thread(&mut ev),
+            "rejected detach must leave the Context's heap installed"
+        );
+        assert_eq!(outer[0], Value::fixnum(20));
+    })
+    .expect("vector mutation succeeded");
+    let detached = detach(&mut ev);
+    reattach(&mut ev, detached);
+}

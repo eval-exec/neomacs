@@ -177,7 +177,7 @@ fn global_display_line_numbers_lights_the_gutter_in_a_buffer_created_after_start
 #[test]
 fn narrowed_gutter_width_and_painted_prefix_match_gnu_matrix() {
     use neomacs_tui_tests::{RawTerminalSnapshot, TuiSession};
-    use std::{fs, path::Path, time::SystemTime};
+    use std::{fs, path::Path};
 
     struct Observation {
         widths: Option<Vec<f64>>,
@@ -302,10 +302,7 @@ fn narrowed_gutter_width_and_painted_prefix_match_gnu_matrix() {
     let base = std::env::var_os("NEOMACS_GUTTER_REPRO_ARTIFACT_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| neomacs_test_env::bounded_temp_base().join("neomacs-gutter"));
-    let nonce = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .expect("clock after epoch")
-        .as_nanos();
+    let nonce = neomacs_tui_tests::unique_nonce();
     let artifacts = base.join(format!("run-{}-{nonce}", std::process::id()));
     fs::create_dir_all(&artifacts).expect("create gutter reproduction artifacts");
     eprintln!("gutter reproduction artifacts: {}", artifacts.display());

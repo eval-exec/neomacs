@@ -239,6 +239,9 @@ mod tests {
     use super::*;
 
     fn sigttou_is_blocked() -> bool {
+        // SAFETY: `sigset_t` is plain C storage; passing a null `set` to
+        // `pthread_sigmask` queries the calling thread's current mask into
+        // `current` without modifying it, and `sigismember` only reads `current`.
         unsafe {
             let mut current: libc::sigset_t = std::mem::zeroed();
             assert_eq!(
@@ -250,6 +253,8 @@ mod tests {
     }
 
     fn sigttou_handler() -> libc::sighandler_t {
+        // SAFETY: `sigaction` is plain C storage; passing a null `act` queries
+        // the current `SIGTTOU` disposition into `action` without modifying it.
         unsafe {
             let mut action: libc::sigaction = std::mem::zeroed();
             assert_eq!(
@@ -260,10 +265,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tty_out_signal_guard_blocks_and_restores_without_changing_disposition() {
-        let handler_before = sigttou_handler();
-        // Ensure SIGTTOU starts unblocked on this thread.
+    fn unblock_sigttou() {
+        // SAFETY: `sigset_t` is initialized via `sigemptyset` and `sigaddset`
+        // before `pthread_sigmask(SIG_UNBLOCK, ...)` updates only the calling
+        // thread's signal mask.
         unsafe {
             let mut set: libc::sigset_t = std::mem::zeroed();
             assert_eq!(libc::sigemptyset(&raw mut set), 0);
@@ -273,6 +278,12 @@ mod tests {
                 0
             );
         }
+    }
+
+    #[test]
+    fn tty_out_signal_guard_blocks_and_restores_without_changing_disposition() {
+        let handler_before = sigttou_handler();
+        unblock_sigttou();
         assert!(!sigttou_is_blocked());
 
         {
@@ -311,15 +322,7 @@ mod tests {
 
     #[test]
     fn tty_out_signal_guard_restores_mask_on_panic() {
-        unsafe {
-            let mut set: libc::sigset_t = std::mem::zeroed();
-            assert_eq!(libc::sigemptyset(&raw mut set), 0);
-            assert_eq!(libc::sigaddset(&raw mut set, libc::SIGTTOU), 0);
-            assert_eq!(
-                libc::pthread_sigmask(libc::SIG_UNBLOCK, &raw const set, std::ptr::null_mut()),
-                0
-            );
-        }
+        unblock_sigttou();
         let result = std::panic::catch_unwind(|| {
             let _guard = TtyOutSignalGuard::block();
             assert!(sigttou_is_blocked());
@@ -335,15 +338,7 @@ mod tests {
     #[test]
     fn database_load_restores_sigttou_mask_and_disposition() {
         let handler_before = sigttou_handler();
-        unsafe {
-            let mut set: libc::sigset_t = std::mem::zeroed();
-            assert_eq!(libc::sigemptyset(&raw mut set), 0);
-            assert_eq!(libc::sigaddset(&raw mut set, libc::SIGTTOU), 0);
-            assert_eq!(
-                libc::pthread_sigmask(libc::SIG_UNBLOCK, &raw const set, std::ptr::null_mut()),
-                0
-            );
-        }
+        unblock_sigttou();
         let _ = Database::load("xterm", &[Query::String(StringCapability::Termcap("md"))]);
         assert!(!sigttou_is_blocked());
         assert_eq!(sigttou_handler(), handler_before);

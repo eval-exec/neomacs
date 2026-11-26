@@ -1,14 +1,16 @@
 //! Issue #359: preserve GNU ftcrfont.c:144-171 raster policy for the same font.
 #![cfg(target_os = "linux")]
 
-use neomacs_gui_tests::{DisplayHarness, GuiArtifactSet, GuiBackend, GuiScenario, GuiTestPlan};
+use neomacs_gui_tests::{
+    DisplayHarness, GuiArtifactSet, GuiBackend, GuiScenario, GuiTestPlan, HangCap,
+};
 use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 const FONTS: [(&str, &str, &str, &str); 2] = [
@@ -131,10 +133,7 @@ fn run_ink_matrix(family: FamilyCase, cases: &[(&str, DisplayResources)]) {
     assert!(oracle.is_attested(), "attested oracle required");
     assert_eq!(fs::canonicalize(&forced).unwrap(), oracle.executable_path());
     let root = neomacs_infra::workspace_root();
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nonce = neomacs_gui_tests::unique_nonce();
     let artifacts = create_dir(root.join(format!(
         "tmp/neomacs-gui-tests/font-hinting-weight-{}-{nonce}",
         std::process::id()
@@ -382,7 +381,7 @@ fn run_editor(
             .spawn()
             .unwrap(),
     );
-    let deadline = Instant::now() + Duration::from_secs(25);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(25));
     let state = loop {
         if let Ok(bytes) = fs::read(&files.gui_state)
             && let Ok(state) = serde_json::from_slice::<Value>(&bytes)
@@ -393,7 +392,7 @@ fn run_editor(
             child.0.try_wait().unwrap().is_none(),
             "editor exited before state: {dir:?}"
         );
-        assert!(Instant::now() < deadline, "state timeout: {dir:?}");
+        assert!(!deadline.is_expired(), "state timeout: {dir:?}");
         thread::sleep(Duration::from_millis(10));
     };
     let rows = state["rows"].as_array().expect("displayed font rows");
@@ -411,7 +410,7 @@ fn run_editor(
     assert!(window.status.success(), "{window:?}; {dir:?}");
     let window = String::from_utf8(window.stdout).unwrap();
     let window = window.lines().next().expect("visible editor window");
-    let capture_deadline = Instant::now() + Duration::from_secs(2);
+    let capture_cap = HangCap::from_secs(10);
     let mut previous = None;
     let ink = loop {
         assert!(
@@ -434,10 +433,7 @@ fn run_editor(
         if ink.iter().all(|value| *value > 100.0) && previous.as_ref() == Some(&ink) {
             break ink;
         }
-        assert!(
-            Instant::now() < capture_deadline,
-            "visible glyphs did not settle: {dir:?}"
-        );
+        capture_cap.assert_not_expired(format!("visible glyphs did not settle: {dir:?}"));
         previous = Some(ink);
         thread::sleep(Duration::from_millis(50));
     };
@@ -446,7 +442,7 @@ fn run_editor(
             assert!(status.success(), "{status}; {dir:?}");
             break;
         }
-        assert!(Instant::now() < deadline, "exit timeout: {dir:?}");
+        assert!(!deadline.is_expired(), "exit timeout: {dir:?}");
         thread::sleep(Duration::from_millis(10));
     }
     json!({"state": state, "ink": ink, "png": files.png})

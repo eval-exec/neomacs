@@ -73,6 +73,8 @@ fn history_rejects_an_unknown_suite_artifact_schema() {
         samples_per_side: ComparisonSampleCount::new(3).expect("valid sample count"),
         machine: MachinePolicy::default(),
         counters: None,
+        host_loadavg: None,
+        provenance: None,
         started_unix_ms: 1,
         total_elapsed_us: 2,
         previous_suite: None,
@@ -137,6 +139,8 @@ fn suite_history(scenarios: Vec<SuiteScenarioResult>) -> SuiteArtifact {
         samples_per_side: ComparisonSampleCount::new(3).expect("valid sample count"),
         machine: MachinePolicy::default(),
         counters: None,
+        host_loadavg: None,
+        provenance: None,
         started_unix_ms: 1,
         total_elapsed_us: 2,
         previous_suite: None,
@@ -955,6 +959,7 @@ fn assert_guard_env_class_blocked_and_rejected(
     .with_machine_policy(MachinePolicy {
         cpu: Some(0),
         required_governor: None,
+        allow_local: false,
     })
     .with_counters(Some(CounterScope::EditLoop))
     .with_baseline_manifest(Some(verified.manifest_path.clone()));
@@ -1129,6 +1134,7 @@ fn org_editing_guard_rejects_path_shadowing_taskset_and_path_in_child_env() {
     .with_machine_policy(MachinePolicy {
         cpu: Some(0),
         required_governor: None,
+        allow_local: false,
     })
     .with_counters(Some(CounterScope::EditLoop))
     .with_baseline_manifest(Some(verified.manifest_path.clone()));
@@ -1520,6 +1526,7 @@ fn perf_harness_suite_rejects_shadowed_taskset_via_resolve_guard_tools() {
     .with_machine_policy(MachinePolicy {
         cpu: Some(0),
         required_governor: None,
+        allow_local: false,
     })
     .with_counters(Some(CounterScope::EditLoop))
     .with_baseline_manifest(Some(manifest_path))
@@ -1618,6 +1625,8 @@ fn comparison_run_from_child_reads_full_passthrough_environment_and_rejects_devi
                 scaling_governor: None,
                 perf_event_paranoid: None,
                 continuous_integration: false,
+                loadavg: None,
+                provenance: None,
             },
             native_video_execution: None,
             verdict: RunVerdict::Valid {
@@ -1664,4 +1673,92 @@ fn comparison_run_from_child_reads_full_passthrough_environment_and_rejects_devi
         )),
         "expected rejection naming all 4 leaked vars from disk provenance, got {reasons:?}"
     );
+}
+
+#[test]
+fn scrolling_long_lines_guard_requires_edit_loop_instructions_and_gates_at_two_percent() {
+    let rows = SuiteId::ScrollingLongLinesGuard.scenarios();
+    assert_eq!(rows.len(), 1);
+    let row = rows[0];
+    assert_eq!(row.scenario, ScenarioId::ScrollingLongLines);
+    assert_eq!(row.gate_metric, SuiteGateMetric::Instructions);
+    assert_eq!(row.maximum_regression_percent, 2.0);
+    assert_eq!(row.maximum_drift_percent, None);
+    assert!(!SuiteId::ScrollingLongLinesGuard.requires_baseline_manifest());
+    assert!(SuiteId::ScrollingLongLinesGuard.uses_guard_hardening());
+    assert_eq!(
+        SuiteId::ScrollingLongLinesGuard.required_counter_scope(),
+        Some(CounterScope::EditLoop)
+    );
+
+    let samples = ComparisonSampleCount::new(3).expect("valid sample count");
+    let missing_counters = SuiteRequest::new(
+        SuiteId::ScrollingLongLinesGuard,
+        "/baseline/emacs",
+        "/candidate/neomacs",
+        samples,
+    );
+    assert!(matches!(
+        missing_counters.validate(),
+        Err(PerfError::HardwareCountersRequired {
+            suite: SuiteId::ScrollingLongLinesGuard,
+            ..
+        })
+    ));
+
+    let wrong_scope = missing_counters
+        .clone()
+        .with_counters(Some(CounterScope::WholeProcess));
+    assert!(matches!(
+        wrong_scope.validate(),
+        Err(PerfError::CounterScopeMismatch {
+            suite: SuiteId::ScrollingLongLinesGuard,
+            expected: CounterScope::EditLoop,
+            actual: CounterScope::WholeProcess,
+        })
+    ));
+
+    let valid = missing_counters.with_counters(Some(CounterScope::EditLoop));
+    assert!(valid.validate().is_ok());
+
+    // Nit 3C regression guard: ScrollingLongLinesGuard uses guard hardening
+    // (strips NEOVM_*/NEOMACS_* knobs + narrows TUI PATH + resolves canonical
+    // perf/taskset tools) even without a baseline manifest.
+    let tools = resolved_test_guard_tools();
+    let mut ambient_env = BTreeMap::new();
+    ambient_env.insert("NEOVM_JIT".to_string(), OsString::from("0"));
+    ambient_env.insert("NEOMACS_TEXT_SNAPSHOT".to_string(), OsString::from("copy"));
+    ambient_env.insert(
+        "NEOMACS_RUNTIME_ROOT".to_string(),
+        OsString::from("/tmp/other"),
+    );
+    let comparison = valid
+        .comparison_request_for(
+            &row,
+            None,
+            Some(tools.clone()),
+            Some(Path::new(CANONICAL_TEST_CANDIDATE)),
+        )
+        .with_inherited_environment(ambient_env);
+    for role in [ComparisonRunRole::Baseline, ComparisonRunRole::Candidate] {
+        let run_request = comparison.run_request_for(role);
+        let run_env = run_request.benchmark_environment();
+        assert!(
+            !run_env.contains_key("NEOVM_JIT")
+                && !run_env.contains_key("NEOMACS_TEXT_SNAPSHOT")
+                && !run_env.contains_key("NEOMACS_RUNTIME_ROOT"),
+            "ScrollingLongLinesGuard {role:?} arm must strip NEOVM_*/NEOMACS_* knobs, got {run_env:?}"
+        );
+        for key in run_env.keys() {
+            assert_eq!(
+                key, "PATH",
+                "ScrollingLongLinesGuard {role:?} TUI arm may only carry minimal tool PATH, found {key}"
+            );
+        }
+        assert_eq!(
+            run_request.resolved_perf(),
+            Some(tools.perf_path.as_path()),
+            "ScrollingLongLinesGuard {role:?} arm must use resolved canonical perf"
+        );
+    }
 }

@@ -2952,6 +2952,29 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         request: FontEntityMetricsRequest,
     ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
         let pixel_size = self.font_sizing.font_opening_size_px(request.size).get();
+        let fallback_weight = request.weight.map(|weight| weight.css_weight());
+        if let Some(matched) = request
+            .handle
+            .and_then(|handle| self.font_entities.get(handle).cloned())
+            && let Some(metrics) = self
+                .synchronized_font_metrics()
+                .open_platform_entity_metrics(&matched, pixel_size, fallback_weight)
+        {
+            let file = matched.file_path().map(LispString::from_utf8);
+            let capability = match &matched.asset {
+                neomacs_display_protocol::font::FontOutlineAsset::File(file) => self
+                    .font_otf_capability(file.path(), file.face_index())
+                    .ok()
+                    .flatten(),
+                asset => font_otf_capability_for_asset(asset),
+            };
+            return Ok(Some(ResolvedFontEntityMetrics {
+                metrics: core_font_px_metrics(metrics),
+                file,
+                capability,
+            }));
+        }
+
         let family = request
             .family
             .as_ref()
@@ -2968,8 +2991,8 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         {
             query = query.with_postscript_name(postscript_name);
         }
-        if let Some(weight) = request.weight {
-            query = query.with_weight(weight.css_weight());
+        if let Some(weight) = fallback_weight {
+            query = query.with_weight(weight);
         }
         if let Some(slant) = request.slant {
             query = query.with_slant(slant);
@@ -3003,22 +3026,25 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         let Some(file) = request.file.as_ref().and_then(LispString::as_utf8_str) else {
             return Ok(None);
         };
-        let Some(metrics) = neomacs_layout_engine::font::probe::probe_font_px_metrics(
+        let Some(metrics) = self.synchronized_font_metrics().probe_file_entity_metrics(
             file,
-            0,
             pixel_size,
-            request.weight.map(|weight| f32::from(weight.css_weight())),
+            fallback_weight,
         ) else {
             return Ok(None);
         };
-        self.synchronized_font_metrics()
-            .observe_opened_font_metrics(metrics.ascent, metrics.descent);
         let capability = self.font_otf_capability(file, 0).ok().flatten();
         Ok(Some(ResolvedFontEntityMetrics {
             metrics: core_font_px_metrics(metrics),
             file: request.file,
             capability,
         }))
+    }
+
+    fn clear_font_cache(&mut self) {
+        if let Some(metrics) = self.font_metrics.as_mut() {
+            metrics.clear_font_cache_and_refresh_catalog();
+        }
     }
 
     fn font_otf_capability(
@@ -4915,11 +4941,9 @@ fn run_gui_evaluator_worker(
     // Lisp's frame-initialize will create the first GUI frame. Publishing the
     // startup terminal as a GUI scene would expose the same premature frame.
 
-    if let Some(buf) = evaluator.buffer_manager_mut().current_buffer_mut() {
-        let mut ul = buf.get_undo_list();
-        neovm_core::buffer::undo_list_boundary(&mut ul);
-        buf.set_undo_list(ul);
-    }
+    evaluator
+        .buffer_manager_view_mut()
+        .append_undo_list_boundary_to_current();
 
     // R2-C3: native-from-call-1 — mark the AOT preload members before first
     // dispatch, and before `after-pdump-load-hook`: the marks trust the
@@ -5689,11 +5713,9 @@ pub unsafe fn run(mode: RuntimeMode) {
     );
 
     // Add undo boundary after startup so initial content isn't undoable
-    if let Some(buf) = evaluator.buffer_manager_mut().current_buffer_mut() {
-        let mut ul = buf.get_undo_list();
-        neovm_core::buffer::undo_list_boundary(&mut ul);
-        buf.set_undo_list(ul);
-    }
+    evaluator
+        .buffer_manager_view_mut()
+        .append_undo_list_boundary_to_current();
 
     // 9. Enter GNU's outer command loop. This mirrors src/emacs.c, which
     //     enters recursive-edit and lets the outer command loop evaluate the
@@ -6040,58 +6062,51 @@ fn bootstrap_buffers_with_font(
     let find_or_create_buffer = |eval: &mut Context, name: &str| {
         eval.buffer_manager()
             .find_buffer_by_name(name)
-            .unwrap_or_else(|| eval.buffer_manager_mut().create_buffer(name))
+            .unwrap_or_else(|| eval.buffer_manager_view_mut().create_buffer(name))
     };
 
     // Reuse GNU startup buffers instead of creating duplicate names on top of
     // cached bootstrap state.
     let scratch_id = find_or_create_buffer(eval, "*scratch*");
     let _ = eval
-        .buffer_manager_mut()
+        .buffer_manager_view_mut()
         .clear_buffer_labeled_restrictions(scratch_id);
-    if let Some(buf) = eval.buffer_manager_mut().get_mut(scratch_id) {
-        buf.widen();
-        // Don't insert scratch content here. GNU Emacs populates
-        // *scratch* from startup.el:2948 via
-        //   (insert (substitute-command-keys initial-scratch-message))
-        // which handles \\[...] key-binding expansion and backtick →
-        // curly-quote conversion via text-quoting-style. Hardcoding
-        // the content in Rust bypassed both of those, producing bare
-        // "C-x C-f" instead of quoted "'C-x C-f'".
-        buf.goto_emacs_byte_pos(buf.point_max_emacs_byte_pos());
-    }
+    // Don't insert scratch content here. GNU Emacs populates
+    // *scratch* from startup.el:2948 via
+    //   (insert (substitute-command-keys initial-scratch-message))
+    // which handles \\[...] key-binding expansion and backtick →
+    // curly-quote conversion via text-quoting-style. Hardcoding
+    // the content in Rust bypassed both of those, producing bare
+    // "C-x C-f" instead of quoted "'C-x C-f'".
+    let _ = eval
+        .buffer_manager_view_mut()
+        .widen_and_goto_end(scratch_id);
 
     // Set *scratch* as the current buffer
-    eval.buffer_manager_mut().set_current(scratch_id);
+    eval.buffer_manager_view_mut().set_current(scratch_id);
 
     let mini_id = find_or_create_buffer(eval, " *Minibuf-0*");
     let _ = eval
-        .buffer_manager_mut()
+        .buffer_manager_view_mut()
         .clear_buffer_labeled_restrictions(mini_id);
     let _ = eval
-        .buffer_manager_mut()
+        .buffer_manager_view_mut()
         .configure_buffer_undo_list(mini_id, Value::NIL);
-    if let Some(buf) = eval.buffer_manager_mut().get_mut(mini_id) {
-        buf.widen();
-        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
-    }
+    let _ = eval.buffer_manager_view_mut().widen_buffer(mini_id);
+    let _ = eval
+        .buffer_manager_view_mut()
+        .goto_buffer_emacs_byte_pos(mini_id, EmacsBytePos::new(0));
 
     let msg_id = find_or_create_buffer(eval, "*Messages*");
     let _ = eval
-        .buffer_manager_mut()
+        .buffer_manager_view_mut()
         .clear_buffer_labeled_restrictions(msg_id);
-    if let Some(buf) = eval.buffer_manager_mut().get_mut(msg_id) {
-        buf.widen();
-        let len = buf.total_emacs_byte_len().get();
-        if len > 0 {
-            buf.delete_emacs_byte_range(EmacsByteRange::new(
-                EmacsBytePos::ZERO,
-                EmacsBytePos::new(len),
-            ));
-        }
-        buf.goto_emacs_byte_pos(EmacsBytePos::new(0));
-    }
-    let _ = eval.buffer_manager_mut().note_buffer_order_tail(msg_id);
+    let _ = eval
+        .buffer_manager_view_mut()
+        .clear_buffer_text_and_reset_point(msg_id);
+    let _ = eval
+        .buffer_manager_view_mut()
+        .note_buffer_order_tail(msg_id);
 
     let frame_id = {
         let frame_manager = eval.frame_manager();
@@ -6421,7 +6436,7 @@ fn bootstrap_gui_startup_terminal(eval: &mut Context) -> FrameId {
     let frame_id = if let Some(frame) = eval.frame_manager().selected_frame() {
         frame.id
     } else {
-        let buffer = eval.buffer_manager_mut().create_buffer("*scratch*");
+        let buffer = eval.buffer_manager_view_mut().create_buffer("*scratch*");
         eval.frame_manager_mut()
             .create_frame_on_terminal("F1", INITIAL_TERMINAL, 80, 25, buffer)
     };
@@ -6711,7 +6726,7 @@ fn ensure_gnu_startup_terminal_frame(eval: &mut Context, opening_frame_id: Frame
     } else if let Some(id) = eval.buffer_manager().find_buffer_by_name("*scratch*") {
         id
     } else {
-        eval.buffer_manager_mut().create_buffer("*scratch*")
+        eval.buffer_manager_view_mut().create_buffer("*scratch*")
     };
     let (width, height, environment) = eval
         .frame_manager()

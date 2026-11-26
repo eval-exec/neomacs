@@ -14,8 +14,8 @@ fn string_owner(payload: LispString) -> (Box<TaggedHeap>, TaggedValue) {
     let mut heap = Box::new(TaggedHeap::new());
     set_tagged_heap(&mut heap);
     let owner = heap.alloc_string(payload);
-    assert!(!collection_observed(owner.bits()));
-    assert!(mark_collection_observed(owner.bits()));
+    assert!(!unsafe { collection_observed(owner.bits()) });
+    assert!(unsafe { mark_collection_observed(owner.bits()) });
     (heap, owner)
 }
 
@@ -42,7 +42,7 @@ fn string_owner_observation_preserves_plain_capacity_and_layout() {
     // SAFETY: the retained heap owns this live string, and no safepoint intervenes.
     let object = unsafe { &*owner.as_string_ptr().unwrap().cast::<StringObj>() };
     assert_eq!(object.data.storage_capacity(), capacity);
-    assert!(!mark_collection_observed(owner.bits()));
+    assert!(!unsafe { mark_collection_observed(owner.bits()) });
     assert_owned_string(owner);
 }
 
@@ -102,7 +102,7 @@ fn borrowed_string_owner_observation_survives_materialization() {
     };
     let alias = heap.alloc_string(alias);
     assert!(
-        !collection_observed(alias.bits()),
+        !unsafe { collection_observed(alias.bits()) },
         "new owner has no observation"
     );
     let (_, reads) = crate::tagged::collection_reads::capture(|| owner.as_str_owned());
@@ -123,14 +123,14 @@ fn string_clone_and_reclamation_keep_observation_on_owner_only() {
         object.data.clone()
     };
     let copy = heap.alloc_string(copy);
-    assert!(!collection_observed(copy.bits()));
+    assert!(!unsafe { collection_observed(copy.bits()) });
     heap.collect_rooted(std::iter::once(copy));
     // Metadata lookup never dereferences this reclaimed owner's address.
     assert!(!crate::tagged::gc::collection_observed_metadata(
         owner.bits()
     ));
     assert_eq!(copy.as_str_owned().as_deref(), Some("abc"));
-    assert!(!collection_observed(copy.bits()));
+    assert!(!unsafe { collection_observed(copy.bits()) });
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn string_shared_observers_publish_header_without_touching_capacity() {
     // LEAD 12:3xZ/14:0xZ: the raw byte is a WRITE route. The forge returns the
     // production atomic cell; the field itself is pub(crate) and unrowed.
     let cell = collection_observed_byte_for_test(&owner.header);
-    assert!(mark_collection_observed(bits));
+    assert!(unsafe { mark_collection_observed(bits) });
     let observed_mark = cell.load(Ordering::Acquire);
     clear_collection_observed_for_test(&owner.header);
     std::thread::scope(|scope| {

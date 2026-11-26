@@ -256,3 +256,111 @@ fn frame_font_publication_captures_the_applied_policy_at_the_metric_safe_point()
         "old snapshots stay immutable"
     );
 }
+
+#[test]
+fn wayland_font_preferences_invalidate_open_entity_cache() {
+    use crate::font::resolver::FontEntityQuery;
+    use crate::font_backend::FontFamilyName;
+    use neovm_core::emacs_core::eval::FontSpecSelection;
+
+    let file = neomacs_test_fonts::noto_sans_variable();
+    let path = file.to_str().unwrap();
+    // Pick a concrete pixel size where FreeType TARGET_NORMAL (Full) and
+    // TARGET_LIGHT (Slight) produce genuinely distinct FontPxMetrics so the
+    // test fails if desktop_font_render_options is bypassed or stale.
+    let (size, expected_full, expected_slight) = (7_u32..=28)
+        .find_map(|candidate_size| {
+            let (full_m, _) = reference(path, candidate_size, LoadFlag::TARGET_NORMAL);
+            let (slight_m, _) = reference(path, candidate_size, LoadFlag::TARGET_LIGHT);
+            (full_m != slight_m).then_some((candidate_size, full_m, slight_m))
+        })
+        .expect("Noto Sans variable must have a pixel size where TARGET_NORMAL != TARGET_LIGHT");
+    assert_ne!(expected_full, expected_slight);
+
+    let catalog = test_catalog::TestFontCatalog::from_files(&[file])
+        .unwrap()
+        .to_native_fontconfig();
+    let mut service = catalog.metrics_service();
+    let display = GraphicalDisplayIdentity::anonymous_connection(GraphicalBackend::Wayland);
+    assert!(display.observe_font_render_options(preferences(DesktopFontHinting::Full)));
+    service.set_display_identity(display.clone());
+    assert!(!service.synchronize_font_catalog().changed());
+
+    let query = FontEntityQuery::new(Some(FontFamilyName::new("Noto Sans").unwrap()))
+        .with_selection(FontSpecSelection::OpenBySpec);
+
+    crate::font::probe::reset_font_px_metric_probes();
+    let first = service
+        .open_font_entity(&query, size)
+        .expect("initial open under Full hinting");
+    assert_eq!(
+        first.metrics, expected_full,
+        "open_font_entity under Full hinting must apply DesktopFontRenderOptions (TARGET_NORMAL)"
+    );
+    for _ in 0..10 {
+        assert_eq!(service.open_font_entity(&query, size), Some(first.clone()));
+    }
+    assert_eq!(
+        crate::font::probe::font_px_metric_probes(),
+        1,
+        "repeat open_font_entity must hit opened_entity_cache without re-probing FreeType"
+    );
+
+    // Native entity-handle path must reuse opened_identity_cache and return Full metrics.
+    let matched_full = service
+        .open_platform_entity_metrics(&first.entity.matched, size, None)
+        .expect("open_platform_entity_metrics under Full hinting");
+    assert_eq!(matched_full, expected_full);
+    assert_eq!(
+        crate::font::probe::font_px_metric_probes(),
+        1,
+        "open_platform_entity_metrics should hit opened_identity_cache populated by open_font_entity"
+    );
+
+    // Standalone file fallback path must also apply DesktopFontRenderOptions and cache repeats.
+    let file_full = service
+        .probe_file_entity_metrics(path, size, None)
+        .expect("probe_file_entity_metrics under Full hinting");
+    assert_eq!(file_full, expected_full);
+    let probes_after_file_full = crate::font::probe::font_px_metric_probes();
+    assert_eq!(
+        service.probe_file_entity_metrics(path, size, None),
+        Some(file_full)
+    );
+    assert_eq!(
+        crate::font::probe::font_px_metric_probes(),
+        probes_after_file_full,
+        "repeat probe_file_entity_metrics must hit opened_identity_cache"
+    );
+
+    // Changing desktop render options (Full -> Slight) through
+    // `synchronize_font_catalog` MUST invalidate all three caches AND re-probe
+    // with TARGET_LIGHT, returning the new Slight metrics.
+    assert!(display.observe_font_render_options(preferences(DesktopFontHinting::Slight)));
+    assert!(service.synchronize_font_catalog().changed());
+
+    let reopened = service
+        .open_font_entity(&query, size)
+        .expect("reopen under Slight hinting");
+    assert_eq!(
+        reopened.metrics, expected_slight,
+        "open_font_entity after Full -> Slight must return TARGET_LIGHT metrics"
+    );
+    assert_ne!(reopened.metrics, first.metrics);
+
+    let matched_slight = service
+        .open_platform_entity_metrics(&reopened.entity.matched, size, None)
+        .expect("open_platform_entity_metrics under Slight hinting");
+    assert_eq!(matched_slight, expected_slight);
+
+    let file_slight = service
+        .probe_file_entity_metrics(path, size, None)
+        .expect("probe_file_entity_metrics under Slight hinting");
+    assert_eq!(file_slight, expected_slight);
+    assert_ne!(file_slight, file_full);
+    assert_eq!(
+        crate::font::probe::font_px_metric_probes(),
+        probes_after_file_full + 2,
+        "desktop render-options change must invalidate both matched-entity and file-probe caches"
+    );
+}

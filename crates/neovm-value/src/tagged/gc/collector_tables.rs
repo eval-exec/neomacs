@@ -6,10 +6,10 @@
 //! Raw collector table pointers still require liveness/stop-all admission;
 //! this module does not turn arbitrary pointer callers into safe authorities.
 
+use super::collector_tables_slot::CollectorTablesSlot;
 use super::mutator_registration::{AllStopped, KeeperTableMut, RendezvousError};
 use super::*;
 use crate::value::LispHashTable;
-use std::rc::Rc;
 
 /// Copying this private designator does not extend its installed stop scope.
 /// Every dereference is unsafe and requires the installation to remain live.
@@ -62,30 +62,21 @@ impl CollectorTables {
     }
 }
 
-/// Installs the address of one real guard, retaining its borrow until cleanup.
-/// The optional cold slot is allocated only for proof collections. An Rc clone
-/// retains its Cell independently of any later heap/registry reborrow, so Drop
-/// never dereferences a raw pointer invalidated by mutable registry access.
-struct CollectorTableScope<'stop, 'era> {
-    slot: Rc<Cell<*const ()>>,
-    stopped: &'stop AllStopped<'era>,
-}
-
 /// Run all phases while retaining the actual stop guard. The RAII installation
-/// stays private: callers cannot forget it and leave an erased pointer behind.
+/// stays private to [`super::collector_tables_slot`]: callers cannot install
+/// arbitrary pointers or forget the scope and leave an erased pointer behind.
 pub(super) fn with_stopped_tables<R>(
     heap: &mut TaggedHeap,
     stopped: &AllStopped<'_>,
     body: impl FnOnce(&mut TaggedHeap) -> R,
 ) -> Result<R, RendezvousError> {
     stopped.check_world_roots(heap.heap_identity())?;
-    let slot = heap._satb_layout_reserve.collector_tables_slot();
-    if !slot.get().is_null() {
-        return Err(RendezvousError::Busy);
-    }
-    slot.set(std::ptr::from_ref(stopped).cast());
-    let _scope = CollectorTableScope { slot, stopped };
-    Ok(body(heap))
+    CollectorTablesSlot::with_entered_on(
+        heap,
+        |heap| heap._satb_layout_reserve.collector_tables_slot(),
+        stopped,
+        body,
+    )
 }
 
 /// Cold collector trace entry. The job callback has not run when installation
@@ -133,13 +124,6 @@ pub(super) fn with_stopped_tables_for_trace_observing_busy<R>(
     }
 }
 
-impl Drop for CollectorTableScope<'_, '_> {
-    fn drop(&mut self) {
-        let installed = self.slot.replace(std::ptr::null());
-        debug_assert_eq!(installed, std::ptr::from_ref(self.stopped).cast());
-    }
-}
-
 impl TaggedHeap {
     /// Internal raw designator: use only synchronously within the current
     /// admitted collector operation. Its unsafe visits retain that obligation.
@@ -169,8 +153,6 @@ impl TaggedHeap {
         }
     }
 }
-
-static_assertions::assert_not_impl_any!(CollectorTableScope<'static, 'static>: Send, Sync, Clone, Copy);
 
 #[cfg(test)]
 mod tests {

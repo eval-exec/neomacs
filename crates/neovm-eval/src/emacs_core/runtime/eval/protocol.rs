@@ -646,6 +646,9 @@ pub trait DisplayHost {
     ) -> Result<Option<FontOtfCapability>, String> {
         Ok(None)
     }
+    /// Clear host-side font resolution and opened-font metric caches for GNU
+    /// `(clear-font-cache)` (`src/font.c:4576`).
+    fn clear_font_cache(&mut self) {}
     /// GNU-compatible synchronous image query used by explicit Lisp
     /// primitives such as `image-size`. This may wait for metadata and must
     /// never be called from redisplay.

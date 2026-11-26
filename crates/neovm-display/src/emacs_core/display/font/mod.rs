@@ -31,17 +31,16 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use strum::EnumString;
 
 use super::xfaces::{
-    FrameFaceInitial, clear_font_cache_state, derived_face_attrs_from_font_value,
+    FrameFaceInitial, FrameFaceView, clear_font_cache_state, derived_face_attrs_from_font_value,
     ensure_frame_lisp_face_vector, lookup_frame_lisp_face_vector,
     realize_default_lisp_face_for_frame, runtime_face_from_lisp_face_vector,
-    runtime_face_table_from_frame_lisp_faces, set_lisp_face_vector_attr,
+    set_lisp_face_vector_attr,
 };
 use neovm_value::error::{EvalResult, Flow, signal};
 
 use super::display_host::{FontOpeningSize, FrameFontRequest, FrameFontSize, PositiveFontScalar};
 use crate::emacs_core::xfaces::realization::XfacesRealizationContextExt;
 use crate::face::realization::FrameFaceRealizationCacheExt;
-use crate::face::remapping::FaceTableRemappingExt;
 use crate::face::{
     Face as RuntimeFace, FaceHeight, FaceRemapping, FontSlant, FontWeight, FontWidth, LFaceAttr,
 };
@@ -539,7 +538,11 @@ fn try_resolve_live_frame_font_request_in_state(
     if requested.is_string() {
         // font_spec_from_name retains the original user selector in GNU;
         // unlike public (font-spec :name ...), this is an opening request.
-        let _ = spec.with_vector_data_mut(|fields| font_parse_set(fields, "user-spec", *requested));
+        if let Some(slice) = spec.as_vector_data() {
+            let mut fields = slice.to_vec();
+            font_parse_set(&mut fields, "user-spec", *requested);
+            let _ = spec.replace_vector_data(fields);
+        }
     }
     let mut retry_size = None;
     loop {
@@ -2976,20 +2979,16 @@ pub(crate) fn x_list_fonts(
         return Ok(Value::NIL);
     }
     if !terminal_target && args.get(1).is_some_and(|face| !face.is_nil()) {
-        let face_name = args.get(1).and_then(font_value_text_lisp_string);
-        let table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, false);
-        let face = if let Some(name) = face_name.as_ref().and_then(LispString::as_utf8_str) {
+        let face_arg = args[1];
+        let face_view = FrameFaceView::new(eval, frame_id, false);
+        let face = if font_value_text_lisp_string(&face_arg).is_some() {
             // lookup_named_face reads the current buffer's remapping even
             // when x-list-fonts names another live frame.
             let remapping = face_remapping_for_current_buffer(eval);
-            if remapping.is_empty() {
-                table.resolve(name)
-            } else {
-                table.resolve_with_remapping(name, &remapping)
-            }
+            face_view.resolve_named_with_remapping(face_arg, &remapping)
         } else {
             // An invalid non-name FACE falls back to the unremapped frame.
-            table.resolve("default")
+            face_view.resolve_default(&FaceRemapping::new())
         };
         let opened = eval
             .display_host
@@ -3160,9 +3159,15 @@ fn match_font_spec_request(
 }
 
 /// `(clear-font-cache)` -- reset internal font/face caches and return nil.
-pub(crate) fn clear_font_cache(args: Vec<Value>) -> EvalResult {
+pub(crate) fn clear_font_cache(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_max_args("clear-font-cache", &args, 0)?;
     clear_font_cache_state();
+    if let Some(host) = eval.display_host.as_mut() {
+        host.clear_font_cache();
+    }
     Ok(Value::NIL)
 }
 
@@ -3293,12 +3298,6 @@ pub(crate) fn close_font(
     Ok(Value::NIL)
 }
 
-#[derive(Clone, Debug)]
-enum FaceLayer {
-    Named(Vec<String>),
-    Inline(RuntimeFace),
-}
-
 /// A verbatim copy of this decoder used to live here, and carried the same
 /// `Fixnum(n) => WindowId(n)` arm GNU has no counterpart for.  Two copies of a
 /// decoder is two places for the window/frame type contract to drift, so this
@@ -3343,43 +3342,6 @@ fn resolve_live_window_for_font_at(
             };
             Ok((frame_id, window_id))
         }
-    }
-}
-
-fn resolve_face_layers_from_value(value: &Value) -> Vec<FaceLayer> {
-    match value.kind() {
-        ValueKind::Nil => Vec::new(),
-        ValueKind::Symbol(_) => value
-            .as_bare_symbol_name()
-            .filter(|name| *name != "nil")
-            .map(|name| vec![FaceLayer::Named(vec![name.to_string()])])
-            .unwrap_or_default(),
-        ValueKind::Cons => {
-            let Some(items) = list_to_vec(value) else {
-                return Vec::new();
-            };
-            if items.first().is_some_and(|item| item.is_bare_keyword()) {
-                vec![FaceLayer::Inline(RuntimeFace::from_plist(
-                    "--font-at--",
-                    &items,
-                ))]
-            } else {
-                let names = items
-                    .iter()
-                    .filter_map(|item| {
-                        item.as_bare_symbol_name()
-                            .filter(|name| *name != "nil")
-                            .map(|name| name.to_string())
-                    })
-                    .collect::<Vec<_>>();
-                if names.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![FaceLayer::Named(names)]
-                }
-            }
-        }
-        _ => Vec::new(),
     }
 }
 
@@ -3446,8 +3408,7 @@ pub(crate) fn resolve_current_buffer_remapped_default_face_font(
     }
 
     let remapping = FaceRemapping::from_lisp(&remapping_value);
-    let face_table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, true);
-    let remapped_default = face_table.resolve_with_remapping("default", &remapping);
+    let remapped_default = FrameFaceView::new(eval, frame_id, true).resolve_default(&remapping);
     eval.display_host
         .as_mut()?
         .resolve_frame_font(frame_id, FrameFontRequest::from_face(remapped_default))
@@ -3467,52 +3428,25 @@ pub(crate) fn face_remapping_for_current_buffer(
     }
 }
 
-fn apply_face_layers_with_remapping(
-    face_table: &crate::face::FaceTable,
-    layers: &[FaceLayer],
-    remapping: &FaceRemapping,
-) -> RuntimeFace {
-    let mut face = if remapping.is_empty() {
-        face_table.resolve("default")
-    } else {
-        face_table.resolve_with_remapping("default", remapping)
-    };
-    for layer in layers {
-        match layer {
-            FaceLayer::Named(names) => {
-                let refs = names.iter().map(String::as_str).collect::<Vec<_>>();
-                let merged = if remapping.is_empty() {
-                    face_table.merge_faces(&refs)
-                } else {
-                    face_table.merge_faces_with_remapping(&refs, remapping)
-                };
-                face = face.merge(&merged);
-            }
-            FaceLayer::Inline(inline_face) => {
-                face = face.merge(inline_face);
-            }
-        }
-    }
-    face
-}
-
 fn resolved_face_at_buffer_byte(
     eval: &neovm_eval::emacs_core::eval::Context,
-    face_table: &crate::face::FaceTable,
+    face_view: &FrameFaceView<'_>,
     buffer: &Buffer,
     bytepos: EmacsBytePos,
 ) -> RuntimeFace {
-    let mut layers = Vec::new();
+    let mut face_values = Vec::new();
 
     let face_prop =
         buffer.text_props_get_property_at_emacs_byte_pos(bytepos, Value::symbol("face"));
     let font_lock_face_prop =
         buffer.text_props_get_property_at_emacs_byte_pos(bytepos, Value::symbol("font-lock-face"));
-    if let Some(value) = face_prop.or(font_lock_face_prop) {
-        layers.extend(resolve_face_layers_from_value(&value));
+    if let Some(value) = face_prop.or(font_lock_face_prop)
+        && !value.is_nil()
+    {
+        face_values.push(value);
     }
 
-    let mut overlay_layers = Vec::new();
+    let mut overlay_faces = Vec::new();
     for overlay_id in buffer.overlays().iter_overlays_at_emacs_byte_pos(bytepos) {
         let priority = buffer
             .overlays()
@@ -3522,42 +3456,42 @@ fn resolved_face_at_buffer_byte(
         if let Some(value) = buffer
             .overlays()
             .overlay_get_named(overlay_id, Value::symbol("face"))
+            && !value.is_nil()
         {
-            let resolved = resolve_face_layers_from_value(&value);
-            if !resolved.is_empty() {
-                overlay_layers.push((priority, resolved));
-            }
+            overlay_faces.push((priority, value));
         }
     }
-    overlay_layers.sort_by_key(|(priority, _)| *priority);
-    for (_, resolved) in overlay_layers {
-        layers.extend(resolved);
+    overlay_faces.sort_by_key(|(priority, _)| *priority);
+    for (_, value) in overlay_faces {
+        face_values.push(value);
     }
 
     // Consult buffer-local face-remapping-alist
     let remapping = face_remapping_for_buffer(eval, buffer);
-    apply_face_layers_with_remapping(face_table, &layers, &remapping)
+    face_view.resolve_face_values_with_remapping(&face_values, &remapping)
 }
 
 fn resolved_face_at_string_char_pos(
     eval: &neovm_eval::emacs_core::eval::Context,
-    face_table: &crate::face::FaceTable,
+    face_view: &FrameFaceView<'_>,
     str_value: Value,
     char_pos: CharPos0,
 ) -> RuntimeFace {
-    let mut layers = Vec::new();
+    let mut face_values = Vec::new();
     if let Some(table) = get_string_text_properties_table_for_value(str_value) {
         let face_prop = table.get_property_at_char_pos(char_pos, Value::symbol("face"));
         let font_lock_face_prop =
             table.get_property_at_char_pos(char_pos, Value::symbol("font-lock-face"));
-        if let Some(value) = face_prop.or(font_lock_face_prop) {
-            layers.extend(resolve_face_layers_from_value(&value));
+        if let Some(value) = face_prop.or(font_lock_face_prop)
+            && !value.is_nil()
+        {
+            face_values.push(value);
         }
     }
     // Use face-remapping-alist from the current buffer (strings inherit
     // the buffer context they're displayed in).
     let remapping = face_remapping_for_current_buffer(eval);
-    apply_face_layers_with_remapping(face_table, &layers, &remapping)
+    face_view.resolve_face_values_with_remapping(&face_values, &remapping)
 }
 
 fn face_height_to_font_value(height: &FaceHeight) -> Value {
@@ -4066,12 +4000,17 @@ fn font_info_vector_for_entity(
     let text_field = |name| {
         font_vector_get_flexible(&elems, name).and_then(|value| font_value_text_lisp_string(&value))
     };
+    let handle = font_vector_get_flexible(&elems, "neomacs-entity-handle")
+        .and_then(|value| value.as_int())
+        .and_then(|value| u32::try_from(value).ok())
+        .and_then(neovm_value::display_vocab::FontEntityHandle::new);
     let opened = eval
         .display_host
         .as_mut()
         .and_then(|host| {
             host.probe_font_entity_metrics(neovm_eval::emacs_core::eval::FontEntityMetricsRequest {
                 frame_id,
+                handle,
                 family: text_field("family"),
                 registry: text_field("registry"),
                 file: text_field("file"),
@@ -4394,7 +4333,7 @@ pub(crate) fn font_at(
         if !has_window_system {
             return Ok(Value::NIL);
         }
-        let face_table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, true);
+        let face_view = FrameFaceView::new(eval, frame_id, true);
         let char_pos = usize::try_from(pos).expect("validated non-negative string position");
         let bytepos = if string.is_multibyte() {
             neovm_value::emacs_char::char_to_byte_pos(string.as_bytes(), char_pos)
@@ -4403,7 +4342,7 @@ pub(crate) fn font_at(
         };
         let face = resolved_face_at_string_char_pos(
             eval,
-            &face_table,
+            &face_view,
             *string_value,
             CharPos0::new(char_pos),
         );
@@ -4461,9 +4400,9 @@ pub(crate) fn font_at(
         return Ok(Value::NIL);
     }
 
-    let face_table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, true);
+    let face_view = FrameFaceView::new(eval, frame_id, true);
     let bytepos = buffer.lisp_pos_to_accessible_emacs_byte_pos(LispCharPos1::new(pos));
-    let face = resolved_face_at_buffer_byte(eval, &face_table, buffer, bytepos);
+    let face = resolved_face_at_buffer_byte(eval, &face_view, buffer, bytepos);
     let character = buffer
         .char_code_at_emacs_byte_pos(bytepos)
         .and_then(neovm_value::emacs_char::EmacsChar::from_code)
@@ -4562,13 +4501,15 @@ pub(crate) fn composition_font_or_frame_at(
             )
         };
         let face_table = realized_frame_face_table(eval, frame_id);
+        let face_view = FrameFaceView::from_cached(eval, &face_table);
         let face =
-            resolved_face_at_string_char_pos(eval, &face_table, string, CharPos0::new(char_pos));
+            resolved_face_at_string_char_pos(eval, &face_view, string, CharPos0::new(char_pos));
         let matched = resolve_font_match(eval, frame_id, character, &face, None)?;
         return Some(realized_face_font_object(eval, frame_id, &face, &matched));
     }
 
     let face_table = realized_frame_face_table(eval, frame_id);
+    let face_view = FrameFaceView::from_cached(eval, &face_table);
     let (character, face) = {
         let buffer = eval.edit.buffers.get(current_buffer_id)?;
         let beg = buffer.point_min_lisp_char_pos().as_i64();
@@ -4580,7 +4521,7 @@ pub(crate) fn composition_font_or_frame_at(
         let character = buffer
             .char_code_at_emacs_byte_pos(bytepos)
             .and_then(neovm_value::emacs_char::EmacsChar::from_code)?;
-        let face = resolved_face_at_buffer_byte(eval, &face_table, buffer, bytepos);
+        let face = resolved_face_at_buffer_byte(eval, &face_view, buffer, bytepos);
         (character, face)
     };
     let realized_fontset = realized_fontset_at(eval, frame_id, window_id, pos);
@@ -4709,7 +4650,8 @@ pub(crate) fn internal_char_font(
                     )
                 })?
         };
-        let face = resolved_face_at_buffer_byte(eval, &face_table, buffer, bytepos);
+        let face_view = FrameFaceView::from_cached(eval, &face_table);
+        let face = resolved_face_at_buffer_byte(eval, &face_view, buffer, bytepos);
         let realized_fontset = realized_fontset_at(eval, frame_id, window_id, pos);
         (frame_id, character, face, realized_fontset)
     };
@@ -4869,7 +4811,7 @@ pub(crate) fn font_info(
             // this frame's default-face attributes, even explicit spec
             // styles. It does not inherit the frame's font family.
             let defaults =
-                runtime_face_table_from_frame_lisp_faces(eval, frame_id, false).resolve("default");
+                FrameFaceView::new(eval, frame_id, false).resolve_default(&FaceRemapping::new());
             let mut request =
                 font_spec_resolve_request(eval, &spec, Some(&Value::make_frame(frame_id.0)))?;
             request.weight = Some(defaults.weight.unwrap_or(FontWeight::NORMAL));

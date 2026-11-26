@@ -170,7 +170,10 @@ fn check_tracking(store: Store) {
     let leaf = store.compile();
     let owner = store.allocate(&mut context);
     context.push_specpdl_root(owner);
-    assert!(!is_observed(owner.bits()), "fresh tracked owner: {store:?}");
+    assert!(
+        !unsafe { is_observed(owner.bits()) },
+        "fresh tracked owner: {store:?}"
+    );
     context.tagged_heap.clear_dirty_owners();
     context.tagged_heap.clear_dirty_writes();
     let first = Value::make_int(51);
@@ -183,7 +186,7 @@ fn check_tracking(store: Store) {
     );
     store.assert_write(&context, owner, first);
     assert!(
-        !is_observed(owner.bits()),
+        !unsafe { is_observed(owner.bits()) },
         "an inactive setter is not a read"
     );
     let (value, reads) = capture(|| store.read(owner));
@@ -206,7 +209,7 @@ fn check_tracking(store: Store) {
     // revision, even if this new owner had no preceding collection read.
     let projected_owner = store.allocate(&mut context);
     context.push_specpdl_root(projected_owner);
-    assert!(!is_observed(projected_owner.bits()));
+    assert!(!unsafe { is_observed(projected_owner.bits()) });
     context.tagged_heap.clear_dirty_writes();
     let before = LispCollectionRevision::current();
     let (_, projected) = capture(|| store.native(&mut context, &leaf, projected_owner, first));
@@ -215,7 +218,7 @@ fn check_tracking(store: Store) {
         1
     );
     store.assert_write(&context, projected_owner, first);
-    assert!(is_observed(projected_owner.bits()));
+    assert!(unsafe { is_observed(projected_owner.bits()) });
     let projected = projected.expect("setter-only projected read is coherent");
     assert!(projected.unchanged());
     assert!(store.interpreted(projected_owner, second));

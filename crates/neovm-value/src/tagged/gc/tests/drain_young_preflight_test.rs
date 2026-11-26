@@ -153,8 +153,8 @@ impl DrainCollectionSnapshot {
             termination_deferred: heap.last_termination_deferred,
             cons_live_count: heap.cons_live_count,
             allocated_count: heap.current_mutator_gc().allocated_count,
-            cons_cursor: heap.jit.cons_cur.get(),
-            cons_limit: heap.jit.cons_lim.get(),
+            cons_cursor: heap.jit.cons_cur(),
+            cons_limit: heap.jit.cons_lim(),
         }
     }
 }

@@ -38,6 +38,8 @@ pub(super) fn test_host() -> HostProvenance {
         scaling_governor: None,
         perf_event_paranoid: None,
         continuous_integration: false,
+        loadavg: None,
+        provenance: None,
     }
 }
 
@@ -91,6 +93,7 @@ fn editor_arguments_reach_actual_frontend_commands_verbatim_before_loads() {
             .with_machine_policy(MachinePolicy {
                 cpu,
                 required_governor: None,
+                allow_local: false,
             })
             .with_inherited_environment(BTreeMap::new())
             .with_editor_arguments(arguments.clone());
@@ -225,6 +228,7 @@ fn resolved_guard_tools_reach_frontend_command_and_perf_stat_capture() {
     .with_machine_policy(MachinePolicy {
         cpu: Some(0),
         required_governor: None,
+        allow_local: false,
     })
     .with_counters(Some(CounterScope::EditLoop))
     .with_resolved_tools(Some(pinned_taskset.clone()), Some(pinned_perf.clone()));

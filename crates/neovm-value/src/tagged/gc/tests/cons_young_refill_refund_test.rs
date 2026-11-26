@@ -72,7 +72,7 @@ fn check_refused_cons_grant_refunded(source: RefusedGrantSource, access: Refused
         .collect();
     heap.close_alloc_regions();
     assert!(!heap.alloc_regions_open());
-    assert_eq!((heap.jit.cons_cur.get(), heap.jit.cons_lim.get()), (0, 0));
+    assert_eq!((heap.jit.cons_cur(), heap.jit.cons_lim()), (0, 0));
     if matches!(source, RefusedGrantSource::FreeList) {
         // Closing the original bump region rewinds its unused suffix instead
         // of publishing it as a free list. Explicitly reserve that unhanded
@@ -132,7 +132,7 @@ fn check_refused_cons_grant_refunded(source: RefusedGrantSource, access: Refused
     assert_eq!(heap.cons_live_count, live_before, "{source:?}/{access:?}");
     assert_eq!(heap.current_mutator_gc().allocated_count, allocated_before);
     assert!(!heap.alloc_regions_open());
-    assert_eq!((heap.jit.cons_cur.get(), heap.jit.cons_lim.get()), (0, 0));
+    assert_eq!((heap.jit.cons_cur(), heap.jit.cons_lim()), (0, 0));
     let used_after = refill_refund_total_used(&heap);
     let free_after = heap.cons_allocator.free_count();
     let new_capacity = used_after.checked_sub(used_before).unwrap();

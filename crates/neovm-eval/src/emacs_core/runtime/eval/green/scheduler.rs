@@ -7025,9 +7025,22 @@ mod tests {
             // 3. Now wake Main -> ONE coalesced BatonRequest arrives, lend epoch2.
             waiter.set_for_test(false);
             assert_eq!(control.wake_waiting_for(Wait::Mutex(mx)), 1);
+            const MAX_TRAILING_IDLE_QUERIES: usize = 4;
+            let baton_deadline = Instant::now() + Duration::from_secs(5);
+            let mut baton_idle_queries = 0usize;
             loop {
-                match inbox_rx.recv_timeout(Duration::from_secs(5)) {
+                let remaining = baton_deadline.saturating_duration_since(Instant::now());
+                assert!(
+                    !remaining.is_zero(),
+                    "timed out waiting for BatonRequest after wake (answered {baton_idle_queries} IdleQueries)"
+                );
+                match inbox_rx.recv_timeout(remaining) {
                     Ok(KeeperMsg::IdleQuery { reply }) => {
+                        baton_idle_queries += 1;
+                        assert!(
+                            baton_idle_queries <= MAX_TRAILING_IDLE_QUERIES,
+                            "too many trailing IdleQueries ({baton_idle_queries}) waiting for BatonRequest; CheckDeadlock appears stuck"
+                        );
                         let _ = reply.try_send(false);
                     }
                     Ok(KeeperMsg::BatonRequest) => break,
@@ -7041,13 +7054,35 @@ mod tests {
                     epoch: epoch2,
                 })
                 .expect("lend second World");
-            assert!(matches!(
-                inbox_rx.recv_timeout(Duration::from_secs(5)),
-                Ok(KeeperMsg::WorldReturn {
-                    end: IntervalEnd::Done,
-                    ..
-                })
-            ));
+            // Match real Driver::await_world (driver_core.rs:1019): answer any
+            // bounded trailing IdleQuery that raced behind BatonRequest before
+            // WorldReturn, while bounding both wall-clock deadline and count so
+            // a stuck CheckDeadlock loop fails promptly instead of hanging.
+            let return_deadline = Instant::now() + Duration::from_secs(5);
+            let mut return_idle_queries = 0usize;
+            loop {
+                let remaining = return_deadline.saturating_duration_since(Instant::now());
+                assert!(
+                    !remaining.is_zero(),
+                    "timed out waiting for WorldReturn {{ Done }} (answered {return_idle_queries} IdleQueries)"
+                );
+                match inbox_rx.recv_timeout(remaining) {
+                    Ok(KeeperMsg::IdleQuery { reply }) => {
+                        return_idle_queries += 1;
+                        assert!(
+                            return_idle_queries <= MAX_TRAILING_IDLE_QUERIES,
+                            "too many trailing IdleQueries ({return_idle_queries}) waiting for WorldReturn {{ Done }}; CheckDeadlock appears stuck"
+                        );
+                        let _ = reply.try_send(false);
+                    }
+                    Ok(KeeperMsg::WorldReturn {
+                        end: IntervalEnd::Done,
+                        ..
+                    }) => break,
+                    Ok(_) => panic!("expected WorldReturn {{ Done }}"),
+                    Err(err) => panic!("inbox error waiting for WorldReturn: {err:?}"),
+                }
+            }
             main_thread.join().expect("main thread");
         });
 

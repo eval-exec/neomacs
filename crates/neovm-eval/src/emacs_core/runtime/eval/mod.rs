@@ -2704,7 +2704,7 @@ pub type FontListFilter<'a> = dyn FnMut(&ListedFontEntity) -> Result<bool, Flow>
 /// GNU separates entity listing/selection from the font driver's `match`
 /// operation. A driver match is authoritative, not another style-filtered
 /// list (notably, ftfont_match deliberately omits Fontconfig style fields).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FontSpecSelection {
     #[default]
     Enumerate,
@@ -2926,6 +2926,7 @@ pub struct FontPxProbeResult {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontEntityMetricsRequest {
     pub frame_id: neovm_value::display_vocab::FrameId,
+    pub handle: Option<neovm_value::display_vocab::FontEntityHandle>,
     pub family: Option<neovm_value::heap_types::LispString>,
     pub registry: Option<neovm_value::heap_types::LispString>,
     pub file: Option<neovm_value::heap_types::LispString>,
@@ -7648,6 +7649,11 @@ pub use green::{SelectTurn, green_make_thread, green_world};
 mod keyboard_forwarding;
 mod owner_bindings;
 pub(crate) use owner_bindings::{Channel, UndoTarget};
+#[cfg(not(feature = "contract-fixtures"))]
+pub(crate) use owner_bindings::{OwnerSlabHandle, OwnerSlabLease, OwnerSlabLeaseError};
+#[cfg(feature = "contract-fixtures")]
+#[doc(hidden)]
+pub use owner_bindings::{OwnerSlabHandle, OwnerSlabLease, OwnerSlabLeaseError};
 mod owner_mirrors;
 pub(crate) use owner_mirrors::ParkedOwner;
 mod variable_access;

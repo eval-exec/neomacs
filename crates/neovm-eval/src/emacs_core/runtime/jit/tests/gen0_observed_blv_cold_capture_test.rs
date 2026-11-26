@@ -91,7 +91,7 @@ fn fixture(local: bool) -> (Context, &'static str, Value, Value, Value, Value) {
     assert!((new_anchor.bits() & !TAG_MASK) < (upper.bits() & !TAG_MASK));
     for owner in [lower, target, new_anchor, upper] {
         context.push_specpdl_root(owner);
-        assert!(!is_observed(owner.bits()));
+        assert!(!unsafe { is_observed(owner.bits()) });
     }
     let (_, reads) = capture(|| {
         lower.cons_cdr();
@@ -136,7 +136,7 @@ fn check_setter(local: bool) {
         LispCollectionRevision::current().steps_since_for_test(revision),
         0
     );
-    assert!(!is_observed(target.bits()));
+    assert!(!unsafe { is_observed(target.bits()) });
     let reads = reads.expect("a setter returning its supplied value is coherent");
     let shims = super::super::shims::VARSET_SHIM_CALLS.with(|count| count.get());
     assert_eq!(
@@ -251,7 +251,7 @@ fn check_binding(local: bool) {
         0
     );
     assert!(
-        !is_observed(target.bits()),
+        !unsafe { is_observed(target.bits()) },
         "saving the old binding is implementation bookkeeping"
     );
     let reads = reads.expect("only the body anchor was observed");

@@ -1,9 +1,33 @@
 ;;; org-table-whitespace.el --- Synthetic table probe -*- lexical-binding: t; -*-
 ;;; No third-party package, SQL, or user file is loaded.
-(defun neo-org-probe-fail (error-data)
-  (princ (format "COMMIT-EDITING-FAIL %S\n" error-data) 'external-debugging-output)
+;; Markers go to stderr first, so a failing file write cannot hide them, and
+;; then to NEOMACS_COMMIT_RESULT_FILE, which is the copy the harness reads.
+;; Render-thread stderr diagnostics can tear a line written char by char.
+;; `create-lockfiles' is nil so two concurrent runs can never meet a lock.
+(defun neo-org-probe-emit (line)
+  "Write LINE to stderr, then append it to NEOMACS_COMMIT_RESULT_FILE."
+  (princ (concat line "\n") 'external-debugging-output)
+  (let ((result-file (getenv "NEOMACS_COMMIT_RESULT_FILE")))
+    (unless result-file (error "NEOMACS_COMMIT_RESULT_FILE is unset"))
+    (let ((coding-system-for-write 'utf-8-unix)
+          (create-lockfiles nil))
+      (write-region (concat line "\n") nil result-file 'append 'silent))))
+
+(defun neo-org-probe-fail (err)
+  "Report ERR and terminate; a failing report still reaches `kill-emacs'."
+  (ignore-errors (neo-org-probe-emit (format "COMMIT-EDITING-FAIL %S" err)))
   (kill-emacs 1))
-(run-at-time 10 nil (lambda () (neo-org-probe-fail "watchdog expired")))
+;; The Rust harness's 60 s process timeout is the single hang-avoidance cap.
+
+(defun neo-org-probe-when-displayed (continuation)
+  "Redisplay until the table is on screen, then CONTINUATION."
+  (condition-case err
+      (progn
+        (redisplay t)
+        (if (and (window-cursor-info) (pos-visible-in-window-p (point-max)))
+            (funcall continuation)
+          (run-at-time 0.05 nil #'neo-org-probe-when-displayed continuation)))
+    (error (neo-org-probe-fail err))))
 (condition-case error-data
     (progn
       (setq warning-minimum-level :emergency)
@@ -21,11 +45,10 @@
                                face (:inherit org-table :inverse-video t))))
       (goto-char (point-min))
       (run-at-time
-       1 nil
+       0 nil #'neo-org-probe-when-displayed
        (lambda ()
          (condition-case error-data
              (progn
-               (redisplay t)
                (if (fboundp 'neomacs--frame-snapshot)
                    (let ((snapshot (neomacs--frame-snapshot nil 'text-faces))
                          row highlighted)
@@ -39,13 +62,13 @@
                        (error "Org table border/padding was classified as trailing whitespace: %S" highlighted))
                      (unless (memq 4 highlighted)
                        (error "Genuine trailing spaces lost their highlight: %S" highlighted))
-                     (princ "ORG-TABLE-RENDERED-FACES-PASS\n" 'external-debugging-output))
+                     (neo-org-probe-emit "ORG-TABLE-RENDERED-FACES-PASS"))
                  ;; This is explicitly source-only, not a GNU face-color oracle.
                  (progn
                    (unless (equal (get-text-property 1 'display) '(space :width (3)))
                      (error "Missing reference table-bar display property"))
-                   (princ "ORG-TABLE-REFERENCE-SOURCE-ONLY\n" 'external-debugging-output)))
-               (princ "COMMIT-EDITING-PASS\n" 'external-debugging-output)
+                   (neo-org-probe-emit "ORG-TABLE-REFERENCE-SOURCE-ONLY")))
+               (neo-org-probe-emit "COMMIT-EDITING-PASS")
                (kill-emacs 0))
            (error (neo-org-probe-fail error-data))))))
   (error (neo-org-probe-fail error-data)))

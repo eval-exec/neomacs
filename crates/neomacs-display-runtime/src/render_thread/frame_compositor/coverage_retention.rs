@@ -68,6 +68,15 @@ impl AuxiliaryCoverageChanges {
     }
 }
 
+/// Shared render-thread admission check for both primary (`refresh`) and
+/// auxiliary (`apply_auxiliary`) compositor coverage surfaces.
+fn surface_compatible_with_frame(surface: &ScrollSurface, frame: &FrameGlyphBuffer) -> bool {
+    let coverage = surface.coverage();
+    coverage.hit_index.presentation() == frame.presentation_id
+        && surface.frame_buffer_resources_match(frame)
+        && coverage.resources_compatible_with_frame_buffer(frame)
+}
+
 impl CoverageRetention {
     /// Apply a complete desired snapshot. Revocation is intentionally more
     /// conservative than installation: an absent window loses coverage even
@@ -110,10 +119,7 @@ impl CoverageRetention {
         for surface in update.surfaces {
             let coverage = surface.coverage();
             let window = coverage.content.window_id;
-            if coverage.hit_index.presentation() != update.base
-                || !surface.frame_buffer_resources_match(frame)
-                || !coverage.resources_compatible_with_frame_buffer(frame)
-            {
+            if !surface_compatible_with_frame(&surface, frame) {
                 tracing::debug!(
                     target: "neomacs_display_runtime::retained_scroll",
                     window = window.get(),
@@ -183,8 +189,20 @@ impl CoverageRetention {
         self.entries.retain(|window, _| certified.contains(window));
         for surface in &frame.scroll_surfaces {
             let coverage = surface.coverage();
+            let window = coverage.content.window_id;
+            if !surface_compatible_with_frame(surface, frame) {
+                tracing::debug!(
+                    target: "neomacs_display_runtime::retained_scroll",
+                    window = window.get(),
+                    base = frame.presentation_id.get(),
+                    hit_index_base = coverage.hit_index.presentation().get(),
+                    "rejected primary compositor coverage surface"
+                );
+                self.entries.remove(&window);
+                continue;
+            }
             self.entries.insert(
-                coverage.content.window_id,
+                window,
                 RetainedCoverage {
                     surface: Arc::clone(surface),
                     valid_presentation: frame.presentation_id,

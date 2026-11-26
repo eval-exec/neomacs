@@ -207,6 +207,18 @@ impl ConcurrentMarkFlag {
         self.0
     }
 
+    /// Read the active flag from a raw `*const ConcurrentMarkFlag` without
+    /// materializing `&TaggedHeap` (value-gc C4).
+    ///
+    /// # Safety
+    /// `ptr` must point to a live, initialized `ConcurrentMarkFlag`.
+    #[inline(always)]
+    pub(super) unsafe fn is_running_from_raw(ptr: *const Self) -> bool {
+        // SAFETY: `ConcurrentMarkFlag` is `#[repr(transparent)]` over `bool`,
+        // and caller upholds pointer validity.
+        unsafe { core::ptr::read(ptr.cast::<bool>()) }
+    }
+
     /// Transition the concurrent-mark active flag.
     ///
     /// # Safety

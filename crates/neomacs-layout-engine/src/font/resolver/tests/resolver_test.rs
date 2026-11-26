@@ -2191,3 +2191,466 @@ fn equal_score_tie_breaks_by_sort_rank_then_family_name() {
         "equal FcFontSort ranks break by file path"
     );
 }
+
+struct EntityCachingBackend {
+    version: Arc<AtomicUsize>,
+    list_calls: Arc<AtomicUsize>,
+    match_calls: Arc<AtomicUsize>,
+    metric_probes: Arc<AtomicUsize>,
+    missing_family: String,
+    include_missing_from_version: usize,
+}
+
+impl EntityCachingBackend {
+    fn make_candidate(&self, family: &str, ascent: u16) -> FontCandidate {
+        let mut c = candidate(family, 400, FontSlant::Normal, 0);
+        c.matched.metadata.design_metrics = None;
+        replace_file_identity(
+            &mut c,
+            ResolvedFontIdentity::from_file(&format!("/fixture/{family}-v{ascent}.ttf"), 0, None),
+        );
+        c
+    }
+}
+
+impl FontBackend for EntityCachingBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::Fontconfig
+    }
+
+    fn list_families(&self) -> Vec<FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        true
+    }
+
+    fn list_candidates(&self, _query: &FontCandidateQuery) -> Vec<FontCandidate> {
+        self.list_calls.fetch_add(1, Ordering::Relaxed);
+        // Empty list forces `OpenBySpec` to fall back to `match_font_spec`,
+        // exercising the `FcFontMatch` driver-match seam directly.
+        Vec::new()
+    }
+
+    fn match_font_spec(&self, query: &FontCandidateQuery) -> crate::font_backend::FontDriverMatch {
+        self.match_calls.fetch_add(1, Ordering::Relaxed);
+        let version = self.version.load(Ordering::Acquire);
+        let family = match &query.scope {
+            FontCandidateScope::Family(name) => name.as_str(),
+            _ => "Default",
+        };
+        if family == self.missing_family && version < self.include_missing_from_version {
+            return crate::font_backend::FontDriverMatch::Native(None);
+        }
+        let ascent = 800 + (version as u16) * 50;
+        crate::font_backend::FontDriverMatch::Native(Some(self.make_candidate(family, ascent)))
+    }
+
+    fn design_metrics(&self, _matched: &PlatformFontMatch) -> Option<PlatformFontDesignMetrics> {
+        self.metric_probes.fetch_add(1, Ordering::Relaxed);
+        let version = self.version.load(Ordering::Acquire) as i32;
+        Some(PlatformFontDesignMetrics {
+            units_per_em: 1_000,
+            ascent: 800 + version * 50,
+            descent: 200,
+            line_gap: 0,
+            max_advance: 700,
+            space_advance: 500,
+            average_advance: 600,
+        })
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+#[test]
+fn resolve_and_open_entity_caches_repeat_queries_and_invalidates_on_catalog_edge() {
+    let version = Arc::new(AtomicUsize::new(0));
+    let list_calls = Arc::new(AtomicUsize::new(0));
+    let match_calls = Arc::new(AtomicUsize::new(0));
+    let metric_probes = Arc::new(AtomicUsize::new(0));
+    let mut resolver = FontResolver::new(Box::new(EntityCachingBackend {
+        version: Arc::clone(&version),
+        list_calls: Arc::clone(&list_calls),
+        match_calls: Arc::clone(&match_calls),
+        metric_probes: Arc::clone(&metric_probes),
+        missing_family: "MissingFont".to_owned(),
+        include_missing_from_version: 1,
+    }));
+
+    let query = FontEntityQuery::new(Some(FontFamilyName::new("TelegaSans").expect("family")))
+        .with_selection(FontSpecSelection::OpenBySpec);
+
+    // Repeat the full font-info sequence (resolve_entity + open_entity) 5 times
+    // for the same (query, pixel_size): driver match and metric probe must run
+    // only ONCE.
+    let first_entity = resolver.resolve_entity(&query).expect("first entity");
+    let first_opened = resolver.open_entity(&query, 16).expect("first open");
+    for _ in 0..4 {
+        assert_eq!(resolver.resolve_entity(&query), Some(first_entity.clone()));
+        assert_eq!(resolver.open_entity(&query, 16), Some(first_opened.clone()));
+    }
+    assert_eq!(
+        match_calls.load(Ordering::Relaxed),
+        1,
+        "repeat (query, size) must not re-enter match_font_spec (FcFontMatch)"
+    );
+    assert_eq!(
+        list_calls.load(Ordering::Relaxed),
+        1,
+        "repeat (query, size) must not re-enter list_candidates"
+    );
+    assert_eq!(
+        metric_probes.load(Ordering::Relaxed),
+        1,
+        "repeat (query, size) must not re-probe metrics"
+    );
+
+    // A second frame with a different pixel_size must NOT receive the 16px metrics.
+    let larger = resolver.open_entity(&query, 24).expect("larger open");
+    assert_ne!(
+        larger.metrics.height, first_opened.metrics.height,
+        "different frame pixel size must produce distinct metrics"
+    );
+    assert_eq!(
+        match_calls.load(Ordering::Relaxed),
+        1,
+        "different size for the same entity reuses cached entity resolution"
+    );
+
+    // A catalog-generation edge (clear_service_caches) MUST invalidate both
+    // caches so match_font_spec and metric probing re-run and see the new font.
+    version.store(1, Ordering::Release);
+    resolver.clear_service_caches();
+    let refreshed = resolver.open_entity(&query, 16).expect("refreshed open");
+    assert_eq!(
+        match_calls.load(Ordering::Relaxed),
+        2,
+        "catalog invalidation must re-enter match_font_spec"
+    );
+    assert_ne!(
+        refreshed.metrics.ascent, first_opened.metrics.ascent,
+        "catalog invalidation must observe updated font metrics"
+    );
+}
+
+#[test]
+fn resolve_entity_nonexistent_font_stays_none_until_catalog_adds_it() {
+    let version = Arc::new(AtomicUsize::new(0));
+    let list_calls = Arc::new(AtomicUsize::new(0));
+    let match_calls = Arc::new(AtomicUsize::new(0));
+    let metric_probes = Arc::new(AtomicUsize::new(0));
+    let mut resolver = FontResolver::new(Box::new(EntityCachingBackend {
+        version: Arc::clone(&version),
+        list_calls: Arc::clone(&list_calls),
+        match_calls: Arc::clone(&match_calls),
+        metric_probes: Arc::clone(&metric_probes),
+        missing_family: "MissingFont".to_owned(),
+        include_missing_from_version: 1,
+    }));
+
+    // Warm the cache with a real font first to prove missing fonts never pick
+    // up another font's cached answer.
+    let present = FontEntityQuery::new(Some(FontFamilyName::new("PresentFont").unwrap()))
+        .with_selection(FontSpecSelection::OpenBySpec);
+    assert!(resolver.open_entity(&present, 16).is_some());
+
+    let missing = FontEntityQuery::new(Some(FontFamilyName::new("MissingFont").unwrap()))
+        .with_selection(FontSpecSelection::OpenBySpec);
+    assert!(resolver.resolve_entity(&missing).is_none());
+    assert!(resolver.open_entity(&missing, 16).is_none());
+    assert!(resolver.resolve_entity(&missing).is_none());
+    assert_eq!(
+        match_calls.load(Ordering::Relaxed),
+        2,
+        "negative lookup must stay cached within the same catalog generation"
+    );
+
+    // Once the font is installed and catalog invalidates, lookup succeeds.
+    version.store(1, Ordering::Release);
+    resolver.clear_service_caches();
+    let found = resolver
+        .open_entity(&missing, 16)
+        .expect("newly installed font resolves after catalog invalidation");
+    assert_eq!(found.entity.matched.family(), "MissingFont");
+    assert_eq!(match_calls.load(Ordering::Relaxed), 3);
+}
+
+#[test]
+fn bounded_lru_cache_edge_cases_and_eviction_order() {
+    // cap == 0: no-op inserts, always misses, never panics.
+    let mut zero = BoundedLruCache::<u32, u32>::new(0);
+    zero.insert(1, 10);
+    assert_eq!(zero.get(&1), None);
+
+    // cap == 1: single slot, evicts immediately on distinct key, supports in-place overwrite & clear.
+    let mut one = BoundedLruCache::<u32, u32>::new(1);
+    one.insert(1, 10);
+    assert_eq!(one.get(&1), Some(&10));
+    one.insert(1, 11);
+    assert_eq!(one.get(&1), Some(&11));
+    one.insert(2, 20);
+    assert_eq!(one.get(&1), None);
+    assert_eq!(one.get(&2), Some(&20));
+    one.clear();
+    assert_eq!(one.get(&2), None);
+    one.insert(3, 30);
+    assert_eq!(one.get(&3), Some(&30));
+
+    // Exact boundary cap == 3: 3 inserts = 0 evictions; 4th evicts LRU (not MRU or untouched middle).
+    let mut three = BoundedLruCache::<u32, u32>::new(3);
+    three.insert(0, 100);
+    three.insert(1, 101);
+    three.insert(2, 102);
+    // Order MRU->LRU: [2, 1, 0]. Touch 0 -> [0, 2, 1].
+    assert_eq!(three.get(&0), Some(&100));
+    // Insert 3 -> evicts 1 (LRU), retains 0 (touched) AND 2 (untouched survivor).
+    three.insert(3, 103);
+    assert_eq!(three.get(&1), None, "LRU key 1 must be evicted on cap+1");
+    assert_eq!(three.get(&0), Some(&100), "touched key 0 must survive");
+    assert_eq!(
+        three.get(&2),
+        Some(&102),
+        "untouched survivor key 2 must survive (rules out clear-all)"
+    );
+    assert_eq!(three.get(&3), Some(&103));
+    // After the three gets above, MRU->LRU order is [3, 2, 0]. Overwriting
+    // existing key 0 updates its value and promotes it to MRU -> [0, 3, 2],
+    // making key 2 the LRU entry.
+    three.insert(0, 200);
+    // Inserting key 4 evicts LRU key 2, retaining 4, 0, and 3.
+    three.insert(4, 104);
+    assert_eq!(
+        three.get(&2),
+        None,
+        "LRU key 2 must be evicted after overwriting key 0 promoted 0 to MRU"
+    );
+    assert_eq!(three.get(&3), Some(&103), "key 3 must survive");
+    assert_eq!(
+        three.get(&0),
+        Some(&200),
+        "overwritten key 0 must survive with updated value"
+    );
+    assert_eq!(three.get(&4), Some(&104));
+    three.clear();
+    assert_eq!(three.get(&0), None);
+    three.insert(9, 900);
+    assert_eq!(three.get(&9), Some(&900));
+}
+
+#[test]
+fn entity_and_opened_entity_caches_are_bounded_lru_without_hot_thrash() {
+    let make_resolver = || {
+        let version = Arc::new(AtomicUsize::new(0));
+        let list_calls = Arc::new(AtomicUsize::new(0));
+        let match_calls = Arc::new(AtomicUsize::new(0));
+        let metric_probes = Arc::new(AtomicUsize::new(0));
+        let resolver = FontResolver::new(Box::new(EntityCachingBackend {
+            version: Arc::clone(&version),
+            list_calls: Arc::clone(&list_calls),
+            match_calls: Arc::clone(&match_calls),
+            metric_probes: Arc::clone(&metric_probes),
+            missing_family: "Never".to_owned(),
+            include_missing_from_version: 0,
+        }));
+        (resolver, match_calls, metric_probes)
+    };
+
+    let query_for = |i: usize| {
+        FontEntityQuery::new(Some(
+            FontFamilyName::new(&format!("Family{i}")).expect("family"),
+        ))
+        .with_selection(FontSpecSelection::OpenBySpec)
+    };
+
+    // 1. `entity_cache` (`resolve_entity`): 580 unique families (> 512 cap),
+    // touching `hot` (Family0) at i = 400 (NOT at 512). A clear-all-at-512
+    // cache would wipe both `hot` AND untouched survivor `Family100`.
+    {
+        let (resolver, match_calls, _) = make_resolver();
+        let hot = query_for(0);
+        let cold = query_for(1);
+        let untouched_survivor = query_for(100);
+        for i in 0..580 {
+            let q = query_for(i);
+            assert!(resolver.resolve_entity(&q).is_some());
+            if i == 400 {
+                assert!(resolver.resolve_entity(&hot).is_some());
+            }
+        }
+        assert_eq!(
+            match_calls.load(Ordering::Relaxed),
+            580,
+            "entity_cache: exact 580 misses across 580 unique families + 1 hot hit"
+        );
+        assert!(resolver.resolve_entity(&hot).is_some());
+        assert_eq!(
+            match_calls.load(Ordering::Relaxed),
+            580,
+            "entity_cache: hot entry refreshed at i=400 must survive 512-entry overflow"
+        );
+        assert!(resolver.resolve_entity(&untouched_survivor).is_some());
+        assert_eq!(
+            match_calls.load(Ordering::Relaxed),
+            580,
+            "entity_cache: untouched survivor Family100 must remain cached (rules out clear-all)"
+        );
+        assert!(resolver.resolve_entity(&cold).is_some());
+        assert_eq!(
+            match_calls.load(Ordering::Relaxed),
+            581,
+            "entity_cache: oldest cold entry Family1 must be evicted and miss"
+        );
+    }
+
+    // 2. `opened_entity_cache` (`open_entity`): same strict discriminating proof.
+    {
+        let (resolver, match_calls, metric_probes) = make_resolver();
+        let hot = query_for(0);
+        let cold = query_for(1);
+        let untouched_survivor = query_for(100);
+        for i in 0..580 {
+            let q = query_for(i);
+            assert!(resolver.open_entity(&q, 16).is_some());
+            if i == 400 {
+                assert!(resolver.open_entity(&hot, 16).is_some());
+            }
+        }
+        assert_eq!(match_calls.load(Ordering::Relaxed), 580);
+        assert_eq!(metric_probes.load(Ordering::Relaxed), 580);
+
+        assert!(resolver.open_entity(&hot, 16).is_some());
+        assert_eq!(match_calls.load(Ordering::Relaxed), 580);
+        assert_eq!(metric_probes.load(Ordering::Relaxed), 580);
+
+        assert!(resolver.open_entity(&untouched_survivor, 16).is_some());
+        assert_eq!(
+            match_calls.load(Ordering::Relaxed),
+            580,
+            "opened_entity_cache: untouched survivor Family100 must hit (rules out clear-all)"
+        );
+        assert_eq!(metric_probes.load(Ordering::Relaxed), 580);
+
+        assert!(resolver.open_entity(&cold, 16).is_some());
+        assert_eq!(match_calls.load(Ordering::Relaxed), 581);
+        assert_eq!(metric_probes.load(Ordering::Relaxed), 581);
+    }
+
+    // 3. `opened_identity_cache` (`open_matched_entity_metrics`): direct
+    // eviction/retention proof for the 4,200-call native-handle hot path.
+    {
+        let (resolver, _, metric_probes) = make_resolver();
+        let matched_for = |i: usize| {
+            let mut c = candidate(&format!("IdFamily{i}"), 400, FontSlant::Normal, 0);
+            c.matched.metadata.design_metrics = None;
+            replace_file_identity(
+                &mut c,
+                ResolvedFontIdentity::from_file(&format!("/fixture/id-{i}.ttf"), 0, None),
+            );
+            c.matched.into_file_match().expect("file match")
+        };
+        let hot = matched_for(0);
+        let cold = matched_for(1);
+        let untouched_survivor = matched_for(100);
+        for i in 0..580 {
+            let m = matched_for(i);
+            assert!(resolver.open_matched_entity_metrics(&m, 16, None).is_some());
+            if i == 400 {
+                assert!(
+                    resolver
+                        .open_matched_entity_metrics(&hot, 16, None)
+                        .is_some()
+                );
+            }
+        }
+        assert_eq!(
+            metric_probes.load(Ordering::Relaxed),
+            580,
+            "opened_identity_cache: exact 580 probes across 580 unique identities + 1 hot hit"
+        );
+        assert!(
+            resolver
+                .open_matched_entity_metrics(&hot, 16, None)
+                .is_some()
+        );
+        assert_eq!(
+            metric_probes.load(Ordering::Relaxed),
+            580,
+            "opened_identity_cache: hot identity refreshed at i=400 must survive overflow"
+        );
+        assert!(
+            resolver
+                .open_matched_entity_metrics(&untouched_survivor, 16, None)
+                .is_some()
+        );
+        assert_eq!(
+            metric_probes.load(Ordering::Relaxed),
+            580,
+            "opened_identity_cache: untouched survivor id 100 must remain cached (rules out clear-all)"
+        );
+        assert!(
+            resolver
+                .open_matched_entity_metrics(&cold, 16, None)
+                .is_some()
+        );
+        assert_eq!(
+            metric_probes.load(Ordering::Relaxed),
+            581,
+            "opened_identity_cache: evicted cold identity 1 must miss and re-probe"
+        );
+    }
+}
+
+#[test]
+fn opened_identity_cache_separates_matched_entity_from_standalone_file_probe() {
+    // A native entity whose backend supplies `design_metrics` and a standalone
+    // `probe_file_entity_metrics` call for the exact same `(file, 0, size, weight)`
+    // must NOT alias in `opened_identity_cache` (they compute different formulas).
+    let file = neomacs_test_fonts::noto_sans_variable();
+    let path = file.to_str().unwrap().to_owned();
+    let version = Arc::new(AtomicUsize::new(0));
+    let list_calls = Arc::new(AtomicUsize::new(0));
+    let match_calls = Arc::new(AtomicUsize::new(0));
+    let metric_probes = Arc::new(AtomicUsize::new(0));
+    let resolver = FontResolver::new(Box::new(EntityCachingBackend {
+        version: Arc::clone(&version),
+        list_calls,
+        match_calls,
+        metric_probes: Arc::clone(&metric_probes),
+        missing_family: "Never".to_owned(),
+        include_missing_from_version: 0,
+    }));
+
+    let mut c = candidate("Noto Sans", 400, FontSlant::Normal, 0);
+    c.matched.metadata.design_metrics = Some(PlatformFontDesignMetrics {
+        units_per_em: 1_000,
+        ascent: 999,
+        descent: 111,
+        line_gap: 0,
+        max_advance: 777,
+        space_advance: 333,
+        average_advance: 555,
+    });
+    replace_file_identity(&mut c, ResolvedFontIdentity::from_file(&path, 0, None));
+    let matched = c.matched.into_file_match().expect("file match");
+
+    let matched_metrics = resolver
+        .open_matched_entity_metrics(&matched, 16, None)
+        .expect("matched entity metrics from design_metrics");
+    let file_metrics = resolver
+        .probe_file_entity_metrics(&path, 16, None)
+        .expect("standalone file metrics from FreeType");
+    assert_ne!(
+        matched_metrics, file_metrics,
+        "probe_file_entity_metrics must not receive cached design_metrics from open_matched_entity_metrics"
+    );
+}

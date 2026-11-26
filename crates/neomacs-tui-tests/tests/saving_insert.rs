@@ -277,10 +277,16 @@ fn rename_visited_file_via_mx_moves_file_and_updates_buffer() {
             .any(|row| row.contains("rename-visited-dest.txt"))
             && grid.iter().any(|row| row.contains("rename visited body"))
     };
-    for _ in 0..10 {
-        gnu.read_until(Duration::from_millis(300), renamed_ready);
-        neo.read_until(Duration::from_millis(300), renamed_ready);
-        if !gnu_src.exists() && !neo_src.exists() && gnu_dest.exists() && neo_dest.exists() {
+    let rename_cap = neomacs_tui_tests::HangCap::from_secs(10);
+    while !rename_cap.is_expired() {
+        read_both(&mut gnu, &mut neo, Duration::from_millis(150));
+        if renamed_ready(&gnu.text_grid())
+            && renamed_ready(&neo.text_grid())
+            && !gnu_src.exists()
+            && !neo_src.exists()
+            && gnu_dest.exists()
+            && neo_dest.exists()
+        {
             break;
         }
     }

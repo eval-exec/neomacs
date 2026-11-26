@@ -245,9 +245,12 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
     wait_for_x11(session.env()).unwrap();
     let config = artifacts.join("config");
     fs::create_dir_all(config.join("fcitx5/conf")).unwrap();
-    fs::write(
+    fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/fixtures/issue-458-fcitx-profile"
+        ),
         config.join("fcitx5/profile"),
-        include_str!("../../fixtures/issue-458-fcitx-profile"),
     )
     .unwrap();
     // Pinyin's default semicolon starts quickphrase instead of punctuation.
@@ -306,7 +309,7 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
             .spawn()
             .expect("fcitx5"),
     );
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(8));
     loop {
         let ready = Command::new("fcitx5-remote")
             .arg("--check")
@@ -319,7 +322,7 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
             break;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "fcitx5 did not start; see {}",
             artifacts.display()
         );
@@ -371,7 +374,7 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
             // so switching before it exists is a no-op and the context is
             // born with the keyboard layout.  Wait for the daemon to see a
             // context (state 0 = closed) before switching.
-            let deadline = Instant::now() + Duration::from_secs(8);
+            let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(8));
             loop {
                 let state = Command::new("fcitx5-remote")
                     .envs(env.iter().map(|(k, v)| (k, v)))
@@ -380,7 +383,7 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
                 if String::from_utf8_lossy(&state.stdout).trim() != "0" {
                     break;
                 }
-                if run.is_finished() || Instant::now() >= deadline {
+                if run.is_finished() || deadline.is_expired() {
                     return Err(format!(
                         "fcitx5 never saw the editor's input context: {state:?}"
                     ));
@@ -404,7 +407,7 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
             // settles.  Sample it to a deadline: the assertion is that the
             // editor is talking to the IM, not that the daemon answered
             // within the first milliseconds after the switch.
-            let deadline = Instant::now() + Duration::from_secs(8);
+            let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(8));
             loop {
                 let active = Command::new("fcitx5-remote")
                     .arg("-n")
@@ -414,7 +417,7 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
                 if String::from_utf8_lossy(&active.stdout).trim() == "pinyin" {
                     break;
                 }
-                if run.is_finished() || Instant::now() >= deadline {
+                if run.is_finished() || deadline.is_expired() {
                     return Err(format!("Pinyin not active: {active:?}"));
                 }
                 thread::sleep(Duration::from_millis(20));
@@ -462,7 +465,7 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
             // stage measures, so wait for the closed state first.  The
             // session has no window manager, so restore the app's X focus
             // explicitly before typing.
-            let deadline = Instant::now() + Duration::from_secs(8);
+            let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(8));
             loop {
                 let state = Command::new("fcitx5-remote")
                     .envs(env.iter().map(|(k, v)| (k, v)))
@@ -471,7 +474,7 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
                 if String::from_utf8_lossy(&state.stdout).trim() != "2" {
                     break;
                 }
-                if run.is_finished() || Instant::now() >= deadline {
+                if run.is_finished() || deadline.is_expired() {
                     return Err(format!(
                         "fcitx5 did not deactivate the input context: {state:?}"
                     ));

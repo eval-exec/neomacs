@@ -539,7 +539,10 @@ impl AcceptedClientBuffer {
         Self::CreateNamed(format!("{base_name}{caller_suffix}"))
     }
 
-    pub(super) fn materialize(self, buffers: &mut BufferManager) -> Value {
+    pub(super) fn materialize(
+        self,
+        buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
+    ) -> Value {
         match self {
             Self::None => Value::NIL,
             Self::CreateNamed(name) => {
@@ -4376,12 +4379,12 @@ pub trait SystemProcessExt {
     ) -> Result<PendingNetworkConnectCompletion, Flow>;
     fn create_accepted_network_client(
         &mut self,
-        buffers: &mut BufferManager,
+        buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
         spec: AcceptedNetworkClientSpec,
     ) -> ProcessId;
     fn accept_network_server_connections(
         &mut self,
-        buffers: &mut BufferManager,
+        buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
         id: ProcessId,
     ) -> Result<Vec<AcceptedNetworkConnection>, Flow>;
     fn read_process_output_result(
@@ -5450,10 +5453,7 @@ impl SystemProcessExt for ProcessManager {
             return ProcessBytesRead::NoSource;
         };
 
-        if scratch.len() < read_len {
-            scratch.resize(read_len, 0);
-        }
-        let buf = &mut scratch[..read_len];
+        let mut buf = ReadScratchGuard::acquire(scratch, read_len);
         let full_read_len = buf.len();
         #[cfg(windows)]
         let result = {
@@ -5468,13 +5468,13 @@ impl SystemProcessExt for ProcessManager {
             }
         };
         #[cfg(not(windows))]
-        let result = stdout.read(buf);
+        let result = stdout.read(&mut buf);
         process_output_read_from_io_result(
             proc,
             coding_systems,
             destination,
             ProcessReadOutcome::from_stream_read(&result),
-            buf,
+            &buf,
             full_read_len,
             mode,
             global_null_inhibition,
@@ -5503,18 +5503,15 @@ impl SystemProcessExt for ProcessManager {
             return ProcessBytesRead::NoSource;
         };
 
-        if scratch.len() < read_len {
-            scratch.resize(read_len, 0);
-        }
-        let buf = &mut scratch[..read_len];
+        let mut buf = ReadScratchGuard::acquire(scratch, read_len);
         let full_read_len = buf.len();
-        let result = port.read(buf);
+        let result = port.read(&mut buf);
         process_output_read_from_io_result(
             proc,
             coding_systems,
             destination,
             ProcessReadOutcome::from_stream_read(&result),
-            buf,
+            &buf,
             full_read_len,
             mode,
             global_null_inhibition,
@@ -5540,18 +5537,15 @@ impl SystemProcessExt for ProcessManager {
             return ProcessBytesRead::NoSource;
         };
 
-        if scratch.len() < read_len {
-            scratch.resize(read_len, 0);
-        }
-        let buf = &mut scratch[..read_len];
+        let mut buf = ReadScratchGuard::acquire(scratch, read_len);
         let full_read_len = buf.len();
-        let result = reader.read(buf);
+        let result = reader.read(&mut buf);
         process_output_read_from_io_result(
             proc,
             coding_systems,
             destination,
             ProcessReadOutcome::from_pty_read(&result),
-            buf,
+            &buf,
             full_read_len,
             mode,
             global_null_inhibition,
@@ -5575,18 +5569,15 @@ impl SystemProcessExt for ProcessManager {
         }
         let read_len = process_read_buffer_len(proc);
         if let Some(tls) = proc.live_io_mut().tls_stream_mut() {
-            if scratch.len() < read_len {
-                scratch.resize(read_len, 0);
-            }
-            let buf = &mut scratch[..read_len];
+            let mut buf = ReadScratchGuard::acquire(scratch, read_len);
             let full_read_len = buf.len();
-            let result = tls.read_process_output(buf);
+            let result = tls.read_process_output(&mut buf);
             let read = process_output_read_from_io_result(
                 proc,
                 coding_systems,
                 destination,
                 ProcessReadOutcome::from_stream_read(&result),
-                buf,
+                &buf,
                 full_read_len,
                 mode,
                 global_null_inhibition,
@@ -5603,22 +5594,19 @@ impl SystemProcessExt for ProcessManager {
                 Unsupported,
             }
 
-            if scratch.len() < read_len {
-                scratch.resize(read_len, 0);
-            }
-            let buf = &mut scratch[..read_len];
+            let mut buf = ReadScratchGuard::acquire(scratch, read_len);
             let full_read_len = buf.len();
             let raw_read = {
                 let socket = proc.live_io().network_socket().expect("checked above");
-                match socket.read_stream_output(buf) {
+                match socket.read_stream_output(&mut buf) {
                     Some(result) => RawNetworkRead::Stream(result),
                     None => match &**socket {
                         NetworkSocket::UdpSocket(socket) => {
-                            RawNetworkRead::Udp(socket.recv_from(buf))
+                            RawNetworkRead::Udp(socket.recv_from(&mut buf))
                         }
                         #[cfg(unix)]
                         NetworkSocket::UnixDatagram(socket) => {
-                            RawNetworkRead::UnixDatagram(socket.recv_from(buf))
+                            RawNetworkRead::UnixDatagram(socket.recv_from(&mut buf))
                         }
                         _ => RawNetworkRead::Unsupported,
                     },
@@ -5630,7 +5618,7 @@ impl SystemProcessExt for ProcessManager {
                     coding_systems,
                     destination,
                     ProcessReadOutcome::from_stream_read(&result),
-                    buf,
+                    &buf,
                     full_read_len,
                     mode,
                     global_null_inhibition,
@@ -6898,7 +6886,7 @@ impl SystemProcessExt for ProcessManager {
 
     fn create_accepted_network_client(
         &mut self,
-        buffers: &mut BufferManager,
+        buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
         spec: AcceptedNetworkClientSpec,
     ) -> ProcessId {
         let AcceptedNetworkClientSpec {
@@ -6941,7 +6929,7 @@ impl SystemProcessExt for ProcessManager {
 
     fn accept_network_server_connections(
         &mut self,
-        buffers: &mut BufferManager,
+        buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
         id: ProcessId,
     ) -> Result<Vec<AcceptedNetworkConnection>, Flow> {
         // Accepted transports stay by value through this short-lived local
@@ -9311,8 +9299,8 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             }
 
             self.sync_process_read_config_from_visible_variables();
-            let (processes, buffers) = self.processes_and_buffers_mut();
-            let accepted = processes.accept_network_server_connections(buffers, pid)?;
+            let (processes, mut buffers) = self.processes_and_buffer_view_mut();
+            let accepted = processes.accept_network_server_connections(&mut buffers, pid)?;
             for event in &accepted {
                 self.setup_process_output_descriptor(event.client_id)?;
             }

@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use neomacs_tui_tests::{TuiLaunch, TuiProcessOutcome, TuiSession, TuiTerminalConfig};
 
-const PROBE_EL: &str = include_str!("mode_line_point_probe.el");
+const PROBE_EL_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/mode_line_point_probe.el"
+);
 
 // GNU Emacs 31.1, interactive 40x120 xterm-256color, C.UTF-8. Collected with:
 // bash tmp/editpath-cont11/run-net-cg-nix-r1.sh python3 -B
@@ -40,7 +43,7 @@ fn run_point_probe(engine: ProbeEngine, program: PathBuf) -> String {
     let home = neomacs_tui_tests::TuiTempDirectory::new("neomacs-point-percent-");
     let script = home.path().join("point.el");
     let out = home.path().join("point.out");
-    std::fs::write(&script, PROBE_EL).expect("write point-percent probe");
+    std::fs::copy(PROBE_EL_PATH, &script).expect("write point-percent probe");
     let mut launch = TuiLaunch::new(program.as_os_str()).arg("-nw").arg("-Q");
     match engine {
         ProbeEngine::Gnu => {

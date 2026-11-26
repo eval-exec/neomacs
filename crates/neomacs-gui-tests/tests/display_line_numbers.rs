@@ -84,11 +84,7 @@ fn hidden_buffer_newlines_keep_the_current_gutter_on_the_point_line() {
 /// oracle and a real GUI; unsupported setup is a failure, never a skip.
 #[test]
 fn native_line_number_gui_matrix_capacity_matches_attested_gnu() {
-    use std::{
-        fs,
-        process::Command,
-        time::{SystemTime, UNIX_EPOCH},
-    };
+    use std::{fs, process::Command};
 
     assert_eq!(std::env::var("NEOVM_ORACLE_MODE").as_deref(), Ok("verify"));
     let forced = PathBuf::from(
@@ -112,10 +108,7 @@ fn native_line_number_gui_matrix_capacity_matches_attested_gnu() {
     let artifacts = root.join(format!(
         "target/neomacs-gui-tests/line-number-gui-capacity-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        neomacs_gui_tests::unique_nonce()
     ));
     fs::create_dir_all(&artifacts).unwrap();
     let prefix = forced.parent().unwrap().parent().unwrap();

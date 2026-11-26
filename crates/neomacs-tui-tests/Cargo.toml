@@ -28,6 +28,12 @@ doom-repro = []
 [dependencies]
 expect-test = "1.5.1"
 
+[dev-dependencies]
+# Lexer, parser and manifest reader for `src/wall_clock_guard_test.rs`.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "3.0.3", features = ["full", "visit"] }
+toml.workspace = true
+
 [target.'cfg(unix)'.dependencies]
 vt100 = "0.16"
 pty-process = "0.5"

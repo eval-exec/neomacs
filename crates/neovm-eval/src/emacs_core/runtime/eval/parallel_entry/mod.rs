@@ -21,3 +21,6 @@ pub(crate) mod world_turn;
 #[cfg(test)]
 #[path = "../tests/green_era_switch_test.rs"]
 mod green_era_switch_tests;
+#[cfg(test)]
+#[path = "../tests/owner_slab_lease_test.rs"]
+mod owner_slab_lease_tests;

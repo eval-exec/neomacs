@@ -177,6 +177,294 @@ fn observation_budget_and_unwind_restore_the_outer_scope() {
     assert!(reads.unwrap().unchanged());
 }
 
+#[test]
+fn bulk_mutators_preserve_journal_before_read_capture_order() {
+    let mut heap = crate::tagged::gc::TestHeap::new();
+
+    fn check_journal_before_read(
+        label: &str,
+        owner: Value,
+        mut read: impl FnMut(Value),
+        mut mutate: impl FnMut(Value),
+    ) {
+        let (_, reads) = capture(|| {
+            mutate(owner);
+            read(owner);
+        });
+        let reads = reads.unwrap_or_else(|| {
+            panic!("{label}: write-before-read capture must return a coherent certificate")
+        });
+        assert!(
+            reads.unchanged(),
+            "{label}: fresh write-before-read capture invalidated its own certificate"
+        );
+        assert!(
+            reads.contains_owner_for_test(owner.bits()),
+            "{label}: certificate must observe the mutated owner"
+        );
+        mutate(owner);
+        assert!(
+            !reads.unchanged(),
+            "{label}: subsequent mutation must invalidate the certificate"
+        );
+
+        let (_, invalid) = capture(|| {
+            read(owner);
+            mutate(owner);
+        });
+        assert!(
+            invalid.is_none(),
+            "{label}: read-before-write capture must be rejected"
+        );
+    }
+
+    let overlay = heap.alloc_overlay(crate::heap_types::OverlayDataInit {
+        serial: crate::heap_types::OverlaySerialSource::Mint,
+        plist: Value::NIL,
+        buffer: None,
+        start: 1,
+        end: 2,
+        front_advance: false,
+        rear_advance: false,
+    });
+    check_journal_before_read(
+        "with_overlay_data_mut",
+        overlay,
+        |v| {
+            let _ = v.as_overlay_data();
+        },
+        |v| {
+            v.with_overlay_data_mut(|d| d.front_advance = !d.front_advance)
+                .unwrap();
+        },
+    );
+
+    let bv = heap.alloc_bool_vector(8, vec![0]);
+    check_journal_before_read(
+        "with_bool_vector_mut",
+        bv,
+        |v| {
+            let _ = v.as_bool_vector_obj();
+        },
+        |v| {
+            v.with_bool_vector_mut(|_| ()).unwrap();
+        },
+    );
+
+    let vec_val = Value::vector(vec![Value::fixnum(1)]);
+    check_journal_before_read(
+        "with_vector_data_mut",
+        vec_val,
+        |v| {
+            let _ = v.as_vector_data();
+        },
+        |v| {
+            v.with_vector_data_mut(|s| s[0] = Value::T).unwrap();
+        },
+    );
+    check_journal_before_read(
+        "replace_vector_data",
+        Value::vector(vec![Value::fixnum(1)]),
+        |v| {
+            let _ = v.as_vector_data();
+        },
+        |v| {
+            assert!(v.replace_vector_data(vec![Value::T]));
+        },
+    );
+
+    let rec_val = Value::make_record(vec![Value::fixnum(1)]);
+    check_journal_before_read(
+        "with_record_data_mut",
+        rec_val,
+        |v| {
+            let _ = v.as_record_data();
+        },
+        |v| {
+            v.with_record_data_mut(|s| s[0] = Value::T).unwrap();
+        },
+    );
+    check_journal_before_read(
+        "replace_record_data",
+        Value::make_record(vec![Value::fixnum(1)]),
+        |v| {
+            let _ = v.as_record_data();
+        },
+        |v| {
+            assert!(v.replace_record_data(vec![Value::T]));
+        },
+    );
+
+    let lam = heap.alloc_lambda(vec![Value::fixnum(1)]);
+    check_journal_before_read(
+        "with_closure_slots_mut(lambda)",
+        lam,
+        |v| {
+            let _ = v.closure_slots();
+        },
+        |v| {
+            crate::tagged::mutate::with_closure_slots_mut(v, |s| s[0] = Value::T).unwrap();
+        },
+    );
+    check_journal_before_read(
+        "replace_closure_slots(lambda)",
+        heap.alloc_lambda(vec![Value::fixnum(1)]),
+        |v| {
+            let _ = v.closure_slots();
+        },
+        |v| {
+            assert!(crate::tagged::mutate::replace_closure_slots(
+                v,
+                vec![Value::T]
+            ));
+        },
+    );
+
+    let ht = heap.alloc_hash_table(crate::value::LispHashTable::new(
+        crate::value::HashTableTest::Eq,
+    ));
+    check_journal_before_read(
+        "with_hash_table_mut",
+        ht,
+        |v| {
+            let _ = v.as_hash_table();
+        },
+        |v| {
+            v.with_hash_table_mut(|_| ()).unwrap();
+        },
+    );
+    let ht_write = heap.alloc_hash_table(crate::value::LispHashTable::new(
+        crate::value::HashTableTest::Eq,
+    ));
+    check_journal_before_read(
+        "with_hash_table_write_inactive",
+        ht_write,
+        |v| {
+            let _ = v.as_hash_table();
+        },
+        |v| {
+            // SAFETY: standalone `TestHeap` has no concurrent hash mutation active.
+            unsafe {
+                v.with_hash_table_write_inactive(|w| {
+                    let _ = w.put(Value::fixnum(1), Value::T, false);
+                })
+            }
+            .unwrap();
+        },
+    );
+    let ct = heap.alloc_char_table(Value::NIL, Value::NIL, 0);
+    check_journal_before_read(
+        "with_char_table_mut",
+        ct,
+        |v| {
+            let _ = v.as_char_table_obj();
+        },
+        |v| {
+            v.with_char_table_mut(|t| t.set_default(Value::T)).unwrap();
+        },
+    );
+
+    let sct = heap.alloc_sub_char_table(1, 0, vec![Value::NIL; 4]);
+    check_journal_before_read(
+        "with_sub_char_table_write",
+        sct,
+        |v| {
+            let _ = v.as_veclike_ptr();
+        },
+        |v| {
+            crate::tagged::mutate::with_sub_char_table_write(v, |t| t.set_contents(0, Value::T))
+                .unwrap();
+        },
+    );
+
+    let ob = heap.alloc_obarray(vec![Value::NIL; 4]);
+    check_journal_before_read(
+        "with_obarray_mut",
+        ob,
+        |v| {
+            let _ = v.as_obarray_obj();
+        },
+        |v| {
+            v.with_obarray_mut(|o| o.count = o.count.wrapping_add(1))
+                .unwrap();
+        },
+    );
+
+    let s1 = heap.alloc_string(crate::heap_types::LispString::from_unibyte(b"abc".to_vec()));
+    check_journal_before_read(
+        "with_lisp_string_mut",
+        s1,
+        |v| {
+            let _ = v.as_lisp_string();
+        },
+        |v| {
+            v.with_lisp_string_mut(|_| ()).unwrap();
+        },
+    );
+
+    let s2 = heap.alloc_string(crate::heap_types::LispString::from_unibyte(b"abc".to_vec()));
+    check_journal_before_read(
+        "with_string_bytes_mut",
+        s2,
+        |v| {
+            let _ = v.as_lisp_string();
+        },
+        |v| {
+            v.with_string_bytes_mut(|b| b[0] = b'z').unwrap();
+        },
+    );
+
+    let s3 = heap.alloc_string(crate::heap_types::LispString::from_unibyte(b"abc".to_vec()));
+    check_journal_before_read(
+        "clear_string_contents",
+        s3,
+        |v| {
+            let _ = v.as_lisp_string();
+        },
+        |v| {
+            assert!(v.clear_string_contents());
+        },
+    );
+
+    let s4 = heap.alloc_string(crate::heap_types::LispString::from_unibyte(b"abc".to_vec()));
+    check_journal_before_read(
+        "pin_string_immovable",
+        s4,
+        |v| {
+            let _ = v.as_lisp_string();
+        },
+        |v| {
+            assert!(v.pin_string_immovable());
+        },
+    );
+
+    // clear_string_intervals on a string with intervals must also preserve journal-before-read.
+    let s5 = heap.alloc_string(crate::heap_types::LispString::from_unibyte(b"abc".to_vec()));
+    crate::tagged::mutate::with_string_text_props_mut(s5, |_| ()).unwrap();
+    let (_, reads) = capture(|| {
+        assert!(crate::tagged::mutate::clear_string_intervals(s5));
+        let _ = s5.as_lisp_string();
+    });
+    let reads = reads.expect("clear_string_intervals write-before-read must return a certificate");
+    assert!(reads.unchanged());
+    assert!(reads.contains_owner_for_test(s5.bits()));
+
+    // Wrong-subtype veclike rejections must not spuriously invalidate certificates.
+    let (_, vec_reads) = capture(|| {
+        let _ = vec_val.as_vector_data();
+    });
+    let vec_reads = vec_reads.unwrap();
+    assert!(vec_val.with_overlay_data_mut(|_| ()).is_none());
+    assert!(vec_val.with_record_data_mut(|_| ()).is_none());
+    assert!(vec_val.with_hash_table_mut(|_| ()).is_none());
+    assert!(vec_val.with_char_table_mut(|_| ()).is_none());
+    assert!(vec_val.with_obarray_mut(|_| ()).is_none());
+    assert!(
+        vec_reads.unchanged(),
+        "wrong-subtype rejections must not journal spurious writes"
+    );
+}
+
 #[cfg(test)]
 #[path = "fast_paths_test.rs"]
 mod fast_paths;

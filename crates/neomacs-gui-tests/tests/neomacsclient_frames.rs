@@ -14,7 +14,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 // Unique within this test process, including concurrent fixture evaluations.
@@ -37,13 +37,13 @@ struct OwnedChild(Child);
 impl OwnedChild {
     /// Bound child completion while retaining ownership for panic cleanup.
     fn wait(&mut self, description: &str, artifacts: &Path) -> ExitStatus {
-        let deadline = Instant::now() + DEADLINE;
+        let deadline = neomacs_gui_tests::HangCap::new(DEADLINE);
         loop {
             if let Some(status) = self.0.try_wait().expect("observe owned child") {
                 return status;
             }
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "{description} timed out; artifacts: {}",
                 artifacts.display()
             );
@@ -503,12 +503,7 @@ impl<'a> Fixture<'a> {
     /// failure and bounding both the protocol reply and child lifetime.
     fn evaluate(&self, form: &str) -> String {
         let ordinal = EVALUATE_ORDINAL.fetch_add(1, Ordering::Relaxed);
-        let wall_ns = || {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .ok()
-                .map(|duration| duration.as_nanos().to_string())
-        };
+        let wall_ns = || Some(neomacs_gui_tests::diagnostic_unix_ns_label());
         let started_unix_ns = wall_ns();
         let caller_pid = std::process::id();
         let history = self.artifacts.join(format!(
@@ -713,7 +708,7 @@ impl<'a> Fixture<'a> {
     /// Await an observable condition while treating an exited daemon as an
     /// immediate failure rather than consuming the whole timeout.
     fn wait_for(&mut self, description: &str, mut condition: impl FnMut(&Self) -> bool) {
-        let deadline = Instant::now() + DEADLINE;
+        let deadline = neomacs_gui_tests::HangCap::new(DEADLINE);
         loop {
             assert!(
                 self.daemon.0.try_wait().unwrap().is_none(),
@@ -724,7 +719,7 @@ impl<'a> Fixture<'a> {
                 return;
             }
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "{description} timed out; artifacts: {}",
                 self.artifacts.display()
             );
@@ -869,10 +864,7 @@ fn neomacsclient_creates_gui_frames_from_a_daemon_with_display() {
     let artifacts = root.join(format!(
         "target/neomacs-gui-tests/neomacsclient-frames-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
+        neomacs_gui_tests::unique_nonce(),
     ));
     fs::create_dir_all(&artifacts).unwrap();
     let isolation = neomacs_test_env::bounded_temp_dir("gui-client-").unwrap();
@@ -1032,10 +1024,7 @@ fn identity_artifacts(label: &str) -> PathBuf {
     let artifacts = neomacs_infra::workspace_root().join(format!(
         "target/neomacs-gui-tests/daemon-identity-{label}-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
+        neomacs_gui_tests::unique_nonce(),
     ));
     fs::create_dir_all(&artifacts).unwrap();
     artifacts

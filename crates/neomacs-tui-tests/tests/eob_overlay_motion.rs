@@ -32,9 +32,7 @@ fn probe(binary: PathBuf, origin: &str) -> serde_json::Value {
 }
 
 fn compare(origin: &str) {
-    let gnu = std::env::var_os("NEOMACS_GNU_EMACS_BINARY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| "emacs".into());
+    let gnu = neomacs_tui_tests::oracle::gnu_oracle_program();
     let expected = probe(gnu, origin);
     assert_eq!(expected["observations"].as_array().unwrap().len(), 16);
     assert!(

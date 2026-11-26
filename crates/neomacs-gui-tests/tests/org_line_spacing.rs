@@ -16,10 +16,7 @@ fn org_selection_and_empty_line_cursor_preserve_spacing_and_backgrounds() {
     let artifacts = root.join(format!(
         "tmp/neomacs-gui-tests/org-line-spacing-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        neomacs_gui_tests::unique_nonce()
     ));
     let backend = GuiBackend::LinuxWayland;
     let session = DisplayHarness::for_backend(backend)
@@ -139,9 +136,9 @@ fn capture_stages(artifacts: GuiArtifactSet) -> Result<(), String> {
             artifacts.frame_snapshot_json.display(),
             stage.name()
         );
-        let deadline = std::time::Instant::now() + Duration::from_secs(12);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(12));
         loop {
-            if std::time::Instant::now() >= deadline {
+            if deadline.is_expired() {
                 return Err(format!(
                     "{stage:?}: no complete PNG with {:?} background; artifacts: {}",
                     stage.background(),

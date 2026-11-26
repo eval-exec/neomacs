@@ -23,7 +23,7 @@ use crate::{
     ProfileRequest, ProfileScope, ProfileVerdict, RunArtifact, RunVerdict, ScenarioId,
     artifact_store::{unix_time_ms, write_json_atomically},
     counters::PerfStatCapture,
-    host::{collect_host_provenance, validate_machine_policy},
+    host::{collect_host_provenance, validate_cohort_load_policy, validate_machine_policy},
     native_video::{NativeVideoExecutionIdentity, NativeVideoPresentationTarget},
     profile_gate::ProfileGate,
     scenario,
@@ -291,6 +291,15 @@ pub enum PerfError {
         expected: CounterScope,
         actual: CounterScope,
     },
+    #[error(
+        "refusing to run cohort-gated scenario `{scenario}` locally at high load (1m loadavg {loadavg_1m:.2} >= {threshold:.2}; /proc/loadavg = `{loadavg}`): run on dedicated idle treeroot, or pass --allow-local to record an explicit provenance=local-UNTRUSTED run"
+    )]
+    HighLoadLocalRefused {
+        scenario: ScenarioId,
+        loadavg_1m: f64,
+        threshold: f64,
+        loadavg: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -306,6 +315,8 @@ impl PerfHarness {
     }
 
     pub fn run(&self, request: &RunRequest) -> Result<RunReport, PerfError> {
+        let preflight_host = collect_host_provenance(&request.machine);
+        validate_cohort_load_policy(request.scenario, &request.machine, &preflight_host)?;
         let context = RunContext::create(&self.workspace_root, request)?;
         if let Err(message) = request.validate_scenario_input() {
             return context.infrastructure_failure(message, Vec::new());
@@ -662,7 +673,7 @@ impl PerfHarness {
             ScenarioId::MxTabCompletionSteady => {
                 scenarios::mx_tab::prepare_steady(&self.workspace_root, request, run_directory)
             }
-            ScenarioId::Scrolling => {
+            ScenarioId::Scrolling | ScenarioId::ScrollingLongLines => {
                 scenarios::scrolling::prepare(&self.workspace_root, request, run_directory)
             }
             ScenarioId::BoundedSearchEditSmall
@@ -1885,7 +1896,9 @@ fn parse_scenario_result(
         ScenarioId::MxTabCompletionSteady => {
             serde_json::from_str(raw).map(ScenarioResult::MxTabCompletionSteady)
         }
-        ScenarioId::Scrolling => serde_json::from_str(raw).map(ScenarioResult::Scrolling),
+        ScenarioId::Scrolling | ScenarioId::ScrollingLongLines => {
+            serde_json::from_str(raw).map(ScenarioResult::Scrolling)
+        }
         ScenarioId::BoundedSearchEditSmall
         | ScenarioId::BoundedSearchEditLarge
         | ScenarioId::BoundedSearchEditOnly

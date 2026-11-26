@@ -68,6 +68,21 @@ static FC_CACHES: OnceLock<Mutex<FontconfigCaches>> = OnceLock::new();
 #[cfg(all(test, unix))]
 static FC_SORT_QUERIES: AtomicUsize = AtomicUsize::new(0);
 
+/// Native `FcFontMatch` calls inside `fc_query_candidates_uncached`. A cache
+/// hit must not increment this.
+#[cfg(all(test, unix))]
+static FC_MATCH_QUERIES: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(test, unix))]
+pub(crate) fn fc_match_queries() -> usize {
+    FC_MATCH_QUERIES.load(Ordering::Relaxed)
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn reset_fc_match_queries() {
+    FC_MATCH_QUERIES.store(0, Ordering::Relaxed);
+}
+
 #[cfg(all(test, unix))]
 pub(crate) fn reset_sort_queries_for_test() {
     FC_SORT_QUERIES.store(0, Ordering::Relaxed);
@@ -1421,6 +1436,8 @@ fn fc_query_candidates_uncached(
             }
             unsafe { fontconfig_sys::FcDefaultSubstitute(pattern.0) };
             let mut result = fontconfig_sys::FcResultNoMatch;
+            #[cfg(all(test, unix))]
+            FC_MATCH_QUERIES.fetch_add(1, Ordering::Relaxed);
             // SAFETY: configuration and pattern remain live; result is a
             // writable scalar and the returned match is immediately guarded.
             let matched = FcPatternGuard(unsafe {

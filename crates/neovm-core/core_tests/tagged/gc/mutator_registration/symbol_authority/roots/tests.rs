@@ -128,7 +128,7 @@ fn root_families(backing: PlainSymbolBacking) {
                 blv.defcell_atomic(),
             ));
             assert_eq!(blv.defcell_atomic(), blv.valcell_atomic());
-            assert_eq!(blv.where_buf.load_atomic(), TaggedValue::NIL);
+            assert_eq!(blv.where_buf_atomic(), TaggedValue::NIL);
             // Only the parked keyboard owns this managed word. The active
             // slot is NIL, and the expected ledger below retains bits only.
             let keyboard_id = intern("c6-root-parked-keyboard");

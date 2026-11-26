@@ -43,8 +43,8 @@ fn recorded_pipe_before_read(
         vec![],
         ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let (processes, buffers) = eval.processes_and_buffers_mut();
-    processes.sync_process_mark(buffers, id).expect("mark");
+    let (processes, mut buffers) = eval.processes_and_buffer_view_mut();
+    processes.sync_process_mark(&mut buffers, id).expect("mark");
     let (reader, mut writer) = os_pipe::pipe().expect("owned pipe");
     writer
         .write_all(b"caf\xc3\xa9\r\n")

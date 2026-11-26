@@ -1584,12 +1584,12 @@ fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
         let custom = crate::emacs_core::custom::CustomManager::new();
-        let (buffers, mut obarray_view) = ev.buffers_and_obarray_view_mut();
+        let (mut buffers, mut obarray_view) = ev.buffer_view_and_obarray_view_mut();
         obarray_view.with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
-                buffers,
+                &mut buffers,
                 &custom,
                 &[],
                 &mut builtin_plan,
@@ -1613,12 +1613,12 @@ fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
         let custom = crate::emacs_core::custom::CustomManager::new();
-        let (buffers, mut obarray_view) = ev.buffers_and_obarray_view_mut();
+        let (mut buffers, mut obarray_view) = ev.buffer_view_and_obarray_view_mut();
         obarray_view.with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
-                buffers,
+                &mut buffers,
                 &custom,
                 &[],
                 &mut lambda_plan,
@@ -1645,12 +1645,12 @@ fn call_interactively_state_resolution_defers_prompting_specs_to_eval() {
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
         let custom = crate::emacs_core::custom::CustomManager::new();
-        let (buffers, mut obarray_view) = ev.buffers_and_obarray_view_mut();
+        let (mut buffers, mut obarray_view) = ev.buffer_view_and_obarray_view_mut();
         obarray_view.with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
-                buffers,
+                &mut buffers,
                 &custom,
                 &[],
                 &mut plan,
@@ -1747,12 +1747,12 @@ fn call_interactively_state_resolution_defers_shift_selection_without_effects() 
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
         let custom = crate::emacs_core::custom::CustomManager::new();
-        let (buffers, mut obarray_view) = ev.buffers_and_obarray_view_mut();
+        let (mut buffers, mut obarray_view) = ev.buffer_view_and_obarray_view_mut();
         obarray_view.with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
-                buffers,
+                &mut buffers,
                 &custom,
                 &[],
                 &mut plan,

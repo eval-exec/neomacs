@@ -102,6 +102,22 @@ impl ConsBlockTrailer {
         unsafe { &*((base + CONS_MARKS_OFFSET) as *const Self) }
     }
 
+    #[inline(always)]
+    fn assert_cell_index(index: usize) {
+        assert!(
+            index < CONS_BLOCK_SIZE,
+            "cons block cell index {index} out of bounds (CONS_BLOCK_SIZE = {CONS_BLOCK_SIZE})"
+        );
+    }
+
+    #[inline(always)]
+    fn assert_cell_count(cells: usize) {
+        assert!(
+            cells <= CONS_BLOCK_SIZE,
+            "cons block cell count {cells} exceeds CONS_BLOCK_SIZE ({CONS_BLOCK_SIZE})"
+        );
+    }
+
     #[inline]
     pub(super) fn mark_bit(index: usize) -> ConsMarkBit {
         ConsMarkBit {
@@ -110,19 +126,17 @@ impl ConsBlockTrailer {
         }
     }
 
-    /// Atomic representation and unchecked indexing preserve the existing
-    /// mark hot path: a relaxed load remains a plain load on x86-64.
+    /// Atomic representation preserves the mark hot path (a relaxed load
+    /// remains a plain load on x86-64/aarch64) while checked slice indexing
+    /// prevents out-of-bounds access past the 64 KiB block.
     #[inline]
     pub(super) fn mark_word(&self, word_index: usize) -> &AtomicUsize {
-        debug_assert!(word_index < CONS_MARK_WORDS);
-        // SAFETY: every caller derives a word of this live block's cells.
-        // Match the original raw-word accessor without adding an array
-        // bounds assumption to the legacy mark/sweep loops.
-        unsafe { &*self.mark.as_ptr().add(word_index) }
+        &self.mark[word_index]
     }
 
     #[inline]
     pub(super) fn is_marked(&self, index: usize) -> bool {
+        Self::assert_cell_index(index);
         let bit = Self::mark_bit(index);
         (self.mark_word(bit.word_index).load(Ordering::Relaxed) & bit.mask) != 0
     }
@@ -130,6 +144,7 @@ impl ConsBlockTrailer {
     /// Mutator marking keeps its existing load-before-RMW fast path.
     #[inline]
     pub(super) fn mark_cell(&self, index: usize) -> bool {
+        Self::assert_cell_index(index);
         let bit = Self::mark_bit(index);
         let word = self.mark_word(bit.word_index);
         if word.load(Ordering::Relaxed) & bit.mask != 0 {
@@ -142,6 +157,7 @@ impl ConsBlockTrailer {
     /// Concurrent claiming must decide ownership from the RMW's old value.
     #[inline]
     pub(super) fn try_mark(&self, index: usize) -> bool {
+        Self::assert_cell_index(index);
         let bit = Self::mark_bit(index);
         (self
             .mark_word(bit.word_index)
@@ -151,7 +167,10 @@ impl ConsBlockTrailer {
     }
 
     pub(super) fn mark_run(&self, start: usize, n: usize, set: bool) {
-        debug_assert!(start + n <= CONS_BLOCK_SIZE);
+        assert!(
+            start <= CONS_BLOCK_SIZE && n <= CONS_BLOCK_SIZE - start,
+            "cons block mark_run range {start}..+{n} exceeds CONS_BLOCK_SIZE ({CONS_BLOCK_SIZE})"
+        );
         let end = start + n;
         let mut i = start;
         while i < end {
@@ -176,12 +195,14 @@ impl ConsBlockTrailer {
     /// joined the marker and closed allocation regions. Atomic stores retain
     /// the representation used by all other mark accesses.
     pub(super) fn clear_marks_world_stopped(&self, cells: usize) {
+        Self::assert_cell_count(cells);
         for w in 0..cons_mark_words(cells) {
             self.mark_word(w).store(0, Ordering::Relaxed);
         }
     }
 
     pub(super) fn count_marked(&self, cells: usize) -> usize {
+        Self::assert_cell_count(cells);
         (0..cons_mark_words(cells))
             .map(|w| self.mark_word(w).load(Ordering::Relaxed).count_ones() as usize)
             .sum()
@@ -191,6 +212,7 @@ impl ConsBlockTrailer {
     /// newly allocated sweep-window cells survive through their mark bit.
     #[inline]
     pub(super) fn is_live_generational(&self, index: usize) -> bool {
+        Self::assert_cell_index(index);
         let bit = Self::mark_bit(index);
         let live = self.old_word(bit.word_index)
             | self.mark_word(bit.word_index).load(Ordering::Relaxed) as u64;
@@ -200,6 +222,7 @@ impl ConsBlockTrailer {
     /// Count the union, rather than adding old and marked populations: a
     /// just-promoted cell still has both bits until the next mark begins.
     pub(super) fn count_live_generational(&self, cells: usize) -> usize {
+        Self::assert_cell_count(cells);
         (0..cons_mark_words(cells))
             .map(|w| {
                 (self.old_word(w) | self.mark_word(w).load(Ordering::Relaxed) as u64).count_ones()
@@ -210,27 +233,27 @@ impl ConsBlockTrailer {
 
     #[inline]
     fn old_atomic(&self, word_index: usize) -> &AtomicU64 {
-        debug_assert!(word_index < CONS_MARK_WORDS);
-        // SAFETY: the word index belongs to this live block's cells.
-        unsafe { self.old.get_unchecked(word_index) }
+        &self.old[word_index]
     }
 
     #[inline]
     fn age(&self, index: usize) -> &AtomicU8 {
-        debug_assert!(index < CONS_AGE_BYTES);
-        // SAFETY: the index belongs to this live block's cells or the
-        // padding of their last word.
-        unsafe { self.age.get_unchecked(index) }
+        Self::assert_cell_index(index);
+        &self.age[index]
     }
 
     /// The age bytes of `lane` of mark word `word_index` as one word.
     #[inline]
     fn age_lane(&self, word_index: usize, lane: usize) -> &AtomicU64 {
-        debug_assert!(word_index < CONS_MARK_WORDS && lane < AGE_LANES_PER_WORD);
+        assert!(
+            word_index < CONS_MARK_WORDS && lane < AGE_LANES_PER_WORD,
+            "cons block age lane ({word_index}, {lane}) out of bounds"
+        );
         let first = word_index * CONS_MARK_BITS_PER_WORD + lane * AGE_LANE_CELLS;
-        // SAFETY: the eight bytes lie inside `age`, word-aligned (asserted
-        // below). The mirror is written only at a stop-all promotion, so a
-        // word-wide access never races with a byte access.
+        // SAFETY: `word_index < CONS_MARK_WORDS` and `lane < AGE_LANES_PER_WORD`
+        // guarantee the eight bytes lie inside `self.age`, word-aligned
+        // (asserted below). The mirror is written only at a stop-all promotion,
+        // so a word-wide access never races with a byte access.
         unsafe { AtomicU64::from_ptr(self.age.as_ptr().add(first).cast::<u64>().cast_mut()) }
     }
 
@@ -243,6 +266,7 @@ impl ConsBlockTrailer {
     /// marking stay as dense in cache as before the mirror.
     #[inline]
     pub(super) fn is_old(&self, index: usize) -> bool {
+        Self::assert_cell_index(index);
         let bit = Self::mark_bit(index);
         self.old_word(bit.word_index) & bit.mask as u64 != 0
     }
@@ -251,7 +275,6 @@ impl ConsBlockTrailer {
     /// the mirror, which always equals the old bit while a mutator runs.
     #[inline]
     pub(super) fn age_is_old(&self, index: usize) -> bool {
-        debug_assert!(index < CONS_BLOCK_SIZE);
         self.age(index).load(Ordering::Relaxed) != ConsAge::Young as u8
     }
 
@@ -259,6 +282,7 @@ impl ConsBlockTrailer {
     /// so no other writer can bypass the mirror. Writes both copies.
     #[cfg(any(test, feature = "test-support"))]
     pub(super) fn set_old(&self, index: usize) {
+        Self::assert_cell_index(index);
         let bit = Self::mark_bit(index);
         self.old_atomic(bit.word_index)
             .fetch_or(bit.mask as u64, Ordering::Relaxed);
@@ -268,6 +292,7 @@ impl ConsBlockTrailer {
     /// Test setup only, as `set_old`. Writes both copies.
     #[cfg(any(test, feature = "test-support"))]
     pub(super) fn clear_old(&self, index: usize) {
+        Self::assert_cell_index(index);
         let bit = Self::mark_bit(index);
         self.old_atomic(bit.word_index)
             .fetch_and(!(bit.mask as u64), Ordering::Relaxed);
@@ -307,6 +332,7 @@ impl ConsBlockTrailer {
     #[cold]
     #[inline(never)]
     pub(super) fn promote_marked_world_stopped(&self, cells: usize) -> usize {
+        Self::assert_cell_count(cells);
         let mut promoted = 0usize;
         for w in 0..cons_mark_words(cells) {
             let marked = self.mark_word(w).load(Ordering::Relaxed) as u64;
@@ -367,6 +393,7 @@ impl ConsBlockTrailer {
     }
 
     pub(super) fn count_old(&self, cells: usize) -> usize {
+        Self::assert_cell_count(cells);
         (0..cons_mark_words(cells))
             .map(|w| self.old_word(w).count_ones() as usize)
             .sum()

@@ -224,7 +224,7 @@ fn rows_owned_domain_unhanded_region_return_preserves_published_storage_domain()
     let count = heap.gc_collections();
     let blocks = heap.cons_blocks.len();
     assert!(
-        heap.jit.cons_cur.get() < heap.jit.cons_lim.get(),
+        heap.jit.cons_cur() < heap.jit.cons_lim(),
         "actual unhanded region tail"
     );
     heap.close_alloc_regions();

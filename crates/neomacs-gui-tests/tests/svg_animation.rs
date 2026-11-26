@@ -2,12 +2,7 @@
 
 #![cfg(target_os = "linux")]
 
-use std::{
-    fs,
-    path::Path,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{fs, path::Path, thread, time::Duration};
 
 use neomacs_gui_tests::{
     DisplayHarness, GuiArtifactSet, GuiBackend, GuiRunOptions, GuiRunStatus, GuiScenario,
@@ -36,10 +31,7 @@ fn run_svg_scenario(scenario: &str, fixture: &str, introduction: bool) {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
     assert!(binary.exists(), "fresh GUI binary required: {binary:?}");
-    let run_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock")
-        .as_nanos();
+    let run_id = neomacs_gui_tests::unique_nonce();
     let artifacts = neomacs_gui_tests::fresh_artifact_dir(root.join(format!(
         "tmp/svg-animation-gui-{}-{run_id}",
         std::process::id()
@@ -97,7 +89,7 @@ fn observe_presentations(
     finished: impl Fn() -> bool,
 ) -> Result<(), String> {
     for (stage, expected_index) in [("initial", 0), ("final", 2)] {
-        let deadline = Instant::now() + Duration::from_secs(18);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(18));
         let mut last_observation = "no stage snapshot".to_owned();
         loop {
             if control.join(format!("{stage}.ready")).exists() {
@@ -180,7 +172,7 @@ fn observe_presentations(
                     }
                 }
             }
-            if finished() || Instant::now() >= deadline {
+            if finished() || deadline.is_expired() {
                 return Err(format!("{stage}: presentation absent ({last_observation})"));
             }
             thread::sleep(Duration::from_millis(25));

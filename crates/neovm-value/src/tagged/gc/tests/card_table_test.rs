@@ -424,3 +424,71 @@ fn aliased_chunks_share_a_slot_and_both_are_indexed() {
     assert_eq!(slots.take_dirty().len(), 2);
     assert!(slots.dirty().is_empty());
 }
+
+/// value-gc B4: `CardTable` is `Sync` with safe `&self` methods (`mark`,
+/// `dirty_cards`, `clear_slot`, `collect_dirty_slots`). Concurrent access
+/// through `&CardTable` must not trigger a non-atomic/atomic data race.
+#[test]
+fn concurrent_mark_with_dirty_cards_clear_and_collect_is_data_race_free() {
+    use super::card_table::{CARD_BYTES, CHUNK_BYTES};
+    use std::sync::{Arc, Barrier};
+
+    let cards = Arc::new(CardTable::new());
+    let chunk = 0x7f00_0000_0000usize;
+    let slot = ChunkSlot::of(chunk);
+    let start = Arc::new(Barrier::new(2));
+
+    let writer_iters = if cfg!(miri) { 8 } else { 32 };
+    let reader_iters = if cfg!(miri) { 1 } else { 8 };
+
+    let writer = {
+        let cards = Arc::clone(&cards);
+        let start = Arc::clone(&start);
+        std::thread::spawn(move || {
+            start.wait();
+            for iter in 0..writer_iters {
+                cards.mark(chunk + (iter % 8) * CARD_BYTES);
+                cards.mark(chunk + CHUNK_BYTES + (iter % 4) * CARD_BYTES);
+            }
+        })
+    };
+
+    start.wait();
+    let mut dirty_slots = Vec::new();
+    for _ in 0..reader_iters {
+        let _ = cards.dirty_cards(slot);
+        cards.clear_slot(slot);
+        dirty_slots.clear();
+        if cfg!(miri) {
+            // Exercise the exact summary-scan loop on the cache line covering
+            // both marked chunks without interpreting all 65,536 summary bytes.
+            cards.collect_dirty_slots_in_lines(0..2, &mut dirty_slots);
+        } else {
+            cards.collect_dirty_slots(&mut dirty_slots);
+        }
+    }
+    writer.join().expect("card writer thread");
+}
+
+#[test]
+fn collect_dirty_slots_in_lines_panics_on_out_of_bounds_line_range() {
+    let cards = CardTable::new();
+    // `CHUNK_SUMMARY_BYTES == 1 << u16::BITS` (asserted in `card_table.rs`), 64 bytes/line.
+    let total_lines = (1usize << u16::BITS) / 64;
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let mut out = Vec::new();
+            cards.collect_dirty_slots_in_lines(0..total_lines + 1, &mut out);
+        }))
+        .is_err(),
+        "collect_dirty_slots_in_lines past end must panic"
+    );
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let mut out = Vec::new();
+            cards.collect_dirty_slots_in_lines(total_lines..total_lines + 1, &mut out);
+        }))
+        .is_err(),
+        "collect_dirty_slots_in_lines starting at total_lines must panic"
+    );
+}

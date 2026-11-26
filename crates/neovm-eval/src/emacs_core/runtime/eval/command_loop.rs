@@ -1608,8 +1608,7 @@ impl Context {
         &mut self,
         force_complete: bool,
     ) -> Result<(), Flow> {
-        #[cfg(debug_assertions)]
-        neovm_value::tagged::mutate::debug_assert_no_heap_mut_closure();
+        neovm_value::tagged::mutate::assert_no_heap_mut_closure();
         // Collection also compacts undo state, materializes thread buffer
         // objects and publishes GC statistics. Those operations can allocate
         // or consult semantic TLS, so activate the collecting Context before

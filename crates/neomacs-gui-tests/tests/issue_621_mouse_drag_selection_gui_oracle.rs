@@ -19,7 +19,7 @@ use neomacs_gui_tests::{
 };
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const FIXTURE: &str = "crates/neomacs-gui-tests/fixtures/issue621-mouse-drag-selection.el";
 const SCENARIO: &str = "issue-621-mouse-drag-selection-oracle";
@@ -112,10 +112,10 @@ fn find_window(env: &[(String, String)]) -> Option<String> {
 }
 
 fn inject_drag(env: &[(String, String)], ready: &Path, label: &str) {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(20));
     while !ready.exists() {
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "{label} drag fixture did not become ready"
         );
         std::thread::sleep(Duration::from_millis(50));
@@ -125,7 +125,7 @@ fn inject_drag(env: &[(String, String)], ready: &Path, label: &str) {
             break window;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "{label} did not map a visible window"
         );
         std::thread::sleep(Duration::from_millis(100));

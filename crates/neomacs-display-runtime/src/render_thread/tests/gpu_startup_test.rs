@@ -121,6 +121,31 @@ fn startup_input_keeps_lifecycle_events_synchronous() {
     assert!(input.is_empty());
 }
 
+#[test]
+fn startup_input_defers_pointer_entered_before_mouse_wheel() {
+    use winit::{dpi::PhysicalPosition, event::PointerKind};
+
+    let mut input = StartupInputReplay::new(WindowId::from_raw(1));
+    let entered = WindowEvent::PointerEntered {
+        device_id: None,
+        position: PhysicalPosition::new(200.0, 200.0),
+        primary: true,
+        kind: PointerKind::Mouse,
+    };
+    let wheel = WindowEvent::MouseWheel {
+        device_id: None,
+        delta: MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -4.0)),
+        phase: TouchPhase::Moved,
+        timestamp: None,
+    };
+    input.defer_input(entered.clone()).unwrap();
+    input.defer_input(wheel.clone()).unwrap();
+
+    assert_eq!(input.pop_front(), Some(entered));
+    assert_eq!(input.pop_front(), Some(wheel));
+    assert!(input.is_empty());
+}
+
 fn adapter_info(backend: wgpu::Backend, driver: &str, driver_info: &str) -> wgpu::AdapterInfo {
     let mut info = wgpu::AdapterInfo::new(wgpu::DeviceType::Cpu, backend);
     info.driver = driver.into();

@@ -678,6 +678,214 @@ fn real_gui_image_size_oracle_matches_gnu_emacs() {
     }
 }
 
+#[test]
+fn real_gui_font_info_cache_staleness_oracle_matches_gnu_emacs() {
+    if !cfg!(target_os = "linux") {
+        eprintln!(
+            "skipping real GUI font-info cache staleness oracle; X11 comparator is Linux-only"
+        );
+        return;
+    }
+
+    let backend = GuiBackend::LinuxX11;
+    let workspace_root = workspace_root();
+    let binary = neomacs_binary(&workspace_root);
+    assert!(
+        binary.exists(),
+        "build {binary:?} before running the real GUI font-info cache staleness oracle"
+    );
+    let gnu_emacs = gnu_emacs_binary();
+
+    let artifact_root = workspace_root.join("target/neomacs-gui-tests");
+    let dir = artifact_root
+        .join(backend.slug())
+        .join(format!("font-info-cache-oracle-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let base_fc = std::env::var("FONTCONFIG_FILE")
+        .ok()
+        .filter(|value| !value.is_empty());
+    let resolve_font_file = |pattern: &str| -> PathBuf {
+        let mut cmd = std::process::Command::new("fc-match");
+        cmd.args(["--format=%{file}", pattern]);
+        if let Some(fc) = &base_fc {
+            cmd.env("FONTCONFIG_FILE", fc);
+        }
+        let output = cmd.output().expect("fc-match should run");
+        assert!(
+            output.status.success(),
+            "fc-match failed for {pattern}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+        assert!(path.exists(), "resolved font file missing: {path:?}");
+        path
+    };
+
+    let dejavu_src = resolve_font_file("DejaVu Sans Mono:style=Book");
+    let noto_src = resolve_font_file("Noto Sans:style=Regular");
+    let p1_dir = dir.join("fonts-p1");
+    let p2_dir = dir.join("fonts-p2");
+    let fc_cache_dir = dir.join("fc-cache");
+    std::fs::create_dir_all(&p1_dir).unwrap();
+    std::fs::create_dir_all(&p2_dir).unwrap();
+    std::fs::create_dir_all(&fc_cache_dir).unwrap();
+    std::fs::copy(&dejavu_src, p1_dir.join(dejavu_src.file_name().unwrap())).unwrap();
+    std::fs::copy(&noto_src, p2_dir.join(noto_src.file_name().unwrap())).unwrap();
+
+    let phase1_conf = dir.join("phase1.fonts.conf");
+    let phase2_conf = dir.join("phase2.fonts.conf");
+    let live_conf = dir.join("live.fonts.conf");
+    std::fs::write(
+        &phase1_conf,
+        format!(
+            "<?xml version=\"1.0\"?>\n\
+             <!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n\
+             <fontconfig>\n\
+               <dir>{}</dir>\n\
+               <cachedir>{}</cachedir>\n\
+               <alias><family>monospace</family><prefer><family>DejaVu Sans Mono</family></prefer></alias>\n\
+             </fontconfig>\n",
+            p1_dir.display(),
+            fc_cache_dir.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &phase2_conf,
+        format!(
+            "<?xml version=\"1.0\"?>\n\
+             <!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n\
+             <fontconfig>\n\
+               <dir>{}</dir>\n\
+               <dir>{}</dir>\n\
+               <cachedir>{}</cachedir>\n\
+               <alias><family>monospace</family><prefer><family>Noto Sans</family></prefer></alias>\n\
+             </fontconfig>\n",
+            p1_dir.display(),
+            p2_dir.display(),
+            fc_cache_dir.display()
+        ),
+    )
+    .unwrap();
+    std::fs::copy(&phase1_conf, &live_conf).unwrap();
+
+    let gnu_phase1_path = dir.join("phase1.gnu-result.el");
+    let gnu_phase2_path = dir.join("phase2.gnu-result.el");
+    let neo_phase1_path = dir.join("phase1.neomacs-result.el");
+    let neo_phase2_path = dir.join("phase2.neomacs-result.el");
+    for path in [
+        &gnu_phase1_path,
+        &gnu_phase2_path,
+        &neo_phase1_path,
+        &neo_phase2_path,
+    ] {
+        let _ = std::fs::remove_file(path);
+    }
+
+    let script = workspace_root.join("crates/neomacs-gui-tests/fixtures/font-info-cache-oracle.el");
+    let scenario = GuiScenario::new("font-info-cache-oracle", script.clone());
+    let session = DisplayHarness::for_backend(backend)
+        .start_session(&artifact_root)
+        .expect("display session should start");
+    let artifacts = neomacs_gui_tests::GuiArtifactSet::new(&artifact_root, backend, &scenario.name);
+
+    let run_gnu_phase = |conf: &std::path::Path, out: &std::path::Path| {
+        let mut env = vec![
+            (
+                "NEOMACS_GUI_FONT_CACHE_RESULT".to_string(),
+                out.display().to_string(),
+            ),
+            ("FONTCONFIG_FILE".to_string(), conf.display().to_string()),
+            ("GDK_BACKEND".to_string(), "x11".to_string()),
+        ];
+        env.extend(session.env().iter().cloned());
+        let cmd = CommandSpec {
+            program: gnu_emacs.clone(),
+            args: vec![
+                "-Q".to_string(),
+                "-l".to_string(),
+                script.display().to_string(),
+            ],
+            env,
+        };
+        let mut runner = ProcessGuiCommandRunner;
+        let output = runner
+            .run(
+                &cmd,
+                &artifacts,
+                &GuiRunOptions::with_timeout(Duration::from_secs(20)),
+            )
+            .expect("GNU Emacs font-info cache oracle should run");
+        assert_eq!(
+            output.exit_code,
+            Some(0),
+            "GNU Emacs font-info cache oracle failed; stderr:\n{}",
+            output.stderr
+        );
+        std::fs::read_to_string(out).expect("GNU Emacs result should be readable")
+    };
+
+    let gnu_phase1 = run_gnu_phase(&phase1_conf, &gnu_phase1_path);
+    let gnu_phase2 = run_gnu_phase(&phase2_conf, &gnu_phase2_path);
+    assert_ne!(
+        gnu_phase1, gnu_phase2,
+        "Phase 1 (DejaVu Sans Mono) and Phase 2 (Noto Sans) must have distinct GNU font-info metrics"
+    );
+
+    // Run ONE live GUI Neomacs process: Phase 1 warms & hits all caches,
+    // mutates live.fonts.conf -> phase2.fonts.conf, calls (clear-font-cache)
+    // immediately without sleeping, and records Phase 2.
+    let mut plan = GuiTestPlan::new(backend, &workspace_root, &artifact_root, scenario)
+        .with_program(binary)
+        .with_env("FONTCONFIG_FILE", live_conf.display().to_string())
+        .with_env(
+            "NEOMACS_GUI_FONT_CACHE_RESULT",
+            neo_phase1_path.display().to_string(),
+        )
+        .with_env(
+            "NEOMACS_GUI_FONT_CACHE_RESULT_PHASE2",
+            neo_phase2_path.display().to_string(),
+        )
+        .with_env(
+            "NEOMACS_GUI_FONT_CACHE_LIVE_CONF",
+            live_conf.display().to_string(),
+        )
+        .with_env(
+            "NEOMACS_GUI_FONT_CACHE_PHASE2_CONF",
+            phase2_conf.display().to_string(),
+        );
+    for (key, value) in session.env() {
+        plan = plan.with_env(key.clone(), value.clone());
+    }
+    let mut runner = ProcessGuiCommandRunner;
+    let result = plan
+        .run_with(
+            &mut runner,
+            GuiRunOptions::with_timeout(Duration::from_secs(25)),
+        )
+        .expect("GUI run should produce font-info cache staleness oracle results");
+    assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
+
+    let neo_phase1 = std::fs::read_to_string(&neo_phase1_path)
+        .expect("Neomacs Phase 1 result should be readable");
+    let neo_phase2 = std::fs::read_to_string(&neo_phase2_path)
+        .expect("Neomacs Phase 2 result should be readable");
+
+    assert_eq!(
+        neo_phase1, gnu_phase1,
+        "Phase 1 (warmed & cached font-info) diverged from attested GNU Emacs 31.1"
+    );
+    assert_eq!(
+        neo_phase2, gnu_phase2,
+        "Phase 2 (post-catalog-mutation + clear-font-cache) returned stale or divergent metrics vs GNU Emacs 31.1"
+    );
+    assert_ne!(
+        neo_phase1, neo_phase2,
+        "Phase 2 metrics must reflect the mutated catalog rather than stale Phase 1 metrics"
+    );
+}
+
 /// Build the GNU Emacs command that runs the image oracle fixture under the
 /// Xvfb display, mirroring `gnu_font_oracle_command` but writing to the
 /// image result file.

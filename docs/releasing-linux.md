@@ -318,3 +318,29 @@ same way. Run the `find` again afterwards: anything that
 account created while you worked is still its own. If such an account has
 existed on the machine, reinstall from a fixed release so every file the
 package ships comes from it again.
+
+## Pre-release hardware X11 presentation-timing gate
+
+The hardware X11 presentation-timing latency check in
+`crates/neomacs-gui-tests/tests/x11_presentation.rs`
+(`x11_presentation::x11_rich_scroll_inputs_have_native_output_receipts_across_resize`)
+cannot run on CI or headless software-Vulkan hosts because it requires a live
+X11 desktop display and a physical GPU Vulkan driver exposing
+`VK_EXT_present_timing` (`native-first-pixel-output` receipts; `llvmpipe` and
+`Xvfb` do not advertise that extension). It also drives input with
+`xdotool`, which must be installed.
+
+- **Owner:** Linux release owner.
+- **Cadence:** Run before cutting each Linux release tag, and whenever modifying
+  `crates/neomacs-display-runtime/src/presentation_feedback/x11.rs` or
+  `crates/neomacs-renderer-wgpu/src/native_presentation/`.
+- **Command:**
+  ```bash
+  cargo xtask fresh-build --release
+  NEOMACS_REQUIRE_X11_TIMING=1 cargo nextest run -p neomacs-gui-tests --test gui \
+    -E 'test(x11_presentation::)'
+  ```
+- **Contract verified:** hardware `native-first-pixel-output` receipts
+  (`:clock-id 1`, `:uncertainty-ns <= 1_000_000`) across an X11 swapchain
+  resize, cold rich-buffer page latency `<= 250 ms`, and warm page/wheel
+  latency `p95 <= 50 ms` / `max <= 250 ms`.

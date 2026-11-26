@@ -14,7 +14,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 // Both editors load this exact reusable fixture, also saved among artifacts.
@@ -89,10 +89,7 @@ fn folded_cloud_variation_selector_redisplay_survives_against_gnu() {
     let runtime = std::env::var_os("NEOMACS_RUNTIME_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.clone());
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nonce = neomacs_gui_tests::unique_nonce();
     let artifacts = root.join(format!(
         "tmp/neomacs-gui-tests/composition-retry-830-{}-{nonce}",
         std::process::id()

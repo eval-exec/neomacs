@@ -138,7 +138,6 @@ use neomacs_display_protocol::frame_glyphs::PhysCursor;
 use neomacs_display_protocol::frame_glyphs::WindowInfo;
 use neomacs_display_protocol::types::Color;
 use neomacs_display_protocol::types::DisplayWindowId;
-#[cfg(test)]
 use neomacs_display_protocol::types::Rect;
 use neomacs_display_protocol::types::{FaceId, Px};
 use neomacs_display_protocol::{MenuBarItem, ToolBarItem};
@@ -3526,6 +3525,7 @@ impl LayoutEngine {
                 }
             }
 
+            let mut tab_bar_band_emitted = false;
             if let Some(tab_bar) = built_tab_bar
                 && let Some(actual_tab_bar_height) = self.render_frame_tab_bar_rust(
                     evaluator,
@@ -3536,42 +3536,64 @@ impl LayoutEngine {
                     tab_bar,
                     &face_attempt,
                 )
-                && actual_tab_bar_height != tab_bar_height
-                && attempt_mode == FrameAttemptMode::Converging
             {
-                let request = FrameRelayoutRequest::FrameTabBar {
-                    assumed_height: tab_bar_height,
-                    measured_height: actual_tab_bar_height,
-                };
-                match self.decide_frame_relayout(
-                    &mut layout_coordinator,
-                    evaluator,
-                    frame_id,
-                    purpose,
-                    attempt_mode,
-                    &mut frame_window_end_attempts,
-                    presentation_id,
-                    request,
-                ) {
-                    RelayoutDecision::Retry => {
-                        if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
-                            frame.tab_bar_height = actual_tab_bar_height.max(1.0) as u32;
-                            frame.sync_window_area_bounds();
+                tab_bar_band_emitted = true;
+                if actual_tab_bar_height != tab_bar_height
+                    && attempt_mode == FrameAttemptMode::Converging
+                {
+                    let request = FrameRelayoutRequest::FrameTabBar {
+                        assumed_height: tab_bar_height,
+                        measured_height: actual_tab_bar_height,
+                    };
+                    match self.decide_frame_relayout(
+                        &mut layout_coordinator,
+                        evaluator,
+                        frame_id,
+                        purpose,
+                        attempt_mode,
+                        &mut frame_window_end_attempts,
+                        presentation_id,
+                        request,
+                    ) {
+                        RelayoutDecision::Retry => {
+                            if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
+                                frame.tab_bar_height = actual_tab_bar_height.max(1.0) as u32;
+                                frame.sync_window_area_bounds();
+                            }
+                            continue 'frame_layout;
                         }
-                        continue 'frame_layout;
-                    }
-                    RelayoutDecision::EnterExhaustionSnapshot => {
-                        if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
-                            frame.tab_bar_height = actual_tab_bar_height.max(1.0) as u32;
-                            frame.sync_window_area_bounds();
+                        RelayoutDecision::EnterExhaustionSnapshot => {
+                            if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
+                                frame.tab_bar_height = actual_tab_bar_height.max(1.0) as u32;
+                                frame.sync_window_area_bounds();
+                            }
+                            attempt_mode = FrameAttemptMode::ExhaustionSnapshot;
+                            continue 'frame_layout;
                         }
-                        attempt_mode = FrameAttemptMode::ExhaustionSnapshot;
-                        continue 'frame_layout;
-                    }
-                    RelayoutDecision::Abort { settle_no_safe } => {
-                        return FrameLayoutInnerOutcome::Aborted { settle_no_safe };
+                        RelayoutDecision::Abort { settle_no_safe } => {
+                            return FrameLayoutInnerOutcome::Aborted { settle_no_safe };
+                        }
                     }
                 }
+            }
+            // GNU `display_tab_bar` (`src/xdisp.c:21546-21547,14671-14761`):
+            // on a TTY frame (`!FRAME_WINDOW_P (f)`), a reserved tab-bar row
+            // (`FRAME_TAB_BAR_LINES (f) > 0`) is always painted with
+            // `TAB_BAR_FACE_ID` across `0..FRAME_COLS (f)`, even when
+            // `tab-bar-format` is nil or renders no glyphs. GUI frames keep
+            // their separate `redisplay_tab_bar` path.
+            if !tab_bar_band_emitted
+                && prepared_gui_chrome.is_some()
+                && window_system.is_none()
+                && tab_bar_height > 0.0
+            {
+                self.render_empty_tty_tab_bar_rust(
+                    evaluator,
+                    &face_resolver,
+                    &frame_params,
+                    tab_bar_height,
+                    &face_attempt,
+                );
             }
 
             tracing::debug!(
@@ -8405,7 +8427,7 @@ impl LayoutEngine {
                         .map(|buffer| buffer.lisp_pos_to_emacs_byte_pos(point_lisp));
                     if let Some(byte_pos) = byte_pos {
                         let _ = evaluator
-                            .buffer_manager_mut()
+                            .buffer_manager_view_mut()
                             .goto_buffer_emacs_byte_pos(buffer_id, byte_pos);
                     }
                 }
@@ -8989,6 +9011,76 @@ impl LayoutEngine {
         );
         self.pending_tab_bar_pointer = Some(pointer_plan);
         Some(actual_tab_bar_height)
+    }
+
+    /// Paint a reserved-but-empty TTY tab-bar band in the realized `tab-bar`
+    /// face across the full frame width, matching GNU `display_tab_bar`
+    /// (`src/xdisp.c:14671-14761`).
+    fn render_empty_tty_tab_bar_rust(
+        &mut self,
+        evaluator: &mut neovm_core::emacs_core::Context,
+        face_resolver: &super::neovm_bridge::FaceResolver,
+        frame_params: &FrameParams,
+        tab_bar_height: f32,
+        face_attempt: &FrameFaceAttempt,
+    ) {
+        let mut tab_bar_face =
+            face_resolver.default_base_face_for_origin_without_buffer(&DisplayOrigin::TabBar);
+        face_resolver.realize_for_display(&mut tab_bar_face, evaluator);
+        let tab_bar_ascent = frame_params.char_height * 0.8;
+        let fallback_metrics =
+            DisplayRowFallbackMetrics::from_frame_defaults(frame_params, tab_bar_ascent);
+        let metrics = DisplayRowFaceRealizer::new(&mut self.font_metrics)
+            .row_metrics_for_face(&tab_bar_face, fallback_metrics);
+        let mut face_ids = face_attempt.clone();
+        let face_id = crate::display_row::face_state::stable_face_id_for_resolved(
+            &mut face_ids,
+            &tab_bar_face,
+        );
+        tab_bar_face.face_id = face_id.get();
+        let realized = DisplayRowFaceRealizer::new(&mut self.font_metrics).realize_face(
+            face_id,
+            &tab_bar_face,
+            metrics.char_width(),
+            metrics.ascent(),
+            metrics.row_height(),
+        );
+        let registered = face_ids
+            .import_face(realized.render_face())
+            .expect("empty TTY tab-bar face must preserve its realized identity");
+        self.frame_output.install_frame_chrome_face(&registered);
+
+        let row_height = tab_bar_height.max(1.0);
+        let row_ascent = metrics.ascent().max(0.0).min(row_height);
+        let mut row = neomacs_display_protocol::glyph_matrix::GlyphRow::new(
+            neomacs_display_protocol::GlyphRowRole::TabBar,
+        );
+        row.height_px = row_height;
+        row.ascent_px = row_ascent;
+        crate::display_row::finalizer::RowTrailingFaceFill::new(
+            face_id,
+            frame_params.width,
+            row_height,
+            row_ascent,
+            metrics.char_width(),
+        )
+        .with_box_vertical_edges(neomacs_display_protocol::face::BoxVerticalEdges::Both)
+        .apply_to(&mut row);
+        crate::display_row::finalizer::GlyphRowFinalizationContext::new(
+            crate::output::builder::FRAME_CHROME_WINDOW_ID as u64,
+            0,
+            Rect::new(0.0, 0.0, frame_params.width, tab_bar_height),
+        )
+        .finalize_row(&mut row, 0, None);
+        self.frame_output
+            .add_frame_chrome_band(ChromeBandRequest::new(
+                ProtocolFrameChromeKind::TabBar,
+                tab_bar_height,
+                FrameChromeContent::DisplayRow(
+                    neomacs_display_protocol::frame_chrome::ChromeDisplayRow::new(row),
+                ),
+            ));
+        self.pending_tab_bar_pointer = None;
     }
 
     /// Layout a MockFrameContent into FrameDisplayState snapshots.

@@ -142,6 +142,7 @@ pub(crate) struct RejectedCoverageInputs {
     // Conservatively retain the whole map: a missing bitmap may become
     // available even though no successful surface identified its resources.
     fringe_bitmaps: rustc_hash::FxHashMap<u16, crate::frame_glyphs::FringeBitmapData>,
+    resources_compatible: bool,
 }
 
 impl ScrollCoverageAdmission {
@@ -150,6 +151,7 @@ impl ScrollCoverageAdmission {
             Self::Ready(surface)
         } else {
             let window = coverage.content.window_id;
+            let resources_compatible = coverage.resources_compatible_with_frame_state(frame);
             Self::Rejected(Box::new(RejectedCoverageInputs {
                 coverage,
                 presentation: frame.presentation_id,
@@ -161,6 +163,7 @@ impl ScrollCoverageAdmission {
                     .cloned()
                     .collect(),
                 fringe_bitmaps: frame.fringe_bitmaps.clone(),
+                resources_compatible,
             }))
         }
     }
@@ -195,6 +198,8 @@ impl ScrollCoverageAdmission {
                         .iter()
                         .filter(|bar| bar.window_id == coverage.content.window_id))
                     && inputs.fringe_bitmaps == frame.fringe_bitmaps
+                    && inputs.resources_compatible
+                        == coverage.resources_compatible_with_frame_state(frame)
             }
         }
     }
@@ -286,10 +291,13 @@ impl ScrollCoverage {
     ///   (substituting `"monospace"` for empty `font_family`, including on
     ///   decoration-only faces), but `realize_face_font` returns `Option<ResolvedFont>`
     ///   and leaves `default_resolved_font_id: None` (with a `font_boundary` warning)
-    ///   when no font can be resolved. Any GUI face reaching the render thread with
-    ///   `None` triggers `record_emergency_font_fallback("layout published no font
-    ///   identity")`. Therefore, whenever either `base.fonts` or `self.fonts` carries
-    ///   realized fonts (`!fonts.is_empty() || !self.fonts.is_empty()`), any additive
+    ///   when no font can be resolved. When the render thread shapes text with a face
+    ///   whose `default_resolved_font_id` is `None` and `font_file_path` is `None`
+    ///   (`glyph_atlas/mod.rs:2320-2326`), it triggers
+    ///   `record_emergency_font_fallback("layout published no font identity")`
+    ///   (fringe/stretch-only faces do not take that text-shaping path). Therefore,
+    ///   whenever either `base.fonts` or `self.fonts` carries realized fonts
+    ///   (`!fonts.is_empty() || !self.fonts.is_empty()`), any additive
     ///   face with `default_resolved_font_id: None` is refused fail-closed — closing
     ///   both the normal GUI path and asymmetric empty-base / populated-coverage
     ///   cases (e.g. empty scalable catalog with a fixed bitmap font, or a
@@ -382,6 +390,7 @@ impl ScrollCoverage {
             || self.hit_index.regions().len() != 1
             || !self.hit_index.string_positions().is_empty()
             || !self.hit_index.resize_handles().is_empty()
+            || !self.resources_compatible_with_frame_state(frame)
         {
             return None;
         }
@@ -554,10 +563,12 @@ impl ScrollSurface {
             }))
     }
 
-    /// A per-publication admission also requires the original presentation.
+    /// A per-publication admission also requires the original presentation
+    /// and resource compatibility against the current frame tables.
     pub(crate) fn frame_inputs_match(&self, frame: &FrameDisplayState) -> bool {
         self.coverage.hit_index.presentation() == frame.presentation_id
             && self.frame_resources_match(frame)
+            && self.coverage.resources_compatible_with_frame_state(frame)
     }
 
     fn reusable_for(&self, coverage: &Arc<ScrollCoverage>, frame: &FrameDisplayState) -> bool {

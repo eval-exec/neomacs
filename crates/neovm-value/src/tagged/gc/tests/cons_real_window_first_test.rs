@@ -79,7 +79,7 @@ fn cons_real_window_first_pointer_overwrites_capture_preimages_with_open_young_r
             let new_car = heap.alloc_cons(TaggedValue::fixnum(107), TaggedValue::NIL);
             let new_cdr = heap.alloc_cons(TaggedValue::fixnum(109), TaggedValue::NIL);
             let owner = heap.alloc_cons(old_car, old_cdr);
-            assert_ne!(heap.jit.cons_cur.get(), 0);
+            assert_ne!(heap.jit.cons_cur(), 0);
             if generational {
                 assert!(heap.region_book.no_old_cons_block_contains(address(owner)));
             }

@@ -87,7 +87,7 @@ fn run_probe(name: &str, program: PathBuf, extra: &[&str]) -> String {
 fn pre_redisplay_functions_run_like_gnu() {
     let gnu = run_probe(
         "GNU",
-        PathBuf::from("emacs"),
+        neomacs_tui_tests::oracle::gnu_oracle_program(),
         &[
             "-no-comp-spawn",
             "--eval=(progn(set'native-comp-jit-compilation())(set'native-comp-async-report-warnings-errors'silent))",

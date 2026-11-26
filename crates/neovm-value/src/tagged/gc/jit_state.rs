@@ -34,12 +34,12 @@ use super::*;
 #[repr(C)]
 #[doc(hidden)]
 pub struct JitHeapState {
-    pub(crate) cons_cur: Cell<usize>,
-    pub(crate) cons_lim: Cell<usize>,
-    pub(crate) float_cur: Cell<usize>,
-    pub(crate) float_lim: Cell<usize>,
-    pub(crate) barrier_lo: Cell<usize>,
-    pub(crate) barrier_len: Cell<usize>,
+    cons_cur: Cell<usize>,
+    cons_lim: Cell<usize>,
+    float_cur: Cell<usize>,
+    float_lim: Cell<usize>,
+    barrier_lo: Cell<usize>,
+    barrier_len: Cell<usize>,
 }
 
 const _: () = assert!(size_of::<JitHeapState>() == 48);
@@ -58,11 +58,150 @@ impl JitHeapState {
         }
     }
 
+    #[inline(always)]
+    pub(super) fn cons_cur(&self) -> usize {
+        self.cons_cur.get()
+    }
+
+    #[inline(always)]
+    pub(super) fn cons_lim(&self) -> usize {
+        self.cons_lim.get()
+    }
+
+    #[inline(always)]
+    pub(super) fn float_cur(&self) -> usize {
+        self.float_cur.get()
+    }
+
+    #[inline(always)]
+    pub(super) fn float_lim(&self) -> usize {
+        self.float_lim.get()
+    }
+
+    /// True if any cons or float bump cursor/limit is non-zero.
+    #[inline]
+    pub(super) fn has_open_cursors(&self) -> bool {
+        self.cons_cur.get() != 0
+            || self.cons_lim.get() != 0
+            || self.float_cur.get() != 0
+            || self.float_lim.get() != 0
+    }
+
+    /// Bump and return the next reserved cons cell address, or `None` when
+    /// the open cons region is exhausted or closed.
+    #[inline(always)]
+    pub(super) fn take_cons_cell(&self) -> Option<usize> {
+        let cur = self.cons_cur.get();
+        if cur < self.cons_lim.get() {
+            self.cons_cur.set(cur + size_of::<ConsCell>());
+            Some(cur)
+        } else {
+            None
+        }
+    }
+
+    /// Bump and return the next reserved float slot address, or `None` when
+    /// the open float region is exhausted or closed.
+    #[inline(always)]
+    pub(super) fn take_float_slot(&self) -> Option<usize> {
+        let cur = self.float_cur.get();
+        if cur < self.float_lim.get() {
+            self.float_cur.set(cur + FLOAT_SLOT_BYTES);
+            Some(cur)
+        } else {
+            None
+        }
+    }
+
+    /// Install an exclusively reserved cons bump region `[cur, lim)`.
+    ///
+    /// # Safety
+    /// `[cur, lim)` must be an exclusively reserved, `ConsCell`-aligned, live
+    /// cons cell range of this heap (`cur <= lim`, `(lim - cur) % size_of::<ConsCell>() == 0`)
+    /// that remains valid until closed via [`Self::clear_cons_region`] before
+    /// any collector phase change, sweep, or heap drop.
+    #[inline]
+    pub(super) unsafe fn install_cons_region(&self, cur: usize, lim: usize) {
+        debug_assert!(cur <= lim && (lim - cur).is_multiple_of(size_of::<ConsCell>()));
+        self.cons_cur.set(cur);
+        self.cons_lim.set(lim);
+    }
+
+    /// Install an exclusively reserved, pre-initialized float bump region `[cur, lim)`.
+    ///
+    /// # Safety
+    /// `[cur, lim)` must be an exclusively reserved, `FloatObj`-aligned, live
+    /// float slot range of this heap with initialized `GcHeader`s (`cur <= lim`,
+    /// `(lim - cur) % FLOAT_SLOT_BYTES == 0`) that remains valid until closed
+    /// via [`Self::clear_float_region`] before any collector phase change,
+    /// sweep, or heap drop.
+    #[inline]
+    pub(super) unsafe fn install_float_region(&self, cur: usize, lim: usize) {
+        debug_assert!(cur <= lim && (lim - cur).is_multiple_of(FLOAT_SLOT_BYTES));
+        self.float_cur.set(cur);
+        self.float_lim.set(lim);
+    }
+
+    /// Clear the cons bump cursors to `(0, 0)` and return the previous `(cur, lim)`.
+    #[inline]
+    pub(super) fn clear_cons_region(&self) -> (usize, usize) {
+        let pair = (self.cons_cur.get(), self.cons_lim.get());
+        self.cons_cur.set(0);
+        self.cons_lim.set(0);
+        pair
+    }
+
+    /// Clear the float bump cursors to `(0, 0)` and return the previous `(cur, lim)`.
+    #[inline]
+    pub(super) fn clear_float_region(&self) -> (usize, usize) {
+        let pair = (self.float_cur.get(), self.float_lim.get());
+        self.float_cur.set(0);
+        self.float_lim.set(0);
+        pair
+    }
+
     /// Store `window` for compiled code.
     #[inline]
     pub(super) fn set_barrier_window(&self, window: BarrierWindow) {
         self.barrier_lo.set(window.lo());
         self.barrier_len.set(window.len());
+    }
+
+    /// Store `window` through a raw `*const JitHeapState` without creating a
+    /// `&TaggedHeap` over sibling fields (value-gc C4).
+    ///
+    /// # Safety
+    /// `this` must point to a live `JitHeapState` belonging to the executing
+    /// mutator's installed heap, with no concurrent reader/writer of
+    /// `barrier_lo` or `barrier_len`.
+    #[inline]
+    pub(super) unsafe fn set_barrier_window_raw(this: *const Self, window: BarrierWindow) {
+        // SAFETY: caller guarantees `this` points to a live `JitHeapState` on
+        // the executing mutator's thread; projecting only `barrier_lo` and
+        // `barrier_len` avoids retagging sibling fields.
+        unsafe {
+            (*std::ptr::addr_of!((*this).barrier_lo)).set(window.lo());
+            (*std::ptr::addr_of!((*this).barrier_len)).set(window.len());
+        }
+    }
+
+    /// Test-only raw cursor injection for `image_tests` open-region refusal checks.
+    ///
+    /// # Safety
+    /// Callers must never allocate from this `JitHeapState` while synthetic
+    /// non-zero cursors are installed, and must reset them to zero before use.
+    #[cfg(test)]
+    pub(super) unsafe fn set_raw_cursors_for_test(
+        &self,
+        cons_cur: usize,
+        cons_lim: usize,
+        float_cur: usize,
+        float_lim: usize,
+    ) {
+        self.cons_cur.set(cons_cur);
+        self.cons_lim.set(cons_lim);
+        self.float_cur.set(float_cur);
+        self.float_lim.set(float_lim);
     }
 
     /// The window compiled code currently tests.

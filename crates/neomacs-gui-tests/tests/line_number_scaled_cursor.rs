@@ -7,10 +7,18 @@ use neomacs_gui_tests::{
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Child, Command, Output},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+struct OwnedHelper(Child);
+impl Drop for OwnedHelper {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 #[test]
 fn scaled_cursor_with_line_numbers_and_hl_line_matches_gnu() {
@@ -44,6 +52,18 @@ fn check_scaled_cursor(native: GuiBackend) {
             "output * resolution 1280x800\nxwayland disable\nseat seat0 fallback true\n",
         )
         .unwrap()
+    });
+    // Headless Sway starts with WLR_LIBINPUT_NO_DEVICES=1, so keep one idle
+    // virtual keyboard attached for the session instead of racing transient
+    // WL_SEAT_CAPABILITY_KEYBOARD attach/detach on every subcase under load.
+    let _wayland_keyboard_holder = wayland.as_ref().map(|session| {
+        OwnedHelper(
+            Command::new("wtype")
+                .envs(session.env().iter().cloned())
+                .args(["-s", "120000"])
+                .spawn()
+                .expect("wtype is required for Wayland scaled-cursor testing"),
+        )
     });
     let highlight = if native == GuiBackend::LinuxWayland {
         "global"
@@ -158,17 +178,20 @@ fn run_case(
 fn drive(case: &CursorCase<'_>, state_file: &Path, readback: &Path) {
     let dir = &case.dir;
     let ready = state_file.with_extension("json.ready");
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(15));
     while !ready.exists() {
-        assert!(Instant::now() < deadline, "fixture not ready: {dir:?}");
+        assert!(!deadline.is_expired(), "fixture not ready: {dir:?}");
         thread::sleep(Duration::from_millis(20));
     }
     send_input(case, &ready);
     if case.engine != "neo" {
         return;
     }
-    // Freeze the observation before an idle redraw repairs a transient error.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // Wait for the state file and a complete diagnostic PNG before asserting
+    // cursor geometry/pixels. The 10 s cap is hang-avoidance only (not a
+    // latency assertion): the fixture writes state.json once on the command
+    // and exits, so a missing state/readback cannot self-heal under a wider cap.
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     loop {
         let state_ready = fs::read(state_file)
             .ok()
@@ -181,8 +204,8 @@ fn drive(case: &CursorCase<'_>, state_file: &Path, readback: &Path) {
             break;
         }
         assert!(
-            Instant::now() < deadline,
-            "cursor observation/readback missing: {dir:?}"
+            !deadline.is_expired(),
+            "cursor observation/readback missing within 10s hang-avoidance cap: {dir:?}"
         );
         thread::sleep(Duration::from_millis(10));
     }

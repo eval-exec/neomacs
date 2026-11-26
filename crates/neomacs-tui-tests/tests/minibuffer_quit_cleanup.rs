@@ -17,7 +17,7 @@ use crate::support;
 use neomacs_tui_tests::TuiSession;
 use std::ffi::OsStr;
 use std::fs;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use support::{
     boot_pair, eval_expression_enters_minibuffer, send_both, write_home_file,
     write_shared_temp_file,
@@ -113,7 +113,7 @@ fn read_result(session: &TuiSession) -> String {
 }
 
 fn wait_for_results(gnu: &mut TuiSession, neo: &mut TuiSession) -> (String, String) {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(30));
     loop {
         gnu.read(Duration::from_millis(100));
         neo.read(Duration::from_millis(100));
@@ -124,7 +124,7 @@ fn wait_for_results(gnu: &mut TuiSession, neo: &mut TuiSession) -> (String, Stri
         {
             return (g, n);
         }
-        if Instant::now() >= deadline {
+        if deadline.is_expired() {
             panic!(
                 "timed out waiting for both result files.\nGNU result:\n{g}\n\
                  Neo result:\n{n}\nGNU grid:\n{}\nNeo grid:\n{}\n\

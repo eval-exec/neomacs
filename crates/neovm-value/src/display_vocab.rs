@@ -637,7 +637,16 @@ impl FontWeight {
 
 /// Font slant.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr, IntoPrimitive, TryFromPrimitive,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    EnumString,
+    IntoStaticStr,
+    IntoPrimitive,
+    TryFromPrimitive,
 )]
 #[repr(u16)]
 #[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
@@ -678,7 +687,16 @@ impl FontSlant {
 
 /// Font width (condensed, normal, expanded).
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr, IntoPrimitive, TryFromPrimitive,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    EnumString,
+    IntoStaticStr,
+    IntoPrimitive,
+    TryFromPrimitive,
 )]
 #[repr(u16)]
 #[strum(serialize_all = "kebab-case", ascii_case_insensitive)]

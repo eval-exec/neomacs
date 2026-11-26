@@ -9,7 +9,7 @@ use std::{
     path::Path,
     process::Child,
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 /// A visible native view of this editor exists in the owned compositor.
@@ -125,7 +125,7 @@ fn wait_for_target<T>(
     mut alive: impl FnMut() -> bool,
     proof: impl Fn(MappedEditor) -> Option<T>,
 ) -> T {
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     let mut last_tree = None;
     loop {
         assert!(
@@ -147,7 +147,7 @@ fn wait_for_target<T>(
             }
             Err(error) => error.to_string(),
         };
-        if Instant::now() >= deadline {
+        if deadline.is_expired() {
             if let Some(tree) = last_tree {
                 let _ = fs::write(
                     artifacts.join("unmapped-editor.json"),

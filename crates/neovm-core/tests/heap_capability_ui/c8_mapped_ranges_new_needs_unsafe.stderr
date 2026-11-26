@@ -1,0 +1,31 @@
+error[E0133]: call to unsafe function `MappedConsRange::new` is unsafe and requires unsafe block
+  --> tests/heap_capability_ui/c8_mapped_ranges_new_needs_unsafe.rs:32:13
+   |
+32 |     let _ = mapped_ranges::MappedConsRange::new(std::ptr::null_mut(), 0);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior
+
+error[E0133]: call to unsafe function `MappedFloatRange::new` is unsafe and requires unsafe block
+  --> tests/heap_capability_ui/c8_mapped_ranges_new_needs_unsafe.rs:33:13
+   |
+33 |     let _ = mapped_ranges::MappedFloatRange::new(std::ptr::null_mut(), 0);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior
+
+error[E0133]: call to unsafe function `MappedVecLikeObject::new` is unsafe and requires unsafe block
+  --> tests/heap_capability_ui/c8_mapped_ranges_new_needs_unsafe.rs:34:13
+   |
+34 |     let _ = mapped_ranges::MappedVecLikeObject::new(std::ptr::null_mut(), 0);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior
+
+error[E0133]: call to unsafe function `MappedStringObject::new` is unsafe and requires unsafe block
+  --> tests/heap_capability_ui/c8_mapped_ranges_new_needs_unsafe.rs:35:13
+   |
+35 |     let _ = mapped_ranges::MappedStringObject::new(std::ptr::null_mut(), 0);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior
