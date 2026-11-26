@@ -23,6 +23,9 @@ pub(crate) mod world_turn;
 #[path = "../tests/e53a_thread_control_test.rs"]
 mod e53a_thread_control_tests;
 #[cfg(test)]
+#[path = "../tests/e53b_thread_join_retire_test.rs"]
+mod e53b_thread_join_retire_tests;
+#[cfg(test)]
 #[path = "../tests/green_era_switch_test.rs"]
 mod green_era_switch_tests;
 #[cfg(test)]

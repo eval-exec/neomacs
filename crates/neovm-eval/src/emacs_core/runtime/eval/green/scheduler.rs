@@ -3463,6 +3463,41 @@ impl Control {
         self.notify_select();
     }
 
+    /// G5 Step 6 (E5.3b): publish a retiring parallel owner's exit after
+    /// Steps 1–5 (result + `specpdl` unwind + final detach + native completion
+    /// root retirement + slab unregister + `Mutator::retire_rooted`) have all
+    /// completed. Consumes `RetiredCompletion` as the typestate proof of root
+    /// retirement, sets `Wait::Exited`, wakes all `join_waiters` (both
+    /// `Participant::Baton` and `Participant::Parallel`), removes the retired
+    /// participant record, and notifies idle selectors in one critical section.
+    pub(crate) fn publish_parallel_owner_exit(
+        &self,
+        expected: ThreadKey,
+        completion: crate::emacs_core::threads::RetiredCompletion,
+    ) {
+        let thread = completion.into_thread_id();
+        let me = ThreadKey::from_id(thread.native_key());
+        if me != expected {
+            std::process::abort();
+        }
+        {
+            let mut state = self.state();
+            Self::set_wait(&mut state, me, Wait::Exited);
+            state.physical.remove(&me);
+            let joiners: Vec<ThreadKey> = state
+                .waits
+                .join_waiters
+                .get(&me)
+                .map(|set| set.iter().copied().collect())
+                .unwrap_or_default();
+            for key in joiners {
+                Self::wake_locked(&mut state, key);
+            }
+            Self::remove_key(&mut state, me);
+        }
+        self.notify_select();
+    }
+
     /// Whether KEY is registered as a parallel owner participant.
     pub(crate) fn is_parallel_participant(&self, key: ThreadKey) -> bool {
         self.state()

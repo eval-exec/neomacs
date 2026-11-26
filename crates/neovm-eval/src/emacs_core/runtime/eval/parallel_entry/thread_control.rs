@@ -19,13 +19,17 @@ use super::super::green::{
     ConditionId, Control, HostRequestKey, MutexId, OwnerWake, ParallelWaitOutcome, SignalHint,
     ThreadKey, Wait,
 };
+use super::super::owner_bindings::OwnerSlabHandle;
+use super::keeper_driver::ChannelPort;
 use super::serial_detach::{ActiveSerialTurn, HostRefusal};
 use super::serial_park::{
-    KeeperPort, LendGuard, LiveSerial, PortRefusal, TurnStartRefusal, give_back, receive,
+    KeeperPort, LendGuard, LiveSerial, PortRefusal, SerialHome, TurnStartRefusal, give_back,
+    receive,
 };
 use super::serial_ticket::{LocalSerialOwner, ReceiveReason};
-use super::serial_turn::SerialHost;
-use neovm_value::error::{EvalResult, Flow, LispCondition, signal};
+use super::serial_turn::{OwnerSerialState, SerialHost, TurnRefusal};
+use neovm_value::error::{EvalResult, Flow, LispCondition, expect_args, signal};
+use neovm_value::tagged::gc::RendezvousError;
 use neovm_value::value::Value;
 use std::cell::Cell;
 use std::marker::PhantomData;
@@ -182,6 +186,20 @@ impl ParallelOwnerControl {
         if self.registered {
             self.registered = false;
             self.control.unregister_parallel(self.key);
+        }
+    }
+
+    /// G5 Step 6 (E5.3b): consume `RetiredCompletion`, publish `Wait::Exited`,
+    /// wake all Baton and parallel joiners, remove this participant from
+    /// `Control`, and disarm `Drop`.
+    pub(crate) fn publish_exit_and_unregister(
+        mut self,
+        completion: crate::emacs_core::threads::RetiredCompletion,
+    ) {
+        if self.registered {
+            self.registered = false;
+            self.control
+                .publish_parallel_owner_exit(self.key, completion);
         }
     }
 
@@ -655,5 +673,343 @@ impl Context {
         }
         self.deliver_parallel_turn_signal(key)?;
         Ok(Value::NIL)
+    }
+
+    /// `(thread-join THREAD)` inside a parallel owner's serial turn (E5.3b D5,
+    /// Row 4; GNU `Fthread_join`, `src/thread.c:1118-1144`):
+    /// - Rejects self-join (`"Cannot join current thread"`).
+    /// - Snapshots TARGET's injected `thread-signal` error BEFORE waiting and
+    ///   roots both `args[0]` and every `Value` in that snapshot in a VM root
+    ///   frame across `parallel_park_in_turn` so GC while parked cannot sweep
+    ///   snapshot payloads even if TARGET catches and clears its own error.
+    /// - When TARGET has not exited yet (`!control.exited(target_key)`), sets
+    ///   `thread_blocker` and `WaitCondvar::Join` for this parallel thread's id
+    ///   (`self.threads.current_thread_id()`, NOT `green_current_id()`) and
+    ///   parks via `ParkWait::Join(target_key)` until TARGET exits or this
+    ///   joiner receives a pending `thread-signal`.
+    /// - Clears `wait_condvar`, `thread_blocker`, and pops the VM root frame
+    ///   unconditionally on every Lisp/recoverable exit path before propagating
+    ///   `wait_result?` or delivering this joiner's own pending signal AHEAD of
+    ///   TARGET's snapshot (GNU `thread_join_callback`, `src/thread.c:1110-1115`).
+    ///   (On a fail-closed `PostDetachParkError` panic, carrier TLS is already
+    ///   parked, the serial ticket was already returned, and the abandoned
+    ///   `Context` is never used again.)
+    /// - Marks join observed, re-raises TARGET's snapshot if present, else
+    ///   returns TARGET's stored result.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn parallel_thread_join(&mut self, args: &[Value]) -> EvalResult {
+        expect_args("thread-join", args, 1)?;
+        let target_id = crate::emacs_core::threads::expect_thread_id(&self.threads, &args[0])?;
+        let joiner_id = self.threads.current_thread_id();
+        if target_id == joiner_id {
+            return Err(signal(
+                "error",
+                vec![Value::string("Cannot join current thread")],
+            ));
+        }
+        let pending = self.threads.pending_thread_signal_for_value(args[0]);
+        let target_key = ThreadKey::from_id(target_id);
+        let control = self.green_control();
+        if !control.exited(target_key) {
+            let joiner_key = ThreadKey::from_id(joiner_id);
+            self.push_vm_root_frame();
+            self.push_vm_frame_root(args[0]);
+            if let Some(sig) = pending.as_ref().and_then(Flow::as_signal) {
+                for &value in &sig.data {
+                    self.push_vm_frame_root(value);
+                }
+            }
+            // Coupling invariant: `set_thread_blocker` stores `args[0]` in the
+            // blocker slot for the same span that `args[0]` is rooted in the
+            // VM root frame pushed above; `clear_thread_blocker` MUST run
+            // before `pop_vm_root_frame()`.
+            self.threads.set_thread_blocker(joiner_id, args[0]);
+            self.threads.set_wait_condvar(
+                joiner_id,
+                Some(crate::emacs_core::threads::WaitCondvar::Join),
+            );
+            let wait_result = (|| -> Result<(), Flow> {
+                while !control.exited(target_key)
+                    && !self.threads.has_pending_thread_signal(joiner_id)
+                {
+                    let (_k, outcome) = self.parallel_park_in_turn(
+                        "thread-join",
+                        ParkWait::Join(target_key),
+                        None,
+                    )?;
+                    if let ParallelWaitOutcome::Deadlock { invariant } = outcome {
+                        return Err(parallel_deadlock_flow(invariant));
+                    }
+                }
+                Ok(())
+            })();
+            self.threads.set_wait_condvar(joiner_id, None);
+            self.threads.clear_thread_blocker(joiner_id);
+            self.pop_vm_root_frame();
+            wait_result?;
+            self.deliver_parallel_turn_signal(joiner_key)?;
+        }
+        self.threads.join_thread_for_value(args[0]);
+        if let Some(flow) = pending {
+            return Err(flow);
+        }
+        Ok(self.threads.thread_result_for_value(args[0]))
+    }
+}
+
+/// Summary returned by [`retire_parallel_owner`] once all 6 G5 steps complete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Dormant E5.3b; E6-P parallel owner loop is the production caller.
+pub(crate) struct ParallelRetireReport {
+    /// True if this owner had a registered `OwnerSlab` and G5 Step 5 removed
+    /// and freed it from `World::owner_slabs`.
+    pub(crate) slab_unregistered: bool,
+}
+
+/// Failure reported by [`retire_parallel_owner`].
+///
+/// Pre-retirement refusals (`Port`, `Receive`, `Activate`, `Begin`) occur
+/// before `prepare_thread_completion`, `Context::drop`, or slab unregistration.
+/// Once `prepare_thread_completion` has run, non-poisoned failures in Steps
+/// 1+2, 3a, 4, 5, and 6 are terminal (`std::process::abort()`). The sole
+/// post-retirement `Err` is [`Self::EraPoisonedAfterRetire`]: the era was
+/// already poisoned (`RendezvousError::Poisoned`) when Step 4 retired the
+/// `Mutator`; Step 6 exit publication still runs to wake any parked joiners,
+/// and the caller MUST NOT continue using the poisoned era.
+#[derive(Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Dormant E5.3b; E6-P parallel owner loop is the production caller.
+pub(crate) enum ParallelRetireError {
+    Port(PortRefusal),
+    Receive(ReceiveReason),
+    Activate,
+    Begin(TurnRefusal<HostRefusal>),
+    /// Step 4 observed `RendezvousError::Poisoned` after the owner had already
+    /// retired (`Context` dropped, completion retired, slab unregistered).
+    /// Step 6 exit publication still ran to wake parked joiners; the caller
+    /// MUST NOT continue using this poisoned era.
+    EraPoisonedAfterRetire,
+}
+
+/// Retire a parallel owner's [`Mutator`](neovm_value::tagged::gc::Mutator) from
+/// the collector (G5 Step 4), retrying transient `RendezvousError::Busy` until
+/// retired or permanently refused.
+///
+/// Gated on `any(test, feature = "test-support")` only because
+/// `Mutator::retire_rooted` in `neovm-value` carries that gate until E6-P
+/// opens the production mutator-retirement method; [`retire_parallel_owner`]
+/// itself compiles identically with `--no-default-features`.
+#[cfg(any(test, feature = "test-support"))]
+#[cold]
+#[inline(never)]
+pub(crate) fn retire_mutator_rooted(
+    mut mutator: neovm_value::tagged::gc::Mutator<'_>,
+) -> Result<(), RendezvousError> {
+    loop {
+        match mutator.retire_rooted(&[]) {
+            Ok(()) => return Ok(()),
+            Err(failure) if failure.reason == RendezvousError::Busy => {
+                mutator = failure.into_owner();
+                std::thread::yield_now();
+            }
+            Err(failure) => return Err(failure.reason),
+        }
+    }
+}
+
+/// G5 6-step parallel-owner retirement (`E6P-INTEGRATION-MAP.md` §4 G5,
+/// `E5.3-E5.4-THREAD-CONTROL.md` Q7 ruling).
+///
+/// Order of operations:
+/// 0. Drop `slab_handle: Option<OwnerSlabHandle>` first so no handle (and
+///    therefore no `OwnerSlabLease`) can survive into Step 5.
+/// 1. Acquire a final serial turn, enter `owner.key()`, run `finalize(ev)`
+///    inside the turn (zero unrooted `Value`s cross the turn boundary), record
+///    the result / internal error + `thread-last-error` via
+///    `finish_make_thread_result`.
+/// 2. Unwind all remaining `specpdl` entries to depth 0 (`ev.unbind_to(0)` +
+///    assert `ev.specpdl.is_empty()`, GNU `src/thread.c:743-748`), then mark
+///    the thread terminal via `prepare_thread_completion(..., Executed)`
+///    (`CompletingThread`), detach the shared `dynamic_module_registry`, and
+///    capture `ParallelRetireWorld` + `ev.owner.raw_slab_ptr()`.
+/// 3a. Run the final detach (`turn.end()` -> `park_owner`, stow World carriers,
+///     close alloc regions, `park_carrier_tls`).
+/// 5. Still holding the exclusive final serial ticket `(seat, local, guard)`
+///    BEFORE `give_back` (excluding concurrent `RefCell` / collector access):
+///    drop `state` (`Context::drop` runs safely while detached), retire the
+///    native live-thread root edge (`retire_world.retire_thread_completion` ->
+///    `RetiredCompletion`), and unregister/free the owner's slab
+///    (`retire_world.unregister_owner_slab`).
+/// 3b. Return the final serial ticket (`give_back` + `guard.disarm()`).
+/// 4. Send `KeeperMsg::Exit` (`let mutator = port.exit()`) and retire the
+///    `Mutator` from the collector via `retire_mutator(mutator)`.
+/// 6. Publish exit to Green `Control` (`owner.publish_exit_and_unregister(retired)`),
+///    consuming `RetiredCompletion` as typestate proof of Steps 1–5, setting
+///    `Wait::Exited`, waking both `Participant::Baton` and
+///    `Participant::Parallel` joiners, and removing the participant record.
+#[cold]
+#[inline(never)]
+#[allow(dead_code)] // Dormant E5.3b; E6-P parallel owner loop is the production caller.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn retire_parallel_owner<'era, A>(
+    mut state: OwnerSerialState<Context, LocalSerialOwner>,
+    owner: ParallelOwnerControl,
+    slab_handle: Option<OwnerSlabHandle>,
+    mut port: ChannelPort<'era>,
+    home: SerialHome,
+    activate: impl FnOnce(&mut LocalSerialOwner) -> Result<(), A>,
+    finalize: impl FnOnce(&mut Context) -> EvalResult,
+    retire_mutator: impl FnOnce(neovm_value::tagged::gc::Mutator<'era>) -> Result<(), RendezvousError>,
+) -> Result<ParallelRetireReport, ParallelRetireError> {
+    // Drop the parallel slab handle first so no handle or `OwnerSlabLease`
+    // can outlive Step 5.
+    drop(slab_handle);
+
+    let (grant, guard) = loop {
+        match port.request_turn() {
+            Ok(granted) => break granted,
+            Err(PortRefusal::Retry) => std::thread::yield_now(),
+            Err(PortRefusal::Poisoned) => {
+                return Err(ParallelRetireError::Port(PortRefusal::Poisoned));
+            }
+            Err(PortRefusal::Failed) => {
+                return Err(ParallelRetireError::Port(PortRefusal::Failed));
+            }
+        }
+    };
+    let (seat, local, guard) =
+        match receive::<ChannelPort<'_>, HostRefusal, A>(home, grant, guard, &mut port, activate) {
+            Ok(resumed) => resumed,
+            Err(TurnStartRefusal::Receive(reason)) => {
+                return Err(ParallelRetireError::Receive(reason));
+            }
+            Err(TurnStartRefusal::Activate(_)) => return Err(ParallelRetireError::Activate),
+            Err(TurnStartRefusal::Port(refusal)) => return Err(ParallelRetireError::Port(refusal)),
+            Err(TurnStartRefusal::Turn(_)) => unreachable!("receive does not call Turn::begin"),
+        };
+
+    let key = owner.key();
+    let (completion, retire_world, slab_ptr, local) = {
+        let mut turn = match state.begin(local) {
+            Ok(turn) => turn,
+            Err((local, refusal)) => {
+                give_back(seat, local, &mut port);
+                guard.disarm();
+                return Err(ParallelRetireError::Begin(refusal));
+            }
+        };
+        let (completion, retire_world, slab_ptr) = turn.with_world(|ev| {
+            // G5 Step 1: finalize inside the final serial turn so zero
+            // unrooted `Value`s cross a turn boundary, then record the outcome
+            // (`ThreadPayload.result` or internal error + `thread-last-error`).
+            ev.threads.enter_thread(key.id());
+            let completion_id = match ev.threads.get_thread(key.id()) {
+                Some(thread) => thread.id(),
+                None => std::process::abort(),
+            };
+            let outcome = finalize(ev);
+            let _ = crate::emacs_core::threads::finish_make_thread_result(
+                &mut ev.threads,
+                key.id(),
+                outcome,
+            );
+            // G5 Step 2: unwind any remaining `specpdl` bindings to depth 0
+            // while this thread is still entered (GNU `src/thread.c:743-748`).
+            // `outcome` is already rooted in `ThreadPayload` above.
+            ev.unbind_to(0);
+            assert!(
+                ev.specpdl.is_empty(),
+                "G5 Step 2: parallel owner specpdl must be empty after unbind_to(0)"
+            );
+            // Mark thread terminal (`thread-live-p` -> nil) and mint the
+            // linear `CompletingThread` token.
+            let completion = match ev.threads.prepare_thread_completion(
+                completion_id,
+                crate::emacs_core::threads::CompletionExit::Executed,
+            ) {
+                Ok(completion) => completion,
+                Err(error) => error.fail_stop(),
+            };
+            // Detach the World's shared dynamic-module registry before
+            // `Context::drop`, matching `Context::retire_green_owner`.
+            ev.detach_shared_dynamic_module_registry_for_retire();
+            let retire_world = ev.parallel_retire_world();
+            let slab_ptr = ev.owner.raw_slab_ptr();
+            (completion, retire_world, slab_ptr)
+        });
+        // G5 Step 3a: final detach (`park_owner`, stow World carriers, close
+        // alloc regions, `park_carrier_tls`). After `prepare_thread_completion`
+        // no rollback is valid; a detach refusal fails closed like Baton's
+        // `AbortOnPanic` / `CompletionError::fail_stop`.
+        let local = match turn.end() {
+            Ok(local) => local,
+            Err((_turn, refusal)) => {
+                tracing::error!(
+                    ?refusal,
+                    "G5 Step 3a: final detach refused after thread completion; aborting fail-closed"
+                );
+                std::process::abort();
+            }
+        };
+        (completion, retire_world, slab_ptr, local)
+    };
+
+    // G5 Step 5 (under exclusive final serial ticket `(seat, local, guard)`
+    // BEFORE `give_back` so `World::owner_slabs` and `ThreadManager::threads`
+    // cannot race with Baton or the collector):
+    // 1. Drop `state` (`Context::drop` runs safely while detached, with its
+    //    shared dynamic-module registry detached and slab still live).
+    // 2. Retire the native live-thread root edge -> `RetiredCompletion`.
+    // 3. Remove and free this owner's `OwnerSlab` from `OwnerSlabRegistry`.
+    drop(state);
+    let retired = retire_world.retire_thread_completion(&local, completion);
+    let slab_unregistered = if let Some(slab) = slab_ptr {
+        // SAFETY: `slab_handle` was dropped at entry, `state` (owning the
+        // retiring `Context` and its `OwnerSlot`) was just dropped above, and
+        // `&local` proves exclusive serial-turn World authority on this thread.
+        unsafe { retire_world.unregister_owner_slab(&local, slab) }
+    } else {
+        false
+    };
+    drop(retire_world);
+
+    // G5 Step 3b: return the final serial ticket so the keeper can leave the
+    // stop and process `KeeperMsg::Exit` + `Mutator::retire_rooted`.
+    give_back(seat, local, &mut port);
+    guard.disarm();
+
+    // G5 Step 4: send `KeeperMsg::Exit` (shrinks `Driver::owners`) and retire
+    // the `Mutator` from the collector.
+    //
+    // At this point the owner is ALREADY retired (`Context` dropped, live
+    // completion unlinked, slab unregistered, final ticket returned):
+    // - `Ok(())`: proceed to Step 6 normally.
+    // - `Err(RendezvousError::Poisoned)`: the era is already poisoned; still
+    //   run Step 6 (`publish_exit_and_unregister`) so parked joiners wake
+    //   instead of wedging, then return `Err(EraPoisonedAfterRetire)` (caller
+    //   MUST NOT continue using the poisoned era).
+    // - Any other `Err(reason)` in a live, non-poisoned era: terminal
+    //   `abort()`, matching Steps 1+2 and 3a, rather than leaving a registered
+    //   `Mutator` with no owner.
+    let mutator = port.exit();
+    match retire_mutator(mutator) {
+        Ok(()) => {
+            // G5 Step 6: publish `Wait::Exited` in `Control` (consuming
+            // `RetiredCompletion` as proof of Steps 1–5), wake all Baton and
+            // parallel joiners, and remove the retired participant record.
+            owner.publish_exit_and_unregister(retired);
+            Ok(ParallelRetireReport { slab_unregistered })
+        }
+        Err(RendezvousError::Poisoned) => {
+            owner.publish_exit_and_unregister(retired);
+            Err(ParallelRetireError::EraPoisonedAfterRetire)
+        }
+        Err(reason) => {
+            tracing::error!(
+                ?reason,
+                "G5 Step 4: owner already retired (Context dropped, completion retired, slab unregistered) but mutator retirement refused in a live era; aborting fail-closed rather than leaving a registered mutator with no owner"
+            );
+            std::process::abort();
+        }
     }
 }

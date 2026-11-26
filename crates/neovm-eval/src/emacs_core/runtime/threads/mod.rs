@@ -772,7 +772,7 @@ pub fn builtin_thread_join(
         return ctx.green_thread_join(&args);
     }
     if ctx.in_active_serial_turn() {
-        return Err(unbridged_parallel_builtin_error("thread-join"));
+        return ctx.parallel_thread_join(&args);
     }
     expect_args("thread-join", &args, 1)?;
     let id = expect_thread_id(&ctx.threads, &args[0])?;

@@ -405,7 +405,7 @@ fn e53a_q6a_unbridged_blocking_builtins_fail_loudly_in_serial_turn() {
                 "unbridged (condition-wait) in serial turn must fail loudly, got: {cond_out}"
             );
             assert!(
-                join_out.contains("thread-join cannot fall through"),
+                join_out.contains("thread-join called in an unbridged parallel serial turn"),
                 "unbridged (thread-join) in serial turn must fail loudly, got: {join_out}"
             );
             assert!(
