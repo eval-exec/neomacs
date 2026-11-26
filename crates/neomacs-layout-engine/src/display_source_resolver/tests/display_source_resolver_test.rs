@@ -652,3 +652,81 @@ fn consecutive_face_lookup_preserves_structural_equality_and_base_identity() {
         Some(RenderFaceRef::FaceId(FaceId::new(21)))
     );
 }
+
+#[test]
+fn alternating_rich_buffer_face_spans_avoid_nested_captures_and_preserve_mutation_invalidation() {
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
+    use neovm_core::tagged::collection_reads::capture;
+    let table = FaceTable::new();
+    let resolver = test_face_resolver(&table);
+    let mut state = DisplaySourceResolveState::default();
+    let base = FaceId::new(0);
+
+    // Model #851's rich-buffer pattern: 10 distinct face plists plus 4 symbol
+    // faces alternating across 400 lines (4,000 plist lookups + 1,600 symbol lookups).
+    let plists: Vec<(Value, FaceId)> = (0..10)
+        .map(|i| {
+            let plist = Value::list(vec![
+                Value::symbol(":height"),
+                Value::fixnum(100 + i as i64 * 10),
+            ]);
+            let fid = FaceId::new(100 + i as u32);
+            state.cache_face(base, plist, fid, resolver.default_face());
+            (plist, fid)
+        })
+        .collect();
+    let symbols: Vec<(Value, FaceId)> = ["bold", "italic", "underline", "highlight"]
+        .iter()
+        .enumerate()
+        .map(|(i, &name)| {
+            let sym = Value::symbol(name);
+            let fid = FaceId::new(200 + i as u32);
+            state.cache_face(base, sym, fid, resolver.default_face());
+            (sym, fid)
+        })
+        .collect();
+
+    let (_, outer_reads) = capture(|| {
+        for _line in 0..400 {
+            for &(plist, fid) in &plists {
+                assert_eq!(
+                    state.cached_face(base, &plist),
+                    Some(RenderFaceRef::FaceId(fid))
+                );
+            }
+            for &(sym, fid) in &symbols {
+                assert_eq!(
+                    state.cached_face(base, &sym),
+                    Some(RenderFaceRef::FaceId(fid))
+                );
+            }
+        }
+    });
+    let outer_reads = outer_reads.expect("enclosing pass capture must succeed");
+
+    // With 1-entry `last_face_lookup`, alternating spans opened 5,600 nested
+    // captures (wiping RECENT_READS 11,200 times). With bounded multi-entry
+    // `observed_face_lookups` + immediate symbol fast path, only 10 nested
+    // captures occur (1 cold structural capture per distinct plist; 0 for symbols).
+    assert_eq!(
+        state.nested_face_captures, 10,
+        "alternating face spans must open at most one nested capture per distinct plist (0 for symbols)"
+    );
+    assert_eq!(state.structural_face_lookups, 10);
+
+    // Mutating one of the alternating plists MUST still invalidate BOTH the
+    // enclosing capture certificate and the cached observed face lookup.
+    assert!(outer_reads.unchanged());
+    plists[7].0.cons_cdr().set_car(Value::fixnum(250));
+    assert!(
+        !outer_reads.unchanged(),
+        "enclosing capture must observe mutations to alternating face plists"
+    );
+    let lookups_before = state.structural_face_lookups;
+    state.cached_face(base, &plists[7].0);
+    assert_eq!(
+        state.structural_face_lookups,
+        lookups_before + 1,
+        "mutated alternating plist must invalidate its observed entry and retry structural lookup"
+    );
+}
