@@ -162,9 +162,8 @@ pub(crate) fn isolate_child_command(command: &mut Command) {
         // explicitly here is what keeps child `SigBlk == 0` matching GNU and
         // Neomacs's Linux-glibc `posix::Attributes::gnu` (`spawn.rs:851-885`).
         // If startup is later changed to match GNU `init_keyboard` (clearing the
-        // main thread's mask alongside `install_job_control_signal_hygiene` in
-        // `crates/neomacs/src/main.rs` while single-threaded), keep this explicit
-        // empty-mask clear in both `isolate_child_command` and `Attributes::gnu`
+        // main thread's signal mask in `crates/neomacs/src/main.rs` while
+        // single-threaded), keep this explicit empty-mask clear in both `isolate_child_command` and `Attributes::gnu`
         // as defense-in-depth for `tty_frontend` temporary `SIG_BLOCK` scopes
         // and library/unit-test callers that do not run `main()`, and update this
         // note accordingly.

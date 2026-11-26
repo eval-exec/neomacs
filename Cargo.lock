@@ -4166,6 +4166,7 @@ dependencies = [
 name = "neomacs-terminfo"
 version = "0.0.21"
 dependencies = [
+ "libc",
  "neomacs-infra",
  "pkg-config",
  "regex",

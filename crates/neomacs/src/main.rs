@@ -5243,11 +5243,15 @@ pub unsafe fn run(mode: RuntimeMode) {
     // collation locale instead of defaulting to the "C" (code-point) locale.
     initialize_system_locale();
 
-    // Make the editor immune to a child process suspending it via job control
-    // (issue #132): children are spawned in their own process group
-    // (callproc::new_child_command), and we ignore SIGTTOU so terminal output
-    // from a momentarily-backgrounded neomacs never stops the whole editor.
-    install_job_control_signal_hygiene();
+    // Preserve the inherited `SIGTTOU` disposition, matching GNU Emacs 31.1
+    // (GNU never sets `SIGTTOU` to `SIG_IGN`; `src/sysdep.c:924-960` and
+    // `src/term.c:4354-4356,4485-4489` only temporarily block `SIGTTOU` with
+    // `pthread_sigmask` around `tcsetpgrp`, `TIOCNOTTY`, and `tgetent`).
+    // Issue #132 originally ignored `SIGTTOU` globally while children only
+    // called `setpgid(0, 0)`, which leaked `SIGTTOU = SIG_IGN` to every pipe
+    // and PTY subprocess; children now call `setsid()` in
+    // `callproc::isolate_child_command` and `neomacs-terminfo` blocks
+    // `SIGTTOU` around `tgetent`/`setupterm`.
 
     // Handle --help / --version with no logging side effects (so e.g.
     // `NEOMACS_LOG_TO_FILE=1 neomacs --help` does not create a stray
@@ -6961,28 +6965,6 @@ fn increase_stack_limit() {
 
 #[cfg(not(unix))]
 fn increase_stack_limit() {}
-
-/// Job-control signal hygiene so a child process can never suspend the editor
-/// (issue #132). Mirrors GNU Emacs, which is never stopped by SIGTTOU.
-///
-/// Children are spawned in their own process group (callproc::new_child_command
-/// → setpgid), so a child's SIGTSTP stays in its own group. The remaining
-/// vector is SIGTTOU: when an interactive subprocess (`bash -i`) grabs the
-/// controlling terminal's foreground process group, neomacs's own terminal
-/// output (redisplay) from a momentarily-backgrounded state would raise SIGTTOU
-/// and stop the whole process. Ignoring SIGTTOU makes those writes succeed
-/// instead — exactly how a terminal editor must behave. SIGTSTP is left intact
-/// so deliberate `C-z` suspension still works.
-#[cfg(unix)]
-fn install_job_control_signal_hygiene() {
-    // SIG_IGN is idempotent and process-global; safe to set once at startup.
-    unsafe {
-        libc::signal(libc::SIGTTOU, libc::SIG_IGN);
-    }
-}
-
-#[cfg(not(unix))]
-fn install_job_control_signal_hygiene() {}
 
 /// Initialize the C library locale from the environment, matching GNU Emacs's
 /// `emacs.c` main(): it calls `setlocale (LC_ALL, "")` (unless `LC_ALL` is the
