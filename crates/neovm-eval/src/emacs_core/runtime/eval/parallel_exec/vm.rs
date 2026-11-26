@@ -2103,15 +2103,14 @@ where
                 else {
                     return Step::Stop(VmOutcome::Fault(EngineFault::StaleFrame));
                 };
-                if !self
-                    .arena
-                    .bindings()
-                    .serial_run_matches_above(bind_base, &popped_records)
-                {
-                    return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
-                        RecordStack::Bindings,
-                    )));
-                }
+                // V8 r2 LOW-1: read-only check-before-mutate LIFO walk from the
+                // top above `bind_base` (GNU `src/eval.c:3946-3958`). Each top
+                // entry must match either a dead `Plain` record already taken
+                // by the serial Return cleanup (`!plain.record_live`) or the
+                // next expected token in `popped_records`. Every token in
+                // `popped_records` must be consumed and zero dead `Plain`
+                // entries may remain below the prefix before EITHER LIFO is
+                // mutated.
                 if !self
                     .arena
                     .handlers()
@@ -2121,16 +2120,43 @@ where
                         RecordStack::Handlers,
                     )));
                 }
+                let total_above = self.arena.bindings().above(bind_base).count();
+                let mut popped_idx = 0usize;
+                let mut remove_count = 0usize;
+                for entry in self.arena.bindings().above(bind_base).rev() {
+                    match entry {
+                        OwnerRecord::Plain(slot) if !self.plain.record_live(slot.record) => {
+                            remove_count += 1;
+                        }
+                        OwnerRecord::Serial(tok)
+                            if popped_records.get(popped_idx) == Some(&tok) =>
+                        {
+                            popped_idx += 1;
+                            remove_count += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                if popped_idx != popped_records.len() {
+                    return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
+                        RecordStack::Bindings,
+                    )));
+                }
+                let remaining_above = total_above - remove_count;
                 if self
                     .arena
-                    .bindings_mut()
-                    .pop_serial_run_above(bind_base, &popped_records)
-                    .is_err()
+                    .bindings()
+                    .above(bind_base)
+                    .take(remaining_above)
+                    .any(|record| {
+                        matches!(record, OwnerRecord::Plain(slot) if !self.plain.record_live(slot.record))
+                    })
                 {
                     return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
                         RecordStack::Bindings,
                     )));
                 }
+                // All checks passed: apply handler and binding pops atomically.
                 if self
                     .arena
                     .handlers_mut()
@@ -2141,24 +2167,8 @@ where
                         RecordStack::Handlers,
                     )));
                 }
-                // Drop any top contiguous `Plain` entries above `bind_base`
-                // whose slab records were already unwound by the serial Return
-                // cleanup before it signaled, and verify no non-top `Plain`
-                // entry was orphaned.
-                while let Some(OwnerRecord::Plain(entry)) =
-                    self.arena.bindings().above(bind_base).last()
-                {
-                    if self.plain.record_live(entry.record) {
-                        break;
-                    }
+                for _ in 0..remove_count {
                     self.arena.bindings_mut().pop();
-                }
-                if self.arena.bindings().above(bind_base).any(|record| {
-                    matches!(record, OwnerRecord::Plain(entry) if !self.plain.record_live(entry.record))
-                }) {
-                    return Step::Stop(VmOutcome::Fault(EngineFault::EscapeRecordContract(
-                        RecordStack::Bindings,
-                    )));
                 }
                 if !debug_updates.is_empty() {
                     let mut stopped = StoppedOwnerBacktrace::from_escape_park(&mut self.arena);
@@ -2236,17 +2246,30 @@ where
                 available,
             }));
         }
-        // R1: both LIFOs are checked before either is touched.
-        let (records_popped_ok, handlers_popped_ok) = match &named {
-            // A refused Plain access pushes (a refused bind) or reads; it
-            // never pops a record. A sealed cons op pops none.
-            EscapeWhy::PlainRefused { .. } | EscapeWhy::UnimplementedSealed(_) => {
-                (records.popped.is_empty(), handlers.popped.is_empty())
+        let handler_dest = match &op {
+            Op::PushCatch(dest) | Op::PushConditionCase(dest) | Op::PushConditionCaseRaw(dest) => {
+                Some(*dest)
             }
-            // A World escape names no token: `WorldSplit::Escape` is one
-            // variant for every World op, so its pop is checked as the top
-            // run strictly above `bind_base`/`handler_base` (V7 F6).
-            _ => (true, true),
+            _ => None,
+        };
+        // R1: both LIFOs are checked before either is touched.
+        let (records_popped_ok, handlers_popped_ok) = if handler_dest.is_some() {
+            // V8 r2 LOW-2a: GNU `push_handler_nosignal` (`src/eval.c:1840-1867`)
+            // installs one handler and never pops existing specpdl records or
+            // handlers.
+            (records.popped.is_empty(), handlers.popped.is_empty())
+        } else {
+            match &named {
+                // A refused Plain access pushes (a refused bind) or reads; it
+                // never pops a record. A sealed cons op pops none.
+                EscapeWhy::PlainRefused { .. } | EscapeWhy::UnimplementedSealed(_) => {
+                    (records.popped.is_empty(), handlers.popped.is_empty())
+                }
+                // A World escape names no token: `WorldSplit::Escape` is one
+                // variant for every World op, so its pop is checked as the top
+                // run strictly above `bind_base`/`handler_base` (V7 F6).
+                _ => (true, true),
+            }
         };
         let contract = if !self
             .arena
@@ -2279,12 +2302,6 @@ where
         // must push EXACTLY ONE token (structural via `Option`) with ZERO
         // specpdl records pushed (GNU `push_handler_nosignal`,
         // `src/eval.c:1840-1867`).
-        let handler_dest = match &op {
-            Op::PushCatch(dest) | Op::PushConditionCase(dest) | Op::PushConditionCaseRaw(dest) => {
-                Some(*dest)
-            }
-            _ => None,
-        };
         let pushed_handler = match (handler_dest, handlers.pushed) {
             (Some(dest), Some(token)) => {
                 if !records.pushed.is_empty() {
@@ -3117,7 +3134,21 @@ where
         let completion = self.escape.unwind(request, &self.arena, &mut self.plain);
         let debug_updates = self.escape.take_debug_on_exit_updates();
         match completion {
-            UnwindCompletion::Flow(flow) => Ok(UnwindEscapeOutcome::Flow(flow)),
+            UnwindCompletion::Flow(flow) => {
+                // V8 r2 LOW-2b: the executor already popped the `Plain` entry
+                // before the escape (GNU `src/eval.c:3948-3957`), so
+                // `unwind_to_idle` would not see an untaken slab record on
+                // `Flow`. Enforce `!record_live` uniformly across `Completed`,
+                // `Caught`, and `Flow`.
+                if self.plain.record_live(record) {
+                    tracing::error!(
+                        op = ?origin_op,
+                        "PlainUnbind Flow left the owner slab record live"
+                    );
+                    return Err(EngineFault::EscapeRecordContract(RecordStack::Bindings));
+                }
+                Ok(UnwindEscapeOutcome::Flow(flow))
+            }
             UnwindCompletion::Caught {
                 handler: new_target,
                 value: new_value,

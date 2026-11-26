@@ -13020,3 +13020,344 @@ fn vm_caught_heap_value_stays_rooted_in_handler_group_across_unwind_polls_and_re
     );
     assert_clear(&engine);
 }
+
+#[test]
+fn vm_cleanup_caught_walks_interleaved_dead_plain_and_serial_atomically_before_mutating() {
+    // V8 r2 LOW-1 (#14735 / agy-pvm-v8r2-0ca3c5d885.md):
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/eval.c:3946-3958 (`unbind_to`: walks `specpdl` strictly in LIFO order
+    //   interleaving `SPECPDL_LET` and `SPECPDL_UNWIND`).
+    // Part A (asymmetry fix): returning callee has `[Serial u1, Plain p1]` above
+    // `bind_base` (`Plain p1` innermost on top). Serial `Return(NeedsSerialCleanup)`
+    // unwinds `p1` from the slab first and then `u1` whose cleanup signals
+    // (`CleanupCaught { popped_records: [u1], popped_handlers: [] }`). The
+    // top-down LIFO walk matches dead `p1` then `u1`, pops both, and lands in
+    // caller's `h1` without double-unbinding.
+    let mut ctx = context();
+    let h1 = handler(171);
+    let u1 = token(1701);
+    let p = plain_sym("pvm-v8-nit-low1-p");
+    let callee_a = make_v7_bytecode(
+        0,
+        0,
+        vec![
+            Op::SaveExcursion, // Serial u1 (outer)
+            Op::Constant(1),   // 7
+            Op::VarBind(0),    // Plain p = 7 (innermost, on top of u1!)
+            Op::Nil,
+            Op::Return, // NeedsSerialCleanup -> CleanupCaught { popped_records: [u1] }
+        ],
+        vec![Value::from_sym_id(p), Value::fixnum(7)],
+        8,
+    );
+    let ops_a = [
+        Op::PushConditionCase(5), // 0: h1, dest = 5
+        Op::Constant(0),          // 1: callee_a
+        Op::Call(0),              // 2
+        Op::PopHandler,           // 3: skipped
+        Op::Return,               // 4: skipped
+        Op::Return,               // 5: dest -> returns caught 77
+    ];
+    let script_a = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(5), h1)),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u1,
+        ))),
+        // RecordingEscape's Return(NeedsSerialCleanup) pops `p` off the slab;
+        // serial cleanup then popped `u1` and signaled into caller's `h1`.
+        Some(ScriptStep::Escape(EscapeCompletion::CleanupCaught {
+            handler: h1,
+            value: Value::fixnum(77),
+            popped_records: vec![u1],
+            popped_handlers: vec![],
+        })),
+        Some(v8_unwind_done(&[h1], &[])),
+    ];
+    let mut engine_a = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(script_a),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new().admit(p),
+        RecordingPoll::new(),
+    );
+    let out_a = engine_a.run(&mut ctx, program_with(&ops_a, &[callee_a]));
+    assert_eq!(done_value(&mut engine_a, out_a), Value::fixnum(77));
+    assert_eq!(
+        engine_a.escape_handler().requests.len(),
+        4,
+        "interleaved [Serial u1, Plain p1] CleanupCaught must pop both without re-sending u1"
+    );
+    assert!(engine_a.plain_handler().live_records().is_empty());
+    assert_clear(&engine_a);
+
+    // Part B (check-before-mutate atomicity): returning callee has
+    // `[Plain p_orphan, Serial u_kept, Serial u_popped]` + child handler `h_child`.
+    // Return(NeedsSerialCleanup) takes `p_orphan` off the slab while returning
+    // `CleanupCaught { popped_records: [u_popped], popped_handlers: [h_child] }`
+    // (leaving `u_kept` live above dead `p_orphan`!). Must fault with
+    // `EscapeRecordContract(Bindings)` BEFORE mutating EITHER `bindings` or
+    // `handlers`, preserving all 3 bindings and both handlers intact.
+    let h_child = handler(172);
+    let u_kept = token(1702);
+    let u_popped = token(1703);
+    let p_orphan = plain_sym("pvm-v8-nit-low1-orphan");
+    let callee_b = make_v7_bytecode(
+        0,
+        0,
+        vec![
+            Op::PushConditionCase(6), // h_child
+            Op::Constant(1),          // 9
+            Op::VarBind(0),           // Plain p_orphan = 9 (outermost in callee)
+            Op::SaveExcursion,        // Serial u_kept (stays live!)
+            Op::SaveExcursion,        // Serial u_popped (in popped_records)
+            Op::Nil,
+            Op::Return, // NeedsSerialCleanup -> orphaned dead p_orphan below u_kept!
+        ],
+        vec![Value::from_sym_id(p_orphan), Value::fixnum(9)],
+        8,
+    );
+    let ops_b = [
+        Op::PushConditionCase(5), // 0: h1
+        Op::Constant(0),          // 1: callee_b
+        Op::Call(0),              // 2
+        Op::PopHandler,           // 3
+        Op::Return,               // 4
+        Op::Return,               // 5
+    ];
+    let script_b = vec![
+        Some(v8_push_handler(&Op::PushConditionCase(5), h1)),
+        Some(v8_push_handler(&Op::PushConditionCase(6), h_child)),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_kept,
+        ))),
+        Some(ScriptStep::Escape(completion_pushing(
+            &Op::SaveExcursion,
+            u_popped,
+        ))),
+        Some(ScriptStep::Escape(EscapeCompletion::CleanupCaught {
+            handler: h1,
+            value: Value::fixnum(88),
+            popped_records: vec![u_popped],
+            popped_handlers: vec![h_child],
+        })),
+    ];
+    let mut engine_b = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(script_b),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new().admit(p_orphan),
+        RecordingPoll::new(),
+    );
+    assert!(matches!(
+        fault_of(engine_b.run(&mut ctx, program_with(&ops_b, &[callee_b]))),
+        EngineFault::EscapeRecordContract(RecordStack::Bindings)
+    ));
+    assert_eq!(
+        lifos(engine_b.arena()).0,
+        vec![None, Some(u_kept.0), Some(u_popped.0)],
+        "check-before-mutate: orphan detection must leave ALL bindings unmutated"
+    );
+    assert_eq!(
+        lifos(engine_b.arena()).1,
+        vec![Some(h1.0), Some(h_child.0)],
+        "check-before-mutate: orphan detection must leave ALL handlers unmutated"
+    );
+    assert!(matches!(
+        engine_b.run(&mut ctx, program(&[Op::Nil, Op::Return])),
+        VmOutcome::Fault(EngineFault::Poisoned)
+    ));
+}
+
+#[test]
+fn vm_handler_push_opcodes_reject_non_empty_popped_records_or_handlers() {
+    // V8 r2 LOW-2a (#14735 / agy-pvm-v8r2-0ca3c5d885.md):
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/eval.c:1840-1867 (`push_handler_nosignal`: installs one handler on
+    //   `handlerlist`; never pops existing `specpdl` records or handlers);
+    // - src/bytecode.c:967-976 (`Bpushcatch` / `Bpushconditioncase`).
+    let mut ctx = context();
+    let u1 = token(1801);
+    let h_outer = handler(181);
+    let h_new = handler(182);
+
+    // 1. PushConditionCase reporting non-empty `records.popped` -> faults
+    //    `EscapeRecordContract(Bindings)` leaving `u1` untouched and poisons.
+    let mut e1 = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(vec![
+            Some(ScriptStep::Escape(completion_pushing(
+                &Op::SaveExcursion,
+                u1,
+            ))),
+            Some(ScriptStep::Escape(EscapeCompletion::Completed {
+                consumed: 0,
+                produced: Vec::new(),
+                jump: None,
+                records: RecordDelta {
+                    popped: vec![u1],
+                    pushed: Vec::new(),
+                },
+                handlers: HandlerDelta {
+                    popped: Vec::new(),
+                    pushed: Some(h_new),
+                },
+            })),
+        ]),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    assert!(matches!(
+        fault_of(e1.run(
+            &mut ctx,
+            program(&[
+                Op::SaveExcursion,
+                Op::PushConditionCase(3),
+                Op::Nil,
+                Op::Return
+            ])
+        )),
+        EngineFault::EscapeRecordContract(RecordStack::Bindings)
+    ));
+    assert_eq!(
+        lifos(e1.arena()).0,
+        vec![Some(u1.0)],
+        "failed handler-push must not pop existing serial binding record"
+    );
+    assert!(lifos(e1.arena()).1.is_empty());
+
+    // 2. PushCatch reporting non-empty `handlers.popped` -> faults
+    //    `EscapeRecordContract(Handlers)` leaving `h_outer` untouched and poisons.
+    let mut e2 = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(vec![
+            Some(v8_push_handler(&Op::PushConditionCase(4), h_outer)),
+            Some(ScriptStep::Escape(EscapeCompletion::Completed {
+                consumed: 1,
+                produced: Vec::new(),
+                jump: None,
+                records: RecordDelta::default(),
+                handlers: HandlerDelta {
+                    popped: vec![h_outer],
+                    pushed: Some(h_new),
+                },
+            })),
+        ]),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new(),
+        RecordingPoll::new(),
+    );
+    assert!(matches!(
+        fault_of(e2.run(
+            &mut ctx,
+            program(&[
+                Op::PushConditionCase(4),
+                Op::Nil,
+                Op::PushCatch(4),
+                Op::Nil,
+                Op::Return,
+            ])
+        )),
+        EngineFault::EscapeRecordContract(RecordStack::Handlers)
+    ));
+    assert_eq!(
+        lifos(e2.arena()).1,
+        vec![Some(h_outer.0)],
+        "failed PushCatch must not pop outer handler"
+    );
+}
+
+#[test]
+fn vm_plain_unbind_flow_leaving_slab_record_live_faults_and_poisons() {
+    // V8 r2 LOW-2b (#14735 / agy-pvm-v8r2-0ca3c5d885.md):
+    // GNU source contract (emacs-31.1 a360712c9d272d950d8d8255ef74570f7e90b7d9):
+    // - src/eval.c:3948-3957 (`unbind_to`: decrements `specpdl_ptr` BEFORE
+    //   `do_one_unbind` invokes watched `set_internal`).
+    // Because `arena.bindings()` already popped the `Plain` entry prior to the
+    // `PlainUnbind` escape, `unwind_to_idle` would never see an untaken slab
+    // record on `Flow`. Both `Op::Unbind(1)` and `unwind_to_handler` must reject
+    // `UnwindCompletion::Flow` if `self.plain.record_live(record)` is still true.
+    let mut ctx = context();
+    let x = plain_sym("pvm-v8-nit-low2b-x");
+    let h1 = handler(191);
+
+    // 1. Via `Op::Unbind(1)` with `leaving_plain_binding()` returning Flow:
+    let mut e1 = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(vec![Some(v8_unwind_flow(signal(
+            "error",
+            vec![Value::string("unlet")],
+        )))])
+        .leaving_plain_binding(),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new().admit(x).watched(x),
+        RecordingPoll::new(),
+    );
+    assert!(matches!(
+        fault_of(e1.run(
+            &mut ctx,
+            program_with(
+                &[
+                    Op::Constant(1),
+                    Op::VarBind(0),
+                    Op::Unbind(1),
+                    Op::Nil,
+                    Op::Return
+                ],
+                &[Value::from_sym_id(x), Value::fixnum(11)],
+            )
+        )),
+        EngineFault::EscapeRecordContract(RecordStack::Bindings)
+    ));
+    assert!(matches!(
+        e1.run(&mut ctx, program(&[Op::Nil, Op::Return])),
+        VmOutcome::Fault(EngineFault::Poisoned)
+    ));
+
+    // 2. Via `unwind_to_handler` L3 watched PlainUnbind returning Flow:
+    let mut e2 = VmExec::new(
+        &(),
+        RecordingEscape::with_steps(vec![
+            Some(v8_push_handler(&Op::PushConditionCase(6), h1)),
+            Some(v8_caught(h1, Value::fixnum(1))),
+            Some(v8_unwind_flow(signal(
+                "error",
+                vec![Value::string("watcher-flow")],
+            ))),
+        ])
+        .leaving_plain_binding(),
+        HarnessVmSealed,
+        HarnessArith::new(),
+        HarnessPlain::new().admit(x).watched(x),
+        RecordingPoll::new(),
+    );
+    assert!(matches!(
+        fault_of(e2.run(
+            &mut ctx,
+            program_with(
+                &[
+                    Op::PushConditionCase(6),
+                    Op::Constant(1),
+                    Op::VarBind(0),
+                    Op::Nil,
+                    Op::SymbolValue,
+                    Op::Return,
+                    Op::Return,
+                ],
+                &[Value::from_sym_id(x), Value::fixnum(22)],
+            )
+        )),
+        EngineFault::EscapeRecordContract(RecordStack::Bindings)
+    ));
+    assert!(matches!(
+        e2.run(&mut ctx, program(&[Op::Nil, Op::Return])),
+        VmOutcome::Fault(EngineFault::Poisoned)
+    ));
+}
