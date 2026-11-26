@@ -7,10 +7,10 @@
 //! cycle check would have to consider -- stays with the builtin, exactly as
 //! before.
 //!
-//! The expected matrix below is GNU 31.1's answers, produced with
-//!   tmp/v10x/sandbox-run.sh $NEOVM_FORCE_ORACLE_PATH -Q --batch -l tmp/memq/swp-oracle.el
-//! inside `nix develop /home/exec/Projects/github.com/eval-exec/neomacs-main`
-//! (rows `OP swp=N TARGET ELEMENT INDEX`, the index of the matched cell).
+//! The expected matrix below records GNU Emacs 31.1's answers
+//! (`$NEOVM_FORCE_ORACLE_PATH -Q --batch` evaluating `memq`/`assq` across
+//! `symbols-with-pos-enabled` = `nil`/`t`, yielding rows
+//! `OP swp=N TARGET ELEMENT INDEX`, the index of the matched cell).
 //! Each case is checked against GNU's expected value, against the builtin
 //! that answered it before the walk learned positions, and (for the compiled
 //! sites) against the interpreter's opcode arm.

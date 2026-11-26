@@ -530,8 +530,8 @@ mod linux {
     ];
 
     /// Runs on this process's main thread: set up the layout, raise the
-    /// limit as `neomacs` does, and run the batch probe
-    /// (tmp/v10x/probes/j2pf/probe-t11.el) and the stacker descent.
+    /// limit as `neomacs` does, and run the recursive Elisp probe tables above
+    /// (`PROBE`, `CRAMPED_PROBE`, `INTERPRETED_PROBE`) and the stacker descent.
     pub fn child(scenario: &str) -> i32 {
         let planted = match scenario {
             "planted" => Some(TARGET_STACK),

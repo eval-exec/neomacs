@@ -1,6 +1,6 @@
 ;; -*- lexical-binding: t -*-
-;; GNU 31.1 oracle for the A6 restricted subset. Refresh only through
-;; tmp/v10x/sandbox-run.sh with NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1.
+;; GNU 31.1 oracle for the A6 restricted subset. Refresh with
+;; NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1 (via NEOVM_LISP_SANDBOX on Linux).
 (unless (string= emacs-version "31.1")
   (error "A6 oracle requires GNU Emacs 31.1, got %s" emacs-version))
 (defun neovm-a6-out (value)

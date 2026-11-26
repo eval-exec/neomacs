@@ -423,8 +423,8 @@ fn rss_kib() -> u64 {
 }
 
 /// Cold inventory of admission on the loaded runtime image: the cells it
-/// projects, how many own a descriptor, its time and memory. Run inside
-/// `tmp/v10x/sandbox-run.sh` with `--run-ignored only`.
+/// projects, how many own a descriptor, its time and memory. Enable with
+/// `--features perf-probes`.
 #[test]
 #[cfg(feature = "perf-probes")]
 fn admission_inventory_probe() {

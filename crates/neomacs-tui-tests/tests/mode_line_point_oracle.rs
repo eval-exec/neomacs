@@ -12,13 +12,9 @@ const PROBE_EL_PATH: &str = concat!(
 );
 
 // GNU Emacs 31.1, interactive 40x120 xterm-256color, C.UTF-8. Collected with:
-// bash tmp/editpath-cont11/run-net-cg-nix-r1.sh python3 -B
-//   tmp/editpath-cont16/collect-point.py $NEOVM_FORCE_ORACLE_PATH point-gnu-r1
-// The controller runs tmp/v10x/sandbox-run.sh <python> -B point-pty.py
 //   $NEOVM_FORCE_ORACLE_PATH -nw -Q -no-comp-spawn
 //   --eval="(setq native-comp-jit-compilation nil native-comp-async-report-warnings-errors 'silent)"
 //   -l crates/neomacs-tui-tests/tests/mode_line_point_probe.el
-// Original GNU output is retained in tmp/editpath-cont16/point-gnu-r1/values.el.
 // In particular, the earlier %l seeds GNU's base before narrowing: narrow's
 // line remains 3. Recounting from the new point-min would incorrectly print 2.
 const GNU_VALUES: &str = "\"start[1/0/1]forward[3/2/3][3/2/3]backward[2/4/5]narrow[3/2/3]widen[3/2/3]excursion[3/2/3]restored[1/0/1]\"\n";

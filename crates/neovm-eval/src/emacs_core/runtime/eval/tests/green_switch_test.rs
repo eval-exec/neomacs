@@ -1418,8 +1418,7 @@ fn a_lone_green_select_publishes_and_preserves_a_control_wake_before_arm() {
 /// while `Fthread_join` re-raises the `error_symbol` snapshot it copied
 /// before its wait (`src/thread.c:1126-1138`). The attested GNU 31.1
 /// oracle (linux-gtk3, THREADS) therefore reports `(error stop)` at the
-/// join and a nil `thread-last-error`: transcript
-/// `tmp/v10x/oracleb-evalfam/gnu-thread-signal-select-proof.txt`. The
+/// join and a nil `thread-last-error`. The
 /// corrected expectation still guards the park publication and the select
 /// deadline because those assertions are unchanged.
 #[test]
@@ -1557,8 +1556,7 @@ fn a_yield_without_ready_peers_still_refuses_gc_inhibition() {
 /// and raises that snapshot after the wait, while
 /// `post_acquire_global_lock` clears and raises the worker's copy on
 /// reacquire (`src/thread.c:146-154`). The attested GNU 31.1 oracle
-/// (linux-gtk3, THREADS) therefore signals `error (wake)` at the join:
-/// transcript `tmp/v10x/oracleb-evalfam/gnu-thread-signal-select-proof.txt`.
+/// (linux-gtk3, THREADS) therefore signals `error (wake)` at the join.
 /// The corrected expectation still guards the deadline: the join cannot
 /// return before the worker's 0.35 s select expires.
 #[test]

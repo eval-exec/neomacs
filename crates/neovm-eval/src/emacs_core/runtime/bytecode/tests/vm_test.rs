@@ -8045,7 +8045,7 @@ fn run_array_opcode(eval: &mut Context, func: &ByteCodeFunction, args: Value) ->
 
 /// Every `aref`/`aset` shape and error a GNU 31.1 byte-compiled
 /// `(lambda (a i) (aref a i))` / `(lambda (a i v) (aset a i v) a)` answers,
-/// recorded from GNU (tmp/v10x/vmgap/array-oracle.el, 2026-10-22): decode
+/// recorded from GNU Emacs 31.1 (2026-10-22): decode
 /// order (CHECK_FIXNUM before the array check), negative and huge indices,
 /// every array kind, and every string-write refusal.
 #[test]

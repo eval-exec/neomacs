@@ -1,4 +1,4 @@
-//! GEN1 card table (card-mark Stage A, tmp/v10x/reports/cardmark-stageA-2026-10-12.md).
+//! GEN1 card table (card-mark Stage A, 2026-10-12).
 //!
 //! One masked byte per 512 bytes of owner address space. A store that may
 //! create an old-to-young edge marks the card of its OWNER's start address;

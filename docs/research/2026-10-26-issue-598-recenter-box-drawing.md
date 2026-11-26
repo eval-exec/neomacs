@@ -269,9 +269,8 @@ core runs were clean.
 
 The remaining layout failure,
 `layout_frame_rust_nerd_font_alias_icon_uses_resolved_monospace_cell_width`,
-matches the existing project gate allowlist dated 2026-10-18
-(`neomacs-main/tmp/v10x/layout-known-failures.txt`) and its known icon-cell width
-6 versus 7 mismatch. `rebased-layout-failure-classification.json` records the
+matches the pre-existing 2026-10-18 layout known-failure baseline (icon-cell width
+6 versus 7 mismatch). `rebased-layout-failure-classification.json` records the
 comparison and zero unexpected failures. Before integrating main, the full
 layout run also had the three documented Fido/M-x special-character text-run
 panics; all three pass on the new base. A separate baseline rebuild for the
