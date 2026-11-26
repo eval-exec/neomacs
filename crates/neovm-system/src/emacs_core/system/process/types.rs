@@ -5450,10 +5450,7 @@ impl SystemProcessExt for ProcessManager {
             return ProcessBytesRead::NoSource;
         };
 
-        if scratch.len() < read_len {
-            scratch.resize(read_len, 0);
-        }
-        let buf = &mut scratch[..read_len];
+        let mut buf = ReadScratchGuard::acquire(scratch, read_len);
         let full_read_len = buf.len();
         #[cfg(windows)]
         let result = {
@@ -5468,13 +5465,13 @@ impl SystemProcessExt for ProcessManager {
             }
         };
         #[cfg(not(windows))]
-        let result = stdout.read(buf);
+        let result = stdout.read(&mut buf);
         process_output_read_from_io_result(
             proc,
             coding_systems,
             destination,
             ProcessReadOutcome::from_stream_read(&result),
-            buf,
+            &buf,
             full_read_len,
             mode,
             global_null_inhibition,
@@ -5503,18 +5500,15 @@ impl SystemProcessExt for ProcessManager {
             return ProcessBytesRead::NoSource;
         };
 
-        if scratch.len() < read_len {
-            scratch.resize(read_len, 0);
-        }
-        let buf = &mut scratch[..read_len];
+        let mut buf = ReadScratchGuard::acquire(scratch, read_len);
         let full_read_len = buf.len();
-        let result = port.read(buf);
+        let result = port.read(&mut buf);
         process_output_read_from_io_result(
             proc,
             coding_systems,
             destination,
             ProcessReadOutcome::from_stream_read(&result),
-            buf,
+            &buf,
             full_read_len,
             mode,
             global_null_inhibition,
@@ -5540,18 +5534,15 @@ impl SystemProcessExt for ProcessManager {
             return ProcessBytesRead::NoSource;
         };
 
-        if scratch.len() < read_len {
-            scratch.resize(read_len, 0);
-        }
-        let buf = &mut scratch[..read_len];
+        let mut buf = ReadScratchGuard::acquire(scratch, read_len);
         let full_read_len = buf.len();
-        let result = reader.read(buf);
+        let result = reader.read(&mut buf);
         process_output_read_from_io_result(
             proc,
             coding_systems,
             destination,
             ProcessReadOutcome::from_pty_read(&result),
-            buf,
+            &buf,
             full_read_len,
             mode,
             global_null_inhibition,
@@ -5575,18 +5566,15 @@ impl SystemProcessExt for ProcessManager {
         }
         let read_len = process_read_buffer_len(proc);
         if let Some(tls) = proc.live_io_mut().tls_stream_mut() {
-            if scratch.len() < read_len {
-                scratch.resize(read_len, 0);
-            }
-            let buf = &mut scratch[..read_len];
+            let mut buf = ReadScratchGuard::acquire(scratch, read_len);
             let full_read_len = buf.len();
-            let result = tls.read_process_output(buf);
+            let result = tls.read_process_output(&mut buf);
             let read = process_output_read_from_io_result(
                 proc,
                 coding_systems,
                 destination,
                 ProcessReadOutcome::from_stream_read(&result),
-                buf,
+                &buf,
                 full_read_len,
                 mode,
                 global_null_inhibition,
@@ -5603,22 +5591,19 @@ impl SystemProcessExt for ProcessManager {
                 Unsupported,
             }
 
-            if scratch.len() < read_len {
-                scratch.resize(read_len, 0);
-            }
-            let buf = &mut scratch[..read_len];
+            let mut buf = ReadScratchGuard::acquire(scratch, read_len);
             let full_read_len = buf.len();
             let raw_read = {
                 let socket = proc.live_io().network_socket().expect("checked above");
-                match socket.read_stream_output(buf) {
+                match socket.read_stream_output(&mut buf) {
                     Some(result) => RawNetworkRead::Stream(result),
                     None => match &**socket {
                         NetworkSocket::UdpSocket(socket) => {
-                            RawNetworkRead::Udp(socket.recv_from(buf))
+                            RawNetworkRead::Udp(socket.recv_from(&mut buf))
                         }
                         #[cfg(unix)]
                         NetworkSocket::UnixDatagram(socket) => {
-                            RawNetworkRead::UnixDatagram(socket.recv_from(buf))
+                            RawNetworkRead::UnixDatagram(socket.recv_from(&mut buf))
                         }
                         _ => RawNetworkRead::Unsupported,
                     },
@@ -5630,7 +5615,7 @@ impl SystemProcessExt for ProcessManager {
                     coding_systems,
                     destination,
                     ProcessReadOutcome::from_stream_read(&result),
-                    buf,
+                    &buf,
                     full_read_len,
                     mode,
                     global_null_inhibition,

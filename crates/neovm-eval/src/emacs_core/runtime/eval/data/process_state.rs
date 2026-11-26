@@ -1241,7 +1241,7 @@ pub struct ProcessIdState {
     /// buffer (64 KiB by default, up to 1 MiB+). Kept inside boxed
     /// `ProcessIdState` so `ProcessManager`'s pinned size in `Context` is
     /// unchanged.
-    pub read_scratch: Vec<u8>,
+    pub(crate) read_scratch: Vec<u8>,
 }
 
 /// Opaque, thread-safe handle a cross-thread producer uses to wake the blocked
@@ -3968,7 +3968,63 @@ impl ProcessManager {
     ) -> Option<(&mut Process, &mut Vec<u8>)> {
         Some((self.processes.get_mut(&id)?, &mut self.ids.read_scratch))
     }
+}
 
+/// Maximum capacity retained by `ProcessIdState::read_scratch` after a read
+/// finishes. Covers default 64 KiB and common 1 MiB LSP `read-process-output-max`
+/// settings without reallocation churn while preventing a temporary large
+/// `read-process-output-max` (up to `i32::MAX`) from permanently pinning
+/// tens of megabytes for the rest of the session.
+pub const READ_SCRATCH_RETAIN_CAP: usize = 1024 * 1024;
+
+/// Scoped lease over `ProcessIdState::read_scratch` of exact length `read_len`.
+///
+/// Reuses the underlying `Vec<u8>` without reallocating for normal reads
+/// (`<= READ_SCRATCH_RETAIN_CAP`), and on drop trims any oversized capacity
+/// back to `READ_SCRATCH_RETAIN_CAP` so one-off huge `read-process-output-max`
+/// spikes cannot remain pinned across early returns or idle periods.
+pub struct ReadScratchGuard<'a> {
+    scratch: &'a mut Vec<u8>,
+    read_len: usize,
+}
+
+impl<'a> ReadScratchGuard<'a> {
+    #[inline]
+    pub fn acquire(scratch: &'a mut Vec<u8>, read_len: usize) -> Self {
+        if scratch.len() < read_len {
+            scratch.resize(read_len, 0);
+        }
+        Self { scratch, read_len }
+    }
+}
+
+impl std::ops::Deref for ReadScratchGuard<'_> {
+    type Target = [u8];
+
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        &self.scratch[..self.read_len]
+    }
+}
+
+impl std::ops::DerefMut for ReadScratchGuard<'_> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [u8] {
+        &mut self.scratch[..self.read_len]
+    }
+}
+
+impl Drop for ReadScratchGuard<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        if self.scratch.capacity() > READ_SCRATCH_RETAIN_CAP {
+            self.scratch.truncate(READ_SCRATCH_RETAIN_CAP);
+            self.scratch.shrink_to(READ_SCRATCH_RETAIN_CAP);
+        }
+    }
+}
+
+impl ProcessManager {
     /// Read the Lisp-visible status at one of the enumerated holes, without
     /// GNU's recording having been made here, and without exposing the
     /// process reference.
@@ -5143,5 +5199,54 @@ mod serial_cancel_order {
         });
         assert!(!waited);
         assert!(!posted);
+    }
+}
+
+#[cfg(test)]
+mod read_scratch_guard_tests {
+    use super::{READ_SCRATCH_RETAIN_CAP, ReadScratchGuard};
+
+    #[test]
+    fn normal_reads_reuse_scratch_without_shrinking() {
+        let mut scratch = Vec::new();
+        let ptr = {
+            let mut buf = ReadScratchGuard::acquire(&mut scratch, 64 * 1024);
+            assert_eq!(buf.len(), 64 * 1024);
+            buf[0] = b'a';
+            buf.as_ptr()
+        };
+        let cap_after_first = scratch.capacity();
+        assert!(cap_after_first >= 64 * 1024);
+        assert!(cap_after_first <= READ_SCRATCH_RETAIN_CAP);
+
+        let ptr_second = {
+            let buf = ReadScratchGuard::acquire(&mut scratch, 4096);
+            assert_eq!(buf.len(), 4096);
+            buf.as_ptr()
+        };
+        assert_eq!(ptr_second, ptr);
+        assert_eq!(scratch.capacity(), cap_after_first);
+    }
+
+    #[test]
+    fn oversized_read_spike_shrinks_back_to_retain_cap_on_drop() {
+        let mut scratch = Vec::new();
+        let spike_len = READ_SCRATCH_RETAIN_CAP * 4;
+        {
+            let mut buf = ReadScratchGuard::acquire(&mut scratch, spike_len);
+            assert_eq!(buf.len(), spike_len);
+            buf[spike_len - 1] = b'z';
+        }
+        assert!(
+            scratch.capacity() <= READ_SCRATCH_RETAIN_CAP,
+            "expected capacity <= {}, got {}",
+            READ_SCRATCH_RETAIN_CAP,
+            scratch.capacity()
+        );
+        assert!(scratch.len() <= READ_SCRATCH_RETAIN_CAP);
+
+        // Subsequent normal read works cleanly on the retained buffer.
+        let buf = ReadScratchGuard::acquire(&mut scratch, 64 * 1024);
+        assert_eq!(buf.len(), 64 * 1024);
     }
 }
