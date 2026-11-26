@@ -479,7 +479,7 @@ fn projected_localized_generic_view_keeps_cache_hits_lazy() {
     // record is retained across a read that may refresh its cache.
     unsafe {
         let cache = &*blv.blv().as_ptr();
-        assert_eq!(cache.where_buf.get(), object);
+        assert_eq!(cache.where_buf(), object);
         assert_eq!(cache.where_buf_id.get(), buffer_id.0);
         assert!(cache.found.get());
         assert_eq!(
@@ -504,7 +504,7 @@ fn projected_localized_generic_view_keeps_cache_hits_lazy() {
     assert_eq!(reads.get(), 1, "bufferless default needs no local lookup");
     // SAFETY: same owned BLV; the preceding bufferless read has completed.
     unsafe {
-        assert_eq!((*blv.blv().as_ptr()).where_buf.get(), object);
+        assert_eq!((*blv.blv().as_ptr()).where_buf(), object);
         assert!((*blv.blv().as_ptr()).found.get());
     }
     assert_eq!(ev.tagged_heap.allocated_count(), allocated);
@@ -535,7 +535,7 @@ fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
             // only after each cache-writing read has returned.
             unsafe {
                 let cache = &*blv.blv().as_ptr();
-                assert!(cache.where_buf.get().is_nil());
+                assert!(cache.where_buf().is_nil());
                 assert_eq!(cache.where_buf_id.get(), neovm_value::symbol::NO_WHERE_BUF);
                 assert!(!cache.found.get());
                 assert_eq!(cache.valcell(), cache.defcell());
@@ -563,7 +563,7 @@ fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
     // SAFETY: same owned BLV; no cache writer overlaps these assertions.
     unsafe {
         let cache = &*blv.blv().as_ptr();
-        assert!(cache.where_buf.get().is_nil());
+        assert!(cache.where_buf().is_nil());
         assert_eq!(cache.where_buf_id.get(), neovm_value::symbol::NO_WHERE_BUF);
         assert!(cache.found.get());
         assert_eq!(

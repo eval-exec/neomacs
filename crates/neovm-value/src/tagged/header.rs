@@ -21,8 +21,8 @@ use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 mod atomic_value;
-#[doc(hidden)]
-pub use atomic_value::AtomicTaggedValue;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) use atomic_value::AtomicTaggedValue;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite_finalizer;
 #[cfg(all(any(test, feature = "test-support"), feature = "sqlite"))]
@@ -1205,11 +1205,41 @@ impl LispValueVec {
     /// [`AtomicTaggedValue`] reads (for example a private `PROT_READ | PROT_WRITE`
     /// pdump mapping or an `[AtomicTaggedValue]` backing, never a `SharedReadOnly`
     /// `&[TaggedValue]` borrow).
-    #[doc(hidden)]
-    pub unsafe fn mapped(ptr: *const AtomicTaggedValue, len: usize) -> Self {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) unsafe fn mapped(ptr: *const AtomicTaggedValue, len: usize) -> Self {
         Self {
             storage: LispValueVecStorage::Mapped { ptr, len },
         }
+    }
+
+    /// Build mapped slot storage from a pdump image byte pointer.
+    ///
+    /// Exists for `neovm-eval`'s pdump loader so [`AtomicTaggedValue`] stays
+    /// crate-private (outside `test-support`).
+    ///
+    /// # Safety
+    /// `ptr` must be aligned to `align_of::<AtomicTaggedValue>()` and address
+    /// `len` initialized `TaggedValue` words inside a private
+    /// `PROT_READ | PROT_WRITE` pdump mapping (carrying shared-read-write
+    /// provenance, never a `SharedReadOnly` `&[TaggedValue]` borrow) that
+    /// remains mapped and immutable for the lifetime of the returned storage.
+    #[doc(hidden)]
+    pub unsafe fn mapped_from_pdump_bytes(ptr: *const u8, len: usize) -> Self {
+        if len > 0 {
+            assert!(
+                !ptr.is_null(),
+                "pdump mapped slot pointer must be non-null for non-empty span"
+            );
+            assert_eq!(
+                ptr.align_offset(std::mem::align_of::<AtomicTaggedValue>()),
+                0,
+                "pdump mapped slot pointer must be aligned to AtomicTaggedValue"
+            );
+        }
+        // SAFETY: caller upholds initialization, lifetime, and
+        // `PROT_READ | PROT_WRITE` pdump provenance for `len` atomic words, and
+        // non-null + alignment were asserted above for `len > 0`.
+        unsafe { Self::mapped(ptr.cast::<AtomicTaggedValue>(), len) }
     }
 
     /// Byte offsets, within a `LispValueVec`, of the element pointer and the

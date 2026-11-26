@@ -398,7 +398,7 @@ pub struct LispBufferLocalValue {
     ///
     /// Written only through [`LispBufferLocalValue::set_where`], which keeps
     /// [`Self::where_buf_id`] in step.
-    pub where_buf: AtomicTaggedValue,
+    pub(crate) where_buf: AtomicTaggedValue,
     /// The raw [`BufferId`](crate::value::buffer_vocab::BufferId) of `where_buf`, or
     /// [`NO_WHERE_BUF`] when it is not a buffer: the read fast path's
     /// where-buffer test as one integer compare. Comparing the object meant
@@ -467,6 +467,18 @@ impl LispBufferLocalValue {
     #[inline]
     pub fn valcell_atomic(&self) -> Value {
         self.valcell.load_atomic()
+    }
+
+    /// Read the cached buffer (or `Value::NIL` for the global default).
+    #[inline]
+    pub fn where_buf(&self) -> Value {
+        self.where_buf.get()
+    }
+
+    /// Atomically load the cached buffer (or `Value::NIL` for the global default).
+    #[inline]
+    pub fn where_buf_atomic(&self) -> Value {
+        self.where_buf.load_atomic()
     }
 
     /// Point the cache at `buf` (a buffer, or `Value::NIL` for the global

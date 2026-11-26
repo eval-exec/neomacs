@@ -1428,12 +1428,11 @@ impl<'a> LoadDecoder<'a> {
                 std::ptr::copy_nonoverlapping(slots.as_ptr(), ptr, slots.len());
             }
         }
+        // SAFETY: `mapped_slots_ptr_for_object` returns an aligned `*mut TaggedValue`
+        // into the private `PROT_READ | PROT_WRITE` pdump heap mapping covering
+        // `slots.len()` initialized words that outlives this `LispValueVec`.
         Ok(Some(unsafe {
-            LispValueVec::mapped(
-                ptr.cast::<neovm_value::tagged::header::AtomicTaggedValue>()
-                    .cast_const(),
-                slots.len(),
-            )
+            LispValueVec::mapped_from_pdump_bytes(ptr.cast::<u8>().cast_const(), slots.len())
         }))
     }
 
@@ -1446,12 +1445,11 @@ impl<'a> LoadDecoder<'a> {
         let Some(ptr) = self.mapped_slots_ptr_for_object(id, expected_len)? else {
             return Ok(None);
         };
+        // SAFETY: `mapped_slots_ptr_for_object` returns an aligned `*mut TaggedValue`
+        // into the private `PROT_READ | PROT_WRITE` pdump heap mapping covering
+        // `expected_len` pre-baked words that outlives this `LispValueVec`.
         Ok(Some(unsafe {
-            LispValueVec::mapped(
-                ptr.cast::<neovm_value::tagged::header::AtomicTaggedValue>()
-                    .cast_const(),
-                expected_len,
-            )
+            LispValueVec::mapped_from_pdump_bytes(ptr.cast::<u8>().cast_const(), expected_len)
         }))
     }
 
@@ -3061,10 +3059,11 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
     });
 
     let constants = if header.const_count > 0 {
-        let slots_ptr = unsafe { base.offset(header.const_rel as isize) }
-            .cast::<neovm_value::tagged::header::AtomicTaggedValue>();
+        let slots_ptr = unsafe { base.offset(header.const_rel as isize) };
+        // SAFETY: `const_rel` addresses `const_count` aligned, initialized
+        // `TaggedValue` words in the live private `PROT_READ | PROT_WRITE` pdump image.
         unsafe {
-            neovm_value::tagged::header::LispValueVec::mapped(
+            neovm_value::tagged::header::LispValueVec::mapped_from_pdump_bytes(
                 slots_ptr,
                 header.const_count as usize,
             )

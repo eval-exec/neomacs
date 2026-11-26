@@ -618,7 +618,7 @@ fn make_symbol_localized_allocates_blv() {
     assert_eq!(blv.defcell(), blv.valcell());
     // (sym . default)
     assert_eq!(blv.defcell().cons_cdr(), Value::fixnum(42));
-    assert!(blv.where_buf.get().is_nil());
+    assert!(blv.where_buf().is_nil());
     assert!(!blv.found.get());
     assert!(!blv.local_if_set);
 }
@@ -688,7 +688,7 @@ fn localized_swap_in_reads_buffer_local_value() {
     assert_eq!(v, Some(Value::fixnum(99)));
     // The cache now records `where_buf == buf_a` and `found == true`.
     let blv = ob.blv(id).expect("BLV");
-    assert_eq!(blv.where_buf.get(), buf_a);
+    assert_eq!(blv.where_buf(), buf_a);
     assert!(blv.found.get());
 }
 
@@ -717,7 +717,7 @@ fn localized_blv_cache_invalidated_on_buffer_switch() {
     let v_b = ob.find_symbol_value_in_buffer(id, None, buf_b, alist_b, None, 0, None);
     assert_eq!(v_b, Some(Value::fixnum(0)));
     let blv = ob.blv(id).expect("BLV");
-    assert_eq!(blv.where_buf.get(), buf_b);
+    assert_eq!(blv.where_buf(), buf_b);
     assert!(!blv.found.get());
 }
 

@@ -551,3 +551,49 @@ fn miri_0c_reentrant_remaining_value_mutators_panic_without_aliasing() {
     })
     .unwrap();
 }
+
+#[test]
+fn miri_lisp_value_vec_mapped_from_pdump_bytes_reads_and_promotes() {
+    let image = [
+        AtomicTaggedValue::new(TaggedValue::fixnum(31)),
+        AtomicTaggedValue::new(TaggedValue::fixnum(42)),
+    ];
+    let byte_ptr = image.as_ptr().cast::<u8>();
+    // SAFETY: `image` is aligned to `AtomicTaggedValue`, initialized, and outlives `values`.
+    let mut values = unsafe { LispValueVec::mapped_from_pdump_bytes(byte_ptr, image.len()) };
+    assert_eq!(
+        values.as_value_slice(),
+        &[TaggedValue::fixnum(31), TaggedValue::fixnum(42)]
+    );
+    assert!(values.store_atomic(0, TaggedValue::fixnum(99)));
+    assert_eq!(
+        values.as_value_slice(),
+        &[TaggedValue::fixnum(99), TaggedValue::fixnum(42)]
+    );
+    // Empty span accepts a dangling aligned pointer.
+    let empty = unsafe {
+        LispValueVec::mapped_from_pdump_bytes(
+            std::ptr::NonNull::<AtomicTaggedValue>::dangling()
+                .as_ptr()
+                .cast::<u8>(),
+            0,
+        )
+    };
+    assert!(empty.as_value_slice().is_empty());
+
+    // Non-empty misaligned or null pointers must panic unconditionally (release & debug).
+    let misaligned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        LispValueVec::mapped_from_pdump_bytes(byte_ptr.add(1), 1)
+    }));
+    assert!(
+        misaligned.is_err(),
+        "misaligned non-empty pdump slot pointer must panic"
+    );
+    let null_non_empty = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        LispValueVec::mapped_from_pdump_bytes(std::ptr::null(), 1)
+    }));
+    assert!(
+        null_non_empty.is_err(),
+        "null non-empty pdump slot pointer must panic"
+    );
+}

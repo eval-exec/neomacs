@@ -4200,9 +4200,9 @@ pub fn builtin_variable_binding_locus(
                 }
                 if let Some(blv) = ctx.obarray.blv(resolved)
                     && blv.found.get()
-                    && !blv.where_buf.get().is_nil()
+                    && !blv.where_buf().is_nil()
                 {
-                    return Ok(blv.where_buf.get());
+                    return Ok(blv.where_buf());
                 }
             }
             ValueCell::Forwarded(fwd) => {
