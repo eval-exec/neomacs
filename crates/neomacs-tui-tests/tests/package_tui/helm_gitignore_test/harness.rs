@@ -9,7 +9,7 @@ use neomacs_tui_tests::{Snapshot, TuiSession};
 use std::fs;
 use std::path::Path;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub(super) fn send_to_both<F>(pair: &mut PackageTuiPair, operation: F)
 where
@@ -69,14 +69,14 @@ pub(super) fn quit_failure_session(pair: &mut PackageTuiPair) {
     send_to_both(pair, |session| session.send_key("C-g"));
     let session_closed = |grid: &[String]| !grid.iter().any(|row| row.contains("*helm-gitignore*"));
     for (name, session) in [("GNU", &mut pair.gnu), ("Neomacs", &mut pair.neo)] {
-        let deadline = Instant::now() + STAGE_TIMEOUT;
+        let deadline = stage_hang_cap();
         loop {
             session.read(Duration::from_millis(20));
             if session_closed(&session.text_grid()) {
                 break;
             }
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "{name} did not close the helm session after C-g:\n{}",
                 session.text_grid().join("\n")
             );
@@ -257,10 +257,10 @@ pub(super) fn observe_terminal_failures(
     pair: &mut PackageTuiPair,
     timeout: Duration,
 ) -> PairedTerminalFailures<'_> {
-    let deadline = Instant::now() + timeout;
+    let deadline = neomacs_tui_tests::HangCap::new(timeout);
     let mut gnu = TerminalFailureObservation::NotObserved;
     let mut neo = TerminalFailureObservation::NotObserved;
-    while Instant::now() < deadline {
+    while !deadline.is_expired() {
         // Neither editor waits behind the other's full deadline: the error
         // can disappear while the other process is still reaching its error.
         for (session, observation) in [(&mut pair.gnu, &mut gnu), (&mut pair.neo, &mut neo)] {
@@ -272,11 +272,9 @@ pub(super) fn observe_terminal_failures(
                         .expect("Helm Gitignore terminal-failure fence");
                     let text = terminal_failure_text(observed.text_grid());
                     if text.is_empty() {
-                        session.read(
-                            deadline
-                                .saturating_duration_since(Instant::now())
-                                .min(Duration::from_millis(50)),
-                        );
+                        if let Some(slice) = deadline.poll_slice(Duration::from_millis(50)) {
+                            session.read(slice);
+                        }
                     } else {
                         *observation = TerminalFailureObservation::Observed(text);
                     }
@@ -419,7 +417,11 @@ enum SaveStage<'filename> {
     Filename(&'filename str),
 }
 
-fn wait_for_save_stage(session: &mut TuiSession, deadline: Instant, stage: SaveStage<'_>) {
+fn wait_for_save_stage(
+    session: &mut TuiSession,
+    deadline: neomacs_tui_tests::HangCap,
+    stage: SaveStage<'_>,
+) {
     loop {
         let observed = session
             .observe_at_fence()
@@ -444,14 +446,14 @@ fn wait_for_save_stage(session: &mut TuiSession, deadline: Instant, stage: SaveS
         if reached {
             return;
         }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(
-            !remaining.is_zero(),
-            "{} did not reach Helm Gitignore save stage {stage:?}:\n{}",
-            session.name,
-            grid.join("\n")
-        );
-        session.read(remaining.min(Duration::from_millis(50)));
+        let Some(slice) = deadline.poll_slice(Duration::from_millis(50)) else {
+            panic!(
+                "{} did not reach Helm Gitignore save stage {stage:?}:\n{}",
+                session.name,
+                grid.join("\n")
+            );
+        };
+        session.read(slice);
     }
 }
 
@@ -467,7 +469,7 @@ pub(super) fn edit_and_write_gitignore(session: &mut TuiSession, path: &Path) {
     );
     // One observation budget covers this editor's edit and filename stages.
     // Transport operations retain their separate existing request deadlines.
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(8));
     session.send_keys("M->");
     session.send(PROJECT_RELEASE_TAIL.as_bytes());
     wait_for_save_stage(session, deadline, SaveStage::EditedTail);
@@ -519,14 +521,14 @@ pub(super) fn capture_editor(session: &mut TuiSession, stage: &str, editor: &str
     // minibuffer has exited, so the caller's next input cannot land inside
     // it.  The form awaits HTTP idle for up to its stage budget.
     neomacs_tui_tests::pair::eval_expression_one_within(session, &expression, STAGE_TIMEOUT);
-    let deadline = Instant::now() + STAGE_TIMEOUT;
+    let deadline = stage_hang_cap();
     loop {
         session.read(Duration::from_millis(10));
         if let Ok(state) = fs::read_to_string(&path) {
             return state;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "{editor} did not capture helm-gitignore stage {stage:?}"
         );
         thread::yield_now();
@@ -540,7 +542,7 @@ pub(super) fn wait_for_state_file(
     editor: &str,
 ) -> String {
     let path = session.home_dir().join(name);
-    let deadline = Instant::now() + STAGE_TIMEOUT;
+    let deadline = stage_hang_cap();
     loop {
         session.read(Duration::from_millis(10));
         if let Ok(state) = fs::read_to_string(&path)
@@ -549,7 +551,7 @@ pub(super) fn wait_for_state_file(
             return state;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "{editor} did not write {name:?} containing {expected_fragment:?}"
         );
         thread::yield_now();

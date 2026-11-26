@@ -42,6 +42,10 @@ serde_json = "1"
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+# Lexer, parser and manifest reader for `src/wall_clock_guard_test.rs`.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "3.0.3", features = ["full", "visit"] }
+toml.workspace = true
 neomacs-test-fonts.workspace = true
 neomacs-test-oracle.workspace = true
 winit.workspace = true

@@ -47,18 +47,33 @@ pub enum PairTimeout {
 
 impl PairTimeout {
     pub const fn same(timeout: Duration) -> Self {
+        assert!(
+            timeout.checked_sub(crate::MIN_HANG_CAP).is_some(),
+            "PairTimeout::same requires a hang-cap >= MIN_HANG_CAP (5s)"
+        );
         Self::Same(timeout)
     }
 
     pub const fn per_editor(gnu: Duration, neomacs: Duration) -> Self {
+        assert!(
+            gnu.checked_sub(crate::MIN_HANG_CAP).is_some()
+                && neomacs.checked_sub(crate::MIN_HANG_CAP).is_some(),
+            "PairTimeout::per_editor requires hang-caps >= MIN_HANG_CAP (5s)"
+        );
         Self::PerEditor { gnu, neomacs }
     }
 
     const fn split(self) -> (Duration, Duration) {
-        match self {
+        let (gnu, neomacs) = match self {
             Self::Same(timeout) => (timeout, timeout),
             Self::PerEditor { gnu, neomacs } => (gnu, neomacs),
-        }
+        };
+        assert!(
+            gnu.checked_sub(crate::MIN_HANG_CAP).is_some()
+                && neomacs.checked_sub(crate::MIN_HANG_CAP).is_some(),
+            "PairTimeout requires hang-caps >= MIN_HANG_CAP (5s)"
+        );
+        (gnu, neomacs)
     }
 }
 
@@ -251,8 +266,8 @@ impl StartingPackageTuiPair {
         F: Fn(&[String]) -> bool,
     {
         let (gnu_timeout, neomacs_timeout) = checkpoint.timeout.split();
-        self.gnu.read_until(gnu_timeout, &predicate);
-        self.neo.read_until(neomacs_timeout, &predicate);
+        wait_session_until(&mut self.gnu, gnu_timeout, &predicate);
+        wait_session_until(&mut self.neo, neomacs_timeout, &predicate);
 
         let gnu_grid = self.gnu.text_grid();
         let neo_grid = self.neo.text_grid();
@@ -284,6 +299,13 @@ impl StartingPackageTuiPair {
             _neo_sandbox: self.neo_sandbox,
         })
     }
+}
+
+fn wait_session_until<F>(session: &mut TuiSession, timeout: Duration, predicate: &F)
+where
+    F: Fn(&[String]) -> bool,
+{
+    session.read_until(timeout, predicate);
 }
 
 impl PackageTuiPair {

@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use neomacs_tui_tests::{TuiLaunch, TuiProcessOutcome, TuiSession, TuiTerminalConfig};
 
-const PROBE_EL: &str = include_str!("mode_line_percent_input_probe.el");
+const PROBE_EL_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/mode_line_percent_input_probe.el"
+);
 
 #[derive(Debug, PartialEq, Eq)]
 struct Observation {
@@ -20,7 +23,7 @@ fn run_probe(name: &str, program: PathBuf, gnu: bool) -> Observation {
     let out = home.path().join("percent-input.out");
     let ready = home.path().join("percent-input.ready");
     let release = home.path().join("percent-input.release");
-    std::fs::write(&script, PROBE_EL).expect("write percent-input probe");
+    std::fs::copy(PROBE_EL_PATH, &script).expect("write percent-input probe");
     let mut launch = TuiLaunch::new(program.as_os_str()).arg("-nw").arg("-Q");
     if gnu {
         launch = launch

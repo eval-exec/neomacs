@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 const READBACK_ENV: [&str; 3] = [
@@ -39,10 +39,7 @@ struct Observation {
 #[test]
 fn wayland_desktop_raster_startup_and_notifications_restore_same_policy_pixels_and_metrics() {
     let root = neomacs_infra::workspace_root();
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nonce = neomacs_gui_tests::unique_nonce();
     let artifacts = directory(root.join(format!(
         "tmp/neomacs-gui-tests/wayland-font-raster-{}-{nonce}",
         std::process::id()
@@ -335,7 +332,7 @@ fn settle(
     fonts: &Path,
     accept: impl Fn(&Observation) -> bool,
 ) -> Observation {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     let mut previous = None;
     loop {
         assert!(
@@ -422,7 +419,7 @@ fn settle(
             previous = Some(observation);
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "phase {phase} did not settle to expected pixels and metrics; {dir:?}"
         );
         thread::sleep(Duration::from_millis(100));
@@ -431,13 +428,13 @@ fn settle(
 
 fn stop_editor(editor: &mut OwnedEditor, dir: &Path) {
     fs::write(dir.join("control"), "stop").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     loop {
         if let Some(status) = editor.0.try_wait().unwrap() {
             assert!(status.success(), "editor exit: {status}; {dir:?}");
             return;
         }
-        assert!(Instant::now() < deadline, "editor exit timeout; {dir:?}");
+        assert!(!deadline.is_expired(), "editor exit timeout; {dir:?}");
         thread::sleep(Duration::from_millis(20));
     }
 }

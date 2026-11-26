@@ -29,7 +29,7 @@ mod popup_trace;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const FIXTURE: &str = "crates/neomacs-gui-tests/fixtures/ctxmenu-popup.el";
 const SCENARIO: &str = "ctxmenu-popup-oracle";
@@ -214,10 +214,10 @@ fn inject_sequence(
     label: &str,
     selects: SelectOffsets,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(20));
     while !ready.exists() {
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "{label} fixture did not become ready"
         );
         std::thread::sleep(Duration::from_millis(50));
@@ -227,7 +227,7 @@ fn inject_sequence(
             break window;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "{label} did not map a visible window"
         );
         std::thread::sleep(Duration::from_millis(100));
@@ -576,14 +576,14 @@ fn editor_alive(child: &mut OwnedChild, artifacts: &Path) {
 }
 
 fn wait_until<T>(what: &str, artifacts: &Path, poll: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(30));
     let mut poll = poll;
     loop {
         if let Some(value) = poll() {
             return value;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "timed out waiting for {what}; artifacts: {}",
             artifacts.display()
         );

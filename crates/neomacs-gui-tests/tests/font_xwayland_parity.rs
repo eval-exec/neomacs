@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 const FONTS: [(&str, &str); 2] = [
@@ -30,10 +30,7 @@ const FONTS: [(&str, &str); 2] = [
 fn attested_gnu_xwayland_and_native_wayland_raster_preferences() {
     assert_eq!(std::env::var("NEOVM_ORACLE_MODE").as_deref(), Ok("verify"));
     let root = neomacs_infra::workspace_root();
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nonce = neomacs_gui_tests::unique_nonce();
     let artifacts = directory(root.join(format!(
         "tmp/neomacs-gui-tests/font-xwayland-{}-{nonce}",
         std::process::id()
@@ -368,7 +365,7 @@ fn save(path: &Path, data: &Value) {
     fs::rename(temporary, path).unwrap();
 }
 fn wait_json(path: &Path, timeout: Duration) -> Value {
-    let deadline = Instant::now() + timeout;
+    let deadline = neomacs_gui_tests::HangCap::new(timeout);
     loop {
         if let Ok(bytes) = fs::read(path)
             && let Ok(value) = serde_json::from_slice(&bytes)
@@ -376,7 +373,7 @@ fn wait_json(path: &Path, timeout: Duration) -> Value {
             return value;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "JSON readiness timeout: {}",
             path.display()
         );
@@ -463,7 +460,7 @@ impl OwnedProcess {
         status
     }
     fn wait_success(&mut self, timeout: Duration) {
-        let deadline = Instant::now() + timeout;
+        let deadline = neomacs_gui_tests::HangCap::new(timeout);
         loop {
             if self.has_exited() {
                 let status = self.finish();
@@ -475,7 +472,7 @@ impl OwnedProcess {
                 return;
             }
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "owned process did not exit: {}",
                 self.dir.display()
             );
@@ -489,8 +486,8 @@ impl Drop for OwnedProcess {
             return;
         }
         self.signal_group(libc::SIGTERM);
-        let deadline = Instant::now() + Duration::from_secs(12);
-        while Instant::now() < deadline && !self.has_exited() {
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(12));
+        while !deadline.is_expired() && !self.has_exited() {
             thread::sleep(Duration::from_millis(30));
         }
         self.finish();
@@ -546,8 +543,8 @@ impl OwnedDisplay {
             let _ = Command::new("swaymsg")
                 .args(["-s", socket, "exit"])
                 .output();
-            let deadline = Instant::now() + Duration::from_secs(3);
-            while Path::new(socket).exists() && Instant::now() < deadline {
+            let exit_cap = neomacs_gui_tests::HangCap::from_secs(5);
+            while Path::new(socket).exists() && !exit_cap.is_expired() {
                 thread::sleep(Duration::from_millis(30));
             }
         }
@@ -628,16 +625,13 @@ fn mapped(display: &OwnedDisplay, pid: u32, gnu: bool) -> Value {
             .into_iter()
             .find_map(|key| node[key].as_array()?.iter().find_map(|n| find(n, pid)))
     }
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(12));
     loop {
         if let Some(node) = find(&display.ipc(&["-t", "get_tree"]), pid) {
             assert_eq!(node["shell"], if gnu { "xwayland" } else { "xdg_shell" });
             return node;
         }
-        assert!(
-            Instant::now() < deadline,
-            "owned editor PID {pid} did not map"
-        );
+        assert!(!deadline.is_expired(), "owned editor PID {pid} did not map");
         thread::sleep(Duration::from_millis(50));
     }
 }
@@ -656,7 +650,7 @@ fn place(editor: &Editor, display: &OwnedDisplay) {
             .iter()
             .all(|entry| entry["success"] == true)
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(5));
     loop {
         let node = mapped(display, pid, editor.gnu);
         if node["rect"]["x"].as_i64() == Some(20)
@@ -668,7 +662,7 @@ fn place(editor: &Editor, display: &OwnedDisplay) {
             return;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "editor did not reach disjoint slot: {node}"
         );
         thread::sleep(Duration::from_millis(30));
@@ -683,7 +677,7 @@ fn observe(
 ) -> Observation {
     let pid = editor.process.child.id();
     fs::write(editor.process.dir.join("phase"), phase).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(12));
     let mut previous = None;
     loop {
         assert!(
@@ -764,7 +758,7 @@ fn observe(
             ));
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "editor observation timeout for {phase}: {}",
             editor.process.dir.display()
         );

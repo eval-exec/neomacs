@@ -1,7 +1,7 @@
 use super::super::scenario::PackageTuiPair;
 use super::prelude::*;
-use neomacs_tui_tests::{RawTerminalSnapshot, Snapshot, TuiSession};
-use std::time::{Duration, Instant};
+use neomacs_tui_tests::{HangCap, RawTerminalSnapshot, Snapshot, TuiSession};
+use std::time::Duration;
 
 pub(super) fn lifecycle_report(pair: &PackageTuiPair, gnu: bool) -> String {
     let grid = if gnu {
@@ -16,15 +16,10 @@ pub(super) fn lifecycle_report(pair: &PackageTuiPair, gnu: bool) -> String {
         .join("\n")
 }
 
-pub(super) fn wait_for<F>(
-    session: &mut TuiSession,
-    timeout: Duration,
-    description: &str,
-    predicate: F,
-) where
+pub(super) fn wait_for<F>(session: &mut TuiSession, cap: &HangCap, description: &str, predicate: F)
+where
     F: Fn(&[String]) -> bool,
 {
-    let deadline = Instant::now() + timeout;
     loop {
         let observed = session
             .observe_at_fence()
@@ -33,25 +28,25 @@ pub(super) fn wait_for<F>(
         if predicate(&grid) {
             return;
         }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(
-            !remaining.is_zero(),
-            "{} timed out waiting for {description}:\n{}",
-            session.name,
-            grid.join("\n")
-        );
-        session.read(remaining.min(Duration::from_millis(50)));
+        let Some(slice) = cap.poll_slice(Duration::from_millis(50)) else {
+            panic!(
+                "{} timed out waiting for {description}:\n{}",
+                session.name,
+                grid.join("\n")
+            );
+        };
+        session.read(slice);
     }
 }
 
 pub(super) fn invoke(session: &mut TuiSession, command: &str, ready: &str) {
     // Prompt entry and literal consumption share the existing input budget.
     // A successful PTY write alone does not establish minibuffer consumption.
-    let input_deadline = Instant::now() + Duration::from_secs(8);
+    let input_cap = HangCap::new(Duration::from_secs(8));
     session.send_key("M-x");
     wait_for(
         session,
-        input_deadline.saturating_duration_since(Instant::now()),
+        &input_cap,
         &format!("M-x prompt before {command}"),
         |grid| grid.last().is_some_and(|row| row.trim_end() == "M-x"),
     );
@@ -59,7 +54,7 @@ pub(super) fn invoke(session: &mut TuiSession, command: &str, ready: &str) {
     let entered = format!("M-x {command}");
     wait_for(
         session,
-        input_deadline.saturating_duration_since(Instant::now()),
+        &input_cap,
         &format!("M-x literal before submitting {command}"),
         |grid| grid.last().is_some_and(|row| row.trim_end() == entered),
     );
@@ -68,7 +63,7 @@ pub(super) fn invoke(session: &mut TuiSession, command: &str, ready: &str) {
         session,
         // The first real theme command cold-loads Org and reapplies its faces.
         // GNU can spend more than 12 CPU seconds there on the bounded CI load.
-        Duration::from_secs(30),
+        &HangCap::new(Duration::from_secs(30)),
         &format!("{command} readiness marker {ready:?}"),
         |grid| grid.iter().any(|row| row.contains(ready)),
     );

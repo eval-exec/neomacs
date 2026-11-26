@@ -136,7 +136,7 @@ fn a_missing_required_capability_skips_the_launch_and_names_itself() {
     let result = plan
         .run_with(
             &mut runner,
-            GuiRunOptions::with_timeout(Duration::from_secs(1)),
+            GuiRunOptions::with_timeout(Duration::from_secs(5)),
         )
         .expect("an unsupported host still writes plan artifacts");
 
@@ -679,7 +679,7 @@ fn run_with_runner_writes_ai_readable_result_artifacts() {
     let result = plan
         .run_with(
             &mut runner,
-            GuiRunOptions::with_timeout(Duration::from_secs(1)),
+            GuiRunOptions::with_timeout(Duration::from_secs(5)),
         )
         .expect("runner result should be written");
     let manifest = std::fs::read_to_string(&artifacts.json).expect("result json should exist");
@@ -727,7 +727,7 @@ fn run_with_runner_reports_missing_png_as_failed_text_result() {
     let result = plan
         .run_with(
             &mut runner,
-            GuiRunOptions::with_timeout(Duration::from_secs(1)),
+            GuiRunOptions::with_timeout(Duration::from_secs(5)),
         )
         .expect("runner result should be written");
     let manifest = std::fs::read_to_string(&artifacts.json).expect("result json should exist");
@@ -776,7 +776,7 @@ fn a_semantic_plan_succeeds_without_a_paint_readback() {
     let result = plan
         .run_with(
             &mut runner,
-            GuiRunOptions::with_timeout(Duration::from_secs(1)),
+            GuiRunOptions::with_timeout(Duration::from_secs(5)),
         )
         .expect("a semantic run writes its artifacts");
 
@@ -820,7 +820,7 @@ fn a_plan_without_an_opt_out_still_requires_a_paint_readback() {
     let result = plan
         .run_with(
             &mut runner,
-            GuiRunOptions::with_timeout(Duration::from_secs(1)),
+            GuiRunOptions::with_timeout(Duration::from_secs(5)),
         )
         .expect("the run records its status even when the paint proof is absent");
 
@@ -866,7 +866,7 @@ fn run_with_runner_treats_timeout_after_png_as_successful_capture() {
     let result = plan
         .run_with(
             &mut runner,
-            GuiRunOptions::with_timeout(Duration::from_secs(1)),
+            GuiRunOptions::with_timeout(Duration::from_secs(5)),
         )
         .expect("runner result should be written");
     let manifest = std::fs::read_to_string(&artifacts.json).expect("result json should exist");
@@ -909,7 +909,7 @@ fn run_with_runner_includes_fixture_visible_text_snapshot() {
     let result = plan
         .run_with(
             &mut runner,
-            GuiRunOptions::with_timeout(Duration::from_secs(1)),
+            GuiRunOptions::with_timeout(Duration::from_secs(5)),
         )
         .expect("runner result should be written");
     let manifest = std::fs::read_to_string(&artifacts.json).expect("result json should exist");
@@ -955,7 +955,7 @@ fn run_with_runner_records_frame_snapshot_artifacts() {
     let result = plan
         .run_with(
             &mut runner,
-            GuiRunOptions::with_timeout(Duration::from_secs(1)),
+            GuiRunOptions::with_timeout(Duration::from_secs(5)),
         )
         .expect("runner result should be written");
     let manifest = std::fs::read_to_string(&artifacts.json).expect("result json should exist");

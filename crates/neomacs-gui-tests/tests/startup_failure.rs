@@ -123,7 +123,6 @@ fn check_pending_gpu(action: GpuStartupAction) {
     use std::{
         os::unix::fs::OpenOptionsExt,
         process::{Command, Stdio},
-        time::Instant,
     };
 
     let root = neomacs_infra::workspace_root();
@@ -250,15 +249,14 @@ fn check_pending_gpu(action: GpuStartupAction) {
         let tasks = PathBuf::from(format!("/proc/{}/task", child.id()));
         // Source-only debug runtimes can still be loading startup Lisp here.
         // The post-release keyboard deadline remains independently bounded.
-        let startup_budget = if matches!(
+        let deadline = if matches!(
             action,
             GpuStartupAction::KeyboardAndComplete | GpuStartupAction::ImageSizeWhilePending
         ) {
-            Duration::from_secs(45)
+            neomacs_gui_tests::HangCap::from_secs(45)
         } else {
-            Duration::from_secs(10)
+            neomacs_gui_tests::HangCap::from_secs(10)
         };
-        let deadline = Instant::now() + startup_budget;
         loop {
             // Unlike opening a FIFO writer, reading wchan cannot release the
             // loader's blocked open. This process has only our GPU FIFO.
@@ -272,7 +270,7 @@ fn check_pending_gpu(action: GpuStartupAction) {
             if waiting {
                 break;
             }
-            if Instant::now() >= deadline {
+            if deadline.is_expired() {
                 return Err("GPU manifest open was not observed in procfs".into());
             }
             if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
@@ -291,14 +289,14 @@ fn check_pending_gpu(action: GpuStartupAction) {
                     | GpuStartupAction::KeyboardAndComplete
                     | GpuStartupAction::ImageSizeWhilePending
             ) {
-                let deadline = Instant::now() + Duration::from_secs(25);
+                let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(25));
                 while !artifacts.join("lisp-ready").is_file() {
                     if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
                         return Err(format!(
                             "Lisp exited before its pending-GPU observation: {status}"
                         ));
                     }
-                    if Instant::now() >= deadline {
+                    if deadline.is_expired() {
                         return Err("Lisp did not reach its pending-GPU observation".into());
                     }
                     std::thread::sleep(Duration::from_millis(10));
@@ -307,7 +305,7 @@ fn check_pending_gpu(action: GpuStartupAction) {
             if matches!(action, GpuStartupAction::ImageSizeWhilePending) {
                 fs::write(artifacts.join("image-query-go"), b"query\n")
                     .map_err(|error| error.to_string())?;
-                let deadline = Instant::now() + Duration::from_secs(10);
+                let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
                 let observed = loop {
                     if let Ok(value) = fs::read_to_string(artifacts.join("image-result")) {
                         break value;
@@ -315,7 +313,7 @@ fn check_pending_gpu(action: GpuStartupAction) {
                     if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
                         return Err(format!("Lisp exited before image-size completed: {status}"));
                     }
-                    if Instant::now() >= deadline {
+                    if deadline.is_expired() {
                         return Err(if artifacts.join("image-result.entered").is_file() {
                             "public image-size entered but did not finish while GPU discovery was blocked"
                                 .into()
@@ -378,12 +376,11 @@ fn check_pending_gpu(action: GpuStartupAction) {
                     // Keep real driver discovery blocked while native dispatch can
                     // consume the key. Delivery may happen now or be replayed once
                     // the GPU is ready; the post-release fixture accepts either.
-                    let dispatch_deadline = Instant::now() + Duration::from_millis(500);
-                    while !artifacts.join("key-observed").is_file()
-                        && Instant::now() < dispatch_deadline
-                    {
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
+                    let _soak = neomacs_gui_tests::NegativeSoak::observe(
+                        Duration::from_secs(1),
+                        Duration::from_millis(10),
+                        || artifacts.join("key-observed").is_file(),
+                    );
                 }
                 let mut change = Command::new("xdotool");
                 match action {
@@ -431,7 +428,7 @@ fn check_pending_gpu(action: GpuStartupAction) {
             }
             // Keep this private X server alive until the process has exited.
             let _session = session;
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
             loop {
                 if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
                     return if status.success() {
@@ -440,13 +437,13 @@ fn check_pending_gpu(action: GpuStartupAction) {
                         Err(format!("native startup action exited with {status}"))
                     };
                 }
-                if Instant::now() >= deadline {
+                if deadline.is_expired() {
                     return Err("native startup action did not finish".into());
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(5));
         loop {
             if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
                 return if status.success() {
@@ -455,7 +452,7 @@ fn check_pending_gpu(action: GpuStartupAction) {
                     Ok(())
                 };
             }
-            if Instant::now() >= deadline {
+            if deadline.is_expired() {
                 return Err("display loss left native dispatch blocked in GPU discovery".into());
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -530,7 +527,7 @@ enum PendingFontAction {
 
 #[cfg(target_os = "linux")]
 fn run_with_pending_font(action: PendingFontAction) -> neomacs_gui_tests::GuiRunResult {
-    use std::{io::Write, os::unix::fs::OpenOptionsExt, process::Command, time::Instant};
+    use std::{io::Write, os::unix::fs::OpenOptionsExt, process::Command};
 
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join("target/neomacs-gui-tests");
@@ -587,7 +584,7 @@ fn run_with_pending_font(action: PendingFontAction) -> neomacs_gui_tests::GuiRun
         // A FIFO writer can open only after Fontconfig has opened its reader.
         // Holding it open without bytes keeps the real native file read pending;
         // no production delay, test flag, or startup-log timing is involved.
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
         let mut writer = loop {
             match fs::OpenOptions::new()
                 .write(true)
@@ -596,10 +593,7 @@ fn run_with_pending_font(action: PendingFontAction) -> neomacs_gui_tests::GuiRun
             {
                 Ok(writer) => break writer,
                 Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {
-                    assert!(
-                        Instant::now() < deadline,
-                        "Fontconfig never opened the FIFO"
-                    );
+                    assert!(!deadline.is_expired(), "Fontconfig never opened the FIFO");
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 Err(error) => panic!("opening font configuration FIFO: {error}"),

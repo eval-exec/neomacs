@@ -6,10 +6,7 @@ use std::{fs, time::Duration};
 #[test]
 fn idle_timer_fires_amid_ordinary_timers_and_subprocess_output() {
     let root = neomacs_infra::workspace_root();
-    let run_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let run_id = neomacs_tui_tests::unique_nonce();
     let artifacts = root.join(format!("tmp/idle-tui-{}-{run_id}", std::process::id()));
     let fixture = root.join("crates/neomacs-gui-tests/fixtures/idle-timer-output.el");
     let neo = std::env::var_os("NEOMACS_TUI_NEOMACS_BIN")

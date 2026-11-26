@@ -9,13 +9,21 @@ pub mod interaction;
 /// Account-free Telega frontend fixture: deterministic synthetic chats,
 /// locally generated avatars, and a `telega-server`-protocol mock process.
 pub mod telega_fixture;
+pub mod timing;
+#[cfg(test)]
+mod wall_clock_guard_test;
 use std::io;
 use std::io::Read;
+pub use timing::{
+    DiagnosticStopwatch, HangCap, MIN_HANG_CAP, MIN_NEGATIVE_SOAK, NegativeSoak,
+    NegativeSoakReceipt, StabilityHold, assert_present_receipt_has_monotonic_clock,
+    assert_projected_precedes_present, diagnostic_unix_ns_label, unique_nonce,
+};
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuiBackend {
@@ -753,12 +761,22 @@ impl CommandSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuiRunOptions {
-    pub timeout: Duration,
+    timeout: Duration,
 }
 
 impl GuiRunOptions {
+    #[track_caller]
     pub fn with_timeout(timeout: Duration) -> Self {
+        assert!(
+            timeout >= MIN_HANG_CAP,
+            "GuiRunOptions::with_timeout requires timeout >= {MIN_HANG_CAP:?}, got {timeout:?}; \
+             assert state or presentation receipts instead of a short wall-clock deadline"
+        );
         Self { timeout }
+    }
+
+    pub fn timeout(&self) -> Duration {
+        self.timeout
     }
 }
 
@@ -850,24 +868,26 @@ pub fn fresh_artifact_dir(path: impl AsRef<Path>) -> PathBuf {
 /// delivering input the child can block forever, and a bare `output()` would
 /// then hang the whole test until nextest's slow-timeout kills the run
 /// without saying why.  Kill the tool at the deadline and fail with its
-/// status and stderr instead.
+/// status and stderr instead. `deadline` is a hang cap and must be at least
+/// [`MIN_HANG_CAP`].
 #[must_use]
+#[track_caller]
 pub fn run_input_tool(
     mut command: std::process::Command,
     deadline: Duration,
 ) -> std::process::Output {
     use std::process::Stdio;
+    let cap = HangCap::new(deadline);
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn input tool");
-    let start = Instant::now();
     loop {
         if child.try_wait().expect("wait for input tool").is_some() {
             return child.wait_with_output().expect("collect input tool output");
         }
-        if start.elapsed() >= deadline {
+        if cap.is_expired() {
             let _ = child.kill();
             let output = child.wait_with_output().expect("collect input tool output");
             panic!(
@@ -920,12 +940,12 @@ impl GuiCommandRunner for ProcessGuiCommandRunner {
         let stdout_reader = thread::spawn(move || read_pipe(stdout));
         let stderr_reader = thread::spawn(move || read_pipe(stderr));
 
-        let start = Instant::now();
+        let cap = HangCap::new(options.timeout);
         let (exit_code, timed_out) = loop {
             if let Some(status) = child.try_wait()? {
                 break (status.code(), false);
             }
-            if start.elapsed() >= options.timeout {
+            if cap.is_expired() {
                 let _ = child.kill();
                 let status = child.wait()?;
                 break (status.code(), true);

@@ -942,7 +942,10 @@ fn visited_file_modtime_returns_cons_after_file_visit() {
         .write(true)
         .open(fixture.path())
         .expect("open timestamp fixture")
-        .set_modified(std::time::UNIX_EPOCH + Duration::new(1_700_000_000, 123_456_789))
+        .set_modified(neomacs_tui_tests::timing::fixed_file_mtime(
+            1_700_000_000,
+            123_456_789,
+        ))
         .expect("set timestamp fixture's nanosecond mtime");
     let (mut gnu, mut neo) = boot_pair("");
 

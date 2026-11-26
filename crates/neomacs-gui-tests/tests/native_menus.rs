@@ -15,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 #[path = "native_menus/interaction.rs"]
@@ -56,10 +56,7 @@ fn vanilla_menu_and_resize_preserve_glyph_pixels_like_gnu() {
     let artifacts = root.join(format!(
         "tmp/vanilla-menu-resize-gnu-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        neomacs_gui_tests::unique_nonce()
     ));
     fs::create_dir_all(&artifacts).unwrap();
     let display = neomacs_infra::display::start_local_xvfb_with_size(&artifacts, 1280, 800)
@@ -215,7 +212,7 @@ fn observe_vanilla_menu_resize(
         // wrong presentation. Keep sampling until the content extent matches
         // the requested native size, or the deadline expires.
         let (extent_x, extent_y, extent_width, extent_height) = {
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
             let mut attempt = 0;
             let mut last_extent = None;
             loop {
@@ -235,7 +232,7 @@ fn observe_vanilla_menu_resize(
                 last_extent = extent;
                 attempt += 1;
                 assert!(
-                    Instant::now() < deadline,
+                    !deadline.is_expired(),
                     "the {width}x{height} native window did not present editor content at the \
                      requested extent within 10s; last extent={last_extent:?}; attempts={attempt}; \
                      {artifacts:?}"
@@ -682,10 +679,7 @@ fn with_native_menu_at_scale(
     let artifacts = root.join(format!(
         "tmp/neomacs-gui-tests/native-menu-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        neomacs_gui_tests::unique_nonce()
     ));
     fs::create_dir_all(&artifacts).unwrap();
     eprintln!(
@@ -825,13 +819,13 @@ fn popup_requests(artifacts: &Path) -> usize {
         .count()
 }
 fn wait_for<T>(label: &str, artifacts: &Path, mut observe: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     loop {
         if let Some(value) = observe() {
             return value;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "timed out waiting for {label}; artifacts: {}",
             artifacts.display()
         );

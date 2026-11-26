@@ -211,34 +211,37 @@ fn interactive_switch_synchronous_shell_command_stays_responsive() {
 fn keyboard_quit_interrupts_blocking_sleep_for() {
     let mut neo = boot_neo("");
 
-    // Open the eval minibuffer and start a long blocking sleep.
+    // Open the eval minibuffer and start a long blocking sleep followed by a
+    // completion sentinel. Because the 60 s sleep exceeds the 15 s
+    // hang-avoidance cap, `Quit` can appear only if `C-g` interrupts `sleep-for`
+    // rather than letting it run to normal completion.
     neo.send_key("M-:");
     let prompt_ready = |grid: &[String]| grid.last().is_some_and(|row| row.contains("Eval:"));
     neo.read_until(Duration::from_secs(8), prompt_ready);
     neo.read(Duration::from_millis(300));
-    neo.send(b"(sleep-for 20)");
+    neo.paste(r#"(progn (sleep-for 60) (message "SLEEP-COMPLETED-WITHOUT-QUIT"))"#);
     neo.send_key("RET");
 
     // Let the command loop enter the blocking sleep, then fire C-g (\x07).
     neo.read(Duration::from_millis(500));
-    let start = std::time::Instant::now();
     neo.send(b"\x07");
 
-    // The quit must surface (echo area "Quit") WELL before the 20 s sleep would
-    // otherwise elapse.
+    // Hang-avoidance cap (15 s) while waiting for the `Quit` echo state.
     let quit_shown = |grid: &[String]| grid.iter().any(|row| row.contains("Quit"));
-    neo.read_until(Duration::from_secs(6), quit_shown);
-    let elapsed = start.elapsed();
+    neo.read_until(Duration::from_secs(15), quit_shown);
 
+    let grid = neo.text_grid();
     assert!(
-        quit_shown(&neo.text_grid()),
-        "C-g should interrupt (sleep-for 20) and echo `Quit` (took {elapsed:?}):\n{}",
-        neo.text_grid().join("\n")
+        quit_shown(&grid),
+        "C-g should interrupt (sleep-for 60) and echo `Quit` within 15s hang-avoidance cap:\n{}",
+        grid.join("\n")
     );
     assert!(
-        elapsed < Duration::from_secs(10),
-        "C-g should interrupt sleep-for promptly, not after the full 20 s \
-         (took {elapsed:?})"
+        !grid
+            .iter()
+            .any(|row| row.contains("SLEEP-COMPLETED-WITHOUT-QUIT")),
+        "sleep-for ran to normal completion instead of being interrupted by C-g:\n{}",
+        grid.join("\n")
     );
 
     // The command loop must be responsive again: an eval round-trips.
@@ -402,7 +405,6 @@ fn unbound_key_echoes_is_undefined() {
 fn single_keyboard_quit_echoes_quit_once_and_stays_responsive() {
     let (mut gnu, mut neo) = boot_pair("");
 
-    let start = std::time::Instant::now();
     send_both_raw(&mut gnu, &mut neo, b"\x07"); // a single C-g
 
     let quit_shown = |grid: &[String]| grid.iter().any(|row| row.contains("Quit"));
@@ -415,8 +417,7 @@ fn single_keyboard_quit_echoes_quit_once_and_stays_responsive() {
     );
     assert!(
         quit_shown(&neo.text_grid()),
-        "a single C-g should echo `Quit' (took {:?}):\n{}",
-        start.elapsed(),
+        "a single C-g should echo `Quit':\n{}",
         neo.text_grid().join("\n")
     );
 

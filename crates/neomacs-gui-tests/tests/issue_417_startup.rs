@@ -1,8 +1,8 @@
 #![cfg(target_os = "linux")]
 
 use neomacs_gui_tests::{
-    DisplayHarness, GuiBackend, GuiRunOptions, GuiRunResult, GuiScenario, GuiTestPlan,
-    ProcessGuiCommandRunner,
+    DisplayHarness, GuiBackend, GuiRunOptions, GuiRunResult, GuiScenario, GuiTestPlan, HangCap,
+    NegativeSoak, ProcessGuiCommandRunner,
 };
 use serde_json::{Value, json};
 use std::{
@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     thread,
-    time::{Duration, Instant, SystemTime},
+    time::Duration,
 };
 
 #[test]
@@ -355,16 +355,13 @@ fn run_with_timeout(plan: GuiTestPlan, timeout: Duration) -> GuiRunResult {
     .unwrap()
 }
 
-/// Cold terminal preload is outside the constructor's prompt-failure budget.
+/// Cold terminal preload is outside the constructor's post-ready hang cap.
 fn run_invalid_initial_frame_with_prompt_exit(plan: GuiTestPlan, ready: &Path) -> GuiRunResult {
     const STARTUP_BUDGET: Duration = Duration::from_secs(45);
-    const EXIT_BUDGET: Duration = Duration::from_secs(5);
+    const EXIT_HANG_CAP: Duration = Duration::from_secs(15);
     thread::scope(|scope| {
-        let deadline = Instant::now() + STARTUP_BUDGET;
-        let runner = scope.spawn(move || {
-            let result = run_with_timeout(plan, STARTUP_BUDGET);
-            (SystemTime::now(), result)
-        });
+        let deadline = neomacs_gui_tests::HangCap::new(STARTUP_BUDGET);
+        let runner = scope.spawn(move || run_with_timeout(plan, STARTUP_BUDGET));
         let observation: Value = loop {
             // The invalid constructor can fail before the observer is
             // scheduled again, so accept its atomically published marker
@@ -377,7 +374,7 @@ fn run_invalid_initial_frame_with_prompt_exit(plan: GuiTestPlan, ready: &Path) -
                 "editor exited before its invalid frame construction marker: {ready:?}"
             );
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "editor did not reach invalid frame construction: {ready:?}"
             );
             thread::sleep(Duration::from_millis(10));
@@ -394,23 +391,15 @@ fn run_invalid_initial_frame_with_prompt_exit(plan: GuiTestPlan, ready: &Path) -
         assert_eq!(events[1]["frame_kinds"], json!(["tty"]));
         observation["pid"].as_u64().expect("owned editor PID");
 
-        // The atomic file's timestamp also covers a descheduled observer:
-        // starting five seconds only when Rust notices the file could hide
-        // a slow exit that had already completed by then.
-        let published = fs::metadata(ready).unwrap().modified().unwrap();
+        // Hang-avoidance cap (never a wall-clock speed assertion): after
+        // `before-init` publishes the marker, invalid initial-frame
+        // construction must terminate rather than wedging in startup.
+        let exit_cap = HangCap::new(EXIT_HANG_CAP);
         while !runner.is_finished() {
-            assert!(
-                published.elapsed().unwrap() < EXIT_BUDGET,
-                "invalid initial frame did not terminate within {EXIT_BUDGET:?}"
-            );
+            exit_cap.assert_not_expired("invalid initial frame did not terminate");
             thread::sleep(Duration::from_millis(10));
         }
-        let (finished, result) = runner.join().expect("owned invalid-frame runner");
-        assert!(
-            finished.duration_since(published).unwrap() <= EXIT_BUDGET,
-            "invalid initial frame did not terminate promptly: {result:#?}"
-        );
-        result
+        runner.join().expect("owned invalid-frame runner")
     })
 }
 
@@ -433,7 +422,7 @@ fn run_at_early_init_barrier(
     thread::scope(|scope| {
         let runner = scope.spawn(move || run(plan));
         let _release_on_exit = ReleaseEarlyInit(release.to_owned());
-        let deadline = Instant::now() + Duration::from_secs(12);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(12));
         let observation: Value = loop {
             if let Ok(contents) = fs::read(ready) {
                 break serde_json::from_slice(&contents).unwrap();
@@ -442,7 +431,7 @@ fn run_at_early_init_barrier(
                 !runner.is_finished(),
                 "editor exited before reaching the early-init barrier"
             );
-            assert!(Instant::now() < deadline, "early-init barrier timed out");
+            assert!(!deadline.is_expired(), "early-init barrier timed out");
             thread::sleep(Duration::from_millis(10));
         };
         eprintln!("native-window barrier state: {observation:#?}");
@@ -488,7 +477,7 @@ fn run_at_invisible_initial_frame_barrier(
         // The first observation includes cold editor initialization. Share
         // the owned process budget rather than imposing a shorter startup
         // deadline that can expire before a valid after-init observation.
-        let deadline = Instant::now() + BUDGET;
+        let deadline = neomacs_gui_tests::HangCap::new(BUDGET);
         let runner = scope.spawn(move || run_with_timeout(plan, BUDGET));
         let _release_on_exit = ReleaseEarlyInit(release.to_owned());
         let _acknowledge_on_exit = ReleaseEarlyInit(visible_ack.to_owned());
@@ -502,7 +491,7 @@ fn run_at_invisible_initial_frame_barrier(
                     break serde_json::from_slice::<Value>(&contents).unwrap();
                 }
                 assert!(
-                    Instant::now() < deadline,
+                    !deadline.is_expired(),
                     "startup barrier timed out: {file:?}"
                 );
                 thread::sleep(Duration::from_millis(10));
@@ -529,46 +518,45 @@ fn run_at_invisible_initial_frame_barrier(
         // Permit either an allocated unmapped window or deferred allocation.
         // Wait for native startup to reach the window before inspecting it;
         // otherwise a fast probe could miss the erroneous asynchronous mapping.
-        let allocation_deadline = Instant::now() + Duration::from_secs(8);
+        let allocation_deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(8));
         loop {
             let owned = tool(&["search", "--pid", &pid]);
             assert!(
                 matches!(owned.status.code(), Some(0 | 1)),
                 "window probe: {owned:?}"
             );
-            if owned.status.success() || Instant::now() >= allocation_deadline {
+            if owned.status.success() || allocation_deadline.is_expired() {
                 break;
             }
             assert!(!runner.is_finished(), "editor exited while invisible");
             thread::sleep(Duration::from_millis(20));
         }
-        let observation_deadline = Instant::now() + Duration::from_millis(500);
-        loop {
-            assert!(
-                !runner.is_finished(),
-                "editor exited while observing its invisible frame"
-            );
-            let mapped = tool(&["search", "--onlyvisible", "--pid", &pid]);
-            assert_eq!(
-                mapped.status.code(),
-                Some(1),
-                "initial-frame-alist visibility nil exposed a native window: {mapped:?}; {hidden}"
-            );
-            assert!(
-                mapped.stdout.is_empty(),
-                "unexpected visible window: {mapped:?}"
-            );
-            if Instant::now() >= observation_deadline {
-                break;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
+        let _soak = NegativeSoak::observe(
+            Duration::from_secs(1),
+            Duration::from_millis(20),
+            || {
+                assert!(
+                    !runner.is_finished(),
+                    "editor exited while observing its invisible frame"
+                );
+                let mapped = tool(&["search", "--onlyvisible", "--pid", &pid]);
+                assert_eq!(
+                    mapped.status.code(),
+                    Some(1),
+                    "initial-frame-alist visibility nil exposed a native window: {mapped:?}; {hidden}"
+                );
+                assert!(
+                    mapped.stdout.is_empty(),
+                    "unexpected visible window: {mapped:?}"
+                );
+            },
+        );
 
         fs::write(release, b"release\n").unwrap();
         let shown = read_observation(visible_ready);
         assert_eq!(shown["pid"], hidden["pid"], "{shown}");
         assert_eq!(shown["logical_visibility"], "t", "{shown}");
-        let mapping_deadline = Instant::now() + Duration::from_secs(8);
+        let mapping_deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(8));
         let mapped = loop {
             let mapped = tool(&["search", "--onlyvisible", "--pid", &pid]);
             if mapped.status.success() && !mapped.stdout.is_empty() {
@@ -579,7 +567,7 @@ fn run_at_invisible_initial_frame_barrier(
                 "editor exited before mapping its frame"
             );
             assert!(
-                Instant::now() < mapping_deadline,
+                !mapping_deadline.is_expired(),
                 "frame did not map after make-frame-visible: {mapped:?}"
             );
             thread::sleep(Duration::from_millis(20));

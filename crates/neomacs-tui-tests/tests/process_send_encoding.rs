@@ -6,10 +6,7 @@ use std::{fs, time::Duration};
 #[test]
 fn japanese_process_string_and_region_sends_match_gnu_bytes() {
     let root = neomacs_infra::workspace_root();
-    let run_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let run_id = neomacs_tui_tests::unique_nonce();
     let artifacts = root.join(format!(
         "tmp/process-encoding-tui-{}-{run_id}",
         std::process::id()

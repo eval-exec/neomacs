@@ -2,13 +2,14 @@
 //! This exercises the shared PixelDelta path, not AppKit's event generation.
 #![cfg(target_os = "linux")]
 
+use neomacs_gui_tests::HangCap;
 use serde_json::Value;
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{Child, Command},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 #[path = "native_scrolling/continuous.rs"]
 mod continuous;
@@ -28,7 +29,7 @@ fn state(path: &Path, after: u64) -> Value {
 }
 
 fn state_with_timeout(path: &Path, after: u64, timeout: Duration) -> Value {
-    let deadline = Instant::now() + timeout;
+    let deadline = neomacs_gui_tests::HangCap::new(timeout);
     loop {
         if let Ok(bytes) = fs::read(path)
             && let Ok(value) = serde_json::from_slice::<Value>(&bytes)
@@ -38,13 +39,13 @@ fn state_with_timeout(path: &Path, after: u64, timeout: Duration) -> Value {
         {
             return value;
         }
-        assert!(Instant::now() < deadline, "no fresh state: {path:?}");
+        assert!(!deadline.is_expired(), "no fresh state: {path:?}");
         thread::sleep(Duration::from_millis(20));
     }
 }
 
 fn state_after_input(path: &Path, after: u64, counter: &str, expected: f64) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     let mut sample = after;
     loop {
         let value = state(path, sample);
@@ -52,7 +53,7 @@ fn state_after_input(path: &Path, after: u64, counter: &str, expected: f64) -> V
             return value;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "scroll input not completed: {value}"
         );
         sample = value["sample"].as_u64().unwrap();
@@ -63,13 +64,13 @@ fn readback(path: &Path) -> image::DynamicImage {
     // The running renderer rewrites its diagnostic PNG on each frame. A
     // timer sample does not synchronize file publication: wait for a complete
     // PNG instead of treating a concurrent write as a rendering failure.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     loop {
         match image::open(path) {
             Ok(image) => return image,
             Err(error) => {
                 assert!(
-                    Instant::now() < deadline,
+                    !deadline.is_expired(),
                     "no complete GUI readback at {path:?}: {error}"
                 );
                 thread::sleep(Duration::from_millis(20));
@@ -462,13 +463,13 @@ focus_follows_mouse yes
         let _focused =
             crate::wayland_readiness::wait_for_focused_child(Path::new(&runtime), &artifacts);
         if !timing_only {
-            let focus_deadline = Instant::now() + Duration::from_secs(10);
+            let focus_deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
             while !fs::read_to_string(artifacts.join("neomacs.log"))
                 .unwrap_or_default()
                 .contains("WindowFocus { focused: true")
             {
                 assert!(
-                    Instant::now() < focus_deadline,
+                    !focus_deadline.is_expired(),
                     "editor did not receive keyboard focus after virtual keyboard attached: {artifacts:?}"
                 );
                 thread::sleep(Duration::from_millis(20));
@@ -501,7 +502,7 @@ focus_follows_mouse yes
             !timing_only,
             "stall proof requires pixel and presentation evidence"
         );
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
         let has_certified_coverage = |log: &str| {
             log.lines().any(|line| {
                 let auxiliary_ok = line.contains("installed auxiliary compositor coverage")
@@ -516,13 +517,13 @@ focus_follows_mouse yes
             &fs::read_to_string(artifacts.join("neomacs.log")).unwrap_or_default(),
         ) {
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "no certified prediction policy: {artifacts:?}"
             );
             thread::sleep(Duration::from_millis(20));
         }
         let before = text_pixels(&readback(&pixels_path));
-        let sent = Instant::now();
+        let projection_cap = HangCap::from_secs(10);
         fs::write(&stall_path, b"hold").unwrap();
         if resolved {
             match kind {
@@ -541,7 +542,7 @@ focus_follows_mouse yes
         }
         while !stall_path.with_extension("stalled").exists() {
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "evaluator did not enter stall: {artifacts:?}"
             );
             thread::sleep(Duration::from_millis(10));
@@ -592,10 +593,9 @@ focus_follows_mouse yes
             // evaluator is held frozen in `(while (file-exists-p gate))` until
             // this test removes `stall_path` below, and the frozen-state check
             // after the loop rejects any premature resume.
-            assert!(
-                sent.elapsed() < Duration::from_secs(10),
-                "hang-avoidance cap (10s) expired: no projected pixels with native presentation while evaluator is stalled: {artifacts:?}"
-            );
+            projection_cap.assert_not_expired(format!(
+                "no projected pixels with native presentation while evaluator is stalled: {artifacts:?}"
+            ));
             thread::sleep(Duration::from_millis(10));
         }
         if !resolved {
@@ -617,7 +617,7 @@ focus_follows_mouse yes
         fs::write(
             artifacts.join("stalled-projection-proof.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
-                "observed_projection_ms": sent.elapsed().as_secs_f64() * 1000.0,
+                "observed_projection": projection_cap.diagnostic_elapsed_label(),
                 "confirmed_native_feedback": true,
             "projected_submission": projected_submission(),
             "confirmed_submission": confirmed_submission(),
@@ -639,7 +639,10 @@ focus_follows_mouse yes
             previous[counter].as_f64().unwrap() + count,
         );
         assert!(position(&completed) > position(&previous));
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // 10 s is a hang-avoidance cap while waiting for the already-completed
+        // input's projected-latency receipt to flush; exact submission equality
+        // and strict causal ordering (`projected < present`) cannot self-heal.
+        let latency_cap = HangCap::from_secs(10);
         loop {
             let samples: Vec<Value> = fs::read_to_string(&latency_path)
                 .unwrap_or_default()
@@ -654,9 +657,9 @@ focus_follows_mouse yes
                     sample["projected_submission"].as_u64(),
                     projected_submission()
                 );
-                assert!(
-                    sample["input_to_projected_present_ns"].as_u64().unwrap()
-                        < sample["input_to_present_ns"].as_u64().unwrap()
+                neomacs_gui_tests::assert_projected_precedes_present(
+                    sample,
+                    format!("{artifacts:?}"),
                 );
                 fs::write(
                     artifacts.join("stalled-latency-proof.json"),
@@ -665,10 +668,9 @@ focus_follows_mouse yes
                 .unwrap();
                 break;
             }
-            assert!(
-                Instant::now() < deadline,
+            latency_cap.assert_not_expired(format!(
                 "no exact-submission projected latency: {artifacts:?}"
-            );
+            ));
             thread::sleep(Duration::from_millis(10));
         }
         return;
@@ -854,7 +856,7 @@ focus_follows_mouse yes
             );
         }
     }
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     let samples = loop {
         let samples: Vec<Value> = fs::read_to_string(&latency_path)
             .unwrap_or_default()
@@ -872,7 +874,7 @@ focus_follows_mouse yes
             break samples;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "missing causal presentation receipts: {samples:?}; {artifacts:?}"
         );
         thread::sleep(Duration::from_millis(20));
@@ -884,10 +886,7 @@ focus_follows_mouse yes
     };
     for sample in &samples {
         assert_eq!(sample["kind"], expected_kind);
-        assert!(
-            sample["input_to_present_ns"].as_u64().is_some(),
-            "clock mismatch: {sample}"
-        );
+        neomacs_gui_tests::assert_present_receipt_has_monotonic_clock(sample, format!("{sample}"));
         assert!(sample["presentation"].as_u64().unwrap() > 0);
         assert_eq!(sample["evicted_inputs"], 0);
     }

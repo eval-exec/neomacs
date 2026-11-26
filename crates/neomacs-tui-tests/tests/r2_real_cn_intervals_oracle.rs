@@ -13,7 +13,7 @@ use crate::support::{
 };
 use neomacs_tui_tests::TuiSession;
 use std::fs;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const KEYS: usize = 64;
 const FIXTURE: &str = r#";;; -*- lexical-binding: t -*-
@@ -185,10 +185,10 @@ fn wait_pair(
     label: &str,
     ready: impl Fn(&TuiSession) -> bool,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(20));
     while !ready(gnu) || !ready(neo) {
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "{label} timeout\nGNU:\n{}\nNeo:\n{}",
             gnu.text_grid().join("\n"),
             neo.text_grid().join("\n")

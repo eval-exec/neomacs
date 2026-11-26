@@ -1,6 +1,6 @@
 use std::fs;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use expect_test::{expect, expect_file};
 
@@ -378,7 +378,7 @@ fn helm_gitignore_public_workflows_match_gnu() {
         edit_and_write_gitignore(&mut pair.neo, &neo_save_path);
     }
     let saved_relative = ".gitignore";
-    let deadline = Instant::now() + STAGE_TIMEOUT;
+    let deadline = stage_hang_cap();
     let gnu_file = loop {
         pair.gnu.read(Duration::from_millis(10));
         if let Ok(text) = fs::read_to_string(pair.gnu.home_dir().join(saved_relative))
@@ -387,13 +387,13 @@ fn helm_gitignore_public_workflows_match_gnu() {
             break text;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "GNU did not save the edited .gitignore"
         );
         thread::yield_now();
     };
     let neo_file = if neo_generated {
-        let deadline = Instant::now() + STAGE_TIMEOUT;
+        let deadline = stage_hang_cap();
         loop {
             pair.neo.read(Duration::from_millis(10));
             if let Ok(text) = fs::read_to_string(pair.neo.home_dir().join(saved_relative))
@@ -401,7 +401,7 @@ fn helm_gitignore_public_workflows_match_gnu() {
             {
                 break Some(text);
             }
-            if Instant::now() >= deadline {
+            if deadline.is_expired() {
                 divergences.push("Neomacs did not save the edited .gitignore".to_string());
                 break None;
             }

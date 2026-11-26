@@ -10,7 +10,7 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 struct Editor(Child);
@@ -35,10 +35,7 @@ impl CloseFixture {
         let artifacts = root.join(format!(
             "tmp/neomacs-gui-tests/close-{mode}-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            neomacs_gui_tests::unique_nonce()
         ));
         fs::create_dir_all(&artifacts).unwrap();
         let display = neomacs_infra::display::start_sway(&artifacts, "output * resolution 1000x700\nxwayland disable\nseat seat0 fallback true\ndefault_border none\n").expect("install sway");
@@ -190,7 +187,7 @@ impl CloseFixture {
 }
 
 fn wait<T>(label: &str, artifacts: &std::path::Path, mut observe: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     loop {
         let log = fs::read_to_string(artifacts.join("neomacs.log")).unwrap_or_default();
         assert!(
@@ -207,7 +204,7 @@ fn wait<T>(label: &str, artifacts: &std::path::Path, mut observe: impl FnMut() -
             return value;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "timed out waiting for {label}; artifacts: {}",
             artifacts.display()
         );

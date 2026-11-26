@@ -15,7 +15,7 @@
 
 use neomacs_tui_tests::{TuiLaunch, TuiProcessOutcome, TuiSession, TuiTerminalConfig};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const JOB_CONTROL_HELPER: &str = r#"import os, resource, signal, sys, time
 signal.signal(signal.SIGTTOU, signal.SIG_IGN)
@@ -131,14 +131,25 @@ const ABORT_PROBE: &str = r#";;; -*- lexical-binding: nil; -*-
 "#;
 
 fn wait_for_file(path: &Path, session: &mut TuiSession, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
+    let cap = neomacs_tui_tests::HangCap::new(timeout);
     while !path.exists() {
-        if Instant::now() >= deadline {
+        if cap.is_expired() {
             return false;
         }
         session.read(Duration::from_millis(20));
     }
     true
+}
+
+fn assert_file_absent_during_soak(path: &Path, session: &mut TuiSession, context: &str) {
+    let _soak = neomacs_tui_tests::NegativeSoak::observe(
+        Duration::from_secs(1),
+        Duration::from_millis(20),
+        || {
+            session.read(Duration::from_millis(20));
+            assert!(!path.exists(), "{context}");
+        },
+    );
 }
 
 fn spawn_job_controlled_editor(
@@ -224,9 +235,10 @@ fn run_continue_case(program: &Path, name: &str) -> ContinueObservation {
     // 1st C-g under inhibit-quit sets quit-flag = t without stopping the process.
     session.clear_recent_output();
     session.send(b"\x07");
-    assert!(
-        !wait_for_file(&stopped, &mut session, Duration::from_millis(250)),
-        "{name} must not stop on the 1st C-g"
+    assert_file_absent_during_soak(
+        &stopped,
+        &mut session,
+        &format!("{name} must not stop on the 1st C-g"),
     );
 
     // 2nd C-g while quit-flag is non-nil triggers emergency escape and SIGTSTP.
@@ -363,9 +375,10 @@ fn run_abort_case(program: &Path, name: &str) -> AbortObservation {
 
     session.clear_recent_output();
     session.send(b"\x07");
-    assert!(
-        !wait_for_file(&stopped, &mut session, Duration::from_millis(250)),
-        "{name} must not stop on the 1st C-g"
+    assert_file_absent_during_soak(
+        &stopped,
+        &mut session,
+        &format!("{name} must not stop on the 1st C-g"),
     );
 
     session.send(b"\x07");
@@ -541,9 +554,10 @@ fn run_mode_strings_case(program: &Path, name: &str) -> ModeStringsObservation {
 
     session.clear_recent_output();
     session.send(b"\x07");
-    assert!(
-        !wait_for_file(&stopped, &mut session, Duration::from_millis(250)),
-        "{name} must not stop on the 1st C-g"
+    assert_file_absent_during_soak(
+        &stopped,
+        &mut session,
+        &format!("{name} must not stop on the 1st C-g"),
     );
 
     session.send(b"\x07");

@@ -11,7 +11,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 const MONO: &str = "DejaVu Sans Mono";
@@ -39,10 +39,7 @@ fn default_family_fallback_realization_and_height_remap_match_attested_gnu() {
     let dir = root.join(format!(
         "tmp/neomacs-gui-tests/font-family-fallback-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        neomacs_gui_tests::unique_nonce()
     ));
     fs::create_dir_all(&dir).unwrap();
     attest(&root, &dir, &gnu);

@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Output},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 struct OwnedHelper(Child);
@@ -178,9 +178,9 @@ fn run_case(
 fn drive(case: &CursorCase<'_>, state_file: &Path, readback: &Path) {
     let dir = &case.dir;
     let ready = state_file.with_extension("json.ready");
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(15));
     while !ready.exists() {
-        assert!(Instant::now() < deadline, "fixture not ready: {dir:?}");
+        assert!(!deadline.is_expired(), "fixture not ready: {dir:?}");
         thread::sleep(Duration::from_millis(20));
     }
     send_input(case, &ready);
@@ -191,7 +191,7 @@ fn drive(case: &CursorCase<'_>, state_file: &Path, readback: &Path) {
     // cursor geometry/pixels. The 10 s cap is hang-avoidance only (not a
     // latency assertion): the fixture writes state.json once on the command
     // and exits, so a missing state/readback cannot self-heal under a wider cap.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     loop {
         let state_ready = fs::read(state_file)
             .ok()
@@ -204,7 +204,7 @@ fn drive(case: &CursorCase<'_>, state_file: &Path, readback: &Path) {
             break;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "cursor observation/readback missing within 10s hang-avoidance cap: {dir:?}"
         );
         thread::sleep(Duration::from_millis(10));

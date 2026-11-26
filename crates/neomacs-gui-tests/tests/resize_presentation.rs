@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use neomacs_gui_tests::{DisplayHarness, GuiArtifactSet, GuiBackend};
+use neomacs_gui_tests::{DisplayHarness, GuiArtifactSet, GuiBackend, HangCap};
 
 #[test]
 fn real_gui_resize_does_not_ghost_the_previous_presentation() {
@@ -320,7 +320,7 @@ fn require_tool(program: &str) {
 }
 
 fn wait_for_x11_window(pid: u32, display_env: &[(String, String)], timeout: Duration) -> String {
-    let started = Instant::now();
+    let cap = HangCap::new(timeout);
     loop {
         let output = Command::new("xdotool")
             .args(["search", "--onlyvisible", "--pid", &pid.to_string()])
@@ -334,24 +334,20 @@ fn wait_for_x11_window(pid: u32, display_env: &[(String, String)], timeout: Dura
         {
             return window.to_string();
         }
-        assert!(
-            started.elapsed() < timeout,
-            "Neomacs PID {pid} did not create an X11 window within {timeout:?}"
-        );
+        cap.assert_not_expired(format!("Neomacs PID {pid} did not create an X11 window"));
         thread::sleep(Duration::from_millis(20));
     }
 }
 
 fn wait_for_log(path: &Path, needle: &str, timeout: Duration) {
-    let started = Instant::now();
+    let cap = HangCap::new(timeout);
     loop {
         let contents = std::fs::read_to_string(path).unwrap_or_default();
         if contents.contains(needle) {
             return;
         }
-        assert!(
-            started.elapsed() < timeout,
-            "{} did not contain {needle:?} within {timeout:?}; tail:\n{}",
+        cap.assert_not_expired(format!(
+            "{} did not contain {needle:?}; tail:\n{}",
             path.display(),
             contents
                 .lines()
@@ -359,19 +355,15 @@ fn wait_for_log(path: &Path, needle: &str, timeout: Duration) {
                 .take(30)
                 .collect::<Vec<_>>()
                 .join("\n")
-        );
+        ));
         thread::sleep(Duration::from_millis(10));
     }
 }
 
 fn wait_for_path(path: &Path, timeout: Duration) {
-    let started = Instant::now();
+    let cap = HangCap::new(timeout);
     while !path.exists() {
-        assert!(
-            started.elapsed() < timeout,
-            "{} was not created within {timeout:?}",
-            path.display()
-        );
+        cap.assert_not_expired(format!("{} was not created", path.display()));
         thread::sleep(Duration::from_millis(10));
     }
 }
@@ -409,7 +401,7 @@ fn wait_for_red_mode_line(
     output_path: &Path,
     timeout: Duration,
 ) -> (image::RgbaImage, Vec<u32>) {
-    let started = Instant::now();
+    let cap = HangCap::new(timeout);
     loop {
         capture_x11_window(display_env, window, output_path);
         let image = image::open(output_path)
@@ -419,11 +411,10 @@ fn wait_for_red_mode_line(
         if !rows.is_empty() {
             return (image, rows);
         }
-        assert!(
-            started.elapsed() < timeout,
-            "fixture did not visibly present its saturated red mode line in {} within {timeout:?}",
+        cap.assert_not_expired(format!(
+            "fixture did not visibly present its saturated red mode line in {}",
             output_path.display()
-        );
+        ));
         thread::sleep(Duration::from_millis(20));
     }
 }
@@ -447,7 +438,7 @@ fn wait_for_resized_mode_line(
     bottom_inset: u32,
     timeout: Duration,
 ) {
-    let started = Instant::now();
+    let cap = HangCap::new(timeout);
     loop {
         capture_x11_window(display_env, window, output_path);
         let image = image::open(output_path)
@@ -464,16 +455,15 @@ fn wait_for_resized_mode_line(
         if wide_red_row {
             return;
         }
-        assert!(
-            started.elapsed() < timeout,
-            "hang-avoidance cap ({timeout:?}) expired: content did not resize without keyboard or mouse input: \
+        cap.assert_not_expired(format!(
+            "content did not resize without keyboard or mouse input: \
              expected mode line at y={expected_row} spanning width {}, \
              actual image {:?}, red rows {:?}; capture={}",
             size.0,
             image.dimensions(),
             red_tinted_rows(&image),
             output_path.display(),
-        );
+        ));
         thread::sleep(Duration::from_millis(20));
     }
 }

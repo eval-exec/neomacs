@@ -1,7 +1,7 @@
 #![cfg(unix)]
 //! Exercise the real Unix PTY readers while Lisp is executing, without timing assertions.
 
-use neomacs_tui_tests::{TuiProcessOutcome, TuiSession, write_all_nonblocking_pty};
+use neomacs_tui_tests::{HangCap, TuiProcessOutcome, TuiSession, write_all_nonblocking_pty_within};
 use std::ffi::CStr;
 use std::fs::File;
 use std::io::Read;
@@ -9,7 +9,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const DEADLOCK_CAP: Duration = Duration::from_secs(30);
 const READ_SLICE: Duration = Duration::from_millis(50);
@@ -91,14 +91,15 @@ fn wait_primary_marker(
     marker: &[u8],
     mut auxiliary: Option<&mut AuxiliaryTty>,
 ) {
-    let deadline = Instant::now() + DEADLOCK_CAP;
+    let deadline = neomacs_tui_tests::HangCap::new(DEADLOCK_CAP);
     while occurrences(editor.recent_output(), marker) == 0 {
         if let Some(tty) = auxiliary.as_deref_mut() {
             tty.drain_output();
         }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(!remaining.is_zero(), "missing raw TTY marker {marker:?}");
-        editor.read(remaining.min(READ_SLICE));
+        let Some(slice) = deadline.poll_slice(READ_SLICE) else {
+            panic!("missing raw TTY marker {marker:?}");
+        };
+        editor.read(slice);
     }
 }
 
@@ -311,7 +312,7 @@ impl AuxiliaryTty {
     }
 
     fn send(&mut self, bytes: &[u8]) {
-        write_all_nonblocking_pty(&mut self.master, bytes, Instant::now() + DEADLOCK_CAP)
+        write_all_nonblocking_pty_within(&mut self.master, bytes, HangCap::new(DEADLOCK_CAP))
             .expect("write auxiliary key bytes");
     }
 }
@@ -371,15 +372,13 @@ fn auxiliary_input_survives_busy_primary() {
         ),
     );
     wait_primary_marker(&mut editor, SETUP_READY, Some(&mut auxiliary));
-    let deadline = Instant::now() + DEADLOCK_CAP;
+    let deadline = neomacs_tui_tests::HangCap::new(DEADLOCK_CAP);
     while occurrences(&auxiliary.output, AUX_READY) == 0 {
         auxiliary.drain_output();
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(
-            !remaining.is_zero(),
-            "auxiliary terminal did not become ready"
-        );
-        editor.read(remaining.min(READ_SLICE));
+        let Some(slice) = deadline.poll_slice(READ_SLICE) else {
+            panic!("auxiliary terminal did not become ready");
+        };
+        editor.read(slice);
     }
     editor.clear_recent_output();
     editor.send(b"\x03b");
@@ -422,15 +421,13 @@ fn auxiliary_frame_draws_past_its_opening_width_after_resize() {
         ),
     );
     wait_primary_marker(&mut editor, SETUP_READY, Some(&mut auxiliary));
-    let deadline = Instant::now() + DEADLOCK_CAP;
+    let deadline = neomacs_tui_tests::HangCap::new(DEADLOCK_CAP);
     while occurrences(&auxiliary.output, AUX_READY) == 0 {
         auxiliary.drain_output();
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(
-            !remaining.is_zero(),
-            "auxiliary terminal did not become ready"
-        );
-        editor.read(remaining.min(READ_SLICE));
+        let Some(slice) = deadline.poll_slice(READ_SLICE) else {
+            panic!("auxiliary terminal did not become ready");
+        };
+        editor.read(slice);
     }
 
     // Opened at 80x24. The input reader observes the new size before it reads
@@ -440,15 +437,13 @@ fn auxiliary_frame_draws_past_its_opening_width_after_resize() {
     auxiliary.send(b"\x03w");
     wait_primary_marker(&mut editor, AUX_RESIZED, Some(&mut auxiliary));
     // A grid left at 80 columns clips the marker at column 100 on every redraw.
-    let deadline = Instant::now() + DEADLOCK_CAP;
+    let deadline = neomacs_tui_tests::HangCap::new(DEADLOCK_CAP);
     while occurrences(&auxiliary.output, PAST_OLD_EDGE) == 0 {
         auxiliary.drain_output();
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(
-            !remaining.is_zero(),
-            "auxiliary frame never drew past its opening width"
-        );
-        editor.read(remaining.min(READ_SLICE));
+        let Some(slice) = deadline.poll_slice(READ_SLICE) else {
+            panic!("auxiliary frame never drew past its opening width");
+        };
+        editor.read(slice);
     }
     finish(editor);
 }

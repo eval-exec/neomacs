@@ -4,12 +4,7 @@ use neomacs_gui_tests::{
     DisplayHarness, GuiArtifactSet, GuiBackend, GuiRunOptions, GuiRunStatus, GuiScenario,
     GuiTestPlan, ProcessGuiCommandRunner,
 };
-use std::{
-    fs,
-    process::Command,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{fs, process::Command, thread, time::Duration};
 
 #[test]
 fn compiled_file_decoding_survives_native_input_and_presents_success() {
@@ -22,10 +17,7 @@ fn compiled_file_decoding_survives_native_input_and_presents_success() {
         return;
     }
     let root = super::workspace_root();
-    let run_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let run_id = neomacs_gui_tests::unique_nonce();
     let control = root.join(format!(
         "tmp/neomacs-gui-tests/encoded-file-{}-{run_id}",
         std::process::id()
@@ -66,10 +58,10 @@ fn compiled_file_decoding_survives_native_input_and_presents_success() {
                 GuiRunOptions::with_timeout(Duration::from_secs(40)),
             )
         });
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(30));
         let mut sent = false;
         let mut presentation = Err("compiled-file checks did not reach presentation".to_owned());
-        while !run.is_finished() && Instant::now() < deadline {
+        while !run.is_finished() && !deadline.is_expired() {
             if control.join("ready").exists() && !sent {
                 // Lisp frame-title-format need not be the native window title.
                 // The ready marker identifies the process that finished loading.

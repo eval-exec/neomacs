@@ -9,7 +9,7 @@ use neomacs_gui_tests::{
 use std::{
     path::{Path, PathBuf},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 #[test]
@@ -28,10 +28,7 @@ fn compare(backend: GuiBackend) {
         "tmp/issue398/gui-{}-{}-{}",
         backend.slug(),
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        neomacs_gui_tests::unique_nonce()
     ));
     std::fs::create_dir_all(&artifacts).unwrap();
     let fixture = root.join("crates/neomacs-gui-tests/fixtures/extended-keysyms.el");
@@ -156,14 +153,14 @@ fn inject_after_ready(
     ready: PathBuf,
 ) -> thread::JoinHandle<Result<(), String>> {
     thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(25);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(25));
         let pid = loop {
             if let Ok(pid) = std::fs::read_to_string(&ready)
                 && let Ok(pid) = pid.trim().parse::<u32>()
             {
                 break pid.to_string();
             }
-            if Instant::now() >= deadline {
+            if deadline.is_expired() {
                 return Err(format!("fixture did not become ready: {}", ready.display()));
             }
             thread::sleep(Duration::from_millis(20));
@@ -178,7 +175,7 @@ fn inject_after_ready(
                     {
                         break window.to_owned();
                     }
-                    if Instant::now() >= deadline {
+                    if deadline.is_expired() {
                         return Err(format!(
                             "native X11 window for PID {pid} was not published; visible windows: {}",
                             visible_x11_windows(&env)

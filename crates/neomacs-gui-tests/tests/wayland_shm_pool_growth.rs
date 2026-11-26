@@ -25,7 +25,7 @@ use std::{
     fs::File,
     os::{fd::AsFd, unix::net::UnixStream},
     path::PathBuf,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use wayland_client::{
     Connection, Dispatch, QueueHandle, delegate_noop,
@@ -123,13 +123,13 @@ fn display_value(env: &[(String, String)], key: &str) -> String {
 fn wait_for_frame(
     queue: &mut wayland_client::EventQueue<State>,
     state: &mut State,
-    deadline: Instant,
+    deadline: neomacs_gui_tests::HangCap,
     stage: &str,
 ) {
     let target = state.frames + 1;
     while state.frames < target {
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "{stage}: the compositor did not present a frame (alive but idle, or its \
              connection died)"
         );
@@ -179,7 +179,7 @@ fn a_live_shm_buffer_survives_its_pool_growing() {
     toplevel.set_title("shm-pool-growth".to_string());
     surface.commit();
     // The first configure arrives only after the role is committed.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     queue
         .roundtrip(&mut state)
         .expect("receive the initial xdg configure");

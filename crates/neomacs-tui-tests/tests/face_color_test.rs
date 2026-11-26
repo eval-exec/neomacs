@@ -10,7 +10,7 @@ use crate::support;
 use neomacs_infra::config_env::ConfigEnvironment as _;
 use neomacs_tui_tests::*;
 use std::ffi::OsString;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use support::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,10 +40,10 @@ fn wait_for_doom_startup(
     timeout: Duration,
     ready: impl Fn(&[String]) -> bool + Copy,
 ) {
-    let deadline = Instant::now() + timeout;
+    let deadline = neomacs_tui_tests::HangCap::new(timeout);
     let poll_slice = Duration::from_millis(80);
 
-    while Instant::now() < deadline {
+    while !deadline.is_expired() {
         let gnu_state = doom_startup_state(&gnu.text_grid(), ready);
         let neo_state = doom_startup_state(&neo.text_grid(), ready);
         if gnu_state == DoomStartupState::Ready && neo_state == DoomStartupState::Ready {

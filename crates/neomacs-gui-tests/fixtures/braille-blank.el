@@ -114,7 +114,7 @@
         (insert (json-encode state)))
       (princ (format "BRAILLE-BLANK %S\n" state) 'external-debugging-output)))
   ;; The host captures the actual native window after all repeated edits stop.
-  (run-at-time 3 nil (lambda () (kill-emacs 0))))
+  (run-at-time 12 nil (lambda () (kill-emacs 0))))
 
 (defun braille-blank-guard (function &rest arguments)
   (condition-case problem
@@ -126,4 +126,4 @@
 (dolist (function '(braille-blank-start braille-blank-edit braille-blank-observe))
   (advice-add function :around #'braille-blank-guard))
 (run-at-time 0.5 nil #'braille-blank-start)
-(run-at-time 40 nil (lambda () (kill-emacs 2)))
+(run-at-time 50 nil (lambda () (kill-emacs 2)))

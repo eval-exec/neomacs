@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use neomacs_gui_tests::{
@@ -157,7 +157,7 @@ fn wait_for_state(
     text_bytes: usize,
     finished: &impl Fn() -> bool,
 ) -> Result<Value, String> {
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(12));
     let mut last = Value::Null;
     loop {
         if let Ok(bytes) = fs::read(artifacts.join("state.json"))
@@ -170,7 +170,7 @@ fn wait_for_state(
             }
             last = state;
         }
-        if finished() || Instant::now() >= deadline {
+        if finished() || deadline.is_expired() {
             return Err(format!(
                 "{stage}: timed out waiting for input; last state {last}"
             ));
@@ -185,14 +185,14 @@ fn wait_for_window(
     exclude: Option<&str>,
     finished: &impl Fn() -> bool,
 ) -> Result<String, String> {
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(12));
     loop {
         if let Ok(windows) = xdotool(env, &["search", "--onlyvisible", "--pid", pid])
             && let Some(window) = windows.lines().find(|window| Some(*window) != exclude)
         {
             return Ok(window.to_owned());
         }
-        if finished() || Instant::now() >= deadline {
+        if finished() || deadline.is_expired() {
             return Err(format!(
                 "native window for PID {pid} excluding {exclude:?} did not appear"
             ));
@@ -203,11 +203,11 @@ fn wait_for_window(
 
 fn wait_for_x11(env: &[(String, String)]) -> Result<(), String> {
     // Listening on TCP precedes accepting authenticated X11 clients.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(5));
     loop {
         match xdotool(env, &["getdisplaygeometry"]) {
             Ok(_) => return Ok(()),
-            Err(error) if Instant::now() >= deadline => return Err(error),
+            Err(error) if deadline.is_expired() => return Err(error),
             Err(_) => thread::sleep(Duration::from_millis(20)),
         }
     }

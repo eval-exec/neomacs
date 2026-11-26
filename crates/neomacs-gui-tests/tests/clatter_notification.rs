@@ -7,18 +7,12 @@ use neomacs_gui_tests::{
 };
 use neomacs_melpa_test_support::clatter_notification::PrivateClatterService;
 use neomacs_melpa_test_support::{CLATTER_PIN, EmacsRuntime, PreparedPackageSet};
-use std::{
-    fs, thread,
-    time::{Duration, Instant},
-};
+use std::{fs, thread, time::Duration};
 
 #[test]
 fn clatter_process_filter_notification_paints_success() {
     let root = neomacs_infra::workspace_root();
-    let run_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let run_id = neomacs_gui_tests::unique_nonce();
     let control = root.join(format!(
         "tmp/clatter-notification-gui-{}-{run_id}",
         std::process::id()
@@ -70,10 +64,10 @@ fn clatter_process_filter_notification_paints_success() {
                 GuiRunOptions::with_timeout(Duration::from_secs(120)),
             )
         });
-        let deadline = Instant::now() + Duration::from_secs(110);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(110));
         let mut presentation =
             Err("Clatter notification did not produce a green presentation".to_owned());
-        while !run.is_finished() && Instant::now() < deadline {
+        while !run.is_finished() && !deadline.is_expired() {
             if let Ok(bytes) = fs::read(control.join("client.json"))
                 && let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes)
                 && state["passed"] == false

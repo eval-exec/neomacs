@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     ptr::NonNull,
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM},
@@ -104,7 +104,7 @@ fn native_windows_focus_routes_typing_to_the_focused_frame() {
 fn exercise(artifacts: &Path, finished: &dyn Fn() -> bool) -> Result<(), String> {
     let observation = Observation {
         artifacts,
-        deadline: Instant::now() + Duration::from_secs(45),
+        deadline: neomacs_gui_tests::HangCap::from_secs(45),
         finished,
     };
     let state = observation.state("fixture readiness", 0)?;
@@ -139,7 +139,7 @@ fn exercise(artifacts: &Path, finished: &dyn Fn() -> bool) -> Result<(), String>
 
 struct Observation<'a> {
     artifacts: &'a Path,
-    deadline: Instant,
+    deadline: neomacs_gui_tests::HangCap,
     finished: &'a dyn Fn() -> bool,
 }
 
@@ -149,12 +149,12 @@ impl Observation<'_> {
         stage: &str,
         mut read: impl FnMut() -> Result<Option<T>, String>,
     ) -> Result<T, String> {
-        let deadline = self.deadline.min(Instant::now() + Duration::from_secs(12));
+        let stage_cap = neomacs_gui_tests::HangCap::from_secs(12);
         loop {
             if let Some(value) = read()? {
                 return Ok(value);
             }
-            if (self.finished)() || Instant::now() >= deadline {
+            if (self.finished)() || self.deadline.is_expired() || stage_cap.is_expired() {
                 return Err(format!(
                     "{stage}: observation timed out; foreground={:?}; ensure an interactive Windows desktop",
                     foreground()

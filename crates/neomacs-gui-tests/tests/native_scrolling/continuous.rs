@@ -1,5 +1,6 @@
 //! Sustained device delivery, with no command-completion waits between inputs.
 use super::*;
+use std::time::Instant;
 #[path = "budget.rs"]
 mod budget;
 #[path = "latency.rs"]

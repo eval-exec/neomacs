@@ -9,7 +9,7 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 struct Editor(Child);
 impl Drop for Editor {
@@ -31,10 +31,7 @@ fn run(fixture: &str, edges: bool) {
     let artifacts = root.join(format!(
         "tmp/neomacs-gui-tests/macos-menu-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        neomacs_gui_tests::unique_nonce()
     ));
     fs::create_dir_all(&artifacts).unwrap();
     eprintln!("macOS menu artifacts: {}", artifacts.display());
@@ -61,7 +58,7 @@ fn run(fixture: &str, edges: bool) {
             .spawn()
             .unwrap(),
     );
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(15));
     let state: serde_json::Value = loop {
         assert!(
             editor.0.try_wait().unwrap().is_none(),
@@ -74,7 +71,7 @@ fn run(fixture: &str, edges: bool) {
         {
             break state;
         }
-        assert!(Instant::now() < deadline, "fixture readiness timeout");
+        assert!(!deadline.is_expired(), "fixture readiness timeout");
         thread::sleep(Duration::from_millis(50));
     };
     let mut driver = MacSession::connect(&socket, editor.0.id())
@@ -99,13 +96,13 @@ fn run(fixture: &str, edges: bool) {
     }
     drop(driver);
     fs::write(artifacts.join("stop"), "stop").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     loop {
         if let Some(status) = editor.0.try_wait().unwrap() {
             assert!(status.success());
             break;
         }
-        assert!(Instant::now() < deadline, "editor shutdown timeout");
+        assert!(!deadline.is_expired(), "editor shutdown timeout");
         thread::sleep(Duration::from_millis(50));
     }
 }

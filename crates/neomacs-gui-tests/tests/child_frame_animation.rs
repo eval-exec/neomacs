@@ -22,7 +22,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 struct OwnedChild(Child);
@@ -39,7 +39,7 @@ fn state_with_phase(path: &Path, after: u64, phase: &str, timeout: Duration) -> 
     // slow capture returns, a later timer may have replaced the current
     // phase, and a phase that was reached but not polled in time must
     // still count.
-    let deadline = Instant::now() + timeout;
+    let deadline = neomacs_gui_tests::HangCap::new(timeout);
     loop {
         // The phases list is append-only on the fixture side, so membership
         // alone is the progress marker; the numeric sample counts writes,
@@ -53,7 +53,7 @@ fn state_with_phase(path: &Path, after: u64, phase: &str, timeout: Duration) -> 
             return value;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "phase '{phase}' never appeared: {path:?}"
         );
         thread::sleep(Duration::from_millis(20));
@@ -61,22 +61,19 @@ fn state_with_phase(path: &Path, after: u64, phase: &str, timeout: Duration) -> 
 }
 
 fn wait_for_file(path: &Path, what: &str, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
+    let deadline = neomacs_gui_tests::HangCap::new(timeout);
     loop {
         if path.exists() {
             return;
         }
-        assert!(Instant::now() < deadline, "{what} never appeared: {path:?}");
+        assert!(!deadline.is_expired(), "{what} never appeared: {path:?}");
         thread::sleep(Duration::from_millis(50));
     }
 }
 
 fn capture(display_env: &[(String, String)], artifacts: &Path, name: &str) -> image::DynamicImage {
     use std::io::Write as _;
-    let started = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64();
+    let stopwatch = neomacs_gui_tests::DiagnosticStopwatch::start();
     let output =
         Command::new(std::env::var_os("NEOMACS_GUI_GRIM").unwrap_or_else(|| "grim".into()))
             .arg(artifacts.join(name))
@@ -86,17 +83,12 @@ fn capture(display_env: &[(String, String)], artifacts: &Path, name: &str) -> im
     // A compositor round-trip can take seconds when the output goes idle
     // between frames; record each capture's submit and completion time so a
     // slow run's phase timing is reconstructible from the artifacts.
-    let elapsed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64()
-        - started;
     if let Ok(mut times) = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(artifacts.join("captures.log"))
     {
-        let _ = writeln!(times, "{started:.6} {elapsed:.3} {name}");
+        let _ = writeln!(times, "{}", stopwatch.format_log_entry(name));
     }
     assert!(
         output.status.success(),
@@ -248,14 +240,14 @@ focus_follows_mouse yes
     // The compositor must be presenting the editor, not its blank startup
     // backdrop, before the background reference is taken.
     let background_pixels = {
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(60));
         loop {
             let pixels = capture(&display_env, &artifacts, "background.png");
             if whole_mean(&pixels) > 0.3 {
                 break pixels;
             }
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "the editor never presented to the compositor"
             );
             thread::sleep(Duration::from_millis(150));
@@ -327,14 +319,14 @@ focus_follows_mouse yes
     // single capture could land mid-fade where the blended popup no longer
     // reads as red. Wait until the popup is fully opaque at its placement.
     let settled_image = {
-        let deadline = Instant::now() + Duration::from_secs(45);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(45));
         loop {
             let pixels = capture(&display_env, &artifacts, "settled.png");
             if locate_popup(&pixels).is_some() {
                 break pixels;
             }
             assert!(
-                Instant::now() < deadline,
+                !deadline.is_expired(),
                 "the popup never reached full opacity at its placement"
             );
             thread::sleep(Duration::from_millis(400));
@@ -365,7 +357,7 @@ focus_follows_mouse yes
     // red and the departure area plain background.
     let pre_arrival = region_mean(&background_pixels, ARRIVAL_STRIP);
     let pre_departure = region_mean(&background_pixels, DEPARTURE_STRIP);
-    let deadline = Instant::now() + Duration::from_secs(45);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(45));
     loop {
         let pixels = capture(&display_env, &artifacts, "post-drift.png");
         let arrival_covered = region_mean(&pixels, ARRIVAL_STRIP);
@@ -374,7 +366,7 @@ focus_follows_mouse yes
             break;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "the drift never settled: arrival {arrival_covered:.3} vs {pre_arrival:.3}, departure {departure_cleared:.3} vs {pre_departure:.3}"
         );
         thread::sleep(Duration::from_millis(600));
@@ -416,10 +408,10 @@ focus_follows_mouse yes
     // above; this only waits for the endpoint the assertion is about.
     let resize_background = region_mean(&background_pixels, RESIZE_STRIP);
     let mut settled_resize = *resized_strip.last().unwrap();
-    let settled_deadline = Instant::now() + Duration::from_secs(20);
+    let settled_deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(20));
     while settled_resize >= resize_background - 0.5 {
         assert!(
-            Instant::now() < settled_deadline,
+            !settled_deadline.is_expired(),
             "the grown popup must cover the strip once the crossfade ends: {settled_resize} (captures {resized_strip:?})"
         );
         thread::sleep(Duration::from_millis(400));

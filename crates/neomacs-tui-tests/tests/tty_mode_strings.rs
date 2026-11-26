@@ -32,7 +32,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const TERM_TYPE: &str = "xterm-256color";
 const MOUSE_ENABLE: &[u8] = b"\x1b[?1000h\x1b[?1003h\x1b[?1006h";
@@ -178,15 +178,14 @@ impl SecondaryPty {
     }
 
     fn wait_for(&mut self, needle: &[u8], timeout: Duration) -> Vec<u8> {
-        let deadline = Instant::now() + timeout;
+        let deadline = neomacs_tui_tests::HangCap::new(timeout);
         let (lock, cvar) = &*self.buffer;
         let mut guard = lock.lock().unwrap();
         while find_subslice(&guard, needle).is_none() {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
+            let Some(slice) = deadline.poll_slice(neomacs_tui_tests::MAX_POLL_SLICE) else {
                 break;
-            }
-            let (next, _) = cvar.wait_timeout(guard, remaining).unwrap();
+            };
+            let (next, _) = cvar.wait_timeout(guard, slice).unwrap();
             guard = next;
         }
         drop(guard);
@@ -355,8 +354,8 @@ fn assert_set_order(output: &[u8], after: usize, label: &str, phase: &str) {
 }
 
 fn wait_for_bytes(session: &mut TuiSession, needle: &[u8], timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
+    let deadline = neomacs_tui_tests::HangCap::new(timeout);
+    while !deadline.is_expired() {
         if find_subslice(session.recent_output(), needle).is_some() {
             // Drain any trailing bytes from the same burst.
             session.read(Duration::from_millis(150));
@@ -367,8 +366,8 @@ fn wait_for_bytes(session: &mut TuiSession, needle: &[u8], timeout: Duration) {
 }
 
 fn wait_for_file(path: &Path, timeout: Duration) -> String {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
+    let deadline = neomacs_tui_tests::HangCap::new(timeout);
+    while !deadline.is_expired() {
         if let Ok(content) = std::fs::read_to_string(path)
             && !content.is_empty()
         {
@@ -1008,10 +1007,10 @@ while True:
         label,
         TuiTerminalConfig::new(TERM_TYPE, 24, 80),
     );
-    let deadline = Instant::now() + Duration::from_secs(25);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(25));
     while !ready.exists() {
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "{label}: emergency-escape probe did not reach inhibit-quit loop"
         );
         session.read(Duration::from_millis(40));
@@ -1027,10 +1026,10 @@ while True:
         "{label}: editor must not stop on 1st C-g before 2nd C-g"
     );
     session.send(b"\x07");
-    let stop_deadline = Instant::now() + Duration::from_secs(15);
+    let stop_deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(15));
     while !stopped.exists() {
         assert!(
-            Instant::now() < stop_deadline,
+            !stop_deadline.is_expired(),
             "{label}: editor did not stop on 2nd C-g emergency escape; raw: {:?}",
             String::from_utf8_lossy(session.recent_output())
         );

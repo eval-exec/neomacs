@@ -6,10 +6,7 @@ use std::{fs, time::Duration};
 #[test]
 fn accepted_tcp_process_plists_match_gnu_shallow_isolation() {
     let root = neomacs_infra::workspace_root();
-    let run_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let run_id = neomacs_tui_tests::unique_nonce();
     let artifacts = root.join(format!(
         "tmp/process-plist-tui-{}-{run_id}",
         std::process::id()

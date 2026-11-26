@@ -16,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 #[derive(Clone, Copy)]
@@ -78,10 +78,7 @@ fn run(binary: &Path, engine: &str, mode: Mode) {
     let artifacts = root.join(format!(
         "target/neomacs-gui-tests/word-wrap-{engine}-{mode}-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        neomacs_gui_tests::unique_nonce()
     ));
     fs::create_dir_all(&artifacts).unwrap();
     let session = DisplayHarness::Xvfb.start_session(&artifacts).unwrap();
@@ -259,7 +256,7 @@ fn wait<T>(
     finished: &impl Fn() -> bool,
     mut observe: impl FnMut() -> Option<T>,
 ) -> Result<T, String> {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     loop {
         if let Some(value) = observe() {
             return Ok(value);
@@ -267,7 +264,7 @@ fn wait<T>(
         if let Ok(error) = fs::read_to_string(artifacts.join("error.json")) {
             return Err(error);
         }
-        if finished() || Instant::now() >= deadline {
+        if finished() || deadline.is_expired() {
             return Err(format!(
                 "GUI acknowledgment timed out: {}",
                 artifacts.display()

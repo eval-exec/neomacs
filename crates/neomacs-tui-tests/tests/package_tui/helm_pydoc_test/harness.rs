@@ -3,7 +3,7 @@ use neomacs_tui_tests::{RawTerminalSnapshot, TuiSession};
 use std::fmt::Write as _;
 use std::fs;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub(super) fn wait_for_both<F>(pair: &mut PackageTuiPair, timeout: Duration, predicate: F)
 where
@@ -46,7 +46,11 @@ impl PydocInputStage {
     }
 }
 
-fn wait_for_pydoc_input(session: &mut TuiSession, deadline: Instant, stage: PydocInputStage) {
+fn wait_for_pydoc_input(
+    session: &mut TuiSession,
+    deadline: neomacs_tui_tests::HangCap,
+    stage: PydocInputStage,
+) {
     loop {
         let observed = session
             .observe_at_fence()
@@ -58,14 +62,14 @@ fn wait_for_pydoc_input(session: &mut TuiSession, deadline: Instant, stage: Pydo
         {
             return;
         }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        assert!(
-            !remaining.is_zero(),
-            "{} did not consume Helm Pydoc command {stage:?}:\n{}",
-            session.name,
-            grid.join("\n")
-        );
-        session.read(remaining.min(Duration::from_millis(50)));
+        let Some(slice) = deadline.poll_slice(Duration::from_millis(50)) else {
+            panic!(
+                "{} did not consume Helm Pydoc command {stage:?}:\n{}",
+                session.name,
+                grid.join("\n")
+            );
+        };
+        session.read(slice);
     }
 }
 
@@ -73,7 +77,7 @@ pub(super) fn open_pydoc(pair: &mut PackageTuiPair) {
     for session in [&mut pair.gnu, &mut pair.neo] {
         // Committed bytes can precede minibuffer consumption while the prior
         // Helm command unwinds. Submit RET only after the full literal is painted.
-        let input_deadline = Instant::now() + Duration::from_secs(8);
+        let input_deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(8));
         session.send_key("M-x");
         wait_for_pydoc_input(session, input_deadline, PydocInputStage::Prompt);
         session.send(b"helm-pydoc");
@@ -317,7 +321,7 @@ pub(super) fn save_and_wait_for_release_console(
 ) {
     send_to_both(pair, |session| session.send_keys("C-x C-s"));
     let relative = "release workspace/release_console.py";
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(8));
     loop {
         pair.gnu.read(Duration::from_millis(10));
         pair.neo.read(Duration::from_millis(10));
@@ -329,7 +333,7 @@ pub(super) fn save_and_wait_for_release_console(
             return;
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "GNU and Neomacs did not save release_console.py containing {expected_fragment:?}"
         );
         thread::sleep(Duration::from_millis(10));
@@ -349,7 +353,7 @@ pub(super) fn capture_and_assert_pydoc_buffer(
     );
     super::super::eval_pair_expression(pair, &expression);
 
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(8));
     let (gnu_contents, neo_contents, gnu_state, neo_state) = loop {
         pair.gnu.read(Duration::from_millis(10));
         pair.neo.read(Duration::from_millis(10));
@@ -363,7 +367,7 @@ pub(super) fn capture_and_assert_pydoc_buffer(
             break (gnu_contents, neo_contents, gnu_state, neo_state);
         }
         assert!(
-            Instant::now() < deadline,
+            !deadline.is_expired(),
             "GNU and Neomacs did not capture the Pydoc output buffer"
         );
         thread::sleep(Duration::from_millis(10));

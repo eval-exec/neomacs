@@ -1,19 +1,14 @@
 //! Same native-input, independent-window, pixel and command contracts on each OS.
 use neomacs_gui_tests::interaction::*;
-use std::{
-    fs,
-    path::Path,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{fs, path::Path, thread, time::Duration};
 
 fn wait<T>(label: &str, mut f: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     loop {
         if let Some(value) = f() {
             return value;
         }
-        assert!(Instant::now() < deadline, "timed out: {label}");
+        assert!(!deadline.is_expired(), "timed out: {label}");
         thread::sleep(Duration::from_millis(40));
     }
 }
@@ -56,7 +51,7 @@ fn capture(
     region: DesktopRect,
 ) -> Capture {
     let mut prior = None;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(10));
     loop {
         let image = driver.capture(&path.join(format!("{name}.png"))).unwrap();
         let current = crop(&image, region);
@@ -64,7 +59,7 @@ fn capture(
         if stable {
             return image;
         }
-        if Instant::now() >= deadline {
+        if deadline.is_expired() {
             if let Some(previous) = prior {
                 previous
                     .save(path.join(format!("{name}-previous-region.png")))

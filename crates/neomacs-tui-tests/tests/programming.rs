@@ -19,7 +19,7 @@ fn indent_for_tab_command_indents_current_elisp_line() {
 
     open_home_file(&mut gnu, &mut neo, name, initial, "C-x C-f");
     send_both(&mut gnu, &mut neo, "C-n TAB");
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(4), |grid| {
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(5), |grid| {
         grid.iter().any(|row| row.contains("  (message \"alpha\")"))
     });
 
@@ -46,7 +46,7 @@ fn comment_dwim_on_blank_elisp_line_inserts_indented_comment() {
 
     open_home_file(&mut gnu, &mut neo, name, initial, "C-x C-f");
     send_both(&mut gnu, &mut neo, "C-n M-;");
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(4), |grid| {
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(5), |grid| {
         grid.iter().any(|row| row.contains("  ;;"))
     });
 

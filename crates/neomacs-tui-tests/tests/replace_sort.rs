@@ -291,18 +291,20 @@ fn query_replace_keyboard_quit_leaves_buffer_unchanged() {
     // C-g may preempt queued typing, so observe its paint in each minibuffer
     // through the same ordering owner before sending the cancellation key.
     for session in [&mut gnu, &mut neo] {
-        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(8));
         loop {
             let observed = session.observe_at_fence().expect("replacement input fence");
             match replacement_literal_observation(&observed) {
                 ReplacementLiteralObservation::Consumed => break,
                 ReplacementLiteralObservation::Pending(minibuffer) => assert!(
-                    std::time::Instant::now() < deadline,
+                    !deadline.is_expired(),
                     "{} did not consume replacement literal: {minibuffer:?}",
                     session.name,
                 ),
             }
-            session.read(deadline.saturating_duration_since(std::time::Instant::now()));
+            if let Some(slice) = deadline.poll_slice(neomacs_tui_tests::MAX_POLL_SLICE) {
+                session.read(slice);
+            }
         }
     }
     // Retain the same semantic condition at both final ordered observations.

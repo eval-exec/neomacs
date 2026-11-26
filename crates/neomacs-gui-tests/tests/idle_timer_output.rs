@@ -5,18 +5,12 @@ use neomacs_gui_tests::{
     DisplayHarness, GuiArtifactSet, GuiBackend, GuiRunOptions, GuiRunStatus, GuiScenario,
     GuiTestPlan, ProcessGuiCommandRunner,
 };
-use std::{
-    fs, thread,
-    time::{Duration, Instant},
-};
+use std::{fs, thread, time::Duration};
 
 #[test]
 fn idle_timer_preserves_its_epoch_and_paints_amid_background_activity() {
     let root = neomacs_infra::workspace_root();
-    let run_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let run_id = neomacs_gui_tests::unique_nonce();
     let control = root.join(format!("tmp/idle-gui-{}-{run_id}", std::process::id()));
     fs::create_dir_all(&control).unwrap();
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
@@ -53,9 +47,9 @@ fn idle_timer_preserves_its_epoch_and_paints_amid_background_activity() {
                 GuiRunOptions::with_timeout(Duration::from_secs(30)),
             )
         });
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = neomacs_gui_tests::HangCap::new(Duration::from_secs(20));
         let mut presentation = Err("idle callback did not produce a green presentation".to_owned());
-        while !run.is_finished() && Instant::now() < deadline {
+        while !run.is_finished() && !deadline.is_expired() {
             if control.join("result.json").exists()
                 && let Ok(png) = image::open(&paths.png)
             {

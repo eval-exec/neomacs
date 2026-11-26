@@ -488,7 +488,15 @@ impl NonblockingWriteError {
 /// errors (`EIO`, `EPIPE`, `WriteZero`, `POLLHUP`/`POLLERR`/`POLLNVAL`, and
 /// deadline expiry) are returned with the exact number of bytes already
 /// accepted by the kernel.
-pub fn write_all_nonblocking_pty(
+pub fn write_all_nonblocking_pty_within(
+    file: &mut std::fs::File,
+    bytes: &[u8],
+    cap: crate::HangCap,
+) -> Result<(), NonblockingWriteError> {
+    write_all_nonblocking_pty(file, bytes, cap.deadline_instant())
+}
+
+pub(crate) fn write_all_nonblocking_pty(
     file: &mut std::fs::File,
     bytes: &[u8],
     deadline: Instant,

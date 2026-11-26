@@ -5,10 +5,7 @@ use neomacs_melpa_test_support::{
     CLATTER_PIN, EmacsRuntime, PreparedPackageSet, clatter_notification::PrivateClatterService,
 };
 use neomacs_tui_tests::{TuiLaunch, TuiSession};
-use std::{
-    fs,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{fs, time::Duration};
 
 #[test]
 fn clatter_process_filter_notification_completes_and_remains_visible() {
@@ -16,10 +13,7 @@ fn clatter_process_filter_notification_completes_and_remains_visible() {
     let gnu = EmacsRuntime::gnu_emacs();
     let packages = PreparedPackageSet::from_locked_melpa(&gnu, CLATTER_PIN, "clatter-notify.el")
         .expect("prepare pinned real Clatter package");
-    let run_id = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let run_id = neomacs_tui_tests::unique_nonce();
     let artifacts = root.join(format!("tmp/clatter-tui-{}-{run_id}", std::process::id()));
     let neo = std::env::var_os("NEOMACS_TUI_NEOMACS_BIN")
         .map(std::path::PathBuf::from)

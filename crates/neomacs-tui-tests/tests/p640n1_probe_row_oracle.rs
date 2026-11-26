@@ -27,7 +27,7 @@ use crate::support::*;
 use neomacs_tui_tests::{TuiSession, TuiTempDirectory};
 use std::ffi::OsStr;
 use std::fs;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const INIT: &str = r#";;; -*- lexical-binding: t -*-
 (progn
@@ -116,14 +116,14 @@ fn run_arm(
     name: &str,
 ) -> ((i64, Vec<i64>), (i64, Vec<i64>)) {
     send_both(gnu, neo, key);
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = neomacs_tui_tests::HangCap::new(Duration::from_secs(20));
     loop {
         let gnu_log = read_log(gnu, name);
         let neo_log = read_log(neo, name);
         if let (Some(g), Some(n)) = (&gnu_log, &neo_log) {
             return (g.clone(), n.clone());
         }
-        if Instant::now() >= deadline {
+        if deadline.is_expired() {
             dump_pair_grids("p640n1_probe_row_arms/timeout", gnu, neo);
             panic!("timed out waiting for arm {name}: gnu={gnu_log:?} neo={neo_log:?}");
         }
