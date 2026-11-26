@@ -71,7 +71,11 @@ fn current_native(
     if state.readers != 0 {
         return Err(RendezvousError::Readers);
     }
-    let image = state.image.as_ref().ok_or(RendezvousError::Publication)?;
+    let image = state
+        .image
+        .as_ref_for(registry.heap, entry.young)
+        .map_err(|_| RendezvousError::Identity)?
+        .ok_or(RendezvousError::Publication)?;
     let identity = state
         .roots
         .as_ref()

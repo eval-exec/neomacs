@@ -171,8 +171,16 @@ impl<'era> Mutator<'era> {
             if state.readers != 0 {
                 return Err(RendezvousError::Readers);
             }
-            if self.local.is_none() || state.image.is_none() {
+            if self.local.is_none() {
                 return Err(RendezvousError::Publication);
+            }
+            match state
+                .image
+                .as_ref_for(self.entry.key.heap, self.entry.young)
+            {
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(RendezvousError::Publication),
+                Err(_) => return Err(RendezvousError::Identity),
             }
             state
                 .rendezvous
@@ -195,7 +203,8 @@ impl<'era> Mutator<'era> {
             // A request can no longer activate until apply finishes the debt.
             let image = state
                 .image
-                .take()
+                .take_for(self.entry.key.heap, self.entry.young)
+                .map_err(|_| RendezvousError::Identity)?
                 .expect("image preflighted under entry guard");
             drop(state);
             drop(gate);

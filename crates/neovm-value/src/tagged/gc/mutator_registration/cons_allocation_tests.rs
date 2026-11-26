@@ -3157,7 +3157,12 @@ fn numeric_serial_window_case<K, W>(
                         .unwrap(),
                 )
             };
-            let legacy = entry_state(&legacy_entry).unwrap().image.take().unwrap();
+            let legacy = entry_state(&legacy_entry)
+                .unwrap()
+                .image
+                .take_for(legacy_entry.key.heap, legacy_entry.young)
+                .unwrap()
+                .unwrap();
             let mut collector = era.core.collector.borrow_mut();
             let heap = collector.as_mut().unwrap().registration_heap_mut();
             // SAFETY: stopped-era test helper restoring `legacy` into its
@@ -3175,7 +3180,13 @@ fn numeric_serial_window_case<K, W>(
             // SAFETY: stopped-era test helper refreezing its own live `&mut TaggedHeap`.
             let legacy = unsafe { PublishedGcImage::from_legacy(heap) }.unwrap();
             let mut state = entry_state(&legacy_entry).unwrap();
-            assert!(state.image.replace(legacy).is_none());
+            // SAFETY: reinstalling the refrozen legacy image for `legacy_entry`.
+            unsafe {
+                state
+                    .image
+                    .install(legacy_entry.key.heap, legacy_entry.young, legacy)
+            }
+            .unwrap();
             Some((float, big))
         };
         // Current broken code refuses here after a legitimate serial bit was

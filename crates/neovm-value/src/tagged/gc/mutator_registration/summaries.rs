@@ -140,7 +140,11 @@ impl<'era> StoppedSummaries<'era> {
             if state.run_loan || state.worker_loan {
                 return Err(RegistrationError::OutstandingLoan);
             }
-            let image = state.image.as_ref().ok_or(RegistrationError::Publication)?;
+            let image = state
+                .image
+                .as_ref_for(registry.heap, entry.young)
+                .map_err(|_| RegistrationError::Publication)?
+                .ok_or(RegistrationError::Publication)?;
             if image.young_id() != entry.young {
                 return Err(RegistrationError::Publication);
             }
@@ -184,7 +188,11 @@ impl<'era> StoppedSummaries<'era> {
             if self.under_stop && Self::is_unactivated_under_stop(&self.gate, entry, &state) {
                 continue;
             }
-            let image = state.image.as_ref().ok_or(RegistrationError::Publication)?;
+            let image = state
+                .image
+                .as_ref_for(self.registry.heap, entry.young)
+                .map_err(RegistrationError::from)?
+                .ok_or(RegistrationError::Publication)?;
             visit(entry.key, state.phase, image);
         }
         Ok(())
@@ -282,11 +290,15 @@ impl<'era> StoppedSummaries<'era> {
             return Err(RegistrationError::StaleRegistration);
         }
         let mut state = lock_entry(self.registry, &entry)?;
-        let image = state.image.as_mut().ok_or(RegistrationError::Publication)?;
-        if image.young_id() != young {
+        let log = state
+            .image
+            .young_mut_for(self.registry.heap, young)
+            .map_err(|_| RegistrationError::Publication)?
+            .ok_or(RegistrationError::Publication)?;
+        if log.id() != young {
             return Err(RegistrationError::Publication);
         }
-        Ok(use_log(image.young_mut()))
+        Ok(use_log(log))
     }
 }
 

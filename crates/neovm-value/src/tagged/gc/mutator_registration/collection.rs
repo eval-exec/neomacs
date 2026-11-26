@@ -502,7 +502,8 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         };
         let legacy = entry_state(&legacy_entry)?
             .image
-            .take()
+            .take_for(legacy_entry.key.heap, legacy_entry.young)
+            .map_err(|_| RendezvousError::Identity)?
             .ok_or(RendezvousError::Publication)?;
         let mut collector = self
             .collector
@@ -515,7 +516,15 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         // SAFETY: world-stopped keeper holds `AllStopped` and exclusive
         // `&mut TaggedHeap` on the collector thread; `legacy` belongs to this era.
         if let Err(failure) = unsafe { legacy.restore_legacy(heap) } {
-            let _ = entry_state(&legacy_entry).map(|mut s| s.image = Some(failure.image));
+            if let Ok(mut s) = entry_state(&legacy_entry) {
+                // SAFETY: returning the untouched legacy image just taken from `legacy_entry`.
+                if let Err(reinstall) = unsafe {
+                    s.image
+                        .install(legacy_entry.key.heap, legacy_entry.young, failure.image)
+                } {
+                    std::mem::forget(reinstall.image);
+                }
+            }
             return Err(RegistrationError::from(failure.error).into());
         }
         let mut book = super::super::OwnerEraReserve::new();
@@ -533,7 +542,17 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             unsafe { PublishedGcImage::from_legacy(heap) }.map_err(RegistrationError::from)?;
         let mut state = entry_state(&legacy_entry)?;
         debug_assert!(state.image.is_none());
-        state.image = Some(refrozen);
+        // SAFETY: `refrozen` was just produced by `PublishedGcImage::from_legacy(heap)`
+        // for `legacy_entry`'s `(heap, young)` identity during this stop.
+        unsafe {
+            state
+                .image
+                .install(legacy_entry.key.heap, legacy_entry.young, refrozen)
+        }
+        .map_err(|failure| {
+            std::mem::forget(failure.image);
+            RegistrationError::from(failure.error)
+        })?;
         drop(state);
         granted.map_err(|_| RendezvousError::Publication)?;
         std::mem::forget(
@@ -1080,14 +1099,23 @@ impl<'a> ImageSession<'a> {
         let mut guards = Vec::new();
         for entry in &selected {
             let state = entry_state(entry)?;
-            if state.image.is_none() {
-                return Err(RendezvousError::Publication);
+            if entry.key.heap != registry.heap {
+                return Err(RendezvousError::Identity);
+            }
+            match state.image.as_ref_for(registry.heap, entry.young) {
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(RendezvousError::Publication),
+                Err(_) => return Err(RendezvousError::Identity),
             }
             guards.push(state);
         }
         let mut images = Vec::with_capacity(selected.len());
         for (entry, state) in selected.iter().zip(&mut guards) {
-            images.push((Arc::clone(entry), state.image.take()));
+            let image = state
+                .image
+                .take_for(registry.heap, entry.young)
+                .map_err(|_| RendezvousError::Identity)?;
+            images.push((Arc::clone(entry), image));
         }
         drop(guards);
         drop(gate);
@@ -1116,8 +1144,15 @@ impl<'a> ImageSession<'a> {
             }
             guards.push(state);
         }
-        for (state, (_, image)) in guards.iter_mut().zip(&mut self.images) {
-            state.image = image.take();
+        for (state, (entry, image)) in guards.iter_mut().zip(&mut self.images) {
+            let taken = image.take().expect("image preflighted above");
+            // SAFETY: `ImageSession::take` extracted this image from `entry` in
+            // this same world-stopped collection epoch for `(entry.key.heap, entry.young)`.
+            if let Err(failure) = unsafe { state.image.install(entry.key.heap, entry.young, taken) }
+            {
+                *image = Some(failure.image);
+                return Err(RegistrationError::from(failure.error).into());
+            }
         }
         self.restored = true;
         Ok(())
@@ -1175,6 +1210,15 @@ fn capture_young(
     kind: GenerationCycle,
 ) -> Result<YoungCapture, CollectionError> {
     let ids = images.images.iter().map(|(entry, _)| entry.young).collect();
+    capture_young_with_peers(heap, ids, &mut images.images[1..], kind)
+}
+
+fn capture_young_with_peers(
+    heap: &mut TaggedHeap,
+    ids: Vec<YoungRegistrationId>,
+    peers: &mut [(Arc<MutatorEntry>, Option<PublishedGcImage>)],
+    kind: GenerationCycle,
+) -> Result<YoungCapture, CollectionError> {
     let identity = heap.heap_identity();
     let heap = &mut *heap;
     // SAFETY: AllStopped and the unique collector RefCell loan exclude every
@@ -1185,7 +1229,7 @@ fn capture_young(
         heap: identity,
         ids,
         legacy,
-        peers: &mut images.images[1..],
+        peers,
     };
     if heap.generational.enabled {
         match kind {
@@ -1199,7 +1243,13 @@ fn capture_young(
         }
     } else {
         for id in logs.ids.clone() {
+            if id.heap_identity() != identity {
+                return Err(RendezvousError::Identity);
+            }
             let log = logs.resolve_mut(id)?;
+            if log.id() != id || log.id().heap_identity() != identity {
+                return Err(RendezvousError::Identity);
+            }
             if !log.blocks().is_empty() || log.pending_index().is_some() {
                 return Err(RendezvousError::Publication);
             }
@@ -1272,5 +1322,118 @@ fn trace_work(heap: &mut TaggedHeap, work: &CollectionWork) {
             // SAFETY: the closed descriptor covers initialized float slots.
             heap.seed_root(unsafe { TaggedValue::from_float_ptr(header.cast()) });
         }
+    }
+}
+
+#[cfg(test)]
+mod post_swap_tests {
+    use super::*;
+    use crate::tagged::gc::mutator_registration::entry_image::EntryImageSlot;
+    use crate::tagged::gc::mutator_registration::image::OwnerGcState;
+    use std::num::NonZeroU64;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+
+    fn synthetic_entry(
+        heap: HeapIdentity,
+        young: YoungRegistrationId,
+        owner: u64,
+    ) -> Arc<MutatorEntry> {
+        let key = MutatorKey {
+            heap,
+            world: heap,
+            owner,
+            registration: NonZeroU64::new(owner + 1).expect("nonzero"),
+            generation: NonZeroU64::new(owner + 1).expect("nonzero"),
+        };
+        Arc::new(MutatorEntry {
+            key,
+            young,
+            cancelled_start: AtomicBool::new(false),
+            admission: AtomicU64::new(AdmissionWord::OUT),
+            keeper_held: AtomicBool::new(false),
+            state: Mutex::new(EntryState {
+                phase: EntryPhase::Published,
+                owner_thread: Some(std::thread::current().id()),
+                publication_generation: 1,
+                epoch: 1,
+                image: EntryImageSlot::empty(),
+                run_loan: false,
+                worker_loan: false,
+                readers: 0,
+                rendezvous: super::super::rendezvous::control::OwnerState::new(
+                    super::super::rendezvous::Mode::Stopped,
+                ),
+                roots: None,
+                retained_roots: Vec::new(),
+            }),
+        })
+    }
+
+    #[test]
+    fn non_generational_capture_young_rejects_mismatched_young_log_id() {
+        let mut heap_a = TaggedHeap::new();
+        heap_a.generational.enabled = false;
+        assert!(
+            !heap_a.generational.enabled,
+            "test must exercise the non-generational capture_young branch"
+        );
+        let heap_b = TaggedHeap::new();
+        let id_a = heap_a.heap_identity();
+        let id_b = heap_b.heap_identity();
+        let legacy_a = heap_a
+            ._satb_layout_reserve
+            .current_young_log_mut()
+            .expect("legacy log")
+            .id();
+        let peer_young_a = YoungRegistrationId::issue_parallel(id_a).unwrap();
+        let other_young_a = YoungRegistrationId::issue_parallel(id_a).unwrap();
+        let foreign_young_b = YoungRegistrationId::issue_parallel(id_b).unwrap();
+
+        let entry_a = synthetic_entry(id_a, peer_young_a, 1);
+
+        // 1. Cross-heap image placed under `entry_a` (wrong heap & wrong log ID).
+        let mut foreign_owner = OwnerGcState::new(id_b, foreign_young_b, 0).unwrap();
+        // SAFETY: fresh empty owner in unit test.
+        let foreign_image = unsafe { foreign_owner.publish() }.unwrap();
+        let mut peers = vec![(Arc::clone(&entry_a), Some(foreign_image))];
+        let err = capture_young_with_peers(
+            &mut heap_a,
+            vec![legacy_a, peer_young_a],
+            &mut peers,
+            GenerationCycle::Major,
+        )
+        .err()
+        .expect("non-generational capture_young must reject cross-heap young log ID");
+        assert_eq!(err, RendezvousError::Identity);
+
+        // 2. Same-heap image from a different registration placed under `entry_a`.
+        let mut other_owner = OwnerGcState::new(id_a, other_young_a, 0).unwrap();
+        // SAFETY: fresh empty owner in unit test.
+        let other_image = unsafe { other_owner.publish() }.unwrap();
+        let mut peers = vec![(Arc::clone(&entry_a), Some(other_image))];
+        let err = capture_young_with_peers(
+            &mut heap_a,
+            vec![legacy_a, peer_young_a],
+            &mut peers,
+            GenerationCycle::Major,
+        )
+        .err()
+        .expect("non-generational capture_young must reject same-heap mismatched young log ID");
+        assert_eq!(err, RendezvousError::Identity);
+
+        // 3. Matching registration ID succeeds on the same non-generational heap.
+        let mut matching_owner = OwnerGcState::new(id_a, peer_young_a, 0).unwrap();
+        // SAFETY: fresh empty owner in unit test.
+        let matching_image = unsafe { matching_owner.publish() }.unwrap();
+        let mut peers = vec![(entry_a, Some(matching_image))];
+        assert!(
+            capture_young_with_peers(
+                &mut heap_a,
+                vec![legacy_a, peer_young_a],
+                &mut peers,
+                GenerationCycle::Major,
+            )
+            .is_ok()
+        );
     }
 }

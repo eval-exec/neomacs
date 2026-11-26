@@ -254,9 +254,9 @@ fn stale_ack_identity_generation_duplicate_and_missing_image_are_refused_body<
         entry.state.lock().unwrap().rendezvous.coverage_epoch = 0;
         assert!(matches!(era.try_stop(), Err(RendezvousError::Publication)));
         entry.state.lock().unwrap().rendezvous.coverage_epoch = epoch.get();
-        let saved_image = entry.state.lock().unwrap().image.take().unwrap();
-        assert!(matches!(era.try_stop(), Err(RendezvousError::Publication)));
-        entry.state.lock().unwrap().image = Some(saved_image);
+        super::keeper::with_missing_image_for_test(&entry, || {
+            assert!(matches!(era.try_stop(), Err(RendezvousError::Publication)));
+        });
         let saved_roots = entry.state.lock().unwrap().roots.take().unwrap();
         assert!(matches!(era.try_stop(), Err(RendezvousError::Publication)));
         entry.state.lock().unwrap().roots = Some(saved_roots);
@@ -378,13 +378,10 @@ fn native_owner_sleeps_two_epochs_latest_image_and_synthetic_work_once_body<
                             first_words = Some(words);
                         }
                         folded += retry(|| {
-                            guard.with_owner_image(native_key, |image| {
-                                image
-                                    .consume_synthetic_remembered_for_test(
-                                        MarkWord::from_immediate(TaggedValue::fixnum(621)).unwrap(),
-                                    )
-                                    .unwrap()
-                            })
+                            guard.consume_synthetic_remembered_for_test(
+                                native_key,
+                                MarkWord::from_immediate(TaggedValue::fixnum(621)).unwrap(),
+                            )
                         });
                         assert_eq!(read_words(guard, ordinary_key).len(), 1);
                         Ok(())
@@ -1581,16 +1578,12 @@ fn a6_ht_b9_table_scope_body_error_stays_terminal_after_image_mutation_body<
                 guard,
                 |_| {
                     body_calls += 1;
-                    guard.with_owner_image(key, |image| {
-                        assert_eq!(
-                            image
-                                .consume_synthetic_remembered_for_test(
-                                    MarkWord::from_immediate(TaggedValue::fixnum(1912)).unwrap(),
-                                )
-                                .unwrap(),
-                            1
-                        );
-                    })?;
+                    guard
+                        .consume_synthetic_remembered_for_test(
+                            key,
+                            MarkWord::from_immediate(TaggedValue::fixnum(1912)).unwrap(),
+                        )
+                        .map(|count| assert_eq!(count, 1))?;
                     Err(RendezvousError::Busy)
                 },
                 || {

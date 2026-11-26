@@ -157,6 +157,7 @@ pub enum CollectionCase {
     CollectRequestedAfterTraceRefusesEarlyWithoutWorldWalk,
     ShouldCollectStoppedCountsKeeperHeapSerialDebt,
     PrepareFinishFoldsSerialFactsAndYoungShellWithoutCollection,
+    SwappedEntryImageBetweenNonGenerationalErasFailsClosedAtCollectStopped,
 }
 
 impl CollectionCase {
@@ -173,6 +174,7 @@ impl CollectionCase {
         Self::CollectRequestedAfterTraceRefusesEarlyWithoutWorldWalk,
         Self::ShouldCollectStoppedCountsKeeperHeapSerialDebt,
         Self::PrepareFinishFoldsSerialFactsAndYoungShellWithoutCollection,
+        Self::SwappedEntryImageBetweenNonGenerationalErasFailsClosedAtCollectStopped,
     ];
 }
 
@@ -260,6 +262,13 @@ pub(crate) fn run_collection_test<K, W>(
         }
         CollectionCase::PrepareFinishFoldsSerialFactsAndYoungShellWithoutCollection => {
             prepare_finish_folds_serial_facts_and_young_shell_without_collection(empty_outer_era);
+        }
+        CollectionCase::SwappedEntryImageBetweenNonGenerationalErasFailsClosedAtCollectStopped => {
+            swapped_entry_image_between_non_generational_eras_fails_closed_at_collect_stopped(
+                graph_era,
+                empty_nested_era,
+                world_roots,
+            );
         }
     }
 }
@@ -360,17 +369,20 @@ fn two_requesters_collect_transitive_world_private_and_image_roots<K, W>(
             }
             let [root, remembered, cons_write] = logs;
             retry(|| {
-                stopped.with_owner_image(first.0, |image| {
-                    // SAFETY: `root`, `remembered`, and `cons_write` are live
-                    // objects allocated on this stopped era's heap.
-                    unsafe {
-                        image.seed_collection_words_for_test(
-                            MarkWord::of(root.2),
-                            MarkWord::of(remembered.2),
-                            MarkWord::of(cons_write.2),
-                        );
-                    }
-                })
+                // SAFETY: in-place test seeding on `first.0`'s own image without swapping it.
+                unsafe {
+                    stopped.with_owner_image_mut_for_test(first.0, |image| {
+                        // SAFETY: `root`, `remembered`, and `cons_write` are live
+                        // objects allocated on this stopped era's heap.
+                        unsafe {
+                            image.seed_collection_words_for_test(
+                                MarkWord::of(root.2),
+                                MarkWord::of(remembered.2),
+                                MarkWord::of(cons_write.2),
+                            );
+                        }
+                    })
+                }
             });
             let log_words = [root.1, remembered.1, cons_write.1].concat();
             drop((root.0, remembered.0, cons_write.0));
@@ -434,8 +446,9 @@ fn native_image_logs_fold_once_across_repeated_full_majors<K, W>(
         for round in 0..2 {
             let mut stopped = era.stop().unwrap();
             let work_words = if let Some((root, words, word)) = remembered.take() {
-                stopped
-                    .with_owner_image(key, |image| {
+                // SAFETY: in-place test seeding on `key`'s own image without swapping it.
+                unsafe {
+                    stopped.with_owner_image_mut_for_test(key, |image| {
                         // SAFETY: `word` is a live object on this stopped era's heap.
                         unsafe {
                             image.seed_collection_words_for_test(
@@ -445,7 +458,8 @@ fn native_image_logs_fold_once_across_repeated_full_majors<K, W>(
                             );
                         }
                     })
-                    .unwrap();
+                }
+                .unwrap();
                 drop(root);
                 words
             } else {
@@ -1107,4 +1121,121 @@ fn stopped_admission_accepts_deferred_native_payloads() {
         "user-ptr and module-function payloads must be admissible once the \
          stopped sweep defers their reclamation"
     );
+}
+
+fn swapped_entry_image_between_non_generational_eras_fails_closed_at_collect_stopped<K, W>(
+    graph_era: &mut dyn FnMut(i64, &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>, Graph)),
+    empty_nested_era: &mut dyn FnMut(i64, &mut dyn for<'e> FnMut(ParallelHeapEra<'e, K>)),
+    world_roots: W,
+) where
+    K: EraKeeper + std::fmt::Debug,
+    W: Copy
+        + for<'k, 's, 'e, 'o> Fn(
+            &'k K,
+            &'s mut AllStopped<'e>,
+            &'o mut Vec<Value>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
+{
+    graph_era(309, &mut |era_a, graph_a| {
+        let mut owner_a = era_a
+            .register(809, 1)
+            .unwrap()
+            .activate(era_a.heap_identity(), 809)
+            .unwrap();
+        // `owner_a`'s published image is now the sole root retaining `graph_a`.
+        owner_a
+            .enter_native(std::slice::from_ref(&graph_a.0))
+            .unwrap();
+        drop(graph_a.0);
+
+        empty_nested_era(0, &mut |era_b| {
+            let mut owner_b = era_b
+                .register(810, 1)
+                .unwrap()
+                .activate(era_b.heap_identity(), 810)
+                .unwrap();
+            owner_b.enter_native(&[]).unwrap();
+
+            let entry_a = Arc::clone(&owner_a.entry);
+            let entry_b = Arc::clone(&owner_b.entry);
+            // Whole-field swap of `EntryState.image` across two live non-generational
+            // eras (same-module / descendant-module mutation vector).
+            {
+                let mut state_a = entry_a.state.lock().unwrap();
+                let mut state_b = entry_b.state.lock().unwrap();
+                std::mem::swap(&mut state_a.image, &mut state_b.image);
+            }
+
+            let mut stopped_a = era_a.stop().unwrap();
+            let mut stopped_b = era_b.stop().unwrap();
+            let collections_before_a = era_a.gc_collections_for_test(&stopped_a).unwrap();
+            let collections_before_b = era_b.gc_collections_for_test(&stopped_b).unwrap();
+            assert_eq!(
+                era_a
+                    .collect_stopped(&mut stopped_a, world_roots)
+                    .unwrap_err(),
+                RendezvousError::Identity,
+                "collect_stopped on era A must fail closed when EntryState.image was swapped from era B"
+            );
+            assert_eq!(
+                era_b
+                    .collect_stopped(&mut stopped_b, world_roots)
+                    .unwrap_err(),
+                RendezvousError::Identity,
+                "collect_stopped on era B must fail closed when EntryState.image was swapped from era A"
+            );
+            // Both eras fail closed AND poison their registries, without running
+            // any sweep or freeing `graph_a`.
+            assert_eq!(
+                era_a.gc_collections_for_test(&stopped_a).unwrap_err(),
+                RendezvousError::Poisoned
+            );
+            assert_eq!(
+                era_b.gc_collections_for_test(&stopped_b).unwrap_err(),
+                RendezvousError::Poisoned
+            );
+            {
+                let mut collector_a = era_a.core.collector.borrow_mut();
+                let heap_a = collector_a
+                    .as_mut()
+                    .expect("poisoned era retains collector")
+                    .registration_heap_mut();
+                assert_eq!(
+                    heap_a.gc_collections(),
+                    collections_before_a,
+                    "failed swapped-image collection must not sweep era A"
+                );
+                check_owned(heap_a, &graph_a.1, true);
+            }
+            {
+                let mut collector_b = era_b.core.collector.borrow_mut();
+                let heap_b = collector_b
+                    .as_mut()
+                    .expect("poisoned era retains collector")
+                    .registration_heap_mut();
+                assert_eq!(
+                    heap_b.gc_collections(),
+                    collections_before_b,
+                    "failed swapped-image collection must not sweep era B"
+                );
+            }
+
+            drop(stopped_b);
+            drop(owner_b);
+            assert_eq!(
+                era_b.finish().unwrap_err().reason,
+                RegistrationError::Poisoned
+            );
+            drop(stopped_a);
+        });
+
+        drop(owner_a);
+        assert_eq!(
+            era_a.finish().unwrap_err().reason,
+            RegistrationError::Poisoned
+        );
+    });
 }

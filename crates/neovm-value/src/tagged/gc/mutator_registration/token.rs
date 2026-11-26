@@ -459,7 +459,17 @@ impl<'era> Mutator<'era> {
                 .expect("owner shells remain local")
                 .publish()?
         };
-        state.image = Some(image);
+        // SAFETY: `image` was just published from `self.local`, which belongs
+        // to `(self.entry.key.heap, self.entry.young)` in this live era.
+        unsafe {
+            state
+                .image
+                .install(self.entry.key.heap, self.entry.young, image)
+        }
+        .map_err(|failure| {
+            std::mem::forget(failure.image);
+            RegistrationError::from(failure.error)
+        })?;
         state.publication_generation = next.get();
         state.epoch = epoch.get();
         state.phase = EntryPhase::Published;
@@ -494,14 +504,26 @@ impl<'era> Mutator<'era> {
         if state.readers != 0 || state.worker_loan {
             return Err(RegistrationError::OutstandingLoan);
         }
-        let image = state.image.take().ok_or(RegistrationError::Publication)?;
+        let image = state
+            .image
+            .take_for(self.entry.key.heap, self.entry.young)
+            .map_err(RegistrationError::from)?
+            .ok_or(RegistrationError::Publication)?;
         // SAFETY: `check_thread()` pinned this call to the owning mutator
         // thread, `state.phase == Published`, `binding.epoch` matched, and
         // `readers == 0` / `!worker_loan` ensure the image belongs to this
         // live era and no sweep has reclaimed its words.
         if let Err(failure) = unsafe { self.local.as_mut().expect("local shells").restore(image) } {
             let reason = failure.error.into();
-            state.image = Some(failure.image);
+            // SAFETY: returning the untouched image just taken from this entry
+            // after a failed restore.
+            if let Err(reinstall) = unsafe {
+                state
+                    .image
+                    .install(self.entry.key.heap, self.entry.young, failure.image)
+            } {
+                std::mem::forget(reinstall.image);
+            }
             return Err(reason);
         }
         state.phase = EntryPhase::Running;

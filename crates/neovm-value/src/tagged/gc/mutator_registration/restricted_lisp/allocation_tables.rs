@@ -237,7 +237,12 @@ pub(super) fn a6_ht_b7_make_copy_collect_resume_and_reclaim<H: HostParts>(host: 
                     let gate = retry_reg(|| era.registry().lock());
                     for entry in gate.entries.iter().skip(1) {
                         let state = entry.state.lock().unwrap();
-                        let summary = state.image.as_ref().unwrap().summary();
+                        let summary = state
+                            .image
+                            .as_ref_for(entry.key.heap, entry.young)
+                            .unwrap()
+                            .unwrap()
+                            .summary();
                         assert_eq!(summary.allocated_count, 5);
                         assert_eq!(
                             summary.memory_use_counts

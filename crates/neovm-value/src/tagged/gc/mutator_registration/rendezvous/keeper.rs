@@ -659,11 +659,15 @@ impl<'era> AllStopped<'era> {
     pub(in crate::tagged::gc) fn with_owner_image<R>(
         &self,
         key: MutatorKey,
-        body: impl FnOnce(&mut PublishedGcImage) -> R,
+        body: impl FnOnce(&PublishedGcImage) -> R,
     ) -> Result<R, RendezvousError> {
         let entry = self.entry(key)?;
-        let mut state = super::keeper_hold(&entry)?;
-        let image = state.image.as_mut().ok_or(RendezvousError::Publication)?;
+        let state = super::keeper_hold(&entry)?;
+        let image = state
+            .image
+            .as_ref_for(self.registry.heap, entry.young)
+            .map_err(|_| RendezvousError::Identity)?
+            .ok_or(RendezvousError::Publication)?;
         let mut attempt = CallbackAttempt {
             registry: self.registry,
             finished: false,
@@ -674,6 +678,66 @@ impl<'era> AllStopped<'era> {
             return Err(RendezvousError::Poisoned);
         }
         Ok(result)
+    }
+
+    /// Test-only: mutable access to a stopped owner's published image for
+    /// in-place fixture seeding/consumption. Takes the verified image out,
+    /// runs `body`, and re-installs via `EntryImageSlot::install` (checking
+    /// identity again on reinstall so even a test callback cannot swap in a
+    /// foreign image).
+    ///
+    /// # Safety
+    /// `body` must not replace or swap the `PublishedGcImage` (or alter its
+    /// heap/registration identity).
+    #[cfg(any(test, feature = "test-support"))]
+    pub(in crate::tagged::gc) unsafe fn with_owner_image_mut_for_test<R>(
+        &self,
+        key: MutatorKey,
+        body: impl FnOnce(&mut PublishedGcImage) -> R,
+    ) -> Result<R, RendezvousError> {
+        let entry = self.entry(key)?;
+        let mut state = super::keeper_hold(&entry)?;
+        let mut image = state
+            .image
+            .take_for(self.registry.heap, entry.young)
+            .map_err(|_| RendezvousError::Identity)?
+            .ok_or(RendezvousError::Publication)?;
+        let mut attempt = CallbackAttempt {
+            registry: self.registry,
+            finished: false,
+        };
+        let result = body(&mut image);
+        attempt.finished = true;
+        // SAFETY: reinstalling the exact verified image taken from `entry` above.
+        if let Err(failure) = unsafe { state.image.install(self.registry.heap, entry.young, image) }
+        {
+            std::mem::forget(failure.image);
+            self.registry.poison();
+            return Err(RendezvousError::Identity);
+        }
+        if self.registry.park.poisoned.load(Ordering::Acquire) {
+            return Err(RendezvousError::Poisoned);
+        }
+        Ok(result)
+    }
+
+    /// Test-only: consume a known immediate synthetic remembered marker on a
+    /// stopped owner's image without exposing `&mut PublishedGcImage`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn consume_synthetic_remembered_for_test(
+        &self,
+        key: MutatorKey,
+        expected: crate::tagged::gc::mark_word::MarkWord,
+    ) -> Result<usize, RendezvousError> {
+        // SAFETY: only calls `consume_synthetic_remembered_for_test` in place;
+        // never replaces or swaps the `PublishedGcImage`.
+        unsafe {
+            self.with_owner_image_mut_for_test(key, |image| {
+                image
+                    .consume_synthetic_remembered_for_test(expected)
+                    .unwrap()
+            })
+        }
     }
 
     /// Copied owner-work census. Root words are bits; other items keep their Debug text.
@@ -705,7 +769,11 @@ impl<'era> AllStopped<'era> {
     ) -> Result<R, RendezvousError> {
         let entry = self.entry(key)?;
         let state = super::keeper_hold(&entry)?;
-        let image = state.image.as_ref().ok_or(RendezvousError::Publication)?;
+        let image = state
+            .image
+            .as_ref_for(self.registry.heap, entry.young)
+            .map_err(|_| RendezvousError::Identity)?
+            .ok_or(RendezvousError::Publication)?;
         let mut attempt = CallbackAttempt {
             registry: self.registry,
             finished: false,
@@ -803,6 +871,36 @@ impl Drop for AllStopped<'_> {
             self.registry.park.wake.notify_all();
         }
     }
+}
+
+/// Test-only: temporarily detach `entry`'s verified image for `body` and
+/// unconditionally reinstall that exact image afterward, so callers cannot pass
+/// an arbitrary `PublishedGcImage` into the reinstall path.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn with_missing_image_for_test<R>(
+    entry: &std::sync::Arc<MutatorEntry>,
+    body: impl FnOnce() -> R,
+) -> R {
+    let saved_image = entry
+        .state
+        .lock()
+        .unwrap()
+        .image
+        .take_for(entry.key.heap, entry.young)
+        .unwrap()
+        .unwrap();
+    let result = body();
+    // SAFETY: reinstalling the exact verified image just taken from `entry`.
+    unsafe {
+        entry
+            .state
+            .lock()
+            .unwrap()
+            .image
+            .install(entry.key.heap, entry.young, saved_image)
+    }
+    .unwrap();
+    result
 }
 
 static_assertions::assert_not_impl_any!(AllStopped<'static>: Send, Sync, Clone, Copy);

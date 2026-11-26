@@ -532,11 +532,21 @@ impl<'era> Mutator<'era> {
                 return Err(error);
             }
         };
+        // SAFETY: `image` was just published from `self.local` on the owning
+        // thread for `(self.entry.key.heap, self.entry.young)` in this live era.
+        if let Err(failure) = unsafe {
+            e.image
+                .install(self.entry.key.heap, self.entry.young, image)
+        } {
+            std::mem::forget(failure.image);
+            std::mem::forget(publication);
+            self.registry.poison();
+            return Err(RegistrationError::from(failure.error).into());
+        }
         if let Some(old) = e.roots.replace(publication) {
             e.retained_roots.push(old);
         }
         e.rendezvous.image_epoch = epoch;
-        e.image = Some(image);
         e.publication_generation = generation.get();
         e.epoch = epoch;
         e.phase = EntryPhase::Published;

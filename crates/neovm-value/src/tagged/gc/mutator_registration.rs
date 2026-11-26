@@ -79,7 +79,9 @@ pub use world_loan::retained::{
 };
 #[doc(hidden)]
 pub use world_loan::{EraWorldLoan, SymbolRootDesignators, WorldIdentity, WorldLoan};
+mod entry_image;
 mod gate;
+use entry_image::EntryImageSlot;
 #[cfg(not(feature = "test-support"))]
 mod image;
 #[cfg(feature = "test-support")]
@@ -166,7 +168,7 @@ use std::thread::ThreadId;
 
 use rustc_hash::FxHashMap;
 
-use super::young_registry::{YoungRegistrationId, YoungRegistryError};
+use super::young_registry::{YoungBlockLog, YoungRegistrationId, YoungRegistryError};
 use super::{HeapIdentity, QuiescentCollector};
 
 /// VIS row: copied entry-image presence for the re-homed native-extent oracle.
@@ -180,7 +182,7 @@ pub(crate) fn entry_image_present_for_test(entry: &MutatorEntry) -> Result<bool,
 pub(crate) fn entry_image_epoch_for_test(entry: &MutatorEntry) -> Result<u64, RendezvousError> {
     rendezvous::entry_state(entry).map(|state| state.rendezvous.image_epoch)
 }
-use image::{OwnerGcState, PublishedGcImage};
+use image::{ImageError, OwnerGcState, PublishedGcImage, RestoreImageFailure};
 use weak_policy::WeakSweepPermit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,7 +285,7 @@ struct EntryState {
     owner_thread: Option<ThreadId>,
     publication_generation: u64,
     epoch: u64,
-    image: Option<PublishedGcImage>,
+    image: EntryImageSlot,
     run_loan: bool,
     worker_loan: bool,
     readers: usize,
@@ -356,7 +358,8 @@ impl MutatorEntry {
             .lock()
             .unwrap()
             .image
-            .as_ref()
+            .as_ref_for(self.key.heap, self.young)
+            .expect("entry image identity must match entry")
             .map(|image| image.root_words_for_test())
     }
 
@@ -774,6 +777,11 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             registration: NonZeroU64::MIN,
             generation,
         };
+        let mut image_slot = EntryImageSlot::empty();
+        // SAFETY: `image` was just frozen from `collector.registration_heap_mut()`
+        // on `heap` and carries its canonical legacy `young` registration ID.
+        unsafe { image_slot.install(heap, young, image) }
+            .expect("fresh legacy image matches entry identity");
         let entry = Arc::new(MutatorEntry {
             key,
             young,
@@ -785,7 +793,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 owner_thread: Some(std::thread::current().id()),
                 publication_generation: 1,
                 epoch: 0,
-                image: Some(image),
+                image: image_slot,
                 run_loan: false,
                 worker_loan: false,
                 readers: 0,
@@ -906,7 +914,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 owner_thread: None,
                 publication_generation: 0,
                 epoch: 0,
-                image: None,
+                image: EntryImageSlot::empty(),
                 run_loan: false,
                 worker_loan: false,
                 readers: 0,
@@ -1139,7 +1147,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             }
             let image = current
                 .image
-                .as_ref()
+                .as_ref_for(entry.key.heap, entry.young)?
                 .ok_or(RegistrationError::Publication)?;
             if !image.roots_empty() {
                 return Err(RegistrationError::PendingRoots);
@@ -1270,15 +1278,59 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         let (legacy, owners) = entry_guards
             .split_first_mut()
             .ok_or(RegistrationError::Publication)?;
-        let mut image = legacy.image.take().expect("preflighted frozen image");
+        let legacy_entry = &state.entries[0];
+        let mut image = legacy
+            .image
+            .take_for(legacy_entry.key.heap, legacy_entry.young)
+            .map_err(RegistrationError::from)?
+            .expect("preflighted frozen image");
         for (entry, current) in state.entries.iter().skip(1).zip(owners.iter_mut()) {
             if entry.cancelled_start.load(Ordering::Acquire) {
                 continue;
             }
-            let other = current.image.take().expect("preflighted retiring image");
+            let other = match current.image.take_for(entry.key.heap, entry.young) {
+                Ok(Some(img)) => img,
+                Ok(None) => {
+                    // SAFETY: returning untouched legacy image taken above.
+                    if let Err(reinstall) = unsafe {
+                        legacy
+                            .image
+                            .install(legacy_entry.key.heap, legacy_entry.young, image)
+                    } {
+                        std::mem::forget(reinstall.image);
+                    }
+                    registry.poison();
+                    return Err(RegistrationError::Publication);
+                }
+                Err(error) => {
+                    // SAFETY: returning untouched legacy image taken above.
+                    if let Err(reinstall) = unsafe {
+                        legacy
+                            .image
+                            .install(legacy_entry.key.heap, legacy_entry.young, image)
+                    } {
+                        std::mem::forget(reinstall.image);
+                    }
+                    registry.poison();
+                    return Err(error.into());
+                }
+            };
             if let Err(failure) = image.merge_non_young(other) {
-                current.image = Some(failure.image);
-                legacy.image = Some(image);
+                // SAFETY: returning the untouched images just taken from `entry` and `legacy_entry`.
+                if let Err(reinstall) = unsafe {
+                    current
+                        .image
+                        .install(entry.key.heap, entry.young, failure.image)
+                } {
+                    std::mem::forget(reinstall.image);
+                }
+                if let Err(reinstall) = unsafe {
+                    legacy
+                        .image
+                        .install(legacy_entry.key.heap, legacy_entry.young, image)
+                } {
+                    std::mem::forget(reinstall.image);
+                }
                 registry.poison();
                 return Err(failure.error.into());
             }
@@ -1296,7 +1348,14 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 |_moved_id| None,
             )
         } {
-            legacy.image = Some(failure.image);
+            // SAFETY: returning the untouched legacy image just taken from `legacy_entry`.
+            if let Err(reinstall) = unsafe {
+                legacy
+                    .image
+                    .install(legacy_entry.key.heap, legacy_entry.young, failure.image)
+            } {
+                std::mem::forget(reinstall.image);
+            }
             registry.poison();
             return Err(failure.error.into());
         }

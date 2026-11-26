@@ -76,7 +76,7 @@ impl MarkWord {
     #[inline(always)]
     pub(super) unsafe fn value(self) -> TaggedValue {
         // SAFETY: `MarkWord` is only constructed from a real `TaggedValue` via
-        // `MarkWord::of` / `MarkWord::NIL` / `MarkWord::from_immediate`, and
+        // `MarkWord::of` / `MarkWord::nil()` / `MarkWord::from_immediate`, and
         // the caller upholds the thread/liveness contract.
         unsafe { TaggedValue::from_bits(self.0) }
     }

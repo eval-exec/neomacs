@@ -95,7 +95,9 @@ impl<'brand> RunSlice<'brand, '_> {
         }
         // SAFETY: only bind constructs a home, with this invariant brand.
         // The bank cannot clear/grow/publish while the slice is borrowed.
-        // All cells of the finite run are disjoint from the root allocation.
+        // All cells of the finite run are disjoint from the root allocation,
+        // and `value` was just initialized in this owner's active cons run on
+        // the same heap, satisfying `MarkWord::of`'s liveness/ownership contract.
         unsafe {
             let car = car.word.as_ptr().read().bits();
             let cdr = cdr.word.as_ptr().read().bits();
