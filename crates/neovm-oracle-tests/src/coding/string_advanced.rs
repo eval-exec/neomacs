@@ -380,3 +380,97 @@ fn oracle_prop_coding_string_buffer_destination_drops_source_properties() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_coding_string_hook_buffer_destination_runs_conversion_hook() {
+    // GNU `code_convert_string` (src/coding.c:9610-9648):
+    // The ASCII identity fast path is gated strictly on `EQ (dst_object, Qt)`.
+    // Buffer destinations never take that fast path, so pure-ASCII input on a
+    // coding system with `:post-read-conversion` / `:pre-write-conversion`
+    // (such as `vietnamese-viqr`) always runs the hook into the buffer.
+    let form = r#"(let ((out nil))
+  (dolist (op '(decode encode))
+    (dolist (cs '(vietnamese-viqr vietnamese-viqr-unix vietnamese-viqr-dos))
+      (dolist (src-kind '(uni-viqr-ascii mb-viqr-ascii))
+        (dolist (nc '(nil t))
+          (dolist (dst '(buf-mb buf-uni))
+            (let* ((raw (if (eq src-kind 'uni-viqr-ascii)
+                            (unibyte-string ?V ?i ?e ?^ ?. ?t)
+                          (string-to-multibyte "Vie^.t")))
+                   (src (propertize raw 'foo 'bar))
+                   (last-coding-system-used 'sentinel))
+              (with-temp-buffer
+                (set-buffer-multibyte (eq dst 'buf-mb))
+                (let* ((pt0 (point))
+                       (ret (if (eq op 'decode)
+                                (decode-coding-string src cs nc (current-buffer))
+                              (encode-coding-string src cs nc (current-buffer))))
+                       (last last-coding-system-used))
+                  (push (list op cs src-kind nc dst ret (= (point) pt0)
+                              (if enable-multibyte-characters t nil)
+                              (string-to-list (buffer-string))
+                              (text-properties-at (point-min))
+                              last)
+                        out)))))))))
+  (nreverse out))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((decode vietnamese-viqr uni-viqr-ascii nil buf-mb 4 t t (86 105 7879 116) nil vietnamese-viqr) (decode vietnamese-viqr uni-viqr-ascii nil buf-uni 4 t nil (86 105 199 116) nil vietnamese-viqr) (decode vietnamese-viqr uni-viqr-ascii t buf-mb 4 t t (86 105 7879 116) nil vietnamese-viqr) (decode vietnamese-viqr uni-viqr-ascii t buf-uni 4 t nil (86 105 199 116) nil vietnamese-viqr) (decode vietnamese-viqr mb-viqr-ascii nil buf-mb 4 t t (86 105 7879 116) nil vietnamese-viqr) (decode vietnamese-viqr mb-viqr-ascii nil buf-uni 4 t nil (86 105 199 116) nil vietnamese-viqr) (decode vietnamese-viqr mb-viqr-ascii t buf-mb 4 t t (86 105 7879 116) nil vietnamese-viqr) (decode vietnamese-viqr mb-viqr-ascii t buf-uni 4 t nil (86 105 199 116) nil vietnamese-viqr) (decode vietnamese-viqr-unix uni-viqr-ascii nil buf-mb 4 t t (86 105 7879 116) nil vietnamese-viqr-unix) (decode vietnamese-viqr-unix uni-viqr-ascii nil buf-uni 4 t nil (86 105 199 116) nil vietnamese-viqr-unix) (decode vietnamese-viqr-unix uni-viqr-ascii t buf-mb 4 t t (86 105 7879 116) nil vietnamese-viqr-unix) (decode vietnamese-viqr-unix uni-viqr-ascii t buf-uni 4 t nil (86 105 199 116) nil vietnamese-viqr-unix) (decode vietnamese-viqr-unix mb-viqr-ascii nil buf-mb 4 t t (86 105 7879 116) nil vietnamese-viqr-unix) (decode vietnamese-viqr-unix mb-viqr-ascii nil buf-uni 4 t nil (86 105 199 116) nil vietnamese-viqr-unix) (decode vietnamese-viqr-unix mb-viqr-ascii t buf-mb 4 t t (86 105 7879 116) nil vietnamese-viqr-unix) (decode vietnamese-viqr-unix mb-viqr-ascii t buf-uni 4 t nil (86 105 199 116) nil vietnamese-viqr-unix) (decode vietnamese-viqr-dos uni-viqr-ascii nil buf-mb 4 t t (86 105 7879 116) nil vietnamese-viqr-dos) (decode vietnamese-viqr-dos uni-viqr-ascii nil buf-uni 4 t nil (86 105 199 116) nil vietnamese-viqr-dos) (decode vietnamese-viqr-dos uni-viqr-ascii t buf-mb 4 t t (86 105 7879 116) nil vietnamese-viqr-dos) (decode vietnamese-viqr-dos uni-viqr-ascii t buf-uni 4 t nil (86 105 199 116) nil vietnamese-viqr-dos) (decode vietnamese-viqr-dos mb-viqr-ascii nil buf-mb 4 t t (86 105 7879 116) nil vietnamese-viqr-dos) (decode vietnamese-viqr-dos mb-viqr-ascii nil buf-uni 4 t nil (86 105 199 116) nil vietnamese-viqr-dos) (decode vietnamese-viqr-dos mb-viqr-ascii t buf-mb 4 t t (86 105 7879 116) nil vietnamese-viqr-dos) (decode vietnamese-viqr-dos mb-viqr-ascii t buf-uni 4 t nil (86 105 199 116) nil vietnamese-viqr-dos) (encode vietnamese-viqr uni-viqr-ascii nil buf-mb 7 t t (86 105 101 92 94 46 116) nil vietnamese-viqr) (encode vietnamese-viqr uni-viqr-ascii nil buf-uni 7 t nil (86 105 101 92 94 46 116) nil vietnamese-viqr) (encode vietnamese-viqr uni-viqr-ascii t buf-mb 7 t t (86 105 101 92 94 46 116) nil vietnamese-viqr) (encode vietnamese-viqr uni-viqr-ascii t buf-uni 7 t nil (86 105 101 92 94 46 116) nil vietnamese-viqr) (encode vietnamese-viqr mb-viqr-ascii nil buf-mb 7 t t (86 105 101 92 94 46 116) nil vietnamese-viqr) (encode vietnamese-viqr mb-viqr-ascii nil buf-uni 7 t nil (86 105 101 92 94 46 116) nil vietnamese-viqr) (encode vietnamese-viqr mb-viqr-ascii t buf-mb 7 t t (86 105 101 92 94 46 116) nil vietnamese-viqr) (encode vietnamese-viqr mb-viqr-ascii t buf-uni 7 t nil (86 105 101 92 94 46 116) nil vietnamese-viqr) (encode vietnamese-viqr-unix uni-viqr-ascii nil buf-mb 7 t t (86 105 101 92 94 46 116) nil vietnamese-viqr-unix) (encode vietnamese-viqr-unix uni-viqr-ascii nil buf-uni 7 t nil (86 105 101 92 94 46 116) nil vietnamese-viqr-unix) (encode vietnamese-viqr-unix uni-viqr-ascii t buf-mb 7 t t (86 105 101 92 94 46 116) nil vietnamese-viqr-unix) (encode vietnamese-viqr-unix uni-viqr-ascii t buf-uni 7 t nil (86 105 101 92 94 46 116) nil vietnamese-viqr-unix) (encode vietnamese-viqr-unix mb-viqr-ascii nil buf-mb 7 t t (86 105 101 92 94 46 116) nil vietnamese-viqr-unix) (encode vietnamese-viqr-unix mb-viqr-ascii nil buf-uni 7 t nil (86 105 101 92 94 46 116) nil vietnamese-viqr-unix) (encode vietnamese-viqr-unix mb-viqr-ascii t buf-mb 7 t t (86 105 101 92 94 46 116) nil vietnamese-viqr-unix) (encode vietnamese-viqr-unix mb-viqr-ascii t buf-uni 7 t nil (86 105 101 92 94 46 116) nil vietnamese-viqr-unix) (encode vietnamese-viqr-dos uni-viqr-ascii nil buf-mb 7 t t (86 105 101 92 94 46 116) nil vietnamese-viqr-dos) (encode vietnamese-viqr-dos uni-viqr-ascii nil buf-uni 7 t nil (86 105 101 92 94 46 116) nil vietnamese-viqr-dos) (encode vietnamese-viqr-dos uni-viqr-ascii t buf-mb 7 t t (86 105 101 92 94 46 116) nil vietnamese-viqr-dos) (encode vietnamese-viqr-dos uni-viqr-ascii t buf-uni 7 t nil (86 105 101 92 94 46 116) nil vietnamese-viqr-dos) (encode vietnamese-viqr-dos mb-viqr-ascii nil buf-mb 7 t t (86 105 101 92 94 46 116) nil vietnamese-viqr-dos) (encode vietnamese-viqr-dos mb-viqr-ascii nil buf-uni 7 t nil (86 105 101 92 94 46 116) nil vietnamese-viqr-dos) (encode vietnamese-viqr-dos mb-viqr-ascii t buf-mb 7 t t (86 105 101 92 94 46 116) nil vietnamese-viqr-dos) (encode vietnamese-viqr-dos mb-viqr-ascii t buf-uni 7 t nil (86 105 101 92 94 46 116) nil vietnamese-viqr-dos))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_coding_string_hook_string_destination_keeps_ascii_fast_path() {
+    // Negative / must-stay-green guard for GNU `code_convert_string`
+    // (src/coding.c:9610-9629): for string destinations (`dst = nil` or `t`),
+    // the ASCII identity fast path does NOT check for conversion hooks — it
+    // returns pure-ASCII input unchanged (honoring `NOCOPY` `eq` and
+    // `make_unibyte_string` / `make_multibyte_string`). Non-ASCII input still
+    // runs the hook for both multibyte buffers and string destinations.
+    let form = r#"(let ((str-cases nil))
+  (dolist (op '(decode encode))
+    (dolist (src-kind '(uni-viqr-ascii mb-viqr-ascii))
+      (dolist (nc '(nil t))
+        (dolist (dst '(nil t))
+          (let* ((raw (if (eq src-kind 'uni-viqr-ascii)
+                          (unibyte-string ?V ?i ?e ?^ ?. ?t)
+                        (string-to-multibyte "Vie^.t")))
+                 (src (propertize raw 'foo 'bar))
+                 (last-coding-system-used 'sentinel)
+                 (res (if (eq op 'decode)
+                          (decode-coding-string src 'vietnamese-viqr nc dst)
+                        (encode-coding-string src 'vietnamese-viqr nc dst)))
+                 (last last-coding-system-used))
+            (push (list op src-kind nc dst (eq res src)
+                        (if (multibyte-string-p res) t nil)
+                        (string-to-list res)
+                        (text-properties-at 0 res)
+                        last)
+                  str-cases))))))
+  (let* ((non-ascii (propertize (unibyte-string ?V ?i ?e ?^ ?. ?t #xc3 #xa9)
+                                'foo 'bar))
+         (non-ascii-buf-mb
+          (with-temp-buffer
+            (set-buffer-multibyte t)
+            (let* ((pt0 (point))
+                   (last-coding-system-used 'sentinel)
+                   (ret (decode-coding-string non-ascii 'vietnamese-viqr nil (current-buffer)))
+                   (last last-coding-system-used))
+              (list ret (= (point) pt0) (if enable-multibyte-characters t nil)
+                    (string-to-list (buffer-string))
+                    (text-properties-at (point-min))
+                    last))))
+         (non-ascii-str
+          (let* ((last-coding-system-used 'sentinel)
+                 (res (decode-coding-string non-ascii 'vietnamese-viqr nil nil))
+                 (last last-coding-system-used))
+            (list (if (multibyte-string-p res) t nil)
+                  (string-to-list res)
+                  (text-properties-at 0 res)
+                  last))))
+    (list (nreverse str-cases) non-ascii-buf-mb non-ascii-str)))"#;
+    let expect = expect_test::expect![[
+        r#""OK (((decode uni-viqr-ascii nil nil nil t (86 105 101 94 46 116) nil vietnamese-viqr) (decode uni-viqr-ascii nil t nil t (86 105 101 94 46 116) nil vietnamese-viqr) (decode uni-viqr-ascii t nil t nil (86 105 101 94 46 116) (foo bar) vietnamese-viqr) (decode uni-viqr-ascii t t t nil (86 105 101 94 46 116) (foo bar) vietnamese-viqr) (decode mb-viqr-ascii nil nil nil t (86 105 101 94 46 116) nil vietnamese-viqr) (decode mb-viqr-ascii nil t nil t (86 105 101 94 46 116) nil vietnamese-viqr) (decode mb-viqr-ascii t nil t t (86 105 101 94 46 116) (foo bar) vietnamese-viqr) (decode mb-viqr-ascii t t t t (86 105 101 94 46 116) (foo bar) vietnamese-viqr) (encode uni-viqr-ascii nil nil nil nil (86 105 101 94 46 116) nil vietnamese-viqr) (encode uni-viqr-ascii nil t nil nil (86 105 101 94 46 116) nil vietnamese-viqr) (encode uni-viqr-ascii t nil t nil (86 105 101 94 46 116) (foo bar) vietnamese-viqr) (encode uni-viqr-ascii t t t nil (86 105 101 94 46 116) (foo bar) vietnamese-viqr) (encode mb-viqr-ascii nil nil nil nil (86 105 101 94 46 116) nil vietnamese-viqr) (encode mb-viqr-ascii nil t nil nil (86 105 101 94 46 116) nil vietnamese-viqr) (encode mb-viqr-ascii t nil t t (86 105 101 94 46 116) (foo bar) vietnamese-viqr) (encode mb-viqr-ascii t t t t (86 105 101 94 46 116) (foo bar) vietnamese-viqr)) (5 t t (86 105 7879 116 233) nil vietnamese-viqr) (t (86 105 7879 116 233) nil vietnamese-viqr))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

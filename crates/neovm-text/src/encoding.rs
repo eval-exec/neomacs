@@ -5707,7 +5707,12 @@ fn builtin_coding_string_in_context<H: TextHost>(
         //   (decode-coding-string ... 'vietnamese-viqr) => the source, unchanged
         //   (decode-coding-region ... 'vietnamese-viqr) => Việt Nam à ề
         //   insert-file-contents with that coding       => Việt Nam à ề
+        // GNU's `code_convert_string` identity fast path is gated strictly on
+        // `EQ (dst_object, Qt)` (src/coding.c:9610), so buffer destinations
+        // always run `encode_coding_object` / `decode_coding_object` and their
+        // conversion hooks even for pure-ASCII input.
         let result = if entry.has_identity_fast_path()
+            && destination.is_none()
             && coding_ascii_identity_fast_path(ctx, &coding, &args, encode, ctx.eol_conversion())
         {
             // Identity: encode yields a unibyte string, decode a multibyte one
