@@ -1676,6 +1676,17 @@ impl TaggedHeap {
 
     /// Sweep non-cons objects: walk intrusive list, free unmarked, rebuild list.
     pub(super) fn sweep_objects(&mut self) -> usize {
+        self.sweep_objects_with_reclaim(|heap, current| {
+            // SAFETY: `current` was just unlinked from `heap.all_objects` and
+            // is an unmarked boxed allocation owned by `heap`.
+            unsafe { heap.free_gc_object(current, ReclamationMode::Explicit) };
+        })
+    }
+
+    fn sweep_objects_with_reclaim(
+        &mut self,
+        mut reclaim: impl FnMut(&mut Self, *mut GcHeader),
+    ) -> usize {
         assert!(
             !self.has_unfinished_concurrent_mark(),
             "sweep_objects cannot reclaim while a concurrent mark is unfinished"
@@ -1692,53 +1703,70 @@ impl TaggedHeap {
         // cycle that just marked them (this eager sweep runs inside the same
         // collection, before any next flip).
         let parity = self.mark_parity;
-        // The unlink cursor must not borrow a field of `self`: promotion and
-        // reclamation below reborrow the whole heap. Keep the head local until
-        // those calls finish, just as the incremental sweep detaches its list.
-        let mut head = std::mem::replace(&mut self.all_objects, std::ptr::null_mut());
-        let mut prev = std::ptr::addr_of_mut!(head);
-        let mut current = head;
+        // Walk `self.all_objects` in place using `prev_node` rather than
+        // detaching `self.all_objects` to a local head, so an unwind inside
+        // `reclaim` or `collector_object_bytes` leaves every survivor and
+        // unvisited node linked on `self.all_objects` (value-gc C6).
+        let mut prev_node: Option<*mut GcHeader> = None;
+        let mut current = self.all_objects;
         let mut live_bytes = 0usize;
         while !current.is_null() {
             // SAFETY: sweeping is exclusive with every marker and mutator;
-            // current and prev address this heap's initialized owner list.
-            // Unlinking precedes explicit resource teardown of a dead Box.
+            // `current` and `prev_node` address initialized headers on this
+            // heap's young list, and unlinking precedes any `&mut self` call.
             unsafe {
                 let next = (*current).next;
                 if (*current).tenured && !(*current).generation.permanent() {
-                    *prev = next;
+                    match prev_node {
+                        None => self.all_objects = next,
+                        Some(prev) => (*prev).next = next,
+                    }
+                    let expected_head = self.all_objects;
                     self.link_old_object_world_stopped(current);
+                    debug_assert_eq!(
+                        self.all_objects, expected_head,
+                        "the eager sweep must not allocate into the young list"
+                    );
                     current = next;
                     continue;
                 }
                 debug_assert!(!(*current).tenured, "tenured object on the young list");
                 if (*current).is_marked_at(parity) {
-                    // Keep it — advance prev
+                    // Keep it — advance prev_node
                     if !(*current).flags.image_resident() {
+                        let expected_head = self.all_objects;
                         live_bytes =
                             live_bytes.saturating_add(self.collector_object_bytes(current));
+                        debug_assert_eq!(
+                            self.all_objects, expected_head,
+                            "the eager sweep must not allocate into the young list"
+                        );
                     }
-                    prev = std::ptr::addr_of_mut!((*current).next);
+                    prev_node = Some(current);
                     current = next;
                 } else {
-                    // Free it — unlink from list
-                    *prev = next;
+                    // Free it — unlink from list and update accounting before
+                    // explicit reclamation so an unwind cannot orphan survivors
+                    // or double-free `current`.
+                    match prev_node {
+                        None => self.all_objects = next,
+                        Some(prev) => (*prev).next = next,
+                    }
                     self.non_cons_object_addrs.remove(&(current as usize));
                     self.unregister_vector_object(current);
-                    self.free_gc_object(current, ReclamationMode::Explicit);
                     self.current_mutator_gc_mut().allocated_count =
                         self.current_mutator_gc().allocated_count.saturating_sub(1);
+                    let expected_head = self.all_objects;
+                    reclaim(self, current);
+                    debug_assert_eq!(
+                        self.all_objects, expected_head,
+                        "the eager sweep must not allocate into the young list"
+                    );
                     current = next;
                 }
             }
         }
 
-        // Sweeping must not append young allocations while its list is detached.
-        debug_assert!(
-            self.all_objects.is_null(),
-            "the eager sweep must not allocate into the young list"
-        );
-        self.all_objects = head;
         live_bytes
     }
 
@@ -2916,5 +2944,65 @@ mod gc_trace_seed_format_tests {
         assert_eq!(field_u64(&line, "seed_us"), 500);
         assert_eq!(field_u64(&line, "mark"), 8);
         assert_eq!(field_u64(&line, "sweep"), 7);
+    }
+
+    /// value-gc C6: a panic inside Explicit-mode object reclamation during
+    /// `sweep_objects` must leave every survivor and not-yet-swept object
+    /// linked on `all_objects` (never orphaned by a detached local head), and
+    /// preserve exact `allocated_count` accounting.
+    #[test]
+    fn c6_sweep_objects_panic_preserves_survivors_on_all_objects() {
+        use super::{GcHeader, ReclamationMode, TaggedHeap};
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let mut heap = TaggedHeap::new();
+        // Allocate 3 boxed young objects linked on `all_objects` as c -> b -> a -> null.
+        // SAFETY: null pointer with no finalizer is inert on explicit reclaim and drop.
+        let a = unsafe { heap.alloc_user_ptr(std::ptr::null_mut(), None) };
+        let b = unsafe { heap.alloc_user_ptr(std::ptr::null_mut(), None) };
+        let c = unsafe { heap.alloc_user_ptr(std::ptr::null_mut(), None) };
+
+        let a_hdr = a.gc_veclike_ptr().unwrap() as *mut GcHeader;
+        let b_hdr = b.gc_veclike_ptr().unwrap() as *mut GcHeader;
+        let c_hdr = c.gc_veclike_ptr().unwrap() as *mut GcHeader;
+
+        // Flip parity so `b` is unmarked while survivors `a` and `c` are marked.
+        heap.mark_parity = heap.mark_parity.flip();
+        let parity = heap.mark_parity;
+        // SAFETY: `a_hdr` and `c_hdr` are live headers allocated above.
+        unsafe {
+            (*a_hdr).set_marked(parity);
+            (*c_hdr).set_marked(parity);
+        }
+
+        let res = catch_unwind(AssertUnwindSafe(|| {
+            heap.sweep_objects_with_reclaim(|heap, ptr| {
+                assert_eq!(ptr, b_hdr, "only unmarked `b` should be reclaimed");
+                // SAFETY: `ptr` was unlinked from `all_objects` by the sweep.
+                unsafe { heap.free_gc_object(ptr, ReclamationMode::Explicit) };
+                panic!("injected reclaim panic during sweep_objects");
+            });
+        }));
+        assert!(res.is_err(), "injected reclaim panic must propagate");
+
+        // Both survivors (`c` before `b` and `a` after `b`) must remain linked on
+        // `all_objects`, with dead `b` unlinked and `allocated_count` decremented.
+        let mut remaining = Vec::new();
+        let mut cur = heap.all_objects;
+        while !cur.is_null() {
+            remaining.push(cur);
+            // SAFETY: every node on `all_objects` is a live boxed header.
+            cur = unsafe { (*cur).next };
+        }
+        assert!(
+            remaining.contains(&c_hdr) && remaining.contains(&a_hdr),
+            "survivors must remain on all_objects after reclaim panic; got {remaining:?}"
+        );
+        assert!(
+            !remaining.contains(&b_hdr),
+            "reclaimed object must stay unlinked after reclaim panic"
+        );
+        assert_eq!(heap.current_mutator_gc().allocated_count, 2);
+        drop(heap);
     }
 }
