@@ -205,6 +205,22 @@ pub enum ScenarioId {
     /// this row necessarily pays from contaminating the steady-state
     /// number. One operation is one scroll command.
     Scrolling,
+    /// Page up/down (`scroll-up-command`/`scroll-down-command`) over a
+    /// deterministic 2,400-line truncated buffer with 30-column right-margin
+    /// `before-string` overlays, `hl-line-mode`, and dense alternating-face
+    /// graph-lane prefixes pinning the Issue #702 long-line band (mean 179.3
+    /// chars, 55.0% > 200 columns, max 319) on a 200x50 TUI.
+    ///
+    /// Baseline on `8471a2c0d1` (pre-77e, dedicated idle treeroot, GNU 31.1
+    /// oracle `a360712c9d`): Magit `C-v 65536` measured 15.563 ms/key vs GNU
+    /// 5.152 ms/key (3.02x; `overlay_live_records` = 961,030 over 200 frames),
+    /// while `C-n 65536` in the same 71,459-overlay buffer stayed flat at
+    /// 1.38x GNU. See `docs/performance/2026-11-26-issue-702-long-line-scroll-attribution.md`.
+    ///
+    /// Deliberately absent from `STANDARD_SCENARIOS` so it does not shift the
+    /// standard board's geometric mean; gated via `SuiteId::ScrollingLongLinesGuard`
+    /// on retired user-space instructions (+2.0% budget, `CounterScope::EditLoop`).
+    ScrollingLongLines,
     /// Font-locked CJK buffer on a GUI frame, then one pulse of face writes.
     ///
     /// Each step writes `pulse-highlight-face`'s background and calls
@@ -823,7 +839,27 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::ScrollingLongLines,
+        description: "Truncated page scrolling over a deterministic pre-propertized long-line band (mean 179.3 chars, 55% > 200 cols, max 319) with 30-col right-margin overlays and hl-line-mode (Issue #702 layout/truncation/horizon/right-edge slice; fundamental-mode, excludes jit-lock RowsFontificationDemand)",
+        default_frontend: Frontend::Tui {
+            rows: 50,
+            columns: 200,
+        },
+        default_iterations: NonZeroU32::new(2).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
+
+impl ScenarioId {
+    /// Whether this scenario enforces the calibrated-cohort high-load local
+    /// refusal gate (`loadavg_1m >= LOCAL_HIGH_LOAD_THRESHOLD` refuses unless
+    /// `--allow-local` is passed, stamping `provenance = local-UNTRUSTED`).
+    pub const fn enforces_cohort_load_gate(self) -> bool {
+        matches!(self, Self::ScrollingLongLines)
+    }
+}
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
     SCENARIOS
@@ -894,6 +930,7 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::Scrolling => &SCENARIOS[53],
         ScenarioId::CjkFontLockPulse => &SCENARIOS[54],
         ScenarioId::ProcessOutputCarryover => &SCENARIOS[55],
+        ScenarioId::ScrollingLongLines => &SCENARIOS[56],
     }
 }
 

@@ -1,4 +1,8 @@
-use crate::{HostProvenance, MachinePolicy, cpu_list_contains, validate_machine_policy};
+use crate::{
+    HostProvenance, LOCAL_HIGH_LOAD_THRESHOLD, MachinePolicy, MeasurementProvenance, PerfError,
+    ScenarioId, collect_host_provenance_with_loadavg, cpu_list_contains, parse_loadavg_1m,
+    validate_cohort_load_policy, validate_machine_policy,
+};
 
 fn host() -> HostProvenance {
     HostProvenance {
@@ -12,6 +16,8 @@ fn host() -> HostProvenance {
         scaling_governor: Some("performance".to_string()),
         perf_event_paranoid: Some(1),
         continuous_integration: false,
+        loadavg: Some("0.42 0.50 0.60".to_string()),
+        provenance: Some(MeasurementProvenance::Calibrated),
     }
 }
 
@@ -30,6 +36,7 @@ fn machine_policy_rejects_disallowed_cpus_and_governor_drift() {
     let disallowed = MachinePolicy {
         cpu: Some(5),
         required_governor: Some("performance".to_string()),
+        allow_local: false,
     };
     let error = validate_machine_policy(&disallowed, &host())
         .expect_err("a CPU outside the process cpuset must reject the run");
@@ -38,6 +45,7 @@ fn machine_policy_rejects_disallowed_cpus_and_governor_drift() {
     let wrong_governor = MachinePolicy {
         cpu: Some(4),
         required_governor: Some("powersave".to_string()),
+        allow_local: false,
     };
     let error = validate_machine_policy(&wrong_governor, &host())
         .expect_err("governor drift must reject the run");
@@ -46,6 +54,89 @@ fn machine_policy_rejects_disallowed_cpus_and_governor_drift() {
     let controlled = MachinePolicy {
         cpu: Some(4),
         required_governor: Some("performance".to_string()),
+        allow_local: false,
     };
     validate_machine_policy(&controlled, &host()).expect("controlled host matches the policy");
+}
+
+#[test]
+fn cohort_load_gate_refuses_high_load_and_stamps_local_untrusted_on_override() {
+    assert_eq!(parse_loadavg_1m("0.51 1.56 2.37"), Some(0.51));
+    assert_eq!(parse_loadavg_1m("47.81 41.10 37.12"), Some(47.81));
+    assert_eq!(parse_loadavg_1m(""), None);
+    assert_eq!(parse_loadavg_1m("-1.0 0.0 0.0"), None);
+    assert_eq!(parse_loadavg_1m("NaN 0.0 0.0"), None);
+
+    // Idle host without --allow-local is stamped calibrated and permitted.
+    let idle_policy = MachinePolicy::default();
+    let idle_host =
+        collect_host_provenance_with_loadavg(&idle_policy, Some("0.68 0.90 1.12".to_string()));
+    assert_eq!(idle_host.loadavg.as_deref(), Some("0.68 0.90 1.12"));
+    assert_eq!(
+        idle_host.provenance,
+        Some(MeasurementProvenance::Calibrated)
+    );
+    validate_cohort_load_policy(ScenarioId::ScrollingLongLines, &idle_policy, &idle_host)
+        .expect("idle host below threshold passes cohort gate");
+
+    // Loaded host without --allow-local MUST refuse cohort-gated scenarios.
+    let loaded_host =
+        collect_host_provenance_with_loadavg(&idle_policy, Some("14.25 12.10 10.05".to_string()));
+    assert_eq!(
+        loaded_host.provenance,
+        Some(MeasurementProvenance::LocalUntrusted)
+    );
+    let err =
+        validate_cohort_load_policy(ScenarioId::ScrollingLongLines, &idle_policy, &loaded_host)
+            .expect_err("high-load local run without --allow-local must fail closed");
+    match err {
+        PerfError::HighLoadLocalRefused {
+            scenario,
+            loadavg_1m,
+            threshold,
+            loadavg,
+        } => {
+            assert_eq!(scenario, ScenarioId::ScrollingLongLines);
+            assert!((loadavg_1m - 14.25).abs() < f64::EPSILON);
+            assert!((threshold - LOCAL_HIGH_LOAD_THRESHOLD).abs() < f64::EPSILON);
+            assert_eq!(loadavg, "14.25 12.10 10.05");
+        }
+        other => panic!("expected HighLoadLocalRefused, got {other:?}"),
+    }
+
+    // Non-cohort scenarios are not blocked by the cohort load refusal gate.
+    validate_cohort_load_policy(ScenarioId::Scrolling, &idle_policy, &loaded_host)
+        .expect("non-cohort scenarios remain unblocked");
+
+    // Explicit --allow-local permits execution and ALWAYS stamps local-UNTRUSTED,
+    // even if the host happens to be quiet when --allow-local was passed.
+    let override_policy = MachinePolicy {
+        allow_local: true,
+        ..MachinePolicy::default()
+    };
+    let override_loaded = collect_host_provenance_with_loadavg(
+        &override_policy,
+        Some("14.25 12.10 10.05".to_string()),
+    );
+    assert_eq!(
+        override_loaded.provenance,
+        Some(MeasurementProvenance::LocalUntrusted)
+    );
+    assert_eq!(
+        override_loaded.provenance.unwrap().to_string(),
+        "local-UNTRUSTED"
+    );
+    validate_cohort_load_policy(
+        ScenarioId::ScrollingLongLines,
+        &override_policy,
+        &override_loaded,
+    )
+    .expect("--allow-local overrides the refusal while stamping local-UNTRUSTED");
+
+    let override_idle =
+        collect_host_provenance_with_loadavg(&override_policy, Some("0.20 0.25 0.30".to_string()));
+    assert_eq!(
+        override_idle.provenance,
+        Some(MeasurementProvenance::LocalUntrusted)
+    );
 }

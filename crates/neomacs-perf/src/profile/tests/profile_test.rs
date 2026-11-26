@@ -408,6 +408,8 @@ fn every_gate_protocol_failure_maps_to_a_rejected_profile() {
                     scaling_governor: None,
                     perf_event_paranoid: None,
                     continuous_integration: false,
+                    loadavg: None,
+                    provenance: None,
                 },
                 iterations: 1,
                 started_unix_ms: 1,

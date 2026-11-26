@@ -24,14 +24,31 @@ pub(crate) fn prepare(
 ) -> Result<PreparedScenario, String> {
     let sandbox = MelpaSandbox::new(&format!("perf-{}", request.scenario))?;
     let editor = collect_editor_provenance(request.editor(), &sandbox)?;
-    let fixture_source = workspace_root.join("crates/neomacs-perf/fixtures/scrolling.el");
+    let (fixture_rel, fixture_name, content_rel) = match request.scenario {
+        ScenarioId::Scrolling => (
+            "crates/neomacs-perf/fixtures/scrolling.el",
+            "scrolling.el",
+            Some("crates/neomacs-perf/fixtures/scrolling-content.el"),
+        ),
+        ScenarioId::ScrollingLongLines => (
+            "crates/neomacs-perf/fixtures/scrolling-long-lines.el",
+            "scrolling-long-lines.el",
+            None,
+        ),
+        other => {
+            return Err(format!(
+                "scrolling scenario handler received unexpected scenario {other}"
+            ));
+        }
+    };
+    let fixture_source = workspace_root.join(fixture_rel);
     if !fixture_source.is_file() {
         return Err(format!(
             "missing committed performance fixture {}",
             fixture_source.display()
         ));
     }
-    let fixture = run_directory.join("scrolling.el");
+    let fixture = run_directory.join(fixture_name);
     fs::copy(&fixture_source, &fixture).map_err(|error| {
         format!(
             "failed to copy performance fixture {} to {}: {error}",
@@ -39,16 +56,21 @@ pub(crate) fn prepare(
             fixture.display()
         )
     })?;
-    let content_source = workspace_root.join("crates/neomacs-perf/fixtures/scrolling-content.el");
-    fs::copy(&content_source, run_directory.join("scrolling-content.el"))
-        .map_err(|error| format!("failed to copy scrolling content fixture: {error}"))?;
+    let content_source_sha256 = if let Some(content_rel) = content_rel {
+        let content_source = workspace_root.join(content_rel);
+        fs::copy(&content_source, run_directory.join("scrolling-content.el"))
+            .map_err(|error| format!("failed to copy scrolling content fixture: {error}"))?;
+        Some(sha256_file(&content_source)?)
+    } else {
+        None
+    };
     let provenance = run_directory.join("input-provenance.json");
     let provenance_manifest = ScrollingInputProvenanceManifest {
         editor,
         host: collect_host_provenance(request.machine_policy()),
-        workload_source: "crates/neomacs-perf/fixtures/scrolling.el",
+        workload_source: fixture_rel,
         workload_source_sha256: sha256_file(&fixture_source)?,
-        content_source_sha256: sha256_file(&content_source)?,
+        content_source_sha256,
         environment_policy: "closed-v1",
         passthrough_environment: request
             .benchmark_environment()
@@ -158,7 +180,8 @@ struct ScrollingInputProvenanceManifest<'a> {
     host: HostProvenance,
     workload_source: &'a str,
     workload_source_sha256: String,
-    content_source_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_source_sha256: Option<String>,
     environment_policy: &'a str,
     passthrough_environment: BTreeMap<String, String>,
 }

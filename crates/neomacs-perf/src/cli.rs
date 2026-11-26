@@ -265,6 +265,10 @@ struct SuiteArgs {
     /// Reject the suite unless the selected CPU uses this scaling governor.
     #[arg(long)]
     require_governor: Option<String>,
+    /// Explicitly permit running a cohort-gated suite on a loaded local host,
+    /// stamping all artifacts with `provenance=local-UNTRUSTED`.
+    #[arg(long)]
+    allow_local: bool,
     /// Link this artifact to an earlier immutable suite artifact.
     #[arg(long)]
     previous_suite: Option<PathBuf>,
@@ -293,6 +297,10 @@ struct WorkloadArgs {
     /// Reject the run unless the selected CPU uses this scaling governor.
     #[arg(long)]
     require_governor: Option<String>,
+    /// Explicitly permit running a cohort-gated scenario on a loaded local
+    /// host, stamping all artifacts with `provenance=local-UNTRUSTED`.
+    #[arg(long)]
+    allow_local: bool,
     /// Video input for the sustained-native-video scenario.
     #[arg(long)]
     video_file: Option<PathBuf>,
@@ -322,6 +330,7 @@ impl WorkloadArgs {
             MachinePolicy {
                 cpu: self.cpu,
                 required_governor: self.require_governor,
+                allow_local: self.allow_local,
             },
             self.video_file,
             self.journal_file,
@@ -561,6 +570,7 @@ impl TryFrom<PerfSubcommand> for PerfCommand {
                 machine: MachinePolicy {
                     cpu: arguments.cpu,
                     required_governor: arguments.require_governor,
+                    allow_local: arguments.allow_local,
                 },
                 counters: arguments.counters.scope(),
                 previous_suite: arguments.previous_suite,
@@ -625,6 +635,12 @@ pub fn run_cli(
             }
             let report = PerfHarness::new(workspace_root).run(&request)?;
             println!("artifact = {}", report.artifact_path.display());
+            if let Some(provenance) = report.artifact.host.provenance {
+                println!("provenance = {provenance}");
+            }
+            if let Some(loadavg) = &report.artifact.host.loadavg {
+                println!("loadavg  = {loadavg}");
+            }
             if report.artifact.verdict.is_valid() {
                 println!("verdict  = valid");
                 Ok(())
@@ -668,6 +684,12 @@ pub fn run_cli(
             }
             let report = PerfHarness::new(workspace_root).compare(&request)?;
             println!("comparison = {}", report.artifact_path.display());
+            if let Some(provenance) = report.artifact.provenance {
+                println!("provenance = {provenance}");
+            }
+            if let Some(loadavg) = &report.artifact.host_loadavg {
+                println!("loadavg    = {loadavg}");
+            }
             match &report.artifact.verdict {
                 ComparisonVerdict::Valid { summary } => {
                     println!("verdict    = valid");
@@ -778,6 +800,12 @@ pub fn run_cli(
                 .with_baseline_manifest(baseline_manifest);
             let report = PerfHarness::new(workspace_root).suite(&request)?;
             println!("suite   = {}", report.artifact_path.display());
+            if let Some(provenance) = report.artifact.provenance {
+                println!("provenance = {provenance}");
+            }
+            if let Some(loadavg) = &report.artifact.host_loadavg {
+                println!("loadavg = {loadavg}");
+            }
             match &report.artifact.verdict {
                 SuiteVerdict::Passed => {
                     println!("verdict = passed");

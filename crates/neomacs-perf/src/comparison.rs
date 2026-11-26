@@ -10,10 +10,11 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    EditorProvenance, Frontend, MetricName, MetricUnit, NativeVideoComparisonIdentity,
-    NativeVideoExecutionIdentity, PerfError, PerfHarness, PortableDumpProvenance, RunRequest,
-    RunVerdict, ScenarioId,
+    EditorProvenance, Frontend, MeasurementProvenance, MetricName, MetricUnit,
+    NativeVideoComparisonIdentity, NativeVideoExecutionIdentity, PerfError, PerfHarness,
+    PortableDumpProvenance, RunRequest, RunVerdict, ScenarioId,
     artifact_store::{unix_time_ms, write_json_atomically},
+    host::{collect_host_provenance, validate_cohort_load_policy},
     scenario,
 };
 
@@ -190,6 +191,10 @@ pub struct ComparisonArtifact {
     pub schema_version: u32,
     pub comparison_id: String,
     pub input: ComparisonInput,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_loadavg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<MeasurementProvenance>,
     pub started_unix_ms: u128,
     pub total_elapsed_us: u128,
     pub verdict: ComparisonVerdict,
@@ -337,19 +342,73 @@ impl ComparisonRequest {
 
     /// Resolve the inherited environment for one comparison arm.
     ///
-    /// Manifest-pinned guard comparisons construct the closed guard environment
-    /// identically for BOTH `Baseline` and `Candidate` arms; non-manifest
-    /// comparisons (`SuiteId::Standard`, standalone `perf compare`) keep the
-    /// existing inherited passthrough environment untouched.
+    /// Guard comparisons construct a closed environment identically for BOTH
+    /// `Baseline` and `Candidate` arms; non-guard comparisons (`SuiteId::Standard`,
+    /// standalone `perf compare`) keep the inherited passthrough environment.
+    ///
+    /// - Manifest-pinned guards (`expected_baseline.is_some()`) use the strictly
+    ///   empty `guard_constructed_environment()` (stripping `LD_LIBRARY_PATH`,
+    ///   `PATH`, `NEOVM_*`, and `NEOMACS_*`).
+    /// - Non-manifest hardened guards (`guard_tools.is_some()`) strip all
+    ///   `NEOVM_*` and `NEOMACS_*` runtime/JIT/redisplay overrides, narrow
+    ///   `PATH` to the canonical parent directories of resolved `perf`,
+    ///   `taskset`, and `python3` for TUI adapters (`pty-run.py`), and preserve
+    ///   only loader library paths (`LD_LIBRARY_PATH`/`DYLD_*`) identically on
+    ///   both arms so dynamically-linked Nix/dev binaries can launch.
     pub(crate) fn run_inherited_environment(
         &self,
         _role: ComparisonRunRole,
     ) -> BTreeMap<String, std::ffi::OsString> {
         if self.expected_baseline.is_some() {
             Self::guard_constructed_environment()
+        } else if let Some(tools) = &self.guard_tools {
+            let mut env = Self::guard_constructed_environment();
+            for loader_var in [
+                "LD_LIBRARY_PATH",
+                "DYLD_LIBRARY_PATH",
+                "DYLD_FALLBACK_LIBRARY_PATH",
+            ] {
+                if let Some(value) = self.inherited_environment.get(loader_var) {
+                    env.insert(loader_var.to_owned(), value.clone());
+                }
+            }
+            if matches!(self.frontend(), Frontend::Tui { .. })
+                && let Some(path) = Self::guard_tui_tool_path(tools)
+            {
+                env.insert("PATH".to_owned(), path);
+            }
+            env
         } else {
             self.inherited_environment.clone()
         }
+    }
+
+    fn guard_tui_tool_path(tools: &crate::ResolvedGuardTools) -> Option<std::ffi::OsString> {
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        let mut push_parent = |path: &Path| {
+            if let Some(parent) = path.parent() {
+                let dir = parent.to_path_buf();
+                if !dirs.contains(&dir) {
+                    dirs.push(dir);
+                }
+            }
+        };
+        push_parent(&tools.perf_path);
+        if let Some(taskset) = &tools.taskset_path {
+            push_parent(taskset);
+        }
+        if let Some(path_env) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path_env) {
+                let candidate = dir.join("python3");
+                if candidate.is_file()
+                    && let Ok(canonical) = fs::canonicalize(&candidate)
+                {
+                    push_parent(&canonical);
+                    break;
+                }
+            }
+        }
+        std::env::join_paths(dirs).ok()
     }
 
     pub(crate) fn run_request_for(&self, role: ComparisonRunRole) -> RunRequest {
@@ -1224,6 +1283,8 @@ fn render_metric_values(values: &[f64]) -> Vec<String> {
 
 impl PerfHarness {
     pub fn compare(&self, request: &ComparisonRequest) -> Result<ComparisonReport, PerfError> {
+        let preflight_host = collect_host_provenance(&request.machine);
+        validate_cohort_load_policy(request.scenario, &request.machine, &preflight_host)?;
         let started = Instant::now();
         let started_unix_ms = unix_time_ms();
         let sequence = COMPARISON_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -1261,6 +1322,8 @@ impl PerfHarness {
             schema_version: COMPARISON_ARTIFACT_SCHEMA_VERSION,
             comparison_id,
             input,
+            host_loadavg: preflight_host.loadavg,
+            provenance: preflight_host.provenance,
             started_unix_ms,
             total_elapsed_us: started.elapsed().as_micros(),
             verdict,

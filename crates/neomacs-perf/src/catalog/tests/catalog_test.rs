@@ -546,3 +546,82 @@ fn process_output_carryover_stays_out_of_the_mean_and_covers_async_filter_carryo
     assert!(helper.contains("accept-process-output"));
     assert!(helper.contains("last-coding-system-used 'utf-8-dos"));
 }
+
+#[test]
+fn scrolling_long_lines_pins_issue_702_band_and_stays_out_of_standard_mean() {
+    let id = ScenarioId::ScrollingLongLines;
+    assert_eq!(ScenarioId::from_str("scrolling-long-lines"), Ok(id));
+    let spec = scenario(id);
+    assert_eq!(spec.id, id);
+    assert_eq!(
+        spec.default_frontend,
+        Frontend::Tui {
+            rows: 50,
+            columns: 200,
+        }
+    );
+    assert_eq!(spec.default_iterations.get(), 2);
+    assert_eq!(spec.primary_metric, MetricName::PerOperationWallTime);
+    assert!(spec.description.contains("179.3"));
+    assert!(spec.description.contains("55%"));
+    assert!(spec.description.contains("319"));
+    assert!(
+        !crate::suite::SuiteId::Standard
+            .scenarios()
+            .iter()
+            .any(|entry| entry.scenario == id),
+        "scrolling-long-lines must stay out of the standard suite geometric mean"
+    );
+
+    let root = crate::workspace_root();
+    let fixture =
+        std::fs::read_to_string(root.join("crates/neomacs-perf/fixtures/scrolling-long-lines.el"))
+            .expect("scrolling-long-lines fixture");
+    // Verify the exact 20-line band vector committed in the fixture matches
+    // the Issue #702 emacs-31.1 band (mean 179.30, 55.0% > 200, max 319).
+    let marker = "(defconst neomacs-perf-long-lines--band-lengths\n  [";
+    let start = fixture.find(marker).expect("band-lengths vector") + marker.len();
+    let end = start + fixture[start..].find(']').expect("band-lengths close");
+    let lengths: Vec<usize> = fixture[start..end]
+        .split_whitespace()
+        .map(|tok| tok.parse::<usize>().expect("integer line length"))
+        .collect();
+    assert_eq!(lengths.len(), 20);
+    let sum: usize = lengths.iter().sum();
+    assert_eq!(sum, 3586, "mean must be exactly 3586 / 20 = 179.30");
+    let over_200 = lengths.iter().filter(|&&len| len > 200).count();
+    assert_eq!(over_200, 11, "11/20 = 55.0% must exceed 200 columns");
+    assert_eq!(lengths.iter().copied().max(), Some(319));
+    assert!(fixture.contains("(setq-local truncate-lines t)"));
+    assert!(fixture.contains("(hl-line-mode 1)"));
+    assert!(fixture.contains("(margin right-margin)"));
+    assert!(fixture.contains("(scenario . \"scrolling-long-lines\")"));
+    // Defect 3A regression guard: wall time must start strictly AFTER setup
+    // and `(garbage-collect)` and stop BEFORE post-loop checksums/teardown.
+    let gc_at = fixture
+        .find("(garbage-collect)")
+        .expect("pre-timing garbage-collect");
+    let wall_start_at = fixture
+        .find("(setq started-wall (float-time))")
+        .expect("post-setup started-wall capture");
+    let cold_at = fixture.find(";; COLD pass:").expect("cold pass comment");
+    let wall_end_at = fixture
+        .find("(setq elapsed-wall-us")
+        .expect("post-warm elapsed-wall-us computation");
+    let checksum_at = fixture
+        .find("(final-checksum")
+        .expect("post-loop final-checksum");
+    assert!(
+        gc_at < wall_start_at && wall_start_at < cold_at,
+        "started-wall must be captured after setup/GC and before the cold scroll pass"
+    );
+    assert!(
+        cold_at < wall_end_at && wall_end_at < checksum_at,
+        "elapsed-wall-us must be computed after the warm scroll pass and before post-loop checksums"
+    );
+    assert!(
+        !fixture.contains("(started-wall (float-time))"),
+        "started-wall must not be bound before buffer setup"
+    );
+    assert!(id.enforces_cohort_load_gate());
+}

@@ -50,9 +50,12 @@ pub(crate) use harness::{
 pub use harness::{PerfError, PerfHarness, RunReport, RunRequest};
 #[cfg(test)]
 pub(crate) use harness::{perf_data_sample_count, profile_verdict};
-pub use host::{HostProvenance, MachinePolicy};
+pub use host::{HostProvenance, LOCAL_HIGH_LOAD_THRESHOLD, MachinePolicy, MeasurementProvenance};
 #[cfg(test)]
-pub(crate) use host::{cpu_list_contains, validate_machine_policy};
+pub(crate) use host::{
+    collect_host_provenance_with_loadavg, cpu_list_contains, parse_loadavg_1m,
+    validate_cohort_load_policy, validate_machine_policy,
+};
 pub use native_video::{
     NativeVideoComparisonIdentity, NativeVideoDecoderKind, NativeVideoExecutionIdentity,
     NativeVideoFrameFormat, NativeVideoFrameRate, NativeVideoGpuTimingStatus,

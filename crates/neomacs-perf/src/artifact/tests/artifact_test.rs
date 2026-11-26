@@ -24,6 +24,8 @@ fn artifact_json_preserves_a_correctness_failure_as_a_failed_verdict() {
             scaling_governor: Some("performance".to_string()),
             perf_event_paranoid: Some(1),
             continuous_integration: false,
+            loadavg: None,
+            provenance: None,
         },
         iterations: 10,
         started_unix_ms: 42,

@@ -582,6 +582,7 @@ pub(crate) fn validate_editor_workload_result(
         | ScenarioId::MxTabCompletion
         | ScenarioId::MxTabCompletionSteady
         | ScenarioId::Scrolling
+        | ScenarioId::ScrollingLongLines
         | ScenarioId::BytecodeCallLoop
         | ScenarioId::LexicalLoop
         | ScenarioId::DynamicBindingLoop

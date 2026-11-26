@@ -1,6 +1,32 @@
+use std::fmt;
 use std::fs;
 
 use serde::{Deserialize, Serialize};
+
+use crate::{PerfError, ScenarioId};
+
+/// 1-minute `/proc/loadavg` ceiling above which cohort-gated scenarios refuse
+/// to run locally unless `--allow-local` is passed explicitly.
+pub const LOCAL_HIGH_LOAD_THRESHOLD: f64 = 2.0;
+
+/// Provenance classification stamped on benchmark artifacts so local override
+/// runs on loaded hosts can never be mistaken for calibrated treeroot runs.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum MeasurementProvenance {
+    #[serde(rename = "calibrated")]
+    Calibrated,
+    #[serde(rename = "local-UNTRUSTED")]
+    LocalUntrusted,
+}
+
+impl fmt::Display for MeasurementProvenance {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Calibrated => "calibrated",
+            Self::LocalUntrusted => "local-UNTRUSTED",
+        })
+    }
+}
 
 /// Stable execution constraints requested by a benchmark invocation.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -8,6 +34,11 @@ use serde::{Deserialize, Serialize};
 pub struct MachinePolicy {
     pub cpu: Option<u32>,
     pub required_governor: Option<String>,
+    /// Explicitly permit running a cohort-gated scenario on a loaded local host
+    /// (`loadavg_1m >= LOCAL_HIGH_LOAD_THRESHOLD`), stamping all emitted
+    /// artifacts with `provenance = local-UNTRUSTED`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_local: bool,
 }
 
 /// Host details that materially affect repeatability without identifying the host.
@@ -24,9 +55,23 @@ pub struct HostProvenance {
     pub scaling_governor: Option<String>,
     pub perf_event_paranoid: Option<i32>,
     pub continuous_integration: bool,
+    /// Linux `/proc/loadavg` `1m 5m 15m` triplet sampled at run start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loadavg: Option<String>,
+    /// Provenance classification (`calibrated` vs `local-UNTRUSTED`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<MeasurementProvenance>,
 }
 
 pub(crate) fn collect_host_provenance(policy: &MachinePolicy) -> HostProvenance {
+    collect_host_provenance_with_loadavg(policy, read_proc_loadavg())
+}
+
+pub(crate) fn collect_host_provenance_with_loadavg(
+    policy: &MachinePolicy,
+    loadavg: Option<String>,
+) -> HostProvenance {
+    let provenance = classify_provenance(policy, loadavg.as_deref());
     HostProvenance {
         operating_system: std::env::consts::OS.to_string(),
         architecture: std::env::consts::ARCH.to_string(),
@@ -41,7 +86,64 @@ pub(crate) fn collect_host_provenance(policy: &MachinePolicy) -> HostProvenance 
         perf_event_paranoid: read_trimmed("/proc/sys/kernel/perf_event_paranoid")
             .and_then(|value| value.parse().ok()),
         continuous_integration: std::env::var_os("CI").is_some(),
+        loadavg,
+        provenance,
     }
+}
+
+pub(crate) fn classify_provenance(
+    policy: &MachinePolicy,
+    loadavg: Option<&str>,
+) -> Option<MeasurementProvenance> {
+    if policy.allow_local {
+        return Some(MeasurementProvenance::LocalUntrusted);
+    }
+    let load_1m = loadavg.and_then(parse_loadavg_1m)?;
+    if load_1m >= LOCAL_HIGH_LOAD_THRESHOLD {
+        Some(MeasurementProvenance::LocalUntrusted)
+    } else {
+        Some(MeasurementProvenance::Calibrated)
+    }
+}
+
+pub(crate) fn parse_loadavg_1m(loadavg: &str) -> Option<f64> {
+    let first = loadavg.split_whitespace().next()?;
+    let value = first.parse::<f64>().ok()?;
+    (value.is_finite() && value >= 0.0).then_some(value)
+}
+
+/// Enforce the cohort high-load refusal gate before creating artifacts or
+/// launching any editor subprocess.
+pub(crate) fn validate_cohort_load_policy(
+    scenario: ScenarioId,
+    policy: &MachinePolicy,
+    host: &HostProvenance,
+) -> Result<(), PerfError> {
+    if !scenario.enforces_cohort_load_gate() || policy.allow_local {
+        return Ok(());
+    }
+    if let Some(raw) = host.loadavg.as_deref()
+        && let Some(loadavg_1m) = parse_loadavg_1m(raw)
+        && loadavg_1m >= LOCAL_HIGH_LOAD_THRESHOLD
+    {
+        return Err(PerfError::HighLoadLocalRefused {
+            scenario,
+            loadavg_1m,
+            threshold: LOCAL_HIGH_LOAD_THRESHOLD,
+            loadavg: raw.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn read_proc_loadavg() -> Option<String> {
+    let contents = fs::read_to_string("/proc/loadavg").ok()?;
+    let mut fields = contents.split_whitespace();
+    let one = fields.next()?;
+    let five = fields.next()?;
+    let fifteen = fields.next()?;
+    parse_loadavg_1m(one)?;
+    Some(format!("{one} {five} {fifteen}"))
 }
 
 pub(crate) fn validate_machine_policy(

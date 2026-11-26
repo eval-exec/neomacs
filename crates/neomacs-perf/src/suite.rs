@@ -9,10 +9,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::artifact_store::{unix_time_ms, write_json_atomically};
+use crate::host::{collect_host_provenance, validate_cohort_load_policy};
 use crate::{
     BaselineManifest, ComparisonRequest, ComparisonSampleCount, ComparisonVerdict, CounterScope,
-    MachinePolicy, MetricName, PerfError, PerfHarness, ResolvedGuardTools, ScenarioId,
-    VerifiedBaselineManifest, resolve_guard_tools, scenario,
+    MachinePolicy, MeasurementProvenance, MetricName, PerfError, PerfHarness, ResolvedGuardTools,
+    ScenarioId, VerifiedBaselineManifest, resolve_guard_tools, scenario,
 };
 
 static SUITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -23,6 +24,10 @@ pub(crate) const SUITE_ARTIFACT_SCHEMA_VERSION: u32 = 1;
 pub enum SuiteId {
     Standard,
     OrgEditingGuard,
+    /// Instruction-gated regression guard for Issue #702's long-line truncated
+    /// scrolling band (`scrolling-long-lines`, mean 179.3 chars, 55% > 200
+    /// cols, 30-col right margin, `hl-line-mode`, 200x50 TUI).
+    ScrollingLongLinesGuard,
 }
 
 impl fmt::Display for SuiteId {
@@ -30,6 +35,7 @@ impl fmt::Display for SuiteId {
         formatter.write_str(match self {
             Self::Standard => "standard",
             Self::OrgEditingGuard => "org-editing-guard",
+            Self::ScrollingLongLinesGuard => "scrolling-long-lines-guard",
         })
     }
 }
@@ -52,6 +58,7 @@ impl FromStr for SuiteId {
         match value {
             "standard" => Ok(Self::Standard),
             "org-editing-guard" => Ok(Self::OrgEditingGuard),
+            "scrolling-long-lines-guard" => Ok(Self::ScrollingLongLinesGuard),
             value => Err(UnknownSuiteId(value.to_string())),
         }
     }
@@ -140,6 +147,24 @@ const ORG_EDITING_GUARD_SCENARIOS: &[SuiteScenario] = &[
     instruction_gated(ScenarioId::OrgEditingHeavy, 1.0),
 ];
 
+/// Issue #702 long-line truncated scroll regression guard.
+///
+/// Gates strictly on retired user-space instructions (`MetricName::Instructions`,
+/// `CounterScope::EditLoop`) with a +2.0% regression budget: retired
+/// instructions on this deterministic loop are load-insensitive (< 0.1%
+/// run-to-run variance) unlike TUI wall time (5-17% under ambient host load),
+/// so +2.0% catches real layout/horizon/right-edge/overlay regressions without
+/// flaking on allocator/GC boundary drift.
+///
+/// Scope boundary: `scrolling-long-lines` runs in `fundamental-mode` with
+/// pre-propertized lines, so this guard covers the layout/truncation/horizon/
+/// right-edge-marker/overlay-route path (84.6% of instructions / 52.1% of
+/// cycles in Issue #702). It does NOT exercise `jit-lock` lazy fontification
+/// or guard `RowsFontificationDemand::ensure` CoW/realloc (`58.99%` of cache
+/// misses on 71k-line Magit logs).
+const SCROLLING_LONG_LINES_GUARD_SCENARIOS: &[SuiteScenario] =
+    &[instruction_gated(ScenarioId::ScrollingLongLines, 2.0)];
+
 const fn suite_scenario(scenario: ScenarioId, maximum_regression_percent: f64) -> SuiteScenario {
     SuiteScenario {
         scenario,
@@ -178,20 +203,32 @@ impl SuiteId {
         match self {
             Self::Standard => STANDARD_SCENARIOS,
             Self::OrgEditingGuard => ORG_EDITING_GUARD_SCENARIOS,
+            Self::ScrollingLongLinesGuard => SCROLLING_LONG_LINES_GUARD_SCENARIOS,
         }
     }
 
     pub const fn requires_baseline_manifest(self) -> bool {
         match self {
-            Self::Standard => false,
+            Self::Standard | Self::ScrollingLongLinesGuard => false,
             Self::OrgEditingGuard => true,
+        }
+    }
+
+    /// Whether this suite enables guard provenance hardening: canonical
+    /// candidate executable resolution, pinned absolute `perf`/`taskset`
+    /// resolution with `PATH` shadowing rejection, and the closed empty guard
+    /// environment.
+    pub const fn uses_guard_hardening(self) -> bool {
+        match self {
+            Self::Standard => false,
+            Self::OrgEditingGuard | Self::ScrollingLongLinesGuard => true,
         }
     }
 
     pub const fn required_counter_scope(self) -> Option<CounterScope> {
         match self {
             Self::Standard => None,
-            Self::OrgEditingGuard => Some(CounterScope::EditLoop),
+            Self::OrgEditingGuard | Self::ScrollingLongLinesGuard => Some(CounterScope::EditLoop),
         }
     }
 }
@@ -420,6 +457,10 @@ pub struct SuiteArtifact {
     pub samples_per_side: ComparisonSampleCount,
     pub machine: MachinePolicy,
     pub counters: Option<CounterScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_loadavg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<MeasurementProvenance>,
     pub started_unix_ms: u128,
     pub total_elapsed_us: u128,
     pub previous_suite: Option<SuiteHistoryLink>,
@@ -440,6 +481,14 @@ pub struct SuiteReport {
 impl PerfHarness {
     pub fn suite(&self, request: &SuiteRequest) -> Result<SuiteReport, PerfError> {
         request.validate()?;
+        let preflight_host = collect_host_provenance(&request.machine);
+        for suite_scenario in request.suite.scenarios() {
+            validate_cohort_load_policy(
+                suite_scenario.scenario,
+                &request.machine,
+                &preflight_host,
+            )?;
+        }
         let baseline_manifest = match request.baseline_manifest.as_deref() {
             Some(path) => {
                 let (manifest, manifest_sha256) = BaselineManifest::load(path)?;
@@ -447,14 +496,16 @@ impl PerfHarness {
             }
             None => None,
         };
-        let canonical_candidate = if baseline_manifest.is_some() {
+        let use_guard_hardening =
+            baseline_manifest.is_some() || request.suite.uses_guard_hardening();
+        let canonical_candidate = if use_guard_hardening {
             Some(resolve_canonical_candidate_editor(
                 &request.candidate_editor,
             )?)
         } else {
             None
         };
-        let guard_tools = if baseline_manifest.is_some() {
+        let guard_tools = if use_guard_hardening {
             Some(resolve_guard_tools(
                 request.guard_path_env().as_deref(),
                 request.machine.cpu.is_some(),
@@ -533,6 +584,8 @@ impl PerfHarness {
             samples_per_side: request.samples,
             machine: request.machine.clone(),
             counters: request.counters,
+            host_loadavg: preflight_host.loadavg,
+            provenance: preflight_host.provenance,
             started_unix_ms,
             total_elapsed_us: started.elapsed().as_micros(),
             previous_suite,
