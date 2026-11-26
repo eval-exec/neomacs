@@ -81,6 +81,8 @@ neovm-eval = { path = "../neovm-eval", default-features = false, features = ["te
 # thread-local snapshot-mode override only through neovm-edit's authority
 # fence, which exists in the test-support build.
 neovm-edit = { path = "../neovm-edit", default-features = false, features = ["test-support"] }
+# The explicit forced-layout control uses display's existing per-thread test fence.
+neovm-display = { path = "../neovm-display", default-features = false, features = ["test-support"] }
 serde_json.workspace = true
 tracing-test.workspace = true
 

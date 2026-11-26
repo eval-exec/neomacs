@@ -30,9 +30,11 @@ fn metadata_capture_typed_getters_observe_success_and_wrong_veclikes() {
     let record = Value::make_record(vec![Value::T]);
     let table = Value::make_char_table(Value::NIL, Value::NIL, 0);
     let subtable = Value::make_sub_char_table(1, 0, vec![Value::NIL]);
-    let positioned = with_tagged_heap(|heap| {
-        heap.alloc_symbol_with_pos(Value::symbol("metadata-capture-symbol"), Value::fixnum(7))
-    });
+    let positioned = unsafe {
+        with_tagged_heap(|heap| {
+            heap.alloc_symbol_with_pos(Value::symbol("metadata-capture-symbol"), Value::fixnum(7))
+        })
+    };
     let subr_id = intern("car");
     let subr = Value::subr(subr_id);
     check_identity_dependency(vector, || assert!(vector.as_vector_data().is_some()));
@@ -63,7 +65,8 @@ fn metadata_capture_typed_getters_observe_success_and_wrong_veclikes() {
 fn metadata_capture_symbol_checks_keep_disabled_and_wrong_type_dependencies() {
     crate::test_utils::init_test_tracing();
     let symbol = Value::symbol("metadata-capture-checked");
-    let positioned = with_tagged_heap(|heap| heap.alloc_symbol_with_pos(symbol, Value::fixnum(1)));
+    let positioned =
+        unsafe { with_tagged_heap(|heap| heap.alloc_symbol_with_pos(symbol, Value::fixnum(1))) };
     let vector = Value::vector(vec![Value::NIL]);
     for enabled in [false, true] {
         for bare in [
@@ -108,7 +111,8 @@ fn metadata_capture_symbol_checks_keep_disabled_and_wrong_type_dependencies() {
 fn metadata_capture_eq_swp_observes_each_projected_identity() {
     crate::test_utils::init_test_tracing();
     let symbol = Value::symbol("metadata-capture-eq");
-    let positioned = with_tagged_heap(|heap| heap.alloc_symbol_with_pos(symbol, Value::fixnum(2)));
+    let positioned =
+        unsafe { with_tagged_heap(|heap| heap.alloc_symbol_with_pos(symbol, Value::fixnum(2))) };
     let vector = Value::vector(vec![Value::NIL]);
     check_identity_dependency(positioned, || {
         assert!(eq_value_swp(&positioned, &symbol, true))

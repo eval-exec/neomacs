@@ -4833,6 +4833,26 @@ impl CachedPackageOracle {
         Ok(report)
     }
 
+    /// Run probes and report GNU/Neomacs differences without pinning an
+    /// expected outcome kind.
+    ///
+    /// [`Self::run_batch`] additionally requires each editor's outcome to match
+    /// the case's declared `Value`/`Signal` kind.  Corpus-wide surface probes
+    /// cannot know that in advance: a package may legitimately fail to load or
+    /// signal, and both editors signalling the same error is parity.  This
+    /// entry point keeps the differential comparison (GNU is the contract) and
+    /// drops only the outcome-kind constraint.
+    pub fn run_probes(
+        &self,
+        batch_name: &str,
+        probes: &[BatchProbe<'_>],
+    ) -> Result<OracleBatchReport, String> {
+        let neomacs = self.configured_runtime(EmacsRuntime::neomacs());
+        let gnu_emacs = self.configured_runtime(EmacsRuntime::gnu_emacs());
+        let setup = self.packages.startup_elisp();
+        run_elisp_oracle_batch(&neomacs, &gnu_emacs, batch_name, &setup, probes)
+    }
+
     fn run_expected(
         &self,
         name: &str,

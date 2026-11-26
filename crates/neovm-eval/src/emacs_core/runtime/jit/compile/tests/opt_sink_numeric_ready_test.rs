@@ -33,7 +33,7 @@ fn opt_sink_numeric_known_ready_and_borrowed_paths_keep_gnu_results_without_read
             vec![Value::string("not-a-number")],
         ])
         .collect::<Vec<_>>();
-    roots.add(&f.constants);
+    roots.add(f.constants());
     for args in &cases {
         roots.add(args);
         let result = tier0(&mut ctx, &f, args);

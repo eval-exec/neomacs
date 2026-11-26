@@ -566,6 +566,98 @@ fn a_signal_into_a_thread_that_has_not_run_waits_for_its_first_switch() {
     );
 }
 
+/// The error stays pending until it is raised. A wait skips itself
+/// (GNU thread.c:232-234, :457-464), and an unlock that releases raises it
+/// (:377). Holding it apart left these waits parked with nothing to wake them.
+#[test]
+fn a_signal_into_a_thread_that_has_not_run_ends_its_first_wait_or_release() {
+    let mut ev = green();
+    assert_eq!(
+        eval(
+            &mut ev,
+            "(progn
+               (setq tgn-held (make-mutex) tgn-results nil)
+               (mutex-lock tgn-held)
+               (setq tgn-bodies
+                     (list
+                      (lambda ()
+                        (let ((m (make-mutex)))
+                          (mutex-lock m) (setq tgn-log (cons 'locked tgn-log))
+                          (mutex-unlock m) (setq tgn-log (cons 'unlocked tgn-log))
+                          (thread-yield) (setq tgn-log (cons 'yielded tgn-log))))
+                      (lambda ()
+                        (setq tgn-log (cons 'locking tgn-log))
+                        (mutex-lock tgn-held) (setq tgn-log (cons 'got-it tgn-log)))
+                      (lambda ()
+                        (let* ((m (make-mutex)) (c (make-condition-variable m)))
+                          (mutex-lock m) (setq tgn-log (cons 'locked tgn-log))
+                          (condition-wait c) (setq tgn-log (cons 'woke tgn-log))))))
+               (while tgn-bodies
+                 (setq tgn-log nil tgn-body (car tgn-bodies) tgn-bodies (cdr tgn-bodies))
+                 (let ((th (make-thread
+                            (lambda ()
+                              (condition-case e (funcall tgn-body)
+                                (error (setq tgn-log
+                                             (cons (list 'caught (car (cdr e))) tgn-log))))))))
+                   (thread-signal th 'error '(\"n\"))
+                   (let ((turns 200))
+                     (while (and (thread-live-p th) (> turns 0))
+                       (thread-yield)
+                       (setq turns (1- turns))))
+                   (setq tgn-results
+                         (cons (list (thread-live-p th) (reverse tgn-log)) tgn-results))))
+               (mutex-unlock tgn-held)
+               (nreverse tgn-results))"
+        ),
+        "((nil (locked (caught \"n\"))) (nil (locking (caught \"n\"))) (nil (locked (caught \"n\"))))"
+    );
+}
+
+/// A thread woken from a mutex wait keeps GNU's `wait_condvar` until it runs
+/// (src/thread.c:231-236). A second `thread-signal` to it in that window still
+/// ends with the sender's `post_acquire_global_lock` (:974-982), which raises
+/// the sender's own pending error.
+#[test]
+fn a_signal_to_a_woken_waiter_that_has_not_run_is_still_a_delivery_point() {
+    let mut ev = green();
+    assert_eq!(
+        eval(
+            &mut ev,
+            "(progn
+               (setq tgw-m (make-mutex) tgw-log nil)
+               (mutex-lock tgw-m)
+               (setq tgw-target
+                     (make-thread
+                      (lambda ()
+                        (condition-case e (mutex-lock tgw-m)
+                          (error (setq tgw-log (cons (list 'target (car (cdr e))) tgw-log)))))))
+               (let ((turns 200))
+                 (while (and (null (eq (thread--blocker tgw-target) tgw-m)) (> turns 0))
+                   (thread-yield)
+                   (setq turns (1- turns))))
+               (setq tgw-sender
+                     (make-thread
+                      (lambda ()
+                        (condition-case e
+                            (progn
+                              (setq tgw-log (cons 'sending tgw-log))
+                              (thread-signal tgw-target 'error '(\"second\"))
+                              (setq tgw-log (cons 'sent tgw-log)))
+                          (error (setq tgw-log (cons (list 'sender (car (cdr e))) tgw-log)))))))
+               (thread-signal tgw-sender 'error '(\"early\"))
+               (thread-signal tgw-target 'error '(\"first\"))
+               (let ((turns 200))
+                 (while (and (or (thread-live-p tgw-target) (thread-live-p tgw-sender))
+                             (> turns 0))
+                   (thread-yield)
+                   (setq turns (1- turns))))
+               (mutex-unlock tgw-m)
+               (reverse tgw-log))"
+        ),
+        "(sending (sender \"early\") (target \"second\"))"
+    );
+}
+
 #[test]
 fn thread_join_re_raises_a_signal_pending_when_it_began() {
     let mut ev = green();
@@ -1794,6 +1886,7 @@ fn native_admission_refusal_trace_records_each_cause_once_and_no_healthy_event()
         let healthy = green();
         assert_eq!(healthy.green_admission_readiness(), Ok(()));
         assert!(events.lock().unwrap().is_empty());
+        drop(healthy);
         for cause in [
             NativeReadinessCause::AbsentPoller,
             NativeReadinessCause::RegistrationFailed(std::io::ErrorKind::PermissionDenied),

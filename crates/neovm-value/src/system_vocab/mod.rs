@@ -14,6 +14,7 @@ pub mod input;
 pub mod path_exec;
 pub mod platform;
 pub mod platform_facts;
+pub mod posix_lookup;
 pub mod time;
 #[cfg(windows)]
 pub mod w32_security;

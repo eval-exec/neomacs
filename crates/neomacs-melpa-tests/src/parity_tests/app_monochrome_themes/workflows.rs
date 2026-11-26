@@ -438,6 +438,29 @@ fn app_monochrome_switches_a_real_dired_session_and_restores_the_previous_displa
     )
 }
 
+pub(super) fn app_monochrome_header_clock_case() -> ParityBatchCase {
+    ParityBatchCase::value(
+        "app_monochrome_header_clock_is_not_a_diagnostic",
+        r####"
+(with-temp-buffer
+  (insert "Compilation started at Wed Nov 20 11:28:21 2026\n")
+  (insert "src/revenue.el:4:8: warning: tax policy needs review\n")
+  (insert "src/revenue.el:8:2: error: production logger is required\n")
+  (insert "Compilation finished at Wed Nov 20 11:28:29 2026\n")
+  (mapcar
+   (lambda (needle)
+     (save-excursion
+       (neomacs-app-monochrome-test-after-compilation-header)
+       (search-forward needle nil t)
+       (neomacs-app-monochrome-test-line)))
+   '("4:8" "8:2")))
+"####,
+        expect![[
+            r#"OK ("src/revenue.el:4:8: warning: tax policy needs review" "src/revenue.el:8:2: error: production logger is required")"#
+        ]],
+    )
+}
+
 pub(super) fn workflows_public_surface_batch_cases() -> Vec<ParityBatchCase> {
     vec![
         app_monochrome_dark_supports_a_real_edit_build_and_error_navigation_session(),

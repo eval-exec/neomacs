@@ -36,7 +36,7 @@ fn opt_profit_lists_numeric_osr_retains_legacy_baseline_clif_and_result() {
         assert_eq!(unsafe { &*leaf }.selected_tier(), SelectedTier::Baseline);
         assert!(!emitted.is_empty());
         clif.push(normalize(emitted));
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
     }
     assert_eq!(clif[0], clif[1]);
     assert_eq!(context.jit_root_stack_top, 0);
@@ -71,5 +71,5 @@ fn opt_profit_lists_list_osr_preserves_snapshot_guards_result_and_mutation() {
     assert_eq!(frame.pc, 1);
     assert_eq!(frame.stack.as_slice(), &bad);
     assert_eq!(context.jit_root_stack_top, 0);
-    cache::clear();
+    cache::clear_with_serial_receipt().expect("serial jit grace");
 }

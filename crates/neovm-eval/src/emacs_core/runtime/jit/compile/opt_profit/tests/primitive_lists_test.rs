@@ -29,7 +29,7 @@ const _: () = assert!(std::mem::size_of::<FixtureScopes>() == 0);
 impl FixtureScopes {
     #[doc(hidden)]
     pub fn enter() -> Self {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         inline::force_inline_for_test(Some(true));
         stats::force_observe_for_test(stats::ObserveOverride {
             stats: true,
@@ -41,7 +41,7 @@ impl FixtureScopes {
 }
 impl Drop for FixtureScopes {
     fn drop(&mut self) {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         inline::force_inline_for_test(None);
         stats::force_observe_for_test(stats::ObserveOverride {
             stats: false,
@@ -167,7 +167,7 @@ fn opt_profit_primitive_lists_retains_list_span_size_and_original_numeric_mir() 
         assert!(!selected_clif.is_empty());
         assert_eq!(normalize(selected_clif), normalize(legacy_clif));
         assert_eq!(
-            selected.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(4)]),
+            unsafe { selected.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(4)]) },
             NativeRun::Ok(Value::make_int(4).bits())
         );
     }
@@ -223,7 +223,7 @@ fn opt_profit_primitive_lists_original_call_survives_real_fusion_and_uses_one_le
     let source = calling_list_loop();
     assert!(!super::super::body_is_call_heavy(
         source.executable_ops(),
-        &source.constants
+        source.constants()
     ));
     assert!(body_admitted(
         OptProfitMode::Lists,
@@ -234,7 +234,7 @@ fn opt_profit_primitive_lists_original_call_survives_real_fusion_and_uses_one_le
     let feedback = vec![NumericFeedback::FixnumOnly; source.executable_ops().len()];
     let fused = inline::fuse_calls(
         source.executable_ops(),
-        &source.constants,
+        source.constants(),
         source.executable_gnu_byte_offset_map(),
         2,
         &feedback,
@@ -271,10 +271,12 @@ fn opt_profit_primitive_lists_original_call_survives_real_fusion_and_uses_one_le
     assert_eq!(normalize(selected_clif), normalize(legacy_clif));
     let pair = pair();
     assert_eq!(
-        selected.call(
-            &mut ctx as *mut Context as *mut u8,
-            &[pair, Value::make_int(4)]
-        ),
+        unsafe {
+            selected.call(
+                &mut ctx as *mut Context as *mut u8,
+                &[pair, Value::make_int(4)],
+            )
+        },
         NativeRun::Ok(Value::make_int(4).bits())
     );
     assert_eq!(pair.cons_car(), Value::make_int(3));

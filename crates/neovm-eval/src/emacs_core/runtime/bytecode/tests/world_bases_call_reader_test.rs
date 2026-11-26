@@ -6,10 +6,12 @@ use crate::emacs_core::eval::Context;
 
 fn bytecode(value: i64) -> Value {
     let mut function = ByteCodeFunction::new(LambdaParams::simple(vec![]));
-    function.ops = vec![Op::Constant(0), Op::Return];
-    function.constants = vec![Value::fixnum(value)].into();
-    function.max_stack = super::super::function_slots::StackDepth::try_from(4usize)
-        .expect("valid fixture stack depth");
+    function.set_ops(vec![Op::Constant(0), Op::Return]);
+    function.set_constants(vec![Value::fixnum(value)].into());
+    function.set_max_stack(
+        super::super::function_slots::StackDepth::try_from(4usize)
+            .expect("valid fixture stack depth"),
+    );
     Value::make_bytecode(function)
 }
 

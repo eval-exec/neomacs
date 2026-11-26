@@ -12,6 +12,37 @@ pub struct FrameId(pub u64);
 /// as Lisp integers.
 pub const FRAME_ID_BASE: u64 = 1 << 32;
 
+/// One evaluator-owned GUI resize request, unique within its frame's lifetime.
+/// Native completions carry the frame identity separately; equal dimensions
+/// do not make two resize requests interchangeable.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GuiResizeRequestId(std::num::NonZeroU64);
+
+impl GuiResizeRequestId {
+    pub const FIRST: Self = Self(std::num::NonZeroU64::MIN);
+
+    pub const fn new(raw: u64) -> Option<Self> {
+        match std::num::NonZeroU64::new(raw) {
+            Some(raw) => Some(Self(raw)),
+            None => None,
+        }
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+
+    /// Never wrap a frame's serial and reuse the identity of an older request.
+    pub fn next(self) -> Self {
+        Self(
+            self.0
+                .checked_add(1)
+                .expect("GUI resize request IDs exhausted"),
+        )
+    }
+}
+
 /// Evaluator-owned correlation ID for one asynchronous xwidget script call.
 ///
 /// The display host cannot allocate this ID: only the evaluator knows which
@@ -234,14 +265,142 @@ impl FontEntityHandle {
     }
 }
 
-/// The cache key for shaped gstrings: the header's font family, pixel size
-/// (bit-exact), and the run's characters. Two gstrings with the same key
-/// shape identically, so one cache entry serves both.
+/// One character's encoded font code and GNU `font->driver->text_extents`
+/// metrics, as `font_fill_lglyph_metrics` stores them in a gstring glyph
+/// (`src/font.c`).  Integer pixels, matching the LGLYPH slots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlyphTextMetrics {
+    pub code: u32,
+    pub width: i64,
+    pub lbearing: i64,
+    pub rbearing: i64,
+    pub ascent: i64,
+    pub descent: i64,
+}
+
+/// The cached shaped-gstring key, mirroring GNU's `gstring_hash_table` key:
+/// the full glyph-string header `[FONT-OBJECT C1 C2 ...]` under `equal`
+/// (src/composite.c:640-669).  Keying on family/pixel alone would collide a
+/// regular face with bold/italic of the same family and size, so the font
+/// part carries the durable backend identity (`stable_key`: file, collection
+/// face and variation coordinates), every Lisp-visible property pair in slot
+/// order, and the computed metrics.
+///
+/// The driver's OTF capability payload is deliberately NOT part of the key.
+/// It is a fresh Lisp object for every opened font object, so its identity
+/// bits would split two realizations of the same font, and its structure is
+/// derived entirely from the same file/face/variation that `stable_key`
+/// already names.  Two font objects with the same `stable_key` therefore
+/// shape identically, which is what GNU's cross-realization `equal` hit
+/// provides for the frame's cached font object.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GstringFontIdentity {
+    pub stable_key: String,
+    pub fields: Vec<(String, String)>,
+    pub metrics: [i64; 7],
+}
+
+/// The cache key for shaped gstrings: the header's font identity plus the
+/// run's characters.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GstringShapeCacheKey {
-    pub family: String,
-    pub pixel_size_bits: u64,
+    pub font: GstringFontIdentity,
     pub chars: Vec<i64>,
+}
+
+/// Build the shaped-gstring cache key from a gstring header.  `None` when the
+/// header does not name an opened font object, or contains a font field this
+/// session cannot fingerprint faithfully; the caller then must not use the
+/// cache rather than risk sharing a gstring across two different faces.
+pub fn gstring_cache_key_from_header(header: &Value) -> Option<GstringShapeCacheKey> {
+    gstring_cache_key_from_header_slots(header.as_vector_data()?)
+}
+
+/// [`gstring_cache_key_from_header`] over an already-borrowed glyph-string
+/// header slot slice, for callers that hold the header vector's elements.
+pub fn gstring_cache_key_from_header_slots(
+    slots: &crate::tagged::header::LispValueSlice,
+) -> Option<GstringShapeCacheKey> {
+    let font = slots.first()?;
+    let data = font.as_font_data()?;
+    let fields = data.fields.as_slice();
+    if fields.is_empty() {
+        return None;
+    }
+    let mut normalized = Vec::with_capacity(fields.len() / 2);
+    let mut index = 1;
+    while index + 1 < fields.len() {
+        normalized.push((
+            font_value_fingerprint(fields[index], 0)?,
+            font_value_fingerprint(fields[index + 1], 0)?,
+        ));
+        index += 2;
+    }
+    let metrics = &data.metrics;
+    let chars = slots[1..]
+        .iter()
+        .map(|value| value.as_int())
+        .collect::<Option<Vec<_>>>()?;
+    Some(GstringShapeCacheKey {
+        font: GstringFontIdentity {
+            stable_key: data.identity.stable_key.clone(),
+            fields: normalized,
+            metrics: [
+                metrics.pixel_size,
+                metrics.height,
+                metrics.max_width,
+                metrics.ascent,
+                metrics.descent,
+                metrics.space_width,
+                metrics.average_width,
+            ],
+        },
+        chars,
+    })
+}
+
+/// A stable textual fingerprint of one font-object slot.  Handles the simple
+/// Lisp shapes a font object's property list carries, including nested lists
+/// and vectors; returns None for shapes it cannot fingerprint faithfully so
+/// the cache is skipped rather than mis-keyed.
+fn font_value_fingerprint(value: Value, depth: u8) -> Option<String> {
+    if depth > 6 {
+        return None;
+    }
+    Some(match value.kind() {
+        ValueKind::Nil => "nil".to_string(),
+        ValueKind::T => "t".to_string(),
+        ValueKind::Fixnum(number) => format!("i{number}"),
+        ValueKind::Float => format!("f{:016x}", value.as_number_f64()?.to_bits()),
+        ValueKind::Symbol(_) => format!("y{}", value.as_bare_symbol_name()?),
+        ValueKind::String => {
+            format!("s{:?}", value.as_lisp_string()?.as_bytes())
+        }
+        ValueKind::Cons => {
+            let car = font_value_fingerprint(value.cons_car(), depth + 1)?;
+            let cdr = font_value_fingerprint(value.cons_cdr(), depth + 1)?;
+            format!("({car}.{cdr})")
+        }
+        ValueKind::Veclike(VecLikeType::Vector) => {
+            let mut out = String::from("[");
+            for item in value.as_vector_data()? {
+                out.push_str(&font_value_fingerprint(item, depth + 1)?);
+                out.push(',');
+            }
+            out.push(']');
+            out
+        }
+        ValueKind::Veclike(VecLikeType::Record) => {
+            let mut out = String::from("{");
+            for item in value.as_record_data()? {
+                out.push_str(&font_value_fingerprint(item, depth + 1)?);
+                out.push(',');
+            }
+            out.push('}');
+            out
+        }
+        _ => return None,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -962,6 +1121,7 @@ pub enum WindowLayoutVariable {
     ImageScalingFactor,
     IndicateEmptyLines,
     IndicateBufferBoundaries,
+    LargeHscrollThreshold,
     LeftFringeWidth,
     LeftMargin,
     LeftMarginWidth,
@@ -1431,4 +1591,33 @@ pub fn font_style_table(entries: &[(i64, &'static [&'static str])]) -> Value {
             })
             .collect(),
     )
+}
+
+/// GNU's `truncate-partial-width-windows` decision for a window that is not
+/// the full frame width.
+///
+/// Inputs are the window's and the frame root window's total widths in
+/// columns, plus the buffer-local-or-global variable value. GNU spells the
+/// full-width test `WINDOW_FULL_WIDTH_P` (`src/window.h:701-704`: pixel width
+/// equals the root window's) and applies it in the display iterator
+/// (`src/xdisp.c:3413-3426`) and in `scan_for_column`
+/// (`src/indent.c:629-643`). Keeping it here lets the display layer and the
+/// edit host share one rule instead of two spellings.
+///
+/// An integer value truncates a window narrower than that many columns; any
+/// other non-nil value truncates every partial-width window; nil or an
+/// unbound value truncates none.
+pub fn partial_width_truncates(
+    window_cols: i64,
+    root_cols: i64,
+    truncate_partial_width: Option<crate::value::Value>,
+) -> bool {
+    if window_cols >= root_cols {
+        return false;
+    }
+    match truncate_partial_width {
+        Some(value) if value.is_fixnum() => window_cols < value.as_fixnum().unwrap_or(0),
+        Some(value) => !value.is_nil(),
+        None => false,
+    }
 }

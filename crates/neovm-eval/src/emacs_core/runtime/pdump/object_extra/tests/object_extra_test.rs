@@ -106,7 +106,8 @@ fn compact_object_extra_leaves_mapped_vectorlike_objects_self_contained() {
         mapped_slots: vec![None; 4],
     };
     let spans = LoadedSpans::from_heap(&heap);
-    let mapped_heap = MappedHeapView::from_mut_slice(&mut heap_bytes);
+    // SAFETY: `heap_bytes` stays live for the duration of `mapped_heap`.
+    let mapped_heap = unsafe { MappedHeapView::from_mut_slice(&mut heap_bytes) };
 
     let objects = load_file_object_descriptors(&bytes, &spans, Some(mapped_heap))
         .expect("load compact heap objects from extra");

@@ -1109,7 +1109,7 @@ pub fn builtin_register_code_conversion_map(
         let plist = eval
             .obarray()
             .get_by_id(sym_id)
-            .map(|s| s.plist.get())
+            .map(|s| s.plist())
             .unwrap_or(Value::NIL);
         neovm_value::plist::plist_check(plist)?;
     }
@@ -1837,10 +1837,10 @@ pub(crate) fn is_global_obarray_proxy(eval: &super::eval::Context, value: &Value
         *SYMBOL.get_or_init(|| neovm_value::intern::intern("neovm--obarray-object"))
     }
     eval.builtin_var_value(neovm_obarray_object_sym())
-        .is_some_and(|proxy| proxy == *value)
+        .is_some_and(|proxy| proxy.bits() == value.bits())
 }
 
-fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
+pub(crate) fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
     // GNU's `Vobarray`; a Lisp `intern` call without an explicit obarray read
     // it by name. The internal fallback name belongs to this port.
     static OBARRAY: WellKnown = WellKnown::Obarray;
@@ -1904,7 +1904,17 @@ pub fn builtin_intern_fn(eval: &mut super::eval::Context, args: Vec<Value>) -> E
 
     // Custom obarray path
     if !is_global_obarray_proxy(eval, &effective_obarray) {
-        let obarray_val = check_obarray_value(effective_obarray)?;
+        let obarray_val = match check_obarray_reader(effective_obarray) {
+            Ok(value) => value,
+            Err(rejected) => {
+                // `Fintern` routes through the same check_obarray_slow.
+                reset_rejected_obarray(eval, rejected);
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("obarrayp"), rejected],
+                ));
+            }
+        };
         let vec_len = obarray_len(obarray_val).unwrap_or(0);
         if vec_len == 0 {
             return Err(signal(
@@ -1962,6 +1972,43 @@ pub fn builtin_intern_fn(eval: &mut super::eval::Context, args: Vec<Value>) -> E
 
 /// `intern-soft` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// Publish SYMBOL, a canonical symbol object, into the custom OBARRAY the
+/// GNU reader would have interned it in (lread.c:4673-4706 interns into the
+/// current value of the `obarray` variable). If the spelling is already
+/// present, return that symbol and add nothing; otherwise prepend SYMBOL
+/// itself, so a caller that reads under a custom obarray sees the object it
+/// read, as GNU does.
+pub(crate) fn intern_symbol_value_into_obarray(symbol: Value, obarray_value: Value) -> EvalResult {
+    let name = symbol.as_bare_symbol_name().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), symbol],
+        )
+    })?;
+    let vec_len = obarray_len(obarray_value).unwrap_or(0);
+    if vec_len == 0 {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("obarrayp"), obarray_value],
+        ));
+    }
+    let idx = obarray_hash(name, vec_len);
+    let bucket = obarray_bucket(obarray_value, idx).unwrap_or(Value::NIL);
+    let mut cursor = bucket;
+    while cursor.is_cons() {
+        let entry = cursor.cons_car();
+        if entry.as_bare_symbol_name() == Some(name) {
+            return Ok(entry);
+        }
+        cursor = cursor.cons_cdr();
+    }
+    let new_bucket = Value::cons(symbol, bucket);
+    let _ = set_obarray_bucket(obarray_value, idx, new_bucket);
+    note_obarray_symbol_added(obarray_value);
+    grow_obarray_vector_if_needed(obarray_value);
+    Ok(symbol)
+}
+
 #[doc(hidden)]
 pub fn builtin_intern_soft_2(
     eval: &mut super::eval::Context,
@@ -2181,7 +2228,7 @@ fn shorthand_character_count_error(
     signal(LispCondition::Error, vec![Value::string(error.to_string())])
 }
 
-pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> EvalResult {
+pub(crate) fn intern_soft_impl(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     expect_min_args("intern-soft", args, 1)?;
     expect_max_args("intern-soft", args, 2)?;
     let effective_obarray = effective_obarray_arg(eval, args);
@@ -2190,7 +2237,20 @@ pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> E
     let selected = if is_global_obarray_proxy(eval, &effective_obarray) {
         SelectedInternSoftObarray::Global
     } else {
-        SelectedInternSoftObarray::Custom(CheckedInternSoftObarray::try_from(effective_obarray)?)
+        match check_obarray_reader(effective_obarray) {
+            Ok(value) => SelectedInternSoftObarray::Custom(CheckedInternSoftObarray {
+                value,
+                _mutator: std::marker::PhantomData,
+            }),
+            Err(rejected) => {
+                // Fintern_soft shares check_obarray_slow's reset.
+                reset_rejected_obarray(eval, rejected);
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("obarrayp"), rejected],
+                ));
+            }
+        }
     };
     let query = if let Some(id) = symbol_id(&args[0], eval.symbol_mode()) {
         InternSoftQuery::Exact {
@@ -2284,19 +2344,24 @@ fn make_compat_obarray() -> Value {
     Value::obarray(1)
 }
 
-#[doc(hidden)]
-pub fn check_obarray_value(value: Value) -> Result<Value, Flow> {
+/// GNU `check_obarray` for callers that cannot build a Lisp `Flow` (the value
+/// reader's symbol-token path). Returns the effective obarray object, or the
+/// rejected value so the caller can signal `(wrong-type-argument obarrayp V)`
+/// with GNU's payload (`lread.c:4644-4666`).
+pub(crate) fn check_obarray_reader(value: Value) -> Result<Value, Value> {
     if is_obarray_value(value) {
         return Ok(value);
     }
 
     if value.is_vector() {
         let slots = value.as_vector_data().unwrap();
-        if let Some(slot0) = slots.first().copied() {
+        if let Some(slot0) = slots.first() {
             if is_obarray_value(slot0) {
                 return Ok(slot0);
             }
             if slot0 == Value::fixnum(0) {
+                // GNU's legacy vector: store a real obarray object in slot 0
+                // and use it for the rest of the read.
                 let obarray = make_compat_obarray();
                 let _ = value.set_vector_slot(0, obarray);
                 return Ok(obarray);
@@ -2304,10 +2369,74 @@ pub fn check_obarray_value(value: Value) -> Result<Value, Flow> {
         }
     }
 
-    Err(signal(
-        LispCondition::WrongTypeArgument,
-        vec![Value::symbol("obarrayp"), value],
-    ))
+    Err(value)
+}
+
+#[doc(hidden)]
+pub fn check_obarray_value(value: Value) -> Result<Value, Flow> {
+    check_obarray_reader(value).map_err(|value| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("obarrayp"), value],
+        )
+    })
+}
+
+/// GNU `check_obarray_slow` resets `Vobarray` to the initial obarray before
+/// signalling when the rejected value is the current obarray
+/// (`lread.c:4662-4665`). Neomacs's dynamic binding is the `obarray` value
+/// cell, so writing the global proxy reproduces that reset inside the
+/// current `let`; the specpdl unwind restores the outer value as usual.
+pub(crate) fn reset_rejected_obarray(eval: &mut super::eval::Context, rejected: Value) {
+    // GNU compares `Vobarray` with `BASE_EQ`; a distinct but `equal` vector
+    // is not the current obarray.
+    if current_lisp_obarray_value(eval).bits() != rejected.bits() {
+        return;
+    }
+    static OBARRAY: WellKnown = WellKnown::Obarray;
+    static NEOVM_OBARRAY_OBJECT: WellKnown = WellKnown::NeovmObarrayObject;
+    if let Some(global) = eval.builtin_var_value(NEOVM_OBARRAY_OBJECT.id()) {
+        // The ordinary `setq` store, including projected bindings, so the
+        // handler sees the reset exactly as GNU's `SET_SYMBOL_VAL` does.
+        let _ = eval.assign_setq_dynamic_by_id(OBARRAY.id(), global);
+    }
+}
+
+/// GNU's reader interns every symbol token into the current obarray while
+/// reading: `oblookup` finds an existing symbol or `intern_driver` creates a
+/// new one and prepends it to the bucket (`lread.c:4217-4249`). Interning a
+/// spelling into a custom obarray therefore yields a fresh, non-canonical
+/// symbol, not the global one, and a spelling already present yields the
+/// object that obarray holds.
+///
+/// OBARRAY must have passed [`check_obarray_reader`]. Returns the rejected
+/// value when the obarray has no buckets (GNU signals `wrong-type-argument
+/// obarrayp` for that too, as `intern` does).
+pub(crate) fn obarray_intern_reader_name(
+    obarray: Value,
+    name: neovm_value::heap_types::LispString,
+) -> Result<Value, Value> {
+    let len = obarray_len(obarray).unwrap_or(0);
+    if len == 0 {
+        return Err(obarray);
+    }
+    let query = neovm_value::intern::SymbolNameQuery::from(&name);
+    let idx = obarray_hash_name_query(query, len);
+    let bucket = obarray_bucket(obarray, idx).unwrap_or(Value::NIL);
+    if let Some(sym) = obarray_bucket_find_name_query(bucket, query) {
+        return Ok(sym);
+    }
+    // GNU's single creation path shares `Fmake_symbol` for both obarrays
+    // (`intern_driver`, lread.c:4705-4708); the reader's token string becomes
+    // the new symbol's name object.
+    let sym = Value::from_sym_id(neovm_value::intern::make_uninterned_symbol_with_name_value(
+        Value::heap_string(name),
+    ));
+    let new_bucket = Value::cons(sym, bucket);
+    let _ = set_obarray_bucket(obarray, idx, new_bucket);
+    note_obarray_symbol_added(obarray);
+    grow_obarray_vector_if_needed(obarray);
+    Ok(sym)
 }
 
 pub(crate) fn expect_obarray_vector_id(value: &Value) -> Result<Value, Flow> {
@@ -2331,9 +2460,7 @@ pub fn obarray_bucket(value: Value, idx: usize) -> Option<Value> {
             .as_obarray_obj()
             .and_then(|obj| obj.buckets.get(idx).copied());
     }
-    value
-        .as_vector_data()
-        .and_then(|items| items.get(idx).copied())
+    value.as_vector_data().and_then(|items| items.get(idx))
 }
 
 #[doc(hidden)]
@@ -2436,9 +2563,8 @@ pub fn builtin_redisplay(
 }
 
 #[doc(hidden)]
-pub fn builtin_suspend_emacs(args: Vec<Value>) -> EvalResult {
-    expect_args_range("suspend-emacs", &args, 0, 1)?;
-    Ok(Value::NIL)
+pub fn builtin_suspend_emacs(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    super::eval::lifecycle::suspend_emacs(eval, args)
 }
 
 #[doc(hidden)]
@@ -2581,6 +2707,13 @@ pub fn builtin_set_buffer_redisplay(
     // even when it is undisplayed. This is SOME, not global ALL.
     if let Some(buffer) = eval.edit.buffers.current_buffer_id() {
         eval.gnu_mark_buffer_mode_line(buffer);
+        // GNU xdisp.c:929 also sets
+        // `current_buffer->prevent_redisplay_optimizations_p`, which makes
+        // `current_matrix_up_to_date_p` false for every window showing the
+        // buffer (src/xdisp.c:20557-20586).  Raise it as the buffer's own
+        // witness: the body-redisplay revision is reserved for an explicit
+        // body invalidation and must not relayout text here.
+        eval.gnu_mark_buffer_prevent_redisplay_optimizations(buffer);
     }
     eval.invalidate_redisplay();
     Ok(Value::NIL)
@@ -2825,7 +2958,7 @@ pub fn builtin_open_font(eval: &mut super::eval::Context, args: Vec<Value>) -> E
     let entity = args[0];
     let mut entity_fields: Vec<Value> = entity
         .as_vector_data()
-        .map(|fields| fields.iter().copied().collect())
+        .map(|fields| fields.to_vec())
         .unwrap_or_default();
     let is_font_entity = entity_fields
         .first()
@@ -3380,12 +3513,6 @@ pub fn builtin_set_minibuffer_window(
 }
 
 #[doc(hidden)]
-pub fn builtin_sort_charsets(args: Vec<Value>) -> EvalResult {
-    expect_args("sort-charsets", &args, 1)?;
-    Ok(Value::NIL)
-}
-
-#[doc(hidden)]
 pub fn builtin_string_distance(args: Vec<Value>) -> EvalResult {
     expect_args_range("string-distance", &args, 2, 3)?;
     let s1 = args[0].as_lisp_string().ok_or_else(|| {
@@ -3798,7 +3925,7 @@ fn compare_value_sequences(
     };
 
     for (left, right) in left_values.iter().zip(right_values.iter()) {
-        let cmp = compare_value_lt_inner(eval, left, right, maxdepth)?;
+        let cmp = compare_value_lt_inner(eval, &left, &right, maxdepth)?;
         if cmp != Ordering::Equal {
             return Ok(cmp);
         }
@@ -4072,7 +4199,7 @@ pub fn builtin_variable_binding_locus(
                     }
                 }
                 if let Some(blv) = ctx.obarray.blv(resolved)
-                    && blv.found
+                    && blv.found.get()
                     && !blv.where_buf.get().is_nil()
                 {
                     return Ok(blv.where_buf.get());
@@ -4153,7 +4280,7 @@ fn stored_interactive_spec_value(spec: Value) -> Value {
     if let Some(items) = spec.as_vector_data()
         && let Some(first) = items.first()
     {
-        return *first;
+        return first;
     }
     spec
 }
@@ -4246,12 +4373,28 @@ fn interactive_form_from_quoted_lambda(
 }
 
 fn interactive_form_from_bytecode_value(function: Value) -> Option<Value> {
+    // GNU reads CLOSURE_INTERACTIVE from the closure's slot array.  When the
+    // reader stored slots back, that array is the installed GNU slot vector;
+    // read it through the same source `aref` uses.
+    static INTERACTIVE_FORM_SYMBOL: WellKnown = WellKnown::Interactive;
+    if let Some(neovm_value::tagged::header::ClosureSlotSource::Materialized(slots)) =
+        function.bytecode_slot_source()
+        && let Some(items) = slots.as_vector_data()
+    {
+        if items.len() <= 5 {
+            return None;
+        }
+        let spec_val = stored_interactive_spec_value(items.at(5));
+        return Some(Value::list(vec![
+            Value::symbol(&INTERACTIVE_FORM_SYMBOL),
+            spec_val,
+        ]));
+    }
     let probe = function.bytecode_interactive_probe()?;
     if probe.slot_count() <= 5 {
         return None;
     }
     // GNU's `Qinteractive`; this form is reconstructed per command lookup.
-    static INTERACTIVE_FORM_SYMBOL: WellKnown = WellKnown::Interactive;
     let spec_val = stored_interactive_spec_value(probe.interactive().unwrap_or(Value::NIL));
     Some(Value::list(vec![
         Value::symbol(&INTERACTIVE_FORM_SYMBOL),
@@ -5724,18 +5867,24 @@ pub fn builtin_kill_emacs(eval: &mut super::eval::Context, args: Vec<Value>) -> 
     eval.shutdown_with_hooks(request)
 }
 
-/// `(lower-frame &optional FRAME)`
+/// `(lread--substitute-object-in-subtree OBJECT PLACEHOLDER COMPLETED)`
 ///
-/// GNU `Flower_frame` opens with `decode_live_frame (frame)` (`src/frame.c`),
-/// so a window, a symbol, or anything else that is not a live frame is
-/// rejected against `frame-live-p` before any lowering is attempted.  The
-/// lowering itself has no effect without a window system, but the type check
-/// is not conditional on one -- accepting every argument silently is how a
-/// caller passing the wrong object learns nothing.
-
+/// GNU `Flread__substitute_object_in_subtree` (`src/lread.c`): put OBJECT
+/// wherever PLACEHOLDER occurs inside it, in place, and return nil. edebug's
+/// `#N=` reader (`edebug-read-special`) calls it. COMPLETED only names the
+/// nodes GNU remembers against cycles; the shared reader walk remembers every
+/// container instead (`value_reader::substitute_object_in_subtree`).
 #[doc(hidden)]
-pub fn builtin_lread_substitute_object_in_subtree(args: Vec<Value>) -> EvalResult {
+pub fn builtin_lread_substitute_object_in_subtree(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("lread--substitute-object-in-subtree", &args, 3)?;
+    crate::emacs_core::value_reader::substitute_object_in_subtree(
+        args[0],
+        args[1],
+        eval.symbol_mode(),
+    )?;
     Ok(Value::NIL)
 }
 
@@ -5769,11 +5918,11 @@ fn adopt_make_byte_code_slot_objects(function: Value, code: Value, constants: Va
     let Some(bc) = function.get_bytecode_data() else {
         return;
     };
-    if bc.gnu_bytecode_bytes.is_some() {
+    if bc.gnu_bytecode_bytes().is_some() {
         install_bytecode_slot_object(function, ByteCodeSlotObject::Code, code);
     }
-    let pool = bc.constants.as_slice();
-    if bc.env.is_none()
+    let pool = bc.constants().as_slice();
+    if bc.env().is_none()
         && constants.as_vector_data().is_some_and(|items| {
             items.len() == pool.len() && items.iter().zip(pool).all(|(a, b)| a.bits() == b.bits())
         })
@@ -6016,7 +6165,7 @@ fn build_byte_code_function(
     // rather than going through as_str() which requires valid UTF-8.
     let raw_bytes =
         neovm_value::tagged::header::LispByteVec::copy_from_slice(slots.code.as_bytes());
-    let _ = bytecode_str.with_lisp_string_mut(|string| string.pin_immovable());
+    let _ = bytecode_str.pin_string_immovable();
 
     // 3. Extract constants from vector
     let mut constants: Vec<Value> = slots.constants.as_slice().to_vec();
@@ -6095,7 +6244,7 @@ fn build_byte_code_function(
     match timing {
         GnuDecodeTiming::Deferred => {
             bc.defer_gnu_decode();
-            if !bc.ops.is_empty() {
+            if !bc.ops().is_empty() {
                 // Eager decode policy kept the instructions resident; prove
                 // them now that every shape field is final. (The lazy path
                 // proves at decode.)
@@ -6305,10 +6454,18 @@ pub fn builtin_make_closure(args: &[Value]) -> EvalResult {
         )
     })?;
 
-    if let Some(env_val) = proto.env {
+    if let Some(env_val) = proto.env() {
         // NeoVM-compiled: replace first N values in env alist
         let mut new_bc = proto.clone();
-        new_bc.env = Some(replace_env_alist_values(env_val, closure_vars));
+        // Ops bytes are unchanged. set_env drops the certificate; restore
+        // the seal and recompute the stack proof for the new alist.
+        let keep_seal = new_bc.ops_sealed();
+        new_bc.set_env(Some(replace_env_alist_values(env_val, closure_vars)));
+        if keep_seal {
+            /* SAFETY: ops bytes are unchanged. seal_ops already succeeded on this function, and clone copied those ops. set_env only cleared the flag. */
+            unsafe { new_bc.mark_ops_sealed() };
+            new_bc.refresh_stack_verification();
+        }
         return Ok(share_prototype_code(
             *prototype,
             Value::make_bytecode(new_bc),
@@ -6321,7 +6478,7 @@ pub fn builtin_make_closure(args: &[Value]) -> EvalResult {
     // GNU .elc: a fresh constant vector (GNU copies it per call too — the
     // captured prefix is per instance), built in one pass: the captured
     // values, then the prototype's tail.
-    let proto_constants = proto.constants.as_slice();
+    let proto_constants = proto.constants().as_slice();
     if closure_vars.len() > proto_constants.len() {
         return Err(signal(
             "error",
@@ -6413,7 +6570,8 @@ fn make_closure_in_place() -> bool {
 /// `make-closure` of a GNU prototype the former way, kept for the
 /// `NEOVM_MAKE_CLOSURE_IN_PLACE=off` A/B: clone the whole prototype (its
 /// constant pool included), patch the captured prefix in the copy, and
-/// move the copy into the heap.
+/// move the copy into the heap. The patch writes values only.
+/// `constants_mut` would drop the seal and replace the shared lazy cell.
 #[inline(never)]
 fn make_closure_by_clone(
     prototype: Value,
@@ -6421,15 +6579,13 @@ fn make_closure_by_clone(
     closure_vars: &[Value],
 ) -> EvalResult {
     let mut new_bc = proto.clone();
-    if closure_vars.len() > new_bc.constants.len() {
+    if closure_vars.len() > new_bc.constants().len() {
         return Err(signal(
             "error",
             vec![Value::string("Closure vars do not fit in constvec")],
         ));
     }
-    for (i, var) in closure_vars.iter().enumerate() {
-        new_bc.constants[i] = *var;
-    }
+    new_bc.overwrite_constant_prefix(closure_vars);
     #[cfg(feature = "jit")]
     if let Some(id) = new_bc.jit_runtime().note_patched_prefix(closure_vars.len()) {
         crate::emacs_core::jit::cache::evict_compiled(id);
@@ -6515,6 +6671,15 @@ pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
     LOSSAGE_SIZE.with(|size| std::mem::swap(&mut *size.borrow_mut(), slot));
 }
 
+/// Hold the lossage slot borrowed so a source-carrier swap refuses.
+#[cfg(test)]
+pub(crate) fn with_source_lossage_reader_for_test<R>(body: impl FnOnce() -> R) -> R {
+    LOSSAGE_SIZE.with(|slot| {
+        let _reader = slot.borrow();
+        body()
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Argument helpers
 // ---------------------------------------------------------------------------
@@ -6533,7 +6698,7 @@ fn is_global_obarray_proxy_in_state(
     value: &Value,
 ) -> bool {
     vars.value_by_name("obarray")
-        .is_some_and(|proxy| proxy == *value)
+        .is_some_and(|proxy| proxy.bits() == value.bits())
 }
 
 /// (mapatoms FUNCTION &optional OBARRAY) — call FUNCTION with each interned symbol.

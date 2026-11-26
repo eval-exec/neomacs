@@ -295,6 +295,12 @@ pub struct FontResolveRequest {
     pub character: EmacsChar,
     /// Fully merged face attributes; family-less fontset rules inherit this family.
     pub face: Face,
+    /// Face id redisplay sealed for this buffer position. `None` when the
+    /// position has no sealed face, or the caller has no buffer position
+    /// (string `font-at`, named `face-font`).
+    pub realized_face_id: Option<u32>,
+    /// Arena epoch that keys `realized_face_id`. Absent together with the id.
+    pub realized_face_epoch: Option<u64>,
 }
 
 pub trait DisplayHost {
@@ -652,8 +658,8 @@ pub trait DisplayHost {
         &self,
         _request: image_catalog::ImageResolveRequest,
         _limit: ImageSizeLimit,
-    ) -> Result<Option<image_catalog::ReadyImage>, String> {
-        Ok(None)
+    ) -> image_catalog::ImageSyncResolution {
+        image_catalog::ImageSyncResolution::Unsupported
     }
     /// Nonblocking image catalog used by redisplay. Synchronous Lisp image
     /// queries use `resolve_image_sync`; redisplay must use this catalog instead.
@@ -819,6 +825,10 @@ pub trait DisplayHost {
     ) -> Result<(), String> {
         Ok(())
     }
+    /// Mirror GNU's live `ns-confirm-quit` value to the native application.
+    /// This scalar crosses threads; native callbacks must never read Lisp state.
+    fn set_ns_confirm_quit(&mut self, _enabled: bool) {}
+
     /// Publish the compiled NS modifier policy to the display backend.
     ///
     /// GNU's `nsterm.m` reads `ns-command-modifier' and friends at every
@@ -852,6 +862,16 @@ pub trait DisplayHost {
 pub struct FrameFontRequest {
     face: Face,
     size: FrameFontSize,
+    selection: FrameFontSelection,
+}
+
+/// Face attributes are preferences; an explicit font specification constrains
+/// native discovery. GNU only permits an unconstrained family pass for the
+/// former (`font_find_for_lface`, font.c).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameFontSelection {
+    FacePreferences,
+    FontSpecification,
 }
 
 impl FrameFontRequest {
@@ -861,12 +881,29 @@ impl FrameFontRequest {
             .take()
             .and_then(FrameFontSize::from_face_height)
             .unwrap_or(FrameFontSize::Default);
-        Self { face, size }
+        Self {
+            face,
+            size,
+            selection: FrameFontSelection::FacePreferences,
+        }
     }
 
     pub fn with_size(mut face: Face, size: FrameFontSize) -> Self {
         face.height = None;
-        Self { face, size }
+        Self {
+            face,
+            size,
+            selection: FrameFontSelection::FacePreferences,
+        }
+    }
+
+    pub fn for_font_specification(mut self) -> Self {
+        self.selection = FrameFontSelection::FontSpecification;
+        self
+    }
+
+    pub const fn selection(&self) -> FrameFontSelection {
+        self.selection
     }
 
     pub const fn face(&self) -> &Face {

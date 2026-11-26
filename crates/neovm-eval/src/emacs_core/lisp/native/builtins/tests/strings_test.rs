@@ -83,6 +83,31 @@ fn string_ordering_preserves_gnu_mixed_encoding_order() {
     );
 }
 
+/// `sxhash-equal` used to resolve a raw-byte symbol name through
+/// `resolve_sym`, which panics when the bytes are not UTF-8. Intern,
+/// `symbol-name`, `keywordp`, and printing must keep working.
+#[test]
+fn raw_unibyte_symbol_sxhash_does_not_panic() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let result = eval.eval_str(
+        r#"(let* ((name (unibyte-string 255 254 128))
+                  (sym (intern name))
+                  (table (make-hash-table :test 'equal)))
+             (puthash sym 7 table)
+             (list (eq sym (intern name))
+                   (equal (symbol-name sym) name)
+                   (integerp (sxhash-equal sym))
+                   (gethash sym table)
+                   (keywordp (intern (concat ":" (unibyte-string 255))))
+                   (stringp (prin1-to-string sym))))"#,
+    );
+    assert_eq!(
+        crate::emacs_core::format_eval_result(&result),
+        "OK (t t t 7 t t)"
+    );
+}
+
 /// GNU's `SYMBOL_NAME` supplies the original Lisp string object even when its
 /// bytes are not UTF-8.  Comparison must not round-trip a symbol name through
 /// Rust `str` while resolving the string designator.

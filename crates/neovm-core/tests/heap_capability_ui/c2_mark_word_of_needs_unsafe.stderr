@@ -1,0 +1,23 @@
+error[E0133]: call to unsafe function `MarkWord::of` is unsafe and requires unsafe block
+  --> tests/heap_capability_ui/c2_mark_word_of_needs_unsafe.rs:14:13
+   |
+14 |     let _ = mark_word::MarkWord::of(tagged::value::TaggedValue::NIL);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior
+
+error[E0133]: call to unsafe function `MarkStack::from_values` is unsafe and requires unsafe block
+  --> tests/heap_capability_ui/c2_mark_word_of_needs_unsafe.rs:15:21
+   |
+15 |     let mut stack = mark_word::MarkStack::from_values(vec![tagged::value::TaggedValue::NIL]);
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior
+
+error[E0133]: call to unsafe function `MarkStack::push` is unsafe and requires unsafe block
+  --> tests/heap_capability_ui/c2_mark_word_of_needs_unsafe.rs:16:5
+   |
+16 |     stack.push(tagged::value::TaggedValue::NIL);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior

@@ -17,14 +17,14 @@ fn gdl_integer_width_native_signal_roots_operands_through_collecting_hook() {
         optional: Vec::new(),
         rest: None,
     });
-    function.lexical = true;
+    function.set_lexical(true);
     // Consume the entry operands themselves, leaving no residual stack that
     // could accidentally keep them alive for the register-operand root guard.
-    function.ops = vec![Op::Mul, Op::Return];
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
+    function.set_ops(vec![Op::Mul, Op::Return]);
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(2));
     function
         .jit_runtime()
-        .record_numeric(0, function.ops.len(), NumericFeedback::Other);
+        .record_numeric(0, function.ops().len(), NumericFeedback::Other);
     let leaf = compile_bytecode_function(&function).expect("generic multiplication compiles");
     let mut eval = Context::new(crate::test_utils::unit_runtime());
     eval.eval_str(
@@ -52,7 +52,7 @@ fn gdl_integer_width_native_signal_roots_operands_through_collecting_hook() {
         let expected = args.map(|value| crate::emacs_core::print::print_value(&value));
         let ctx_ptr = &mut eval as *mut Context as *mut u8;
         assert_eq!(
-            leaf.call(ctx_ptr, &args),
+            unsafe { leaf.call(ctx_ptr, &args) },
             NativeRun::Signal,
             "must return native STATUS_SIGNAL rather than deopt or a value"
         );

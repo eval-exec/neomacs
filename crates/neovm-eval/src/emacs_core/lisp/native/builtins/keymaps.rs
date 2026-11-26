@@ -163,7 +163,11 @@ fn convert_lucid_event_type_list(value: &Value, symbol_mode: SymbolMode) -> Opti
 /// XEmacs-style keyboard macro and canonicalizes each Lucid event list in it.
 /// Keep that compatibility conversion at the `define-key` boundary so stored
 /// definitions, lookup results, and command-loop execution share one shape.
-fn normalize_keyboard_macro_definition(definition: Value, symbol_mode: SymbolMode) -> Value {
+fn normalize_keyboard_macro_definition(
+    eval: &mut super::eval::Context,
+    definition: Value,
+    symbol_mode: SymbolMode,
+) -> Value {
     let Some(items) = definition.as_vector_data() else {
         return definition;
     };
@@ -171,12 +175,24 @@ fn normalize_keyboard_macro_definition(definition: Value, symbol_mode: SymbolMod
         return definition;
     }
 
-    Value::vector(
-        items
-            .iter()
-            .map(|item| convert_lucid_event_type_list(item, symbol_mode).unwrap_or(*item))
-            .collect(),
-    )
+    let converted: Vec<Value> = items
+        .iter()
+        .map(
+            |item| match convert_lucid_event_type_list(&item, symbol_mode) {
+                Some(event) => {
+                    // GNU keymap.c:1132-1139 converts each XEmacs-style
+                    // keyboard-macro element with Fevent_convert_list, whose
+                    // apply_modifiers interns the derived name (keyboard.c:
+                    // 7800-7830). Publish at this producer; define-key no
+                    // longer walks the stored definition.
+                    crate::emacs_core::reader::publish_derived_symbols(eval, event);
+                    event
+                }
+                None => item,
+            },
+        )
+        .collect();
+    Value::vector(converted)
 }
 
 /// Parse a key description from a Value (must be a string or vector).
@@ -339,11 +355,16 @@ fn define_key_in_rooted_keymap(
     // makes the events Lisp-visible (PEER 5786 census: the C-/M-/S- function
     // key families in `function-key-map`).
     for event in &events {
-        eval.obarray.intern_member_symbols_in(*event);
+        crate::emacs_core::reader::publish_derived_symbols(eval, *event);
     }
     cache_key_event_symbol_properties(eval, &events)?;
-    let def = normalize_keyboard_macro_definition(args[2], symbol_mode);
-    eval.obarray.intern_member_symbols_in(def);
+    let def = normalize_keyboard_macro_definition(eval, args[2], symbol_mode);
+    // GNU `Fdefine_key` stores the definition object; it interns nothing
+    // from it. Walking DEF here made every definition pay for the whole
+    // graph it stores, which is O(N) per call on a growing keymap and was
+    // 75% of the ETAF mount's cycles at N=200 (#590). Symbols reach Lisp
+    // through the reader (which publishes them) or through `intern`, so
+    // membership is already GNU-consistent without this walk.
     let remove = args.get(3).is_some_and(|v| v.is_truthy());
     // Expand meta-prefixed events to ESC + base, matching GNU Emacs
     // Fdefine_key's metized handling.
@@ -364,10 +385,10 @@ fn possibly_translate_key_sequence(eval: &mut super::eval::Context, key: Value) 
     let Some(items) = key.as_vector_data() else {
         return Ok(key);
     };
-    let [string] = items.as_slice() else {
+    if items.len() != 1 {
         return Ok(key);
-    };
-    let string = *string;
+    }
+    let string = items.at(0);
     if !string.is_string() {
         return Ok(key);
     }
@@ -888,16 +909,23 @@ pub(crate) fn builtin_keymapp_impl(
 
 /// `(event-convert-list EVENT-DESC)` -> event object or nil
 #[doc(hidden)]
-pub fn builtin_event_convert_list(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
+pub fn builtin_event_convert_list(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("event-convert-list", &args, 1)?;
+    let symbol_mode = eval.symbol_mode();
     let Some(items) = list_to_vec(&args[0]) else {
         return Ok(Value::NIL);
     };
     if items.is_empty() {
         return Ok(Value::NIL);
     }
-    convert_lucid_event_list(&items, symbol_mode)
-        .ok_or_else(|| signal("error", vec![Value::string("Invalid event description")]))
+    let converted = convert_lucid_event_list(&items, symbol_mode)
+        .ok_or_else(|| signal("error", vec![Value::string("Invalid event description")]))?;
+    // GNU `Fevent_convert_list` derives the name in `apply_modifiers`, which
+    // interns it (keyboard.c:7800-7830). Publish at the producer so a caller
+    // that stores the result without going through define-key still sees a
+    // member, exactly as GNU does.
+    crate::emacs_core::reader::publish_derived_symbols(eval, converted);
+    Ok(converted)
 }
 
 /// `(text-char-description CHARACTER)` -> printable text description.

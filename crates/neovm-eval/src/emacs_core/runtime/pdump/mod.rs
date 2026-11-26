@@ -67,6 +67,7 @@ use self::runtime::*;
 use self::types::DumpContextState;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::data::fontset_state::FontsetRegistrySnapshot;
+use crate::emacs_core::eval::parked_context::ParkedContext;
 use neovm_text::emacs_core::charset::{
     CharsetRegistrySnapshot, restore_charset_registry, snapshot_charset_registry,
 };
@@ -218,6 +219,13 @@ fn fingerprint_bytes() -> [u8; 32] {
             NEOMACS_PDUMP_FINGERPRINT_RECORD.fingerprint
         ))
     }
+}
+
+/// Whether `xtask` has not replaced the link-time placeholder. Every such
+/// binary shares one pdump identity, so a layout-sensitive cache must not
+/// key on the fingerprint alone.
+pub(crate) fn fingerprint_is_placeholder() -> bool {
+    fingerprint_bytes() == FINGERPRINT_PLACEHOLDER
 }
 
 fn hex_string(bytes: &[u8]) -> String {
@@ -605,6 +613,9 @@ pub fn load_from_dump_with_proof(
     path: &Path,
     proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
+    // Refuse before touching symbol tables or mapping the image if another
+    // live Context's heap is already installed on this thread (rt A3).
+    neovm_value::tagged::gc::refuse_if_live_heap_installed();
     let load_start = std::time::Instant::now();
     let mut image = mmap_image::load_image(path)?;
     image.apply_relocations()?;
@@ -640,13 +651,17 @@ fn load_from_mapped_image(
         .section(DumpSectionKind::SymbolTable)
         .ok_or_else(|| DumpError::ImageFormatError("missing symbol-table section".into()))?;
     symbol_table_image::load_symbol_table_section(symbol_table_payload)?;
+    // Take the writable heap base before any section borrow is held.
+    // `LoadedSpans` keeps the object-starts bytes, so a later `&mut`
+    // on the image cannot overlap that borrow. `as_mut_ptr` needs the
+    // mutable borrow; the view keeps only the raw pointer.
+    let mapped_heap = image
+        .section_mut_ptr(DumpSectionKind::HeapImage)
+        .map(|(ptr, len)| unsafe { mapped_heap::MappedHeapView::from_raw_parts(ptr, len, true) });
     let object_starts_payload = image
         .section(DumpSectionKind::ObjectStarts)
         .ok_or_else(|| DumpError::ImageFormatError("missing object-starts section".into()))?;
     let spans = object_starts::load_object_starts(object_starts_payload)?;
-    let mapped_heap = image
-        .section_mut_ptr(DumpSectionKind::HeapImage)
-        .map(|(ptr, len)| unsafe { mapped_heap::MappedHeapView::from_raw_parts(ptr, len, true) });
     let object_extra_payload = image
         .section(DumpSectionKind::ObjectExtra)
         .ok_or_else(|| DumpError::ImageFormatError("missing object-extra section".into()))?;
@@ -769,27 +784,88 @@ pub fn restore_active_runtime(eval: &mut Context, snapshot: &ActiveRuntimeSnapsh
 }
 
 /// Reconstruct an evaluator from a previously captured in-memory pdump snapshot.
+///
+/// Refuses if another live `Context`'s heap is already installed on this
+/// thread (rt A3).
 pub fn restore_snapshot(
     state: &DumpContextState,
     proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
+    neovm_value::tagged::gc::refuse_if_live_heap_installed();
     reconstruct_evaluator(state, None, proof)
+}
+
+struct RestoreActiveSourceAfterClone<'a> {
+    eval: &'a mut Context,
+    saved_fontset: Option<FontsetRegistrySnapshot>,
+    saved_loaded_dump: Option<SavedLoadedDumpStats>,
+}
+
+impl<'a> RestoreActiveSourceAfterClone<'a> {
+    fn enter(eval: &'a mut Context) -> Self {
+        let saved_fontset = Some(crate::emacs_core::eval::lifecycle::fontset_registry_snapshot());
+        let saved_loaded_dump = Some(snapshot_loaded_dump_stats());
+        // SAFETY: `self.eval` is mutably borrowed for the entire clone nest and
+        // `Drop` unconditionally reactivates `eval` before control returns to it.
+        unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&eval.tagged_heap) };
+        Self {
+            eval,
+            saved_fontset,
+            saved_loaded_dump,
+        }
+    }
+}
+
+impl Drop for RestoreActiveSourceAfterClone<'_> {
+    fn drop(&mut self) {
+        self.eval.finish_runtime_activation(true);
+        if let Some(fontset) = self.saved_fontset.take() {
+            crate::emacs_core::eval::lifecycle::restore_fontset_registry(fontset);
+        }
+        if let Some(stats) = self.saved_loaded_dump.take() {
+            restore_loaded_dump_stats(stats);
+        }
+        self.eval.sync_thread_runtime_bindings();
+        self.eval.sync_current_thread_buffer_state();
+    }
 }
 
 /// Clone a live evaluator through the pdump conversion pipeline.
 ///
-/// Prefer `snapshot_evaluator` + `restore_snapshot` when cloning the same
-/// template repeatedly; that avoids rebuilding the intermediate dump state.
-pub fn clone_evaluator(eval: &Context) -> Result<Context, DumpError> {
-    restore_snapshot(&snapshot_evaluator(eval), eval.hooks_installed())
+/// Builds the clone under a scoped nest that fully reactivates `eval` (heap,
+/// thread-local registries, heap-keyed caches, integer-width context, JIT
+/// stack limit, fontset registry, and loaded-dump stats) on exit, and returns
+/// the clone parked ([`ParkedContext`]). The caller keeps `eval` active and
+/// resumes the clone only after parking or dropping `eval`.
+///
+/// Refuses if a foreign live `Context`'s heap (other than `eval`) is installed.
+pub fn clone_evaluator(eval: &mut Context) -> Result<ParkedContext, DumpError> {
+    if !neovm_value::tagged::gc::tagged_heap_is_current(&eval.tagged_heap) {
+        neovm_value::tagged::gc::refuse_if_live_heap_installed();
+    }
+    let state = snapshot_evaluator(eval);
+    let proof = eval.hooks_installed();
+    let _guard = RestoreActiveSourceAfterClone::enter(eval);
+    let cloned = reconstruct_evaluator(&state, None, proof)?;
+    Ok(cloned.park())
 }
 
 /// Clone an evaluator after activating its thread-local runtime bindings.
 ///
-/// Use this when cloning from a live runtime that shares the current thread
-/// with other `Context`s.
-pub fn clone_active_evaluator(eval: &mut Context) -> Result<Context, DumpError> {
-    restore_snapshot(&snapshot_active_evaluator(eval), eval.hooks_installed())
+/// Builds the clone under a scoped nest that restores `eval` as the active
+/// `Context` on exit, and returns the clone parked ([`ParkedContext`]).
+/// The caller resumes the clone only after parking or dropping `eval`.
+///
+/// Refuses if a foreign live `Context`'s heap (other than `eval`) is installed.
+pub fn clone_active_evaluator(eval: &mut Context) -> Result<ParkedContext, DumpError> {
+    if !neovm_value::tagged::gc::tagged_heap_is_current(&eval.tagged_heap) {
+        neovm_value::tagged::gc::refuse_if_live_heap_installed();
+    }
+    let state = snapshot_active_evaluator(eval);
+    let proof = eval.hooks_installed();
+    let _guard = RestoreActiveSourceAfterClone::enter(eval);
+    let cloned = reconstruct_evaluator(&state, None, proof)?;
+    Ok(cloned.park())
 }
 
 /// Reconstruct an `Context` from deserialized dump state.
@@ -863,7 +939,14 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
     // so tagged dump references can resolve directly to live tagged objects.
     let tagged_heap =
         neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
-    neovm_value::tagged::gc::set_tagged_heap_root(tagged_heap.root());
+    // SAFETY: the dump loader owns this AliasableBox. The root stays live
+    // until the loaded Context, or this heap's Drop on the error path, clears
+    // it. Drop calls clear_tagged_heap_if_installed, so the `?` below cannot
+    // leave the thread-local installed. No heap reference is live yet.
+    // The refusing predicate ensures pdump never overwrites a live foreign heap.
+    unsafe {
+        neovm_value::tagged::gc::install_tagged_heap_root_refusing_foreign(tagged_heap.root())
+    };
     decoder.preload_tagged_heap_with_value_fixup_section(value_fixups_section)?;
 
     // 3. Reset thread-local runtime caches before replaying semantic state.
@@ -955,6 +1038,9 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
     }
 
     decoder.discard_restored_file_object_descriptors();
+    // Late forwarder/native reconstruction belongs to the image baseline;
+    // only births after this complete activation join the runtime GC row.
+    eval.capture_gc_symbol_census_after_activation();
     Ok(eval)
 }
 

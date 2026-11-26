@@ -133,6 +133,7 @@ pub(crate) struct PerfStatCapture {
     scope: CounterScope,
     output: PathBuf,
     timeout: Duration,
+    perf_program: PathBuf,
     gate: Option<ProfileGate>,
 }
 
@@ -142,8 +143,16 @@ impl PerfStatCapture {
             scope,
             output: directory.join("hardware-counters.csv"),
             timeout,
+            perf_program: PathBuf::from("perf"),
             gate: None,
         }
+    }
+
+    pub(crate) fn with_perf_program(mut self, perf_program: Option<&Path>) -> Self {
+        if let Some(program) = perf_program {
+            self.perf_program = program.to_path_buf();
+        }
+        self
     }
 
     pub(crate) fn wrap(
@@ -179,7 +188,7 @@ impl PerfStatCapture {
             return Ok(command);
         }
 
-        let mut captured = Command::new("perf");
+        let mut captured = Command::new(&self.perf_program);
         captured.args(self.stat_arguments());
         captured.arg(command.get_program());
         captured.args(command.get_args());

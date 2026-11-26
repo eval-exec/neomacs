@@ -72,28 +72,31 @@ const TREEMACS_MAGIT_TEST_PRELUDE: &str = r####"
     new))
 
 (defun neomacs-treemacs-magit-test-await-processes (baseline)
-  "Wait until every process created after BASELINE has completed."
+  "Wait until every process created after BASELINE has left `process-list'.
+`process-live-p' becomes nil at SIGCHLD, before `status_notify' reads
+remaining output and runs the sentinel. With `delete-exited-processes'
+non-nil, that function removes the process immediately before
+`exec_sentinel', so absence from `process-list' means the sentinel ran."
   (let ((deadline (+ (float-time) 20.0))
-        live)
+        pending)
     (while (and
-            (setq live
-                  (cl-remove-if-not
-                   (lambda (process)
-                     (and (not (memq process baseline))
-                          (process-live-p process)))
+            (setq pending
+                  (cl-remove-if
+                   (lambda (process) (memq process baseline))
                    (process-list)))
             (< (float-time) deadline))
       (accept-process-output nil 0.02))
-    (when live
-      (error "Treemacs-Magit processes did not finish: %S" live))))
+    (when pending
+      (error "Treemacs-Magit processes did not finish: %S" pending))))
 
 (defun neomacs-treemacs-magit-test-await-process (process)
-  "Wait for Magit's concrete PROCESS without waiting on editor servers."
+  "Wait until PROCESS has left `process-list'.
+Same sentinel ordering as `neomacs-treemacs-magit-test-await-processes'."
   (let ((deadline (+ (float-time) 20.0)))
-    (while (and (process-live-p process)
+    (while (and (memq process (process-list))
                 (< (float-time) deadline))
       (accept-process-output nil 0.02))
-    (when (process-live-p process)
+    (when (memq process (process-list))
       (error "Treemacs-Magit process did not finish: %S" process))))
 
 (defun neomacs-treemacs-magit-test-node-state (buffer path root)

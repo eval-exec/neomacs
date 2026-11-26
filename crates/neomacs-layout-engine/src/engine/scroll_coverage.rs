@@ -16,6 +16,7 @@ use crate::row_layout::program::{
     RowMeasurements, RowProgram, RowProgramError, RowProgramGeometry, RowProgramLimits,
 };
 use crate::row_layout::worker::{RowJobTicket, RowWorker};
+use crate::string_property_snapshot::StringSourceRootScope;
 use crate::window_output::prepared_body::position_buffer_rows;
 use neovm_core::buffer::CharPos0;
 use neovm_core::tagged::collection_reads::{self, CollectionReads};
@@ -102,9 +103,9 @@ struct Capture {
     fringe: Option<crate::buffer_source::fringe_arrows::TruncationContinuationFringeRequest>,
 }
 
-struct WindowCoverage {
+pub(super) struct WindowCoverage {
     key: RetainedWindowKey,
-    targets: Vec<CharPos0>,
+    pub(super) targets: Vec<CharPos0>,
     // Remember pixel motion between source-row transitions and worker wakes.
     moving_backward: bool,
     // Source edge used to plan this queue, including after its bridge is popped.
@@ -122,15 +123,26 @@ pub(super) struct ScrollCoverage {
     // One paused acquisition, with the same per-page limits and root leases.
     // Urgent bridges share the existing worker; no unbounded producer queue.
     deferred: Option<Capture>,
-    frame: Option<FrameId>,
+    pub(super) frame: Option<FrameId>,
     // At most three targets per retained live window. Glyph storage remains
     // subject to PreparedViewports' global byte/row limits.
-    windows: rustc_hash::FxHashMap<DisplayWindowId, WindowCoverage>,
+    pub(super) windows: rustc_hash::FxHashMap<DisplayWindowId, WindowCoverage>,
     last_window: Option<DisplayWindowId>,
-    publication_pending: bool,
+    pub(super) publication_pending: bool,
+    pub(super) publication_serial: u64,
+    pub(super) refused_publication: Option<super::auxiliary_coverage::RefusedAuxiliaryKey>,
 }
 
 impl ScrollCoverage {
+    pub(super) fn note_publication_pending(&mut self) {
+        self.publication_pending = true;
+        self.publication_serial = self.publication_serial.wrapping_add(1);
+    }
+
+    pub(super) fn clear_publication_pending(&mut self) {
+        self.publication_pending = false;
+        self.refused_publication = None;
+    }
     #[cfg(test)]
     pub(super) fn fairness_owner_for_test(&self) -> Option<DisplayWindowId> {
         self.last_window
@@ -194,9 +206,10 @@ impl ScrollCoverage {
         self.frame = None;
         self.windows.clear();
         self.last_window = None;
+        self.clear_publication_pending();
     }
 
-    fn cancel_active(&mut self) {
+    pub(super) fn cancel_active(&mut self) {
         self.worker.cancel();
         self.admission = None;
         self.capture = None;
@@ -258,14 +271,7 @@ impl ScrollCoverage {
                 return Ok(false);
             };
             rows.truncate(last + 1);
-            let capacity = admission
-                .retained
-                .matrix
-                .rows
-                .iter()
-                .skip(admission.row_base)
-                .filter(|row| !RetainedWindowMatrix::is_chrome_role(row.role))
-                .count();
+            let capacity = crate::row_layout::worker::MAX_ROWS;
             let mut height = 0.0;
             let keep = rows
                 .iter()
@@ -287,16 +293,10 @@ impl ScrollCoverage {
             };
             admission.retained.key.window_start = char_pos.get() as i64;
         }
-        // Small-font rows can reach the matrix's row limit before its pixel
-        // bottom. Match both bounds of the canonical viewport walk.
-        let capacity = admission
-            .retained
-            .matrix
-            .rows
-            .iter()
-            .skip(admission.row_base)
-            .filter(|row| !RetainedWindowMatrix::is_chrome_role(row.role))
-            .count();
+        // Shorter faces can fit more rows into the text body than the default
+        // frame-font line height implies. Allow up to the worker's row cap so
+        // prepared viewports fill the same pixel height as canonical layout.
+        let capacity = crate::row_layout::worker::MAX_ROWS;
         let mut height = 0.0;
         let visible = rows
             .iter()
@@ -312,9 +312,25 @@ impl ScrollCoverage {
         let fills_viewport = height >= regions.text_body.height;
         // A suffix can start in a visual continuation: it certifies scroll
         // coverage, not a fresh viewport starting at that buffer character.
-        let complete_viewport = !bridge && (fills_viewport || visible == capacity);
+        // Only pixel coverage of the text body certifies a complete viewport;
+        // clamping at MAX_ROWS must not falsely mark a short-face page complete.
+        let complete_viewport = !bridge && fills_viewport;
         if !bridge {
             rows.truncate(visible);
+        }
+        let needed_matrix_rows = admission.row_base + rows.len();
+        if admission.retained.matrix.rows.len() < needed_matrix_rows {
+            admission
+                .retained
+                .matrix
+                .rows
+                .resize_with(needed_matrix_rows, || {
+                    let mut row = neomacs_display_protocol::glyph_matrix::GlyphRow::new(
+                        neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text,
+                    );
+                    row.enabled = false;
+                    neomacs_display_protocol::glyph_matrix::MatrixRow::new(row)
+                });
         }
         let body = position_buffer_rows(
             rows,
@@ -325,6 +341,7 @@ impl ScrollCoverage {
             admission.window.get() as u64,
             regions.outer,
             admission.retained.matrix.ncols,
+            admission.retained.key.bidi_paragraph_directions.text,
             #[cfg(any(test, feature = "redisplay-test-policy"))]
             admission
                 .retained
@@ -387,7 +404,9 @@ impl ScrollCoverage {
             complete_viewport,
             query_freshness,
         );
-        self.publication_pending |= changed;
+        if changed {
+            self.note_publication_pending();
+        }
         tracing::debug!(target: "neomacs_layout_engine::scroll_coverage",
             window = admission.window.get(), changed,
             "worker coverage retention decision");
@@ -407,11 +426,57 @@ impl LayoutEngine {
             .retain_live(|frame| evaluator.frame_manager().get(frame).is_some());
         self.prepared_viewports
             .retain_live_frames(|frame| evaluator.frame_manager().get(frame).is_some());
+        self.retained_by_frame
+            .retain(|frame, _| evaluator.frame_manager().get(*frame).is_some());
+        // Five cache retains and the global order lock run only after a
+        // frame that owns fontset state has actually disappeared. A live
+        // redisplay pays for a small frame-id set, not the CJK caches.
+        let mut watched = crate::font::fallback_order::fallback_order_frames();
+        if let Some(service) = self.font_metrics.as_ref() {
+            watched.extend(service.keyed_fontset_frames());
+        }
+        let frame_died = watched.into_iter().any(|frame| {
+            evaluator
+                .frame_manager()
+                .get(neovm_core::window::FrameId(frame))
+                .is_none()
+        });
+        if frame_died {
+            if let Some(service) = self.font_metrics.as_mut() {
+                service.prune_dead_frame_fontsets(|frame| {
+                    evaluator
+                        .frame_manager()
+                        .get(neovm_core::window::FrameId(frame))
+                        .is_some()
+                });
+            } else {
+                crate::font::fallback_order::prune_fallback_orders(
+                    &|fontset: &crate::font::fallback_order::FaceFontsetId| {
+                        fontset.frame != 0
+                            && evaluator
+                                .frame_manager()
+                                .get(neovm_core::window::FrameId(fontset.frame))
+                                .is_none()
+                    },
+                );
+            }
+        }
+        if self
+            .retained_frame
+            .is_some_and(|frame| evaluator.frame_manager().get(frame).is_none())
+        {
+            self.scroll_preview_coverage.clear();
+            self.auxiliary_base = None;
+        }
     }
 
     /// A completed idle page needs one fresh immutable transport publication.
     pub fn take_scroll_coverage_publication(&mut self) -> bool {
-        std::mem::take(&mut self.scroll_coverage.publication_pending)
+        let pending = std::mem::take(&mut self.scroll_coverage.publication_pending);
+        if pending {
+            self.scroll_coverage.refused_publication = None;
+        }
+        pending
     }
 
     /// Perform one bounded off-screen acquisition step during a command-loop
@@ -425,7 +490,7 @@ impl LayoutEngine {
         if !self.prepared_viewports.invalidated.is_empty() {
             // Retire the old render-thread certificate even before a new
             // worker page is ready. Cache eviction alone cannot revoke it.
-            self.scroll_coverage.publication_pending = true;
+            self.scroll_coverage.note_publication_pending();
         }
         for (_, window) in self.prepared_viewports.invalidated.drain(..) {
             self.scroll_coverage.windows.remove(&window);
@@ -555,43 +620,40 @@ impl LayoutEngine {
                 .get(&window_id)
                 .is_some_and(|observed| backward_start < observed.backward_edge);
         let urgent_backward = moving_backward
-            && self.last_frame_display_state.as_ref().is_none_or(|state| {
-                state
-                    .scroll_coverage
-                    .iter()
-                    .find(|coverage| coverage.content.window_id == window_id)
-                    .and_then(|coverage| {
-                        coverage.content.text_clip_bounds.map(|bounds| {
-                            // The same lower offset as ScrollSurface::clamp_offset;
-                            // no glyph materialization is needed to schedule work.
-                            let headroom = coverage.viewport.y + coverage.origin - bounds.y;
-                            // Two physical lines of one short face are fewer
-                            // pixels than `2 * char_height`. The tallest body
-                            // row is that face when the page is uniform, and
-                            // stays the frame font when any row is at least
-                            // that tall. A clipped fragment must not shrink it.
-                            let line = coverage
-                                .content
-                                .matrix
-                                .rows
-                                .iter()
-                                .filter(|row| {
-                                    row.enabled
-                                        && row.height_px > 0.0
-                                        && !RetainedWindowMatrix::is_chrome_role(row.role)
-                                })
-                                .map(|row| row.height_px)
-                                .fold(0.0_f32, f32::max);
-                            let unit = if line > 0.0 && line + 1.0 < retained.key.char_height {
-                                line
-                            } else {
-                                retained.key.char_height
-                            };
-                            headroom <= unit * 2.0
-                        })
+            && self
+                .scroll_preview_coverage
+                .coverage(frame.id, window_id)
+                .and_then(|coverage| {
+                    coverage.content.text_clip_bounds.map(|bounds| {
+                        // The same lower offset as ScrollSurface::clamp_offset;
+                        // no glyph materialization is needed to schedule work.
+                        let headroom = coverage.viewport.y + coverage.origin - bounds.y;
+                        // Two physical lines of one short face are fewer
+                        // pixels than `2 * char_height`. The tallest body
+                        // row is that face when the page is uniform, and
+                        // stays the frame font when any row is at least
+                        // that tall. A clipped fragment must not shrink it.
+                        let line = coverage
+                            .content
+                            .matrix
+                            .rows
+                            .iter()
+                            .filter(|row| {
+                                row.enabled
+                                    && row.height_px > 0.0
+                                    && !RetainedWindowMatrix::is_chrome_role(row.role)
+                            })
+                            .map(|row| row.height_px)
+                            .fold(0.0_f32, f32::max);
+                        let unit = if line > 0.0 && line + 1.0 < retained.key.char_height {
+                            line
+                        } else {
+                            retained.key.char_height
+                        };
+                        headroom <= unit * 2.0
                     })
-                    .unwrap_or(true)
-            });
+                })
+                .unwrap_or(true);
         if !compatible {
             self.scroll_coverage.cancel_active();
         }
@@ -748,12 +810,39 @@ impl LayoutEngine {
                             .emacs_byte_at_pos(neovm_core::buffer::EmacsBytePos::new(byte - 1))
                             == Some(b'\n'))
                 {
-                    let near = buffer.emacs_byte_pos_to_char_pos_clamped(
-                        neovm_core::buffer::EmacsBytePos::new(byte),
-                    );
-                    if near > bridge && near < end {
-                        observed.targets[index] = near;
-                        observed.backward_bridge = Some((near, end));
+                    // One short physical line is cheaper than the four-line
+                    // bridge. A line taller than the viewport is not a small
+                    // slice: collapsing onto it drops the connected tail.
+                    let body = retained.key.partition.text_body();
+                    let columns = (body.width / retained.key.char_width.max(1.0)) as usize;
+                    let span = end_byte.saturating_sub(byte);
+                    let visual_rows = if columns == 0 {
+                        1
+                    } else {
+                        span.div_ceil(columns).max(1)
+                    };
+                    let row_px = retained
+                        .matrix
+                        .rows
+                        .iter()
+                        .filter(|row| {
+                            row.enabled
+                                && row.height_px > 0.0
+                                && !RetainedWindowMatrix::is_chrome_role(row.role)
+                        })
+                        .map(|row| row.height_px)
+                        .fold(retained.key.char_height, f32::max)
+                        .max(1.0);
+                    let fits_in_viewport =
+                        columns == 0 || (visual_rows as f32) * row_px < body.height;
+                    if fits_in_viewport {
+                        let near = buffer.emacs_byte_pos_to_char_pos_clamped(
+                            neovm_core::buffer::EmacsBytePos::new(byte),
+                        );
+                        if near > bridge && near < end {
+                            observed.targets[index] = near;
+                            observed.backward_bridge = Some((near, end));
+                        }
                     }
                 }
             }
@@ -922,6 +1011,7 @@ impl LayoutEngine {
         let mut retained = RetainedWindowMatrix {
             matrix,
             key: key.clone(),
+            gnu_accuracy: None,
             validity: retained.validity,
             display_snapshot: std::sync::Arc::new(neovm_core::window::WindowDisplaySnapshot {
                 window_id: window,
@@ -1182,6 +1272,14 @@ impl LayoutEngine {
         if self.font_metrics.is_none() {
             return Err(RowProgramError::Unsupported);
         }
+        let epoch = self
+            .frame_face_arenas
+            .get(&frame)
+            .map(|arena| arena.face_epoch().get())
+            .unwrap_or_else(|| evaluator.face_change_count());
+        if let Some(service) = self.font_metrics.as_mut() {
+            service.set_realized_fontset_context(frame.0, epoch);
+        }
         let default_face = DisplayRowFaceRealizer::new(&mut self.font_metrics).realize_face(
             base_id,
             resolver.default_face(),
@@ -1274,6 +1372,7 @@ impl LayoutEngine {
             context,
             &mut capture.attempt,
             || false,
+            StringSourceRootScope::Rooted(evaluator.owned_root_retainer()),
         )?;
         if !captured.roots.is_empty() {
             capture
@@ -1298,6 +1397,19 @@ impl LayoutEngine {
                     metrics.row_height(),
                 ));
             }
+        }
+        let body_height = capture.retained.display_snapshot.regions.text_body.height;
+        if let Some(shortest) = faces
+            .iter()
+            .map(|face| face.metrics.line_height_px())
+            .filter(|height| *height >= 1.0 && *height + 1.0 <= key.char_height)
+            .reduce(f32::min)
+        {
+            let widened = (body_height / shortest).ceil() as usize;
+            if widened > crate::row_layout::worker::MAX_PROGRAMS {
+                return Err(RowProgramError::Budget);
+            }
+            capture.row_count = capture.row_count.max(widened);
         }
         for face in &faces {
             let mut rendered = face.render_face();
@@ -1404,7 +1516,8 @@ impl LayoutEngine {
         capture.programs.push(
             program
                 .with_trailing_text_continuation(captured.trailing_text_continues)
-                .with_buffer_source_start(captured.source_start),
+                .with_buffer_source_start(captured.source_start)
+                .with_overlay_string_kinds(captured.overlay_string_kinds),
         );
         Ok(())
     }

@@ -2,10 +2,8 @@
 
 use std::sync::Arc;
 
-use wgpu::util::DeviceExt;
-
 use neomacs_display_protocol::face::BoxVerticalEdges;
-use neomacs_display_protocol::frame_glyphs::{FringeBitmapData, StipplePattern};
+use neomacs_display_protocol::frame_glyphs::StipplePattern;
 use neomacs_display_protocol::scene::{Scene, SceneCursorStyle};
 use neomacs_display_protocol::types::Color;
 
@@ -27,13 +25,14 @@ mod cursor_presentation;
 mod deform;
 mod draw;
 mod dynamic_buffer;
-pub use draw::DrawContext;
+pub use draw::{DeviceLost, DrawContext};
 mod paint;
 mod target;
 pub use target::{NativeContentPlacement, NativePlacementError, RenderTarget, SnapshotRegion};
 mod effect_common;
 mod effects_state;
-mod frame_pass;
+pub(crate) mod frame_pass;
+mod fringe_paint;
 mod full_frame_texture;
 pub use full_frame_texture::FullFrameTexture;
 mod fx_state;
@@ -118,14 +117,15 @@ fn create_bi_planar_video_pipeline(
 }
 
 #[cfg(feature = "video")]
-fn create_bi_planar_video_copy_pipeline(
+fn create_video_copy_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::PipelineLayout,
     target_format: wgpu::TextureFormat,
+    label: &str,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Bi-planar Video Shader-channel Copy Pipeline"),
+        label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
@@ -379,6 +379,18 @@ impl WgpuRenderer {
     /// identities for the replacement renderer.
     pub fn into_image_decoder(self) -> crate::ImageDecoder {
         self.caches.image.into_decoder()
+    }
+
+    /// Leak this renderer and return the CPU image decoder.
+    ///
+    /// Device-loss recovery must not drop wgpu objects into a wedged driver.
+    pub fn abandon_keeping_decoder(self) -> crate::ImageDecoder {
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: the renderer is leaked, so its wgpu fields are not dropped.
+        // The image cache is read out once. `take_decoder_and_leak_gpu` moves
+        // the decoder and leaks that cache's GPU objects. The bitwise copy
+        // left inside the leaked renderer is never dropped.
+        unsafe { std::ptr::read(&this.caches.image) }.take_decoder_and_leak_gpu()
     }
 
     /// Internal helper that creates the renderer with the given device/queue.
@@ -884,11 +896,20 @@ impl WgpuRenderer {
             "Bi-planar Video Pipeline",
         );
         #[cfg(feature = "video")]
-        let bi_planar_video_copy_pipeline = create_bi_planar_video_copy_pipeline(
+        let packed_video_copy_pipeline = create_video_copy_pipeline(
+            &device,
+            &image_shader,
+            &image_pipeline_layout,
+            crate::video_cache::VIDEO_CHANNEL_FORMAT,
+            "Packed Video Shader-channel Copy Pipeline",
+        );
+        #[cfg(feature = "video")]
+        let bi_planar_video_copy_pipeline = create_video_copy_pipeline(
             &device,
             &bi_planar_video_shader,
             &bi_planar_video_pipeline_layout,
             crate::video_cache::VIDEO_CHANNEL_FORMAT,
+            "Bi-planar Video Shader-channel Copy Pipeline",
         );
 
         // Opaque image pipeline — for XRGB/BGRX DMA-BUF textures where alpha=0x00.
@@ -1225,6 +1246,8 @@ impl WgpuRenderer {
                 picture_interpolate: picture_interpolate_pipeline,
                 #[cfg(feature = "video")]
                 bi_planar_video: bi_planar_video_pipeline,
+                #[cfg(feature = "video")]
+                packed_video_copy: packed_video_copy_pipeline,
                 #[cfg(feature = "video")]
                 bi_planar_video_copy: bi_planar_video_copy_pipeline,
                 opaque_image: opaque_image_pipeline,
@@ -1596,14 +1619,17 @@ impl WgpuRenderer {
             return;
         }
 
-        // Create vertex buffer
-        let vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Rect Vertex Buffer"),
-                contents: bytemuck::cast_slice(&vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
+        // Create vertex buffer. No COPY_DST: this buffer is the frame's vertex
+        // snapshot, and a lost device must abandon the frame instead of panicking.
+        let Ok(vertex_buffer) = draw::create_initialized_buffer(
+            &self.device,
+            "Rect Vertex Buffer",
+            bytemuck::cast_slice(&vertices),
+            wgpu::BufferUsages::VERTEX,
+        ) else {
+            self.draw_parameters.mark_lost();
+            return;
+        };
 
         // Create command encoder and render pass
         let mut encoder = self
@@ -1636,7 +1662,10 @@ impl WgpuRenderer {
             });
 
             render_pass.set_pipeline(&self.pipelines.rect);
-            render_pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
+            let Ok(frame_params) = self.frame_parameters() else {
+                return;
+            };
+            render_pass.set_bind_group(0, frame_params.binding(), &[]);
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             render_pass.draw(0..vertices.len() as u32, 0..1);
         }
@@ -1703,173 +1732,28 @@ impl WgpuRenderer {
         fg: &Color,
         pattern: &StipplePattern,
     ) {
-        if pattern.width == 0 || pattern.height == 0 {
-            return;
-        }
-        let bytes_per_row = pattern.width.div_ceil(8) as usize;
-        // Round the fractional cell size UP so the tiled fill covers the whole
-        // domain: with a proportional font the per-glyph cell width is
-        // fractional (e.g. 16.25px), and truncating left a ~1px unfilled column
-        // at every glyph boundary. Any overdraw past the domain is clipped by
-        // the paint clip and overpainted by the next glyph's own fill.
-        let w_pixels = width.ceil() as u32;
-        let h_pixels = height.ceil() as u32;
-
-        // Tile the pattern over the area, merging horizontal runs
-        for py in 0..h_pixels {
-            let pat_y = py % pattern.height;
-            let mut px = 0u32;
-            while px < w_pixels {
-                let pat_x = px % pattern.width;
-                let byte_idx = pat_y as usize * bytes_per_row + (pat_x / 8) as usize;
-                let bit_idx = pat_x % 8;
-                let bit_set =
-                    byte_idx < pattern.bits.len() && (pattern.bits[byte_idx] >> bit_idx) & 1 != 0;
-                if !bit_set {
-                    px += 1;
-                    continue;
-                }
-                // Start of a run — find how far it extends
-                let run_start = px;
-                px += 1;
-                while px < w_pixels {
-                    let pat_x2 = px % pattern.width;
-                    let bi2 = pat_y as usize * bytes_per_row + (pat_x2 / 8) as usize;
-                    let bit2 = pat_x2 % 8;
-                    let set2 = bi2 < pattern.bits.len() && (pattern.bits[bi2] >> bit2) & 1 != 0;
-                    if !set2 {
-                        break;
-                    }
-                    px += 1;
-                }
-                let run_len = px - run_start;
-                self.add_rect(
-                    vertices,
-                    x + run_start as f32,
-                    y + py as f32,
-                    run_len as f32,
-                    1.0,
-                    fg,
-                );
-            }
+        for (qx, qy, qw, qh) in pattern.covered_runs(x, y, width, height) {
+            self.add_rect(vertices, qx, qy, qw, qh, fg);
         }
     }
 
-    /// Render a monochrome fringe bitmap into a window's fringe column.
-    ///
-    /// Reuses the stipple bits-to-quads technique (no texture/atlas): each set
-    /// bit becomes a `scale`-sized foreground quad, with horizontal runs merged.
-    /// `scale` is one logical pixel (`1.0`); the logical→physical projection in
-    /// the rect pipeline then scales it by the device pixel ratio, so arrows are
-    /// full-size on hidpi without any per-bit `* scale_factor`.
-    ///
-    /// Bits are MSB-aligned `u16` (column `b` of row `r` is set when
-    /// `(bits[r] >> (15 - b)) & 1 == 1`). `column_x`/`row_y` are the fringe
-    /// column's top-left in logical (offset-applied) frame coordinates; the
-    /// bitmap is centered horizontally and aligned vertically per `align`
-    /// (0 = center, 1 = top, 2 = bottom).
-    #[allow(clippy::too_many_arguments)]
+    /// Paint a fringe bitmap into a window's fringe column the way GNU's
+    /// `draw_fringe_bitmap_1` and `x_draw_fringe_bitmap` do: the rectangles of
+    /// [`fringe_bitmap_rects`] as quads (no texture or atlas; horizontal runs
+    /// of set bits are merged). `scale` is one logical pixel (`1.0`); the
+    /// logical→physical projection in the rect pipeline then scales each quad
+    /// by the device pixel ratio, so bitmaps are full-size on hidpi without any
+    /// per-bit `* scale_factor`.
     fn render_fringe_bitmap(
         &self,
         vertices: &mut Vec<RectVertex>,
-        column_x: f32,
-        row_y: f32,
-        column_width: f32,
-        row_height: f32,
-        fg: &Color,
-        bitmap: &FringeBitmapData,
+        place: fringe_paint::FringeBitmapPlace<'_>,
+        foreground: Color,
+        background: Color,
     ) {
-        if bitmap.width == 0 || bitmap.height == 0 || bitmap.bits.is_empty() {
-            return;
-        }
-        let scale = 1.0_f32;
-        let bmp_w = bitmap.width as f32 * scale;
-        let period = bitmap.period as usize;
-        // A periodic bitmap (e.g. `empty-line`, period 3) tiles its `period`-row
-        // motif down the FULL row height — GNU `draw_fringe_bitmap_1` keys the
-        // start row off the row's frame y (`p.dh = p.y % period`) so the dashed
-        // pattern stays on a single global grid across every empty row, then
-        // draws `height - dh` rows clipped to the row.  A non-periodic bitmap is
-        // a fixed-height glyph aligned within the row.
-        let bmp_h = if period > 0 {
-            row_height
-        } else {
-            bitmap.height as f32 * scale
-        };
-
-        // Horizontal: center the bitmap in the fringe column (GNU left-justifies
-        // standard bitmaps, but centering reads well for magit's narrow arrows
-        // and never clips when width <= column_width).
-        let x_off = ((column_width - bmp_w) * 0.5).max(0.0);
-        // Vertical alignment within the row. Periodic bitmaps always tile from
-        // the row top (GNU stores them ALIGN_BITMAP_TOP); the phase below keeps
-        // them aligned to the global grid.
-        let y_off = if period > 0 {
-            0.0
-        } else {
-            match bitmap.align {
-                1 => 0.0,                                   // TOP
-                2 => (row_height - bmp_h).max(0.0),         // BOTTOM
-                _ => ((row_height - bmp_h) * 0.5).max(0.0), // CENTER
-            }
-        };
-        let origin_x = column_x + x_off;
-        let origin_y = row_y + y_off;
-
-        // GNU's per-row phase: `dh = y % period`. We key off the row's logical
-        // frame y so consecutive empty rows continue the same dotted grid.
-        let phase = if period > 0 {
-            (row_y.max(0.0).round() as i64).rem_euclid(period as i64) as usize
-        } else {
-            0
-        };
-
-        let width_bits = bitmap.width.min(16) as u32;
-        let bitmap_rows = bitmap.bits.len();
-        // Number of device rows to draw: clipped to the row height, and never
-        // past the stored bitmap (a non-periodic bitmap draws its own height).
-        let device_rows = if period > 0 {
-            bmp_h.max(0.0).round() as usize
-        } else {
-            bitmap_rows
-        };
-        for dr in 0..device_rows {
-            let py = origin_y + dr as f32 * scale;
-            if py >= row_y + row_height {
-                break;
-            }
-            // Which stored bitmap row to sample. Periodic bitmaps wrap modulo
-            // `period`, phase-shifted so the grid is continuous across rows; a
-            // non-periodic bitmap maps device row -> bitmap row 1:1.
-            let bitmap_row = if period > 0 {
-                (phase + dr) % period
-            } else {
-                dr
-            };
-            let Some(&row_bits) = bitmap.bits.get(bitmap_row) else {
-                continue;
-            };
-            let mut b = 0u32;
-            while b < width_bits {
-                let set = (row_bits >> (15 - b)) & 1 != 0;
-                if !set {
-                    b += 1;
-                    continue;
-                }
-                let run_start = b;
-                b += 1;
-                while b < width_bits && (row_bits >> (15 - b)) & 1 != 0 {
-                    b += 1;
-                }
-                let run_len = (b - run_start) as f32;
-                self.add_rect(
-                    vertices,
-                    origin_x + run_start as f32 * scale,
-                    py,
-                    run_len * scale,
-                    scale,
-                    fg,
-                );
+        for rect in fringe_paint::fringe_bitmap_rects(place) {
+            if let Some(color) = fringe_paint::fringe_ink_color(rect.ink, foreground, background) {
+                self.add_rect(vertices, rect.x, rect.y, rect.width, rect.height, &color);
             }
         }
     }
@@ -2098,7 +1982,11 @@ impl WgpuRenderer {
         self.caches.image.sampler()
     }
 
-    fn parameters(&self, size: [f32; 2], time: f32) -> draw::DrawParameters {
+    fn parameters(
+        &self,
+        size: [f32; 2],
+        time: f32,
+    ) -> Result<draw::DrawParameters, draw::DeviceLost> {
         self.parameters_with_alpha(size, time, 1.0)
     }
 
@@ -2109,7 +1997,12 @@ impl WgpuRenderer {
     /// background, border, shadow and glyphs alike -- by one value, and
     /// carrying that in the shared uniform snapshot is what keeps the
     /// multiply out of every vertex builder.
-    fn parameters_with_alpha(&self, size: [f32; 2], time: f32, alpha: f32) -> draw::DrawParameters {
+    fn parameters_with_alpha(
+        &self,
+        size: [f32; 2],
+        time: f32,
+        alpha: f32,
+    ) -> Result<draw::DrawParameters, draw::DeviceLost> {
         self.parameters_for(size, time, alpha, 1.0, [0.0; 2])
     }
 
@@ -2122,12 +2015,16 @@ impl WgpuRenderer {
         alpha: f32,
         scale: f32,
         pivot: [f32; 2],
-    ) -> draw::DrawParameters {
+    ) -> Result<draw::DrawParameters, draw::DeviceLost> {
         self.draw_parameters
             .get(&self.device, size, time, alpha, scale, pivot)
     }
 
-    fn frame_parameters(&self) -> draw::DrawParameters {
+    pub fn take_frame_device_lost(&self) -> bool {
+        self.draw_parameters.take_lost()
+    }
+
+    fn frame_parameters(&self) -> Result<draw::DrawParameters, draw::DeviceLost> {
         let time = self
             .frame_sample
             .since_at_presentation(self.ambient.render_start_time)
@@ -2243,4 +2140,37 @@ impl GlyphCoverageMask {
             Self::Subpixel => "fs_subpixel",
         }
     }
+}
+
+/// Device-pixel grid placement for an overlay glyph texture's top-left.
+///
+/// Chrome text (menu-bar labels, popup menu items, tooltips) is drawn from
+/// pre-rasterized whole-label or per-glyph textures at a *logical* position
+/// whose fractional part comes from centering the label in a chrome band and
+/// from accumulated advances.  Drawing such a texture at a fractional device
+/// position makes the linear sampler resample every stem into a soft edge.
+/// The row/text pipeline solves the same problem by placing whole-pixel glyph
+/// origins (`content::snap_glyph_origin`, bins forced to `Zero` — whole-pixel
+/// placement is GNU's behavior and avoids per-position atlas variants), so
+/// overlay text uses the same rule: round the final physical origin and return
+/// it in logical units.
+///
+/// `bearing_*` and `font_ascent`-scaled values are physical pixels; the result
+/// is within half a physical pixel of the unsnapped origin.
+pub fn snap_overlay_glyph_origin(
+    x: f32,
+    y: f32,
+    bearing_x: f32,
+    bearing_y: f32,
+    font_ascent: f32,
+    scale: f32,
+) -> (f32, f32) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let physical_x = (x * scale + bearing_x).round();
+    let physical_y = (y * scale + font_ascent * scale - bearing_y).round();
+    (physical_x / scale, physical_y / scale)
 }

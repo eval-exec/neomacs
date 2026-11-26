@@ -1,0 +1,16 @@
+error[E0382]: borrow of moved value: `turn`
+  --> tests/e51_turn_ui/turn_used_after_park.rs:21:5
+   |
+16 |     let mut turn = match state.begin(Ticket) {
+   |         -------- move occurs because `turn` has type `SerialTurn<'_, i32, Ticket>`, which does not implement the `Copy` trait
+...
+20 |     let _parked = turn.park("mutex");
+   |                        ------------- `turn` moved due to this method call
+21 |     turn.with_world(|world| *world += 1);
+   |     ^^^^ value borrowed here after move
+   |
+note: `SerialTurn::<'turn, C, L>::park` takes ownership of the receiver `self`, which moves `turn`
+  --> tests/e51_turn_ui/../../../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/serial_turn.rs
+   |
+   |         self,
+   |         ^^^^

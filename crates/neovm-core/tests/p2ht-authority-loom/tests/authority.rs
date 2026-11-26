@@ -288,6 +288,74 @@ fn writer_skipping_drain_observes_torn_entry() {
     });
 }
 
+/// A reader entering an unhydrated table loads the payload generation only
+/// after it holds the reader count or WRITER, while a writer replaces that
+/// payload. Every observation is an even generation. The reader drops the
+/// count before the test returns so the writer's drain can finish.
+#[test]
+fn reader_enter_observes_unhydrated_payload_only_under_a_word() {
+    support::check(3, || {
+        let table = Arc::new(Table::new());
+        table.needs_hydration.store(true, Ordering::Release);
+
+        let t = Arc::clone(&table);
+        let reader = thread::spawn(move || {
+            t.reader_enter_hydrating();
+        });
+
+        let t = Arc::clone(&table);
+        let writer = thread::spawn(move || {
+            let lease = WriterLease::enter(&t);
+            t.replace_payload();
+            drop(lease);
+        });
+
+        reader.join().unwrap();
+        writer.join().unwrap();
+        assert_eq!(table.authority.load(Ordering::Acquire), 0);
+        assert_eq!(table.pending.load(Ordering::Acquire) % 2, 0);
+        assert!(!table.needs_hydration.load(Ordering::Acquire));
+    });
+}
+
+/// NEGATIVE control — the reader loads the payload generation before taking
+/// a word. The writer's odd window is then visible. The reader takes no
+/// count, so the writer's drain is not the assertion under test.
+#[test]
+fn reader_loading_payload_before_the_word_sees_a_mid_replace() {
+    const EXPECTED: &str = "unsynchronized payload observed";
+    support::negative(3, EXPECTED, || {
+        let table = Arc::new(Table::new());
+        table.needs_hydration.store(true, Ordering::Release);
+
+        let odd = Arc::new(AtomicBool::new(false));
+        let (t, flag) = (Arc::clone(&table), Arc::clone(&odd));
+        let writer = thread::spawn(move || {
+            let lease = WriterLease::enter(&t);
+            let generation = t.pending.load(Ordering::Acquire);
+            t.pending.store(generation + 1, Ordering::Release);
+            flag.store(true, Ordering::Release);
+            loom::thread::yield_now();
+            t.pending.store(generation + 2, Ordering::Release);
+            t.needs_hydration.store(false, Ordering::Release);
+            drop(lease);
+        });
+
+        let (t, flag) = (Arc::clone(&table), Arc::clone(&odd));
+        let reader = thread::spawn(move || {
+            // No authority word: the load sits in the writer's odd window.
+            wait_for(&flag);
+            let generation = t.pending.load(Ordering::Acquire);
+            if generation % 2 == 1 {
+                panic!("{}", EXPECTED);
+            }
+        });
+
+        reader.join().unwrap();
+        writer.join().unwrap();
+    });
+}
+
 /// Sanity for the word layout constants used above.
 #[test]
 fn word_layout_constants() {
@@ -318,11 +386,7 @@ fn three_readers_overlap_then_writer_drains_all() {
         let overlap = Arc::new(AtomicBool::new(false));
         let drain = Arc::new(AtomicBool::new(false));
 
-        let (t, a, c) = (
-            Arc::clone(&table),
-            Arc::clone(&a_in),
-            Arc::clone(&c_in),
-        );
+        let (t, a, c) = (Arc::clone(&table), Arc::clone(&a_in), Arc::clone(&c_in));
         let reader_a = thread::spawn(move || {
             let lease = model::ReaderLease::enter(&t);
             a.set();

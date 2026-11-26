@@ -45,8 +45,8 @@ impl OwnerKind {
     fn read(self, owner: TaggedValue) -> TaggedValue {
         match self {
             Self::Cons => owner.cons_car(),
-            Self::Vector => owner.as_vector_data().expect("vector")[0],
-            Self::Record => owner.as_record_data().expect("record")[0],
+            Self::Vector => owner.as_vector_data().expect("vector").at(0),
+            Self::Record => owner.as_record_data().expect("record").at(0),
             Self::String => TaggedValue::make_int(i64::from(
                 owner.as_str_owned().expect("string").as_bytes()[0],
             )),
@@ -153,7 +153,7 @@ fn reclaimed_endpoints_contract(kind: OwnerKind, generational: bool) {
         }
     }
 
-    heap.collect_exact(std::iter::once(middle));
+    heap.collect_rooted(std::iter::once(middle));
     assert!(!heap.owns_heap_value_for_test(first));
     assert!(heap.owns_heap_value_for_test(middle));
     assert!(!heap.owns_heap_value_for_test(last));
@@ -230,7 +230,7 @@ fn recent_read_reclamation_acknowledges_epoch_in_every_journal_mode() {
         capture(|| {
             owner.cons_car();
             let before = super::super::gc::collection_observation_epoch();
-            heap.collect_exact(std::iter::once(owner));
+            heap.collect_rooted(std::iter::once(owner));
             let after = super::super::gc::collection_observation_epoch();
             assert_ne!(before, after, "a real sweep must publish reclamation");
             assert_eq!(
@@ -330,9 +330,9 @@ fn incremental_sweep_without_observed_reclamation_keeps_epoch_and_recent_hits() 
     }
     heap.incremental_drain_all();
     let bytes_before = heap.live_bytes();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     loop {
-        let done = heap.incremental_sweep_slice(1);
+        let done = heap.incremental_sweep_slice_for_test(1);
         assert_eq!(
             super::super::gc::collection_observation_epoch(),
             before,
@@ -371,17 +371,30 @@ fn recent_reads_reset_on_heap_identity_change_and_preserve_same_heap_installatio
             probe_recent(owner.bits()),
             "same live heap retains its cache"
         );
+        // SAFETY: bare `TaggedHeap` unit test clearing `first` before switching
+        // to `second`; re-seeding `RECENT` ensures `set_tagged_heap(&mut second)`
+        // itself must reset the recent-read cache on identity change.
+        unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&first) };
+        assert!(!probe_recent(owner.bits()));
+        assert!(probe_recent(owner.bits()));
         set_tagged_heap(&mut second);
         assert!(
             !probe_recent(owner.bits()),
             "new heap cannot reuse an old identity hit"
         );
+        // SAFETY: bare `TaggedHeap` unit test clearing `second` before restoring
+        // `first`; re-seeding `RECENT` ensures `set_tagged_heap(&mut first)`
+        // itself resets the cache.
+        unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&second) };
+        assert!(!probe_recent(owner.bits()));
+        assert!(probe_recent(owner.bits()));
         set_tagged_heap(&mut first);
         assert!(
             !probe_recent(owner.bits()),
             "restored or migrated heap starts empty"
         );
-        crate::tagged::gc::clear_tagged_heap_if_installed(&first);
+        // SAFETY: standalone bare `TaggedHeap` test fixture cleared to verify reset.
+        unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&first) };
         assert!(
             !probe_recent(owner.bits()),
             "uninstallation clears before owner destruction"

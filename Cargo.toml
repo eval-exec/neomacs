@@ -73,7 +73,7 @@ passthrough = ["CARGO_INCREMENTAL"]
 image = "ghcr.io/cross-rs/x86_64-pc-windows-gnu:edge"
 
 [workspace.package]
-version = "0.0.20"
+version = "0.0.21"
 edition = "2024"
 authors = ["Eval Exec <execvy@gmail.com>"]
 license = "GPL-3.0-or-later"
@@ -227,6 +227,12 @@ enumflags2 = "0.7"
 bytemuck = { version = "1.18", features = ["derive"] }
 memmap2 = "0.9"
 image = "0.25"
+# The GIF frame reader behind `image`. `image` hands out a GIF animation
+# only as a whole-sequence iterator that cannot cross threads, and the
+# sequence cache keeps one decoder position per source across its worker
+# threads (crates/neomacs-renderer-wgpu/src/image_sequence/gif_stream.rs).
+# The version `image` 0.25 already resolves to, so the tree gains no crate.
+gif = "0.14"
 # Dev-only, `xpm` feature only: an independent XPM3 decoder that
 # cross-checks neomacs-renderer-wgpu's XPM decoder against the shipped
 # etc/images corpus. GNU stays the specification for that decoder (see
@@ -364,7 +370,7 @@ objc2-metal = "0.3.2"
 windows = "0.62.2"
 windows-core = "0.62.2"
 webview2-com = "0.39.1"
-url = "2"
+url = "2.5.9"
 
 # Terminal emulation
 rio-vt = "0.5.29"

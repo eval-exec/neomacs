@@ -40,7 +40,11 @@ fn contained_panic_in_load_unwinds_load_bookkeeping() {
     // times; five leaked entries would previously get there. Every round
     // must instead report the contained panic with clean state.
     for round in 0..5 {
-        assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal, "round {round}");
+        assert_eq!(
+            unsafe { leaf.call(ctx_ptr, &[]) },
+            NativeRun::Signal,
+            "round {round}"
+        );
         let flow = take_pending_flow().expect("panic flow stashed");
         let sig = match flow.into_kind() {
             FlowKind::Signal(sig) => sig,

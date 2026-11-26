@@ -82,13 +82,21 @@ fn pentry_e2b_source_entry_gen1_or_typed_gen0_route() {
 #[test]
 fn pentry_e2b_source_entry_foreign_heap_tls_is_preserved() {
     let source = source();
+    let parked_source = source.park_for_test();
     let foreign = self::source();
+    let foreign_root = foreign.tagged_heap.heap_root();
+    let foreign = foreign.park_for_test();
+    let source = parked_source.resume_for_test().expect("resume source");
+    // SAFETY: `foreign` owns `foreign_root` and `source` owns the displaced
+    // root; both are declared before `_foreign_heap` and outlive its drop.
+    let _foreign_heap =
+        unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(foreign_root) };
     assert_eq!(
         validate_serial_source_entry(&source),
         Err(SourceEntryRefusal::HeapTlsNotCurrent)
     );
     assert!(neovm_value::tagged::gc::tagged_heap_is_current(
-        &foreign.tagged_heap
+        foreign.tagged_heap()
     ));
 }
 

@@ -71,7 +71,9 @@ static COUNTS: [[AtomicU64; N_BUCKETS]; N_KINDS] = [ROW; N_KINDS];
 static TOTAL_BYTES: [AtomicU64; N_KINDS] = [ZERO; N_KINDS];
 static PEAK_ADDR_SET: AtomicUsize = AtomicUsize::new(0);
 
-fn kind_index(header: *const GcHeader) -> usize {
+/// # Safety
+/// `header` must point to a live, initialized GC object header.
+unsafe fn kind_index(header: *const GcHeader) -> usize {
     let kind = match unsafe { (*header).kind } {
         HeapObjectKind::String => AllocKind::String,
         HeapObjectKind::Float => AllocKind::Float,
@@ -156,9 +158,15 @@ pub(crate) fn bytecode_backtraces() -> Vec<String> {
 /// Record one non-cons allocation at link time (`link_object` /
 /// `link_veclike`). The object is fully constructed before it is linked,
 /// so reading its payload sizes here is sound.
-pub(crate) fn record(header: *const GcHeader, addr_set_len: usize) {
-    let bytes = TaggedHeap::object_bytes_from_header(header);
-    let k = kind_index(header);
+///
+/// # Safety
+/// `header` must point to a live, initialized GC object whose header and
+/// payload match its `kind` and `type_tag`.
+pub(crate) unsafe fn record(header: *const GcHeader, addr_set_len: usize) {
+    // SAFETY: `record`'s caller guarantees `header` points to a live initialized `GcHeader`.
+    let bytes = unsafe { TaggedHeap::object_bytes_from_header(header) };
+    // SAFETY: `record`'s caller guarantees `header` points to a live initialized `GcHeader`.
+    let k = unsafe { kind_index(header) };
     COUNTS[k][bucket(bytes)].fetch_add(1, Ordering::Relaxed);
     TOTAL_BYTES[k].fetch_add(bytes as u64, Ordering::Relaxed);
     PEAK_ADDR_SET.fetch_max(addr_set_len, Ordering::Relaxed);

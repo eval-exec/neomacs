@@ -235,11 +235,17 @@ impl Context {
             return if cell.is_nil() {
                 None
             } else {
-                Some(cell.cons_cdr())
+                // SAFETY: the slot stores NIL or a binding cons. `lexenv_assq`
+                // and `lexical_symbols::assq` return only a cons, and a miss
+                // is stored as NIL. This arm is the non-nil case.
+                Some(unsafe { cell.cons_cdr_unchecked() })
             };
         }
         self.lexenv_assq_cached_fill(lexenv, lexenv_bits, sym_id, index)
-            .map(|cell| cell.cons_cdr())
+            .map(|cell| {
+                // SAFETY: `Some` from the fill is that same binding cons.
+                unsafe { cell.cons_cdr_unchecked() }
+            })
     }
 }
 

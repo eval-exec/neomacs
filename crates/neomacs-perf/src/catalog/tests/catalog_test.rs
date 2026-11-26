@@ -413,3 +413,136 @@ fn every_scenario_name_agrees_across_strum_serde_and_round_trip() {
     }
     assert_eq!(seen.len(), ScenarioId::COUNT);
 }
+
+#[test]
+fn cjk_font_lock_pulse_stays_out_of_the_mean_and_exercises_font_lock() {
+    let id = ScenarioId::CjkFontLockPulse;
+    assert_eq!(ScenarioId::from_str("cjk-font-lock-pulse"), Ok(id));
+    let spec = scenario(id);
+    assert_eq!(spec.id, id);
+    assert_eq!(
+        spec.default_frontend,
+        Frontend::Gui {
+            width: 1200,
+            height: 800,
+        }
+    );
+    assert_eq!(spec.default_iterations.get(), 5);
+    assert_eq!(spec.primary_metric, MetricName::PerOperationWallTime);
+    assert!(spec.description.contains("font-lock"));
+    assert!(spec.description.contains("pulse"));
+    assert!(spec.description.contains("redisplay"));
+    assert!(
+        !crate::suite::SuiteId::Standard
+            .scenarios()
+            .iter()
+            .any(|entry| entry.scenario == id),
+        "an unmeasured CJK row must not enter the board's geometric mean"
+    );
+
+    let root = crate::workspace_root();
+    let fixture =
+        std::fs::read_to_string(root.join("crates/neomacs-perf/fixtures/editor-workloads.el"))
+            .expect("editor workload fixture");
+    let marker = "(defconst neomacs-perf-workload--cjk-chars\n  \"";
+    let start = fixture.find(marker).expect("cjk sample") + marker.len();
+    let end = start + fixture[start..].find('"').expect("end of cjk sample");
+    let chars = &fixture[start..end];
+    let distinct = chars
+        .chars()
+        .filter(|ch| u32::from(*ch) >= 0x3000)
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    assert_eq!(chars.chars().count(), 60);
+    assert_eq!(distinct, 60);
+
+    let branch_at = fixture
+        .find("(\"cjk-font-lock-pulse\"")
+        .expect("timed cjk branch");
+    let branch = &fixture[branch_at..branch_at + 700];
+    assert!(
+        branch.contains("(font-lock-ensure (point-min) (point-max))"),
+        "the timed pulse must fontify the CJK buffer"
+    );
+    assert!(branch.contains("neomacs-perf-workload--pulse-face-steps"));
+
+    let prepare_at = fixture
+        .find("((equal scenario \"cjk-font-lock-pulse\")")
+        .expect("cjk prepare branch");
+    let prepare = &fixture[prepare_at..prepare_at + 900];
+    assert!(
+        prepare.contains("(rename-buffer \"cjk-font-lock-pulse\" t)"),
+        "a space-prefixed temp name would force font-lock off"
+    );
+    assert!(prepare.contains("(font-lock-mode 1)"));
+    assert!(prepare.contains("(pop-to-buffer (current-buffer))"));
+    assert!(prepare.contains("(goto-char (point-min))"));
+
+    let pulse_at = fixture
+        .find("(defun neomacs-perf-workload--pulse-face-steps")
+        .expect("pulse helper");
+    let pulse = &fixture[pulse_at..pulse_at + 1400];
+    assert!(pulse.contains("(require 'pulse)"));
+    assert!(pulse.contains("set-face-background"));
+    assert!(pulse.contains("(redisplay t)"));
+    assert!(pulse.contains("(pos-visible-in-window-p (point-min))"));
+    assert!(pulse.contains("pulse-iterations"));
+
+    let pulse_source = std::fs::read_to_string(root.join("lisp/pulse.el")).expect("pulse.el");
+    assert!(
+        pulse_source.contains("(defcustom pulse-iterations 10"),
+        "the row's ten face writes are pulse.el's default"
+    );
+}
+
+#[test]
+fn process_output_carryover_stays_out_of_the_mean_and_covers_async_filter_carryover() {
+    let id = ScenarioId::ProcessOutputCarryover;
+    assert_eq!(ScenarioId::from_str("process-output-carryover"), Ok(id));
+    let spec = scenario(id);
+    assert_eq!(spec.id, id);
+    assert_eq!(spec.default_frontend, Frontend::Batch);
+    assert_eq!(spec.default_iterations.get(), 20);
+    assert_eq!(spec.primary_metric, MetricName::PerOperationWallTime);
+    assert!(spec.description.contains("filter"));
+    assert!(spec.description.contains("carryover"));
+    assert!(
+        !crate::suite::SuiteId::Standard
+            .scenarios()
+            .iter()
+            .any(|entry| entry.scenario == id),
+        "an unmeasured process-output-carryover row must not enter the board's geometric mean"
+    );
+
+    let root = crate::workspace_root();
+    let fixture =
+        std::fs::read_to_string(root.join("crates/neomacs-perf/fixtures/editor-workloads.el"))
+            .expect("editor workload fixture");
+    let prepare_at = fixture
+        .find("((equal scenario \"process-output-carryover\")")
+        .expect("carryover prepare branch");
+    let prepare = &fixture[prepare_at..prepare_at + 350];
+    assert!(prepare.contains("neomacs-perf-workload--prepare-carryover-stream"));
+
+    let branch_at = fixture
+        .find("(\"process-output-carryover\"")
+        .expect("timed carryover branch");
+    let branch = &fixture[branch_at..branch_at + 750];
+    assert!(branch.contains("neomacs-perf-workload--run-process-output-carryover"));
+    assert!(branch.contains("process-filter-calls"));
+    assert!(branch.contains("process-carryover-boundaries"));
+    assert!(branch.contains("process-carryover-verified"));
+
+    let helper_at = fixture
+        .find("(defun neomacs-perf-workload--run-process-output-carryover")
+        .expect("carryover runner helper");
+    let helper_end = fixture[helper_at + 1..]
+        .find("\n(defun ")
+        .map_or(fixture.len(), |offset| helper_at + 1 + offset);
+    let helper = &fixture[helper_at..helper_end];
+    assert!(helper.contains("make-process"));
+    assert!(helper.contains(":connection-type 'pipe"));
+    assert!(helper.contains(":filter"));
+    assert!(helper.contains("accept-process-output"));
+    assert!(helper.contains("last-coding-system-used 'utf-8-dos"));
+}

@@ -1,13 +1,71 @@
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// The shared cache root prefers the explicit env override, then an absolute
+/// `XDG_CACHE_HOME`, then `HOME`, then the workspace fallback.
+#[test]
+fn pinned_fixture_cache_root_prefers_explicit_then_xdg_then_home_then_workspace() {
+    let workspace = PathBuf::from("/worktree-a");
+    assert_eq!(
+        resolve_pinned_fixture_cache_root(
+            Some("/shared/pinned".into()),
+            Some("/xdg".into()),
+            Some("/home/tester".into()),
+            workspace.clone(),
+        ),
+        PathBuf::from("/shared/pinned")
+    );
+    assert_eq!(
+        resolve_pinned_fixture_cache_root(
+            Some("".into()),
+            Some("/xdg".into()),
+            Some("/home/tester".into()),
+            workspace.clone(),
+        ),
+        PathBuf::from("/xdg/neomacs/pinned-fixtures")
+    );
+    assert_eq!(
+        resolve_pinned_fixture_cache_root(
+            None,
+            Some("".into()),
+            Some("/home/tester".into()),
+            workspace.clone(),
+        ),
+        PathBuf::from("/home/tester/.cache/neomacs/pinned-fixtures")
+    );
+    assert_eq!(
+        resolve_pinned_fixture_cache_root(None, Some("".into()), Some("".into()), workspace),
+        PathBuf::from("/worktree-a/tmp/pinned-fixtures")
+    );
+}
+
+/// Relative `XDG_CACHE_HOME` values are invalid per the XDG Base Directory
+/// Specification and fall through to `HOME` and then the workspace fallback.
+#[test]
+fn relative_xdg_cache_home_is_ignored_in_favor_of_home_and_workspace() {
+    let workspace = PathBuf::from("/worktree-a");
+    assert_eq!(
+        resolve_pinned_fixture_cache_root(
+            None,
+            Some("relative/xdg".into()),
+            Some("/home/tester".into()),
+            workspace.clone(),
+        ),
+        PathBuf::from("/home/tester/.cache/neomacs/pinned-fixtures")
+    );
+    assert_eq!(
+        resolve_pinned_fixture_cache_root(None, Some("relative/xdg".into()), None, workspace),
+        PathBuf::from("/worktree-a/tmp/pinned-fixtures")
+    );
+}
 
 /// The bytes the cache holds are what the hash describes: a cached fixture
 /// with the pinned hash is accepted, and one with any other hash is refused
 /// with the typed mismatch a caller can match on.
 #[test]
 fn verification_accepts_only_the_pinned_bytes() {
-    let root = cache_root();
-    std::fs::create_dir_all(&root).expect("cache root");
-    let path = root.join(format!("verify-probe-{}.bin", std::process::id()));
+    let temporary = tempfile::tempdir().expect("temporary fixture directory");
+    let path = temporary.path().join("verify-probe.bin");
     std::fs::write(&path, b"pinned bytes").expect("write probe");
 
     let good = crate::inventory::sha256_hex(b"pinned bytes");
@@ -18,14 +76,14 @@ fn verification_accepts_only_the_pinned_bytes() {
         }
         other => panic!("a wrong hash must be reported as a hash error: {other:?}"),
     }
-    std::fs::remove_file(&path).ok();
 }
 
 /// A cache read that cannot happen is its own typed error, not a hash
 /// mismatch: the two call for different reactions (re-fetch vs give up).
 #[test]
 fn an_unreadable_cache_entry_is_a_read_error() {
-    let missing = cache_root().join("never-written-probe.bin");
+    let temporary = tempfile::tempdir().expect("temporary fixture directory");
+    let missing = temporary.path().join("never-written-probe.bin");
     match verify(&missing, &"0".repeat(64)) {
         Err(PinnedError::Read { .. }) => {}
         other => panic!("a missing cache entry must be a read error: {other:?}"),
@@ -36,22 +94,22 @@ fn an_unreadable_cache_entry_is_a_read_error() {
 /// entry resolves offline for a caller that names its own cap (issue #556).
 #[test]
 fn a_verified_cache_entry_resolves_for_a_caller_named_limit() {
-    let root = cache_root();
-    std::fs::create_dir_all(&root).expect("cache root");
-    let name = format!("limit-probe-{}.bin", std::process::id());
-    let path = root.join(&name);
-    std::fs::write(&path, b"cached fixture").expect("write probe");
-    let sha256 = crate::inventory::sha256_hex(b"cached fixture");
+    let temporary = tempfile::tempdir().expect("temporary fixture directory");
+    let payload = b"limit-probe-payload";
+    let sha256 = crate::inventory::sha256_hex(payload);
+    let path = publish_verified_bytes(temporary.path(), "limit-probe.bin", &sha256, payload)
+        .expect("publish probe");
 
-    let resolved = pinned_file_with_limit(
-        &name,
+    let resolved = pinned_file_in_with_fetch(
+        temporary.path(),
+        "limit-probe.bin",
         "https://127.0.0.1:1/never",
         &sha256,
         192 * 1024 * 1024,
+        || panic!("a verified cache entry must resolve without fetching"),
     )
     .expect("a verified cache entry resolves offline");
     assert_eq!(resolved, path);
-    std::fs::remove_file(&path).ok();
 }
 
 /// A cached fixture is trusted without touching the network: the URL below
@@ -60,17 +118,22 @@ fn a_verified_cache_entry_resolves_for_a_caller_named_limit() {
 /// runnable offline.
 #[test]
 fn a_verified_cache_entry_needs_no_network() {
-    let root = cache_root();
-    std::fs::create_dir_all(&root).expect("cache root");
-    let name = format!("cache-probe-{}.bin", std::process::id());
-    let path = root.join(&name);
-    std::fs::write(&path, b"cached fixture").expect("write probe");
-    let sha256 = crate::inventory::sha256_hex(b"cached fixture");
+    let temporary = tempfile::tempdir().expect("temporary fixture directory");
+    let payload = b"cache-probe-payload";
+    let sha256 = crate::inventory::sha256_hex(payload);
+    let path = publish_verified_bytes(temporary.path(), "cache-probe.bin", &sha256, payload)
+        .expect("publish probe");
 
-    let resolved = pinned_file(&name, "https://127.0.0.1:1/never", &sha256)
-        .expect("a verified cache entry resolves offline");
+    let resolved = pinned_file_in_with_fetch(
+        temporary.path(),
+        "cache-probe.bin",
+        "https://127.0.0.1:1/never",
+        &sha256,
+        MAX_PINNED_FIXTURE_BYTES,
+        || panic!("a verified cache entry must resolve without fetching"),
+    )
+    .expect("a verified cache entry resolves offline");
     assert_eq!(resolved, path);
-    std::fs::remove_file(&path).ok();
 }
 
 /// A test-runtime miss stays offline and does not materialize the cache.
@@ -80,7 +143,9 @@ fn cache_only_missing_fixture_is_a_typed_miss_without_writes() {
     let root = temporary.path().join("not-created");
     let expected = crate::inventory::sha256_hex(b"pinned bytes");
     match cached_pinned_file_in(&root, "fixture.xpm", &expected) {
-        Err(PinnedError::CacheMiss { path }) => assert_eq!(path, root.join("fixture.xpm")),
+        Err(PinnedError::CacheMiss { path }) => {
+            assert_eq!(path, entry_path(&root, "fixture.xpm", &expected));
+        }
         other => panic!("expected a cache-only miss, got {other:?}"),
     }
     assert!(
@@ -93,9 +158,10 @@ fn cache_only_missing_fixture_is_a_typed_miss_without_writes() {
 #[test]
 fn cache_only_corrupt_fixture_is_rejected_without_replacement() {
     let temporary = tempfile::tempdir().expect("temporary fixture directory");
-    let path = temporary.path().join("fixture.xpm");
-    std::fs::write(&path, b"corrupt bytes").unwrap();
     let expected = crate::inventory::sha256_hex(b"pinned bytes");
+    let path = entry_path(temporary.path(), "fixture.xpm", &expected);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"corrupt bytes").unwrap();
     match cached_pinned_file_in(temporary.path(), "fixture.xpm", &expected) {
         Err(PinnedError::CachedHash {
             path: actual_path,
@@ -116,9 +182,9 @@ fn cache_only_corrupt_fixture_is_rejected_without_replacement() {
 #[test]
 fn cache_only_valid_fixture_is_reverified_on_every_read() {
     let temporary = tempfile::tempdir().expect("temporary fixture directory");
-    let path = temporary.path().join("fixture.xpm");
-    std::fs::write(&path, b"pinned bytes").unwrap();
     let expected = crate::inventory::sha256_hex(b"pinned bytes");
+    let path = publish_verified_bytes(temporary.path(), "fixture.xpm", &expected, b"pinned bytes")
+        .unwrap();
     assert_eq!(
         cached_pinned_file_in(temporary.path(), "fixture.xpm", &expected).unwrap(),
         path
@@ -129,4 +195,553 @@ fn cache_only_valid_fixture_is_reverified_on_every_read() {
         Err(PinnedError::CachedHash { .. })
     ));
     assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 1);
+}
+
+/// Two worktrees pinning different revisions of the same filename coexist in
+/// the shared cache without clobbering each other.
+#[test]
+fn distinct_revisions_for_the_same_filename_do_not_collide() {
+    let shared = tempfile::tempdir().expect("shared cache");
+    let rev_a = b"revision A bytes";
+    let rev_b = b"revision B bytes";
+    let sha_a = crate::inventory::sha256_hex(rev_a);
+    let sha_b = crate::inventory::sha256_hex(rev_b);
+
+    let path_a =
+        publish_verified_bytes(shared.path(), "nyan-mode-nyan.xpm", &sha_a, rev_a).unwrap();
+    let path_b =
+        publish_verified_bytes(shared.path(), "nyan-mode-nyan.xpm", &sha_b, rev_b).unwrap();
+
+    assert_ne!(path_a, path_b);
+    assert_eq!(
+        cached_pinned_file_in(shared.path(), "nyan-mode-nyan.xpm", &sha_a).unwrap(),
+        path_a
+    );
+    assert_eq!(
+        cached_pinned_file_in(shared.path(), "nyan-mode-nyan.xpm", &sha_b).unwrap(),
+        path_b
+    );
+    assert_eq!(std::fs::read(&path_a).unwrap(), rev_a);
+    assert_eq!(std::fs::read(&path_b).unwrap(), rev_b);
+}
+
+/// Atomic publish writes through a sibling staging directory and leaves no
+/// staging leftovers on success or on hash mismatch.
+#[test]
+fn atomic_publish_stages_cleanly_and_rejects_bad_downloads() {
+    let shared = tempfile::tempdir().expect("shared cache");
+    let good = b"good pinned payload";
+    let sha = crate::inventory::sha256_hex(good);
+
+    let err = pinned_file_in_with_fetch(
+        shared.path(),
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha,
+        1024,
+        || Ok(b"wrong payload".to_vec()),
+    )
+    .expect_err("wrong download digest must fail");
+    assert!(matches!(err, PinnedError::DownloadedHash { .. }));
+    assert!(
+        !entry_dir(shared.path(), &sha).exists(),
+        "bad download must not create the hash directory"
+    );
+
+    let published = pinned_file_in_with_fetch(
+        shared.path(),
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha,
+        1024,
+        || Ok(good.to_vec()),
+    )
+    .expect("verified download publishes atomically");
+    assert_eq!(published, entry_path(shared.path(), "fixture.xpm", &sha));
+    assert_eq!(std::fs::read(&published).unwrap(), good);
+
+    let leftover_stages: Vec<_> = std::fs::read_dir(shared.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".stage-"))
+        .collect();
+    assert!(
+        leftover_stages.is_empty(),
+        "unexpected staging leftovers: {leftover_stages:?}"
+    );
+}
+
+/// A corrupt cached entry is refused by the cache-only reader and atomically
+/// repaired by the writer without leaving staging leftovers behind.
+#[test]
+fn corrupt_entry_is_repaired_atomically_by_writer() {
+    let shared = tempfile::tempdir().expect("shared cache");
+    let good = b"repaired pinned bytes";
+    let sha = crate::inventory::sha256_hex(good);
+    let path = entry_path(shared.path(), "fixture.xpm", &sha);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"corrupt bytes").unwrap();
+
+    assert!(matches!(
+        cached_pinned_file_in(shared.path(), "fixture.xpm", &sha),
+        Err(PinnedError::CachedHash { .. })
+    ));
+
+    let repaired = pinned_file_in_with_fetch(
+        shared.path(),
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha,
+        1024,
+        || Ok(good.to_vec()),
+    )
+    .expect("writer repairs corrupt entry");
+    assert_eq!(repaired, path);
+    assert_eq!(std::fs::read(&repaired).unwrap(), good);
+    assert_eq!(
+        cached_pinned_file_in(shared.path(), "fixture.xpm", &sha).unwrap(),
+        path
+    );
+    let leftover_stages: Vec<_> = std::fs::read_dir(shared.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".stage-"))
+        .collect();
+    assert!(leftover_stages.is_empty(), "{leftover_stages:?}");
+}
+
+/// Malformed pin names or digests are rejected before any path join.
+#[test]
+fn invalid_pin_name_or_hash_is_rejected() {
+    let shared = tempfile::tempdir().expect("shared cache");
+    let good_sha = crate::inventory::sha256_hex(b"ok");
+    for bad_name in ["", ".", "..", "../escape.xpm", "sub/dir.xpm", "a\\b.xpm"] {
+        assert!(
+            matches!(
+                cached_pinned_file_in(shared.path(), bad_name, &good_sha),
+                Err(PinnedError::InvalidPin { .. })
+            ),
+            "expected InvalidPin for name {bad_name:?}"
+        );
+    }
+    for bad_sha in [
+        "",
+        "short",
+        &"G".repeat(64),
+        &good_sha.to_uppercase(),
+        &format!("../{}", "a".repeat(61)),
+    ] {
+        assert!(
+            matches!(
+                cached_pinned_file_in(shared.path(), "fixture.xpm", bad_sha),
+                Err(PinnedError::InvalidPin { .. })
+            ),
+            "expected InvalidPin for sha {bad_sha:?}"
+        );
+    }
+}
+
+/// Two distinct worktrees sharing XDG/HOME resolve the exact same hash-keyed
+/// cache entry: worktree A publishes once, and worktree B validates and reuses
+/// that entry without re-fetching or rebuilding, while a different revision pin
+/// still misses.
+#[test]
+fn two_worktrees_share_one_hash_keyed_entry_without_refetch() {
+    let sandbox = tempfile::tempdir().expect("sandbox");
+    let wt_a = sandbox.path().join("worktree-a");
+    let wt_b = sandbox.path().join("worktree-b");
+    let xdg = sandbox.path().join("shared-xdg");
+    let home = sandbox.path().join("home");
+    std::fs::create_dir_all(&wt_a).unwrap();
+    std::fs::create_dir_all(&wt_b).unwrap();
+
+    let root_a = resolve_pinned_fixture_cache_root(
+        None,
+        Some(xdg.clone().into_os_string()),
+        Some(home.clone().into_os_string()),
+        wt_a.clone(),
+    );
+    let root_b = resolve_pinned_fixture_cache_root(
+        None,
+        Some(xdg.into_os_string()),
+        Some(home.into_os_string()),
+        wt_b.clone(),
+    );
+    assert_eq!(root_a, root_b);
+    assert!(!root_a.starts_with(&wt_a));
+    assert!(!root_b.starts_with(&wt_b));
+
+    let bytes = b"shared pinned fixture payload";
+    let sha = crate::inventory::sha256_hex(bytes);
+    let other_sha = crate::inventory::sha256_hex(b"different pinned revision");
+    let fetches = AtomicUsize::new(0);
+
+    let path_a = pinned_file_in_with_fetch(
+        &root_a,
+        "nyan-mode-nyan.xpm",
+        "https://fixtures.invalid/nyan.xpm",
+        &sha,
+        1024,
+        || {
+            fetches.fetch_add(1, Ordering::SeqCst);
+            Ok(bytes.to_vec())
+        },
+    )
+    .expect("worktree A populates shared cache");
+    assert_eq!(fetches.load(Ordering::SeqCst), 1);
+
+    let cached_b = cached_pinned_file_in(&root_b, "nyan-mode-nyan.xpm", &sha)
+        .expect("worktree B reads shared cache offline");
+    assert_eq!(cached_b, path_a);
+
+    let path_b = pinned_file_in_with_fetch(
+        &root_b,
+        "nyan-mode-nyan.xpm",
+        "https://127.0.0.1:1/never",
+        &sha,
+        1024,
+        || panic!("worktree B must hit the shared entry without fetching"),
+    )
+    .expect("worktree B reuses shared entry without fetch");
+    assert_eq!(path_b, path_a);
+    assert_eq!(fetches.load(Ordering::SeqCst), 1);
+
+    assert!(
+        matches!(
+            cached_pinned_file_in(&root_b, "nyan-mode-nyan.xpm", &other_sha),
+            Err(PinnedError::CacheMiss { .. })
+        ),
+        "worktree B must not accept a different pinned revision"
+    );
+}
+
+/// A cold Rust fetch hashes downloaded bytes once (no redundant in-memory or
+/// immediate post-write re-hash), while every subsequent read verifies on disk.
+#[test]
+fn cold_fetch_hashes_downloaded_bytes_once() {
+    let shared = tempfile::tempdir().expect("shared cache");
+    let payload = b"large-archive-standin";
+    let sha = crate::inventory::sha256_hex(payload);
+
+    TEST_HASH_CALLS.with(|count| count.set(0));
+    let published = pinned_file_in_with_fetch(
+        shared.path(),
+        "archive.tar.gz",
+        "https://fixtures.invalid/archive.tar.gz",
+        &sha,
+        1024,
+        || Ok(payload.to_vec()),
+    )
+    .expect("cold fetch publishes");
+    assert_eq!(
+        TEST_HASH_CALLS.with(|count| count.get()),
+        1,
+        "cold fetch must hash the payload exactly once"
+    );
+    assert_eq!(std::fs::read(&published).unwrap(), payload);
+
+    TEST_HASH_CALLS.with(|count| count.set(0));
+    let hit = cached_pinned_file_in(shared.path(), "archive.tar.gz", &sha).expect("cache hit");
+    assert_eq!(hit, published);
+    assert_eq!(
+        TEST_HASH_CALLS.with(|count| count.get()),
+        1,
+        "each cache read still verifies SHA-256 on disk"
+    );
+}
+
+/// A stray regular file occupying `<cache_root>/<sha256>` is removed under the
+/// lock so the hash directory can be published cleanly instead of failing with
+/// ENOTDIR.
+#[test]
+fn stray_regular_file_at_hash_path_is_replaced_cleanly() {
+    let shared = tempfile::tempdir().expect("shared cache");
+    let payload = b"valid fixture after stray file";
+    let sha = crate::inventory::sha256_hex(payload);
+    let stray = entry_dir(shared.path(), &sha);
+    std::fs::write(&stray, b"stray regular file").unwrap();
+    assert!(stray.is_file());
+
+    let published = pinned_file_in_with_fetch(
+        shared.path(),
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha,
+        1024,
+        || Ok(payload.to_vec()),
+    )
+    .expect("writer replaces stray file at hash path");
+    assert!(stray.is_dir());
+    assert_eq!(published, entry_path(shared.path(), "fixture.xpm", &sha));
+    assert_eq!(std::fs::read(&published).unwrap(), payload);
+    assert_eq!(
+        cached_pinned_file_in(shared.path(), "fixture.xpm", &sha).unwrap(),
+        published
+    );
+}
+
+/// Published hash directories inherit the process umask (matching ordinary
+/// `fs::create_dir`) rather than `mkdtemp`'s hardcoded `0700`.
+#[cfg(unix)]
+#[test]
+fn published_hash_directory_inherits_umask_instead_of_0700() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let shared = tempfile::tempdir().expect("shared cache");
+    let reference = shared.path().join("umask-reference");
+    std::fs::create_dir(&reference).expect("create reference dir");
+    let expected_mode = std::fs::metadata(&reference).unwrap().permissions().mode() & 0o777;
+
+    let payload = b"umask permission check";
+    let sha = crate::inventory::sha256_hex(payload);
+    let published = pinned_file_in_with_fetch(
+        shared.path(),
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha,
+        1024,
+        || Ok(payload.to_vec()),
+    )
+    .expect("publish fixture");
+    let actual_mode = std::fs::metadata(published.parent().unwrap())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(actual_mode, expected_mode);
+}
+
+/// Stray symlinks (both a symlink pointing to an existing directory and a
+/// dangling symlink) occupying `<cache_root>/<sha256>` are replaced with a real
+/// directory without writing into or mutating the symlink's target.
+#[cfg(unix)]
+#[test]
+fn stray_symlinks_at_hash_path_are_replaced_without_touching_target() {
+    use std::os::unix::fs::symlink;
+
+    let sandbox = tempfile::tempdir().expect("sandbox");
+    let shared = sandbox.path().join("cache");
+    let external = sandbox.path().join("external-target");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::write(external.join("keep.txt"), b"do not touch").unwrap();
+
+    let payload_dir_link = b"fixture replacing symlink-to-dir";
+    let sha_dir_link = crate::inventory::sha256_hex(payload_dir_link);
+    let hash_dir_link = entry_dir(&shared, &sha_dir_link);
+    symlink(&external, &hash_dir_link).unwrap();
+
+    let published_a = pinned_file_in_with_fetch(
+        &shared,
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha_dir_link,
+        1024,
+        || Ok(payload_dir_link.to_vec()),
+    )
+    .expect("stray symlink to directory is replaced");
+    assert!(is_real_dir(&hash_dir_link));
+    assert_eq!(std::fs::read(&published_a).unwrap(), payload_dir_link);
+    assert_eq!(
+        std::fs::read(external.join("keep.txt")).unwrap(),
+        b"do not touch"
+    );
+    assert!(
+        !external.join("fixture.xpm").exists(),
+        "writer must never publish through a symlink into an external directory"
+    );
+
+    let payload_dangling = b"fixture replacing dangling symlink";
+    let sha_dangling = crate::inventory::sha256_hex(payload_dangling);
+    let hash_dangling = entry_dir(&shared, &sha_dangling);
+    symlink(sandbox.path().join("does-not-exist"), &hash_dangling).unwrap();
+
+    let published_b = pinned_file_in_with_fetch(
+        &shared,
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha_dangling,
+        1024,
+        || Ok(payload_dangling.to_vec()),
+    )
+    .expect("stray dangling symlink is replaced");
+    assert!(is_real_dir(&hash_dangling));
+    assert_eq!(std::fs::read(&published_b).unwrap(), payload_dangling);
+}
+
+/// If a stray symlink to a directory appears in the race window right before
+/// `rename`, the rename-collision fallback must NOT follow the symlink into the
+/// external directory; it must unlink the symlink and retry the directory
+/// rename.
+#[cfg(unix)]
+#[test]
+fn post_rename_retry_unlinks_raced_symlink_without_following_it() {
+    use std::os::unix::fs::symlink;
+
+    let sandbox = tempfile::tempdir().expect("sandbox");
+    let shared = sandbox.path().join("cache");
+    let external = sandbox.path().join("external-target");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::write(external.join("keep.txt"), b"untouched").unwrap();
+
+    let payload = b"post-rename retry payload";
+    let sha = crate::inventory::sha256_hex(payload);
+    let target_dir = entry_dir(&shared, &sha);
+    let destination = target_dir.join("fixture.xpm");
+
+    let stage = StageDir::create_in(&shared, &sha).unwrap();
+    let staged_file = stage.path().join("fixture.xpm");
+    std::fs::write(&staged_file, payload).unwrap();
+
+    let calls = AtomicUsize::new(0);
+    publish_stage_dir(
+        stage,
+        &staged_file,
+        &target_dir,
+        &destination,
+        |from, to| {
+            let attempt = calls.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                assert_eq!(to, target_dir);
+                symlink(&external, &target_dir)?;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "raced symlink-to-dir",
+                ));
+            }
+            assert_eq!(
+                to, target_dir,
+                "retry must rename staging directory into target_dir, not write through symlink"
+            );
+            std::fs::rename(from, to)
+        },
+    )
+    .expect("post-rename retry succeeds after unlinking raced symlink");
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(is_real_dir(&target_dir));
+    assert_eq!(std::fs::read(&destination).unwrap(), payload);
+    assert_eq!(
+        std::fs::read(external.join("keep.txt")).unwrap(),
+        b"untouched"
+    );
+    assert!(!external.join("fixture.xpm").exists());
+    let leftovers: Vec<_> = std::fs::read_dir(&shared)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".stage-"))
+        .collect();
+    assert!(leftovers.is_empty(), "leftover staging dirs: {leftovers:?}");
+}
+
+/// Cache reads never follow a symlink at `<cache_root>/<sha256>` or `<name>`,
+/// even when the symlink target contains matching bytes; mismatched external
+/// targets are refused without reading or leaking their SHA-256, and writers
+/// replace the symlink with a real cache entry while leaving external targets
+/// untouched.
+#[cfg(unix)]
+#[test]
+fn read_path_refuses_symlinks_even_when_target_bytes_match() {
+    use std::os::unix::fs::symlink;
+
+    let sandbox = tempfile::tempdir().expect("sandbox");
+    let shared = sandbox.path().join("cache");
+    let external = sandbox.path().join("external-target");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::create_dir_all(&external).unwrap();
+
+    // Case 1: <cache>/<sha256> -> external/ where external/fixture.xpm has
+    // exact matching bytes. Both cache-only reader and writer must refuse the
+    // symlink rather than accepting an external file as a cache hit.
+    let payload = b"matching external fixture bytes";
+    let sha = crate::inventory::sha256_hex(payload);
+    let external_file = external.join("fixture.xpm");
+    std::fs::write(&external_file, payload).unwrap();
+    let hash_link = entry_dir(&shared, &sha);
+    symlink(&external, &hash_link).unwrap();
+
+    assert!(
+        matches!(
+            cached_pinned_file_in(&shared, "fixture.xpm", &sha),
+            Err(PinnedError::Read { .. })
+        ),
+        "cache-only read must refuse a symlinked hash directory even when bytes match"
+    );
+
+    let fetches = AtomicUsize::new(0);
+    let published = pinned_file_in_with_fetch(
+        &shared,
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha,
+        1024,
+        || {
+            fetches.fetch_add(1, Ordering::SeqCst);
+            Ok(payload.to_vec())
+        },
+    )
+    .expect("writer replaces symlinked hash dir with real dir");
+    assert_eq!(fetches.load(Ordering::SeqCst), 1);
+    assert!(is_real_dir(&hash_link));
+    assert_eq!(std::fs::read(&published).unwrap(), payload);
+    assert_eq!(std::fs::read(&external_file).unwrap(), payload);
+
+    // Case 2: <cache>/<sha_b> -> external/ where external/fixture.xpm holds
+    // different bytes. Cache-only read must refuse without hashing or leaking
+    // the external file's digest in PinnedError::CachedHash.
+    let payload_b = b"different expected fixture bytes";
+    let sha_b = crate::inventory::sha256_hex(payload_b);
+    let hash_link_b = entry_dir(&shared, &sha_b);
+    symlink(&external, &hash_link_b).unwrap();
+    assert!(
+        matches!(
+            cached_pinned_file_in(&shared, "fixture.xpm", &sha_b),
+            Err(PinnedError::Read { .. })
+        ),
+        "cache-only read must not follow symlink or leak external file hash"
+    );
+
+    // Case 3: <cache>/<sha_c> is a real dir, but <cache>/<sha_c>/fixture.xpm is
+    // a symlink to external/fixture.xpm with matching bytes.
+    let payload_c = b"symlinked file entry bytes";
+    let sha_c = crate::inventory::sha256_hex(payload_c);
+    let external_c = external.join("external-c.xpm");
+    std::fs::write(&external_c, payload_c).unwrap();
+    let dir_c = entry_dir(&shared, &sha_c);
+    std::fs::create_dir_all(&dir_c).unwrap();
+    let file_link_c = dir_c.join("fixture.xpm");
+    symlink(&external_c, &file_link_c).unwrap();
+
+    assert!(
+        matches!(
+            cached_pinned_file_in(&shared, "fixture.xpm", &sha_c),
+            Err(PinnedError::Read { .. })
+        ),
+        "cache-only read must refuse a symlinked file entry even when bytes match"
+    );
+
+    let fetches_c = AtomicUsize::new(0);
+    let published_c = pinned_file_in_with_fetch(
+        &shared,
+        "fixture.xpm",
+        "https://fixtures.invalid/fixture.xpm",
+        &sha_c,
+        1024,
+        || {
+            fetches_c.fetch_add(1, Ordering::SeqCst);
+            Ok(payload_c.to_vec())
+        },
+    )
+    .expect("writer replaces symlinked file entry with real file");
+    assert_eq!(fetches_c.load(Ordering::SeqCst), 1);
+    assert!(
+        std::fs::symlink_metadata(&published_c)
+            .unwrap()
+            .file_type()
+            .is_file(),
+        "published entry must be a real file, not a symlink"
+    );
+    assert_eq!(std::fs::read(&published_c).unwrap(), payload_c);
+    assert_eq!(std::fs::read(&external_c).unwrap(), payload_c);
 }

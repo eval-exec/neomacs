@@ -29,8 +29,8 @@ pub(crate) use divider_corners::{
 mod borrowed_buffer;
 mod buffer_snapshot;
 pub(crate) use borrowed_buffer::BorrowedLayoutBuffer;
-pub(crate) use buffer_snapshot::LayoutBufferSnapshot;
 use buffer_snapshot::capture_string_composition_rules;
+pub(crate) use buffer_snapshot::{LayoutBufferSnapshot, OverlaySourceMode, overlay_source_mode};
 
 #[cfg(test)]
 #[path = "neovm_bridge/tests/property_keys_support.rs"]
@@ -62,7 +62,10 @@ use face_sources::{FaceTableRoots, RootedFace};
 use neovm_core::buffer::{
     Buffer, CharPos0, CharRange, EmacsByteLen, EmacsBytePos, EmacsByteRange, LispCharPos1,
     buffer::{BufferSlotInfo, lookup_buffer_slot_by_sym_id},
-    overlay::{OverlayList, OverlayPropertyAtPoint, OverlayPropertyFilter},
+    overlay::{
+        LiveOverlayView, OverlayList, OverlayPropertyAtPoint, OverlayPropertyFilter,
+        OverlayPropertyResolver, OverlayRead,
+    },
 };
 use neovm_core::emacs_core::effect_profile::{
     EffectScope, effect_name_from_lisp, effect_operation_from_lisp,
@@ -159,6 +162,230 @@ impl DisplayLineNumbersMode {
     }
 }
 
+/// Why a layout attempt's overlay view cannot certify the completed walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OverlayViewUnusable {
+    /// The walk consumed at or past a window-range overlay view's end.
+    Exhausted,
+    /// A query read below a window-range overlay view's captured start floor.
+    Underflow,
+    /// A live overlay view's generation stamp no longer matches the buffer's
+    /// live index (Lisp mutated overlays mid-attempt).
+    Stale,
+}
+
+enum LayoutOverlayIter<S, L> {
+    Snapshot(S),
+    Live(L),
+}
+
+impl<S, L> Iterator for LayoutOverlayIter<S, L>
+where
+    S: Iterator<Item = Value>,
+    L: Iterator<Item = Value>,
+{
+    type Item = Value;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Snapshot(iter) => iter.next(),
+            Self::Live(iter) => iter.next(),
+        }
+    }
+}
+
+/// Overlay view a layout attempt reads. Both variants implement [`OverlayRead`]
+/// and dispatch statically without trait objects.
+#[derive(Clone, Copy)]
+pub(crate) enum LayoutOverlays<'a> {
+    Snapshot(&'a OverlayList),
+    Live(&'a LiveOverlayView),
+}
+
+impl<'a> LayoutOverlays<'a> {
+    pub(crate) fn is_empty(self) -> bool {
+        match self {
+            Self::Snapshot(list) => OverlayRead::is_empty(list),
+            Self::Live(live) => OverlayRead::is_empty(live),
+        }
+    }
+    pub(crate) fn may_contain_property(self, property: Value) -> bool {
+        match self {
+            Self::Snapshot(list) => OverlayRead::may_contain_property(list, property),
+            Self::Live(live) => OverlayRead::may_contain_property(live, property),
+        }
+    }
+    pub(crate) fn overlay_plist(self, overlay: Value) -> Option<Value> {
+        match self {
+            Self::Snapshot(list) => OverlayRead::overlay_plist(list, overlay),
+            Self::Live(live) => OverlayRead::overlay_plist(live, overlay),
+        }
+    }
+    pub(crate) fn overlay_get_named(self, overlay: Value, prop_name: Value) -> Option<Value> {
+        match self {
+            Self::Snapshot(list) => OverlayRead::overlay_get_named(list, overlay, prop_name),
+            Self::Live(live) => OverlayRead::overlay_get_named(live, overlay, prop_name),
+        }
+    }
+    pub(crate) fn overlay_applies_to_window(self, overlay: Value, window_id: Option<u64>) -> bool {
+        match self {
+            Self::Snapshot(list) => {
+                OverlayRead::overlay_applies_to_window(list, overlay, window_id)
+            }
+            Self::Live(live) => OverlayRead::overlay_applies_to_window(live, overlay, window_id),
+        }
+    }
+    pub(crate) fn overlay_start_emacs_byte_pos(self, overlay: Value) -> Option<EmacsBytePos> {
+        match self {
+            Self::Snapshot(list) => OverlayRead::overlay_start_emacs_byte_pos(list, overlay),
+            Self::Live(live) => OverlayRead::overlay_start_emacs_byte_pos(live, overlay),
+        }
+    }
+    pub(crate) fn overlay_end_emacs_byte_pos(self, overlay: Value) -> Option<EmacsBytePos> {
+        match self {
+            Self::Snapshot(list) => OverlayRead::overlay_end_emacs_byte_pos(list, overlay),
+            Self::Live(live) => OverlayRead::overlay_end_emacs_byte_pos(live, overlay),
+        }
+    }
+    pub(crate) fn overlays_at_emacs_byte_pos(self, pos: EmacsBytePos) -> Vec<Value> {
+        match self {
+            Self::Snapshot(list) => OverlayRead::overlays_at_emacs_byte_pos(list, pos),
+            Self::Live(live) => OverlayRead::overlays_at_emacs_byte_pos(live, pos),
+        }
+    }
+    pub(crate) fn overlays_in_emacs_byte_range(self, range: EmacsByteRange) -> Vec<Value> {
+        match self {
+            Self::Snapshot(list) => OverlayRead::overlays_in_emacs_byte_range(list, range),
+            Self::Live(live) => OverlayRead::overlays_in_emacs_byte_range(live, range),
+        }
+    }
+    pub(crate) fn next_boundary_after_emacs_byte_pos(
+        self,
+        pos: EmacsBytePos,
+    ) -> Option<EmacsBytePos> {
+        match self {
+            Self::Snapshot(list) => OverlayRead::next_boundary_after_emacs_byte_pos(list, pos),
+            Self::Live(live) => OverlayRead::next_boundary_after_emacs_byte_pos(live, pos),
+        }
+    }
+    pub(crate) fn next_property_boundary_after_until_emacs_byte_pos(
+        self,
+        pos: EmacsBytePos,
+        limit: EmacsBytePos,
+        properties: &[Value],
+    ) -> Option<EmacsBytePos> {
+        match self {
+            Self::Snapshot(list) => OverlayRead::next_property_boundary_after_until_emacs_byte_pos(
+                list, pos, limit, properties,
+            ),
+            Self::Live(live) => OverlayRead::next_property_boundary_after_until_emacs_byte_pos(
+                live, pos, limit, properties,
+            ),
+        }
+    }
+    pub(crate) fn highest_priority_overlay_property_value_at_emacs_byte_pos(
+        self,
+        pos: EmacsBytePos,
+        property: Value,
+        window_id: Option<u64>,
+    ) -> Option<Value> {
+        match self {
+            Self::Snapshot(list) => {
+                OverlayRead::highest_priority_overlay_property_value_at_emacs_byte_pos(
+                    list, pos, property, window_id,
+                )
+            }
+            Self::Live(live) => {
+                OverlayRead::highest_priority_overlay_property_value_at_emacs_byte_pos(
+                    live, pos, property, window_id,
+                )
+            }
+        }
+    }
+    pub(crate) fn sort_overlay_ids_by_priority_desc(self, overlay_ids: &mut [Value]) {
+        match self {
+            Self::Snapshot(list) => {
+                OverlayRead::sort_overlay_ids_by_priority_desc(list, overlay_ids)
+            }
+            Self::Live(live) => OverlayRead::sort_overlay_ids_by_priority_desc(live, overlay_ids),
+        }
+    }
+    pub(crate) fn sort_overlay_ids_by_priority_desc_with(
+        self,
+        overlay_ids: &mut [Value],
+        priority_of: &dyn Fn(Value) -> Option<Value>,
+    ) {
+        match self {
+            Self::Snapshot(list) => {
+                OverlayRead::sort_overlay_ids_by_priority_desc_with(list, overlay_ids, priority_of)
+            }
+            Self::Live(live) => {
+                OverlayRead::sort_overlay_ids_by_priority_desc_with(live, overlay_ids, priority_of)
+            }
+        }
+    }
+    pub(crate) fn iter_overlays_at_emacs_byte_pos(
+        self,
+        pos: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + 'a {
+        match self {
+            Self::Snapshot(list) => {
+                LayoutOverlayIter::Snapshot(OverlayRead::iter_overlays_at_emacs_byte_pos(list, pos))
+            }
+            Self::Live(live) => {
+                LayoutOverlayIter::Live(OverlayRead::iter_overlays_at_emacs_byte_pos(live, pos))
+            }
+        }
+    }
+    pub(crate) fn iter_overlays_in_accessible_emacs_byte_range(
+        self,
+        range: EmacsByteRange,
+        accessible_end: EmacsBytePos,
+    ) -> impl Iterator<Item = Value> + 'a {
+        match self {
+            Self::Snapshot(list) => LayoutOverlayIter::Snapshot(
+                OverlayRead::iter_overlays_in_accessible_emacs_byte_range(
+                    list,
+                    range,
+                    accessible_end,
+                ),
+            ),
+            Self::Live(live) => {
+                LayoutOverlayIter::Live(OverlayRead::iter_overlays_in_accessible_emacs_byte_range(
+                    live,
+                    range,
+                    accessible_end,
+                ))
+            }
+        }
+    }
+    pub(crate) fn resolve_overlay_property_at_emacs_byte_pos<R>(
+        self,
+        pos: EmacsBytePos,
+        window_id: Option<u64>,
+        property_value: R,
+    ) -> OverlayPropertyAtPoint<'a, R>
+    where
+        R: OverlayPropertyResolver,
+    {
+        match self {
+            Self::Snapshot(list) => OverlayRead::resolve_overlay_property_at_emacs_byte_pos(
+                list,
+                pos,
+                window_id,
+                property_value,
+            ),
+            Self::Live(live) => OverlayRead::resolve_overlay_property_at_emacs_byte_pos(
+                live,
+                pos,
+                window_id,
+                property_value,
+            ),
+        }
+    }
+}
+
 pub(crate) trait LayoutBufferView {
     // Raw, frame-less buffer readers retain graphical classification. Window
     // snapshots must supply their actual frame target at construction.
@@ -183,6 +410,13 @@ pub(crate) trait LayoutBufferView {
     fn layout_point_min_emacs_byte_pos(&self) -> EmacsBytePos;
     fn layout_point_max_emacs_byte_pos(&self) -> EmacsBytePos;
     fn layout_point_max_char_pos(&self) -> CharPos0;
+    /// GNU `long_line_optimizations_p` for the displayed buffer
+    /// (`src/xdisp.c:20646`): redisplay found a line above
+    /// `long-line-threshold`, enabling its long-line shortcuts. A view that
+    /// cannot prove the flag keeps the exact (unoptimized) walk.
+    fn layout_long_line_optimizations_p(&self) -> bool {
+        false
+    }
     /// Readable context for complete display elements. A measurement stop can
     /// fall inside a composition; actual buffer narrowing still bounds it.
     fn layout_measurement_context_end(&self) -> Option<CharPos0> {
@@ -284,7 +518,45 @@ pub(crate) trait LayoutBufferView {
     /// Start of the run containing `pos` over which `syntax-table`/`category`
     /// are constant in presence and value (backward companion).
     fn layout_previous_syntax_prop_state_run_start_char_pos(&self, pos: CharPos0) -> CharPos0;
-    fn layout_overlays(&self) -> &OverlayList;
+    fn layout_overlays(&self) -> LayoutOverlays<'_>;
+    /// Exclusive character end of a window-range overlay view, or `None` for
+    /// a whole-buffer view. A walk that consumes at or past it was answered
+    /// from a subset and must be retried with the whole buffer.
+    fn layout_overlay_view_end_char(&self) -> Option<neovm_core::buffer::CharPos0> {
+        None
+    }
+    /// True when this attempt queried the overlay view below its captured
+    /// start. Such an answer may be missing overlays from before the view, so
+    /// the walk must be retried with the whole-buffer view.
+    fn layout_overlay_view_start_underflow(&self) -> bool {
+        false
+    }
+    /// True when a live overlay view detected a generation mismatch against
+    /// the owning buffer's overlay index.
+    fn layout_overlay_view_stale(&self) -> bool {
+        false
+    }
+    /// Check whether this overlay view can certify a completed walk up to
+    /// `window_end`. Returns the specific usability defect if the attempt must
+    /// be discarded and retried.
+    fn layout_overlay_view_unusable(
+        &self,
+        window_end: neovm_core::buffer::CharPos0,
+    ) -> Option<OverlayViewUnusable> {
+        if self.layout_overlay_view_stale() {
+            return Some(OverlayViewUnusable::Stale);
+        }
+        if self.layout_overlay_view_start_underflow() {
+            return Some(OverlayViewUnusable::Underflow);
+        }
+        if self
+            .layout_overlay_view_end_char()
+            .is_some_and(|end| window_end.get() >= end.get())
+        {
+            return Some(OverlayViewUnusable::Exhausted);
+        }
+        None
+    }
     /// Automatic-composition span whose first character is `pos`.
     ///
     /// These spans are compiled from the live Lisp rule table when the
@@ -298,6 +570,14 @@ pub(crate) trait LayoutBufferView {
         _pos: CharPos0,
         _limit: CharPos0,
     ) -> Option<CharPos0> {
+        None
+    }
+    /// GNU `composition_gstring_width` of the automatic composition whose
+    /// first character is `pos`, when the snapshot resolved it through the
+    /// evaluator's rule machinery.  A live-buffer adapter has no evaluator
+    /// environment, and a snapshot taken without one stores no advance, so
+    /// the row writer falls back to measuring the composed text.
+    fn layout_automatic_composition_advance_px(&self, _pos: CharPos0) -> Option<f32> {
         None
     }
 }
@@ -421,6 +701,7 @@ fn layout_var_info(var: LayoutVar) -> &'static LayoutVarInfo {
                             | LayoutVar::DisplayLineNumbersWidth
                             | LayoutVar::FaceRemappingAlist
                             | LayoutVar::GlyphlessCharDisplay
+                            | LayoutVar::LargeHscrollThreshold
                             | LayoutVar::LinePrefix
                             | LayoutVar::NeomacsCursorEffect
                             | LayoutVar::NeomacsVisualCursors
@@ -455,6 +736,10 @@ impl LayoutBufferView for Buffer {
 
     fn layout_point_max_char_pos(&self) -> CharPos0 {
         self.point_max_char_pos()
+    }
+
+    fn layout_long_line_optimizations_p(&self) -> bool {
+        Buffer::long_line_optimizations_p(self)
     }
 
     fn layout_total_emacs_byte_len(&self) -> EmacsByteLen {
@@ -576,8 +861,8 @@ impl LayoutBufferView for Buffer {
         self.previous_syntax_prop_state_run_start_at_char_pos(pos)
     }
 
-    fn layout_overlays(&self) -> &OverlayList {
-        self.overlays()
+    fn layout_overlays(&self) -> LayoutOverlays<'_> {
+        LayoutOverlays::Snapshot(self.overlays())
     }
 }
 
@@ -611,6 +896,48 @@ pub(crate) fn visible_value(
     id: neovm_core::emacs_core::SymId,
 ) -> Option<Value> {
     evaluator.builtin_var_value(id)
+}
+
+/// GNU's paragraph directions for one window.
+///
+/// Buffer text follows the displayed buffer's BVARs (`src/xdisp.c:3600-3611`):
+/// a nil `bidi-display-reordering` turns bidi off entirely, a
+/// `bidi-paragraph-direction` of `left-to-right`/`right-to-left` pins the base
+/// level, and every other value (including nil) selects UAX#9 P2/P3.  The read
+/// goes through `effective_buffer_value`, GNU's `find_symbol_value` with this
+/// buffer current, so a live `let` of the variable is visible just like the
+/// buffer slot.
+///
+/// Chrome rows are display strings: `display_mode_line` (mode, header and tab
+/// lines, `src/xdisp.c:28165`) and `display_tab_bar` (`src/xdisp.c:14727`) set
+/// `it->paragraph_embedding = L2R` unconditionally, and `reseat_to_string`
+/// gates string reordering on the DEFAULT `bidi-display-reordering`
+/// (`buffer_defaults`), not the buffer's.
+fn layout_paragraph_directions(
+    buffer: &Buffer,
+    vars: VariableView<'_>,
+) -> crate::bidi::ParagraphDirections {
+    use crate::bidi::{ParagraphDirection, ParagraphDirections};
+    let text = if effective_buffer_value(buffer, vars, LayoutVar::BidiDisplayReordering)
+        .is_none_or(|value| value.is_nil())
+    {
+        ParagraphDirection::Off
+    } else {
+        match effective_buffer_value(buffer, vars, LayoutVar::BidiParagraphDirection) {
+            Some(value) if value == Value::symbol("left-to-right") => {
+                ParagraphDirection::LeftToRight
+            }
+            Some(value) if value == Value::symbol("right-to-left") => {
+                ParagraphDirection::RightToLeft
+            }
+            _ => ParagraphDirection::Auto,
+        }
+    };
+    let chrome = match vars.default_value(LayoutVar::BidiDisplayReordering.sym_id()) {
+        Some(value) if !value.is_nil() => ParagraphDirection::LeftToRight,
+        _ => ParagraphDirection::Off,
+    };
+    ParagraphDirections { text, chrome }
 }
 
 pub(crate) fn buffer_local_value<B: LayoutBufferView + ?Sized>(
@@ -695,7 +1022,7 @@ pub fn frame_params_from_neovm(
         width: frame.width as f32,
         height: frame.height as f32,
         menu_bar_height: frame.menu_bar_height as f32,
-        tool_bar_height: frame.tool_bar_height as f32,
+        tool_bar_height: frame.reserved_tool_bar_height() as f32,
         compact_bar_height: frame.compact_bar_height as f32,
         tab_bar_height: frame.tab_bar_height as f32,
         char_width: frame.char_width,
@@ -1227,7 +1554,7 @@ pub(crate) fn buffer_invisible_ellipsis_text<B: LayoutBufferView>(buffer: &B) ->
     if glyphs.is_empty() {
         return None;
     }
-    let text: String = glyphs.iter().filter_map(|g| glyph_code_char(*g)).collect();
+    let text: String = glyphs.iter().filter_map(glyph_code_char).collect();
     (!text.is_empty()).then_some(text)
 }
 
@@ -1257,10 +1584,7 @@ pub(crate) fn buffer_display_table_glyphs<B: LayoutBufferView + ?Sized>(
     let table = active_buffer_display_table(buffer)?;
     let entry = neovm_core::emacs_core::chartable::ct_ref(&table, i64::from(character.code()));
     let glyphs = entry.as_vector_data()?;
-    let decoded: Vec<_> = glyphs
-        .iter()
-        .filter_map(|glyph| glyph_code_parts(*glyph))
-        .collect();
+    let decoded: Vec<_> = glyphs.iter().filter_map(glyph_code_parts).collect();
     let text = decoded.iter().map(|(ch, _)| *ch).collect();
     let mut face_runs: Vec<DisplaySourceMappedFaceRun> = Vec::new();
     for (_, lisp_face_id) in decoded {
@@ -1938,10 +2262,12 @@ pub fn window_params_from_neovm_with_font_sizing(
     let default_fg = buffer_default_face.fg;
     let default_bg = buffer_default_face.bg;
     // The frame's own `default` face, un-remapped: GNU's `FRAME_FOREGROUND_PIXEL`
-    // (src/image.c:6518), which a buffer's `face-remapping-alist` does not move
-    // (issue #556).
+    // and `FRAME_BACKGROUND_PIXEL` (src/image.c:6518, :10092), which a buffer's
+    // `face-remapping-alist` does not move (issue #556).
     let frame_foreground = face_resolver.default_face().fg;
+    let frame_background = face_resolver.default_face().bg;
 
+    let bidi_paragraph_directions = layout_paragraph_directions(buffer, vars);
     let glyph_matrix_input = window.display()?.glyph_matrix_row_scale.snapshot();
     Some(WindowParams {
         // Filled in by `resolve_window_display_source_params`, the one place
@@ -2011,6 +2337,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         wrap_mode,
         word_wrap,
         word_wrap_policy,
+        bidi_paragraph_directions,
         tab_width,
         scroll_conservatively,
         scroll_step,
@@ -2023,6 +2350,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         default_fg,
         default_bg,
         frame_foreground,
+        frame_background,
         char_width,
         char_height,
         window_system: is_window_system,
@@ -3394,18 +3722,60 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
     /// counting over-estimate display rows and therefore must not force
     /// screen-at-a-time visibility retries.
     fn has_display_row_collapse_between(&self, char_from: i64, char_to: i64) -> bool {
+        // Bound candidate-boundary probes using GNU's SCROLL_LIMIT-side budget
+        // (`try_scrolling`, src/xdisp.c:19393, 19408-19466). Non-carrier
+        // overlays are skipped in O(1)/O(log N) via `may_contain_property` and
+        // `OrderedFilterMask` without consuming steps; if a pathological buffer
+        // still exceeds the probe bound (e.g. hundreds of non-replacing
+        // `display` or disabled `invisible` transitions), fall back
+        // conservatively to `true` (`DisplayRowsRequired`, i.e. GNU's measured
+        // `try_scrolling` -> `recenter:` walk), never truncating the answer.
+        const MAX_COLLAPSE_PROBE_STEPS: usize =
+            (crate::scroll_policy::SCROLL_SEARCH_LIMIT_LINES as usize) * 4;
+
         let max = self.buffer.layout_point_max_char_pos().get() as i64;
         let mut charpos = char_from.clamp(0, max);
         let end = char_to.clamp(charpos, max);
+        if charpos >= end {
+            return false;
+        }
+        // A window-bounded overlay snapshot excludes overlays past
+        // `layout_overlay_view_end_char()`. Never certify `SourceLineEstimate`
+        // across a range extending past that ceiling: an `invisible` or
+        // replacing-`display` overlay beyond the snapshot end would be absent
+        // from this subset view and could cause `scroll_down_from_available_rows`
+        // to over-scroll.
+        if self
+            .buffer
+            .layout_overlay_view_end_char()
+            .is_some_and(|view_end| end > view_end.get() as i64)
+        {
+            return true;
+        }
         let end_byte = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, end);
+        let invisible = Value::symbol(&INVISIBLE_TEXT_PROPERTY);
         let display = Value::symbol(&DISPLAY_TEXT_PROPERTY);
+        let collapse_props = [invisible, display];
+        let mut steps = 0usize;
 
         while charpos < end {
+            if steps >= MAX_COLLAPSE_PROBE_STEPS {
+                return true;
+            }
+            steps += 1;
+
             if self.invisible_status_at(charpos).hidden() || self.replacing_display_at(charpos) {
                 return true;
             }
 
             let bytepos = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, charpos);
+            let next_invisible_text = self
+                .buffer
+                .layout_next_single_text_prop_change_after_emacs_byte_pos_bounded(
+                    bytepos, invisible, end_byte,
+                )
+                .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next) as i64)
+                .unwrap_or(end);
             let next_display_text = self
                 .buffer
                 .layout_next_single_text_prop_change_after_emacs_byte_pos_bounded(
@@ -3413,17 +3783,28 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
                 )
                 .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next) as i64)
                 .unwrap_or(end);
-            // `next_invisible_boundary` includes every overlay endpoint, so it
-            // is also the boundary at which an overlay `display` winner may
-            // change. It separately tracks invisible text-property changes.
-            let next = self
-                .next_invisible_boundary(charpos)
+            let next_overlay = self
+                .buffer
+                .layout_overlays()
+                .next_property_boundary_after_until_emacs_byte_pos(
+                    bytepos,
+                    end_byte,
+                    &collapse_props,
+                )
+                .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next) as i64)
+                .unwrap_or(end);
+            let next = next_invisible_text
                 .min(next_display_text)
+                .min(next_overlay)
                 .min(end);
             charpos = next.max(charpos.saturating_add(1));
         }
 
-        false
+        // Symmetric lower-bound guard: if `char_from` fell below a bounded
+        // snapshot's `view_query_floor`, `note_overlay_view_query` latched
+        // underflow; refuse to certify `SourceLineEstimate` for an unobserved
+        // prefix.
+        self.buffer.layout_overlay_view_start_underflow()
     }
 
     /// Combined `invisible` status at `charpos` from the `invisible` text
@@ -3484,21 +3865,22 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
         // Turns this per-redisplay scan from O(buffer) into O(window).
         // Mirrors GNU's TEXT_PROP_DISTANCE_LIMIT cap in `compute_stop_pos`.
         let scan_limit = EmacsBytePos::new(bytepos.get().saturating_add(INVISIBLE_SCAN_BYTE_LIMIT));
+        let max_char = self.buffer.layout_point_max_char_pos().get();
+        let max_byte = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, max_char as i64);
+        let invisible = Value::symbol(&INVISIBLE_TEXT_PROPERTY);
         let next_text_change = self
             .buffer
             .layout_next_single_text_prop_change_after_emacs_byte_pos_bounded(
-                bytepos,
-                Value::symbol(&INVISIBLE_TEXT_PROPERTY),
-                scan_limit,
+                bytepos, invisible, scan_limit,
             )
             .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next))
-            .unwrap_or_else(|| self.buffer.layout_point_max_char_pos().get());
+            .unwrap_or(max_char);
         let next_overlay_change = self
             .buffer
             .layout_overlays()
-            .next_boundary_after_emacs_byte_pos(bytepos)
+            .next_property_boundary_after_until_emacs_byte_pos(bytepos, max_byte, &[invisible])
             .map(|next| buffer_emacs_byte_pos_to_charpos(self.buffer, next))
-            .unwrap_or_else(|| self.buffer.layout_point_max_char_pos().get());
+            .unwrap_or(max_char);
         next_text_change.min(next_overlay_change) as i64
     }
 
@@ -3547,8 +3929,12 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
             .buffer
             .layout_overlays()
             .overlays_in_emacs_byte_range(scan_range);
-        overlay_ids.sort();
-        overlay_ids.dedup();
+        // Deduplicate by object identity (`eq`), NOT `Value::eq` (Lisp `equal`):
+        // two distinct overlays at the same endpoints with equal-text
+        // `before-string`s (e.g. `" "` carrying different `display` fringe specs)
+        // compare `equal` because Lisp `equal` ignores string text properties.
+        overlay_ids.sort_by_key(|v| v.bits());
+        overlay_ids.dedup_by_key(|v| v.bits());
 
         for oid in overlay_ids {
             if !self.overlay_applies_to_window(oid) {
@@ -5054,6 +5440,10 @@ impl FaceResolver {
         )
     }
 
+    pub(crate) fn font_sizing(&self) -> FontSizing {
+        self.font_sizing
+    }
+
     pub fn new_with_font_sizing(
         face_table: &FaceTable,
         default_fg: u32,
@@ -6557,6 +6947,37 @@ impl FaceResolver {
             &mut remap_stack,
             0,
             FaceReferenceDiagnostics::Report,
+        )
+        .map(|contribution| {
+            self.apply_specified_face_over(base, &contribution.face, contribution.identity.as_ref())
+        })
+    }
+
+    /// GNU `lookup_derived_face (w, f, symbol, base_face_id, false)` (xfaces.c):
+    /// resolve a named face (symbol or string) merged over `base`, returning
+    /// `None` without recording a diagnostic when `val` does not name a defined
+    /// or remapped face.
+    pub(crate) fn resolve_remapped_derived_face_over(
+        &self,
+        remapping: BufferFaceRemapping,
+        base: &ResolvedFace,
+        val: &Value,
+    ) -> Option<ResolvedFace> {
+        let name = Self::face_name_from_value(val)?;
+        if name == "nil" {
+            return None;
+        }
+        let remapped = Self::buffer_face_remapping_specs(remapping, name).is_some();
+        if !remapped && (name == "default" || self.face_table.get(name).is_none()) {
+            return None;
+        }
+        let mut remap_stack = Vec::new();
+        self.resolve_buffer_named_face_overlay_spec_inner(
+            remapping,
+            name,
+            &mut remap_stack,
+            0,
+            FaceReferenceDiagnostics::Suppress,
         )
         .map(|contribution| {
             self.apply_specified_face_over(base, &contribution.face, contribution.identity.as_ref())

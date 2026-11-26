@@ -103,13 +103,13 @@ static_assertions::assert_not_impl_any!(CacheScope: Send, Sync);
 impl CacheScope {
     #[doc(hidden)]
     pub fn enter() -> Self {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
         Self(std::marker::PhantomData)
     }
 }
 impl Drop for CacheScope {
     fn drop(&mut self) {
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
     }
 }
 
@@ -204,10 +204,12 @@ fn opt_report_clif_parity_keeps_native_observation_and_source_heat_unchanged() {
                     assert_eq!(stats::entry_counting_enabled(), observe.entry_count);
                     assert_eq!(stats::naming_enabled(), observe.naming);
                     assert_eq!(
-                        leaf.call(
-                            &mut context as *mut Context as *mut u8,
-                            &[Value::make_int(7)]
-                        ),
+                        unsafe {
+                            leaf.call(
+                                &mut context as *mut Context as *mut u8,
+                                &[Value::make_int(7)],
+                            )
+                        },
                         NativeRun::Ok(Value::make_int(7).bits())
                     );
                     assert_eq!(leaf.obs.entries.get(), u64::from(observe.entry_count));
@@ -259,10 +261,10 @@ fn opt_report_counts_normal_osr_refusal_and_transient_native_construction() {
     );
     let osr = cache::osr_leaf_ptr_for_test(&source, 1).unwrap();
     assert_eq!(unsafe { &*osr }.selected_tier(), SelectedTier::Opt);
-    cache::clear(); // Also count an OSR leaf no longer retained at exit.
+    cache::clear_with_serial_receipt().expect("serial jit grace"); // Also count an OSR leaf no longer retained at exit.
     let refused = lower_leaf_full_osr_with_opt(
         oversized.executable_ops(),
-        &oversized.constants,
+        oversized.constants(),
         2,
         oversized.executable_gnu_byte_offset_map(),
         None,
@@ -309,7 +311,7 @@ fn opt_report_row_budget_preserves_all_refused_attempts() {
     for _ in 0..ROW_CAP + 3 {
         let refusal = opt_backend::lower_selected_requested(
             f.executable_ops(),
-            &f.constants,
+            f.constants(),
             0,
             None,
             None,

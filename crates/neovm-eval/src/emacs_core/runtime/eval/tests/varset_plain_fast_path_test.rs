@@ -47,10 +47,10 @@ fn run_setq(ev: &mut Context, engine: Engine, sym: Value, value: Value) -> Resul
                 optional: Vec::new(),
                 rest: None,
             });
-            f.lexical = true;
-            f.ops = ops;
-            f.constants = constants.into();
-            f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+            f.set_lexical(true);
+            f.set_ops(ops);
+            f.set_constants(constants.into());
+            f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
             let mut vm = Vm::from_context(ev);
             match vm.execute(&f, vec![value]).kinded() {
                 Ok(_) => Ok(()),
@@ -63,7 +63,7 @@ fn run_setq(ev: &mut Context, engine: Engine, sym: Value, value: Value) -> Resul
             use crate::emacs_core::jit::compile::{NativeRun, lower_leaf, take_pending_flow};
             let leaf = lower_leaf(&ops, &constants, 1).expect("setter lowers");
             let ctx = ev as *mut Context as *mut u8;
-            match leaf.call(ctx, &[value]) {
+            match unsafe { leaf.call(ctx, &[value]) } {
                 NativeRun::Ok(_) => Ok(()),
                 NativeRun::Signal => {
                     match take_pending_flow().map(neovm_value::error::Flow::into_kind) {

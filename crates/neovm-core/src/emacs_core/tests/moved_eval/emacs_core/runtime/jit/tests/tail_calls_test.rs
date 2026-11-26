@@ -30,8 +30,8 @@ fn two_calls(tail: bool) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![
+    f.set_lexical(true);
+    f.set_ops(vec![
         Op::Constant(0), // h1          [l h1]
         Op::StackRef(1), // l           [l h1 l]
         Op::Call(1),     // residual l  [l r1]
@@ -40,13 +40,13 @@ fn two_calls(tail: bool) -> ByteCodeFunction {
         Op::StackRef(1), // l           [l h2 l]
         Op::Cdr,         //             [l h2 d]
         Op::Call(1),     // residual l  [l r2]
-    ];
+    ]);
     if !tail {
-        f.ops.push(Op::Pop);
+        f.ops_mut().push(Op::Pop);
     }
-    f.ops.push(Op::Return);
-    f.constants = vec![Value::symbol("neovm--tc-h1"), Value::symbol("neovm--tc-h2")].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    f.ops_mut().push(Op::Return);
+    f.set_constants(vec![Value::symbol("neovm--tc-h1"), Value::symbol("neovm--tc-h2")].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f
 }
 

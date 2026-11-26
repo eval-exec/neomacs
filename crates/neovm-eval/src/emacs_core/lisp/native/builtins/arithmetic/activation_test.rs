@@ -47,10 +47,13 @@ fn pentry_e2b_integer_width_detach_preserves_absent_slot() {
 
 #[test]
 fn pentry_e2b_integer_width_detach_preserves_foreign_activation() {
-    let source = source();
+    let mut source = source();
+    // Keep the policy owner accessible without evaluating the parked Context.
+    let source_width = std::mem::take(&mut source.integer_width_context);
+    let _parked_source = source.park_for_test();
     let newer = self::source();
     let owner = Arc::downgrade(&newer.integer_width_context.lifetime);
-    let receipt = source.integer_width_context.detach_activation().unwrap();
+    let receipt = source_width.detach_activation().unwrap();
     assert!(active_is(&owner));
     restore_integer_width_activation(receipt).expect("inactive no-op");
     assert!(active_is(&owner));
@@ -103,6 +106,7 @@ fn pentry_e2b_integer_width_detach_restore_owns_receipt_on_borrow() {
 fn pentry_e2b_integer_width_detach_refuses_displaced_restoration() {
     let source = source();
     let receipt = source.integer_width_context.detach_activation().unwrap();
+    let _parked_source = source.park_for_test();
     let newer = self::source();
     let owner = Arc::downgrade(&newer.integer_width_context.lifetime);
     let failure = restore_integer_width_activation(receipt).expect_err("newer activation");

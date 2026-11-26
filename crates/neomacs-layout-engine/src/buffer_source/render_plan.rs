@@ -86,15 +86,28 @@ impl<'chrome> WindowChromeRowSource<'chrome> {
     }
 }
 
-/// The one way chrome preparation fails: Lisp run by a display source changed
-/// the window's projection. The containing attempt reports it as
-/// [`BufferSourceRenderAttemptOutcome::LogicalInputsChanged`] through `From`.
+/// Pre-chrome body-certificate failure (`freshness_before_window_chrome`).
+/// Converts into [`BufferSourceRenderAttemptOutcome::LogicalInputsChanged`] so
+/// non-chrome retries retain the shared frame-layout budget.
 #[derive(Debug)]
 struct LogicalInputsChanged;
 
 impl From<LogicalInputsChanged> for BufferSourceRenderAttemptOutcome {
     fn from(_: LogicalInputsChanged) -> Self {
         Self::LogicalInputsChanged
+    }
+}
+
+/// Window chrome evaluation invalidated the window's live source projection
+/// (`WindowChromeRowsRenderOutcome::SourceInvalidated`). Converts into
+/// [`BufferSourceRenderAttemptOutcome::ChromeSourceInvalidated`] so the frame
+/// coordinator classifies it distinctly from pre-chrome body invalidations.
+#[derive(Debug)]
+struct ChromeSourceInvalidated;
+
+impl From<ChromeSourceInvalidated> for BufferSourceRenderAttemptOutcome {
+    fn from(_: ChromeSourceInvalidated) -> Self {
+        Self::ChromeSourceInvalidated
     }
 }
 
@@ -107,12 +120,13 @@ fn render_or_retain_window_chrome(
     request: WindowChromeRowsRenderRequest<'_, '_>,
     render_services: ChromeRowRenderServices<'_, '_>,
     source: WindowChromeRowSource<'_>,
+    eval_mode: crate::display_status_line::WindowChromeEvalMode<'_>,
 ) -> Result<
     (
         WindowChromeMetrics,
         crate::attempt_freshness::LayoutLispAdmission,
     ),
-    LogicalInputsChanged,
+    ChromeSourceInvalidated,
 > {
     let _cursor_source_pause = crate::cursor_source_dependencies::pause();
     let memo = match source {
@@ -142,12 +156,13 @@ fn render_or_retain_window_chrome(
         request,
         render_services,
         memo,
+        eval_mode,
     ) {
         WindowChromeRowsRenderOutcome::Rendered {
             metrics,
             lisp_admission,
         } => Ok((metrics, lisp_admission)),
-        WindowChromeRowsRenderOutcome::SourceInvalidated => Err(LogicalInputsChanged),
+        WindowChromeRowsRenderOutcome::SourceInvalidated => Err(ChromeSourceInvalidated),
     }
 }
 
@@ -155,13 +170,15 @@ fn freshness_before_window_chrome(
     evaluator: &neovm_core::emacs_core::Context,
     frame_id: FrameId,
     params: &WindowParams,
-) -> Result<neovm_core::window::WindowLayoutAttemptFreshness, LogicalInputsChanged> {
+    completion: &mut crate::buffer_source::render_attempt::BodyCompletionRequest<'_>,
+) -> Result<crate::buffer_source::render_attempt::CompletedBodyCertificate, LogicalInputsChanged> {
     evaluator
         .window_layout_attempt_freshness(
             frame_id,
             WindowId(params.window_id as u64),
             BufferId(params.buffer_id),
         )
+        .and_then(|attempt| completion.complete(attempt))
         .ok_or(LogicalInputsChanged)
 }
 
@@ -493,7 +510,8 @@ fn try_decorate_window_cursor(
     params: &WindowParams,
     text_area_left: f32,
     window_top: f32,
-    char_w: f32,
+    frame_char_width: f32,
+    default_face_char_width: f32,
     default_height: f32,
     default_ascent: f32,
     measurement: DisplayRowMeasurementPolicy,
@@ -503,7 +521,9 @@ fn try_decorate_window_cursor(
         .current_window_row(cursor_row)
     {
         Some(row) => {
-            let mut width = char_w;
+            // Preserve buffer-default remapping in the glyphless insertion
+            // fallback; the frame width describes grid geometry.
+            let mut width = default_face_char_width;
             if let Some(glyph) =
                 crate::display_cursor::CursorVisualColumnResolutionRequest::point_glyph(row, point)
             {
@@ -512,7 +532,7 @@ fn try_decorate_window_cursor(
                     glyph.pixel_width,
                     matches!(glyph.glyph_type, GlyphType::Stretch { .. }),
                     params.x_stretch_cursor,
-                    char_w,
+                    frame_char_width,
                 );
             }
             let Some((face_height, face_ascent)) =
@@ -531,7 +551,7 @@ fn try_decorate_window_cursor(
             );
             (y, height, ascent, width)
         }
-        None => (0.0, default_height, default_ascent, char_w),
+        None => (0.0, default_height, default_ascent, default_face_char_width),
     };
     let window_id_i64 = window_id as i64;
     let paint = replay_cursor_paint(output, cursor_row, point, params);
@@ -559,7 +579,7 @@ fn try_decorate_window_cursor(
         output_emitter,
         FastPathCursorPlacement::Reconstructed {
             output_cursor: cursor,
-            char_width: char_w,
+            char_width: frame_char_width,
         },
         params.cursor_role,
         text_area_left,
@@ -596,7 +616,15 @@ impl BufferSourceOutputSetup {
             max_rows,
             walk_setup,
         );
-        setup.begin_request = setup.begin_request.with_source_extent(params.source_extent);
+        setup.begin_request = setup
+            .begin_request
+            .with_source_extent(params.source_extent)
+            .with_bidi_paragraph_directions(params.bidi_paragraph_directions)
+            .with_text_geometry_units(if params.window_system {
+                neomacs_display_protocol::glyph_matrix::TextGeometryUnits::Pixels
+            } else {
+                neomacs_display_protocol::glyph_matrix::TextGeometryUnits::TerminalCells
+            });
         setup.row_visibility_limit.allow_partial = params.window_system
             && !params.kind.is_minibuffer()
             && params.measurement_rows.is_none();
@@ -695,7 +723,15 @@ impl BufferSourceOutputSetup {
         request: WindowChromeRowsRenderRequest<'_, '_>,
         params: &WindowParams,
     ) -> BufferSourceRenderAttemptOutcome {
-        let (mut output, font_metrics, face_resolver, mut face_ids, _) = state.into_parts();
+        let (
+            mut output,
+            font_metrics,
+            face_resolver,
+            mut face_ids,
+            _,
+            mut body_completion,
+            chrome_eval_mode,
+        ) = state.into_parts();
         if !self.remeasure_chrome
             || !self.position_publication.remeasures_chrome()
             || neovm_core::emacs_core::xdisp::mode_line_display_active(output.evaluator())
@@ -706,22 +742,38 @@ impl BufferSourceOutputSetup {
             output.evaluator(),
             self.begin_request.frame_id(),
             params,
+            &mut body_completion,
         ) {
             Ok(freshness) => freshness,
             Err(changed) => return changed.into(),
         };
+        let window_id = self.begin_request.window_id();
         let mut emitter = output.begin_text_window_output(self.begin_request);
-        let (output, evaluator) = output.into_parts();
-        let services =
-            ChromeRowRenderServices::new(font_metrics, face_resolver.resolver(), &mut face_ids);
-        match render_or_retain_window_chrome(
-            output,
+        let (mut output, evaluator) = output.into_parts();
+        let services = ChromeRowRenderServices::new(
+            font_metrics,
+            face_resolver.resolver(),
+            &mut face_ids,
+            crate::string_property_snapshot::StringSourceRootScope::Rooted(
+                evaluator.owned_root_retainer(),
+            ),
+        );
+        let measured = render_or_retain_window_chrome(
+            output.reborrow(),
             &mut emitter,
             evaluator,
             request,
             services,
             WindowChromeRowSource::Recompute,
-        ) {
+            chrome_eval_mode,
+        );
+        // This query needs chrome metrics, never a chrome-only presentation.
+        // Discard its scratch grid on success and source invalidation alike;
+        // closing it would publish rows without a finished window snapshot.
+        output
+            .builder()
+            .discard_unpublished_window_grid(window_id.0);
+        match measured {
             Ok((measured, chrome_lisp_admission)) => {
                 BufferSourceRenderAttemptOutcome::EmptyBodyChromeMeasured {
                     measured,
@@ -871,8 +923,15 @@ impl BufferSourceOutputSetup {
     where
         B: LayoutBufferView,
     {
-        let (mut output, font_metrics, face_resolver, mut face_ids, window_snapshots) =
-            state.into_parts();
+        let (
+            mut output,
+            font_metrics,
+            face_resolver,
+            mut face_ids,
+            window_snapshot,
+            mut body_completion,
+            chrome_eval_mode,
+        ) = state.into_parts();
         let retry_checkpoint = output.capture_retry_checkpoint();
         let effective_default_face =
             default_face.reserve_effective_face(face_resolver.resolver(), &mut face_ids);
@@ -960,7 +1019,6 @@ impl BufferSourceOutputSetup {
             source.window_start(),
             source.accessible_start(),
             source.accessible_end(),
-            source.text_start_byte(),
             self.body_install_context.display_text_row_base(),
             walk_setup.text_area_left,
             walk_setup.window_top,
@@ -1015,7 +1073,10 @@ impl BufferSourceOutputSetup {
             // Combine row ascent with the point face's descent through the
             // canonical cursor geometry rule. Width comes from the point glyph.
             // Fall back to row metrics at EOL or hidden text without a glyph.
-            let mut cursor_width = geometry.char_width;
+            // A newline has no semantic point glyph. Preserve the remapped
+            // default width for that insertion fallback, independently of the
+            // frame grid (the ordinary newline inherits this default font).
+            let mut cursor_width = default_face.char_width();
             let mut cursor_stretch_like = false;
             let mut cursor_height = geometry.char_height;
             let mut cursor_ascent = window_metrics.ascent();
@@ -1082,8 +1143,14 @@ impl BufferSourceOutputSetup {
             // reserved their complete frame-wide ID range before any fresh face
             // allocation. This window can now install rows without mutating the
             // namespace behind glyphs emitted by an earlier sibling.
-            let mut render_services =
-                ChromeRowRenderServices::new(font_metrics, face_resolver.resolver(), &mut face_ids);
+            let mut render_services = ChromeRowRenderServices::new(
+                font_metrics,
+                face_resolver.resolver(),
+                &mut face_ids,
+                crate::string_property_snapshot::StringSourceRootScope::Rooted(
+                    evaluator.owned_root_retainer(),
+                ),
+            );
 
             // Install retained body rows verbatim (already bidi-finalized), with
             // the prior cursor decoration stripped — the new cursor is set below.
@@ -1110,31 +1177,17 @@ impl BufferSourceOutputSetup {
                 replay.points,
                 replay.point_rows,
             );
-            let mut redisplay_positions = TextWindowRedisplayPositions::from_output_rows(
+            let char_to_byte = |pos: neovm_core::buffer::CharPos0| {
+                neovm_core::buffer::EmacsBytePos::new(
+                    buf_access.charpos_to_bytepos(pos.get() as i64) as usize,
+                )
+            };
+            let redisplay_positions = TextWindowRedisplayPositions::from_output_rows(
                 &output_emitter,
                 tail_context.window_start,
                 source.accessible_end(),
-                source.text_start_byte(),
-                0,
+                char_to_byte,
             );
-            // Cursor-only does not walk (byte_idx = 0 above), so from_output_rows
-            // leaves window_end_byte at text_start_byte. Re-derive it from the
-            // (correct) window_end char so the published byte companion matches a
-            // full rebuild instead of defaulting to the buffer top.
-            {
-                let end_char0 = redisplay_positions
-                    .window_end_lisp()
-                    .to_one_based_usize()
-                    .saturating_sub(1) as i64;
-                redisplay_positions.replace_window_end_anchor(
-                    neovm_core::buffer::TextPositionAnchor::new(
-                        neovm_core::buffer::CharPos0::new(end_char0 as usize),
-                        neovm_core::buffer::EmacsBytePos::new(
-                            buf_access.charpos_to_bytepos(end_char0) as usize,
-                        ),
-                    ),
-                );
-            }
             record_text_window_display_range(
                 output.reborrow(),
                 redisplay_positions.display_range(output_window_id),
@@ -1221,18 +1274,38 @@ impl BufferSourceOutputSetup {
                 );
             }
 
+            // Check overlay view usability as the body walk seals, before
+            // chrome Lisp: a range view may have underflowed/exhausted, or a
+            // live view may have gone stale before/during the body walk.
+            // Late chrome mutations do not rewind completed body rows (GNU
+            // `xdisp.c:21419-21483`), and chrome never reads `buffer.layout_overlays()`.
+            let window_end_char = redisplay_positions
+                .window_end_position()
+                .anchor()
+                .char_pos();
+            if let Some(reason) = buffer.layout_overlay_view_unusable(window_end_char) {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::OverlayViewUnusable(reason);
+            }
+
             // Chrome is re-walked unless the replay carries a retained chrome
             // plan — GNU's one-line optimization never reaches
             // `display_mode_lines` (xdisp.c:17572-17726). The permission is
             // decided in `RetainedWindowMatrix::chrome_reusable_after_cursor_move`,
             // where the dirty flags and the point-stayed-on-this-line
             // precondition live.
-            let freshness_before_chrome =
-                match freshness_before_window_chrome(evaluator, publish_request.frame_id(), params)
-                {
-                    Ok(freshness) => freshness,
-                    Err(changed) => return changed.into(),
-                };
+            let freshness_before_chrome = match freshness_before_window_chrome(
+                evaluator,
+                publish_request.frame_id(),
+                params,
+                &mut body_completion,
+            ) {
+                Ok(freshness) => freshness,
+                Err(changed) => return changed.into(),
+            };
             let (measured_chrome_heights, chrome_lisp_admission) =
                 match render_or_retain_window_chrome(
                     output.reborrow(),
@@ -1244,6 +1317,7 @@ impl BufferSourceOutputSetup {
                         retained_chrome.as_ref(),
                         chrome_memo.as_ref(),
                     ),
+                    chrome_eval_mode,
                 ) {
                     Ok(metrics) => metrics,
                     Err(changed) => return changed.into(),
@@ -1251,7 +1325,7 @@ impl BufferSourceOutputSetup {
             tail_context.finish_and_install(
                 TextWindowFinishState::new(output, output_emitter, evaluator),
                 measured_chrome_heights,
-                window_snapshots,
+                window_snapshot,
             );
             return BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
@@ -1480,8 +1554,14 @@ impl BufferSourceOutputSetup {
                 }
             }
 
-            let mut render_services =
-                ChromeRowRenderServices::new(font_metrics, face_resolver.resolver(), &mut face_ids);
+            let mut render_services = ChromeRowRenderServices::new(
+                font_metrics,
+                face_resolver.resolver(),
+                &mut face_ids,
+                crate::string_property_snapshot::StringSourceRootScope::Rooted(
+                    evaluator.owned_root_retainer(),
+                ),
+            );
 
             // Redisplay positions: window_end is the LAST visible row.
             //  - SCROLL: reused rows sit ABOVE the exposed (bottom) rows, so the
@@ -1490,13 +1570,17 @@ impl BufferSourceOutputSetup {
             //  - BELOW-REUSE (bound_walk): reused rows sit BELOW the exposed
             //    (edited) line, so the last visible row is the last reused-below
             //    row — compute AFTER they are spliced into the emitter.
+            let char_to_byte = |pos: neovm_core::buffer::CharPos0| {
+                neovm_core::buffer::EmacsBytePos::new(
+                    buf_access.charpos_to_bytepos(pos.get() as i64) as usize,
+                )
+            };
             let scroll_positions = (!below_reused).then(|| {
                 TextWindowRedisplayPositions::from_output_rows(
                     &output_emitter,
                     scroll.new_window_start,
                     source.accessible_end(),
-                    source.text_start_byte(),
-                    walk_setup.byte_idx,
+                    char_to_byte,
                 )
             });
 
@@ -1640,33 +1724,14 @@ impl BufferSourceOutputSetup {
             );
             output_emitter.normalize_body_start_cols();
 
-            let mut redisplay_positions = scroll_positions.unwrap_or_else(|| {
+            let redisplay_positions = scroll_positions.unwrap_or_else(|| {
                 TextWindowRedisplayPositions::from_output_rows(
                     &output_emitter,
                     scroll.new_window_start,
                     source.accessible_end(),
-                    source.text_start_byte(),
-                    walk_setup.byte_idx,
+                    char_to_byte,
                 )
             });
-            if below_reused {
-                // The bounded walk's `byte_idx` stops at the edited line, so the
-                // from_output_rows window_end_byte points there, not at the last
-                // reused-below row. Re-derive it from the (correct) window_end
-                // char so the published byte companion matches a full rebuild.
-                let end_char0 = redisplay_positions
-                    .window_end_lisp()
-                    .to_one_based_usize()
-                    .saturating_sub(1) as i64;
-                redisplay_positions.replace_window_end_anchor(
-                    neovm_core::buffer::TextPositionAnchor::new(
-                        neovm_core::buffer::CharPos0::new(end_char0 as usize),
-                        neovm_core::buffer::EmacsBytePos::new(
-                            buf_access.charpos_to_bytepos(end_char0) as usize,
-                        ),
-                    ),
-                );
-            }
 
             // Finalize the exposed rows (reused rows are already finalized), then
             // publish the corrected positions for the mode-line chrome.
@@ -1675,6 +1740,7 @@ impl BufferSourceOutputSetup {
                 &mut output_emitter,
                 render_services.reborrow(),
                 &tail_context,
+                char_to_byte,
             );
             // The exposed walk can wrap even when its reused prefix contains
             // only natural rows. Finalize its fringe indicators through the
@@ -1758,6 +1824,7 @@ impl BufferSourceOutputSetup {
                     walk_setup.text_area_left,
                     walk_setup.window_top,
                     geometry.char_width,
+                    default_face.char_width(),
                     geometry.char_height,
                     window_metrics.ascent(),
                     default_face.measurement_policy(),
@@ -1839,12 +1906,29 @@ impl BufferSourceOutputSetup {
                 }
                 (chrome, _) => chrome,
             };
-            let freshness_before_chrome =
-                match freshness_before_window_chrome(evaluator, publish_request.frame_id(), params)
-                {
-                    Ok(freshness) => freshness,
-                    Err(changed) => return changed.into(),
-                };
+            // Check overlay view usability as the body walk seals, before
+            // chrome Lisp: late chrome mutations do not rewind completed body
+            // rows, and chrome never reads `buffer.layout_overlays()`.
+            let window_end_char = redisplay_positions
+                .window_end_position()
+                .anchor()
+                .char_pos();
+            if let Some(reason) = buffer.layout_overlay_view_unusable(window_end_char) {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::OverlayViewUnusable(reason);
+            }
+            let freshness_before_chrome = match freshness_before_window_chrome(
+                evaluator,
+                publish_request.frame_id(),
+                params,
+                &mut body_completion,
+            ) {
+                Ok(freshness) => freshness,
+                Err(changed) => return changed.into(),
+            };
             let (measured_chrome_heights, chrome_lisp_admission) =
                 match render_or_retain_window_chrome(
                     output.reborrow(),
@@ -1856,15 +1940,15 @@ impl BufferSourceOutputSetup {
                         retained_chrome.as_ref(),
                         chrome_memo.as_ref(),
                     ),
+                    chrome_eval_mode,
                 ) {
                     Ok(metrics) => metrics,
                     Err(changed) => return changed.into(),
                 };
-
             tail_context.finish_and_install(
                 TextWindowFinishState::new(output, output_emitter, evaluator),
                 measured_chrome_heights,
-                window_snapshots,
+                window_snapshot,
             );
             #[cfg(test)]
             if scroll.edit && synced_stop.is_some() {
@@ -2000,14 +2084,25 @@ impl BufferSourceOutputSetup {
 
         let (mut output, evaluator) = output.into_parts();
         let window_faces = FrameFaces::new(face_resolver).for_window(buffer);
-        let mut render_services =
-            ChromeRowRenderServices::new(font_metrics, face_resolver.resolver(), &mut face_ids);
+        let mut render_services = ChromeRowRenderServices::new(
+            font_metrics,
+            face_resolver.resolver(),
+            &mut face_ids,
+            crate::string_property_snapshot::StringSourceRootScope::Rooted(
+                evaluator.owned_root_retainer(),
+            ),
+        );
         let mut output_emitter = output_emitter;
         let redisplay_positions = walk_setup.install_body(
             output.reborrow(),
             &mut output_emitter,
             render_services.reborrow(),
             &tail_context,
+            |pos| {
+                neovm_core::buffer::EmacsBytePos::new(
+                    buf_access.charpos_to_bytepos(pos.get() as i64) as usize,
+                )
+            },
         );
         // Live window publication belongs to this evaluator-side orchestrator,
         // after body installation and before chrome reads window-end (%p, etc.).
@@ -2120,11 +2215,29 @@ impl BufferSourceOutputSetup {
         } else {
             WindowChromeRowSource::Recompute
         };
-        let freshness_before_chrome =
-            match freshness_before_window_chrome(evaluator, publish_request.frame_id(), params) {
-                Ok(freshness) => freshness,
-                Err(changed) => return changed.into(),
-            };
+        // Check overlay view usability as the body walk seals, before chrome
+        // Lisp: late chrome mutations do not rewind completed body rows, and
+        // chrome never reads `buffer.layout_overlays()`.
+        let window_end_char = redisplay_positions
+            .window_end_position()
+            .anchor()
+            .char_pos();
+        if let Some(reason) = buffer.layout_overlay_view_unusable(window_end_char) {
+            crate::window_output::restore_text_window_retry_checkpoint(
+                output.reborrow(),
+                retry_checkpoint,
+            );
+            return BufferSourceRenderAttemptOutcome::OverlayViewUnusable(reason);
+        }
+        let freshness_before_chrome = match freshness_before_window_chrome(
+            evaluator,
+            publish_request.frame_id(),
+            params,
+            &mut body_completion,
+        ) {
+            Ok(freshness) => freshness,
+            Err(changed) => return changed.into(),
+        };
         let (measured_chrome_heights, chrome_lisp_admission) = match render_or_retain_window_chrome(
             output.reborrow(),
             &mut output_emitter,
@@ -2132,6 +2245,7 @@ impl BufferSourceOutputSetup {
             chrome_request,
             render_services.reborrow(),
             chrome_source,
+            chrome_eval_mode,
         ) {
             Ok(metrics) => metrics,
             Err(changed) => return changed.into(),
@@ -2145,7 +2259,7 @@ impl BufferSourceOutputSetup {
         tail_context.finish_and_install(
             TextWindowFinishState::new(output, output_emitter, evaluator),
             measured_chrome_heights,
-            window_snapshots,
+            window_snapshot,
         );
         BufferSourceRenderAttemptOutcome::Finished {
             redisplay_positions,
@@ -2163,3 +2277,7 @@ impl BufferSourceOutputSetup {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "render_plan/tests/empty_body_chrome_lifecycle_test.rs"]
+mod empty_body_chrome_lifecycle_tests;

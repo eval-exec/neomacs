@@ -9,32 +9,59 @@
 (defvar resize-increments-main nil)
 (defvar resize-increments-floating-width nil)
 (defvar resize-increments-fullscreen-size nil)
+(defvar resize-increments-restore-submission 0)
 (defvar resize-increments-decorated nil)
 (defvar resize-increments-timer nil)
+(defvar resize-increments-last-state nil)
 
-;; A software Wayland compositor acknowledges a configure asynchronously; the
-;; settle time depends on the renderer and the runner's load.  Wait for the
-;; observable geometry instead of assuming a fixed delay is enough.
-(defconst resize-increments-timeout 12)
+(defun resize-increments-receipt ()
+  (let ((file (getenv "NEOMACS_GUI_PRESENTATION_RECEIPT")))
+    (when (and file (file-exists-p file))
+      (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))
 
-(defun resize-increments-wait-until (predicate on-success failure)
-  "Poll PREDICATE every 20 ms; call ON-SUCCESS or FAILURE at the deadline.
-FAILURE runs when the deadline passes without PREDICATE; it reports through
-`resize-increments-fail'."
-  (let ((deadline (+ (float-time) resize-increments-timeout)))
-    (setq resize-increments-timer
-          (run-at-time
-           0 0.02
-           (lambda ()
-             (cond
-              ((funcall predicate)
-               (cancel-timer resize-increments-timer)
-               (setq resize-increments-timer nil)
-               (funcall on-success))
-              ((> (float-time) deadline)
-               (cancel-timer resize-increments-timer)
-               (setq resize-increments-timer nil)
-               (funcall failure))))))))
+(defun resize-increments-presented (after)
+  "Non-nil once the native display has presented a frame after AFTER."
+  (or (not (getenv "NEOMACS_GUI_PRESENTATION_RECEIPT"))
+      (let ((receipt (resize-increments-receipt)))
+        (and receipt
+             (eq (plist-get receipt :outcome) 'presented)
+             (> (plist-get receipt :submission) after)
+             (integerp (plist-get receipt :clock-id))
+             (natnump (plist-get receipt :seconds))
+             (natnump (plist-get receipt :nanoseconds))
+             (< (plist-get receipt :nanoseconds) 1000000000)))))
+
+(defun resize-increments-log-state (stage expected)
+  "Publish the observed resize geometry when it changes."
+  (let* ((frame resize-increments-main)
+         (receipt (resize-increments-receipt))
+         (line (format
+                "RESIZE-INCREMENTS-STATE stage=%s columns=%S width=%S height=%S expected=%s submission=%S"
+                stage
+                (and frame (frame-width frame))
+                (and frame (frame-pixel-width frame))
+                (and frame (frame-pixel-height frame))
+                expected
+                (plist-get receipt :submission))))
+    (unless (equal line resize-increments-last-state)
+      (setq resize-increments-last-state line)
+      (princ (concat line "\n") 'external-debugging-output))))
+
+(defun resize-increments-wait-until (stage expected predicate on-success)
+  "Poll PREDICATE every 20 ms and call ON-SUCCESS.
+No wall-clock stage deadline: the predicate carries the geometry change and
+the compositor's presentation receipt, and the harness's process timeout is
+the only bound on a missing receipt.  Publish the observed state whenever it
+changes so a timeout still names the numbers."
+  (setq resize-increments-timer
+        (run-at-time
+         0 0.02
+         (lambda ()
+           (resize-increments-log-state stage expected)
+           (when (funcall predicate)
+             (cancel-timer resize-increments-timer)
+             (setq resize-increments-timer nil)
+             (funcall on-success))))))
 
 ;; Exercise content geometry independently of client-side decoration buffers.
 (unless resize-increments-decorated
@@ -42,21 +69,20 @@ FAILURE runs when the deadline passes without PREDICATE; it reports through
 
 (defun resize-increments-check-restored ()
   (resize-increments-wait-until
+   "restored"
+   (format "91/%S" resize-increments-floating-width)
    (lambda ()
      (and (= (frame-width resize-increments-main) 91)
           (= (frame-pixel-width resize-increments-main)
-             resize-increments-floating-width)))
-   (lambda () (kill-emacs 0))
-   (lambda ()
-     (let ((columns (frame-width resize-increments-main))
-           (width (frame-pixel-width resize-increments-main)))
-       (resize-increments-fail
-        "Restored resize: expected 91 columns / %S pixels, got %S / %S"
-        resize-increments-floating-width columns width)))))
+             resize-increments-floating-width)
+          (resize-increments-presented resize-increments-restore-submission)))
+   (lambda () (kill-emacs 0))))
 
 (defun resize-increments-check-rejected ()
   ;; The duplicate requests were rejected synchronously; a settle window is
   ;; the only witness for a negative "geometry did not change" assertion.
+  ;; After it, remember the fullscreen presentation serial so the restored
+  ;; frame must present a newer one before the test exits.
   (run-at-time
    1 nil
    (lambda ()
@@ -65,6 +91,8 @@ FAILURE runs when the deadline passes without PREDICATE; it reports through
        (if (not (equal size resize-increments-fullscreen-size))
            (resize-increments-fail "Rejected resize changed geometry: %S -> %S"
                                    resize-increments-fullscreen-size size)
+         (setq resize-increments-restore-submission
+               (or (plist-get (resize-increments-receipt) :submission) 0))
          (message "Duplicate rejected resize retained fullscreen geometry: %S" size)
          (set-frame-parameter resize-increments-main 'fullscreen nil)
          (resize-increments-check-restored))))))
@@ -85,23 +113,30 @@ FAILURE runs when the deadline passes without PREDICATE; it reports through
   (setq resize-increments-floating-width
         (frame-pixel-width resize-increments-main))
   ;; Fullscreen restoration forces a compositor configure through winit's
-  ;; grid snapping after scale-2 hints have been installed.
-  (set-frame-parameter resize-increments-main 'fullscreen 'fullboth)
-  (resize-increments-wait-until
-   (lambda ()
-     (> (frame-pixel-width resize-increments-main)
-        resize-increments-floating-width))
-   #'resize-increments-request-while-fullscreen
-   (lambda () (resize-increments-fail "Native fullscreen did not take effect"))))
+  ;; grid snapping after scale-2 hints have been installed.  Wait for the
+  ;; fullscreen frame's own presentation receipt before submitting the
+  ;; duplicate width requests that must be rejected as fullscreen.
+  (let ((submission (or (plist-get (resize-increments-receipt) :submission) 0)))
+    (set-frame-parameter resize-increments-main 'fullscreen 'fullboth)
+    (resize-increments-wait-until
+     "fullscreen"
+     (format ">%S" resize-increments-floating-width)
+     (lambda ()
+       (and (> (frame-pixel-width resize-increments-main)
+               resize-increments-floating-width)
+            (resize-increments-presented submission)))
+     #'resize-increments-request-while-fullscreen)))
 
 (run-at-time
  0.2 nil
  (lambda ()
    (setq resize-increments-main (selected-frame))
-   (set-frame-width resize-increments-main 91)
-   (resize-increments-wait-until
-    (lambda () (= (frame-width resize-increments-main) 91))
-    #'resize-increments-after-resize
-    (lambda ()
-      (resize-increments-fail "Resize reconfigure regression: resize did not complete: width %S"
-                              (frame-width resize-increments-main))))))
+   (let ((submission (or (plist-get (resize-increments-receipt) :submission) 0)))
+     (set-frame-width resize-increments-main 91)
+     (resize-increments-wait-until
+      "resize"
+      "91"
+      (lambda ()
+        (and (= (frame-width resize-increments-main) 91)
+             (resize-increments-presented submission)))
+      #'resize-increments-after-resize))))

@@ -76,6 +76,7 @@ fn window_params() -> WindowParams {
         tab_stop_list: Vec::new(),
         default_fg: 0,
         frame_foreground: 0,
+        frame_background: 0,
         default_bg: 0,
         char_width: 8.0,
         char_height: 16.0,
@@ -121,6 +122,7 @@ fn window_params() -> WindowParams {
         horizontal_scroll_bar: true,
         scroll_bar_pixel_width: 12.0,
         scroll_bar_pixel_height: 8.0,
+        bidi_paragraph_directions: Default::default(),
     }
 }
 

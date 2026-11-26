@@ -15,7 +15,9 @@ use neovm_eval::test_support::authority::new_minimal_vm_harness;
 #[test]
 fn minimal_runtime_keeps_buffers_in_its_world_allocation() {
     let boot = test_utils::new_context();
-    let context = new_minimal_vm_harness(boot.hooks_installed());
+    let proof = boot.hooks_installed();
+    drop(boot);
+    let context = new_minimal_vm_harness(proof);
     assert_eq!(
         context.edit.buffers.backing_kind_for_test(),
         BufferBackingKindForTest::LeasedAttached

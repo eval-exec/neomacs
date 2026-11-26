@@ -7,7 +7,7 @@ use crate::host_effect::contracts::{
 };
 use crate::host_effect::owner_step::{OwnerStepResult, PendingOwnerStep};
 
-fn publish(baton: &Baton, heap: &TaggedHeap) -> RootBatchLease {
+fn publish(baton: &TurnRight, heap: &TaggedHeap) -> RootBatchLease {
     let prepared = baton.prepare_parked_batch(heap, 0).unwrap();
     // SAFETY: this fixture holds its original heap's Baton; the empty root
     // slice stays live with no GC, callback or handoff through publication.
@@ -19,7 +19,7 @@ fn publish(baton: &Baton, heap: &TaggedHeap) -> RootBatchLease {
 
 fn register<K: RegisteredRecord>(
     registry: &mut HostRegistry,
-    baton: &Baton,
+    baton: &TurnRight,
     heap: &TaggedHeap,
     parent: HostRequestKey,
     roots: &[Value],
@@ -37,16 +37,16 @@ pub(in crate::emacs_core::eval::green::host_service) enum FixtureStepStage {
 }
 
 pub(in crate::emacs_core::eval::green::host_service) fn pending_fixture()
--> (Context, Baton, StepKey) {
+-> (Context, TurnRight, StepKey) {
     step_fixture(FixtureStepStage::Published)
 }
 
 pub(in crate::emacs_core::eval::green::host_service) fn step_fixture(
     stage: FixtureStepStage,
-) -> (Context, Baton, StepKey) {
+) -> (Context, TurnRight, StepKey) {
     let mut owner =
         Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     let input = Value::list(vec![Value::string("step-root-only"), Value::fixnum(73)]);
     let key = owner.with_green_runtime(|runtime| {
         let mut roots = runtime.parked.borrow_mut();
@@ -107,7 +107,7 @@ pub(in crate::emacs_core::eval::green::host_service) fn step_fixture(
     (owner, baton, key)
 }
 
-fn restored<'a>(owner: &'a Context, baton: &'a Baton) -> RestoredHostOwner<'a> {
+fn restored<'a>(owner: &'a Context, baton: &'a TurnRight) -> RestoredHostOwner<'a> {
     // Registry-only controls deliberately construct the same-heap authority;
     // materialization below separately exercises the actual seated constructor.
     RestoredHostOwner {
@@ -120,7 +120,7 @@ fn restored<'a>(owner: &'a Context, baton: &'a Baton) -> RestoredHostOwner<'a> {
 fn successor_pending(
     registry: &mut HostRegistry,
     owner: &Context,
-    baton: &Baton,
+    baton: &TurnRight,
     access: &ContinuationAccess,
     next: StepKey,
 ) -> PendingStep {
@@ -154,7 +154,7 @@ fn successor_pending(
 fn callback_completion(
     registry: &mut HostRegistry,
     owner: &Context,
-    baton: &Baton,
+    baton: &TurnRight,
     access: &ContinuationAccess,
     claim: StepClaim,
 ) -> StepCompletion {

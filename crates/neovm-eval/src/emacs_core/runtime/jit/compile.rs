@@ -254,9 +254,9 @@ fn materialize_spec_slot(
 /// interpreter's `params_on_stack` in `vm.rs` `run_frame`. Dynamic-binding
 /// bytecode binds params via `varref` instead and is not supported here.
 fn params_on_stack(f: &ByteCodeFunction) -> bool {
-    f.lexical
-        || f.env.is_some()
-        || matches!(f.arglist.kind(), neovm_value::value::ValueKind::Fixnum(_))
+    f.lexical()
+        || f.env().is_some()
+        || matches!(f.arglist().kind(), neovm_value::value::ValueKind::Fixnum(_))
 }
 
 /// Compile a [`ByteCodeFunction`] whose parameters live on the operand stack
@@ -446,7 +446,7 @@ fn jit_profile_emit(
     let reason = error.map_or_else(|| "-".to_string(), |e| format!("{e:?}"));
     let reason = reason.replace(',', ";").replace('\n', " ");
     let fingerprint: Vec<String> = f
-        .constants
+        .constants()
         .iter()
         .filter_map(|v| v.as_bare_symbol_id())
         .take(6)
@@ -514,14 +514,19 @@ fn jit_profile_emit(
     };
     let arity = params.entry_depth();
     let inlinable = match obarray {
-        Some(ob) => analyze_cfg(ops, &f.constants, f.executable_gnu_byte_offset_map(), arity)
-            .map(|cfg| {
-                find_spec_sites(ops, &f.constants, &cfg.leaders, ob, false)
-                    .values()
-                    .filter(|site| site.kind == SpecCalleeKind::Bytecode)
-                    .count()
-            })
-            .unwrap_or(0),
+        Some(ob) => analyze_cfg(
+            ops,
+            f.constants(),
+            f.executable_gnu_byte_offset_map(),
+            arity,
+        )
+        .map(|cfg| {
+            find_spec_sites(ops, f.constants(), &cfg.leaders, ob, false)
+                .values()
+                .filter(|site| site.kind == SpecCalleeKind::Bytecode)
+                .count()
+        })
+        .unwrap_or(0),
         None => 0,
     };
     let compiled_id = f
@@ -918,7 +923,7 @@ pub(crate) fn front_requires_osr_evidence(f: &ByteCodeFunction, request: Compile
     let front = opt_profit::front(
         request,
         f.executable_ops(),
-        opt_profit::CallDensity::from(body_is_call_heavy(f.executable_ops(), &f.constants)),
+        opt_profit::CallDensity::from(body_is_call_heavy(f.executable_ops(), f.constants())),
         f.jit_runtime(),
     );
     opt_profit::requires_osr_evidence(front)
@@ -940,7 +945,7 @@ pub(crate) fn compile_bytecode_function_requested(
         let _numeric = publish_numeric_feedback(f);
         snapshot::FrontFeedbackScope::Main { _scope: _numeric }
     };
-    let call_heavy = body_is_call_heavy(f.executable_ops(), &f.constants);
+    let call_heavy = body_is_call_heavy(f.executable_ops(), f.constants());
     let self_recursive = body_calls_itself(f, obarray);
     let _scope = lowering::RegallocScope::enter(regalloc_for_shape(
         request.regalloc,
@@ -1015,7 +1020,8 @@ pub(crate) fn compile_bytecode_function_requested(
         // The live function's declared depth, not the JIT operand-stack
         // depth. Re-arm of a redefined callee compiles a new leaf, so this
         // stamp is the size the next call charges.
-        leaf.frame_bytes = crate::emacs_core::bytecode::vm::bytecode_frame_bytes(f.max_stack.get());
+        leaf.frame_bytes =
+            crate::emacs_core::bytecode::vm::bytecode_frame_bytes(f.max_stack().get());
     }
     if jit_profile_path().is_some() {
         let _phase = super::stats::enter_phase(super::stats::CompilePhase::Other);
@@ -1081,7 +1087,7 @@ fn body_calls_itself(f: &ByteCodeFunction, obarray: Option<&Obarray>) -> bool {
     {
         return false;
     }
-    f.constants.iter().any(|c| {
+    f.constants().iter().any(|c| {
         c.as_bare_symbol_id()
             .and_then(|id| obarray.symbol_function_id(id))
             .is_some_and(|binding| binding.is_bytecode_object_of(f))
@@ -1119,14 +1125,14 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
     // a real call. A depth that fits here is still spliced: the caller's
     // frame does not grow by the callee's max_stack, and the splice does
     // not repeat the positional compare.
-    if !crate::emacs_core::bytecode::vm::declared_frame_fits(bc.max_stack.get()) {
+    if !crate::emacs_core::bytecode::vm::declared_frame_fits(bc.max_stack().get()) {
         return None;
     }
     // Required-only lexical, and no captured lexenv: inlining drops the lexenv
     // install, which is only otherwise safe because lexenv-reading ops lower to
     // Opaque and `callee_inlinable` rejects them — keep the safety local here too.
     let arity = JitParamShape::try_from(bc).ok()?.fixed_arity()?;
-    if !bc.lexical || bc.env.is_some() {
+    if !bc.lexical() || bc.env().is_some() {
         return None;
     }
     // A patched source's leading constants are per-instance; inlining would
@@ -1164,7 +1170,7 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
     }
     mir::build_mir(
         bc.executable_ops(),
-        &bc.constants,
+        bc.constants(),
         bc.executable_gnu_byte_offset_map(),
         arity,
     )
@@ -3893,7 +3899,7 @@ fn lower_leaf_body_with_plan(
                 .get_bytecode_data()
                 .expect("admitted callback");
             for v in code
-                .constants
+                .constants()
                 .iter()
                 .skip(site.prefix)
                 .copied()

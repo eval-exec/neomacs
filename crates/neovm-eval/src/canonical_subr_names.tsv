@@ -150,6 +150,8 @@ backtrace-frame--internal	3	3	eval	always
 recursion-depth	0	0	eval	always
 kill-emacs	0	2	eval	always
 make-thread	1	3	eval	always
+neomacs-make-parallel-thread	1	3	eval	always
+neomacs-thread-parallel-p	1	1	eval	always
 thread-join	1	1	eval	always
 thread-yield	0	0	eval	always
 thread-name	1	1	eval	always

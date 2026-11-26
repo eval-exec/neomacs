@@ -9,7 +9,7 @@ use neovm_value::value::Value;
 fn prepare(
     registry: &mut HostRegistry,
     owner: &Context,
-    baton: &Baton,
+    baton: &TurnRight,
     roots: &[Value],
 ) -> PreparedHostCall {
     // SAFETY: fixture values belong to this original held-Baton owner; no
@@ -21,7 +21,7 @@ fn prepare(
 fn explicit_prepublication_abandonment_retires_only_its_own_registered_batches() {
     let mut owner =
         Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     let graph = Value::list(vec![Value::string("unpublished graph"), Value::fixnum(51)]);
     let sibling_graph = Value::string("sibling graph remains published");
     owner.prepare_parked_root_retirement().unwrap();
@@ -85,7 +85,7 @@ fn abandoned_admission_is_inert_and_retained_until_quiescent_drain() {
     let mut owner =
         Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
     let live = owner.world_lifetime_probe_for_test();
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     let graph = Value::string("abandoned roots survive collection without materialization");
     let key = owner.with_green_runtime(|runtime| {
         let mut parked = runtime.parked.borrow_mut();
@@ -149,7 +149,7 @@ fn abandoned_admission_is_inert_and_retained_until_quiescent_drain() {
 fn foreign_owner_cannot_abandon_an_unpublished_request() {
     let mut owner =
         Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
-    let baton = owner.start_green_runtime().unwrap();
+    let baton = TurnRight::from(owner.start_green_runtime().unwrap());
     owner.with_green_runtime(|runtime| {
         let mut parked = runtime.parked.borrow_mut();
         let registry = parked.hosts();

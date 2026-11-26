@@ -278,14 +278,16 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     ) -> Result<SymbolHandle, InitialInternError> {
         globals::check_home(self, symbol)?;
         let lease = self.initial_obarray_mut()?;
-        let value = lease
+        let word = lease
             .run
             .owner
             .local
             .as_ref()
-            .and_then(|local| local.root_scratch.get(symbol.index))
-            .ok_or(RegistrationError::StaleRegistration)?
-            .value();
+            .and_then(|local| local.root_slot_word(symbol.index))
+            .ok_or(RegistrationError::StaleRegistration)?;
+        // SAFETY: `check_home` verified this slot belongs to the active
+        // owning mutator thread's live root bank.
+        let value = unsafe { word.value() };
         let id = value
             .as_bare_symbol_id()
             .ok_or(InitialInternError::ExpectedPlainSymbol)?;
@@ -400,11 +402,12 @@ impl InitialObarrayRef<'_, '_, '_> {
                 .local
                 .as_ref()
                 .ok_or(RegistrationError::StaleRegistration)?;
-            let value = local
-                .root_scratch
-                .get(usize::from(name_index))
-                .ok_or(RegistrationError::StaleRegistration)?
-                .value();
+            let word = local
+                .root_slot_word(usize::from(name_index))
+                .ok_or(RegistrationError::StaleRegistration)?;
+            // SAFETY: `self.run` is an active thread-checked run on the owning
+            // mutator; this root slot stays live in its resident root bank.
+            let value = unsafe { word.value() };
             let name = value
                 .as_lisp_string()
                 .ok_or(InitialInternError::ExpectedString)?;
@@ -437,14 +440,13 @@ impl InitialObarrayRef<'_, '_, '_> {
         // Source was copied before this store, so an aliased operand works.
         // No allocation/callback/poll occurs between selection and rooting,
         // and the reader remains held through installation into the real home.
-        let dst = self
-            .run
+        // SAFETY: `answer` is NIL or a bare symbol ID belonging to this era.
+        self.run
             .owner
             .local
             .as_mut()
-            .and_then(|local| local.root_scratch.get_mut(usize::from(dst_index)))
+            .and_then(|local| unsafe { local.set_root_slot(usize::from(dst_index), answer) })
             .ok_or(RegistrationError::StaleRegistration)?;
-        *dst = MarkWord::of(answer);
         Ok(())
     }
 }
@@ -479,10 +481,9 @@ pub(super) fn publish_initial(
     symbols: &SymbolSidecar,
     heap: HeapIdentity,
     value: Value,
-    dst: &mut MarkWord,
     charged: &mut RetainedBytes,
     authority: &SymbolWriteToken<'_>,
-) -> Result<(), InitialInternError> {
+) -> Result<Value, InitialInternError> {
     let name = value
         .as_lisp_string()
         .ok_or(InitialInternError::ExpectedString)?;
@@ -574,6 +575,5 @@ pub(super) fn publish_initial(
     // record retains exclusive registry access and every required reservation.
     // Canonical mapping and epoch are installed before the rooted answer.
     prepared.commit(charged);
-    *dst = MarkWord::of(Value::from_sym_id(metadata.id()));
-    Ok(())
+    Ok(Value::from_sym_id(metadata.id()))
 }

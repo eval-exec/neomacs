@@ -22,8 +22,11 @@ fn the_four_words_sit_where_generated_code_reads_them() {
     let leaf = 0x7f00_0000_1000usize as *const CompiledLeaf;
     let consts = 0x7f00_0000_2000usize as *const Value;
     let entry = 0x7f00_0000_3000usize as *const u8;
-    slot.arm_leaf(leaf, consts, false, false, true);
-    slot.arm_direct_entry(entry);
+    // SAFETY: dummy aligned pointers are stored only to verify layout offsets and cleared before drop.
+    unsafe {
+        slot.arm_leaf(leaf, consts, false, false, true);
+        slot.arm_direct_entry(entry);
+    }
     assert_eq!(word_at(&slot, SPEC_SLOT_EPOCH_OFFSET), 0x1234);
     assert_eq!(word_at(&slot, SPEC_SLOT_LEAF_OFFSET), leaf as u64);
     assert_eq!(
@@ -115,23 +118,34 @@ fn a_direct_entry_needs_its_leaf_and_a_frameless_key() {
     let slot = SpecSlot::at_epoch(1);
     let entry = 0x7f00_0000_3000usize as *const u8;
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.arm_direct_entry(entry)))
-            .is_err(),
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            // SAFETY: expected to panic in debug_assert before storing; never called.
+            slot.arm_direct_entry(entry)
+        }))
+        .is_err(),
         "no leaf cached"
     );
     let leaf = 0x7f00_0000_1000usize as *const CompiledLeaf;
     let consts = 0x7f00_0000_2000usize as *const Value;
-    slot.arm_leaf(leaf, consts, false, true, false);
+    // SAFETY: dummy aligned pointers are stored only to test debug_asserts; never dereferenced.
+    unsafe { slot.arm_leaf(leaf, consts, false, true, false) };
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.arm_direct_entry(entry)))
-            .is_err(),
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            // SAFETY: expected to panic in debug_assert before storing; never called.
+            slot.arm_direct_entry(entry)
+        }))
+        .is_err(),
         "a framed leaf is never called directly"
     );
     slot.clear_leaf();
-    slot.arm_leaf(leaf, consts, false, false, false);
+    // SAFETY: dummy aligned pointers are stored only to test debug_asserts; never dereferenced.
+    unsafe { slot.arm_leaf(leaf, consts, false, false, false) };
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.arm_direct_entry(entry)))
-            .is_err(),
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            // SAFETY: expected to panic in debug_assert before storing; never called.
+            slot.arm_direct_entry(entry)
+        }))
+        .is_err(),
         "a memory-ABI leaf is never called directly"
     );
     assert!(slot.direct_entry().is_null());
@@ -145,9 +159,58 @@ fn arming_a_new_leaf_drops_the_old_leafs_direct_entry() {
     let leaf = 0x7f00_0000_1000usize as *const CompiledLeaf;
     let other = 0x7f00_0000_5000usize as *const CompiledLeaf;
     let consts = 0x7f00_0000_2000usize as *const Value;
-    slot.arm_leaf(leaf, consts, false, false, true);
-    slot.arm_direct_entry(0x7f00_0000_3000usize as *const u8);
-    slot.arm_leaf(other, consts, false, false, true);
+    // SAFETY: dummy aligned pointers are stored only to verify state transitions; never dereferenced.
+    unsafe {
+        slot.arm_leaf(leaf, consts, false, false, true);
+        slot.arm_direct_entry(0x7f00_0000_3000usize as *const u8);
+        slot.arm_leaf(other, consts, false, false, true);
+    }
     assert!(slot.direct_entry().is_null());
     assert_eq!(slot.leaf_ptr(), other);
+}
+
+/// JIT B4: arming raw leaf/code pointers into a `SpecSlot` or consuming a
+/// slot's armed leaf pointer in `arm_shaped_direct_entry` or
+/// `arm_direct_entry_if_eligible` must require `unsafe`.
+#[test]
+#[deny(unused_unsafe)]
+fn spec_slot_arming_requires_unsafe() {
+    #[deny(unused_unsafe)]
+    fn assert_arm_direct_entry_if_eligible_is_unsafe(slot: &SpecSlot, leaf: &CompiledLeaf) {
+        if false {
+            // SAFETY: dead branch purely asserting `arm_direct_entry_if_eligible` requires `unsafe`.
+            unsafe {
+                arm_direct_entry_if_eligible(slot, leaf, 0);
+            }
+        }
+    }
+    let _ = assert_arm_direct_entry_if_eligible_is_unsafe;
+
+    let slot = SpecSlot::at_epoch(1);
+    // SAFETY: null pointers are never dereferenced; test verifies the unsafe signature.
+    unsafe {
+        slot.arm_leaf(std::ptr::null(), std::ptr::null(), false, false, true);
+    }
+    // SAFETY: null pointers are never dereferenced; test verifies the unsafe signature.
+    unsafe {
+        slot.arm_source(std::ptr::null(), std::ptr::null(), 1);
+    }
+    // SAFETY: `slot` holds a null leaf pointer so `arm_shaped_direct_entry` returns early.
+    unsafe {
+        arm_shaped_direct_entry(&slot, super::super::direct_call::CalleeShape::exact(0), 0);
+    }
+    let leaf = 0x7f00_0000_1000usize as *const CompiledLeaf;
+    let consts = 0x7f00_0000_2000usize as *const Value;
+    let entry = 0x7f00_0000_3000usize as *const u8;
+    // SAFETY: dummy aligned pointers are stored only to verify the unsafe API
+    // and cleared immediately before `slot` drops; never dereferenced or called.
+    unsafe {
+        slot.arm_leaf(leaf, consts, false, false, true);
+    }
+    // SAFETY: dummy aligned entry pointer is stored only to verify the unsafe API
+    // and cleared immediately before `slot` drops; never called.
+    unsafe {
+        slot.arm_direct_entry(entry);
+    }
+    slot.clear_leaf();
 }

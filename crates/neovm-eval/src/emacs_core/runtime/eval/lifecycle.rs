@@ -22,9 +22,9 @@
 //! assertion: every call site runs only after construction/dump, so a missing
 //! descriptor means the construction seam itself is broken.
 
-use super::data::face_registry::FontRegistryHandle;
+use super::data::face_registry::{FaceAttrState, FontRegistryHandle};
 use super::data::fontset_state::FontsetRegistrySnapshot;
-use super::data::terminal_state::TerminalRegistryHandle;
+use super::data::terminal_state::{TerminalLispRegistry, TerminalRegistryHandle};
 use super::data::window_state::{Frame, FrameManager, MiniWindowResize, WindowTree};
 use super::*;
 #[doc(hidden)]
@@ -34,11 +34,26 @@ use neovm_edit::emacs_core::display_metrics::{WindowBodyCellSize, WindowId};
 use neovm_edit::emacs_core::textprop::WindowBufferLookup;
 use neovm_value::display_vocab::{FrameId, SplitDirection};
 use neovm_value::error::{EvalResult, Flow};
+use neovm_value::heap_registry::detachment::{DetachedRegistry, RegistryDetachFailure};
 use neovm_value::heap_types::LispString;
 use neovm_value::{HookInstallError, HookInstallStatus};
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+/// Display-owned terminal slot, requested by the source shell.
+pub type TerminalRegistryDetach = fn(
+    &TerminalRegistryHandle,
+) -> Result<
+    DetachedRegistry<TerminalLispRegistry>,
+    RegistryDetachFailure<TerminalLispRegistry>,
+>;
+
+/// Display-owned face-attribute slot, requested by the source shell.
+pub type FontRegistryDetach =
+    fn(
+        &FontRegistryHandle,
+    ) -> Result<DetachedRegistry<FaceAttrState>, RegistryDetachFailure<FaceAttrState>>;
 
 /// Produce a placeholder for the World's carried thread-local state.
 pub(crate) type WorldStatePlaceholder = fn() -> Box<dyn Any>;
@@ -235,6 +250,7 @@ pub struct TerminalHooks {
     handle_value: fn() -> Value,
     delete_noelisp: fn(&mut Context, u64) -> EvalResult,
     frame_terminal: fn(&mut Context, Vec<Value>) -> EvalResult,
+    suspend_emacs: fn(&mut Context, Vec<Value>) -> EvalResult,
     print_handle: fn(&Value) -> Option<String>,
     configure_window_system_runtime: fn(neomacs_display_protocol::GraphicalDisplayIdentity),
     park_carrier_tls: fn(),
@@ -247,14 +263,18 @@ pub struct TerminalHooks {
     current_registry_handle: fn() -> TerminalRegistryHandle,
     install_registry_handle: fn(&TerminalRegistryHandle),
     install_owner_registry_handle: fn(&TerminalRegistryHandle),
+    /// `None` is unregistered. The source shell refuses and does not call display.
+    detach_registry: Option<TerminalRegistryDetach>,
 }
 
 impl TerminalHooks {
     /// Build the terminal-registry group.
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
         handle_value: fn() -> Value,
         delete_noelisp: fn(&mut Context, u64) -> EvalResult,
         frame_terminal: fn(&mut Context, Vec<Value>) -> EvalResult,
+        suspend_emacs: fn(&mut Context, Vec<Value>) -> EvalResult,
         print_handle: fn(&Value) -> Option<String>,
         configure_window_system_runtime: fn(neomacs_display_protocol::GraphicalDisplayIdentity),
         park_carrier_tls: fn(),
@@ -267,11 +287,13 @@ impl TerminalHooks {
         current_registry_handle: fn() -> TerminalRegistryHandle,
         install_registry_handle: fn(&TerminalRegistryHandle),
         install_owner_registry_handle: fn(&TerminalRegistryHandle),
+        detach_registry: Option<TerminalRegistryDetach>,
     ) -> Self {
         Self {
             handle_value,
             delete_noelisp,
             frame_terminal,
+            suspend_emacs,
             print_handle,
             configure_window_system_runtime,
             park_carrier_tls,
@@ -284,6 +306,7 @@ impl TerminalHooks {
             current_registry_handle,
             install_registry_handle,
             install_owner_registry_handle,
+            detach_registry,
         }
     }
 }
@@ -656,6 +679,11 @@ impl TerminalHooks {
     }
 
     #[doc(hidden)]
+    pub fn suspend_emacs(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+        self.suspend_emacs
+    }
+
+    #[doc(hidden)]
     pub fn print_handle(&self) -> fn(&Value) -> Option<String> {
         self.print_handle
     }
@@ -716,6 +744,11 @@ impl TerminalHooks {
     pub fn install_owner_registry_handle(&self) -> fn(&TerminalRegistryHandle) {
         self.install_owner_registry_handle
     }
+
+    #[doc(hidden)]
+    pub fn detach_registry(&self) -> Option<TerminalRegistryDetach> {
+        self.detach_registry
+    }
 }
 
 /// Face-attribute registry carrier state (E6 registry handle).  The registry
@@ -727,6 +760,8 @@ pub struct XfacesHooks {
     carrier_tls_fingerprint: Option<fn(&mut u64)>,
     current_registry_handle: fn() -> FontRegistryHandle,
     install_registry_handle: fn(&FontRegistryHandle),
+    /// `None` is unregistered. The source shell refuses and does not call display.
+    detach_registry: Option<FontRegistryDetach>,
 }
 
 impl XfacesHooks {
@@ -736,12 +771,14 @@ impl XfacesHooks {
         carrier_tls_fingerprint: Option<fn(&mut u64)>,
         current_registry_handle: fn() -> FontRegistryHandle,
         install_registry_handle: fn(&FontRegistryHandle),
+        detach_registry: Option<FontRegistryDetach>,
     ) -> Self {
         Self {
             park_carrier_tls,
             carrier_tls_fingerprint,
             current_registry_handle,
             install_registry_handle,
+            detach_registry,
         }
     }
 
@@ -763,6 +800,11 @@ impl XfacesHooks {
     #[doc(hidden)]
     pub fn install_registry_handle(&self) -> fn(&FontRegistryHandle) {
         self.install_registry_handle
+    }
+
+    #[doc(hidden)]
+    pub fn detach_registry(&self) -> Option<FontRegistryDetach> {
+        self.detach_registry
     }
 }
 
@@ -1169,6 +1211,12 @@ pub fn delete_terminal_noelisp_owned(
     (lifecycle_hooks().terminal().delete_noelisp())(ctx, terminal_id)
 }
 
+/// Suspend Emacs and reset/re-initialize active TTY modes through the display
+/// terminal owner (GNU `Fsuspend_emacs`, `src/keyboard.c:12427`).
+pub(crate) fn suspend_emacs(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    (lifecycle_hooks().terminal().suspend_emacs())(ctx, args)
+}
+
 /// Capture a window configuration through the core `current-window-configuration`
 /// entry.
 pub(crate) fn window_configuration_capture(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
@@ -1422,4 +1470,77 @@ pub fn current_font_registry_handle() -> FontRegistryHandle {
 /// Install HANDLE as the current face-attribute registry.
 pub fn install_font_registry_handle(handle: &FontRegistryHandle) {
     (lifecycle_hooks().xfaces().install_registry_handle())(handle)
+}
+
+/// A missing display detach pointer. `Detach` is the slot owner's own refusal.
+/// `Unregistered` calls nothing, the same fail-closed rule as an unregistered
+/// source-module probe.
+pub(crate) enum SourceShellHookRefusal<T> {
+    Unregistered,
+    Detach(RegistryDetachFailure<T>),
+}
+
+impl<T> std::fmt::Debug for SourceShellHookRefusal<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unregistered => formatter.write_str("Unregistered"),
+            Self::Detach(failure) => formatter.debug_tuple("Detach").field(failure).finish(),
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SOURCE_SHELL_TRACE: std::cell::RefCell<Vec<&'static str>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+pub(crate) fn record_source_shell_trace(label: &'static str) {
+    SOURCE_SHELL_TRACE.with(|trace| trace.borrow_mut().push(label));
+}
+
+#[cfg(test)]
+pub(crate) fn take_source_shell_trace() -> Vec<&'static str> {
+    SOURCE_SHELL_TRACE.with(|trace| std::mem::take(&mut *trace.borrow_mut()))
+}
+
+/// Withdraw the display face slot after eval's own frames have returned.
+pub(crate) fn detach_font_registry_for_source_shell(
+    handle: &FontRegistryHandle,
+) -> Result<DetachedRegistry<FaceAttrState>, SourceShellHookRefusal<FaceAttrState>> {
+    invoke_font_registry_detach(lifecycle_hooks().xfaces().detach_registry(), handle)
+}
+
+/// Call the published face detach, or refuse when that pointer was not registered.
+pub(crate) fn invoke_font_registry_detach(
+    installed: Option<FontRegistryDetach>,
+    handle: &FontRegistryHandle,
+) -> Result<DetachedRegistry<FaceAttrState>, SourceShellHookRefusal<FaceAttrState>> {
+    let Some(detach) = installed else {
+        return Err(SourceShellHookRefusal::Unregistered);
+    };
+    #[cfg(test)]
+    record_source_shell_trace("font-hook");
+    detach(handle).map_err(SourceShellHookRefusal::Detach)
+}
+
+/// Withdraw the display terminal slot after eval's own frames have returned.
+pub(crate) fn detach_terminal_registry_for_source_shell(
+    handle: &TerminalRegistryHandle,
+) -> Result<DetachedRegistry<TerminalLispRegistry>, SourceShellHookRefusal<TerminalLispRegistry>> {
+    invoke_terminal_registry_detach(lifecycle_hooks().terminal().detach_registry(), handle)
+}
+
+/// Call the published terminal detach, or refuse when that pointer was not registered.
+pub(crate) fn invoke_terminal_registry_detach(
+    installed: Option<TerminalRegistryDetach>,
+    handle: &TerminalRegistryHandle,
+) -> Result<DetachedRegistry<TerminalLispRegistry>, SourceShellHookRefusal<TerminalLispRegistry>> {
+    let Some(detach) = installed else {
+        return Err(SourceShellHookRefusal::Unregistered);
+    };
+    #[cfg(test)]
+    record_source_shell_trace("terminal-hook");
+    detach(handle).map_err(SourceShellHookRefusal::Detach)
 }

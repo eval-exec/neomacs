@@ -175,6 +175,7 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         crate::emacs_core::terminal::pure::terminal_handle_value,
         crate::emacs_core::terminal::pure::delete_terminal_noelisp_owned,
         crate::emacs_core::terminal::pure::builtin_frame_terminal,
+        crate::emacs_core::terminal::pure::builtin_suspend_emacs,
         crate::emacs_core::terminal::pure::print_terminal_handle,
         configure_window_system_runtime,
         terminal_park_carrier_tls,
@@ -187,6 +188,7 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         crate::emacs_core::terminal::pure::current_terminal_registry_handle,
         crate::emacs_core::terminal::pure::install_terminal_registry_handle,
         crate::emacs_core::terminal::pure::install_owner_terminal_registry_handle,
+        Some(crate::emacs_core::terminal::pure::detach_terminal_registry),
     ),
     FontsetHooks::new(
         crate::emacs_core::fontset::fontset_alias_alist_startup_value,
@@ -220,6 +222,7 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         XFACES_TLS_FINGERPRINT,
         crate::emacs_core::xfaces::current_font_registry_handle,
         crate::emacs_core::xfaces::install_font_registry_handle,
+        Some(crate::emacs_core::xfaces::detach_font_registry),
     ),
     crate::emacs_core::timefns::reset_timefns_thread_locals,
     crate::emacs_core::sqlite::reset_sqlite_thread_locals,

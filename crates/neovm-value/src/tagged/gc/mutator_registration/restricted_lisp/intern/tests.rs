@@ -244,7 +244,7 @@ fn case_capacity<H: InternParts>(
             frame = Some(session.seed(&mut owner, 0, &nil).unwrap_or_else(|error| {
                 panic!(
                     "C5 executor seed: {error:?}; rooted_slots={}",
-                    owner.local.as_ref().unwrap().root_scratch.len()
+                    owner.local.as_ref().unwrap().root_scratch_len()
                 )
             }));
             body(&era, &session, &mut owner, frame.as_mut().unwrap());

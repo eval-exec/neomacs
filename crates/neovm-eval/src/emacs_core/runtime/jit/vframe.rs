@@ -293,8 +293,8 @@ impl DeoptChain {
             let code = function
                 .get_bytecode_data()
                 .ok_or(ChainReadError::InvalidCallee)?;
-            let params_on_stack = code.lexical || code.arglist.as_fixnum().is_some();
-            if code.env.is_some()
+            let params_on_stack = code.lexical() || code.arglist().as_fixnum().is_some();
+            if code.env().is_some()
                 || JitParamShape::try_from(code)
                     .ok()
                     .and_then(JitParamShape::fixed_arity)
@@ -302,7 +302,7 @@ impl DeoptChain {
                 || (nargs != 0 && !params_on_stack)
                 || !code.executes_sealed_ops()
                 || !code.executes_verified_ops()
-                || stack.len() > code.max_stack.get()
+                || stack.len() > code.max_stack().get()
                 || meta.pc as usize >= code.executable_ops().len()
             {
                 return Err(ChainReadError::InvalidCallee);
@@ -507,7 +507,7 @@ impl DeoptChain {
             || !code.executes_sealed_ops()
             || !code.executes_verified_ops()
             || callback.pc as usize >= code.executable_ops().len()
-            || callback.stack.len as usize > code.max_stack.get()
+            || callback.stack.len as usize > code.max_stack().get()
             || (!callback_entered && callback.pc != 0)
         {
             return Err(ChainReadError::InvalidCallee);

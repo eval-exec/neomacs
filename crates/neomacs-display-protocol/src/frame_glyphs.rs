@@ -253,6 +253,7 @@ pub enum FrameGlyph {
         height: f32,
         face_id: FaceId,
         box_vertical_edges: BoxVerticalEdges,
+        presentation: crate::image::ImageGlyphPresentation,
     },
 
     /// Video glyph (inline in buffer)
@@ -309,11 +310,13 @@ pub enum FrameGlyph {
     /// Fringe bitmap drawn in a window's left or right fringe column. The
     /// monochrome bits live once per frame in
     /// [`FrameGlyphBuffer::fringe_bitmaps`], keyed by `bitmap_index`; the
-    /// renderer expands them to foreground quads in the fringe column. GNU draws
-    /// these via `rif->draw_fringe_bitmap`.
+    /// renderer paints them with the face's foreground over its background.
+    /// GNU draws these via `rif->draw_fringe_bitmap`.
     FringeBitmap {
         window_id: DisplayWindowId,
         row_role: GlyphRowRole,
+        /// The band the row shows in: for a buffer-text row the window's text
+        /// area, so a row partly scrolled under a header line is clipped.
         clip_rect: Option<Rect>,
         /// Frame-absolute X of the fringe column's left edge.
         x: f32,
@@ -329,6 +332,8 @@ pub enum FrameGlyph {
         face_id: FaceId,
         /// Which fringe this bitmap belongs to.
         side: FringeSide,
+        /// The row's own bitmap, or an overlay painted on top of it.
+        kind: FringeBitmapKind,
     },
 
     /// Window background
@@ -799,6 +804,18 @@ pub enum FringeSide {
     Right,
 }
 
+/// Which of GNU's two fringe-bitmap draws a [`FrameGlyph::FringeBitmap`] is:
+/// `draw_fringe_bitmap_1`'s `overlay` argument (src/fringe.c).
+///
+/// A row's own bitmap covers its fringe strip with its face's background and
+/// paints its set bits in the face's foreground. An overlay, the overlay
+/// arrow, paints its set bits only, over whatever the row's bitmap left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum FringeBitmapKind {
+    RowBitmap,
+    Overlay,
+}
+
 /// Resolved fringe-bitmap data embedded once per frame in
 /// [`FrameGlyphBuffer::fringe_bitmaps`]. Mirrors the user-bitmap registry on
 /// the evaluator; `bits` rows are MSB-aligned `u16` (leftmost column is bit 15).
@@ -846,6 +863,64 @@ impl StipplePattern {
             height,
             bits: bits.to_vec(),
         })
+    }
+
+    /// Foreground quads for this bitmap tiled over a rectangle at `(x, y)`.
+    ///
+    /// GNU samples the bitmap at the frame pixel. `xterm.c` leaves the tile
+    /// origin on the frame drawable; the offscreen pixmap path sets
+    /// `XSetTSOrigin(-s->x, -s->y)` so that same phase survives. indent-bars
+    /// rotates its bitmap for that frame origin. Each set bit is one logical
+    /// pixel. The rect pipeline scales those quads to device pixels once.
+    pub fn covered_runs(
+        &self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> Vec<(f32, f32, f32, f32)> {
+        let mut runs = Vec::new();
+        if self.width == 0 || self.height == 0 || width <= 0.0 || height <= 0.0 {
+            return runs;
+        }
+        let bytes_per_row = self.width.div_ceil(8) as usize;
+        let period_x = self.width as i64;
+        let period_y = self.height as i64;
+        let w_pixels = width.ceil() as u32;
+        let h_pixels = height.ceil() as u32;
+        for py in 0..h_pixels {
+            let pat_y = ((y + py as f32).floor() as i64).rem_euclid(period_y) as u32;
+            let mut px = 0u32;
+            while px < w_pixels {
+                let pat_x = ((x + px as f32).floor() as i64).rem_euclid(period_x) as u32;
+                if !self.bit_at(pat_x, pat_y, bytes_per_row) {
+                    px += 1;
+                    continue;
+                }
+                let run_start = px;
+                px += 1;
+                while px < w_pixels {
+                    let pat_x2 = ((x + px as f32).floor() as i64).rem_euclid(period_x) as u32;
+                    if !self.bit_at(pat_x2, pat_y, bytes_per_row) {
+                        break;
+                    }
+                    px += 1;
+                }
+                runs.push((
+                    x + run_start as f32,
+                    y + py as f32,
+                    (px - run_start) as f32,
+                    1.0,
+                ));
+            }
+        }
+        runs
+    }
+
+    fn bit_at(&self, pat_x: u32, pat_y: u32, bytes_per_row: usize) -> bool {
+        let byte_idx = pat_y as usize * bytes_per_row + (pat_x / 8) as usize;
+        let bit_idx = pat_x % 8;
+        byte_idx < self.bits.len() && (self.bits[byte_idx] >> bit_idx) & 1 != 0
     }
 
     /// Parse an X BitMap (XBM) source file into a stipple pattern, mirroring
@@ -1261,6 +1336,10 @@ pub struct FrameGlyphBuffer {
     /// Native catalog generation paired with `faces` and `fonts`.
     pub font_catalog_generation: crate::font::FontCatalogGeneration,
 
+    /// PGTK opening/raster options paired with this frame's font metrics.
+    /// None leaves the backend's Xlib surface policy in charge.
+    pub desktop_font_render_options: Option<crate::DesktopFontRenderOptions>,
+
     /// Resolved font table referenced by `Face::default_resolved_font_id`
     /// (and eventually shaped glyph runs). Carried alongside `faces` so the
     /// renderer rasterizes the exact fonts layout resolved.
@@ -1363,6 +1442,7 @@ impl FrameGlyphBuffer {
     pub fn font_bindings(&self) -> crate::font::FrameFontBindings<'_> {
         crate::font::FrameFontBindings {
             catalog_generation: self.font_catalog_generation,
+            desktop_font_render_options: self.desktop_font_render_options,
             faces: &self.faces,
             fonts: &self.fonts,
             char_fonts: &self.char_fonts,
@@ -1376,6 +1456,7 @@ impl FrameGlyphBuffer {
     /// subset of these mutually-dependent fields.
     pub fn clone_font_bindings_from(&mut self, source: &Self) {
         self.font_catalog_generation = source.font_catalog_generation;
+        self.desktop_font_render_options = source.desktop_font_render_options;
         self.faces.clone_from(&source.faces);
         self.fonts.clone_from(&source.fonts);
         self.char_fonts.clone_from(&source.char_fonts);
@@ -1600,6 +1681,7 @@ impl FrameGlyphBuffer {
             current_clip_rect: None,
             faces: HashMap::default(),
             font_catalog_generation: crate::font::FontCatalogGeneration::default(),
+            desktop_font_render_options: None,
             fonts: crate::font::ResolvedFontTable::default(),
             char_fonts: crate::font::CharFontTable::default(),
             shaped_clusters: crate::font::ShapedClusterTable::default(),
@@ -2023,6 +2105,7 @@ impl FrameGlyphBuffer {
             height,
             face_id: self.current_face_id,
             box_vertical_edges: BoxVerticalEdges::Both,
+            presentation: crate::image::ImageGlyphPresentation::Texture,
         });
     }
 
@@ -2106,6 +2189,7 @@ impl FrameGlyphBuffer {
         bitmap_index: u16,
         face_id: FaceId,
         side: FringeSide,
+        kind: FringeBitmapKind,
     ) {
         self.glyphs.push(FrameGlyph::FringeBitmap {
             window_id: self.current_window_id,
@@ -2118,6 +2202,7 @@ impl FrameGlyphBuffer {
             bitmap_index,
             face_id,
             side,
+            kind,
         });
     }
 

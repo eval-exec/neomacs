@@ -18,7 +18,7 @@ use neovm_value::hashtab::{
 use neovm_value::heap_types::LispString;
 use neovm_value::tagged::SymbolMode;
 use neovm_value::value::{
-    ByteCodeKeyPart, EqualKind, EqualSeenPair, HashKey, Value, equal_value_inner,
+    ByteCodeKeyPart, EqualKeySeen, EqualKind, EqualSeenPair, HashKey, Value, equal_value_inner,
     try_equal_value_inner,
 };
 use std::collections::HashSet;
@@ -255,8 +255,9 @@ fn op_key_word(op: &Op) -> u64 {
 fn bytecode_to_equal_key(
     value: Value,
     depth: usize,
-    seen: &mut Vec<usize>,
+    seen: &mut EqualKeySeen,
     symbols_with_pos_enabled: bool,
+    budget: &mut usize,
 ) -> HashKey {
     use ByteCodeStructuralPart as Part;
     if depth > 200 {
@@ -265,8 +266,11 @@ fn bytecode_to_equal_key(
     let Some(bc) = value.get_bytecode_data() else {
         return value.to_eq_key();
     };
-    let mut key_of =
-        |slot: &Value| slot.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled);
+    // Slot keys share the caller's node budget: a captured environment can
+    // hold a shared structure whose expansion is exponential.
+    let mut key_of = |slot: &Value| {
+        slot.to_equal_key_depth_budgeted(depth + 1, seen, symbols_with_pos_enabled, budget)
+    };
     let parts = bc.structural_parts();
     let mut keys = Vec::with_capacity(parts.len());
     for part in parts {

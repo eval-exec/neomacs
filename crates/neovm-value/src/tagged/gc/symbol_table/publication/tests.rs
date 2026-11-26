@@ -255,7 +255,9 @@ fn nmjit_n3_publication_byte_quote_overflow_is_table_capacity() {
     struct OverflowPayload {
         value: Box<u8>,
     }
-    impl PublicationPayload for OverflowPayload {
+    // SAFETY: `self.value` is a heap-allocated `Box<u8>`, so its address stays
+    // valid and stable across moves of `OverflowPayload` until drop.
+    unsafe impl PublicationPayload for OverflowPayload {
         type Error = TableError;
         type Generation = u64;
 

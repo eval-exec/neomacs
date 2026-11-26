@@ -1,0 +1,18 @@
+error[E0596]: cannot borrow data in dereference of `BufferManagerMut<'_>` as mutable
+ --> tests/buffer_manager_view_ui/buffer_manager_view_cannot_replace_buffer_element.rs:9:25
+  |
+9 |     if let Some(slot) = view.get_mut(id) {
+  |                         ^^^^ cannot borrow as mutable
+  |
+  = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `BufferManagerMut<'_>`
+
+error[E0133]: call to unsafe function `BufferManagerMut::<'a>::with_buffer_mut_no_swap` is unsafe and requires unsafe block
+  --> tests/buffer_manager_view_ui/buffer_manager_view_cannot_replace_buffer_element.rs:15:13
+   |
+15 |       let _ = view.with_buffer_mut_no_swap(id, |slot| {
+   |  _____________^
+16 | |         let _ = std::mem::replace(slot, Buffer::new_standalone(id, Value::NIL));
+17 | |     });
+   | |______^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior

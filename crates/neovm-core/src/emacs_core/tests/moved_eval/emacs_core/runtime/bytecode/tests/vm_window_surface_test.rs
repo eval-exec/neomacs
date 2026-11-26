@@ -458,8 +458,12 @@ fn vm_save_window_excursion_restores_selected_window() {
         rest: None,
     });
     let body_idx = func.add_constant(body);
-    func.ops = vec![Op::Constant(body_idx), Op::SaveWindowExcursion, Op::Return];
-    func.max_stack = StackDepth::for_test(2);
+    func.set_ops(vec![
+        Op::Constant(body_idx),
+        Op::SaveWindowExcursion,
+        Op::Return,
+    ]);
+    func.set_max_stack(StackDepth::for_test(2));
     neovm_eval::test_support::authority::seal_hand_assembled_ops_for_test(&mut func);
 
     let result = {

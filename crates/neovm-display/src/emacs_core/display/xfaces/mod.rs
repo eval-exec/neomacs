@@ -370,8 +370,7 @@ use super::font::{
     is_font_spec, live_frame_designator_in_state, live_frame_font_attribute_fallback,
     opened_font_from_resolved_match, publish_face_attribute_to_frame_parameter,
     replace_alternative_font_family_alist, replace_alternative_font_registry_alist,
-    resolve_font_match, resolve_live_frame_font_request, sync_live_default_face_font_state,
-    sync_live_frame_font_state,
+    resolve_font_match, sync_live_default_face_font_state, sync_live_frame_font_state,
 };
 use neovm_value::error::{Flow, LispCondition, signal, signal_error_with_arg};
 
@@ -982,6 +981,8 @@ thread_local! {
 }
 
 mod font_detach;
+#[doc(hidden)]
+pub use font_detach::detach_font_registry;
 
 /// Invalidate the cached face-name list after the defined-face set changes.
 fn bump_face_set_generation() {
@@ -1847,7 +1848,7 @@ fn copy_lisp_face_vector_slots(from: Value, to: Value) {
 fn lisp_face_vector_attr(vector: Value, attr: LFaceAttr) -> Option<Value> {
     vector
         .as_vector_data()
-        .and_then(|slots| slots.get(attr as usize).copied())
+        .and_then(|slots| slots.get(attr as usize))
 }
 
 pub(crate) fn set_lisp_face_vector_attr(vector: Value, attr: LFaceAttr, value: Value) {
@@ -1891,7 +1892,6 @@ fn sync_face_overrides_from_lisp_face_vector(
     for attr in LFACE_ATTRS {
         let value = slots
             .get(attr as usize)
-            .copied()
             .unwrap_or_else(unspecified_face_symbol);
         if !face_value_is_sentinel(value, FaceSentinel::Unspecified, mode) {
             set_face_override(face_name, attr, value, defaults_frame);
@@ -2062,6 +2062,11 @@ pub(crate) fn realize_default_lisp_face_for_frame(
         return;
     };
     let window_system = frame.effective_window_system();
+    // GNU `realize_default_face` drives `set_lface_from_font` with
+    // `f->default_face_done_p` as FORCE_P (src/xfaces.c:6029).  The first
+    // realization fills only unspecified slots; later realizations replace
+    // every font-derived slot with the opened frame font's value.
+    let default_face_done = frame.default_face_done;
 
     if window_system.is_none() {
         set_lisp_face_vector_attr(vector, LFaceAttr::Family, Value::string("default"));
@@ -2092,13 +2097,21 @@ pub(crate) fn realize_default_lisp_face_for_frame(
             LFaceAttr::Weight,
             LFaceAttr::Slant,
         ] {
-            if frame_has_explicit_default_font_attr(eval, frame_id, attr) {
+            if !default_face_done && frame_has_explicit_default_font_attr(eval, frame_id, attr) {
                 continue;
             }
             let fallback = live_frame_font_attribute_fallback(eval, frame_id, attr);
             if let Some(value) = fallback {
                 set_lisp_face_vector_attr(vector, attr, value);
             }
+        }
+        // `set_lface_from_font` sets the `font` slot regardless of FORCE_P
+        // ("The exception is `font' attribute").
+        if let Some(font) = live_frame_font_attribute_fallback(eval, frame_id, LFaceAttr::Font) {
+            set_lisp_face_vector_attr(vector, LFaceAttr::Font, font);
+        }
+        if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+            frame.default_face_done = true;
         }
     }
 
@@ -2394,6 +2407,37 @@ pub(crate) fn runtime_face_from_lisp_face_vector_resolved(
     face
 }
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static FRAME_LISP_FACE_TABLE_REBUILDS: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+/// Count entries to the full Lisp-face-table walk. Redisplay's cache hit
+/// does not come through here; `internal-char-font` on the parent does, once
+/// per call.
+#[cfg(any(test, feature = "test-support"))]
+fn note_frame_lisp_face_table_rebuild() {
+    FRAME_LISP_FACE_TABLE_REBUILDS.with(|count| {
+        count.set(count.get().saturating_add(1));
+    });
+}
+
+#[cfg(not(any(test, feature = "test-support")))]
+#[inline(always)]
+fn note_frame_lisp_face_table_rebuild() {}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn reset_frame_lisp_face_table_rebuilds() {
+    FRAME_LISP_FACE_TABLE_REBUILDS.with(|count| count.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn frame_lisp_face_table_rebuilds() -> u64 {
+    FRAME_LISP_FACE_TABLE_REBUILDS.with(|count| count.get())
+}
+
 /// Materialize a frame's authoritative Lisp face specifications into an
 /// isolated runtime table.  This is a derived value: callers may use it for a
 /// Lisp query or install it as redisplay's cache, but must never mutate it as
@@ -2403,6 +2447,7 @@ pub(crate) fn runtime_face_table_from_frame_lisp_faces(
     frame_id: FrameId,
     preserve_default_baseline: bool,
 ) -> crate::face::FaceTable {
+    note_frame_lisp_face_table_rebuild();
     runtime_face_table_from_frame_lisp_faces_resolved(
         eval,
         frame_id,
@@ -3697,6 +3742,7 @@ pub fn builtin_internal_set_lisp_face_attribute(
         ));
     }
 
+    let mut opened_fonts = Vec::new();
     let mut changed_live_frames = Vec::new();
     {
         let mut apply_set = |defaults_frame: bool| -> Result<(), Flow> {
@@ -3799,6 +3845,48 @@ pub fn builtin_internal_set_lisp_face_attribute(
                 && !is_reset_like_face_attr_value(&canonical_value, symbol_mode)
             {
                 validate_font_face_attr_value(&canonical_value)?;
+                if defaults_frame {
+                    let selected = super::window_cmds::ensure_selected_frame_id(eval);
+                    if eval.frame_manager().get(selected).is_none_or(|frame| {
+                        !FrameFontRealization::for_frame(frame).stores_face_font_attributes()
+                    }) {
+                        // GNU xfaces.c:3671-3698 validates FRAME=t against the
+                        // selected frame, then neither opens nor stores a font
+                        // when that reference frame is a TTY. Reset sentinels
+                        // take the separate storage arm and bypass this gate.
+                        return Ok(());
+                    }
+                }
+            }
+
+            // GNU opens :font after validation and before set_lface_from_font
+            // writes attributes (xfaces.c:3675-3698). Retain the opened object
+            // for publication so a native miss leaves this domain untouched.
+            if canonical_attr == LFaceAttr::Font {
+                for target in font_face_realization_targets(eval, args.get(3))
+                    .into_iter()
+                    .filter(|target| target.defaults_frame() == defaults_frame)
+                {
+                    let resolution = if is_reset_like_face_attr_value(&canonical_value, symbol_mode)
+                    {
+                        super::font::LiveFrameFontResolution {
+                            font_value: canonical_value,
+                        }
+                    } else {
+                        super::font::try_resolve_live_frame_font_request(
+                            eval,
+                            target.reference_frame(),
+                            &canonical_value,
+                        )
+                        .map_err(|unavailable| {
+                            signal(
+                                "error",
+                                vec![Value::string("Font not available"), unavailable.spec],
+                            )
+                        })?
+                    };
+                    opened_fonts.push((target, resolution));
+                }
             }
 
             set_face_override_id(face_id, canonical_attr, canonical_value, defaults_frame);
@@ -3884,11 +3972,9 @@ pub fn builtin_internal_set_lisp_face_attribute(
                 normalize_face_attr_for_set_with_eval(Some(eval), &face_name, attr_name, value)?;
             let mut public_effective_value = canonical_value;
             if canonical_attr == LFaceAttr::Font {
-                let targets = font_face_realization_targets(eval, args.get(3));
                 let mut published_live_override = false;
-                for target in targets {
+                for (target, resolution) in opened_fonts {
                     let frame_id = target.reference_frame();
-                    let resolution = resolve_live_frame_font_request(eval, frame_id, &value);
                     let effective_value = resolution.font_value;
                     set_realized_font_for_target(
                         eval,
@@ -3941,8 +4027,22 @@ pub fn builtin_internal_set_lisp_face_attribute(
                 // GNU handles FRAME=0 recursively, so each frame reopens the
                 // font against its own display metrics after a family, height,
                 // weight, slant, or width change.
+                //
+                // `set_font_frame_param` clears `default_face_done_p` before
+                // `gui_set_font`'s `recompute_basic_faces` (src/xfaces.c:3974),
+                // so that synchronous realization keeps the slot the caller
+                // just set; the completion sets the flag again, and the next
+                // redisplay realization forces the opened font's values
+                // (which is how `:height 100` reads back as 100 until a
+                // redisplay and as PIXEL_TO_POINT(14*10, 100) = 101 after it).
                 for frame_id in changed_live_frames.iter().copied() {
+                    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+                        frame.default_face_done = false;
+                    }
                     sync_live_default_face_font_state(eval, frame_id)?;
+                    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+                        frame.default_face_done = true;
+                    }
                 }
             }
 
@@ -5271,7 +5371,9 @@ pub fn builtin_face_font(
         // an XLFD pixel size; fabricating a name corrupts window-font-*.
         neovm_value::emacs_char::EmacsChar::from_char('M')
     };
-    Ok(resolve_font_match(eval, frame_id, character, &face)
+    // Named `face-font` has no buffer position, so it stays on the implicit
+    // fontset. Buffer `(font-at)` is the path that carries the realized id.
+    Ok(resolve_font_match(eval, frame_id, character, &face, None)
         .and_then(|matched| font_name_value(&opened_font_from_resolved_match(&face, &matched)))
         .unwrap_or(Value::NIL))
 }

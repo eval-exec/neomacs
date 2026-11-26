@@ -28,6 +28,10 @@ impl TaggedHeap {
     /// advances before resource teardown, so an unwinding explicit shutdown
     /// cannot make automatic Drop revisit a callback or freed allocation.
     pub(super) fn reclaim_intrusive_objects(&mut self, mode: ReclamationMode) {
+        assert!(
+            !self.has_unfinished_concurrent_mark(),
+            "reclaim_intrusive_objects cannot free objects while a concurrent mark is unfinished"
+        );
         for list in [
             ObjectList::Young,
             ObjectList::Tenured,
@@ -74,42 +78,36 @@ impl Drop for TaggedHeap {
         // cannot establish exclusive ownership while a marker or facade
         // reader obligation remains, so its fallback retains the backing
         // allocations and returns without waiting for either kind of reader.
-        if self.concurrent_mark_running
+        if self.has_unfinished_concurrent_mark()
             || self.facade_mark_is_excluded()
             || self._satb_layout_reserve.has_outstanding_young_loans()
+            || self.has_owner_cons_reserves()
         {
             // A rejected consuming shutdown still reaches this Drop. Young
             // loans may outlive the owner even without an active marker or
-            // facade, so retain every backing instead of freeing it here.
+            // facade. An owner reserve's closed or forgotten book likewise
+            // retains its blocks until explicit return, so retain every
+            // backing instead of freeing it here.
             self.abandon_concurrent_mark();
-            // The collector may still be running the abandoned job: detach
-            // it rather than wait.
-            //
-            // SAFETY (ordering): the detached thread cannot touch this heap's
-            // freed memory.
-            // - The job never dereferences the heap (`ConcurrentMarkJob`; the
-            //   mapped-veclike snapshot keeps a heap pointer for identity
-            //   comparison only). It reads its own snapshots and queues, and
-            //   through them the blocks, pages, vector backings and hash
-            //   storage that `abandon_concurrent_mark` just retained
-            //   (forgot) for it. Leased obarray chunks outlive their owner
-            //   the same way.
-            // - `stop` was stored (Release) above, so the job exits at its
-            //   next check. Its final `exited` send fails harmlessly once
-            //   `gc_exited` drops with this heap.
-            // - Retiring closes the request channel, so after the job `recv`
-            //   fails and the thread ends. No other request can be queued:
-            //   `MarkAll` is synchronous (its sender is blocked until done,
-            //   so none is pending while the owner runs Drop), and only one
-            //   concurrent job runs per heap.
             if let Some(collector) = retire_collector(self.identity) {
                 collector.detach();
             }
-            crate::tagged::gc::clear_tagged_heap_if_installed(self);
+            // Storage is retained and the heap is being destroyed; release its
+            // cold side-table entry so abandoned heaps do not leak HeapIdentity.
+            // SAFETY: `abandon_concurrent_mark()` + `collector.detach()` above
+            // retained every backing allocation and `Drop` returns immediately
+            // without freeing storage reachable by any live worker.
+            unsafe { mark_channel::retire_heap(self.identity) };
+            // SAFETY: `TaggedHeap::drop` is tearing down this heap; no active
+            // `Context` can evaluate on it after drop begins.
+            unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(self) };
             return;
         }
         // No job is in flight, so the heap's collector is idle in `recv`:
         // joining it returns at once, and no collector outlives its heap.
+        // SAFETY: `!self.has_unfinished_concurrent_mark()` held at entry above,
+        // so no concurrent mark is active on `self.identity`.
+        unsafe { mark_channel::retire_heap(self.identity) };
         if let Some(collector) = retire_collector(self.identity) {
             collector.join();
         }
@@ -125,7 +123,9 @@ impl Drop for TaggedHeap {
         // installed -- and when a `Context` drop already uninstalled this one,
         // which is also why the frees below run with no heap installed either
         // way.
-        crate::tagged::gc::clear_tagged_heap_if_installed(self);
+        // SAFETY: `TaggedHeap::drop` is tearing down this heap; no active
+        // `Context` can evaluate on it after drop begins.
+        unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(self) };
         // Automatic destruction cannot invoke module finalizers or SQLite
         // teardown. Explicit shutdown reclaims those resources beforehand;
         // the fallback retains native payloads and frees inert Rust storage.

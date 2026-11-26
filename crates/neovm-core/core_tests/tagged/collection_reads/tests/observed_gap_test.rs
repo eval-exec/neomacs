@@ -92,7 +92,8 @@ fn exclude_middle(context: &Context, owners: [TaggedValue; 3]) -> BarrierWindow 
     let hull = context.tagged_heap().jit_barrier_window_for_test();
     assert!(hull.covers(address(target)));
     assert_eq!(
-        neovm_jit_unobserved_collection_owner(target.bits() as i64),
+        // SAFETY: `target` is a live cons word this test mutator owns.
+        unsafe { neovm_jit_unobserved_collection_owner(target.bits() as i64) },
         1
     );
     let gap = compiled_observation_gate(BarrierWindow::NONE)
@@ -147,7 +148,8 @@ fn observed_exterior_refusal_does_not_block_later_interior_cons_gap() {
     // refusal. An owner already outside the original hull needs no exemption
     // and must not occupy the one retained interval before an interior miss.
     assert_eq!(
-        neovm_jit_unobserved_collection_owner(exterior.bits() as i64),
+        // SAFETY: `exterior` is a live cons word this test mutator owns.
+        unsafe { neovm_jit_unobserved_collection_owner(exterior.bits() as i64) },
         0,
         "an exterior refusal cannot reserve an irrelevant gap",
     );
@@ -159,7 +161,8 @@ fn observed_exterior_refusal_does_not_block_later_interior_cons_gap() {
     assert_eq!(context.tagged_heap().jit_barrier_window_for_test(), hull);
 
     assert_eq!(
-        neovm_jit_unobserved_collection_owner(interior.bits() as i64),
+        // SAFETY: `interior` is a live cons word this test mutator owns.
+        unsafe { neovm_jit_unobserved_collection_owner(interior.bits() as i64) },
         1,
         "the first useful interior refusal must still learn its interval",
     );
@@ -208,7 +211,8 @@ fn observed_unobserved_cons_gap_closes_before_a_new_certificate() {
             .covers(address(target))
     );
     assert_eq!(
-        neovm_jit_unobserved_collection_owner(target.bits() as i64),
+        // SAFETY: `target` is a live cons word this test mutator owns.
+        unsafe { neovm_jit_unobserved_collection_owner(target.bits() as i64) },
         0
     );
     native_setcar(&mut context, target, TaggedValue::make_int(23));
@@ -261,16 +265,13 @@ fn observed_heap_switch_dump_change_discards_empty_gap() {
     crate::test_utils::init_test_tracing();
     let _mode = ObservedMode::begin();
     let mut first = context();
-    let mut second = context();
-    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
-    set_tagged_heap(unsafe { first.tagged_heap_mut() });
     let owners = rooted_cons_triplet(&mut first);
     exclude_middle(&first, owners);
     let (_, reads) = capture(|| owners[0].cons_car());
     let reads = reads.expect("the first heap's owner remains retained");
 
-    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
-    set_tagged_heap(unsafe { second.tagged_heap_mut() });
+    let parked_first = first.park_for_test();
+    let mut second = context();
     // This valid writable image allocation outlives both heaps, as an actual
     // pdump mapping does. No fabricated header or non-object address is used.
     let image = Box::leak(Box::new(ConsCell {
@@ -292,8 +293,8 @@ fn observed_heap_switch_dump_change_discards_empty_gap() {
             .jit_barrier_window_for_test()
             .covers(image as *mut ConsCell as usize)
     );
-    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
-    set_tagged_heap(unsafe { first.tagged_heap_mut() });
+    let _parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     assert!(
         compiled_observation_gate(BarrierWindow::NONE)
             .excluded_for_test()
@@ -326,7 +327,8 @@ fn observed_concurrent_barrier_overrides_empty_gap() {
         BarrierWindow::ALL
     );
     assert_eq!(
-        neovm_jit_unobserved_collection_owner(target.bits() as i64),
+        // SAFETY: `target` is a live cons word this test mutator owns.
+        unsafe { neovm_jit_unobserved_collection_owner(target.bits() as i64) },
         0
     );
     native_setcar(&mut context, target, TaggedValue::NIL);
@@ -365,7 +367,8 @@ fn observed_tracking_refusal_keeps_full_setter_and_reopens_gap_after_disarm() {
         BarrierWindow::ALL
     );
     assert_eq!(
-        neovm_jit_unobserved_collection_owner(target.bits() as i64),
+        // SAFETY: `target` is a live cons word this test mutator owns.
+        unsafe { neovm_jit_unobserved_collection_owner(target.bits() as i64) },
         0
     );
     native_setcar(&mut context, target, TaggedValue::make_int(12));
@@ -380,7 +383,8 @@ fn observed_tracking_refusal_keeps_full_setter_and_reopens_gap_after_disarm() {
     // SAFETY: serial test setup; the WorldView is used in place and never swapped.
     unsafe { context.tagged_heap_mut() }.set_write_tracking_mode(WriteTrackingMode::Disabled);
     assert_eq!(
-        neovm_jit_unobserved_collection_owner(target.bits() as i64),
+        // SAFETY: `target` is a live cons word this test mutator owns.
+        unsafe { neovm_jit_unobserved_collection_owner(target.bits() as i64) },
         1
     );
     assert!(
@@ -412,12 +416,13 @@ fn observed_cons_gap_retains_vector_and_string_dependencies() {
     let (_, reads) = capture(|| {
         cons.cons_car();
         right.cons_car();
-        vector.as_vector_data().expect("vector")[0];
+        vector.as_vector_data().expect("vector").at(0);
         string.as_str_owned().expect("string");
     });
     let reads = reads.expect("all three real collection dependencies");
     assert_eq!(
-        neovm_jit_unobserved_collection_owner(target.bits() as i64),
+        // SAFETY: `target` is a live cons word this test mutator owns.
+        unsafe { neovm_jit_unobserved_collection_owner(target.bits() as i64) },
         1
     );
     let gap = compiled_observation_gate(BarrierWindow::NONE)

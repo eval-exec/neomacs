@@ -81,6 +81,7 @@ fn pooled_scroll_crop_preserves_neighbors_and_reverses_at_multiple_scales() {
                     &h.view,
                     mapping_for_scale(&background, W, H, scale).surface(),
                 ))
+                .expect("live device draw parameters")
                 .blit_snapshot_region(region);
             let pixels = read_tex(&h.renderer, &h.target);
             for y in 0..H {

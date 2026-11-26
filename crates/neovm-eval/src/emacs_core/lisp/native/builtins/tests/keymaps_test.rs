@@ -65,3 +65,25 @@ fn key_description_esc_boundary_cases() {
     // [27] alone -> ESC
     assert_eq!(key_description(vec![Value::fixnum(27)]), "ESC");
 }
+
+// #590: define-key stores the definition object; it must not publish the
+// canonical symbols reachable only from DEF. The canary id exists in the
+// name registry but is not an obarray member, so only a definition walk
+// could make it one.
+#[test]
+fn define_key_does_not_publish_a_definition_symbol() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new(crate::test_utils::unit_runtime());
+    let keymap = eval.eval_str("(make-sparse-keymap)").expect("fresh keymap");
+    let canary = neovm_value::intern::intern("neovm--def-canary");
+    let definition = Value::cons(Value::from_sym_id(canary), Value::NIL);
+    builtin_define_key(
+        &mut eval,
+        vec![keymap, Value::vector(vec![Value::fixnum(1)]), definition],
+    )
+    .expect("define-key");
+    assert!(
+        !eval.obarray_view().is_global_member(canary),
+        "a symbol reachable only from DEF must stay a non-member"
+    );
+}

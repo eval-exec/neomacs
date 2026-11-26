@@ -419,20 +419,71 @@ fn list_assoc_symbol_key(value: Option<Value>, key: SymId, mode: SymbolMode) -> 
     None
 }
 
-fn maybe_remap_language(eval: &super::eval::Context, language: SymId) -> SymId {
-    let remapped =
-        super::misc_eval::dynamic_or_global_symbol_value(eval, "treesit-language-remap-alist");
-    let Some(items) = list_assoc_symbol_key(remapped, language, eval.symbol_mode()) else {
-        return language;
+/// GNU `resolve_language_symbol` (`src/treesit.c:656-662`):
+/// look up `language` by `eq` in `treesit-language-remap-alist` (an alist of
+/// `(LANGUAGE-A . LANGUAGE-B)` dotted pairs) and return its `cdr`, or
+/// `language` when no entry matches.
+///
+/// Reuses `builtin_assq_values` so cycle detection (`circular-list`) and
+/// improper-list diagnostics (`(wrong-type-argument listp ALIST)`) match GNU's
+/// `Fassoc` (`FOR_EACH_TAIL` + `CHECK_LIST_END (tail, alist)`).
+fn resolve_language_symbol(
+    eval: &mut super::eval::Context,
+    language: Value,
+) -> Result<Value, Flow> {
+    eval.maybe_quit()?;
+    let Some(alist) =
+        super::misc_eval::dynamic_or_global_symbol_value(eval, "treesit-language-remap-alist")
+    else {
+        return Ok(language);
     };
-    items
-        .get(1)
-        .and_then(|v| v.as_symbol_id(eval.symbol_mode()))
-        .unwrap_or(language)
+    let entry = neovm_value::list_scan::builtin_assq_values(
+        language,
+        alist,
+        eval.symbols_with_pos_enabled,
+    )?;
+    if entry.is_nil() {
+        Ok(language)
+    } else {
+        Ok(entry.cons_cdr())
+    }
 }
 
-fn language_requires_linecol_tracking(eval: &super::eval::Context, language: SymId) -> bool {
-    let remapped = maybe_remap_language(eval, language);
+/// GNU `Ftreesit_parser_create` (`src/treesit.c:2387-2388`):
+/// resolve `treesit-language-remap-alist` and enforce `CHECK_SYMBOL`.
+fn resolve_parser_language_symbol(
+    eval: &mut super::eval::Context,
+    language: Value,
+) -> Result<SymId, Flow> {
+    let remapped = resolve_language_symbol(eval, language)?;
+    remapped.as_symbol_id(eval.symbol_mode()).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), remapped],
+        )
+    })
+}
+
+/// GNU `treesit_ensure_query_compiled` (`src/treesit.c:2182-2189`):
+/// resolve `treesit-language-remap-alist` and signal `treesit-query-error`
+/// when the remapped value is not a symbol.
+fn resolve_query_language_symbol(
+    eval: &mut super::eval::Context,
+    language: Value,
+) -> Result<SymId, Flow> {
+    let remapped = resolve_language_symbol(eval, language)?;
+    remapped.as_symbol_id(eval.symbol_mode()).ok_or_else(|| {
+        signal(
+            LispCondition::TreesitQueryError,
+            vec![Value::string("Invalid language symbol"), remapped],
+        )
+    })
+}
+
+fn language_requires_linecol_tracking(
+    eval: &super::eval::Context,
+    remapped_language: SymId,
+) -> bool {
     let Some(languages) = super::misc_eval::dynamic_or_global_symbol_value(
         eval,
         "treesit-languages-require-line-column-tracking",
@@ -445,7 +496,7 @@ fn language_requires_linecol_tracking(eval: &super::eval::Context, language: Sym
         .any(|value| {
             value
                 .as_symbol_id(eval.symbol_mode())
-                .is_some_and(|name| name == remapped)
+                .is_some_and(|name| name == remapped_language)
         })
 }
 
@@ -468,12 +519,11 @@ fn treesit_user_emacs_dir(eval: &super::eval::Context) -> Option<String> {
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn treesit_candidate_paths(eval: &super::eval::Context, language: SymId) -> Vec<String> {
-    let remapped_language = maybe_remap_language(eval, language);
-    let remapped_name = resolve_sym(remapped_language);
-    let default_lib_base = format!("libtree-sitter-{remapped_name}");
-    let default_c_symbol = format!("tree_sitter_{}", remapped_name.replace('-', "_"));
-    let (lib_base_name, _c_symbol) = treesit_override_names(eval, remapped_language)
-        .unwrap_or((default_lib_base, default_c_symbol));
+    let language_name = resolve_sym(language);
+    let default_lib_base = format!("libtree-sitter-{language_name}");
+    let default_c_symbol = format!("tree_sitter_{}", language_name.replace('-', "_"));
+    let (lib_base_name, _c_symbol) =
+        treesit_override_names(eval, language).unwrap_or((default_lib_base, default_c_symbol));
 
     let mut candidates = Vec::new();
     let suffixes = dynamic_library_suffixes_for_eval(eval);
@@ -568,16 +618,15 @@ fn load_language(
     eval: &mut super::eval::Context,
     language: SymId,
 ) -> Result<(Language, Option<String>), Value> {
-    let remapped_language = maybe_remap_language(eval, language);
-    if let Some((loaded, filename)) = eval.treesit.loaded_language(remapped_language) {
+    if let Some((loaded, filename)) = eval.treesit.loaded_language(language) {
         return Ok((loaded, filename));
     }
 
-    let remapped_name = resolve_sym(remapped_language);
-    let default_lib_base = format!("libtree-sitter-{remapped_name}");
-    let default_c_symbol = format!("tree_sitter_{}", remapped_name.replace('-', "_"));
-    let (_lib_base_name, c_symbol) = treesit_override_names(eval, remapped_language)
-        .unwrap_or((default_lib_base, default_c_symbol));
+    let language_name = resolve_sym(language);
+    let default_lib_base = format!("libtree-sitter-{language_name}");
+    let default_c_symbol = format!("tree_sitter_{}", language_name.replace('-', "_"));
+    let (_lib_base_name, c_symbol) =
+        treesit_override_names(eval, language).unwrap_or((default_lib_base, default_c_symbol));
 
     let candidates = treesit_candidate_paths(eval, language);
     let mut errors = Vec::new();
@@ -585,8 +634,7 @@ fn load_language(
         match load_language_from_path(&candidate, &c_symbol) {
             Ok(loaded) => {
                 let result = (loaded.language().clone(), loaded.filename().clone());
-                eval.treesit
-                    .cache_loaded_language(remapped_language, loaded);
+                eval.treesit.cache_loaded_language(language, loaded);
                 return Ok(result);
             }
             Err(GrammarLoadError::Open(error)) => errors.push(error.to_string()),
@@ -644,14 +692,14 @@ fn resolve_buffer_ids(
 fn parser_record_slot(parser: Value, index: usize) -> Result<Value, Flow> {
     parser
         .as_record_data()
-        .and_then(|items| items.get(index).copied())
+        .and_then(|items| items.get(index))
         .ok_or_else(|| parser_type_error("treesit-parser-slot", parser))
 }
 
 fn query_record_slot(query: Value, index: usize) -> Result<Value, Flow> {
     query
         .as_record_data()
-        .and_then(|items| items.get(index).copied())
+        .and_then(|items| items.get(index))
         .ok_or_else(|| compiled_query_type_error("treesit-query-slot", query))
 }
 
@@ -682,7 +730,7 @@ fn expect_live_parser_id(
 struct NodeHandle {
     parser_id: u64,
     raw: tree_sitter::ffi::TSNode,
-    generation: u64,
+    reparse_epoch: u64,
 }
 
 fn expect_node_handle(
@@ -699,7 +747,7 @@ fn expect_node_handle(
     Ok(NodeHandle {
         parser_id: entry.parser_id(),
         raw: entry.raw(),
-        generation: entry.generation(),
+        reparse_epoch: entry.reparse_epoch(),
     })
 }
 
@@ -712,7 +760,7 @@ fn ensure_current_node(
     let Some(parser) = eval.treesit.parser(handle.parser_id) else {
         return Err(node_outdated_error(value));
     };
-    if parser.generation() != handle.generation {
+    if parser.reparse_epoch() != handle.reparse_epoch {
         return Err(node_outdated_error(value));
     }
     if eval.edit.buffers.get(parser.orig_buffer_id()).is_none() {
@@ -733,16 +781,14 @@ fn make_node_value_for_parser(
     parser_id: u64,
     node: tree_sitter::Node<'_>,
 ) -> Value {
-    let (parser_value, generation) = {
+    let (parser_value, reparse_epoch) = {
         let parser = eval
             .treesit
             .parser(parser_id)
             .expect("parser should exist while creating node value");
-        (parser.value(), parser.generation())
+        (parser.value(), parser.reparse_epoch())
     };
-    let id = eval
-        .treesit
-        .insert_node(parser_id, node.into_raw(), generation);
+    let id = eval.treesit.insert_node(parser_id, node, reparse_epoch);
     runtime::make_node_value(id, parser_value)
 }
 
@@ -934,56 +980,30 @@ fn ensure_parser_reparsed(
                     vec![Value::string("Parser buffer has been killed")],
                 )
             })?;
-        let parser = eval
-            .treesit
-            .parser_mut(parser_id)
-            .ok_or_else(|| signal("error", vec![Value::string("Missing tree-sitter parser")]))?;
-        // GNU always hands the previous tree back to tree-sitter
-        // (`treesit_ensure_parsed`, `src/treesit.c:1925`); `Full` is reached
-        // only for a parser that has no usable tree at all.
-        let old_tree = match request.kind {
-            ParserReparseKind::Incremental => parser.tree().map(|tree| tree.tree().clone()),
-            ParserReparseKind::Full => None,
-        };
         #[cfg(test)]
         TREESIT_REPARSES.with(|count| count.set(count.get() + 1));
         // Issue #131: feed the parser the exact Emacs bytes so byte offsets
         // match the buffer and real PUA glyphs / eight-bit bytes survive --
         // read in place, gap-aware, as GNU's `treesit_read_buffer` does.
+        // The old-tree clone stays inside `reparse_parser`.
         let visible = request.visible;
         let mut read_buffer = |byte_offset: usize, _position: Point| {
             treesit_read_buffer(buffer, visible, byte_offset)
         };
-        let tree = parser
-            .parser_mut()
-            .parse_with_options(&mut read_buffer, old_tree.as_ref(), None)
-            .ok_or_else(|| treesit_parse_error(request.parser_value))?;
-        let changed_ranges = match changed_range_collection {
-            ChangedRangeCollection::Ignore => Vec::new(),
-            ChangedRangeCollection::Collect => {
-                if let Some(old_tree) = old_tree.as_ref() {
-                    old_tree
-                        .changed_ranges(&tree)
-                        .map(|range| {
-                            runtime::SourceByteRange::new(range.start_byte, range.end_byte)
-                        })
-                        .collect::<Vec<_>>()
-                } else if visible.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![runtime::SourceByteRange::new(0, visible.len().get())]
-                }
-            }
-        };
-        parser.set_tree(Some(runtime::ParsedTree::new(tree, request.visible)));
-        parser.set_freshness(ParserFreshness::Clean(request.current_revision));
-        parser.set_generation(parser.generation().saturating_add(1));
-        if changed_range_collection == ChangedRangeCollection::Collect {
-            parser.set_last_changed_ranges(changed_ranges.clone());
-        }
-        changed_ranges
+        eval.treesit
+            .reparse_parser(
+                parser_id,
+                request.visible,
+                request.current_revision,
+                matches!(request.kind, ParserReparseKind::Incremental),
+                changed_range_collection == ChangedRangeCollection::Collect,
+                &mut read_buffer,
+            )
+            .map_err(|()| treesit_parse_error(request.parser_value))?
     };
-    eval.treesit.clear_nodes_for_parser(parser_id);
+    // `TreeSitterManager::reparse_parser` owns clearing `self.nodes` for
+    // `parser_id` and bumping `reparse_epoch`; eval-side handles continue to
+    // gate reads on `parser.reparse_epoch() == handle.reparse_epoch`.
     Ok(Some(changed_ranges))
 }
 
@@ -1005,11 +1025,12 @@ fn ensure_query_compiled(eval: &mut super::eval::Context, query: Value) -> Resul
     }
 
     let language = query_record_slot(query, QUERY_SLOT_LANGUAGE)?;
-    let language_sym = parse_symbol_arg("treesit-query-compile", &language, eval.symbol_mode())?;
+    let _language_sym = parse_symbol_arg("treesit-query-compile", &language, eval.symbol_mode())?;
+    let remapped_sym = resolve_query_language_symbol(eval, language)?;
     let source = query_record_slot(query, QUERY_SLOT_SOURCE)?;
     let source_string = expand_query_value("treesit-query-compile", source, eval.symbol_mode())?;
 
-    let (lang, _) = load_language(eval, language_sym)
+    let (lang, _) = load_language(eval, remapped_sym)
         .map_err(|detail| signal_with_data("treesit-load-language-error", detail))?;
     let compiled =
         runtime::EmacsQuery::new(&lang, &source_string).map_err(treesit_query_error_from_query)?;
@@ -1068,7 +1089,7 @@ fn expand_pattern_value(pattern: Value, mode: SymbolMode) -> Result<String, Flow
     if let Some(items) = pattern.as_vector_data() {
         let mut pieces = Vec::with_capacity(items.len());
         for item in items {
-            pieces.push(expand_pattern_value(*item, mode)?);
+            pieces.push(expand_pattern_value(item, mode)?);
         }
         return Ok(format!("[{}]", pieces.join(" ")));
     }
@@ -1197,34 +1218,10 @@ fn changed_ranges_to_lisp(
     ))
 }
 
-fn resolve_compiled_query_value(
-    eval: &mut super::eval::Context,
-    language_symbol: Value,
-    query: Value,
-    caller: &str,
-) -> Result<Value, Flow> {
-    let language_sym = parse_symbol_arg(caller, &language_symbol, eval.symbol_mode())?;
-    let compiled_query = if runtime::is_compiled_query(query) {
-        query
-    } else {
-        builtin_treesit_query_compile(eval, vec![language_symbol, query, Value::T])?
-    };
-    let query_language = query_record_slot(compiled_query, QUERY_SLOT_LANGUAGE)?;
-    if query_language != language_symbol {
-        return Err(treesit_query_error(format!(
-            "Query language mismatch: expected `{}`",
-            resolve_sym(language_sym)
-        )));
-    }
-    ensure_query_compiled(eval, compiled_query)?;
-    Ok(compiled_query)
-}
-
 #[derive(Clone, Copy)]
 struct ResolvedNodeInput {
     parser_id: u64,
     parser_value: Value,
-    language_symbol: Value,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     node_value: Value,
     node_raw: tree_sitter::ffi::TSNode,
@@ -1244,7 +1241,6 @@ fn resolve_node_input(
         return Ok(ResolvedNodeInput {
             parser_id: handle.parser_id,
             parser_value: parser.value(),
-            language_symbol: parser_record_slot(parser.value(), PARSER_SLOT_LANGUAGE)?,
             node_value: value,
             node_raw: handle.raw,
         });
@@ -1259,8 +1255,7 @@ fn resolve_node_input(
                 .parser(parser_id)
                 .ok_or_else(|| parser_deleted_error(value))?;
             parser
-                .tree()
-                .map(|tree| tree.tree().root_node().into_raw())
+                .root_raw()
                 .ok_or_else(|| treesit_parse_error(value))?
         };
         let node_value = make_node_value_for_parser(eval, parser_id, unsafe {
@@ -1329,14 +1324,668 @@ fn predicate_function_p(eval: &super::eval::Context, predicate: Value) -> bool {
     true
 }
 
+fn treesit_buffer_changed(predicate: Value) -> Flow {
+    // GNU `Qtreesit_buffer_changed` (`src/treesit.c`, emacs-31.1). The data is
+    // `list1(pred)`, the same shape as `treesit_pred_with_guard`.
+    signal("treesit-buffer_changed", vec![predicate])
+}
+
+fn parser_tree_clone(
+    eval: &super::eval::Context,
+    parser_id: u64,
+    node_value: Value,
+) -> Result<runtime::WalkClone, Flow> {
+    eval.treesit
+        .parser(parser_id)
+        .ok_or_else(|| node_outdated_error(node_value))?
+        .walk_clone()
+        .ok_or_else(|| node_outdated_error(node_value))
+}
+
+/// Epoch and edit generation captured when a walk clones the parser tree.
+///
+/// O(1) retarget of `TSNode.tree` is sound only while both are unchanged:
+/// `ts_tree_copy` shares subtrees, but `ts_tree_edit` copy-on-writes once
+/// another owner holds the tree, so an edit makes the ids diverge even
+/// though `reparse_epoch` did not move.
+///
+/// `clone_root` is the clone root's `TSNode.id` (`&TSTree.root` of that
+/// clone). It is an address, not a heap subtree, and is only compared.
+#[derive(Clone, Copy)]
+struct WalkShare {
+    reparse_epoch: u64,
+    generation: u64,
+    clone_root: usize,
+}
+
+fn walk_share(eval: &super::eval::Context, parser_id: u64) -> WalkShare {
+    match eval.treesit.parser(parser_id) {
+        Some(parser) => WalkShare {
+            reparse_epoch: parser.reparse_epoch(),
+            generation: parser.generation(),
+            clone_root: 0,
+        },
+        None => WalkShare {
+            reparse_epoch: 0,
+            generation: 0,
+            clone_root: 0,
+        },
+    }
+}
+
+/// Rebind a parser's validated `raw` node onto a pre-edit `WalkClone` `tree`.
+///
+/// # Safety
+/// `raw` must be a valid `TSNode` belonging to `parser_id`'s current tree from
+/// which `tree` was cloned (`ts_tree_copy`) before any callback mutated it.
+unsafe fn node_on_clone<'tree>(
+    eval: &super::eval::Context,
+    parser_id: u64,
+    tree: &'tree runtime::WalkClone,
+    raw: tree_sitter::ffi::TSNode,
+    share: &mut WalkShare,
+) -> tree_sitter::Node<'tree> {
+    let clone_root = tree.root_node().into_raw();
+    share.clone_root = clone_root.id as usize;
+    let is_parser_root = eval
+        .treesit
+        .parser(parser_id)
+        .and_then(|parser| parser.root_raw())
+        .is_some_and(|root| root.id == raw.id);
+    if is_parser_root {
+        // A root id is the address of that tree's `TSTree.root` field, not a
+        // shared heap subtree. The parser's field changes in `ts_tree_edit`.
+        // The clone has its own field, which still names the pre-edit subtree.
+        return tree.root_node();
+    }
+    let mut raw = raw;
+    raw.tree = clone_root.tree;
+    // SAFETY: `tree` is a `ts_tree_copy` taken before any callback in this
+    // walk. A non-root id addresses a heap subtree both trees share until an
+    // edit copy-on-writes the parser side. Only the tree pointer changes.
+    // This stays O(1) for the imenu string-predicate case and does not use
+    // `node_index_path`, which fails on zero-width and missing nodes
+    // (GNU bug#60127, `src/treesit.c:4262-4268`).
+    unsafe { tree_sitter::Node::from_raw(raw) }
+}
+
+fn project_node_to_parser(
+    eval: &super::eval::Context,
+    parser_id: u64,
+    node: tree_sitter::Node<'_>,
+    share: WalkShare,
+) -> Option<tree_sitter::ffi::TSNode> {
+    let parser = eval.treesit.parser(parser_id)?;
+    let live_root = parser.root_raw()?;
+    if parser.reparse_epoch() == share.reparse_epoch && parser.generation() == share.generation {
+        // The clone root id dies with the clone. Publish the parser root,
+        // whose id is that tree's own `TSTree.root` field.
+        if node.into_raw().id as usize == share.clone_root {
+            return Some(live_root);
+        }
+        let mut raw = node.into_raw();
+        raw.tree = live_root.tree;
+        return Some(raw);
+    }
+    let source = node.into_raw();
+    let path = runtime::node_index_path(node)?;
+    let mut raw = parser.node_raw_at_index_path(&path)?;
+    // Keep the clone node's start byte. `ts_node_end_byte` is that start
+    // plus the live subtree's size (`lib/src/node.c`). An insert that does
+    // not change the subtree size leaves both ends stale, matching GNU.
+    raw.context = source.context;
+    Some(raw)
+}
+
+/// Wrap a validated raw `TSNode` from `parser_id`'s current tree as a Lisp
+/// node value.
+///
+/// # Safety
+/// `raw` must be a valid `TSNode` belonging to `parser_id`'s live tree.
+unsafe fn make_node_value_from_raw(
+    eval: &mut super::eval::Context,
+    parser_id: u64,
+    raw: tree_sitter::ffi::TSNode,
+) -> Value {
+    // SAFETY: caller guarantees `raw` belongs to `parser_id`'s live tree.
+    // Publishing copies the `TSNode` and stamps the current reparse epoch.
+    make_node_value_for_parser(eval, parser_id, unsafe { tree_sitter::Node::from_raw(raw) })
+}
+
+/// Pure-Rust subset of tree-sitter predicates that cannot invoke Lisp or
+/// trigger GC.
+///
+/// Constructed via [`PurePredicate::try_parse`] (cycle-safe via canonical
+/// [`neovm_value::list_scan::GnuTailCycle`] plus bounded depth and node budget)
+/// and evaluated via [`PurePredicate::matches`], which takes an immutable
+/// `&super::eval::Context` so calling `funcall_general(&mut self)` or mutating
+/// evaluator/GC state is a compile-time error. Any predicate outside this
+/// subset — including `treesit-thing-settings` symbols, Lisp callables, dotted
+/// `(string . fn)` pairs, malformed/improper/cyclic boolean lists, or trees
+/// exceeding the depth/node budget — parses as `None` and falls through to the
+/// rooted `&mut Context` path (where [`validate_treesit_predicate`] validates
+/// the full predicate up front before matching any node, matching GNU
+/// `treesit_traverse_validate_predicate`, `src/treesit.c:4492-4587`).
+enum PurePredicate {
+    Regexp(Value),
+    Builtin(TreesitBuiltinPredicate),
+    Not(Box<PurePredicate>),
+    Or(Vec<PurePredicate>),
+    And(Vec<PurePredicate>),
+}
+
+impl PurePredicate {
+    const MAX_DEPTH: usize = 16;
+    const MAX_NODES: usize = 256;
+
+    fn try_parse(eval: &super::eval::Context, predicate: Value) -> Option<Self> {
+        let mut budget = Self::MAX_NODES;
+        Self::try_parse_inner(eval, predicate, Self::MAX_DEPTH, &mut budget)
+    }
+
+    fn try_parse_inner(
+        eval: &super::eval::Context,
+        predicate: Value,
+        max_depth: usize,
+        budget: &mut usize,
+    ) -> Option<Self> {
+        if *budget == 0 {
+            return None;
+        }
+        *budget -= 1;
+
+        if eval.lisp_string(predicate).is_some() {
+            return Some(Self::Regexp(predicate));
+        }
+        // `TreesitBuiltinPredicate` is checked before `lookup_thing_definition`
+        // in `predicate_matches_node`, so `named` and `anonymous` never consult
+        // `treesit-thing-settings` or invoke Lisp.
+        if let Some(builtin) =
+            TreesitBuiltinPredicate::from_symbol_value(predicate, eval.symbol_mode())
+        {
+            return Some(Self::Builtin(builtin));
+        }
+        if max_depth == 0 || !predicate.is_cons() {
+            return None;
+        }
+        let head = predicate.cons_car();
+        let boolean_predicate =
+            TreesitBooleanPredicate::from_symbol_value(head, eval.symbol_mode())?;
+
+        // Walk the argument cdr chain with the canonical GNU Brent cycle guard
+        // (`GnuTailCycle`) and the shared node budget so circular or oversized
+        // lists return `None` in bounded steps and fall through to
+        // `validate_treesit_predicate` -> `(circular-list TAIL)`.
+        let mut items = Vec::new();
+        let mut tail = predicate.cons_cdr();
+        let mut cycle = neovm_value::list_scan::GnuTailCycle::new(tail);
+        while tail.is_cons() {
+            items.push(Self::try_parse_inner(
+                eval,
+                tail.cons_car(),
+                max_depth - 1,
+                budget,
+            )?);
+            tail = tail.cons_cdr();
+            if tail.is_cons() && cycle.check(tail).is_err() {
+                return None;
+            }
+        }
+        if !tail.is_nil() {
+            return None;
+        }
+        match boolean_predicate {
+            TreesitBooleanPredicate::Not => {
+                if items.len() != 1 {
+                    return None;
+                }
+                Some(Self::Not(Box::new(items.pop()?)))
+            }
+            TreesitBooleanPredicate::Or => {
+                if items.is_empty() {
+                    return None;
+                }
+                Some(Self::Or(items))
+            }
+            TreesitBooleanPredicate::And => {
+                if items.is_empty() {
+                    return None;
+                }
+                Some(Self::And(items))
+            }
+        }
+    }
+
+    /// Evaluate this pure predicate against `node` using only an immutable
+    /// `&super::eval::Context` (compile-time guarantee against Lisp/GC calls).
+    fn matches(
+        &self,
+        eval: &super::eval::Context,
+        node: tree_sitter::Node<'_>,
+        named_only: bool,
+    ) -> Result<bool, Flow> {
+        if named_only && !node.is_named() {
+            return Ok(false);
+        }
+        match self {
+            Self::Regexp(predicate) => {
+                let Some(pattern) = eval.lisp_string(*predicate) else {
+                    return Err(treesit_invalid_predicate(
+                        "Unsupported tree-sitter predicate",
+                        *predicate,
+                    ));
+                };
+                neovm_text::emacs_core::regex::predicate_match(pattern, node.kind())
+                    .map_err(|err| treesit_invalid_predicate(err.to_string(), *predicate))
+            }
+            Self::Builtin(builtin) => Ok(builtin.matches_node(node)),
+            Self::Not(inner) => Ok(!inner.matches(eval, node, named_only)?),
+            Self::Or(items) => {
+                for item in items {
+                    if item.matches(eval, node, named_only)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            Self::And(items) => {
+                for item in items {
+                    if !item.matches(eval, node, named_only)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+        }
+    }
+}
+
+/// Typed sparse-tree walk driver unifying predicate mode, `process_fn`,
+/// reversed child accumulator, and the active ancestor's `SpecpdlRootSlot` so
+/// `(Pure, Some(slot))` and `(Rooted, None)` are unrepresentable at compile time.
+enum SparseWalkDriver<'a> {
+    /// Compiled pure-Rust predicate with nil `process_fn`: `PurePredicate::matches`
+    /// takes `&Context` (cannot invoke Lisp or trigger GC), so zero `specpdl`
+    /// root slots exist in this variant.
+    Pure {
+        predicate: &'a PurePredicate,
+        out_rev: Value,
+    },
+    /// General predicate or non-nil `process_fn`: every active ancestor carries
+    /// its own `SpecpdlRootSlot` by type, updated in O(1) on every push.
+    Rooted {
+        predicate: Value,
+        process_fn: Value,
+        out_rev: Value,
+        out_slot: &'a super::eval::SpecpdlRootSlot,
+    },
+}
+
+impl SparseWalkDriver<'_> {
+    fn matches_node(
+        &self,
+        eval: &mut super::eval::Context,
+        parser_id: u64,
+        parser_value: Value,
+        node: tree_sitter::Node<'_>,
+        share: WalkShare,
+    ) -> Result<bool, Flow> {
+        match self {
+            Self::Pure { predicate, .. } => predicate.matches(eval, node, false),
+            Self::Rooted { predicate, .. } => predicate_matches_node(
+                eval,
+                parser_id,
+                parser_value,
+                node,
+                *predicate,
+                false,
+                true,
+                share,
+            ),
+        }
+    }
+
+    fn changed_by(&self) -> Value {
+        match self {
+            Self::Pure { .. } => Value::NIL,
+            Self::Rooted {
+                predicate,
+                process_fn,
+                ..
+            } => {
+                if process_fn.is_nil() {
+                    *predicate
+                } else {
+                    *process_fn
+                }
+            }
+        }
+    }
+
+    fn apply_process_fn(
+        &self,
+        eval: &mut super::eval::Context,
+        parser_id: u64,
+        node_value: Value,
+        epoch: Option<u64>,
+    ) -> Result<Value, Flow> {
+        match self {
+            Self::Pure { .. } => Ok(node_value),
+            Self::Rooted { process_fn, .. } if process_fn.is_nil() => Ok(node_value),
+            Self::Rooted { process_fn, .. } => {
+                // `funcall_general` roots `process_fn` and `node_value` via
+                // `SpecBinding::Backtrace1`; `node_value` is unused after the call.
+                let value = eval.funcall_general(*process_fn, vec![node_value])?;
+                let now = eval
+                    .treesit
+                    .parser(parser_id)
+                    .map(|parser| parser.reparse_epoch());
+                if now != epoch {
+                    return Err(treesit_buffer_changed(*process_fn));
+                }
+                Ok(value)
+            }
+        }
+    }
+
+    /// Walk matching node's children using a child driver of the same variant,
+    /// anchoring `payload` and the child accumulator in `specpdl` only for
+    /// `Rooted` walks, and return `Value::cons(payload, children)`.
+    fn walk_matching_children(
+        &self,
+        eval: &mut super::eval::Context,
+        parser_id: u64,
+        parser_value: Value,
+        node: tree_sitter::Node<'_>,
+        depth: i64,
+        share: WalkShare,
+        payload: Value,
+    ) -> Result<Value, Flow> {
+        let walk_children = |eval: &mut super::eval::Context,
+                             child_driver: &mut SparseWalkDriver<'_>|
+         -> Result<Value, Flow> {
+            for idx in 0..node.child_count() {
+                if let Some(child) = node.child(idx) {
+                    build_sparse_tree(
+                        eval,
+                        parser_id,
+                        parser_value,
+                        child,
+                        depth.saturating_sub(1),
+                        share,
+                        child_driver,
+                    )?;
+                }
+            }
+            Ok(Value::cons(payload, child_driver.take_reversed()))
+        };
+
+        match *self {
+            Self::Pure { predicate, .. } => {
+                #[cfg(test)]
+                record_sparse_tree_peak_specpdl(eval);
+                let mut child_driver = SparseWalkDriver::Pure {
+                    predicate,
+                    out_rev: Value::NIL,
+                };
+                walk_children(eval, &mut child_driver)
+            }
+            Self::Rooted {
+                predicate,
+                process_fn,
+                ..
+            } => {
+                let root_scope = eval.save_specpdl_roots();
+                if payload.is_heap_object() {
+                    eval.push_specpdl_root(payload);
+                }
+                let my_slot = eval.push_specpdl_root_slot(Value::NIL);
+                #[cfg(test)]
+                record_sparse_tree_peak_specpdl(eval);
+                let mut child_driver = SparseWalkDriver::Rooted {
+                    predicate,
+                    process_fn,
+                    out_rev: Value::NIL,
+                    out_slot: &my_slot,
+                };
+                let walk_res = walk_children(eval, &mut child_driver);
+                eval.restore_specpdl_roots(root_scope);
+                walk_res
+            }
+        }
+    }
+
+    fn push_entry(&mut self, eval: &mut super::eval::Context, entry: Value) {
+        match self {
+            Self::Pure { out_rev, .. } => {
+                *out_rev = Value::cons(entry, *out_rev);
+            }
+            Self::Rooted {
+                out_rev, out_slot, ..
+            } => {
+                *out_rev = Value::cons(entry, *out_rev);
+                eval.set_specpdl_root_slot(out_slot, *out_rev);
+            }
+        }
+    }
+
+    fn take_reversed(&mut self) -> Value {
+        let rev = match self {
+            Self::Pure { out_rev, .. } | Self::Rooted { out_rev, .. } => {
+                std::mem::replace(out_rev, Value::NIL)
+            }
+        };
+        reverse_cons_list(rev)
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static SPARSE_TREE_PEAK_SPECPDL: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_sparse_tree_peak_specpdl(baseline: usize) {
+    SPARSE_TREE_PEAK_SPECPDL.with(|peak| peak.set(baseline));
+}
+
+#[cfg(test)]
+fn record_sparse_tree_peak_specpdl(eval: &super::eval::Context) {
+    let current = eval.specpdl_len_for_test();
+    SPARSE_TREE_PEAK_SPECPDL.with(|peak| peak.set(peak.get().max(current)));
+}
+
+#[cfg(test)]
+fn sparse_tree_peak_specpdl() -> usize {
+    SPARSE_TREE_PEAK_SPECPDL.with(std::cell::Cell::get)
+}
+
+fn reverse_cons_list(mut rev: Value) -> Value {
+    let mut out = Value::NIL;
+    while rev.is_cons() {
+        out = Value::cons(rev.cons_car(), out);
+        rev = rev.cons_cdr();
+    }
+    out
+}
+
 fn call_node_predicate(
     eval: &mut super::eval::Context,
     predicate: Value,
     parser_id: u64,
     node: tree_sitter::Node<'_>,
+    guard: bool,
+    share: WalkShare,
 ) -> Result<bool, Flow> {
-    let node_value = make_node_value_for_parser(eval, parser_id, node);
-    Ok(!eval.funcall_general(predicate, vec![node_value])?.is_nil())
+    let raw = project_node_to_parser(eval, parser_id, node, share)
+        .ok_or_else(|| treesit_buffer_changed(predicate))?;
+    let epoch = eval
+        .treesit
+        .parser(parser_id)
+        .map(|parser| parser.reparse_epoch());
+    // SAFETY: `project_node_to_parser` returned a `TSNode` from `parser_id`'s live tree.
+    let node_value = unsafe { make_node_value_from_raw(eval, parser_id, raw) };
+    // `predicate` is already rooted by the entry builtin / composite
+    // `predicate_matches_node` frame, and `funcall_general` roots both
+    // `predicate` and `node_value` via `SpecBinding::Backtrace1` for the call.
+    let result = eval.funcall_general(predicate, vec![node_value])?;
+    // GNU `treesit_pred_with_guard` (`src/treesit.c:2232-2245`) signals when a
+    // function predicate reparses. The timestamp advances only in
+    // `treesit_ensure_parsed` after `ts_parser_parse`, so an edit that does
+    // not reparse is allowed. A dotted `(string . function)` predicate is not
+    // wrapped in that guard. This checks `reparse_epoch`, not `generation`:
+    // `generation` also advances on every buffer edit.
+    if guard {
+        let now = eval
+            .treesit
+            .parser(parser_id)
+            .map(|parser| parser.reparse_epoch());
+        if now != epoch {
+            return Err(treesit_buffer_changed(predicate));
+        }
+    }
+    Ok(!result.is_nil())
+}
+
+/// Collect `or`/`and` predicate arguments using the canonical GNU Brent cycle
+/// guard (`GnuTailCycle`, mirroring GNU `FOR_EACH_TAIL` without `CHECK_LIST_END`
+/// at `src/treesit.c:4570, 4649, 4659`).
+///
+/// - Circular `cdr` chain -> signals `(circular-list TAIL)` with the tail datum.
+/// - Non-cons terminating `cdr` -> stops cleanly without error, matching GNU.
+fn collect_boolean_or_and_args(tail: Value) -> Result<Vec<Value>, Flow> {
+    let mut items = Vec::new();
+    let mut cur = tail;
+    let mut cycle = neovm_value::list_scan::GnuTailCycle::new(cur);
+    while cur.is_cons() {
+        items.push(cur.cons_car());
+        cur = cur.cons_cdr();
+        if cur.is_cons() {
+            cycle.check(cur)?;
+        }
+    }
+    Ok(items)
+}
+
+/// Upfront whole-predicate validation mirroring GNU
+/// `treesit_traverse_validate_predicate` (`src/treesit.c:4492-4587`).
+///
+/// Called once before traversal from `treesit-search-subtree`,
+/// `treesit-search-forward`, `treesit-induce-sparse-tree`, and
+/// `treesit-node-match-p` whenever `PurePredicate::try_parse` returns `None`,
+/// so nested cycles or invalid shapes behind short-circuiting or
+/// side-effecting `or`/`and` branches fail before any node is matched or
+/// callback runs.
+fn validate_treesit_predicate(
+    eval: &super::eval::Context,
+    language: Value,
+    predicate: Value,
+    recursion_level: usize,
+) -> Result<(), Flow> {
+    if recursion_level > 99 {
+        return Err(treesit_invalid_predicate(
+            "Predicate recursion level exceeded: it must not exceed 100 levels",
+            predicate,
+        ));
+    }
+    if eval.lisp_string(predicate).is_some() {
+        return Ok(());
+    }
+    if TreesitBuiltinPredicate::from_symbol_value(predicate, eval.symbol_mode()).is_some() {
+        return Ok(());
+    }
+    if let Some(definition) = lookup_thing_definition(eval, language, predicate) {
+        return validate_treesit_predicate(eval, language, definition, recursion_level + 1);
+    }
+    if super::types::value_is_function(eval, predicate) {
+        return Ok(());
+    }
+    if predicate.as_symbol_name(eval.symbol_mode()).is_some() {
+        return Err(treesit_predicate_not_found(predicate));
+    }
+    if predicate.is_cons() {
+        let head = predicate.cons_car();
+        let tail = predicate.cons_cdr();
+        if let Some(boolean_predicate) =
+            TreesitBooleanPredicate::from_symbol_value(head, eval.symbol_mode())
+        {
+            return match boolean_predicate {
+                TreesitBooleanPredicate::Not => {
+                    if !tail.is_cons() {
+                        return Err(treesit_invalid_predicate(
+                            "Invalid `not' predicate",
+                            predicate,
+                        ));
+                    }
+                    // GNU `src/treesit.c:4546`: `Flength (cdr)` -> `list_length`:
+                    // signals `(circular-list TAIL)` on cycles and
+                    // `(wrong-type-argument listp <non-nil-cdr>)` on improper tails.
+                    let len = neovm_value::list_scan::proper_list_length_or_signal(tail)?;
+                    if len != 1 {
+                        return Err(treesit_invalid_predicate(
+                            "`not' can only have one argument",
+                            predicate,
+                        ));
+                    }
+                    validate_treesit_predicate(eval, language, tail.cons_car(), recursion_level + 1)
+                }
+                TreesitBooleanPredicate::Or | TreesitBooleanPredicate::And => {
+                    if !tail.is_cons() {
+                        return Err(treesit_invalid_predicate(
+                            "`or' or `and' must have a list of patterns as arguments ",
+                            predicate,
+                        ));
+                    }
+                    // GNU `src/treesit.c:4570`: `FOR_EACH_TAIL (cdr)` without
+                    // `CHECK_LIST_END`: signals `(circular-list TAIL)` on cycles
+                    // and stops cleanly at a non-cons terminator.
+                    let mut cur = tail;
+                    let mut cycle = neovm_value::list_scan::GnuTailCycle::new(cur);
+                    while cur.is_cons() {
+                        validate_treesit_predicate(
+                            eval,
+                            language,
+                            cur.cons_car(),
+                            recursion_level + 1,
+                        )?;
+                        cur = cur.cons_cdr();
+                        if cur.is_cons() {
+                            cycle.check(cur)?;
+                        }
+                    }
+                    Ok(())
+                }
+            };
+        }
+        if eval.lisp_string(head).is_some() && super::types::value_is_function(eval, tail) {
+            return Ok(());
+        }
+    }
+    Err(treesit_invalid_predicate(
+        "Invalid predicate, see `treesit-thing-settings' for valid forms of predicate",
+        predicate,
+    ))
+}
+
+/// Validate `predicate` up front, returning `Ok(false)` when
+/// `treesit-predicate-not-found` should be ignored (matching GNU
+/// `src/treesit.c:4826-4835, 4901-4910, 5041-5050, 5098-5109`).
+fn validate_predicate_or_ignore_missing(
+    eval: &super::eval::Context,
+    parser_value: Value,
+    predicate: Value,
+    ignore_missing: bool,
+) -> Result<bool, Flow> {
+    let language = parser_record_slot(parser_value, PARSER_SLOT_LANGUAGE)?;
+    match validate_treesit_predicate(eval, language, predicate, 0).kinded() {
+        Ok(()) => Ok(true),
+        Err(FlowKind::Signal(sig))
+            if ignore_missing && sig.symbol == intern("treesit-predicate-not-found") =>
+        {
+            Ok(false)
+        }
+        Err(err) => Err(Flow::from_kind(err)),
+    }
 }
 
 fn predicate_matches_node(
@@ -1347,6 +1996,7 @@ fn predicate_matches_node(
     predicate: Value,
     named_only: bool,
     ignore_missing: bool,
+    share: WalkShare,
 ) -> Result<bool, Flow> {
     if named_only && !node.is_named() {
         return Ok(false);
@@ -1367,7 +2017,16 @@ fn predicate_matches_node(
         parser_record_slot(parser_value, PARSER_SLOT_LANGUAGE)?,
         predicate,
     ) {
-        return predicate_matches_node(
+        // Pure-Rust thing definitions evaluate via `&Context` (compile-time
+        // impossible to call Lisp or GC), skipping per-node specpdl roots.
+        if let Some(pure) = PurePredicate::try_parse(eval, definition) {
+            return pure.matches(eval, node, named_only);
+        }
+        let root_scope = eval.save_specpdl_roots();
+        if definition.is_heap_object() {
+            eval.push_specpdl_root(definition);
+        }
+        let matched = predicate_matches_node(
             eval,
             parser_id,
             parser_value,
@@ -1375,7 +2034,10 @@ fn predicate_matches_node(
             definition,
             named_only,
             ignore_missing,
+            share,
         );
+        eval.restore_specpdl_roots(root_scope);
+        return matched;
     }
 
     if predicate.as_symbol_name(eval.symbol_mode()).is_some()
@@ -1389,7 +2051,7 @@ fn predicate_matches_node(
     }
 
     if predicate_function_p(eval, predicate) && !predicate.is_cons() {
-        return call_node_predicate(eval, predicate, parser_id, node);
+        return call_node_predicate(eval, predicate, parser_id, node, true, share);
     }
 
     if !predicate.is_cons() {
@@ -1404,18 +2066,32 @@ fn predicate_matches_node(
     if let Some(boolean_predicate) =
         TreesitBooleanPredicate::from_symbol_value(head, eval.symbol_mode())
     {
+        // Pure-Rust boolean predicates evaluate via `&Context` without
+        // touching `specpdl`. Cyclic, malformed, or Lisp-calling forms return
+        // `None` from `PurePredicate::try_parse` and fall through below.
+        if let Some(pure) = PurePredicate::try_parse(eval, predicate) {
+            return pure.matches(eval, node, named_only);
+        }
         return match boolean_predicate {
             TreesitBooleanPredicate::Not => {
-                let args = neovm_value::value::list_to_vec(&tail).ok_or_else(|| {
-                    treesit_invalid_predicate("`not' expects one predicate", predicate)
-                })?;
-                if args.len() != 1 {
+                if !tail.is_cons() {
                     return Err(treesit_invalid_predicate(
-                        "`not' expects one predicate",
+                        "Invalid `not' predicate",
                         predicate,
                     ));
                 }
-                Ok(!predicate_matches_node(
+                let args = neovm_value::list_scan::collect_proper_list_items(tail)?;
+                if args.len() != 1 {
+                    return Err(treesit_invalid_predicate(
+                        "`not' can only have one argument",
+                        predicate,
+                    ));
+                }
+                let root_scope = eval.save_specpdl_roots();
+                if args[0].is_heap_object() {
+                    eval.push_specpdl_root(args[0]);
+                }
+                let matched = predicate_matches_node(
                     eval,
                     parser_id,
                     parser_value,
@@ -1423,56 +2099,72 @@ fn predicate_matches_node(
                     args[0],
                     named_only,
                     ignore_missing,
-                )?)
+                    share,
+                );
+                eval.restore_specpdl_roots(root_scope);
+                Ok(!matched?)
             }
             TreesitBooleanPredicate::Or | TreesitBooleanPredicate::And => {
-                let args = neovm_value::value::list_to_vec(&tail).ok_or_else(|| {
-                    treesit_invalid_predicate(
+                if !tail.is_cons() {
+                    return Err(treesit_invalid_predicate(
                         "`or' or `and' must have a list of patterns as arguments ",
                         predicate,
-                    )
-                })?;
+                    ));
+                }
+                let args = collect_boolean_or_and_args(tail)?;
                 if args.is_empty() {
                     return Err(treesit_invalid_predicate(
                         "`or' or `and' must have a list of patterns as arguments ",
                         predicate,
                     ));
                 }
-                match boolean_predicate {
-                    TreesitBooleanPredicate::Or => {
-                        for item in args {
-                            if predicate_matches_node(
-                                eval,
-                                parser_id,
-                                parser_value,
-                                node,
-                                item,
-                                named_only,
-                                ignore_missing,
-                            )? {
-                                return Ok(true);
-                            }
-                        }
-                        Ok(false)
+                let root_scope = eval.save_specpdl_roots();
+                for &item in &args {
+                    if item.is_heap_object() {
+                        eval.push_specpdl_root(item);
                     }
-                    TreesitBooleanPredicate::And => {
-                        for item in args {
-                            if !predicate_matches_node(
-                                eval,
-                                parser_id,
-                                parser_value,
-                                node,
-                                item,
-                                named_only,
-                                ignore_missing,
-                            )? {
-                                return Ok(false);
-                            }
-                        }
-                        Ok(true)
-                    }
-                    TreesitBooleanPredicate::Not => unreachable!(),
                 }
+                let outcome = (|| -> Result<bool, Flow> {
+                    match boolean_predicate {
+                        TreesitBooleanPredicate::Or => {
+                            for item in args {
+                                if predicate_matches_node(
+                                    eval,
+                                    parser_id,
+                                    parser_value,
+                                    node,
+                                    item,
+                                    named_only,
+                                    ignore_missing,
+                                    share,
+                                )? {
+                                    return Ok(true);
+                                }
+                            }
+                            Ok(false)
+                        }
+                        TreesitBooleanPredicate::And => {
+                            for item in args {
+                                if !predicate_matches_node(
+                                    eval,
+                                    parser_id,
+                                    parser_value,
+                                    node,
+                                    item,
+                                    named_only,
+                                    ignore_missing,
+                                    share,
+                                )? {
+                                    return Ok(false);
+                                }
+                            }
+                            Ok(true)
+                        }
+                        TreesitBooleanPredicate::Not => unreachable!(),
+                    }
+                })();
+                eval.restore_specpdl_roots(root_scope);
+                outcome
             }
         };
     }
@@ -1489,7 +2181,13 @@ fn predicate_matches_node(
         {
             return Ok(false);
         }
-        return call_node_predicate(eval, tail, parser_id, node);
+        // GNU calls this dotted predicate with `calln` and no
+        // `treesit_pred_with_guard` (`src/treesit.c:4667-4683`). A reparse
+        // inside it frees the tree GNU is still walking; that is UB and not a
+        // contract. Neomacs walks a clone. If this predicate returns t, the
+        // result sites path-remap the clone node onto the live tree, which
+        // can have a different type than the regexp matched.
+        return call_node_predicate(eval, tail, parser_id, node, false, share);
     }
 
     Err(treesit_invalid_predicate(
@@ -1555,6 +2253,7 @@ fn search_subtree_impl<'tree>(
     named_only: bool,
     depth: i64,
     skip_root: bool,
+    share: WalkShare,
 ) -> Result<Option<tree_sitter::Node<'tree>>, Flow> {
     if !skip_root
         && predicate_matches_node(
@@ -1565,6 +2264,7 @@ fn search_subtree_impl<'tree>(
             predicate,
             named_only,
             false,
+            share,
         )?
     {
         return Ok(Some(node));
@@ -1586,6 +2286,7 @@ fn search_subtree_impl<'tree>(
             named_only,
             depth - 1,
             false,
+            share,
         )? {
             return Ok(Some(found));
         }
@@ -1605,6 +2306,7 @@ fn search_forward_impl<'tree>(
     predicate: Value,
     forward: bool,
     named_only: bool,
+    share: WalkShare,
 ) -> Result<Option<tree_sitter::Node<'tree>>, Flow> {
     let mut current = start;
     loop {
@@ -1618,6 +2320,7 @@ fn search_forward_impl<'tree>(
                 predicate,
                 named_only,
                 false,
+                share,
             )? {
                 return Ok(Some(candidate));
             }
@@ -1638,6 +2341,7 @@ fn search_forward_impl<'tree>(
             predicate,
             named_only,
             false,
+            share,
         )? {
             return Ok(Some(current));
         }
@@ -1665,44 +2369,66 @@ fn build_sparse_tree(
     parser_id: u64,
     parser_value: Value,
     node: tree_sitter::Node<'_>,
-    predicate: Value,
-    process_fn: Value,
     depth: i64,
-) -> Result<Option<Value>, Flow> {
-    let matched =
-        predicate_matches_node(eval, parser_id, parser_value, node, predicate, false, true)?;
-    let mut children = Vec::new();
-    if depth != 0 {
-        for idx in 0..node.child_count() {
-            if let Some(child) = node.child(idx)
-                && let Some(item) = build_sparse_tree(
-                    eval,
-                    parser_id,
-                    parser_value,
-                    child,
-                    predicate,
-                    process_fn,
-                    depth.saturating_sub(1),
-                )?
-            {
-                children.push(item);
+    share: WalkShare,
+    driver: &mut SparseWalkDriver<'_>,
+) -> Result<(), Flow> {
+    // GNU `treesit_build_sparse_tree` (`src/treesit.c:4937-4975`) omits a
+    // node that does not match and attaches its matches to the nearest
+    // matching ancestor. `process_fn` runs before the children
+    // (`src/treesit.c:4941-4950`).
+    //
+    // Matches are prepended onto the active ancestor's `SparseWalkDriver`:
+    // - `SparseWalkDriver::Pure`: evaluates via `PurePredicate::matches(&Context)`
+    //   with no `process_fn` and no `SpecpdlRootSlot`, touching zero `specpdl` slots.
+    // - `SparseWalkDriver::Rooted`: uses at most 2 `specpdl` slots per matching
+    //   internal ancestor on the active recursion spine (`<= 2 * D_m` in
+    //   `build_sparse_tree`, `<= 5 + 2 * D_m` including entry roots, where
+    //   `D_m <= min(max(depth, 0), tree_height - 1)`), updating its typed
+    //   `out_slot` in O(1) on every `push_entry`.
+    #[cfg(test)]
+    record_sparse_tree_peak_specpdl(eval);
+    let matched = driver.matches_node(eval, parser_id, parser_value, node, share)?;
+
+    if !matched {
+        // GNU visits children only when `limit > 0` (`src/treesit.c:4957`).
+        // Zero and negative DEPTH match this node and do not walk downward.
+        if depth > 0 {
+            for idx in 0..node.child_count() {
+                if let Some(child) = node.child(idx) {
+                    build_sparse_tree(
+                        eval,
+                        parser_id,
+                        parser_value,
+                        child,
+                        depth.saturating_sub(1),
+                        share,
+                        driver,
+                    )?;
+                }
             }
         }
+        return Ok(());
     }
-    if !matched && children.is_empty() {
-        return Ok(None);
-    }
-    let payload = if matched {
-        let node_value = make_node_value_for_parser(eval, parser_id, node);
-        if process_fn.is_nil() {
-            node_value
-        } else {
-            eval.funcall_general(process_fn, vec![node_value])?
-        }
+
+    let raw = project_node_to_parser(eval, parser_id, node, share)
+        .ok_or_else(|| treesit_buffer_changed(driver.changed_by()))?;
+    let epoch = eval
+        .treesit
+        .parser(parser_id)
+        .map(|parser| parser.reparse_epoch());
+    // SAFETY: `project_node_to_parser` returned a `TSNode` from `parser_id`'s live tree.
+    let node_value = unsafe { make_node_value_from_raw(eval, parser_id, raw) };
+    let payload = driver.apply_process_fn(eval, parser_id, node_value, epoch)?;
+
+    let entry = if depth > 0 && node.child_count() > 0 {
+        driver.walk_matching_children(eval, parser_id, parser_value, node, depth, share, payload)?
     } else {
-        Value::NIL
+        Value::cons(payload, Value::NIL)
     };
-    Ok(Some(Value::cons(payload, Value::list(children))))
+
+    driver.push_entry(eval, entry);
+    Ok(())
 }
 
 #[doc(hidden)]
@@ -1737,24 +2463,82 @@ pub fn builtin_treesit_induce_sparse_tree(
         .parser(handle.parser_id)
         .ok_or_else(|| node_outdated_error(args[0]))?
         .value();
-    let root = unsafe { tree_sitter::Node::from_raw(handle.raw) };
-    match build_sparse_tree(
-        eval,
-        handle.parser_id,
-        parser_value,
-        root,
-        args[1],
-        args.get(2).copied().unwrap_or(Value::NIL),
-        depth,
-    )
-    .kinded()
+    let process_fn = args.get(2).copied().unwrap_or(Value::NIL);
+    let parsed_pure = PurePredicate::try_parse(eval, args[1]);
+    if parsed_pure.is_none()
+        && !validate_predicate_or_ignore_missing(eval, parser_value, args[1], true)?
     {
-        Ok(Some(tree)) => Ok(tree),
-        Ok(None) => Ok(Value::NIL),
-        Err(FlowKind::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
-            Ok(Value::NIL)
+        return Ok(Value::NIL);
+    }
+    let pure_pred = if process_fn.is_nil() {
+        parsed_pure
+    } else {
+        None
+    };
+    let mut share = walk_share(eval, handle.parser_id);
+    let walk = parser_tree_clone(eval, handle.parser_id, args[0])?;
+    // SAFETY: every `NodeEntry.raw` names the parser's current tree
+    // (`insert_node` enforces it and `apply_parser_edits` retargets it), and
+    // `walk` was just cloned from that live tree.
+    let root = unsafe { node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share) };
+    let finalize_walk = |eval: &mut super::eval::Context,
+                         driver: &mut SparseWalkDriver<'_>|
+     -> EvalResult {
+        match build_sparse_tree(
+            eval,
+            handle.parser_id,
+            parser_value,
+            root,
+            depth,
+            share,
+            driver,
+        )
+        .kinded()
+        {
+            Ok(()) => {
+                let matches = driver.take_reversed();
+                if matches.is_nil() {
+                    Ok(Value::NIL)
+                } else {
+                    // GNU returns the dummy parent `(nil . matches)` (`treesit.c:5051-5069`).
+                    // Its car is nil when the start node does not match. When the start
+                    // node matches, it is the single element of that list.
+                    Ok(Value::cons(Value::NIL, matches))
+                }
+            }
+            Err(FlowKind::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
+                Ok(Value::NIL)
+            }
+            Err(err) => Err(Flow::from_kind(err)),
         }
-        Err(err) => Err(Flow::from_kind(err)),
+    };
+
+    match pure_pred.as_ref() {
+        Some(pure) => {
+            let mut driver = SparseWalkDriver::Pure {
+                predicate: pure,
+                out_rev: Value::NIL,
+            };
+            finalize_walk(eval, &mut driver)
+        }
+        None => {
+            let scope = eval.save_specpdl_roots();
+            for value in [args[0], args[1], process_fn, parser_value] {
+                if value.is_heap_object() {
+                    eval.push_specpdl_root(value);
+                }
+            }
+            let top_slot = eval.push_specpdl_root_slot(Value::NIL);
+            let mut driver = SparseWalkDriver::Rooted {
+                predicate: args[1],
+                process_fn,
+                out_rev: Value::NIL,
+                out_slot: &top_slot,
+            };
+            let outcome = finalize_walk(eval, &mut driver);
+            eval.restore_specpdl_roots(scope);
+            outcome
+        }
     }
 }
 
@@ -1842,7 +2626,7 @@ pub fn builtin_treesit_node_check(eval: &mut super::eval::Context, args: Vec<Val
         .ok_or_else(|| node_outdated_error(args[0]))?;
 
     if property == TreesitNodeProperty::Outdated {
-        return Ok(if parser.generation() == handle.generation {
+        return Ok(if parser.reparse_epoch() == handle.reparse_epoch {
             Value::NIL
         } else {
             Value::T
@@ -1996,7 +2780,7 @@ pub fn builtin_treesit_node_eq(eval: &mut super::eval::Context, args: Vec<Value>
     let left = ensure_current_node(eval, "treesit-node-eq", args[0])?;
     let right = ensure_current_node(eval, "treesit-node-eq", args[1])?;
     let equal = left.parser_id == right.parser_id
-        && left.generation == right.generation
+        && left.reparse_epoch == right.reparse_epoch
         && unsafe {
             tree_sitter::Node::from_raw(left.raw) == tree_sitter::Node::from_raw(right.raw)
         };
@@ -2077,16 +2861,35 @@ pub fn builtin_treesit_node_match_p(
         .parser(handle.parser_id)
         .ok_or_else(|| node_outdated_error(args[0]))?
         .value();
+    if PurePredicate::try_parse(eval, args[1]).is_none()
+        && !validate_predicate_or_ignore_missing(eval, parser_value, args[1], ignore_missing)?
+    {
+        return Ok(Value::NIL);
+    }
+    let mut share = walk_share(eval, handle.parser_id);
+    let walk = parser_tree_clone(eval, handle.parser_id, args[0])?;
+    // SAFETY: every `NodeEntry.raw` names the parser's current tree
+    // (`insert_node` enforces it and `apply_parser_edits` retargets it), and
+    // `walk` was just cloned from that live tree.
+    let node = unsafe { node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share) };
+    let root_scope = eval.save_specpdl_roots();
+    for value in [args[0], args[1], parser_value] {
+        if value.is_heap_object() {
+            eval.push_specpdl_root(value);
+        }
+    }
     let matched = predicate_matches_node(
         eval,
         handle.parser_id,
         parser_value,
-        unsafe { tree_sitter::Node::from_raw(handle.raw) },
+        node,
         args[1],
         false,
         ignore_missing,
-    )?;
-    Ok(if matched { Value::T } else { Value::NIL })
+        share,
+    );
+    eval.restore_specpdl_roots(root_scope);
+    Ok(if matched? { Value::T } else { Value::NIL })
 }
 
 #[doc(hidden)]
@@ -2143,7 +2946,7 @@ pub fn builtin_treesit_node_parser(args: Vec<Value>) -> EvalResult {
     let Some(node) = args[0].as_treesit_node_data() else {
         return Err(node_type_error("treesit-node-parser", args[0]));
     };
-    Ok(node.get(NODE_SLOT_PARSER).copied().unwrap_or(Value::NIL))
+    Ok(node.get(NODE_SLOT_PARSER).unwrap_or(Value::NIL))
 }
 
 #[doc(hidden)]
@@ -2280,6 +3083,9 @@ pub fn builtin_treesit_parser_create(
     }
 
     let (orig_buffer_id, root_buffer_id, buffer_value) = resolve_buffer_ids(eval, args.get(1))?;
+    // GNU `Ftreesit_parser_create` (`src/treesit.c:2387-2388`) resolves and
+    // validates `treesit-language-remap-alist` before checking parser reuse.
+    let remapped_language = resolve_parser_language_symbol(eval, args[0])?;
     if args.get(2).is_none_or(|value| value.is_nil())
         && let Some(existing) = eval
             .treesit
@@ -2288,7 +3094,7 @@ pub fn builtin_treesit_parser_create(
         return Ok(existing);
     }
 
-    let (loaded_language, _) = load_language(eval, language)
+    let (loaded_language, _) = load_language(eval, remapped_language)
         .map_err(|detail| signal_with_data("treesit-load-language-error", detail))?;
     let mut parser = Parser::new();
     parser
@@ -2296,7 +3102,7 @@ pub fn builtin_treesit_parser_create(
         .map_err(|err| signal("error", vec![Value::string(format!("ABI mismatch: {err}"))]))?;
 
     let tracking_linecol = eval.treesit.linecol_cache(orig_buffer_id).is_some()
-        || language_requires_linecol_tracking(eval, language);
+        || language_requires_linecol_tracking(eval, remapped_language);
     if tracking_linecol {
         eval.treesit.enable_linecol_tracking(orig_buffer_id);
     }
@@ -2338,6 +3144,7 @@ pub fn builtin_treesit_parser_delete(
     let _ = eval.treesit.mark_parser_deleted(parser_id);
     if need_to_gc_buffer {
         let _ = eval.edit.buffers.kill_buffer(buffer_id);
+        eval.forget_buffer_redisplay_revisions(&[buffer_id]);
     }
     Ok(Value::NIL)
 }
@@ -2452,9 +3259,7 @@ pub fn builtin_treesit_parser_root_node(
             .parser(parser_id)
             .ok_or_else(|| parser_deleted_error(args[0]))?;
         parser
-            .tree()
-            .map(|tree| tree.tree().root_node())
-            .map(tree_sitter::Node::into_raw)
+            .root_raw()
             .ok_or_else(|| treesit_parse_error(args[0]))?
     };
     Ok(make_node_value_for_parser(eval, parser_id, unsafe {
@@ -2470,7 +3275,22 @@ pub fn builtin_treesit_parser_set_included_ranges(
     expect_args("treesit-parser-set-included-ranges", &args, 2)?;
     let parser_id = expect_live_parser_id(eval, "treesit-parser-set-included-ranges", args[0])?;
     let current_ranges = parser_record_slot(args[0], runtime::PARSER_SLOT_INCLUDED_RANGES)?;
-    if current_ranges == args[1] {
+    // GNU `CHECK_CONS` runs before `Fequal` (`src/treesit.c:2734-2738`).
+    // Nil skips the check. Any other non-cons signals `consp`.
+    if !args[1].is_nil() && !args[1].is_cons() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("consp"), args[1]],
+        ));
+    }
+    // `try_equal_value_swp` is Lisp `equal`: the spine walk, and a signal
+    // when a car nest passes depth 200.
+    if neovm_value::value::try_equal_value_swp(
+        &current_ranges,
+        &args[1],
+        0,
+        eval.symbols_with_pos_enabled,
+    )? {
         return Ok(Value::NIL);
     }
 
@@ -2929,15 +3749,44 @@ pub fn builtin_treesit_query_capture(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("treesit-query-capture", &args, 2, 6)?;
+    if !query_like_p(args[1]) {
+        return Err(query_type_error("treesit-query-capture", args[1]));
+    }
     let input = resolve_node_input(eval, args[0], "treesit-query-capture")?;
-    let compiled_query = resolve_compiled_query_value(
-        eval,
-        input.language_symbol,
-        args[1],
-        "treesit-query-capture",
-    )?;
-    let query_id = runtime::query_id(compiled_query)
-        .ok_or_else(|| compiled_query_type_error("treesit-query-capture", compiled_query))?;
+
+    enum CaptureQuery {
+        Compiled(u64),
+        Ephemeral(runtime::EmacsQuery),
+    }
+
+    // GNU `Ftreesit_query_capture` -> `treesit_initialize_query`
+    // (`src/treesit.c:3950-3988, 4063-4064`): uncompiled string/sexp queries
+    // compile directly against `ts_parser_language(parser)` (the parser's
+    // loaded `TSLanguage`), never by re-consulting `treesit-language-remap-alist`.
+    // Pre-compiled queries are ensured compiled and then checked against the
+    // parser's loaded `TSLanguage` (rather than unremapped Lisp symbols).
+    let capture_query = if runtime::is_compiled_query(args[1]) {
+        ensure_query_compiled(eval, args[1])?;
+        let query_id = runtime::query_id(args[1])
+            .ok_or_else(|| compiled_query_type_error("treesit-query-capture", args[1]))?;
+        CaptureQuery::Compiled(query_id)
+    } else {
+        let parser_language = {
+            let parser = eval
+                .treesit
+                .parser(input.parser_id)
+                .ok_or_else(|| parser_deleted_error(input.parser_value))?;
+            parser
+                .language()
+                .map(|lang| (*lang).clone())
+                .ok_or_else(|| treesit_parse_error(input.parser_value))?
+        };
+        let source_string =
+            expand_query_value("treesit-query-capture", args[1], eval.symbol_mode())?;
+        let compiled = runtime::EmacsQuery::new(&parser_language, &source_string)
+            .map_err(treesit_query_error_from_query)?;
+        CaptureQuery::Ephemeral(compiled)
+    };
     let byte_range = {
         let parser = eval
             .treesit
@@ -2972,16 +3821,37 @@ pub fn builtin_treesit_query_capture(
         if parser.tree().is_none() {
             return Err(treesit_parse_error(input.parser_value));
         }
-        let query = eval
-            .treesit
-            .query(query_id)
-            .and_then(|entry| entry.compiled())
-            .ok_or_else(|| compiled_query_type_error("treesit-query-capture", compiled_query))?;
+        let query = match &capture_query {
+            CaptureQuery::Compiled(query_id) => eval
+                .treesit
+                .query(*query_id)
+                .and_then(|entry| entry.compiled())
+                .ok_or_else(|| compiled_query_type_error("treesit-query-capture", args[1]))?,
+            CaptureQuery::Ephemeral(ephemeral) => ephemeral,
+        };
+        let loaded_parser_lang = parser
+            .language()
+            .ok_or_else(|| treesit_parse_error(input.parser_value))?;
+        if query.language() != &*loaded_parser_lang {
+            let expected = parser_record_slot(input.parser_value, PARSER_SLOT_LANGUAGE)
+                .ok()
+                .and_then(|v| v.as_symbol_name(eval.symbol_mode()))
+                .unwrap_or("unknown");
+            return Err(treesit_query_error(format!(
+                "Query language mismatch: expected `{expected}`"
+            )));
+        }
         let capture_names = query.capture_names().to_vec();
         let predicates = query.predicates().to_vec();
-        let raw_matches = query
-            .matches(input.node_raw, byte_range)
-            .map_err(treesit_query_error)?;
+        // SAFETY: `input.node_raw` names `parser`'s current live tree (via
+        // `insert_node`/`apply_parser_edits` + `ensure_current_node` or
+        // `parser.root_raw()`), `parser.tree()` was verified non-`None` above,
+        // `query.language() == &*loaded_parser_lang` was verified directly on
+        // the loaded `TSLanguage` pointers above (never via unremapped Lisp
+        // symbols), and `eval.treesit` is immutably borrowed for the duration
+        // of this call.
+        let raw_matches =
+            unsafe { query.matches(input.node_raw, byte_range) }.map_err(treesit_query_error)?;
         (
             capture_names,
             predicates,
@@ -3199,24 +4069,53 @@ pub fn builtin_treesit_search_forward(
         .value();
     let forward = args.get(2).is_none_or(|value| value.is_nil());
     let named_only = args.get(3).is_none_or(|value| value.is_nil());
-    match search_forward_impl(
+    if PurePredicate::try_parse(eval, args[1]).is_none()
+        && !validate_predicate_or_ignore_missing(eval, parser_value, args[1], true)?
+    {
+        return Ok(Value::NIL);
+    }
+    let mut share = walk_share(eval, handle.parser_id);
+    let walk = parser_tree_clone(eval, handle.parser_id, args[0])?;
+    // SAFETY: every `NodeEntry.raw` names the parser's current tree
+    // (`insert_node` enforces it and `apply_parser_edits` retargets it), and
+    // `walk` was just cloned from that live tree.
+    let start = unsafe { node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share) };
+    let root_scope = eval.save_specpdl_roots();
+    for value in [args[0], args[1], parser_value] {
+        if value.is_heap_object() {
+            eval.push_specpdl_root(value);
+        }
+    }
+    let outcome = match search_forward_impl(
         eval,
         handle.parser_id,
         parser_value,
-        unsafe { tree_sitter::Node::from_raw(handle.raw) },
+        start,
         args[1],
         forward,
         named_only,
+        share,
     )
     .kinded()
     {
-        Ok(Some(node)) => Ok(make_node_value_for_parser(eval, handle.parser_id, node)),
+        Ok(Some(node)) => match project_node_to_parser(eval, handle.parser_id, node, share) {
+            Some(raw) => {
+                // Neomacs choice, not GNU. After an unguarded dotted reparse, GNU
+                // returns a node of the tree `ts_tree_delete` freed (`src/treesit.c:1945`),
+                // which is UB. This projects the clone node onto the live tree.
+                // SAFETY: `project_node_to_parser` returned a `TSNode` from `handle.parser_id`'s live tree.
+                Ok(unsafe { make_node_value_from_raw(eval, handle.parser_id, raw) })
+            }
+            None => Err(treesit_buffer_changed(args[1])),
+        },
         Ok(None) => Ok(Value::NIL),
         Err(FlowKind::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
             Ok(Value::NIL)
         }
         Err(err) => Err(Flow::from_kind(err)),
-    }
+    };
+    eval.restore_specpdl_roots(root_scope);
+    outcome
 }
 
 #[doc(hidden)]
@@ -3237,26 +4136,55 @@ pub fn builtin_treesit_search_subtree(
         value if value.is_nil() => 1000,
         value => expect_fixnum(&value)?,
     };
-    match search_subtree_impl(
+    if PurePredicate::try_parse(eval, args[1]).is_none()
+        && !validate_predicate_or_ignore_missing(eval, parser_value, args[1], true)?
+    {
+        return Ok(Value::NIL);
+    }
+    let mut share = walk_share(eval, handle.parser_id);
+    let walk = parser_tree_clone(eval, handle.parser_id, args[0])?;
+    // SAFETY: every `NodeEntry.raw` names the parser's current tree
+    // (`insert_node` enforces it and `apply_parser_edits` retargets it), and
+    // `walk` was just cloned from that live tree.
+    let start = unsafe { node_on_clone(eval, handle.parser_id, &walk, handle.raw, &mut share) };
+    let root_scope = eval.save_specpdl_roots();
+    for value in [args[0], args[1], parser_value] {
+        if value.is_heap_object() {
+            eval.push_specpdl_root(value);
+        }
+    }
+    let outcome = match search_subtree_impl(
         eval,
         handle.parser_id,
         parser_value,
-        unsafe { tree_sitter::Node::from_raw(handle.raw) },
+        start,
         args[1],
         forward,
         named_only,
         depth,
         false,
+        share,
     )
     .kinded()
     {
-        Ok(Some(node)) => Ok(make_node_value_for_parser(eval, handle.parser_id, node)),
+        Ok(Some(node)) => match project_node_to_parser(eval, handle.parser_id, node, share) {
+            Some(raw) => {
+                // Neomacs choice, not GNU. After an unguarded dotted reparse, GNU
+                // returns a node of the tree `ts_tree_delete` freed (`src/treesit.c:1945`),
+                // which is UB. This projects the clone node onto the live tree.
+                // SAFETY: `project_node_to_parser` returned a `TSNode` from `handle.parser_id`'s live tree.
+                Ok(unsafe { make_node_value_from_raw(eval, handle.parser_id, raw) })
+            }
+            None => Err(treesit_buffer_changed(args[1])),
+        },
         Ok(None) => Ok(Value::NIL),
         Err(FlowKind::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
             Ok(Value::NIL)
         }
         Err(err) => Err(Flow::from_kind(err)),
-    }
+    };
+    eval.restore_specpdl_roots(root_scope);
+    outcome
 }
 
 #[doc(hidden)]
@@ -3370,7 +4298,7 @@ pub fn builtin_treesit_parse_string(
     // leaving the disjoint `eval.buffers` mutations below alone.  This is
     // DIVERGENCES.md 175 §5's one measured false positive of
     // `Context::lisp_string`, landed rather than reverted.
-    let text = args[0].expect_lisp_string_in(&eval.tagged_heap)?;
+    let text = args[0].expect_lisp_string_in(eval.tagged_heap.heap_ref())?;
     let name = format!(" *treesit-parse-string-{}*", eval.treesit.roots().len() + 1);
     let buffer_id = eval
         .edit
@@ -3416,13 +4344,26 @@ pub fn builtin_treesit_parser_changed_regions(
         return Ok(Value::NIL);
     }
     let regions = changed_ranges_to_lisp(eval, parser_id, &changed_ranges)?;
-    for notifier in
+    let notifiers =
         neovm_value::value::list_to_vec(&parser_record_slot(args[0], PARSER_SLOT_NOTIFIERS)?)
-            .unwrap_or_default()
+            .unwrap_or_default();
+    let root_scope = eval.save_specpdl_roots();
+    for value in [args[0], regions]
+        .into_iter()
+        .chain(notifiers.iter().copied())
     {
-        let _ = eval.funcall_general(notifier, vec![regions, args[0]])?;
+        if value.is_heap_object() {
+            eval.push_specpdl_root(value);
+        }
     }
-    Ok(regions)
+    let outcome = (|| -> EvalResult {
+        for notifier in notifiers {
+            let _ = eval.funcall_general(notifier, vec![regions, args[0]])?;
+        }
+        Ok(regions)
+    })();
+    eval.restore_specpdl_roots(root_scope);
+    outcome
 }
 
 #[doc(hidden)]

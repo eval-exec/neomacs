@@ -274,20 +274,38 @@ fn reserve_canonical(mut context: Context, storage: CanonicalDepthStorage, switc
 fn green_signal_reserve_borrows_owner_default_binding_without_watchers() {
     // Native table bootstrap must finish for every Context before the first
     // admission captures those tables for a World.
-    let [bound, canonical]: [Context; 2] = std::array::from_fn(|_| {
-        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime())
-    });
+    let bound =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    let parked_bound = bound.park_for_test();
+    let canonical =
+        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    let parked_canonical = canonical.park_for_test();
+    let bound = parked_bound.resume_for_test().expect("resume bound");
     reserve_binding(bound, false);
+    let canonical = parked_canonical
+        .resume_for_test()
+        .expect("resume canonical");
     reserve_canonical(canonical, CanonicalDepthStorage::Forwarded, false);
 }
 
 #[test]
 fn green_signal_reserve_borrows_owner_local_binding_without_watchers() {
-    let [bound, default, local, switched]: [Context; 4] = std::array::from_fn(|_| {
-        Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime())
-    });
+    let make =
+        || Context::new_with_threading(ThreadingMode::Green, crate::test_utils::unit_runtime());
+    let bound = make();
+    let parked_bound = bound.park_for_test();
+    let default = make();
+    let parked_default = default.park_for_test();
+    let local = make();
+    let parked_local = local.park_for_test();
+    let switched = make();
+    let parked_switched = switched.park_for_test();
+    let bound = parked_bound.resume_for_test().expect("resume bound");
     reserve_binding(bound, true);
+    let default = parked_default.resume_for_test().expect("resume default");
     reserve_canonical(default, CanonicalDepthStorage::LocalizedDefault, false);
+    let local = parked_local.resume_for_test().expect("resume local");
     reserve_canonical(local, CanonicalDepthStorage::LocalizedLocal, false);
+    let switched = parked_switched.resume_for_test().expect("resume switched");
     reserve_canonical(switched, CanonicalDepthStorage::LocalizedLocal, true);
 }

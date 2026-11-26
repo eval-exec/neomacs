@@ -3,15 +3,17 @@ use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::value::ValueKind;
 use std::io::Write;
 
-// Test helpers hold the Context alive in a thread_local so the
-// heap objects in the returned Value survive until the next call.
-// Previously the bare `let mut eval = ...; builtin(...)` pattern
-// dropped the Context at end of function, destroying the tagged
-// heap and leaving the returned Value pointing at freed memory.
+// Each helper call constructs one Context, runs the builtin, then parks
+// it. Parking clears the slot so the next call is not a second active
+// Context, and keeps that heap allocated so earlier return values stay
+// readable. Arguments are built by the caller before the call; with the
+// slot empty they land on the armed test fallback, which `Context::new`
+// may replace.
 use std::cell::RefCell;
 thread_local! {
-    static DIRED_TEST_CTX: RefCell<Option<Box<super::super::eval::Context>>> =
-        const { RefCell::new(None) };
+    static DIRED_TEST_CTX: RefCell<
+        Vec<neovm_eval::emacs_core::eval::parked_context::ParkedContext>,
+    > = const { RefCell::new(Vec::new()) };
 }
 
 /// Test helper: create a fresh eval context for dired tests.
@@ -19,31 +21,25 @@ fn test_eval_ctx() -> super::super::eval::Context {
     crate::test_utils::new_context()
 }
 
+fn call_with_fresh_context(
+    invoke: impl FnOnce(&mut super::super::eval::Context) -> EvalResult,
+) -> EvalResult {
+    let mut ctx = crate::test_utils::new_context();
+    let result = invoke(&mut ctx);
+    DIRED_TEST_CTX.with(|slot| slot.borrow_mut().push(ctx.park_for_test()));
+    result
+}
+
 fn call_directory_files_and_attributes(args: Vec<Value>) -> EvalResult {
-    DIRED_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(crate::test_utils::new_context());
-        let result = builtin_directory_files_and_attributes(&mut ctx, args);
-        *slot.borrow_mut() = Some(ctx);
-        result
-    })
+    call_with_fresh_context(|ctx| builtin_directory_files_and_attributes(ctx, args))
 }
 
 fn call_file_name_all_completions(args: Vec<Value>) -> EvalResult {
-    DIRED_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(crate::test_utils::new_context());
-        let result = builtin_file_name_all_completions(&mut ctx, args);
-        *slot.borrow_mut() = Some(ctx);
-        result
-    })
+    call_with_fresh_context(|ctx| builtin_file_name_all_completions(ctx, args))
 }
 
 fn call_file_attributes(args: Vec<Value>) -> EvalResult {
-    DIRED_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(crate::test_utils::new_context());
-        let result = builtin_file_attributes(&mut ctx, args);
-        *slot.borrow_mut() = Some(ctx);
-        result
-    })
+    call_with_fresh_context(|ctx| builtin_file_attributes(ctx, args))
 }
 
 fn make_test_dir(name: &str) -> (std::path::PathBuf, String) {

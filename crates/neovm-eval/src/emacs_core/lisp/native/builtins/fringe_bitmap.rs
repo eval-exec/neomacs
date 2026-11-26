@@ -142,12 +142,11 @@ impl FringeBitmapRegistry {
     /// A re-definition of an existing symbol keeps its previously assigned
     /// index (GNU: "If BITMAP already exists, the existing definition is
     /// replaced."), preserving any `'fringe` integer already on the symbol.
-    pub fn define(
-        &mut self,
-        sym: SymId,
-        existing_index: Option<u32>,
-        mut bitmap: FringeBitmap,
-    ) -> u32 {
+    ///
+    /// A re-definition carries no face: GNU's `init_fringe_bitmap` runs
+    /// `destroy_fringe_bitmap` first, and that clears `fringe_faces[n]`, so the
+    /// bitmap's `set-fringe-bitmap-face` face does not survive it (fringe.c).
+    pub fn define(&mut self, sym: SymId, existing_index: Option<u32>, bitmap: FringeBitmap) -> u32 {
         let index = match existing_index.or_else(|| self.index_of(sym)) {
             Some(index) => index,
             None => {
@@ -156,13 +155,6 @@ impl FringeBitmapRegistry {
                 index
             }
         };
-        // Preserve a face override set by an earlier `set-fringe-bitmap-face`
-        // when a later `define-fringe-bitmap` replaces the geometry only.
-        if bitmap.face.is_none()
-            && let Some(prev) = self.user_bitmaps.get(&sym)
-        {
-            bitmap.face = prev.face.clone();
-        }
         self.user_bitmaps.insert(sym, bitmap);
         self.by_index.insert(index, sym);
         index

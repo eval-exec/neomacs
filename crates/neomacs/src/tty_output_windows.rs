@@ -78,7 +78,7 @@ impl Session {
         )
     }
 
-    fn enter(&mut self) -> io::Result<()> {
+    fn enter(&mut self, set_strings: &[u8]) -> io::Result<()> {
         if self.active {
             return Ok(());
         }
@@ -90,8 +90,11 @@ impl Session {
                     | DISABLE_NEWLINE_AUTO_RETURN,
             )?;
             self.active = true;
-            self.console()
-                .write_char_buffer(super::super::tty_init::tty_enter_sequence())?;
+            for chunk in super::super::tty_init::tty_vt_enter_chunks(set_strings) {
+                if !chunk.is_empty() {
+                    self.console().write_char_buffer(chunk)?;
+                }
+            }
         } else {
             let alternate = ScreenBuffer::create()?;
             // Disable automatic wrapping: writing the bottom-right cell must
@@ -104,12 +107,15 @@ impl Session {
         Ok(())
     }
 
-    fn leave(&mut self) -> io::Result<()> {
+    fn leave(&mut self, reset_strings: &[u8]) -> io::Result<()> {
         let output = (|| {
             if self.active {
                 if self.vt {
-                    self.console()
-                        .write_char_buffer(super::super::tty_init::tty_leave_sequence())?;
+                    for chunk in super::super::tty_init::tty_vt_leave_chunks(reset_strings) {
+                        if !chunk.is_empty() {
+                            self.console().write_char_buffer(chunk)?;
+                        }
+                    }
                 } else {
                     self.original.show()?;
                     self.alternate = None;
@@ -149,7 +155,7 @@ impl Session {
 }
 impl Drop for Session {
     fn drop(&mut self) {
-        let _ = self.leave();
+        let _ = self.leave(&[]);
     }
 }
 
@@ -168,18 +174,18 @@ pub(crate) fn attributes() -> TtyAttributeCapabilities {
     }
     caps
 }
-pub(crate) fn enter() -> io::Result<()> {
+pub(crate) fn enter_with(set_strings: &[u8]) -> io::Result<()> {
     with_session(|session| {
-        if let Err(error) = session.enter() {
-            let _ = session.leave();
+        if let Err(error) = session.enter(set_strings) {
+            let _ = session.leave(&[]);
             Err(error)
         } else {
             Ok(())
         }
     })
 }
-pub(crate) fn leave() -> io::Result<()> {
-    with_session(Session::leave)
+pub(crate) fn leave_with(reset_strings: &[u8]) -> io::Result<()> {
+    with_session(|session| session.leave(reset_strings))
 }
 
 pub(crate) fn render(rif: &mut TtyRif) -> io::Result<()> {
@@ -280,16 +286,18 @@ fn legacy_attributes(attrs: &CellAttrs, default: u16) -> u16 {
     foreground | (background << 4)
 }
 
-pub(crate) fn popup_line(row: usize, col: usize, text: &str) -> io::Result<()> {
+pub(crate) fn popup_line(row: usize, col: usize, text: &str, inverse: bool) -> io::Result<()> {
     with_session(|session| {
         if session.vt {
+            let highlight = if inverse { "\x1b[7m" } else { "" };
+            let reset = if inverse { "\x1b[0m" } else { "" };
             session.console().write_char_buffer(
-                format!("\x1b[{};{}H\x1b[7m{text}\x1b[0m", row + 1, col + 1).as_bytes(),
+                format!("\x1b[{};{}H{highlight}{text}{reset}", row + 1, col + 1).as_bytes(),
             )?;
         } else {
             session.move_to(row, col)?;
             let attrs = CellAttrs {
-                inverse: true,
+                inverse,
                 ..CellAttrs::default()
             };
             session

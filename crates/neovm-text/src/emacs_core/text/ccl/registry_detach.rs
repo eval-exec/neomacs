@@ -8,14 +8,8 @@ use neovm_value::heap_registry::detachment::{
 };
 
 #[cold]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "E2 L3 dormant cold detach; no production caller enters it"
-    )
-)]
-pub(crate) fn detach_ccl_registry(
+#[doc(hidden)]
+pub fn detach_ccl_registry(
     handle: &HeapRegistryHandle<CclRegistry>,
 ) -> Result<DetachedRegistry<CclRegistry>, RegistryDetachFailure<CclRegistry>> {
     CCL_REGISTRY.with(|slot| {

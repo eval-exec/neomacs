@@ -17,12 +17,14 @@
 ;; expose the same command even before the GUI terminal layer is loaded.
 (global-set-key [XF86WakeUp] #'ignore)
 
-;; GNU's NS port binds Cmd-Q to `save-buffers-kill-emacs' in the dump
-;; (`term/ns-win.el:141').  Neomacs's AppKit Quit item is retargeted to feed
-;; that key event into the input transport, so the binding must exist in the
-;; dump exactly where GNU installs it.  Other window systems leave `s-q'
-;; unbound, as GNU does.
+;; GNU's NS port installs separate bindings for the physical Cmd-Q chord
+;; (`term/ns-win.el:141') and the application's `ns-power-off' non-key event
+;; (`term/ns-win.el:177,195'). Both initially save buffers and quit; rebinding
+;; the chord must preserve the application-menu route. Keep these dump-safe
+;; defaults on Darwin, including batch/TTY sessions, as GNU's NS dump does.
 (when (eq system-type 'darwin)
+  (make-non-key-event 'ns-power-off)
+  (global-set-key [ns-power-off] #'save-buffers-kill-emacs)
   (global-set-key [?\s-q] #'save-buffers-kill-emacs))
 
 ;; `x-gtk-use-system-tooltips' has no C declaration in any GNU build: it is an

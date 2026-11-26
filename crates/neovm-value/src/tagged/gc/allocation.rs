@@ -35,7 +35,7 @@ impl TaggedHeap {
     /// snapshot). A property of the allocation region, decided at its grant.
     #[inline(always)]
     pub(super) fn allocates_black(&self) -> bool {
-        self.sweep_in_progress || self.concurrent_mark_running
+        self.sweep_in_progress || self.concurrent_mark_running()
     }
 
     /// GNU `Flist` (`src/alloc.c:2699`): `val = Qnil; while (nargs > 0) val =
@@ -91,7 +91,8 @@ impl TaggedHeap {
 
         self.add_memory_use_count(MemoryUseCountSlot::Strings, 1);
         self.add_memory_use_count(MemoryUseCountSlot::StringChars, s.sbytes() as u64);
-        let ptr = self.string_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.string_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -106,11 +107,15 @@ impl TaggedHeap {
             // white for the next `begin_collection` flip otherwise.
             (*ptr).header.set_marked(self.mark_parity);
         }
-        self.note_black_born(ptr.cast());
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
+        unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
-        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        unsafe {
+            alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
+        };
         self.current_mutator_gc_mut().allocated_count += 1;
-        self.note_allocation_bytes(unsafe { Self::string_object_bytes(&*ptr) });
+        self.note_allocation_bytes(unsafe { Self::string_allocation_bytes(&*ptr) });
         let value = unsafe { TaggedValue::from_string_ptr(ptr) };
         if let Some(kind) = empty_kind {
             self.canonical_empty_strings.install_owned(kind, value)
@@ -155,7 +160,9 @@ impl TaggedHeap {
         // region wrote; only the value is left.
         unsafe { std::ptr::addr_of_mut!((*ptr).value).write(value) };
         #[cfg(any(test, feature = "test-support"))]
-        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        unsafe {
+            alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
+        };
         unsafe { TaggedValue::from_float_ptr(ptr) }
     }
 
@@ -176,8 +183,17 @@ impl TaggedHeap {
     /// `drop_in_place` frees the element `Vec` the vector owns).
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn alloc_vector(&mut self, items: Vec<TaggedValue>) -> TaggedValue {
+        let ptr = self.alloc_vector_raw(items);
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
+    /// Allocate a vector slot from the vector arena pages and return its typed
+    /// raw pointer without an integer-to-pointer round-trip. Used by
+    /// `alloc_vector` and by strict-provenance Miri tests.
+    pub(crate) fn alloc_vector_raw(&mut self, items: Vec<TaggedValue>) -> *mut VectorObj {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, items.len() as u64);
-        let ptr = self.vector_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.vector_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -196,15 +212,25 @@ impl TaggedHeap {
             registered,
             "page vector allocated twice (bitmap/registry out of sync)"
         );
-        self.note_black_born(ptr.cast());
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
+        unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
-        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        unsafe {
+            alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
+        };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(
             size_of::<VectorObj>()
                 .saturating_add(Self::lisp_value_vec_storage_bytes(unsafe { &(*ptr).data })),
         );
-        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+        ptr
+    }
+
+    /// Number of live 64 KiB pages currently owned by `vector_arena`.
+    #[cfg(test)]
+    pub(crate) fn vector_arena_page_count(&self) -> usize {
+        self.vector_arena.pages.len()
     }
 
     /// Allocate a GNU-shaped char-table.
@@ -241,7 +267,8 @@ impl TaggedHeap {
             extras: extras.into(),
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe {
             size_of::<CharTableObj>()
@@ -265,7 +292,8 @@ impl TaggedHeap {
             contents: contents.into(),
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe {
             size_of::<SubCharTableObj>()
@@ -277,12 +305,10 @@ impl TaggedHeap {
     /// Allocate a hash table.
     pub fn alloc_hash_table(&mut self, table: crate::value::LispHashTable) -> TaggedValue {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, 1);
-        let obj = Box::new(HashTableObj {
-            header: VecLikeHeader::new(VecLikeType::HashTable),
-            table,
-        });
+        let obj = Box::new(HashTableObj::new(table));
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::hash_table_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -297,7 +323,8 @@ impl TaggedHeap {
             count: 0,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::obarray_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -321,7 +348,8 @@ impl TaggedHeap {
     /// defers every lambda to the STW termination drain (concurrent claiming
     /// is a future task); `mark_value`'s owned veclike arm traces it as before.
     pub fn alloc_lambda(&mut self, slots: Vec<TaggedValue>) -> TaggedValue {
-        let ptr = self.lambda_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.lambda_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -335,9 +363,13 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally — the link seam's store.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
-        self.note_black_born(ptr.cast());
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
+        unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
-        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        unsafe {
+            alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
+        };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::lambda_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -354,7 +386,8 @@ impl TaggedHeap {
     /// 03/3b — same discipline as `alloc_lambda`, own arena at the shared
     /// 128B stride; `drop_in_place` frees the slot `Vec` + cached params).
     pub fn alloc_macro(&mut self, slots: Vec<TaggedValue>) -> TaggedValue {
-        let ptr = self.macro_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.macro_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -368,9 +401,13 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
-        self.note_black_born(ptr.cast());
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
+        unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
-        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        unsafe {
+            alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
+        };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::macro_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -390,7 +427,8 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<BufferObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -404,7 +442,8 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<WindowObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -418,7 +457,8 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<FrameObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -431,7 +471,8 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<TimerObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -444,7 +485,8 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<ProcessObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -457,7 +499,8 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<TerminalObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -490,7 +533,8 @@ impl TaggedHeap {
             kill_without_query: false,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<XwidgetObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -508,7 +552,8 @@ impl TaggedHeap {
         self.add_memory_use_count(MemoryUseCountSlot::VectorCells, 1 + nwords as u64);
         let obj = Box::new(BoolVectorObj::new(nbits, words));
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<BoolVectorObj>() + nwords * size_of::<u64>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -526,7 +571,8 @@ impl TaggedHeap {
             surface_id,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<SurfaceObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -543,7 +589,8 @@ impl TaggedHeap {
         let object = Box::new(ThreadObj::new(payload));
         let bytes = object.owned_bytes();
         let ptr = Box::into_raw(object);
-        self.link_veclike(ptr.cast());
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr.cast()) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(bytes);
         // SAFETY: the linked, fully initialized ThreadObj owns this header.
@@ -559,7 +606,8 @@ impl TaggedHeap {
         let object = Box::new(MutexObj::new(payload));
         let bytes = object.owned_bytes();
         let ptr = Box::into_raw(object);
-        self.link_veclike(ptr.cast());
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr.cast()) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(bytes);
         // SAFETY: the linked, fully initialized MutexObj owns this header.
@@ -575,7 +623,8 @@ impl TaggedHeap {
         let object = Box::new(CondVarObj::new(payload));
         let bytes = object.owned_bytes();
         let ptr = Box::into_raw(object);
-        self.link_veclike(ptr.cast());
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr.cast()) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(bytes);
         // SAFETY: the linked, fully initialized CondVarObj owns this header.
@@ -592,7 +641,8 @@ impl TaggedHeap {
             video_id,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<VideoObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -626,7 +676,8 @@ impl TaggedHeap {
             hidden: false,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<XwidgetViewObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -664,7 +715,8 @@ impl TaggedHeap {
         &mut self,
         data: crate::tagged::bytecode::chunk::ByteCodeFunction,
     ) -> TaggedValue {
-        let ptr = self.bytecode_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.bytecode_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -679,9 +731,13 @@ impl TaggedHeap {
             // `link_veclike`).
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
-        self.note_black_born(ptr.cast());
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
+        unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
-        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        unsafe {
+            alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
+        };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::bytecode_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -691,16 +747,15 @@ impl TaggedHeap {
     /// `constants` and whose GNU code-string object (`aref` slot 1) is
     /// `code`, the prototype's, as GNU's instance copies the prototype's
     /// slot: every other field is `proto`'s (the `Clone` shares its
-    /// bytes, decode cell and tiering state), written STRAIGHT INTO the arena
-    /// slot field by field. `alloc_bytecode` of a clone moved the whole
-    /// ~336-byte function through several stack temporaries on the way into
-    /// the slot (wide copies whose loads hit the narrow stores that had just
-    /// built them); here no temporary of the whole function exists.
+    /// bytes, decode cell and tiering state, including the execution
+    /// certificate), written STRAIGHT INTO the arena slot field by field.
+    /// [`ByteCodeFunction::instance_image`] clones those fields before the
+    /// slot is claimed. Its destructure is exhaustive, so a new
+    /// `ByteCodeFunction` field fails to compile until the image copies it.
     ///
     /// Same chokepoint contract as [`Self::alloc_bytecode`]: a FULL header
-    /// write before anything else, every data field written (the destructure
-    /// below is exhaustive, so a new `ByteCodeFunction` field fails to
-    /// compile here until it is copied), then the born-at-parity store — all
+    /// write before anything else, every data field written, then the
+    /// born-at-parity store — all
     /// before the value exists, so no barrier is needed and the concurrent
     /// claim arm, which reads only pre-cycle objects, never sees the slot
     /// half-written. Same accounting.
@@ -711,47 +766,13 @@ impl TaggedHeap {
         constants: LispValueVec,
         code: TaggedValue,
     ) -> TaggedValue {
-        debug_assert!(
-            !proto.is_pdump_stub(),
-            "instantiating an unmaterialized pdump stub"
-        );
-        #[cfg(any(test, feature = "test-support"))]
-        crate::tagged::bytecode::chunk::note_bytecode_function_clone_for_test();
-        let crate::tagged::bytecode::chunk::ByteCodeFunction {
-            source_id,
-            ops,
-            ops_sealed,
-            stack_verified,
-            constants: _,
-            max_stack,
-            params,
-            arglist,
-            lexical,
-            env,
-            gnu_byte_offset_map,
-            gnu_bytecode_bytes,
-            docstring,
-            doc_form,
-            interactive,
-            closure_slot_count,
-            extra_slots,
-            #[cfg(feature = "jit")]
-            runtime,
-            lazy_gnu_code,
-        } = proto;
         // Every clone BEFORE the slot is claimed: `alloc_slot` marks it
         // allocated, and the sweep would drop whatever a panic left there.
-        let ops = ops.clone();
-        let params = params.clone();
-        let gnu_byte_offset_map = gnu_byte_offset_map.clone();
-        let gnu_bytecode_bytes = gnu_bytecode_bytes.clone();
-        let docstring = docstring.clone();
-        let extra_slots = extra_slots.clone();
-        #[cfg(feature = "jit")]
-        let runtime = runtime.clone();
-        let lazy_gnu_code = lazy_gnu_code.clone();
+        // The image copies the execution certificate; it does not clear it.
+        let image = proto.instance_image();
 
-        let ptr = self.bytecode_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.bytecode_arena.alloc_slot() };
         // SAFETY: `ptr` is a claimed, correctly aligned slot of this heap's
         // bytecode arena. Every field is written exactly once through a raw
         // field pointer (never through a reference to the uninitialized
@@ -761,27 +782,7 @@ impl TaggedHeap {
             use std::ptr::addr_of_mut;
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             addr_of_mut!((*ptr).header).write(VecLikeHeader::new(VecLikeType::ByteCode));
-            let data = addr_of_mut!((*ptr).data);
-            addr_of_mut!((*data).source_id).write(*source_id);
-            addr_of_mut!((*data).ops).write(ops);
-            addr_of_mut!((*data).ops_sealed).write(*ops_sealed);
-            addr_of_mut!((*data).stack_verified).write(*stack_verified);
-            addr_of_mut!((*data).constants).write(constants);
-            addr_of_mut!((*data).max_stack).write(*max_stack);
-            addr_of_mut!((*data).params).write(params);
-            addr_of_mut!((*data).arglist).write(*arglist);
-            addr_of_mut!((*data).lexical).write(*lexical);
-            addr_of_mut!((*data).env).write(*env);
-            addr_of_mut!((*data).gnu_byte_offset_map).write(gnu_byte_offset_map);
-            addr_of_mut!((*data).gnu_bytecode_bytes).write(gnu_bytecode_bytes);
-            addr_of_mut!((*data).docstring).write(docstring);
-            addr_of_mut!((*data).doc_form).write(*doc_form);
-            addr_of_mut!((*data).interactive).write(*interactive);
-            addr_of_mut!((*data).closure_slot_count).write(*closure_slot_count);
-            addr_of_mut!((*data).extra_slots).write(extra_slots);
-            #[cfg(feature = "jit")]
-            addr_of_mut!((*data).runtime).write(runtime);
-            addr_of_mut!((*data).lazy_gnu_code).write(lazy_gnu_code);
+            image.write(addr_of_mut!((*ptr).data), constants);
             // Pre-publish, like every field above: `code` is reachable from
             // the prototype, so no barrier is owed.
             addr_of_mut!((*ptr).slot_objects).write(ByteCodeSlotObjects::with_code(code));
@@ -789,9 +790,13 @@ impl TaggedHeap {
             // `link_veclike`).
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
-        self.note_black_born(ptr.cast());
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
+        unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
-        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        unsafe {
+            alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
+        };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::bytecode_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -823,7 +828,8 @@ impl TaggedHeap {
             data,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::font_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -859,7 +865,8 @@ impl TaggedHeap {
             tag,
             VecLikeType::Record | VecLikeType::WindowConfiguration | VecLikeType::TsNode
         ));
-        let ptr = self.record_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.record_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -872,9 +879,13 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
-        self.note_black_born(ptr.cast());
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
+        unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
-        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        unsafe {
+            alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
+        };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::record_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -901,7 +912,8 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         let value = unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) };
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<OverlayObj>());
         value
@@ -920,7 +932,8 @@ impl TaggedHeap {
         // class free list, so `save-excursion`'s make/free churn cycles
         // through a few cache-warm slots instead of scattering `Box`es
         // across the general heap.
-        let ptr = self.marker_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.marker_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -933,9 +946,13 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
-        self.note_black_born(ptr.cast());
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
+        unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
-        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        unsafe {
+            alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
+        };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<MarkerObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -972,7 +989,8 @@ impl TaggedHeap {
     /// escapes (the `alloc_float_inline` pattern).
     #[inline(always)]
     pub(crate) fn alloc_bignum_inline(&mut self, value: Integer) -> TaggedValue {
-        let ptr = self.bignum_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.bignum_arena.alloc_slot() };
         unsafe {
             std::ptr::write(
                 ptr,
@@ -985,9 +1003,13 @@ impl TaggedHeap {
                 },
             );
         }
-        self.note_black_born(ptr.cast());
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
+        unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
-        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        unsafe {
+            alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
+        };
         self.current_mutator_gc_mut().allocated_count += 1;
         // Pacing unchanged: the 56-byte object, as for the boxed bignum. GNU
         // does not count GMP limb memory toward `consing_until_gc` either.
@@ -1006,7 +1028,8 @@ impl TaggedHeap {
     /// entry (owned via the page-span oracle, routed by owns_veclike_object;
     /// free_gc_object's SymbolWithPos arm stays the residual-Box seam).
     pub fn alloc_symbol_with_pos(&mut self, sym: TaggedValue, pos: TaggedValue) -> TaggedValue {
-        let ptr = self.symbol_with_pos_arena.alloc_slot();
+        // SAFETY: the `ptr::write` immediately below initializes the slot header and payload.
+        let ptr = unsafe { self.symbol_with_pos_arena.alloc_slot() };
         unsafe {
             // FULL-HEADER WRITE: never partially reuse prior slot bytes.
             std::ptr::write(
@@ -1020,9 +1043,13 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
-        self.note_black_born(ptr.cast());
+        // SAFETY: `ptr` was just allocated on this heap with an initialized `GcHeader`.
+        unsafe { self.note_black_born(ptr.cast()) };
+        // SAFETY: `ptr` points to the initialized `GcHeader` just allocated above.
         #[cfg(any(test, feature = "test-support"))]
-        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        unsafe {
+            alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len())
+        };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<SymbolWithPosObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
@@ -1038,7 +1065,8 @@ impl TaggedHeap {
             function,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.finalizer_registry.push(ptr);
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<FinalizerObj>());
@@ -1054,14 +1082,21 @@ impl TaggedHeap {
             id,
         });
         let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(ptr as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<SqliteObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
 
     /// Allocate a user-pointer object for dynamic module API.
-    pub fn alloc_user_ptr(
+    ///
+    /// # Safety
+    ///
+    /// `ptr` is null or owned by `finalizer`. The collector may call
+    /// `finalizer` with `ptr` once, on this heap's thread, after the object
+    /// is unreachable.
+    pub unsafe fn alloc_user_ptr(
         &mut self,
         ptr: *mut std::ffi::c_void,
         finalizer: EmacsFinalizer,
@@ -1072,14 +1107,21 @@ impl TaggedHeap {
             finalizer,
         });
         let raw = Box::into_raw(obj);
-        self.link_veclike(raw as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(raw as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<UserPtrObj>());
         unsafe { TaggedValue::from_veclike_ptr(raw as *const VecLikeHeader) }
     }
 
     /// Allocate a module-function object for dynamic module API.
-    pub fn alloc_module_function(
+    ///
+    /// # Safety
+    ///
+    /// `subr` is a valid module `emacs_function`. `funcall` jumps to it, so
+    /// a garbage pointer is undefined behavior. `data` stays valid for every
+    /// later invocation.
+    pub unsafe fn alloc_module_function(
         &mut self,
         min_arity: isize,
         max_arity: isize,
@@ -1099,7 +1141,8 @@ impl TaggedHeap {
             interactive_form,
         });
         let raw = Box::into_raw(obj);
-        self.link_veclike(raw as *mut VecLikeHeader);
+        // SAFETY: newly boxed object has an initialized `VecLikeHeader` and has not been linked yet.
+        unsafe { self.link_veclike(raw as *mut VecLikeHeader) };
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<ModuleFunctionObj>());
         unsafe { TaggedValue::from_veclike_ptr(raw as *const VecLikeHeader) }
@@ -1107,7 +1150,9 @@ impl TaggedHeap {
 }
 
 impl TaggedHeap {
-    pub(super) fn veclike_payload_layout(header: *const VecLikeHeader) -> PayloadLayout {
+    /// # Safety
+    /// `header` must point to a live, initialized `VecLikeHeader`.
+    pub(super) unsafe fn veclike_payload_layout(header: *const VecLikeHeader) -> PayloadLayout {
         unsafe {
             match (*header).type_tag {
                 VecLikeType::Vector => {

@@ -32,13 +32,13 @@ fn make_old_cons(heap: &mut TaggedHeap, owner: TaggedValue, other_roots: &[Tagge
         if heap.cons_age_is_old_for_test(owner) {
             break;
         }
-        heap.begin_minor_collection().unwrap();
+        heap.begin_minor_collection_for_test().unwrap();
         heap.seed_root(owner);
         for &root in other_roots {
             heap.seed_root(root);
         }
-        heap.complete_minor_collection();
-        heap.finish_incremental_sweep_now();
+        heap.complete_minor_collection_for_test();
+        heap.finish_incremental_sweep_now_for_test();
     }
     assert!(heap.cons_age_is_old_for_test(owner));
     assert_eq!(heap.cons_region_for_test(), (0, 0));
@@ -63,7 +63,7 @@ fn generational_inline_slot_immediates_leave_old_cards_and_logs_clean() {
         assert!(set_vector_slot(vector, 0, value));
         assert_eq!(cons.cons_car(), value);
         assert_eq!(cons.cons_cdr(), value);
-        assert_eq!(vector.as_vector_data().unwrap().as_slice()[0], value);
+        assert_eq!(vector.as_vector_data().unwrap().at(0), value);
         assert!(!heap.owner_card_is_dirty_for_test(cons));
         assert!(heap.current_mutator_gc().remset.is_empty());
     }
@@ -181,7 +181,7 @@ fn gen0_inline_slot_tenured_immediates_outside_window_keep_bookkeeping() {
     // the first partition cycle make it permanent; it stays outside the dump
     // span, so the inline store still takes the remembered gate.
     assert_eq!(heap.note_image_object(vector), ImageStamp::Stamped);
-    heap.collect_exact(std::iter::once(vector));
+    heap.collect_rooted(std::iter::once(vector));
     assert!(heap.is_tenured_for_test(vector));
     assert!(!heap.is_remembered_for_test(vector));
     assert!(!heap.barrier_window().covers(vector.bits() & !TAG_MASK));
@@ -199,18 +199,26 @@ fn inline_slot_heap_switch_rederives_generation_and_real_window_obligations() {
     assert!(set_cons_car(cons, TaggedValue::fixnum(53)));
     assert!(!generational.owner_card_is_dirty_for_test(cons));
 
+    // SAFETY: bare `TaggedHeap` unit test switching to `legacy`.
+    unsafe { clear_tagged_heap_if_installed(&generational) };
     let mut legacy = installed_heap(false);
     let image = FakeImage::leak(false);
     let mapped = image.register_cons(&mut legacy);
     assert!(set_cons_car(mapped, TaggedValue::char('s')));
     assert!(legacy.mapped_remembered.contains(&mapped.bits()));
 
+    // SAFETY: bare `TaggedHeap` unit test switching back to `generational`.
+    unsafe { clear_tagged_heap_if_installed(&legacy) };
     set_tagged_heap(&mut generational);
     let child = generational.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     assert!(set_cons_car(cons, child));
     // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
     unsafe { generational.set_concurrent_active_for_test(true) };
+    // SAFETY: bare `TaggedHeap` unit test switching to `legacy` and back.
+    unsafe { clear_tagged_heap_if_installed(&generational) };
     set_tagged_heap(&mut legacy);
+    // SAFETY: bare `TaggedHeap` unit test switching back to `generational`.
+    unsafe { clear_tagged_heap_if_installed(&legacy) };
     set_tagged_heap(&mut generational);
     assert!(set_cons_car(cons, TaggedValue::fixnum(59)));
     // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.

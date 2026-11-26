@@ -53,10 +53,15 @@ fn bytecode_varset(var: &str, value: Value) -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::VarSet(1), Op::Constant(0), Op::Return];
-    f.constants = vec![value, Value::from_sym_id(intern(var))].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+    f.set_lexical(true);
+    f.set_ops(vec![
+        Op::Constant(0),
+        Op::VarSet(1),
+        Op::Constant(0),
+        Op::Return,
+    ]);
+    f.set_constants(vec![value, Value::from_sym_id(intern(var))].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
     neovm_eval::test_support::authority::seal_hand_assembled_ops_for_test(&mut f);
     Value::make_bytecode(f)
 }

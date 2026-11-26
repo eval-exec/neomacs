@@ -206,7 +206,7 @@ pub(super) fn shared_table_gc<H: HostParts>(host: &mut H, old_table: bool) {
                     open_collection(era, &session.go_txs, Go::Forced, &mut session.next_epoch);
                 // Observe the real per-owner published logs, before the major
                 // drain could hide a missing barrier by tracing table roots.
-                let receipts = retry_reg(|| era.stopped_summaries()).census().unwrap();
+                let receipts = stopped.summaries().unwrap().census().unwrap();
                 // Admission may collect while retiring the bootstrap weak
                 // table, promoting shells even in the general survival row.
                 // Read their actual ages before this row's first collection.

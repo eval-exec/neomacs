@@ -26,8 +26,11 @@ fn gc_tls_ownership_window_snapshot_payload_is_rooted_by_its_configuration() {
 fn gc_tls_ownership_window_snapshots_follow_context_swaps() {
     let mut first = crate::test_utils::new_context();
     first.eval_str("(progn (setq window-persistent-parameters '((gc-tls-payload . t))) (set-window-parameter nil 'gc-tls-payload (vector 1)) (setq gc-tls-configuration (current-window-configuration)) (set-window-parameter nil 'gc-tls-payload nil))").unwrap();
+    let parked_first = first.park_for_test();
     let mut second = crate::test_utils::new_context();
     second.eval_str("(progn (setq window-persistent-parameters '((gc-tls-payload . t))) (set-window-parameter nil 'gc-tls-payload (vector 2)) (setq gc-tls-configuration (current-window-configuration)) (set-window-parameter nil 'gc-tls-payload nil))").unwrap();
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first");
     first.setup_thread_locals();
     first.gc_collect_exact();
     first
@@ -39,6 +42,8 @@ fn gc_tls_ownership_window_snapshots_follow_context_swaps() {
             .unwrap(),
         Value::fixnum(1)
     );
+    drop(first);
+    let mut second = parked_second.resume_for_test().expect("resume second");
     second.setup_thread_locals();
     second.gc_collect_exact();
     second

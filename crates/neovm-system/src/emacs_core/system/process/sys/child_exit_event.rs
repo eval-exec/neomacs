@@ -93,19 +93,27 @@ impl ChildExitEvent {
         }
         // XNU posts NOTE_EXIT before SZOMB and SIGCHLD after SZOMB. Register
         // SIGCHLD before any process knote, without changing its disposition.
-        event.change_darwin(
-            libc::SIGCHLD as _,
-            libc::EVFILT_SIGNAL,
-            libc::EV_ADD | libc::EV_CLEAR,
-            0,
-            0,
-        )?;
-        event.change_darwin(0, libc::EVFILT_USER, libc::EV_ADD | libc::EV_CLEAR, 0, 0)?;
+        // SAFETY: EVFILT_SIGNAL and EVFILT_USER treat `udata = 0` as an opaque
+        // cookie and never dereference it.
+        unsafe {
+            event.change_darwin(
+                libc::SIGCHLD as _,
+                libc::EVFILT_SIGNAL,
+                libc::EV_ADD | libc::EV_CLEAR,
+                0,
+                0,
+            )?;
+            event.change_darwin(0, libc::EVFILT_USER, libc::EV_ADD | libc::EV_CLEAR, 0, 0)?;
+        }
         Ok(event)
     }
 
+    /// # Safety
+    /// `(ident, filter, flags, fflags)` must specify a valid kqueue change
+    /// whose `udata` is treated solely as an opaque integer cookie by the
+    /// kernel and never dereferenced.
     #[cfg(target_os = "macos")]
-    fn change_darwin(
+    unsafe fn change_darwin(
         &self,
         ident: libc::uintptr_t,
         filter: i16,
@@ -172,13 +180,16 @@ impl ChildExitEvent {
 
     #[cfg(target_os = "macos")]
     pub fn register(&self, pid: u32, token: usize) -> io::Result<ChildExitNotification> {
-        let notification = match self.change_darwin(
-            pid as _,
-            libc::EVFILT_PROC,
-            libc::EV_ADD | libc::EV_ONESHOT,
-            libc::NOTE_EXIT,
-            token,
-        ) {
+        // SAFETY: EVFILT_PROC treats `udata` solely as an opaque integer token.
+        let notification = match unsafe {
+            self.change_darwin(
+                pid as _,
+                libc::EVFILT_PROC,
+                libc::EV_ADD | libc::EV_ONESHOT,
+                libc::NOTE_EXIT,
+                token,
+            )
+        } {
             Ok(()) => ChildExitNotification::Wake,
             // NOTE_EXIT has already passed. An initial WNOHANG probe,
             // followed by the already-registered SIGCHLD source, covers it.
@@ -210,7 +221,10 @@ impl ChildExitEvent {
         #[cfg(target_os = "macos")]
         {
             // A delivered oneshot is already gone; ENOENT/ESRCH are harmless.
-            let _ = self.change_darwin(pid as _, libc::EVFILT_PROC, libc::EV_DELETE, 0, token);
+            // SAFETY: EVFILT_PROC EV_DELETE treats `udata` as an opaque integer token.
+            let _ = unsafe {
+                self.change_darwin(pid as _, libc::EVFILT_PROC, libc::EV_DELETE, 0, token)
+            };
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let _ = (token, pid);
@@ -240,7 +254,8 @@ impl ChildExitEvent {
         }
         #[cfg(target_os = "macos")]
         {
-            self.change_darwin(0, libc::EVFILT_USER, 0, libc::NOTE_TRIGGER, 0)
+            // SAFETY: EVFILT_USER NOTE_TRIGGER treats `udata = 0` as an opaque cookie.
+            unsafe { self.change_darwin(0, libc::EVFILT_USER, 0, libc::NOTE_TRIGGER, 0) }
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {

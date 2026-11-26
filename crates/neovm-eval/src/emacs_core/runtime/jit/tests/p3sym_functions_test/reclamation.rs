@@ -166,7 +166,7 @@ fn history(named: bool) {
         // reclamation. This is not automatic retirement-store reclamation.
         test_support::settle(&mut ctx);
         assert_eq!(cache::native_depth(), 0);
-        cache::clear();
+        cache::clear_with_serial_receipt().expect("serial jit grace");
     }
     assert_eq!(reloc_count(&ctx, old_word), 0);
     let (released, before_gc, after_gc) = stopped_collection(&mut ctx, old_word);

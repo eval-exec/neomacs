@@ -661,6 +661,10 @@ impl BufferDisplayPropertyReplacementItem {
         self.start_byte_pos.get().checked_sub(text_start_byte)
     }
 
+    pub(crate) fn end_byte_idx(&self, text_start_byte: usize) -> Option<usize> {
+        self.end_byte_pos.get().checked_sub(text_start_byte)
+    }
+
     pub(crate) fn source_anchor(
         &self,
         text_start_byte: usize,
@@ -741,10 +745,17 @@ impl BufferDisplayPropertyReplacementAnchor {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DisplayTextRun {
     pub(crate) text: Box<str>,
     pub(crate) composition: DisplayTextComposition,
+    /// GNU `composition_gstring_width` for an automatic composition, in
+    /// frame pixels: the sum of the shaped gstring's LGLYPH_WIDTH slots,
+    /// using LGLYPH_WADJUST when a glyph carries an adjustment vector
+    /// (src/composite.c).  `None` falls back to measuring the composed text
+    /// through the font service, which cannot see a rule's spacing
+    /// adjustment.
+    pub(crate) automatic_advance_px: Option<f32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -766,6 +777,7 @@ impl DisplayTextRun {
         Self {
             text: text.into(),
             composition,
+            automatic_advance_px: None,
         }
     }
 
@@ -778,11 +790,22 @@ impl DisplayTextRun {
     }
 
     pub(crate) fn automatic(text: impl Into<Box<str>>) -> Self {
+        Self::automatic_with_advance(text, None)
+    }
+
+    /// An automatic composition with its evaluated gstring advance, when the
+    /// display snapshot resolved one (GNU `composition_gstring_width`).
+    pub(crate) fn automatic_with_advance(
+        text: impl Into<Box<str>>,
+        advance_px: Option<f32>,
+    ) -> Self {
         let text = text.into();
         let terminal = neovm_core::emacs_core::composite::automatic_composition_for_terminal(&text);
         Self {
             text,
             composition: DisplayTextComposition::Automatic(terminal),
+            automatic_advance_px: advance_px
+                .filter(|advance| advance.is_finite() && *advance >= 0.0),
         }
     }
 }
@@ -1181,6 +1204,7 @@ pub(crate) struct DisplayImageItem {
     pub(crate) horizontal_margin: f32,
     pub(crate) vertical_margin: f32,
     pub(crate) opaque_background: Option<u32>,
+    pub(crate) presentation: neomacs_display_protocol::ImageGlyphPresentation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1225,6 +1249,7 @@ pub(crate) enum DisplayMediaReplacementKind {
         margin_top: f32,
         margin_bottom: f32,
         opaque_background: Option<u32>,
+        presentation: neomacs_display_protocol::ImageGlyphPresentation,
     },
     /// A valid image replacement whose GNU slice resolves to no pixels. The
     /// source text is still consumed, but no placeholder or drawable glyph is
@@ -1334,6 +1359,7 @@ impl DisplayImageReplacement {
             margin_top,
             margin_bottom,
             opaque_background,
+            presentation,
         } = self.0.kind
         else {
             return None;
@@ -1355,6 +1381,7 @@ impl DisplayImageReplacement {
                 margin_top,
                 margin_bottom,
                 opaque_background,
+                presentation,
             },
             width: visible_px,
             ..self.0
@@ -1387,6 +1414,7 @@ impl DisplayMediaReplacement {
                 margin_top: vertical_margin,
                 margin_bottom: vertical_margin,
                 opaque_background: image.opaque_background,
+                presentation: image.presentation,
             },
             width: display_replacement_dimension(image.width) + 2.0 * horizontal_margin,
             height: display_replacement_dimension(image.height) + 2.0 * vertical_margin,

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Prepare immutable external fixtures for the Linux GUI integration tests.
-# Run once after installing native test tools; tests themselves stay offline.
+# Run before launching GUI scenarios. Tests may invoke this preparation step;
+# already prepared packages are verified locally without network access.
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -30,6 +31,17 @@ prepare_package() {
     mv -T -- "$staging" "$destination"
 }
 
-# svg-lib matches the existing MELPA source lock; svg-tag-mode is pinned too.
-prepare_package svg-lib https://github.com/rougier/svg-lib f2cc9615ef3a052747135d34f31c423a26592f14
-prepare_package svg-tag-mode https://github.com/rougier/svg-tag-mode 13e888b8bd9a0664d060149a44a751b2113331b6
+# Omitted arguments preserve the existing setup-all command. A caller with an
+# explicit directory override can prepare only its remaining default package.
+packages=("$@")
+if [[ ${#packages[@]} -eq 0 ]]; then
+    packages=(svg-lib svg-tag-mode)
+fi
+for package in "${packages[@]}"; do
+    case "$package" in
+        # svg-lib matches the existing MELPA source lock.
+        svg-lib) prepare_package svg-lib https://github.com/rougier/svg-lib f2cc9615ef3a052747135d34f31c423a26592f14 ;;
+        svg-tag-mode) prepare_package svg-tag-mode https://github.com/rougier/svg-tag-mode 13e888b8bd9a0664d060149a44a751b2113331b6 ;;
+        *) echo "Unknown GUI fixture package: $package" >&2; exit 2 ;;
+    esac
+done

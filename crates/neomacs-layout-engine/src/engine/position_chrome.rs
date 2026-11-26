@@ -80,6 +80,12 @@ impl MeasuredPositionChrome {
                 text_clip_bounds: layout_box.body(),
                 selected: params.selected,
                 row_capacity: OutputWindowRowCapacity::Growing,
+                bidi_paragraph_directions: params.bidi_paragraph_directions,
+                text_geometry_units: if params.window_system {
+                    neomacs_display_protocol::glyph_matrix::TextGeometryUnits::Pixels
+                } else {
+                    neomacs_display_protocol::glyph_matrix::TextGeometryUnits::TerminalCells
+                },
             },
         );
         let mut emitter = WindowOutputEmitter::new_speculative(
@@ -97,13 +103,21 @@ impl MeasuredPositionChrome {
             DisplayRowFallbackMetrics::from_window_defaults(params),
             &name,
         );
-        let services = ChromeRowRenderServices::new(font_metrics, resolver, &mut face_ids);
+        let services = ChromeRowRenderServices::new(
+            font_metrics,
+            resolver,
+            &mut face_ids,
+            crate::string_property_snapshot::StringSourceRootScope::Rooted(
+                evaluator.owned_root_retainer(),
+            ),
+        );
         let outcome = request.measure_position(&mut WindowChromeRowsRenderState::new(
             output,
             &mut emitter,
             evaluator,
             services,
             None,
+            crate::display_status_line::WindowChromeEvalMode::Converging { captured: None },
         ));
         if evaluator.has_mode_line_display_flow() {
             return Err(MeasurementFailure::DeferredExit);
@@ -434,18 +448,20 @@ impl<'run> QueryRun<'run> {
                 Some(chrome)
             }
         };
-        self.engine.layout_frame_rust_with_face_services(
-            self.evaluator,
-            frame,
-            LayoutPurpose::SynchronousQuery {
-                window_id: window,
-                scope,
-            },
-            None,
-            #[cfg(test)]
-            None,
-            &rows_face_services::NoopFaceServiceFactory,
-            chrome,
-        )
+        self.engine
+            .layout_frame_rust_with_face_services(
+                self.evaluator,
+                frame,
+                LayoutPurpose::SynchronousQuery {
+                    window_id: window,
+                    scope,
+                },
+                None,
+                #[cfg(test)]
+                None,
+                &rows_face_services::NoopFaceServiceFactory,
+                chrome,
+            )
+            .into_query()
     }
 }

@@ -63,7 +63,7 @@ fn miriub3_eager_sweep_preserves_young_and_old_survivors() {
             .marked
             .store(UNMARKED_AT_REST, Ordering::Relaxed);
     }
-    let young_bytes = heap.collector_object_bytes(headers[1]);
+    let young_bytes = unsafe { heap.collector_object_bytes(headers[1]) };
     assert_eq!(heap.sweep_objects(), young_bytes);
     assert_eq!(heap.non_cons_object_addrs.len(), 3);
     assert_eq!(heap.all_objects, headers[1]);
@@ -251,8 +251,8 @@ fn concurrent_mark_overlaps_mutation_and_retains_live_set() {
     heap.seed_root(pivot);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     // The whole list (N) + pivot + D survive; `head` is retained as floating
     // garbage via SATB (it left pivot's cdr but was logged); the churn conses
@@ -305,10 +305,10 @@ fn deferred_sweep_aggregates_slice_stats() {
     heap.seed_root(rooted);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
     assert!(heap.sweep_in_progress());
     let mut slices = 1usize;
-    while !heap.incremental_sweep_slice(8) {
+    while !heap.incremental_sweep_slice_for_test(8) {
         slices += 1;
     }
     assert!(!heap.sweep_in_progress());
@@ -374,8 +374,8 @@ fn concurrent_termination_records_deferred_drain_size() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
     assert_eq!(heap.sweep_stats().noncons_freed, 0, "all records are live");
 }
@@ -414,8 +414,8 @@ fn concurrent_handshake_records_heap_side_phases() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     let hs = heap.handshake_stats();
     assert_eq!(hs.start_count, 1, "one concurrent start handshake ran");
@@ -619,8 +619,8 @@ fn concurrent_termination_classifies_deferred_kinds() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
     assert_eq!(heap.sweep_stats().noncons_freed, 0, "everything is rooted");
 }
@@ -654,8 +654,8 @@ fn finish_concurrent_cycle(heap: &mut TaggedHeap, root: TaggedValue) {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
 }
 
@@ -766,8 +766,8 @@ fn concurrent_mark_born_string_interval_child_survives() {
     heap.seed_root(s);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     // C survived its birth-cycle severing (SATB), S survived (born-at-
     // parity), and C's payload is intact.
@@ -794,8 +794,8 @@ fn concurrent_mark_born_string_interval_child_survives() {
     heap.seed_root(s);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(heap.owns_non_cons_object(s.as_string_ptr().unwrap() as *const u8));
     assert_eq!(
         unsafe { (*c.xcons_ptr()).load_car() }.0,
@@ -858,7 +858,7 @@ fn concurrent_string_claim_passes_partition_verifier() {
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
     // collector or compiled leaf runs.
     unsafe { heap.begin_collection() };
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert!(heap.dump_blackened);
 
     let v = heap.alloc_cons(TaggedValue::fixnum(61), TaggedValue::fixnum(62));
@@ -953,8 +953,8 @@ fn concurrent_mark_defers_mapped_strings_and_marks_their_interval_children() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     // Termination marked it on the mapped path and traced the child.
     let idx = heap.mapped_string_index_by_addr[&(mapped as usize)];
@@ -1024,8 +1024,8 @@ fn concurrent_leaked_subr_dropped_from_defer_path() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     // Subr payload intact after the full cycle (permanently live; the
     // sweep never visits it).
@@ -1090,8 +1090,8 @@ fn concurrent_mapped_subr_still_deferred_and_side_table_marked() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     // The termination marked it via the mapped side table.
     let idx = heap.mapped_veclike_index_by_addr[&(mapped as usize)];
@@ -1154,8 +1154,8 @@ fn concurrent_vector_header_claimed_children_survive_garbage_freed() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     // Children survived via the Tier-B backing scan (the claimed header
     // was never re-traced at termination).
@@ -1210,7 +1210,7 @@ fn concurrent_mid_cycle_vector_in_reused_slot_keeps_child_alive() {
     let root = list;
     // Bootstrap STW cycle: blackens the fake dump (arming the
     // verifiers), promotes survivors, and frees v_dead's slot.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     let pre_launch_bases: std::collections::HashSet<usize> = heap
         .vector_arena
         .pages
@@ -1251,8 +1251,8 @@ fn concurrent_mid_cycle_vector_in_reused_slot_keeps_child_alive() {
     heap.incremental_drain_all();
     // Runs verify_dump_partition + verify_incremental_tricolor (armed
     // above): a black v_new with a white C would panic here.
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     // C survived its birth-cycle severing (SATB), with payload intact.
     assert_eq!(
@@ -1276,8 +1276,8 @@ fn concurrent_mid_cycle_vector_in_reused_slot_keeps_child_alive() {
     heap.seed_root(v_new);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert_eq!(
         unsafe { (*c.xcons_ptr()).load_car() }.0,
         TaggedValue::fixnum(81).0,
@@ -1503,14 +1503,16 @@ fn concurrent_module_function_interactive_form_overwrite_keeps_child_alive() {
 
     // V reachable ONLY via mf.interactive_form.
     let v = heap.alloc_float(9.5);
-    let mf = heap.alloc_module_function(
-        0,
-        0,
-        std::ptr::null(),
-        std::ptr::null_mut(),
-        TaggedValue::fixnum(0),
-        v,
-    );
+    let mf = unsafe {
+        heap.alloc_module_function(
+            0,
+            0,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            TaggedValue::fixnum(0),
+            v,
+        )
+    };
     // Bury mf in a seeded list so the mark takes real time.
     let mut list = heap.alloc_cons(mf, TaggedValue::fixnum(0));
     for i in 0..300_000 {
@@ -1598,8 +1600,8 @@ fn concurrent_mapped_vector_still_deferred_and_traced() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     // Termination marked it on the mapped path and traced its child.
     let idx = heap.mapped_veclike_index_by_addr[&(mapped as usize)];
@@ -1831,8 +1833,8 @@ fn concurrent_claim_reaches_vector_slot_strings() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     assert!(heap.owns_non_cons_object(s_free.as_string_ptr().unwrap() as *const u8));
     assert!(heap.owns_non_cons_object(s_props.as_string_ptr().unwrap() as *const u8));
@@ -1861,7 +1863,7 @@ fn dumpless_heap_enables_concurrent_after_bootstrap_and_collects() {
         rooted = heap.alloc_cons(TaggedValue::fixnum(i), rooted);
     }
     let rooted_head = rooted;
-    heap.collect_exact(std::iter::once(rooted_head));
+    heap.collect_rooted(std::iter::once(rooted_head));
     assert!(
         heap.should_run_concurrent(),
         "the completed STW bootstrap must enable concurrent marking"
@@ -1891,8 +1893,8 @@ fn dumpless_heap_enables_concurrent_after_bootstrap_and_collects() {
     heap.seed_root(rooted_head);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     // The unrooted churn was reclaimed...
     let after = heap.cons_live_count_exact();
@@ -1940,8 +1942,8 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     }
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(!heap.sweep_in_progress());
 }
 
@@ -1964,7 +1966,7 @@ fn parity_allocate_black_object_survives_two_cycles() {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
     assert_eq!(
         heap.mark_parity,
@@ -1995,8 +1997,8 @@ fn parity_allocate_black_object_survives_two_cycles() {
     heap.seed_root(spine); // v/s deliberately NOT seeded this cycle
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         heap.owns_non_cons_object(v_ptr),
         "allocate-black vector must survive the cycle it was born in",
@@ -2036,7 +2038,7 @@ fn parity_reclaims_garbage_within_two_cycles() {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine));
+    heap.collect_rooted(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
 
     // G1: born BETWEEN cycles (idle) — never seeded, no allocate-black.
@@ -2057,8 +2059,8 @@ fn parity_reclaims_garbage_within_two_cycles() {
     heap.seed_root(spine);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         !heap.owns_non_cons_object(g1_ptr),
         "idle-born garbage must be reclaimed by the first cycle after its birth",
@@ -2110,7 +2112,7 @@ fn parity_tenured_objects_stay_frozen_across_cycles_under_verifier() {
     assert_eq!(heap.note_image_object(t), ImageStamp::Stamped);
 
     // First partition cycle: STW full trace + sweep, then promotion.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(heap.dump_blackened);
     let t_header = t.as_veclike_ptr().unwrap();
     assert!(unsafe { (*t_header).gc.tenured });
@@ -2157,7 +2159,7 @@ fn parity_string_claim_works_across_two_cycles() {
     for i in 0..100_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine)); // bootstrap
+    heap.collect_rooted(std::iter::once(spine)); // bootstrap
 
     for cycle in 0..2 {
         heap.concurrent_begin();
@@ -2188,8 +2190,8 @@ fn parity_string_claim_works_across_two_cycles() {
             },
             "cycle {cycle}: claimed string must be black at the cycle parity before sweep",
         );
-        heap.incremental_finish(bytes_before, std::time::Instant::now());
-        heap.finish_incremental_sweep_now();
+        heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+        heap.finish_incremental_sweep_now_for_test();
         assert!(!heap.sweep_in_progress());
         assert!(heap.owns_non_cons_object(s_ptr));
         if heap.tagged_heap_generational_enabled() {
@@ -2229,7 +2231,7 @@ fn parity_idle_born_object_is_traced_on_the_next_cycle() {
     for i in 0..10_000 {
         spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
     }
-    heap.collect_exact(std::iter::once(spine)); // bootstrap (parity -> true)
+    heap.collect_rooted(std::iter::once(spine)); // bootstrap (parity -> true)
 
     // Idle window: no mark, no sweep. Y is reachable ONLY through X.
     let y = heap.alloc_cons(TaggedValue::fixnum(31_337), TaggedValue::fixnum(0));
@@ -2269,7 +2271,8 @@ fn dropping_heap_mid_concurrent_mark_retains_gc_storage() {
     heap.seed_root(list);
     heap.launch_concurrent_mark();
     assert!(heap.concurrent_mark_running());
-    let completion = heap.gc_exited.take().unwrap();
+    // SAFETY: abandonment test waits on completion after dropping `heap`.
+    let completion = unsafe { heap.gc_exited.take_receiver_for_test() }.unwrap();
     drop(heap);
     completion
         .recv_timeout(std::time::Duration::from_secs(10))
@@ -2302,7 +2305,7 @@ fn a_reclaimed_cons_is_recognizable_as_dead() {
     let doomed = heap.alloc_cons(TaggedValue::fixnum(3), TaggedValue::fixnum(4));
     assert!(!unsafe { (*doomed.xcons_ptr()).load_car() }.is_dead());
 
-    heap.collect_exact(std::iter::once(rooted));
+    heap.collect_rooted(std::iter::once(rooted));
 
     assert!(
         !unsafe { (*rooted.xcons_ptr()).load_car() }.is_dead(),
@@ -2356,7 +2359,7 @@ fn a_reclaimed_string_is_recognizable_as_dead() {
         "a live string must not look reclaimed",
     );
 
-    heap.collect_exact(std::iter::once(rooted));
+    heap.collect_rooted(std::iter::once(rooted));
 
     assert!(
         !unsafe { (*rooted.as_string_ptr().unwrap()).data.is_reclaimed() },
@@ -2381,7 +2384,8 @@ fn a_reclaimed_string_with_borrowed_bytes_is_also_marked_free() {
     // static-rodata payload has (`storage_capacity == 0`).
     static BYTES: &[u8] = b"borrowed\0";
     let borrowed =
-        unsafe { crate::heap_types::LispString::from_mapped_bytes(BYTES.as_ptr(), 8, 8, -1) };
+        unsafe { crate::heap_types::LispString::from_mapped_bytes(BYTES.as_ptr(), 8, 8, -1) }
+            .expect("consistent mapped unibyte string");
     assert!(!borrowed.is_reclaimed());
     let mut owner = std::mem::ManuallyDrop::new(borrowed);
     unsafe { std::ptr::drop_in_place(&mut *owner as *mut crate::heap_types::LispString) };
@@ -2417,7 +2421,7 @@ fn post_mark_ownership_verification_runs_and_finds_nothing() {
 
     // Asserts internally (problems == 0) at the one moment where "marked"
     // and "owned" must agree.
-    heap.collect_exact(std::iter::once(rooted));
+    heap.collect_rooted(std::iter::once(rooted));
     assert_eq!(heap.verify_marked_objects_owned(), 0);
 
     super::set_verify_marked_objects_for_test(false);
@@ -2452,7 +2456,7 @@ fn collect_exact_retains_rooted_and_frees_unrooted() {
     let before = heap.cons_live_count_exact();
 
     // Force a full collection with only the rooted list reachable.
-    heap.collect_exact(std::iter::once(rooted_head));
+    heap.collect_rooted(std::iter::once(rooted_head));
     let after = heap.cons_live_count_exact();
 
     // The unrooted list was reclaimed...
@@ -2495,7 +2499,7 @@ fn ordinary_non_cons_ownership_index_tracks_sweep() {
     assert!(heap.float_arena.owns(dead_ptr));
     assert_eq!(heap.non_cons_object_addrs.len(), 0);
 
-    heap.collect_exact(std::iter::once(live));
+    heap.collect_rooted(std::iter::once(live));
 
     // The sweep's alloc-bit clear IS the ownership eviction: the freed
     // slot answers NOT-owned with no addr-set bookkeeping involved.
@@ -2582,7 +2586,7 @@ fn vector_registry_matches_full_filter_across_cycles() {
     // Cycle 1 (synchronous sweep_objects path): the unrooted vector and
     // record are reclaimed; the registry follows.
     let _ = dead_vec;
-    heap.collect_exact([keep_vec, keep_float].into_iter());
+    heap.collect_rooted([keep_vec, keep_float].into_iter());
     assert_snapshots_match(&heap);
     assert_eq!(registry_entries(&heap).len(), 1);
 
@@ -2592,7 +2596,7 @@ fn vector_registry_matches_full_filter_across_cycles() {
     let _ = dead_vec2;
     assert_snapshots_match(&heap);
     assert_eq!(registry_entries(&heap).len(), 3);
-    heap.collect_exact([keep_vec, keep_vec2].into_iter());
+    heap.collect_rooted([keep_vec, keep_vec2].into_iter());
     assert_snapshots_match(&heap);
     assert_eq!(registry_entries(&heap).len(), 2);
 
@@ -2611,8 +2615,8 @@ fn vector_registry_matches_full_filter_across_cycles() {
     heap.seed_root(keep_vec);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert_snapshots_match(&heap);
     assert_eq!(registry_entries(&heap).len(), 1);
 }
@@ -2650,8 +2654,8 @@ fn immediate_join_mid_drain_hands_residual_work_to_termination() {
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     assert_eq!(
         heap.cons_live_count_exact(),
@@ -2698,7 +2702,7 @@ fn collect_exact_retains_rooted_graph_and_frees_garbage() {
     assert!(live_before >= 5);
 
     // Force a full collection rooted only at `a`.
-    heap.collect_exact(std::iter::once(a));
+    heap.collect_rooted(std::iter::once(a));
 
     // The 3-cons rooted spine survives; the 2 garbage conses are reclaimed.
     assert_eq!(
@@ -2749,11 +2753,11 @@ fn native_font_object_traces_properties_and_capability() {
         ),
     });
 
-    heap.collect_exact(std::iter::once(font));
+    heap.collect_rooted(std::iter::once(font));
     assert!(heap.owns_non_cons_object(property_ptr));
     assert!(heap.owns_non_cons_object(capability_ptr));
 
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert!(!heap.owns_non_cons_object(property_ptr));
     assert!(!heap.owns_non_cons_object(capability_ptr));
 }
@@ -2896,8 +2900,8 @@ fn concurrent_mark_dedup_retains_hash_table_live_set() {
     heap.seed_root(table);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     // (1) The overwritten OLD value (live at snapshot time, then unlinked) must
     //     still be a readable, non-swept cons (SATB pre-image retained it).
@@ -2948,7 +2952,7 @@ fn finalizer_doomed_on_stw_collection_queues_and_keeps_function() {
     let fin_ptr = finalizer.as_veclike_ptr().unwrap();
     // The verifier enumeration must cover the function slot
     // (`collect_veclike_children` stays a superset of `trace_veclike`).
-    let children = heap.collect_veclike_children(fin_ptr as *mut VecLikeHeader);
+    let children = unsafe { heap.collect_veclike_children(fin_ptr as *mut VecLikeHeader) };
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].0, function.0);
 
@@ -2958,7 +2962,7 @@ fn finalizer_doomed_on_stw_collection_queues_and_keeps_function() {
     // collector or compiled leaf runs.
     unsafe { heap.begin_collection() };
     heap.seed_root(finalizer);
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert!(heap.doomed_finalizer_functions.is_empty());
     assert_eq!(heap.finalizer_registry.len(), 1);
     assert_eq!(
@@ -2971,7 +2975,7 @@ fn finalizer_doomed_on_stw_collection_queues_and_keeps_function() {
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
     // collector or compiled leaf runs.
     unsafe { heap.begin_collection() };
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert!(heap.finalizer_registry.is_empty());
     assert!(
         !heap.owns_non_cons_object(fin_ptr as *const u8),
@@ -2992,7 +2996,7 @@ fn finalizer_doomed_on_stw_collection_queues_and_keeps_function() {
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
     // collector or compiled leaf runs.
     unsafe { heap.begin_collection() };
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert_eq!(
         unsafe { (*function.xcons_ptr()).load_car() }.0,
         TaggedValue::fixnum(42).0,
@@ -3046,8 +3050,8 @@ fn finalizer_doomed_on_concurrent_termination_queues_and_keeps_function() {
     heap.seed_root(live_fin);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
 
     assert!(
         !heap.owns_non_cons_object(doomed_ptr as *const u8),
@@ -3073,7 +3077,7 @@ fn finalizer_doomed_on_concurrent_termination_queues_and_keeps_function() {
     // collector or compiled leaf runs.
     unsafe { heap.begin_collection() };
     heap.seed_root(live_fin);
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert!(!heap.owns_non_cons_object(churn_ptr as *const u8));
     assert_eq!(heap.finalizer_registry.len(), 1);
     let doomed = heap.take_doomed_finalizer_functions();
@@ -3103,7 +3107,7 @@ fn finalizer_cycle_passes_partition_verifier() {
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
     // collector or compiled leaf runs.
     unsafe { heap.begin_collection() };
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert!(heap.dump_blackened);
 
     let payload = heap.alloc_cons(TaggedValue::fixnum(5), TaggedValue::fixnum(6));
@@ -3118,7 +3122,7 @@ fn finalizer_cycle_passes_partition_verifier() {
     // collector or compiled leaf runs.
     unsafe { heap.begin_collection() };
     heap.seed_root(live_fin);
-    heap.complete_collection();
+    heap.complete_collection_for_test();
 
     let doomed = heap.take_doomed_finalizer_functions();
     assert_eq!(doomed.len(), 1);
@@ -3157,7 +3161,7 @@ fn write_barrier_caches_skip_only_writes_with_nothing_to_record() {
     for &owner in &owners {
         assert_eq!(heap.note_image_object(owner), ImageStamp::Stamped);
     }
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(owners.iter().all(|&owner| heap.value_is_tenured(owner)));
     let calls = || RECORD_HEAP_WRITE_CALLS.with(|c| c.get());
 
@@ -3227,8 +3231,8 @@ fn write_barrier_caches_skip_only_writes_with_nothing_to_record() {
     heap.seed_root(young);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     arm(&mut heap, true);
     let before = calls();
     let child = heap.alloc_cons(TaggedValue::fixnum(99), TaggedValue::NIL);
@@ -3383,8 +3387,8 @@ fn concurrent_first_cycle_keeps_weak_entries_keyed_by_live_image_objects() {
             heap.seed_root(weak);
             let bytes_before = heap.live_bytes();
             heap.incremental_drain_all();
-            heap.incremental_finish(bytes_before, std::time::Instant::now());
-            heap.finish_incremental_sweep_now();
+            heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+            heap.finish_incremental_sweep_now_for_test();
             heap.finish_first_partition_cycle();
         } else {
             // SAFETY: serial fixture heap; the caller holds the only heap view and no
@@ -3392,7 +3396,7 @@ fn concurrent_first_cycle_keeps_weak_entries_keyed_by_live_image_objects() {
             unsafe { heap.begin_collection() };
             heap.seed_root(weak);
             heap.seed_root(key);
-            heap.complete_collection();
+            heap.complete_collection_for_test();
         }
         assert_eq!(
             entries(weak),
@@ -3456,8 +3460,8 @@ fn a_forced_collection_during_the_concurrent_first_cycle_keeps_image_held_object
     heap.seed_root(keeper);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
-    heap.incremental_finish(bytes_before, std::time::Instant::now());
-    heap.finish_incremental_sweep_now();
+    heap.incremental_finish_for_test(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now_for_test();
     assert!(
         !unsafe { (*h.xcons_ptr()).load_car() }.is_dead(),
         "the concurrent cycle keeps the image-held object"
@@ -3467,9 +3471,9 @@ fn a_forced_collection_during_the_concurrent_first_cycle_keeps_image_held_object
         "the concurrent cycle keeps what it allocated during its mark"
     );
     // ... then runs its stop-the-world cycle.
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     heap.seed_root(keeper);
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert!(
         !unsafe { (*h.xcons_ptr()).load_car() }.is_dead(),
         "the forced cycle must not free an object an image cons still holds"
@@ -3479,9 +3483,9 @@ fn a_forced_collection_during_the_concurrent_first_cycle_keeps_image_held_object
         "the forced cycle must free the concurrent cycle's floating garbage"
     );
     // And the image is blackened, with H safely live, for every later cycle.
-    heap.begin_stw_collection();
+    heap.begin_stw_collection_for_test();
     heap.seed_root(keeper);
-    heap.complete_collection();
+    heap.complete_collection_for_test();
     assert!(!unsafe { (*h.xcons_ptr()).load_car() }.is_dead());
 }
 
@@ -3509,7 +3513,8 @@ fn dropping_the_installed_heap_uninstalls_it() {
         tagged_heap_is_installed(),
         "dropping a heap that is not installed must leave the installed one"
     );
-    crate::tagged::gc::clear_tagged_heap_if_installed(&kept);
+    // SAFETY: bare `TaggedHeap` unit-test fixture teardown.
+    unsafe { crate::tagged::gc::clear_tagged_heap_if_installed(&kept) };
 }
 
 #[cfg(feature = "test-support")]
@@ -3540,7 +3545,7 @@ fn concurrent_builtin_clear_string_retains_interval_child_for_snapshot() {
     );
     assert_eq!(child.as_str_owned().as_deref(), Some("only-in-properties"));
     // No property home remains. The next exact collection must reclaim child.
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     assert!(!heap.owns_non_cons_object(child_ptr));
 }
 
@@ -3552,7 +3557,7 @@ fn owned_subr_storage_is_deallocated_by_its_exact_layout() {
     let (value, ptr) = (ownership_host().leaked_subr)();
     // The cfg(test) adapter returns an unregistered allocation whose only
     // owner is this fixture; unlike the static tests, transfer it to the heap.
-    heap.link_veclike(ptr.cast::<VecLikeHeader>());
+    unsafe { heap.link_veclike(ptr.cast::<VecLikeHeader>()) };
     assert!(heap.non_cons_object_addrs.contains(&(ptr as usize)));
     assert_eq!(value.as_subr_id(), Some(crate::intern::SymId(1)));
     // Drop's existing exclusive owned sweep must use the fixed exact Layout.
@@ -3593,4 +3598,34 @@ pub(crate) fn run_ownership_upper_test(
         }
         other => panic!("unknown ownership upper test {other}"),
     }
+}
+
+/// The physical counter reports the arena slot stride and each owned payload's
+/// exact capacity (NUL included), not GNU's logical header+STRING_BYTES
+/// census. This is the per-string footprint the representation design (Neo
+/// 64-byte slot vs GNU's 32-byte in-band-marked header) is measured against;
+/// it is deliberately separate from the Lisp GC budget.
+#[test]
+fn string_physical_bytes_counter_reports_slot_plus_owned_payload_capacity() {
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let lengths = [0usize, 1, 93, 300];
+    let mut values = Vec::new();
+    for len in lengths {
+        let text: String = std::iter::repeat('x').take(len).collect();
+        values.push(heap.alloc_string(crate::heap_types::LispString::from_utf8(&text)));
+    }
+    let (strings, slot_bytes, payload_capacity_bytes) = heap.string_physical_bytes_for_test();
+    assert_eq!(strings, lengths.len());
+    assert_eq!(
+        slot_bytes,
+        lengths.len() * 64,
+        "a StringObj occupies one 64-byte arena slot"
+    );
+    assert_eq!(
+        payload_capacity_bytes,
+        lengths.iter().map(|len| len + 1).sum::<usize>(),
+        "an owned payload's capacity is its byte length plus the NUL"
+    );
+    assert_eq!(values.len(), lengths.len());
 }

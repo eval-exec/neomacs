@@ -30,7 +30,7 @@ pub(crate) fn has_ready_opt_osr(
     let Some(heap) = neovm_value::tagged::gc::current_tagged_heap_identity() else {
         return false;
     };
-    if !COMPILED_HEAP.with(|owner| owner.get() == Some(heap))
+    if !COMPILED_HEAP.with(|owner| owner.get().identity() == Some(heap))
         || !COMPILED_OBARRAY.with(|owner| owner.get() == Some(generation))
     {
         return false;

@@ -1,8 +1,11 @@
+use std::sync::{Arc, mpsc};
+
 use super::{
-    FrameLeaseId, NativeWpeBufferLease, PendingFrames, ReactorMailbox, RecoveryFrame,
-    RecoveryFrames, RenderedWpeBuffer, pick_render_node,
+    FrameLeaseId, NativeWpeBufferLease, PendingFrames, ReactorMailbox, ReactorSender,
+    ReactorSignal, RecoveryFrame, RecoveryFrames, RenderedWpeBuffer, WpeRuntime,
+    configure_before_threads_with, pick_render_node, select_wpe_device_with,
 };
-use crate::{PixelFrame, WebViewFrame};
+use crate::{PixelFrame, WebViewFrame, WebViewFrameTransport, WebViewSystemConfig, WebViewWake};
 
 #[test]
 fn render_node_policy_prefers_non_nvidia_driver_when_a_choice_exists() {
@@ -117,4 +120,81 @@ fn recovery_never_replaces_newer_completed_or_queued_browser_content() {
 fn native_wpe_acknowledgement_cannot_cross_threads() {
     static_assertions::assert_not_impl_any!(NativeWpeBufferLease: Send, Sync);
     static_assertions::assert_not_impl_any!(RenderedWpeBuffer: Send, Sync);
+}
+
+#[test]
+fn runtime_init_with_discovered_device_does_not_mutate_process_environment() {
+    // SAFETY: nextest runs each test in its own process, and the only other
+    // thread is libtest's parked main thread (which does not read env vars).
+    unsafe {
+        std::env::remove_var("WPE_DRM_DEVICE");
+        std::env::remove_var("WPE_DRM_RENDER_NODE");
+    }
+
+    let (commands, _receiver) = mpsc::channel();
+    let sender = ReactorSender {
+        commands,
+        signal: Arc::new(ReactorSignal::default()),
+    };
+    let mailbox = Arc::new(ReactorMailbox::default());
+
+    // Inject a deterministic render-node list so this test exercises the
+    // discovered-device path even on GPU-less CI runners where udev finds no
+    // DRM render nodes.
+    let _result = unsafe {
+        WpeRuntime::new_with_device_selector(
+            WebViewSystemConfig {
+                profile_root: None,
+                frame_transport: WebViewFrameTransport::SoftwarePixels,
+                dma_buf_import_formats: Default::default(),
+            },
+            sender,
+            mailbox,
+            WebViewWake::noop(),
+            || {
+                select_wpe_device_with(|| {
+                    Some(vec![
+                        ("renderD128".to_owned(), "nvidia".to_owned()),
+                        ("renderD-injected-test".to_owned(), "i915".to_owned()),
+                    ])
+                })
+            },
+        )
+    };
+
+    assert_eq!(
+        std::env::var_os("WPE_DRM_DEVICE"),
+        None,
+        "WpeRuntime::new must not mutate WPE_DRM_DEVICE even when a render node is selected"
+    );
+    assert_eq!(
+        std::env::var_os("WPE_DRM_RENDER_NODE"),
+        None,
+        "WpeRuntime::new must not mutate WPE_DRM_RENDER_NODE even when a render node is selected"
+    );
+}
+
+#[test]
+fn configure_before_threads_with_discovered_nodes_exports_selected_device() {
+    // SAFETY: nextest runs each test in its own process, and the only other
+    // thread is libtest's parked main thread (which does not read env vars).
+    unsafe {
+        std::env::remove_var("WPE_DRM_DEVICE");
+        std::env::remove_var("WPE_DRM_RENDER_NODE");
+        configure_before_threads_with(|| {
+            Some(vec![
+                ("renderD128".to_owned(), "nvidia".to_owned()),
+                ("renderD129".to_owned(), "i915".to_owned()),
+            ])
+        });
+    }
+
+    assert_eq!(
+        std::env::var_os("WPE_DRM_DEVICE").as_deref(),
+        Some(std::ffi::OsStr::new("/dev/dri/renderD129"))
+    );
+    assert_eq!(
+        std::env::var_os("WPE_DRM_RENDER_NODE").as_deref(),
+        Some(std::ffi::OsStr::new("/dev/dri/renderD129"))
+    );
 }

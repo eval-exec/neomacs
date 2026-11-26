@@ -3129,7 +3129,9 @@ carrying a neomacs-invented or wrong VALUE on top of the missing declaration:
 - `redisplay--inhibit-bidi`: a conflicting nil seed deleted; bootstrap is t
   (xdisp.c:39235), loadup.el flips it off after charprop loads
 - `frame-inhibit-implied-resize`: nil -> `(tab-bar-lines tool-bar-lines)`
-  (frame.c:7636, the own-drawn-tool-bar GUI branch)
+  was the original own-drawn-tool-bar choice. The canonical NS/GTK3 build
+  profiles use `(tab-bar-lines)` instead (frame.c:7684-7692); the bootstrap
+  and its special-variable pin now follow those attested defaults.
 
 Pinned by the five per-subsystem tables in
 `crates/neovm-core/src/emacs_core/gnu_defvar_special_test.rs`, which assert

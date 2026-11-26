@@ -36,6 +36,13 @@ impl TextShaper for CosmicTextShaper {
         font_size: f32,
         line_height: f32,
     ) -> Vec<ShapedGlyph> {
+        // A native catalog may legitimately contain no scalable faces (for
+        // example after rejectfont filtering). Cosmic's fallback iterator
+        // requires a default face even for an empty line; retain our fallible
+        // no-glyph result without admitting an unapproved replacement font.
+        if text.is_empty() || font_system.db().is_empty() {
+            return Vec::new();
+        }
         let metrics = cosmic_text::Metrics::new(font_size.max(1.0), line_height.max(1.0));
         // Install the requested text before shaping anything. `Buffer::new`
         // first shapes an empty line with default font attributes, causing

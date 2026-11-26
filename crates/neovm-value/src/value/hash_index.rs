@@ -108,6 +108,9 @@ impl HashIndex {
         self.table.capacity()
     }
 
+    // Expose the index-only loan to the caller's capacity comparison, while
+    // retaining hashbrown's usable-capacity changes when tombstones clear.
+    #[inline]
     pub(super) fn clear(&mut self) {
         self.table.clear();
     }
@@ -145,8 +148,37 @@ impl HashIndex {
 
     /// File a NEW entry; the caller has established that no entry matches.
     pub(super) fn insert_new(&mut self, hash: u64, key: HashKey, slot: usize) {
+        self.insert_new_with_growth(hash, key, slot, &mut |_| {});
+    }
+
+    /// Only an absent-key insertion can grow the index. Keep its capacity
+    /// observation out of overwrites, and let hashbrown decide whether a
+    /// tombstone can be reused instead of forcing an eager reserve.
+    /// The shared generic body lets the unmetered reporter erase accounting,
+    /// and keeps insertion and its capacity observations visible together.
+    #[inline]
+    pub(super) fn insert_new_with_growth(
+        &mut self,
+        hash: u64,
+        key: HashKey,
+        slot: usize,
+        report: &mut impl FnMut(usize),
+    ) {
+        let before = self.table.capacity();
         self.table
             .insert_unique(hash, IndexEntry { hash, key, slot }, |entry| entry.hash);
+        let after = self.table.capacity();
+        // Byte scaling is needed only when usable capacity increases. This
+        // includes tombstone reuse: capacity is items plus growth_left, so
+        // testing only whether the table was full would lose existing charges.
+        if after > before {
+            let before_bytes = before.saturating_mul(size_of::<IndexEntry>());
+            let after_bytes = after.saturating_mul(size_of::<IndexEntry>());
+            let grown = after_bytes.saturating_sub(before_bytes);
+            if grown != 0 {
+                report(grown);
+            }
+        }
     }
 
     /// The entry whose materialized key is `key`, when only the key is at
@@ -208,6 +240,38 @@ impl HashKey {
                 | HashKey::SymbolWithPos(..)
                 | HashKey::Cycle(_)
         )
+    }
+
+    /// Whether this key stopped at [`super::TRUNCATED_KEY_CYCLE`] anywhere.
+    ///
+    /// A budgeted structural key (see
+    /// [`crate::value::TaggedValue::to_equal_key_bounded`]) uses that
+    /// sentinel where its node budget ran out.  Such a key still identifies
+    /// the entry for membership, but it no longer describes the key object
+    /// completely, so exact-key consumers must decline it.
+    pub(crate) fn contains_truncation(&self) -> bool {
+        match self {
+            HashKey::Cycle(index) => *index == super::TRUNCATED_KEY_CYCLE,
+            HashKey::EqualCons(car, cdr) => {
+                if car.contains_truncation() {
+                    return true;
+                }
+                let mut node = cdr.as_ref();
+                while let HashKey::EqualCons(next_car, next_cdr) = node {
+                    if next_car.contains_truncation() {
+                        return true;
+                    }
+                    node = next_cdr.as_ref();
+                }
+                node.contains_truncation()
+            }
+            HashKey::EqualVec(keys) => keys.iter().any(HashKey::contains_truncation),
+            HashKey::SymbolWithPos(sym, pos) => {
+                sym.contains_truncation() || pos.contains_truncation()
+            }
+            HashKey::Overlay(parts) => parts.3.contains_truncation(),
+            _ => false,
+        }
     }
 }
 
@@ -315,7 +379,7 @@ fn equal_hash_obj(value: Value, depth: u32, mut hasher: FxHasher) -> FxHasher {
             | VecLikeType::Record
             | VecLikeType::TsNode
             | VecLikeType::CharTable => {
-                let Some(view) = StructuralPseudovectorView::from_value(value, kind) else {
+                let Some(view) = StructuralPseudovectorView::from_value(&value, kind) else {
                     return identity(hasher);
                 };
                 let tag = match kind {

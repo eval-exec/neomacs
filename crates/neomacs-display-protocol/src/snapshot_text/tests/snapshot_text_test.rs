@@ -45,6 +45,7 @@ fn golden_state() -> FrameDisplayState {
             width_cols: 1,
             margins: image_margins,
             opaque_background: crate::ImageOpaqueBackground::default(),
+            presentation: crate::ImageGlyphPresentation::Texture,
         },
         ..Glyph::char('x', FaceId::new(0), 3)
     });

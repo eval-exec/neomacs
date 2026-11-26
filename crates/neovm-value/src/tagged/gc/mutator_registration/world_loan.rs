@@ -99,7 +99,7 @@ impl SymbolRootDesignators {
 /// holder and does not release backing or reenter heap code.
 /// `heap_root_designator` is the original allocation root this owner retains,
 /// never a pointer derived from a collector loan. This is not a constructor
-/// from identity words. Only the eval World owner and the forwarding adapter
+/// from identity words. Only the eval World owner and the forwarding adapters
 /// in this module implement it.
 #[doc(hidden)]
 pub unsafe trait EraWorldLoan: Send + 'static {
@@ -194,3 +194,6 @@ static_assertions::assert_impl_all!(WorldLoan: Send);
 static_assertions::assert_not_impl_any!(WorldLoan: Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(WorldIdentity: Clone, Copy);
 static_assertions::assert_not_impl_any!(SymbolRootDesignators: Clone, Copy);
+
+/// Value-only retention guard for scoped actual-era admission.
+pub(crate) mod retained;

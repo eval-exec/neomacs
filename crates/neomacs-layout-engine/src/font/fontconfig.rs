@@ -7,13 +7,13 @@
 //!
 //! This module mirrors that shape:
 //! - generic family resolution uses Fontconfig directly
-//! - character fallback uses Neovm's shared fontset state
 //! - candidate discovery uses Fontconfig's `FcFontList`
 //! - style selection is scored in Rust instead of delegated to Fontconfig
 
 use crate::font::policy::{
     combined_query_langs, query_charset_ranges, registry_language, representative_char_for_spec,
 };
+#[cfg(test)]
 use crate::font::selection::{CandidateSelectionScore, candidate_selection_score};
 pub use crate::font::subpixel::FontconfigSubpixelOrder;
 use crate::font_backend::{FontFamilyName, PlatformFontSize};
@@ -22,9 +22,7 @@ use fontconfig_sys::constants::{
     FC_RGBA, FC_RGBA_BGR, FC_RGBA_NONE, FC_RGBA_RGB, FC_RGBA_VBGR, FC_RGBA_VRGB,
 };
 use neomacs_display_protocol::font::FontVariationCoord;
-use neovm_core::emacs_core::fontset::{
-    FontSpecEntry, StoredFontSpec, fontset_generation, matching_entries_for_char,
-};
+use neovm_core::emacs_core::fontset::StoredFontSpec;
 use neovm_core::emacs_core::intern::{intern, resolve_sym};
 use neovm_core::face::{FontSlant, FontWeight, FontWidth};
 use std::collections::HashMap;
@@ -34,6 +32,8 @@ use std::ffi::{CStr, CString};
 use std::process::Command;
 #[cfg(unix)]
 use std::ptr;
+#[cfg(all(test, unix))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 #[cfg(unix)]
 use {fontconfig::Pattern, fontconfig_sys};
@@ -52,13 +52,41 @@ struct FontconfigCaches {
     candidate_epoch: u64,
     #[cfg(unix)]
     candidate_queries: candidate_cache::CandidateQueries,
+    /// `FcFontSort` families for one `(family, lang)` inside this catalog epoch.
+    /// [`invalidate_catalog_caches`] replaces the whole cache, so the epoch is
+    /// the third part of the key.
+    #[cfg(unix)]
+    sorted_families: HashMap<(String, String), Vec<String>>,
     aliases: Option<HashMap<String, String>>,
     spacing: HashMap<String, Option<i32>>,
     subpixel_order: Option<FontconfigSubpixelOrder>,
-    char_matches: HashMap<CharMatchCacheKey, Option<FontMatch>>,
 }
 
 static FC_CACHES: OnceLock<Mutex<FontconfigCaches>> = OnceLock::new();
+
+/// Native `FcFontSort` calls. A cache hit must not increment this.
+#[cfg(all(test, unix))]
+static FC_SORT_QUERIES: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(test, unix))]
+pub(crate) fn reset_sort_queries_for_test() {
+    FC_SORT_QUERIES.store(0, Ordering::Relaxed);
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn sort_query_count() -> usize {
+    FC_SORT_QUERIES.load(Ordering::Relaxed)
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn reset_list_queries_for_test() {
+    NATIVE_CANDIDATE_QUERIES.with(|count| count.set(0));
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn list_query_count() -> usize {
+    NATIVE_CANDIDATE_QUERIES.with(|count| count.get())
+}
 #[cfg(unix)]
 static FC_HANDLE: OnceLock<Option<fontconfig::Fontconfig>> = OnceLock::new();
 
@@ -174,20 +202,9 @@ pub(crate) fn list_families(
             object_set.0,
         ))
     };
-    if fontset.0.is_null() {
-        return Vec::new();
-    }
-    let nfont = unsafe { (*fontset.0).nfont };
-    if nfont <= 0 {
-        return Vec::new();
-    }
-    let fonts = unsafe { (*fontset.0).fonts };
-    if fonts.is_null() {
-        return Vec::new();
-    }
-    unsafe { std::slice::from_raw_parts(fonts, nfont as usize) }
-        .iter()
-        .filter_map(|&pattern| raw_pattern_string(pattern, fontconfig::FC_FAMILY))
+    fontset
+        .patterns()
+        .filter_map(|pattern| raw_pattern_string(pattern, fontconfig::FC_FAMILY))
         .filter_map(FontFamilyName::new)
         .collect()
 }
@@ -215,16 +232,6 @@ pub(crate) fn list_families() -> Vec<FontFamilyName> {
         .collect()
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct CharMatchCacheKey {
-    family: String,
-    codepoint: u32,
-    prefer_monospace: bool,
-    requested_weight: u16,
-    italic: bool,
-    fontset_generation: u64,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ListedFont {
     pub(crate) matched: FontMatch,
@@ -237,12 +244,18 @@ pub(crate) struct ListedFont {
     pub(crate) foundry: Option<String>,
 }
 
+#[cfg(test)]
 const FONT_SPACING_PROPORTIONAL: i32 = 0;
+#[cfg(test)]
 const FONT_SPACING_DUAL: i32 = 90;
+#[cfg(test)]
 const FONT_SPACING_MONO: i32 = 100;
+#[cfg(test)]
 const FONT_SPACING_CHARCELL: i32 = 110;
+#[cfg(test)]
 const FONT_SPACING_MONO_MAX: i32 = FONT_SPACING_CHARCELL - 1;
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SpacingClass {
     Proportional,
@@ -342,49 +355,6 @@ pub fn family_prefers_monospace(
         owner,
         family,
     ) == Some(100)
-}
-
-/// Resolve a character-capable fallback font through shared fontset state and
-/// a Fontconfig candidate list, approximating GNU Emacs' `face_for_char`
-/// pipeline.
-pub fn match_font_for_char(
-    family: &str,
-    ch: char,
-    prefer_monospace: bool,
-    requested_weight: u16,
-    italic: bool,
-) -> Option<FontMatch> {
-    if ch.is_ascii() {
-        return None;
-    }
-
-    let key = CharMatchCacheKey {
-        family: family.to_string(),
-        codepoint: ch as u32,
-        prefer_monospace,
-        requested_weight,
-        italic,
-        fontset_generation: fontset_generation(),
-    };
-    if let Some(cached) = fontconfig_caches()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .char_matches
-        .get(&key)
-    {
-        return cached.clone();
-    }
-
-    let matched =
-        match_font_for_char_uncached(family, ch, prefer_monospace, requested_weight, italic);
-
-    fontconfig_caches()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .char_matches
-        .insert(key, matched.clone());
-
-    matched
 }
 
 pub fn find_font_for_spec(
@@ -490,127 +460,6 @@ fn requested_width_distance(requested: Option<FontWidth>, candidate: Option<Font
     })
 }
 
-fn match_font_for_char_uncached(
-    family: &str,
-    ch: char,
-    prefer_monospace: bool,
-    requested_weight: u16,
-    italic: bool,
-) -> Option<FontMatch> {
-    for entry in matching_entries_for_char(ch) {
-        match entry {
-            FontSpecEntry::ExplicitNone => {
-                tracing::debug!(
-                    "fontconfig: U+{:04X} hit explicit nil fontset entry",
-                    ch as u32
-                );
-                return None;
-            }
-            FontSpecEntry::Font(spec) => {
-                if let Some(matched) = match_font_from_spec(
-                    family,
-                    ch,
-                    prefer_monospace,
-                    requested_weight,
-                    italic,
-                    &spec,
-                ) {
-                    tracing::debug!(
-                        "fontconfig: fontset matched U+{:04X} req_family={} spec={:?} -> {:?}",
-                        ch as u32,
-                        family,
-                        spec,
-                        matched
-                    );
-                    return Some(matched);
-                }
-            }
-        }
-    }
-
-    let fallback_spec = StoredFontSpec {
-        family: None,
-        registry: None,
-        lang: None,
-        weight: None,
-        slant: None,
-        width: None,
-        otf: None,
-        definition: None,
-    };
-    let matched = match_font_from_spec(
-        family,
-        ch,
-        prefer_monospace,
-        requested_weight,
-        italic,
-        &fallback_spec,
-    );
-    if let Some(ref matched) = matched {
-        tracing::debug!(
-            "fontconfig: generic fallback matched U+{:04X} req_family={} -> {:?}",
-            ch as u32,
-            family,
-            matched
-        );
-    }
-    matched
-}
-
-fn match_font_from_spec(
-    requested_family: &str,
-    ch: char,
-    prefer_monospace: bool,
-    requested_weight: u16,
-    italic: bool,
-    spec: &StoredFontSpec,
-) -> Option<FontMatch> {
-    let effective_weight = spec
-        .weight
-        .map(FontWeight::css_weight)
-        .unwrap_or(requested_weight);
-    let query_charset_ranges = query_charset_ranges(spec, ch);
-    let registry_lang = spec.registry.map(resolve_sym).and_then(registry_language);
-    let query_langs = combined_query_langs(registry_lang, spec.lang.map(resolve_sym));
-    let requested_spacing = requested_spacing(spec);
-
-    let family_policy =
-        crate::font::policy::FontFamilySource::for_spec(requested_family, spec).capture();
-    let search_order = family_policy.search_order(
-        #[cfg(all(test, unix))]
-        |family| resolve_family(test_config::QueryOwner::System, family),
-        #[cfg(not(all(test, unix)))]
-        resolve_family,
-    );
-    for family in search_order {
-        let family_option = family.as_family();
-        let candidates = fc_list_candidates(
-            #[cfg(all(test, unix))]
-            test_config::QueryOwner::System,
-            family_option,
-            &query_charset_ranges,
-            Some(ch as u32),
-            &query_langs,
-        );
-        if candidates.is_empty() {
-            continue;
-        }
-
-        let best = best_candidate_for_pass(
-            candidates,
-            effective_weight,
-            italic,
-            spec.slant,
-            requested_spacing,
-            prefer_monospace,
-            family_option,
-        )?;
-        return Some(best);
-    }
-
-    None
-}
-
 fn candidate_matches_find_font_spec(candidate: &ListedFont, spec: &StoredFontSpec) -> bool {
     if let Some(weight) = spec.weight
         && candidate
@@ -630,6 +479,7 @@ fn candidate_matches_find_font_spec(candidate: &ListedFont, spec: &StoredFontSpe
     true
 }
 
+#[cfg(test)]
 fn best_candidate_for_pass(
     candidates: Vec<ListedFont>,
     requested_weight: u16,
@@ -676,6 +526,7 @@ fn family_search_order(
         .collect()
 }
 
+#[cfg(test)]
 fn candidate_score(
     candidate: &ListedFont,
     requested_weight: u16,
@@ -713,14 +564,7 @@ fn candidate_score(
     .expect("this legacy listing path scores only scalable candidates")
 }
 
-fn requested_spacing(_spec: &StoredFontSpec) -> Option<i32> {
-    // GNU ftfont only filters by FC_SPACING when the font-spec itself requests
-    // spacing.  Inferring "monospace" from the current face family over-weights
-    // Fontconfig spacing metadata and makes variable CJK companions lose to
-    // unrelated fixed-pitch families.
-    None
-}
-
+#[cfg(test)]
 fn spacing_score(
     requested_spacing: Option<i32>,
     candidate_spacing: Option<i32>,
@@ -770,6 +614,7 @@ fn family_affinity_score(queried_family: Option<&str>, candidate_family: &str) -
     80
 }
 
+#[cfg(test)]
 fn normalize_spacing(spacing: i32) -> Option<SpacingClass> {
     match spacing {
         i32::MIN..=-1 => None,
@@ -780,6 +625,7 @@ fn normalize_spacing(spacing: i32) -> Option<SpacingClass> {
     }
 }
 
+#[cfg(test)]
 fn spacing_distance(requested: SpacingClass, candidate: SpacingClass) -> u32 {
     use SpacingClass::{Charcell, Dual, Mono, Proportional};
 
@@ -847,7 +693,39 @@ impl Drop for FcObjectSetGuard {
 }
 
 #[cfg(unix)]
+#[derive(Clone, Copy)]
+struct PatternRef<'a> {
+    ptr: ptr::NonNull<fontconfig_sys::FcPattern>,
+    _owner: std::marker::PhantomData<&'a fontconfig_sys::FcPattern>,
+}
+
+#[cfg(unix)]
+impl<'a> PatternRef<'a> {
+    /// # Safety
+    /// If non-null, `ptr` must point to a live `FcPattern` that remains valid
+    /// and is not mutated or destroyed for the lifetime `'a`.
+    unsafe fn from_raw(ptr: *mut fontconfig_sys::FcPattern) -> Option<Self> {
+        ptr::NonNull::new(ptr).map(|ptr| Self {
+            ptr,
+            _owner: std::marker::PhantomData,
+        })
+    }
+
+    fn as_ptr(self) -> *mut fontconfig_sys::FcPattern {
+        self.ptr.as_ptr()
+    }
+}
+
+#[cfg(unix)]
 struct FcPatternGuard(*mut fontconfig_sys::FcPattern);
+
+#[cfg(unix)]
+impl FcPatternGuard {
+    fn as_ref(&self) -> Option<PatternRef<'_>> {
+        // SAFETY: `self.0` is owned by this guard and remains live for `'_`.
+        unsafe { PatternRef::from_raw(self.0) }
+    }
+}
 
 #[cfg(unix)]
 impl Drop for FcPatternGuard {
@@ -860,6 +738,34 @@ impl Drop for FcPatternGuard {
 
 #[cfg(unix)]
 struct FcFontSetGuard(*mut fontconfig_sys::FcFontSet);
+
+#[cfg(unix)]
+impl FcFontSetGuard {
+    fn patterns(&self) -> impl Iterator<Item = PatternRef<'_>> {
+        let slice: &[*mut fontconfig_sys::FcPattern] = if self.0.is_null() {
+            &[]
+        } else {
+            // SAFETY: `self.0` is owned by this guard until drop.
+            let nfont = unsafe { (*self.0).nfont };
+            if nfont <= 0 {
+                &[]
+            } else {
+                let fonts = unsafe { (*self.0).fonts };
+                if fonts.is_null() {
+                    &[]
+                } else {
+                    // SAFETY: Fontconfig owns this aligned `nfont`-element
+                    // array inside the live `FcFontSet` for the borrow `'_`.
+                    unsafe { std::slice::from_raw_parts(fonts, nfont as usize) }
+                }
+            }
+        };
+        slice.iter().filter_map(|&ptr| {
+            // SAFETY: every non-null element is owned by `self` and lives for `'_`.
+            unsafe { PatternRef::from_raw(ptr) }
+        })
+    }
+}
 
 #[cfg(unix)]
 impl Drop for FcFontSetGuard {
@@ -971,13 +877,17 @@ fn build_candidate_object_set(projection: GnuEntityProjection) -> Option<FcObjec
 }
 
 #[cfg(unix)]
-fn raw_pattern_string(pattern: *mut fontconfig_sys::FcPattern, key: &CStr) -> Option<String> {
+fn raw_pattern_string(pattern: PatternRef<'_>, key: &CStr) -> Option<String> {
     let mut raw_value: *mut fontconfig_sys::FcChar8 = ptr::null_mut();
-    let result =
-        unsafe { fontconfig_sys::FcPatternGetString(pattern, key.as_ptr(), 0, &mut raw_value) };
+    // SAFETY: `pattern` borrows a live `FcPattern` and `key` is NUL-terminated.
+    let result = unsafe {
+        fontconfig_sys::FcPatternGetString(pattern.as_ptr(), key.as_ptr(), 0, &mut raw_value)
+    };
     if result != fontconfig_sys::FcResultMatch || raw_value.is_null() {
         return None;
     }
+    // SAFETY: Fontconfig returned `FcResultMatch` with a non-null NUL-terminated
+    // string owned by `pattern`, which stays live for this call.
     unsafe { CStr::from_ptr(raw_value.cast()) }
         .to_str()
         .ok()
@@ -987,10 +897,12 @@ fn raw_pattern_string(pattern: *mut fontconfig_sys::FcPattern, key: &CStr) -> Op
 }
 
 #[cfg(unix)]
-fn raw_pattern_int(pattern: *mut fontconfig_sys::FcPattern, key: &CStr) -> Option<i32> {
+fn raw_pattern_int(pattern: PatternRef<'_>, key: &CStr) -> Option<i32> {
     let mut value = 0;
-    let result =
-        unsafe { fontconfig_sys::FcPatternGetInteger(pattern, key.as_ptr(), 0, &mut value) };
+    // SAFETY: `pattern` borrows a live `FcPattern` and `key` is NUL-terminated.
+    let result = unsafe {
+        fontconfig_sys::FcPatternGetInteger(pattern.as_ptr(), key.as_ptr(), 0, &mut value)
+    };
     (result == fontconfig_sys::FcResultMatch).then_some(value)
 }
 
@@ -1007,32 +919,34 @@ fn parse_font_variations(value: &str) -> Vec<FontVariationCoord> {
 }
 
 #[cfg(unix)]
-fn raw_pattern_bool(pattern: *mut fontconfig_sys::FcPattern, key: &CStr) -> Option<bool> {
+fn raw_pattern_bool(pattern: PatternRef<'_>, key: &CStr) -> Option<bool> {
     let mut value = 0;
-    let result = unsafe { fontconfig_sys::FcPatternGetBool(pattern, key.as_ptr(), 0, &mut value) };
+    // SAFETY: `pattern` borrows a live `FcPattern` and `key` is NUL-terminated.
+    let result =
+        unsafe { fontconfig_sys::FcPatternGetBool(pattern.as_ptr(), key.as_ptr(), 0, &mut value) };
     (result == fontconfig_sys::FcResultMatch).then_some(value != 0)
 }
 
 #[cfg(unix)]
-fn raw_pattern_double(pattern: *mut fontconfig_sys::FcPattern, key: &CStr) -> Option<f64> {
+fn raw_pattern_double(pattern: PatternRef<'_>, key: &CStr) -> Option<f64> {
     let mut value = 0.0;
-    let result =
-        unsafe { fontconfig_sys::FcPatternGetDouble(pattern, key.as_ptr(), 0, &mut value) };
+    // SAFETY: `pattern` borrows a live `FcPattern` and `key` is NUL-terminated.
+    let result = unsafe {
+        fontconfig_sys::FcPatternGetDouble(pattern.as_ptr(), key.as_ptr(), 0, &mut value)
+    };
     (result == fontconfig_sys::FcResultMatch && value.is_finite()).then_some(value)
 }
 
 #[cfg(unix)]
-fn raw_pattern_supports_any_char(
-    pattern: *mut fontconfig_sys::FcPattern,
-    query_chars: &[u32],
-) -> bool {
+fn raw_pattern_supports_any_char(pattern: PatternRef<'_>, query_chars: &[u32]) -> bool {
     if query_chars.is_empty() {
         return true;
     }
     let mut charset: *mut fontconfig_sys::FcCharSet = ptr::null_mut();
+    // SAFETY: `pattern` borrows a live `FcPattern`.
     let result = unsafe {
         fontconfig_sys::FcPatternGetCharSet(
-            pattern,
+            pattern.as_ptr(),
             fontconfig::FC_CHARSET.as_ptr(),
             0,
             &mut charset,
@@ -1041,16 +955,16 @@ fn raw_pattern_supports_any_char(
     if result != fontconfig_sys::FcResultMatch || charset.is_null() {
         return false;
     }
-    query_chars.iter().any(|&codepoint| unsafe {
-        fontconfig_sys::FcCharSetHasChar(charset, codepoint as fontconfig_sys::FcChar32) != 0
+    query_chars.iter().any(|&codepoint| {
+        // SAFETY: `charset` is non-null and owned by `pattern`, which stays live.
+        unsafe {
+            fontconfig_sys::FcCharSetHasChar(charset, codepoint as fontconfig_sys::FcChar32) != 0
+        }
     })
 }
 
 #[cfg(unix)]
-fn listed_font_from_raw_pattern(pattern: *mut fontconfig_sys::FcPattern) -> Option<ListedFont> {
-    if pattern.is_null() {
-        return None;
-    }
+fn listed_font_from_raw_pattern(pattern: PatternRef<'_>) -> Option<ListedFont> {
     let file = raw_pattern_string(pattern, fontconfig::FC_FILE)?;
     let face_index = u32::try_from(raw_pattern_int(pattern, fontconfig::FC_INDEX)?).ok()?;
     let variation_coords =
@@ -1217,12 +1131,7 @@ fn foundry_for_file_uncached(
             object_set.0,
         ))
     };
-    if fontset.0.is_null() {
-        return None;
-    }
-    let nfont = unsafe { (*fontset.0).nfont } as usize;
-    for i in 0..nfont {
-        let candidate = unsafe { *(*fontset.0).fonts.add(i) };
+    for candidate in fontset.patterns() {
         if let Some(foundry) = raw_pattern_string(candidate, fontconfig::FC_FOUNDRY) {
             return Some(foundry);
         }
@@ -1517,7 +1426,7 @@ fn fc_query_candidates_uncached(
             let matched = FcPatternGuard(unsafe {
                 fontconfig_sys::FcFontMatch(native_config, pattern.0, &mut result)
             });
-            if let Some(candidate) = listed_font_from_raw_pattern(matched.0) {
+            if let Some(candidate) = matched.as_ref().and_then(listed_font_from_raw_pattern) {
                 candidates.push(candidate);
             }
             continue;
@@ -1543,10 +1452,13 @@ fn fc_query_candidates_uncached(
                 object_set.0,
             ))
         };
-        if fontset.0.is_null() {
-            continue;
-        }
-        let nfont = unsafe { (*fontset.0).nfont };
+        let nfont = if fontset.0.is_null() {
+            0
+        } else {
+            // SAFETY: `fontset` owns this non-null `FcFontSet` returned by
+            // `FcFontList` until `fontset` drops at the end of this iteration.
+            unsafe { (*fontset.0).nfont }
+        };
         tracing::trace!(
             family = family.unwrap_or(""),
             lang = lang.unwrap_or(""),
@@ -1555,17 +1467,9 @@ fn fc_query_candidates_uncached(
             nfont,
             "fontconfig raw candidate list"
         );
-        if nfont <= 0 {
-            continue;
-        }
-        let fonts = unsafe { (*fontset.0).fonts };
-        if fonts.is_null() {
-            continue;
-        }
-        let patterns = unsafe { std::slice::from_raw_parts(fonts, nfont as usize) };
         let before = candidates.len();
 
-        for &candidate_pattern in patterns {
+        for candidate_pattern in fontset.patterns() {
             if let Some(required_char) = required_char
                 && !raw_pattern_supports_any_char(candidate_pattern, &[required_char])
             {
@@ -1589,6 +1493,147 @@ fn fc_query_candidates_uncached(
         );
     }
     candidates
+}
+
+/// Families in `FcFontSort` order for `family:lang=lang`.
+///
+/// This is the order `fc-match -s` reports. It is a tie-break only: discovery
+/// stays on `FcFontList`, and a missing sort leaves the caller unranked.
+#[cfg(unix)]
+pub(crate) fn fc_sorted_families(
+    #[cfg(test)] owner: test_config::QueryOwner<'_>,
+    family: &str,
+    lang: &str,
+) -> Vec<String> {
+    if family.is_empty() || lang.is_empty() {
+        return Vec::new();
+    }
+    let cache_key = (family.to_owned(), lang.to_owned());
+    if let Some(cached) = ({
+        #[cfg(test)]
+        {
+            owner.caches()
+        }
+        #[cfg(not(test))]
+        {
+            fontconfig_caches()
+        }
+    })
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .sorted_families
+    .get(&cache_key)
+    .cloned()
+    {
+        return cached;
+    }
+    #[cfg(test)]
+    let access = owner.acquire();
+    #[cfg(test)]
+    let config = access.borrow();
+    #[cfg(test)]
+    let native_config = match config.native_ptr() {
+        Ok(pointer) => pointer,
+        Err(test_config::ConfigAccessError::SystemUnavailable) => return Vec::new(),
+    };
+    #[cfg(not(test))]
+    let native_config = ptr::null_mut();
+    #[cfg(not(test))]
+    if fontconfig_handle().is_none() {
+        return Vec::new();
+    }
+    let pattern = unsafe { fontconfig_sys::FcPatternCreate() };
+    if pattern.is_null() {
+        return Vec::new();
+    }
+    let pattern = FcPatternGuard(pattern);
+    let Ok(family_value) = CString::new(family) else {
+        return Vec::new();
+    };
+    let Ok(lang_value) = CString::new(lang) else {
+        return Vec::new();
+    };
+    let family_ok = unsafe {
+        fontconfig_sys::FcPatternAddString(
+            pattern.0,
+            fontconfig::FC_FAMILY.as_ptr(),
+            family_value.as_ptr().cast(),
+        )
+    };
+    if family_ok == 0 {
+        return Vec::new();
+    }
+    // `FC_LANG` is a langset. A string property is rejected, and the sort
+    // would then ignore the language the caller asked for.
+    let langset = unsafe { fontconfig_sys::FcLangSetCreate() };
+    if langset.is_null() {
+        return Vec::new();
+    }
+    let langset = FcLangSetGuard(langset);
+    let lang_added = unsafe { fontconfig_sys::FcLangSetAdd(langset.0, lang_value.as_ptr().cast()) };
+    if lang_added == 0 {
+        return Vec::new();
+    }
+    let lang_ok = unsafe {
+        fontconfig_sys::FcPatternAddLangSet(pattern.0, fontconfig::FC_LANG.as_ptr(), langset.0)
+    };
+    if lang_ok == 0 {
+        return Vec::new();
+    }
+    #[cfg(test)]
+    if config.apply_defaults(&pattern).is_err() {
+        return Vec::new();
+    }
+    if unsafe {
+        fontconfig_sys::FcConfigSubstitute(native_config, pattern.0, fontconfig_sys::FcMatchPattern)
+    } == 0
+    {
+        return Vec::new();
+    }
+    unsafe { fontconfig_sys::FcDefaultSubstitute(pattern.0) };
+    let mut result = fontconfig_sys::FcResultNoMatch;
+    // SAFETY: the pattern and configuration stay live. A null charset out-param
+    // asks Fontconfig not to build the coverage union. trim is false so every
+    // family remains in the order `fc-match -s` would print.
+    #[cfg(test)]
+    FC_SORT_QUERIES.fetch_add(1, Ordering::Relaxed);
+    let fontset = unsafe {
+        FcFontSetGuard(fontconfig_sys::FcFontSort(
+            native_config,
+            pattern.0,
+            0,
+            ptr::null_mut(),
+            &mut result,
+        ))
+    };
+    let mut families = Vec::new();
+    for pattern in fontset.patterns() {
+        let Some(name) = raw_pattern_string(pattern, fontconfig::FC_FAMILY) else {
+            continue;
+        };
+        if families
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&name))
+        {
+            continue;
+        }
+        families.push(name);
+    }
+    ({
+        #[cfg(test)]
+        {
+            owner.caches()
+        }
+        #[cfg(not(test))]
+        {
+            fontconfig_caches()
+        }
+    })
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .sorted_families
+    .insert(cache_key, families.clone());
+    families
 }
 
 #[cfg(not(unix))]

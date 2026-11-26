@@ -39,8 +39,9 @@ fn storefast_vm_and_tls_stores_do_not_borrow_the_inactive_capture_recorder() {
     use neovm_eval::emacs_core::builtins;
 
     let boot = crate::test_utils::new_context();
-    let mut context =
-        neovm_eval::test_support::authority::new_minimal_vm_harness(boot.hooks_installed());
+    let proof = boot.hooks_installed();
+    drop(boot);
+    let mut context = neovm_eval::test_support::authority::new_minimal_vm_harness(proof);
     let cons = Value::cons(Value::NIL, Value::NIL);
     let vector = Value::vector(vec![Value::NIL]);
     let record = Value::make_record(vec![Value::NIL]);
@@ -84,8 +85,8 @@ fn storefast_vm_and_tls_stores_do_not_borrow_the_inactive_capture_recorder() {
     );
     assert!(cons.cons_car().is_nil());
     assert!(cons.cons_cdr().is_t());
-    assert!(vector.as_vector_data().unwrap()[0].is_nil());
-    assert!(record.as_record_data().unwrap()[0].is_t());
+    assert!(vector.as_vector_data().unwrap().at(0).is_nil());
+    assert!(record.as_record_data().unwrap().at(0).is_t());
 }
 
 #[test]
@@ -94,7 +95,7 @@ fn storefast_null_heap_stores_keep_journal_and_captures_without_installing_a_hea
         TestHeap, clear_tagged_heap_if_installed, current_tagged_heap_identity,
         tagged_heap_is_installed,
     };
-    let heap = TestHeap::new();
+    let mut heap = TestHeap::new();
     let cons = Value::cons(Value::NIL, Value::NIL);
     let vector = Value::vector(vec![Value::NIL]);
     let record = Value::make_record(vec![Value::NIL]);
@@ -105,7 +106,8 @@ fn storefast_null_heap_stores_keep_journal_and_captures_without_installing_a_hea
     });
     let certificate = certificate.unwrap();
     assert!(certificate.unchanged());
-    clear_tagged_heap_if_installed(&heap);
+    // SAFETY: standalone `TestHeap` fixture cleared to exercise null-heap stores.
+    unsafe { clear_tagged_heap_if_installed(&heap) };
     let before = LispCollectionRevision::current();
     neovm_value::test_support::authority::with_cold_capture_for_test(|| {
         cons.set_car(Value::T);
@@ -125,12 +127,13 @@ fn storefast_null_heap_stores_keep_journal_and_captures_without_installing_a_hea
         3
     );
     assert_eq!(cons.cons_car(), Value::T);
-    assert_eq!(vector.as_vector_data().unwrap()[0], Value::T);
-    assert_eq!(record.as_record_data().unwrap()[0], Value::T);
+    assert_eq!(vector.as_vector_data().unwrap().at(0), Value::T);
+    assert_eq!(record.as_record_data().unwrap().at(0), Value::T);
 
     let (_, unfinished) = capture(|| {
         cons.cons_cdr();
-        clear_tagged_heap_if_installed(&heap);
+        // SAFETY: standalone `TestHeap` fixture cleared inside capture.
+        unsafe { clear_tagged_heap_if_installed(&heap) };
         cons.set_cdr(Value::T);
     });
     assert!(unfinished.is_none());
@@ -212,8 +215,8 @@ fn storefast_shared_stores_with_active_capture_and_full_barrier() {
     }
     assert_eq!(cons.cons_car(), Value::T);
     assert_eq!(cons.cons_cdr(), Value::T);
-    assert_eq!(vector.as_vector_data().unwrap()[0], Value::NIL);
-    assert_eq!(record.as_record_data().unwrap()[0], Value::NIL);
+    assert_eq!(vector.as_vector_data().unwrap().at(0), Value::NIL);
+    assert_eq!(record.as_record_data().unwrap().at(0), Value::NIL);
     assert_eq!(string.as_lisp_string().unwrap().as_bytes(), b"xy");
 }
 

@@ -291,7 +291,7 @@ impl<Slot> SortReadStorage for VectorSortStorage<Slot> {
     }
     #[inline]
     fn item(&self, index: usize) -> SortItem {
-        let value = self.vector.as_vector_data().unwrap()[index];
+        let value = self.vector.as_vector_data().unwrap().at(index);
         SortItem {
             value,
             key: self.keys.as_ref().map_or(value, |keys| keys[index]),

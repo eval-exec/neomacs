@@ -523,11 +523,11 @@ fn validate_matches_decode_on_real_elc_functions() {
             continue;
         }
         let data = f.get_bytecode_data().expect("byte-code function");
-        if let Some(bytes) = &data.gnu_bytecode_bytes {
+        if let Some(bytes) = data.gnu_bytecode_bytes() {
             bodies.push(bytes.to_vec());
         }
         pending.extend(
-            data.constants
+            data.constants()
                 .iter()
                 .copied()
                 .filter(|c| c.get_bytecode_data().is_some()),
@@ -579,7 +579,7 @@ fn make_byte_code_decodes_lazily_at_first_execution() {
     assert_eq!(lazy() - lazy0, 0);
     for f in neovm_value::value::list_to_vec(&made).unwrap() {
         let data = f.get_bytecode_data().unwrap();
-        assert!(data.ops.is_empty());
+        assert!(data.ops().is_empty());
         assert!(data.lazy_gnu_code().is_some());
     }
 
@@ -630,7 +630,7 @@ fn make_byte_code_full_decode_baseline_still_defers() {
         .expect("make-byte-code");
     crate::emacs_core::eval::push_scratch_gc_root(made);
     assert_eq!((full() - full0, lazy() - lazy0), (1, 0));
-    assert!(made.get_bytecode_data().unwrap().ops.is_empty());
+    assert!(made.get_bytecode_data().unwrap().ops().is_empty());
     assert_eq!(
         eval.eval_str("(funcall mbc-full)").unwrap(),
         Value::symbol("mbc-ran")

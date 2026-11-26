@@ -44,12 +44,12 @@ fn verified_heap() -> TaggedHeap {
 }
 
 fn minor(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     for &root in roots {
         heap.seed_root(root);
     }
-    heap.complete_minor_collection();
-    heap.finish_incremental_sweep_now();
+    heap.complete_minor_collection_for_test();
+    heap.finish_incremental_sweep_now_for_test();
 }
 
 fn card_addr(owner: TaggedValue) -> usize {
@@ -226,13 +226,15 @@ fn verify_mode_rejects_an_old_cons_edge_with_a_clean_card() {
     heap.card_table()
         .expect("GEN1 built the table")
         .clear(card_addr(owner));
-    heap.begin_minor_collection().unwrap();
+    heap.begin_minor_collection_for_test().unwrap();
     heap.seed_root(owner);
     // A second root keeps the child marked, so the missed-child check passes
     // and the card check alone must reject the edge the next minor would miss.
     heap.seed_root(child);
-    let panic = catch_unwind(AssertUnwindSafe(|| heap.complete_minor_collection()))
-        .expect_err("an old cons edge behind a clean card must fail verification");
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        heap.complete_minor_collection_for_test()
+    }))
+    .expect_err("an old cons edge behind a clean card must fail verification");
     let message = panic
         .downcast_ref::<String>()
         .map(String::as_str)
@@ -256,7 +258,7 @@ fn gen0_heap_never_marks_a_card() {
     let roots = ScratchRoots::new();
     let owner = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(owner);
-    heap.collect_exact(std::iter::once(owner));
+    heap.collect_rooted(std::iter::once(owner));
     let child = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     store_young_child(owner, OwnerClass::ArenaVector, child);
     assert!(!heap.owner_card_is_dirty(card_addr(owner)));

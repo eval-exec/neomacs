@@ -6,42 +6,51 @@ use super::*;
 pub use crate::emacs_core::subr::{FixedMin1, SubrSpec};
 use neovm_value::symbol::FunctionEpochBump;
 
-fn align_real_owner_clocks(a: &mut Context, b: &mut Context) -> u64 {
-    let target = a.obarray.function_epoch().max(b.obarray.function_epoch());
-    for ctx in [a, b] {
-        while ctx.obarray.function_epoch() != target {
-            ctx.obarray
-                .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
-        }
+fn align_real_owner_clocks(ctx: &mut Context, target: u64) {
+    while ctx.obarray.function_epoch() != target {
+        ctx.obarray
+            .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
     }
-    target
 }
 
 #[test]
 fn opt_sqrt_binding_equal_owner_clocks_still_read_cell_and_inplace_entry() {
-    let mut first = Context::new(crate::test_utils::unit_runtime());
+    let first = Context::new(crate::test_utils::unit_runtime());
     let symbol = intern("sqrt");
     let symbol_bits = Value::from_sym_id(symbol).bits() as u64;
     let original = first.obarray.symbol_function_id(symbol).unwrap();
+    let first_epoch = first.obarray.function_epoch();
+    let parked_first = first.park_for_test();
     let mut second = Context::new(crate::test_utils::unit_runtime());
     second
         .eval_str("(fset 'sqrt (lambda (x) (list 'changed x)))")
         .unwrap();
-    let epoch = align_real_owner_clocks(&mut first, &mut second);
-    assert_ne!(first.obarray.generation(), second.obarray.generation());
-    assert_eq!(
-        first.obarray.function_epoch(),
-        second.obarray.function_epoch()
-    );
+    let epoch = first_epoch.max(second.obarray.function_epoch());
+    align_real_owner_clocks(&mut second, epoch);
+    let second_generation = second.obarray.generation();
+    let second_epoch = second.obarray.function_epoch();
+    let parked_second = second.park_for_test();
+    let second_root = parked_second.tagged_heap().heap_root();
+    let mut first = parked_first.resume_for_test().expect("resume first owner");
+    align_real_owner_clocks(&mut first, epoch);
+    assert_ne!(first.obarray.generation(), second_generation);
+    assert_eq!(first.obarray.function_epoch(), second_epoch);
     assert!(is_actual_sqrt(original));
-    assert!(binding_valid(
-        &first,
-        symbol_bits,
-        original.bits() as u64,
-        epoch
-    ));
+    // `binding_valid(&first)` runs while second's heap is installed. A
+    // validator that read the installed owner would miss first's cell.
+    {
+        // SAFETY: `parked_second` owns `second_root` and `first` owns the
+        // displaced root; both outlive `_nest`.
+        let _nest =
+            unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(second_root) };
+        assert!(unsafe { binding_valid(&first, symbol_bits, original.bits() as u64, epoch) });
+    }
+    let parked_first = first.park_for_test();
+    let mut second = parked_second
+        .resume_for_test()
+        .expect("resume second owner");
     assert!(
-        !binding_valid(&second, symbol_bits, original.bits() as u64, epoch),
+        !unsafe { binding_valid(&second, symbol_bits, original.bits() as u64, epoch) },
         "same numeric epoch cannot replace CURRENT owner function-cell proof"
     );
 
@@ -50,6 +59,8 @@ fn opt_sqrt_binding_equal_owner_clocks_still_read_cell_and_inplace_entry() {
         crate::emacs_core::builtins::builtin_sin_1,
         FixedMin1::One,
     ));
+    let parked_second = second.park_for_test();
+    let first = parked_first.resume_for_test().expect("resume first owner");
     assert_eq!(
         first.obarray.function_epoch(),
         epoch,
@@ -59,21 +70,35 @@ fn opt_sqrt_binding_equal_owner_clocks_still_read_cell_and_inplace_entry() {
         first.obarray.symbol_function_id(symbol).unwrap().bits(),
         original.bits()
     );
-    assert!(
-        !binding_valid(&first, symbol_bits, original.bits() as u64, epoch),
-        "same static pointer now holds a different actual A1 function"
-    );
+    {
+        // SAFETY: `parked_second` owns `second_root` and `first` owns the
+        // displaced root; both outlive `_nest`.
+        let _nest =
+            unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(second_root) };
+        assert!(
+            !unsafe { binding_valid(&first, symbol_bits, original.bits() as u64, epoch) },
+            "same static pointer now holds a different actual A1 function"
+        );
+    }
+    let parked_first = first.park_for_test();
+    let mut second = parked_second
+        .resume_for_test()
+        .expect("resume second owner");
     second.register_subr(SubrSpec::fixed1(
         "sqrt",
         crate::emacs_core::builtins::builtin_sqrt_1,
         FixedMin1::One,
     ));
-    assert!(binding_valid(
-        &first,
-        symbol_bits,
-        original.bits() as u64,
-        epoch
-    ));
+    let parked_second = second.park_for_test();
+    let mut first = parked_first.resume_for_test().expect("resume first owner");
+    {
+        // SAFETY: `parked_second` owns `second_root` and `first` owns the
+        // displaced root; both outlive `_nest`.
+        let _nest =
+            unsafe { neovm_value::tagged::gc::NestedTaggedHeapInstall::install_bare(second_root) };
+        assert!(unsafe { binding_valid(&first, symbol_bits, original.bits() as u64, epoch) });
+    }
+    drop(parked_second);
     first.setup_thread_locals();
 }
 
@@ -102,7 +127,7 @@ fn opt_sqrt_binding_shared_static_reader_declines_busy_writer_and_observes_rewri
         let epoch = reader.obarray.function_epoch();
         reply.send(None).unwrap();
         while let Ok(Probe::Check) = receive.recv() {
-            let answer = binding_valid(&reader, symbol_bits, original_bits, epoch);
+            let answer = unsafe { binding_valid(&reader, symbol_bits, original_bits, epoch) };
             reply.send(Some(answer)).unwrap();
         }
     });

@@ -1,0 +1,41 @@
+error[E0616]: field `child_stdout` of struct `LiveProcessIo` is private
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/live_process_io_fields_are_private.rs
+  |
+  |     io.child_stdout = None;
+  |        ^^^^^^^^^^^^ private field
+
+error[E0616]: field `network_socket` of struct `LiveProcessIo` is private
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/live_process_io_fields_are_private.rs
+  |
+  |     io.network_socket = None;
+  |        ^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `tls_stream` of struct `LiveProcessIo` is private
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/live_process_io_fields_are_private.rs
+  |
+  |     io.tls_stream = None;
+  |        ^^^^^^^^^^ private field
+
+error[E0616]: field `serial_port` of struct `LiveProcessIo` is private
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/live_process_io_fields_are_private.rs
+  |
+  |     io.serial_port = None;
+  |        ^^^^^^^^^^^ private field
+
+error[E0616]: field `pty_master` of struct `LiveProcessIo` is private
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/live_process_io_fields_are_private.rs
+  |
+  |     io.pty_master = None;
+  |        ^^^^^^^^^^ private field
+
+error[E0616]: field `child_status_source` of struct `LiveProcessIo` is private
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/live_process_io_fields_are_private.rs
+  |
+  |     io.child_status_source = None;
+  |        ^^^^^^^^^^^^^^^^^^^ private field
+
+error[E0616]: field `live_io` of struct `neovm_eval::emacs_core::eval::data::process_state::Process` is private
+ --> $WORKSPACE/crates/neovm-system/tests/poller_registration_ui/live_process_io_fields_are_private.rs
+  |
+  |     proc.live_io = LiveProcessIo::default();
+  |          ^^^^^^^ private field

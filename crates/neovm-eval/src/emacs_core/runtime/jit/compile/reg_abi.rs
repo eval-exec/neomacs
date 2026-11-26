@@ -274,41 +274,42 @@ pub(crate) unsafe fn call_register_entry(
 ) -> NativeRet {
     type A = i64;
     // SAFETY: the caller's contract; each arm transmutes to the entry's
-    // exact signature and reads exactly `arity` words.
+    // exact unsafe signature, reads exactly `arity` words, and calls it.
     unsafe {
         let a = |i: usize| *args.add(i);
         match arity {
             0 => {
-                let f: extern "C" fn(*mut u8, *const u8) -> NativeRet = core::mem::transmute(entry);
+                let f: unsafe extern "C" fn(*mut u8, *const u8) -> NativeRet =
+                    core::mem::transmute(entry);
                 f(vmctx, aux)
             }
             1 => {
-                let f: extern "C" fn(*mut u8, *const u8, A) -> NativeRet =
+                let f: unsafe extern "C" fn(*mut u8, *const u8, A) -> NativeRet =
                     core::mem::transmute(entry);
                 f(vmctx, aux, a(0))
             }
             2 => {
-                let f: extern "C" fn(*mut u8, *const u8, A, A) -> NativeRet =
+                let f: unsafe extern "C" fn(*mut u8, *const u8, A, A) -> NativeRet =
                     core::mem::transmute(entry);
                 f(vmctx, aux, a(0), a(1))
             }
             3 => {
-                let f: extern "C" fn(*mut u8, *const u8, A, A, A) -> NativeRet =
+                let f: unsafe extern "C" fn(*mut u8, *const u8, A, A, A) -> NativeRet =
                     core::mem::transmute(entry);
                 f(vmctx, aux, a(0), a(1), a(2))
             }
             4 => {
-                let f: extern "C" fn(*mut u8, *const u8, A, A, A, A) -> NativeRet =
+                let f: unsafe extern "C" fn(*mut u8, *const u8, A, A, A, A) -> NativeRet =
                     core::mem::transmute(entry);
                 f(vmctx, aux, a(0), a(1), a(2), a(3))
             }
             5 => {
-                let f: extern "C" fn(*mut u8, *const u8, A, A, A, A, A) -> NativeRet =
+                let f: unsafe extern "C" fn(*mut u8, *const u8, A, A, A, A, A) -> NativeRet =
                     core::mem::transmute(entry);
                 f(vmctx, aux, a(0), a(1), a(2), a(3), a(4))
             }
             6 => {
-                let f: extern "C" fn(*mut u8, *const u8, A, A, A, A, A, A) -> NativeRet =
+                let f: unsafe extern "C" fn(*mut u8, *const u8, A, A, A, A, A, A) -> NativeRet =
                     core::mem::transmute(entry);
                 f(vmctx, aux, a(0), a(1), a(2), a(3), a(4), a(5))
             }
@@ -356,9 +357,9 @@ macro_rules! register_thunk {
             args: *const i64,
         ) -> NativeRet {
             let _ = args;
-            // SAFETY: the contract above.
+            // SAFETY: the contract above; this calls the arity's unsafe entry.
             unsafe {
-                let f: extern "C" fn(*mut u8, *const u8 $(, register_thunk!(@word $i))*) -> NativeRet =
+                let f: unsafe extern "C" fn(*mut u8, *const u8 $(, register_thunk!(@word $i))*) -> NativeRet =
                     core::mem::transmute(entry);
                 f(vmctx, base_of(aux) $(, *args.add($i))*)
             }

@@ -119,11 +119,25 @@ macro_rules! reset_step {
 /// clear undoes the one harness exception: a test build's lazy charset
 /// initializer may install the test fallback heap, which must not stay in an
 /// idle carrier's slot either.
-pub(crate) fn park_carrier_tls() {
-    reset_step!(
-        "heap-clear",
-        neovm_value::tagged::gc::clear_carrier_heap_tls()
-    );
+///
+/// # Safety
+///
+/// 1. No live active `Context` remains evaluating on this OS thread (owner
+///    state and carried World state have already been stowed or retired).
+/// 2. No loan or reference derived from the TLS heap slot is live on this
+///    thread.
+/// 3. Before reusing this carrier thread for another job, the caller must
+///    invoke [`reset_carrier_tls`] to complete the deferred-reset lifecycle.
+pub(crate) unsafe fn park_carrier_tls() {
+    // SAFETY: caller upholds `park_carrier_tls`'s contract (owner and carried
+    // World state already stowed/retired, no live TLS heap loan, deferred
+    // `reset_carrier_tls` runs before carrier reuse).
+    unsafe {
+        reset_step!(
+            "heap-clear",
+            neovm_value::tagged::gc::clear_carrier_heap_tls()
+        );
+    }
 
     // Heap-pointer OwnerCarried records: the standard-table object caches.
     reset_step!(
@@ -168,10 +182,14 @@ pub(crate) fn park_carrier_tls() {
 
     // Idle carriers must name no heap at all; a test build's lazy charset
     // initializer can have installed the harness heap above.
-    reset_step!(
-        "heap-clear-final",
-        neovm_value::tagged::gc::clear_carrier_heap_tls()
-    );
+    // SAFETY: final carrier-park clear; no active Context is live on this
+    // thread after carrier retirement.
+    unsafe {
+        reset_step!(
+            "heap-clear-final",
+            neovm_value::tagged::gc::clear_carrier_heap_tls()
+        );
+    }
 }
 
 /// Deferred `MustReset` cache clear. Runs as the first action of a reused
@@ -310,10 +328,17 @@ pub(crate) fn reset_carrier_tls() {
 #[allow(dead_code)]
 pub(crate) fn snapshot_carrier_tls() -> u64 {
     // Build the charset placeholder now (allocating the test-only plists on
-    // the fallback heap), then restore the empty slot before sampling.
+    // the fallback heap), then restore the empty slot before sampling ONLY if
+    // the slot holds the armed test fallback (never clear a live Context heap).
     neovm_text::emacs_core::charset::warm_carrier_charset_registry();
     #[cfg(test)]
-    neovm_value::tagged::gc::clear_carrier_heap_tls();
+    if neovm_value::tagged::gc::installed_slot_is_armed_test_fallback() {
+        // SAFETY: the guard above proved TLS holds only the armed test-fallback
+        // heap (not a live `Context` heap) and no TLS-derived heap loan is live.
+        unsafe {
+            neovm_value::tagged::gc::clear_carrier_heap_tls();
+        }
+    }
     let mut h = neovm_value::tls_fingerprint::SEED;
     neovm_value::tagged::gc::carrier_tls_fingerprint(&mut h);
     neovm_value::tagged::collection_reads::carrier_tls_fingerprint(&mut h);
@@ -696,7 +721,10 @@ mod lifecycle_carrier_protocol_tests {
         let identity = context.dynamic_module_registry.heap_identity();
         for (cycle, owner) in [false, true].into_iter().enumerate() {
             restore_after(&mut context, owner, |_| {
-                super::park_carrier_tls();
+                // SAFETY: `restore_after` parked/stowed `context` and restores
+                // it on exit after `reset_carrier_tls` below; no TLS heap loan
+                // is live here.
+                unsafe { super::park_carrier_tls() };
                 assert_eq!(
                     neovm_value::tagged::gc::current_tagged_heap_identity(),
                     None

@@ -49,10 +49,10 @@ fn function(arity: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(32);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(32));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -173,7 +173,7 @@ fn inline_named_runtime_pure_native_region_preserves_frame_depth_and_roots() {
     let roots = ctx.jit_root_stack_top;
     for n in [0, 1, -17, 1_000] {
         assert_eq!(
-            leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(n)]),
+            unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(n)]) },
             NativeRun::Ok(Value::make_int(n + 1).bits())
         );
         assert_eq!(
@@ -208,7 +208,7 @@ fn inline_named_runtime_conditional_returns_preserve_each_path() {
     let leaf = native(&mut ctx, &f, name);
     for (arg, value) in [(Value::NIL, 99), (Value::make_int(7), 8)] {
         assert_eq!(
-            leaf.call(&mut ctx as *mut Context as *mut u8, &[arg]),
+            unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[arg]) },
             NativeRun::Ok(Value::make_int(value).bits())
         );
     }
@@ -232,7 +232,7 @@ fn inline_named_runtime_cell_redefinition_resumes_original_call_with_new_functio
             vec![Value::make_int(77)],
         )),
     );
-    let run = leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(3)]);
+    let run = unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(3)]) };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("named cell compare: {run:?}")
     };
@@ -271,7 +271,7 @@ fn inline_named_runtime_unrelated_function_cell_write_keeps_native_entry() {
         Value::make_bytecode(function(0, vec![Op::Nil, Op::Return], vec![])),
     );
     assert_eq!(
-        leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(3)]),
+        unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(3)]) },
         NativeRun::Ok(Value::make_int(4).bits())
     );
 }
@@ -287,7 +287,7 @@ fn inline_named_runtime_depth_guard_precedes_callee_and_uses_bcall_error() {
     ctx.depth = 120;
     ctx.max_depth = 120;
     ctx.set_variable("max-lisp-eval-depth", Value::make_int(120));
-    let run = leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(3)]);
+    let run = unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(3)]) };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("named depth guard: {run:?}")
     };
@@ -318,7 +318,7 @@ fn inline_named_runtime_attention_guard_leaves_before_virtual_entry() {
     let f = caller(name, 1);
     let leaf = native(&mut ctx, &f, name);
     ctx.set_variable("throw-on-input", Value::T);
-    let run = leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(3)]);
+    let run = unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[Value::make_int(3)]) };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("named attention guard: {run:?}")
     };
@@ -371,7 +371,7 @@ fn inline_named_runtime_assigned_argument_is_resumed_without_losing_original_cal
     ctx.set_variable("named-runtime-observed-call", Value::NIL);
     let original = Value::cons(Value::make_int(7), Value::NIL);
     push_scratch_gc_root(original);
-    let run = leaf.call(&mut ctx as *mut Context as *mut u8, &[original]);
+    let run = unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[original]) };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("inner Car guard: {run:?}")
     };
@@ -432,7 +432,7 @@ fn inline_named_runtime_forced_entry_deopt_preserves_cons_identity_under_gc() {
     let pair = Value::cons(Value::make_int(17), Value::NIL);
     push_scratch_gc_root(pair);
     ctx.gc_stress = true;
-    let run = leaf.call(&mut ctx as *mut Context as *mut u8, &[pair]);
+    let run = unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &[pair]) };
     assert!(
         matches!(run, NativeRun::DeoptAt(_)),
         "forced named entry really deopts"

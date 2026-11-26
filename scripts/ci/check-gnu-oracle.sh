@@ -168,7 +168,9 @@ case $profile in
                 *) missing="$missing $want" ;;
             esac
         done
-        for forbidden in NATIVE_COMP GCONF SOUND LIBSYSTEMD LIBOTF; do
+        # ACL is host-dependent unless the recipe passes --disable-acl.
+        # The Linux reference omits it; an ACL feature line is a different oracle.
+        for forbidden in NATIVE_COMP GCONF SOUND LIBSYSTEMD LIBOTF ACL; do
             case " $features " in
                 *" $forbidden "*) missing="$missing -$forbidden" ;;
             esac

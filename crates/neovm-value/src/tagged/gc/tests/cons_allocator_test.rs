@@ -229,7 +229,7 @@ fn cons_allocator_dense_slots_preserve_fragmented_run_and_return_order() {
     unsafe { allocator.stopped_world() }.withhold(bases);
     for (block, live_indices) in blocks.iter_mut().zip([&[2, 6][..], &[1, 5][..]]) {
         for &index in live_indices {
-            ConsBlock::mark_run_at(block.base_addr(), index, 1, true);
+            unsafe { ConsBlock::mark_run_at(block.base_addr(), index, 1, true) };
         }
         let mut head = std::ptr::null_mut();
         let live = block.sweep(&mut head);

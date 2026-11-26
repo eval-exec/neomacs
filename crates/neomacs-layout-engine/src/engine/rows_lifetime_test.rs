@@ -151,6 +151,7 @@ fn rows_lifetime_automatic_tty_and_cold_face_scopes_refuse() {
             RowsObservationRefusal::TtyOrUnknownFrame
         ))]
     );
+    drop(context);
     let (mut context, frame, window, _) = fixture(false);
     let mut engine = LayoutEngine::new_without_font_metrics();
     let (_, reports) = query(&mut context, &mut engine, frame, window, rows());

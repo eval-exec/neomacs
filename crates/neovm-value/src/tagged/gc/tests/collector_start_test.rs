@@ -22,7 +22,7 @@ fn mark_all_survives_repeated_start_refusal_and_recovers_on_next_request() {
     let plan = refusal_then_recovery(heap.heap_identity());
     let failures = collector_start_failures();
     for cycle in 0..4 {
-        heap.collect_exact([root].into_iter());
+        heap.collect_rooted([root].into_iter());
         assert_eq!(root.cons_car(), TaggedValue::fixnum(37));
         assert_eq!(collector_is_registered(heap.heap_identity()), cycle >= 2);
     }
@@ -62,22 +62,23 @@ fn concurrent_start_refusal(policy: ClaimPolicy) {
                 heap.concurrent_mark_done(),
                 "the inline result is already ready for termination"
             );
-            let result = heap
-                .gc_exited
-                .take()
+            // SAFETY: inspecting the already-completed inline worker result before relaying it back.
+            let result = unsafe { heap.gc_exited.take_receiver_for_test() }
                 .unwrap()
                 .try_recv()
                 .expect("inline dispatch must return with its result queued");
             if cycle == 0 {
                 assert!(
-                    !result.deferred.is_empty(),
+                    !result.deferred_for_test().is_empty(),
                     "the quantum stop must retain residual work"
                 );
             }
             // Inspect without consuming the actual termination protocol.
             let (send, receive) = std::sync::mpsc::channel();
             send.send(result).unwrap();
-            heap.gc_exited = Some(receive);
+            let heap_id = heap.heap_identity();
+            // SAFETY: relaying the unmodified completion result for `heap`.
+            unsafe { heap.gc_exited.install_for_heap(heap_id, receive) };
         } else {
             assert!(collector_is_registered(heap.heap_identity()));
         }
@@ -86,13 +87,13 @@ fn concurrent_start_refusal(policy: ClaimPolicy) {
         heap.seed_root(root);
         heap.incremental_drain_all();
         let live_bytes = heap.live_bytes();
-        heap.incremental_finish(live_bytes, Instant::now());
-        heap.finish_incremental_sweep_now();
+        heap.incremental_finish_for_test(live_bytes, Instant::now());
+        heap.finish_incremental_sweep_now_for_test();
         assert!(heap.owns_heap_value_for_test(root));
         assert!(heap.owns_heap_value_for_test(child));
         assert_eq!(child.as_str_owned().unwrap(), "inline worker retained");
         assert_eq!(
-            root.as_vector_data().unwrap()[0].cons_car(),
+            root.as_vector_data().unwrap().at(0).cons_car(),
             TaggedValue::fixnum(1535)
         );
     }
@@ -117,7 +118,7 @@ fn inline_only_handle_retires_without_a_thread_to_join() {
         heap.heap_identity(),
         [SpawnOutcome::Unavailable(std::io::ErrorKind::WouldBlock)],
     );
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     plan.assert_consumed();
     assert!(matches!(
         collectors().get(&heap.heap_identity()),

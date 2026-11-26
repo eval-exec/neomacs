@@ -8,6 +8,7 @@ use super::super::*;
 use super::image::{CollectionHistory, CollectionWork, ResponsePacing};
 use super::rendezvous::entry_state;
 use super::*;
+use crate::tagged::header::HashTableObj;
 
 #[cfg(all(
     any(test, feature = "test-support"),
@@ -20,6 +21,22 @@ mod weak_policy_tests;
     not(feature = "gc-memory-telemetry")
 ))]
 pub(crate) use weak_policy_tests::{WeakPolicyCase, WeakPolicyHost, run_weak_policy_case};
+
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+#[path = "stopped_adapter_fixture_tests.rs"]
+mod stopped_adapter_fixture_tests;
+#[cfg(all(
+    any(test, feature = "test-support"),
+    not(feature = "gc-memory-telemetry")
+))]
+pub use stopped_adapter_fixture_tests::{
+    StoppedAdapterEphemeronFixture, StoppedAdapterResourceFixture,
+    assert_stopped_adapter_ephemerons, assert_stopped_adapter_resources,
+    prepare_stopped_adapter_ephemerons, prepare_stopped_adapter_resources,
+};
 
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 mod threading_payload_tests {
@@ -96,7 +113,17 @@ pub struct CollectionReport {
     pub major: bool,
     pub roots: usize,
     pub frozen_owners: usize,
+    /// Frozen owner root words the keeper actually seeded before the mark.
+    ///
+    /// This isolates the joined-scan contribution from legacy, World, image
+    /// and shared-root transport sources in `roots`, and it is counted at the
+    /// seed site (not at the read site), so a two-owner join can assert that
+    /// BOTH batches were seeded even when a dropped `SharedRoot` would
+    /// otherwise keep an object alive for one collection.
+    pub frozen_root_words: usize,
     pub cycle: usize,
+    /// Last completed runtime-owned heap census, excluding image object
+    /// storage while retaining separately owned hash backing.
     pub live_bytes: usize,
     /// Post-sweep global charged live balance, retained canonically in owner 0.
     pub allocated_count: usize,
@@ -113,37 +140,19 @@ impl CollectionReport {
 }
 
 fn supported(heap: &TaggedHeap) -> Result<(), CollectionError> {
-    supported_with_weak(heap, None)
-}
-
-fn supported_with_weak(
-    heap: &TaggedHeap,
-    weak_sweep: Option<&WeakSweepPermit>,
-) -> Result<(), CollectionError> {
-    // This optional inventory includes private buffer capacities, for which
-    // A5 has no all-owner adapter. Refuse admission rather than emit partial data.
+    // E3.3 policy: this optional measurement build takes the DESIGN-allowed
+    // explicit serial-only telemetry route. A complete stopped aggregation is
+    // the named follow-up; returning partial data is never an option. The
+    // typed reason routes the heap to the Baton-serial fallback, and a static
+    // test proves gc-memory-telemetry is in no default product feature set.
     if cfg!(feature = "gc-memory-telemetry") {
-        return Err(RendezvousError::Publication);
+        return Err(RendezvousError::TelemetryStoppedGcUnavailable);
     }
-    if !heap.finalizer_registry.is_empty()
-        || !heap.doomed_finalizer_functions.is_empty()
-        || !heap.always_swept_weak_tables.is_empty()
-        || !heap.weak_hash_tables.is_empty()
-        || !heap.pending_surface_destroys.is_empty()
-        || !heap.pending_video_destroys.is_empty()
-    {
-        #[cfg(any(test, feature = "test-support"))]
-        eprintln!(
-            "A5 unsupported registry: finalizers={} doomed={} always_swept_weak={} weak={} surfaces={} videos={}",
-            heap.finalizer_registry.len(),
-            heap.doomed_finalizer_functions.len(),
-            heap.always_swept_weak_tables.len(),
-            heap.weak_hash_tables.len(),
-            heap.pending_surface_destroys.len(),
-            heap.pending_video_destroys.len()
-        );
-        return Err(RendezvousError::Publication);
-    }
+    // The stopped major runs `finish_stopped_mark_adapters` before the sweep
+    // (E3 slice 1), so a nonempty finalizer registry, doomed batch, weak-table
+    // list, always-swept list, or pending surface/video drain no longer makes
+    // the heap uncollectible: F, W, the three reclaims, and the record-only
+    // resource arms all run inside the stop.
     let inspect = |header: *const GcHeader| -> Result<(), CollectionError> {
         // SAFETY: admission or AllStopped retains initialized catalog storage;
         // no mutator/worker, callback, or collection overlaps this preflight.
@@ -153,12 +162,17 @@ fn supported_with_weak(
             }
             let ptr = header.cast::<VecLikeHeader>();
             match (*ptr).type_tag {
-                VecLikeType::Finalizer
-                | VecLikeType::UserPtr
-                | VecLikeType::ModuleFunction
-                | VecLikeType::Sqlite
-                | VecLikeType::SurfaceHandle
-                | VecLikeType::VideoHandle => {
+                // E3.2: the stopped sweep detaches a user-ptr/module-function
+                // payload into the pending-native batch instead of invoking
+                // its finalizer under the stopped heap loan; the stopped
+                // completion drains it after the loan and before owners
+                // resume (the completed-cycle block is the serial backstop),
+                // matching GNU's in-sweep ordering. SQLite stays refused
+                // until the GNU-observable DB-lifecycle row decides its
+                // admission (its explicit drop may close where GNU's
+                // cleanup_vector is a no-op).
+                VecLikeType::UserPtr | VecLikeType::ModuleFunction => Ok(()),
+                VecLikeType::Sqlite => {
                     #[cfg(any(test, feature = "test-support"))]
                     eprintln!(
                         "A5 unsupported callback-bearing payload: {:?}",
@@ -169,23 +183,29 @@ fn supported_with_weak(
                 VecLikeType::HashTable => {
                     // Admission has exclusive serial authority; a stopped job
                     // installs its real AllStopped before reaching this visit.
-                    let (weakness, eligible) =
-                        heap.collector_tables()
-                            .inspect(ptr.cast_mut().cast(), |ht| {
-                                (
-                                    ht.weakness,
-                                    ht.data.pending_entries().is_none()
-                                        && ht.test_depth.load(Ordering::Acquire) == 0
-                                        && ht.data.authority.load(Ordering::Acquire) == 0,
-                                )
-                            });
-                    let allowed = weak_sweep.is_some_and(|permit| {
-                        permit.covers(heap, header as usize)
-                            && (*header).flags.boxed()
-                            && !(*header).generation.permanent()
-                            && eligible
-                    });
-                    if weakness.is_some() && !allowed {
+                    // A weak table is swept by `mark_and_sweep_weak_tables`
+                    // inside the stopped major (E3 slice 1), so it needs no
+                    // test permit. The structural eligibility below still
+                    // refuses a table the stopped sweep cannot own: unhydrated
+                    // storage, an active table authority, or a permanent
+                    // image-resident shell.
+                    // Depth and the authority word are object metadata. Read
+                    // them before inspect: a stopped visit's keeper lease
+                    // CASes the word to WRITER, so an in-callback load would
+                    // see the lease's own bit.
+                    let object = ptr.cast::<HashTableObj>();
+                    let (depth, authority) = (
+                        (*object).test_depth.load(Ordering::Acquire),
+                        (*object).authority.load(Ordering::Acquire),
+                    );
+                    let (weakness, pending_clear) = heap.collector_tables().inspect(
+                        ptr.cast_mut().cast(),
+                        |ht| (ht.weakness, ht.data.pending_entries().is_none()),
+                    );
+                    let eligible = pending_clear && depth == 0 && authority == 0;
+                    let admitted =
+                        (*header).flags.boxed() && !(*header).generation.permanent() && eligible;
+                    if weakness.is_some() && !admitted {
                         #[cfg(any(test, feature = "test-support"))]
                         eprintln!("A5 unsupported weak hash payload: {:?}", weakness);
                         Err(RendezvousError::Publication)
@@ -224,7 +244,14 @@ fn supported_with_weak(
                 | VecLikeType::Font
                 | VecLikeType::Macro
                 | VecLikeType::ByteCode
-                | VecLikeType::Timer => Ok(()),
+                | VecLikeType::Timer
+                // E3 slice 1: the stopped major queues a finalizer's function
+                // (F) and records a dead surface/video handle's id for the
+                // post-stop drain; the sweep itself only drops the shell or
+                // records the id. No native callback runs inside the stop.
+                | VecLikeType::Finalizer
+                | VecLikeType::SurfaceHandle
+                | VecLikeType::VideoHandle => Ok(()),
             }
         }
     };
@@ -235,6 +262,15 @@ fn supported_with_weak(
         inspect(item.header.cast::<GcHeader>())?;
     }
     Ok(())
+}
+
+/// Test-support entry to the stopped admission preflight without constructing
+/// a full owner protocol. The accessor stays crate-private; the value-crate
+/// collection tests exercise the same `supported` path the keeper uses.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub(super) fn supported_for_test(heap: &TaggedHeap) -> Result<(), CollectionError> {
+    supported(heap)
 }
 
 impl<'heap, K: EraKeeper> EraCore<'heap, K> {
@@ -262,7 +298,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         } else {
             WeakSweepPermit::mint(collector.registration_heap_mut(), keeper, tables).and_then(
                 |permit| {
-                    supported_with_weak(collector.registration_heap_mut(), Some(&permit))
+                    supported(collector.registration_heap_mut())
                         .map(|()| permit)
                         .map_err(|_| RegistrationError::Publication)
                 },
@@ -361,6 +397,199 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn charge_serial_bytes_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        bytes: usize,
+    ) -> Result<(), CollectionError> {
+        self.check_collection(stopped)?;
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        let heap = collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut();
+        let state = heap.current_mutator_gc_mut();
+        state.bytes_since_gc = state.bytes_since_gc.saturating_add(bytes);
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn set_gc_threshold_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        threshold: usize,
+    ) -> Result<(), CollectionError> {
+        self.check_collection(stopped)?;
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut()
+            .set_gc_threshold(threshold);
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn gc_threshold_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<usize, CollectionError> {
+        self.with_stopped_heap_for_test(stopped, |heap| heap.gc_threshold())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn gc_collections_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<usize, CollectionError> {
+        self.with_stopped_heap_for_test(stopped, |heap| heap.gc_collections())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn owns_heap_word_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        proof: super::HeapWord,
+    ) -> Result<bool, CollectionError> {
+        self.with_stopped_heap_for_test(stopped, |heap| {
+            // SAFETY: a `HeapWord` is minted only in this crate from a live
+            // `TaggedValue`, so its bits are a valid value; the ownership probe
+            // compares heap ranges and never dereferences outside them.
+            heap.owns_heap_value_for_test(unsafe { TaggedValue::from_bits(proof.bits()) })
+        })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn alloc_serial_cons_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<super::HeapWord, CollectionError> {
+        self.check_collection(stopped)?;
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        let heap = collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut();
+        let cons = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::fixnum(2));
+        heap.close_alloc_regions();
+        Ok(super::HeapWord::new(cons.bits()))
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn grant_closed_owner_cons_lease_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+        key: MutatorKey,
+    ) -> Result<(), CollectionError> {
+        self.check_collection(stopped)?;
+        let legacy_entry = {
+            let gate = self.registry().lock_for_keeper()?;
+            Arc::clone(
+                gate.entries
+                    .iter()
+                    .find(|entry| entry.key.owner == 0)
+                    .ok_or(RendezvousError::Publication)?,
+            )
+        };
+        let legacy = entry_state(&legacy_entry)?
+            .image
+            .take_for(legacy_entry.key.heap, legacy_entry.young)
+            .map_err(|_| RendezvousError::Identity)?
+            .ok_or(RendezvousError::Publication)?;
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        let heap = collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut();
+        // SAFETY: world-stopped keeper holds `AllStopped` and exclusive
+        // `&mut TaggedHeap` on the collector thread; `legacy` belongs to this era.
+        if let Err(failure) = unsafe { legacy.restore_legacy(heap) } {
+            if let Ok(mut s) = entry_state(&legacy_entry) {
+                // SAFETY: returning the untouched legacy image just taken from `legacy_entry`.
+                if let Err(reinstall) = unsafe {
+                    s.image
+                        .install(legacy_entry.key.heap, legacy_entry.young, failure.image)
+                } {
+                    std::mem::forget(reinstall.image);
+                }
+            }
+            return Err(RegistrationError::from(failure.error).into());
+        }
+        let mut book = super::super::OwnerEraReserve::new();
+        let granted = book.grant_at_stop_for_registration(
+            stopped,
+            heap,
+            true,
+            super::super::MeasuredInterval::zero(),
+            key.registration,
+        );
+        heap.close_alloc_regions();
+        // SAFETY: world-stopped keeper holds exclusive `&mut TaggedHeap`
+        // authority with closed allocation regions on this live era's heap.
+        let refrozen =
+            unsafe { PublishedGcImage::from_legacy(heap) }.map_err(RegistrationError::from)?;
+        let mut state = entry_state(&legacy_entry)?;
+        debug_assert!(state.image.is_none());
+        // SAFETY: `refrozen` was just produced by `PublishedGcImage::from_legacy(heap)`
+        // for `legacy_entry`'s `(heap, young)` identity during this stop.
+        unsafe {
+            state
+                .image
+                .install(legacy_entry.key.heap, legacy_entry.young, refrozen)
+        }
+        .map_err(|failure| {
+            std::mem::forget(failure.image);
+            RegistrationError::from(failure.error)
+        })?;
+        drop(state);
+        granted.map_err(|_| RendezvousError::Publication)?;
+        std::mem::forget(
+            book.into_closed()
+                .map_err(|_| RendezvousError::Publication)?,
+        );
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn poison_cons_allocator_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<(), CollectionError> {
+        self.check_collection(stopped)?;
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut()
+            .cons_allocator
+            .poison_storage_for_test();
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn has_owner_cons_reserves_for_test(
+        &self,
+        stopped: &AllStopped<'_>,
+    ) -> Result<bool, CollectionError> {
+        self.with_stopped_heap_for_test(stopped, |heap| heap.has_owner_cons_reserves())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn shutdown_admission_stopped_for_test(
         &self,
         stopped: &AllStopped<'_>,
@@ -375,6 +604,69 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             .ok_or(RendezvousError::Publication)?
             .registration_heap_mut()
             .shutdown_admission())
+    }
+
+    /// Whether the stopped era's aggregate allocation debt has reached the
+    /// heap's GC threshold (`bytes_since_gc >= gc_threshold`).
+    ///
+    /// Reads the stopped census through `AllStopped::summaries` (F1
+    /// `lock_for_keeper`, never transient gate `Busy`), drops that gate guard
+    /// before borrowing `self.collector`, and adds the keeper heap's own
+    /// `bytes_since_gc()` so serial-turn allocation debt also triggers
+    /// collection. Does not call `stopped.trace`, so the caller can follow a
+    /// `true` result with `collect_requested` on the same `AllStopped`.
+    #[cold]
+    pub(super) fn should_collect_stopped(
+        &self,
+        stopped: &mut AllStopped<'_>,
+    ) -> Result<bool, RendezvousError> {
+        self.check_collection(stopped)?;
+        let published_bytes = {
+            let summaries = stopped.summaries()?;
+            summaries.census()?.bytes_since_gc
+        };
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        let heap = collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut();
+        let bytes_since_gc = published_bytes.saturating_add(heap.bytes_since_gc());
+        Ok(bytes_since_gc >= heap.gc_threshold())
+    }
+
+    /// Stop-session entry for a main-thread GC request.
+    ///
+    /// The caller is expected to collect, or to return the book, before
+    /// `resume_cons_storage` while a lease is live. This function does not
+    /// check that order. Resume reports `RegistrationError::OwnerReserveHeld`
+    /// until a collection or an explicit return. That error is not `Busy`.
+    ///
+    /// `gc_safe_point` does not call this. It collects the serial `Context`
+    /// heap through `begin_stw_collection` and has no `AllStopped`.
+    /// `grant_at_stop` is test-gated, and nothing else inserts an owner-cons
+    /// lease, so that heap's reserve count stays zero until a production
+    /// grant exists. Wiring the safe point waits for that grant.
+    ///
+    /// The body enters the stop session, which returns every leased book
+    /// before any collector entry. A direct `TaggedHeap::collect` still hits
+    /// the backstop, including while an owner run is open.
+    #[cold]
+    pub(super) fn collect_requested(
+        &self,
+        stopped: &mut AllStopped<'_>,
+        roots: impl FnOnce(
+            &K,
+            &mut AllStopped<'_>,
+            &mut Vec<TaggedValue>,
+        )
+            -> Result<Vec<*mut *mut crate::tagged::header::MarkerObj>, RendezvousError>,
+    ) -> Result<CollectionReport, CollectionError> {
+        // The lease return stays inside `collect_stopped_kind`, before the
+        // registry gate. This request does not walk the table itself.
+        self.collect_stopped(stopped, roots)
     }
 
     #[cold]
@@ -406,6 +698,9 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             -> Result<Vec<*mut *mut crate::tagged::header::MarkerObj>, RendezvousError>,
     ) -> Result<CollectionReport, MinorCollectionError> {
         self.check_collection(stopped)?;
+        if stopped.is_traced() {
+            return Err(RendezvousError::Publication.into());
+        }
         {
             let mut slot = self
                 .collector
@@ -444,22 +739,43 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         >,
     ) -> Result<CollectionReport, CollectionError> {
         self.check_collection(stopped)?;
+        // Refuse an already-traced stop before returning owner-cons leases,
+        // draining retired queues, finishing root readers, or running the
+        // World-root walk (lead #13986 N3).
+        if stopped.is_traced() {
+            return Err(RendezvousError::Publication);
+        }
+        // Return every leased book before root readers, World callbacks, or
+        // image transfer. A leftover count is permanent. Poison skips the
+        // return. A non-poison leftover is the mid-return unwind wedge: the
+        // lease table was taken and the count was not fully discharged, and
+        // the next stop walks an empty table, so the count never clears.
+        // Both are Publication. The retryable Busy is only the collector
+        // lock miss above.
+        {
+            let mut collector = self
+                .collector
+                .try_borrow_mut()
+                .map_err(|_| RendezvousError::Busy)?;
+            let heap = collector
+                .as_mut()
+                .ok_or(RendezvousError::Publication)?
+                .registration_heap_mut();
+            heap.return_leased_owner_cons_reserves();
+            if heap.has_owner_cons_reserves() {
+                return Err(RendezvousError::Publication);
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            self.registry().drain_retired_owner_cons_after_full_walk();
+        }
         let registry = self.registry();
         let (keys, entries) = {
-            let gate = registry.lock()?;
+            let gate = registry.lock_for_keeper()?;
             (gate.rendezvous.frozen.clone(), gate.entries.clone())
         };
         // Refuse a retained/abandoned reader BEFORE any mark or image mutation.
         // Root-table locks never overlap the control gate or the collector job.
-        for entry in &entries {
-            let state = entry_state(entry)?;
-            if let Some(roots) = &state.roots {
-                roots.validate_no_readers()?;
-            }
-            for roots in &state.retained_roots {
-                roots.validate_no_readers()?;
-            }
-        }
+        super::rendezvous::readers_finished_waiting(&entries)?;
         let mut words = Vec::new();
         for key in &keys {
             stopped.with_root_reader(*key, |reader| {
@@ -497,9 +813,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                     self.registry.as_ref().expect("live era registry"),
                 )?;
             }
-            collector_tables::with_stopped_tables(heap, stopped, |heap| {
-                supported_with_weak(heap, self.weak_sweep_permit())
-            })??;
+            collector_tables::with_stopped_tables(heap, stopped, |heap| supported(heap))??;
             facade_mark::CollectorQuiescence::check(heap).map_err(|_| RendezvousError::Busy)?;
             crate::tagged::transport::collect_shared_root_gc_roots(heap, &mut roots);
         }
@@ -520,14 +834,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 collector.registration_heap_mut(),
                 guard,
                 |heap| {
-                    let job = StoppedCollectorJob::new(
-                        heap,
-                        proof,
-                        guard,
-                        registry,
-                        self.weak_sweep_permit().is_some(),
-                        kind,
-                    )?;
+                    let job = StoppedCollectorJob::new(heap, proof, guard, registry, kind)?;
                     let mut images = ImageSession::take(registry, &entries, &keys)?;
                     let report =
                         job.run(&mut images, roots, words, heads, root_count, keys.len())?;
@@ -539,7 +846,30 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         });
         #[cfg(any(test, feature = "test-support"))]
         super::a8_probes::mark(super::a8_probes::MARK_SWEEP_DONE, stopped.epoch().get(), 0);
-        traced
+        // E3.2: the stopped sweep deferred native finalizers; run them now,
+        // after the heap loan and image restoration and before this call can
+        // return to the owner/Baton side (owners are still stopped). This also
+        // clears the deferral mode on the error paths.
+        let drained = self.drain_stopped_native_batch();
+        let report = traced?;
+        drained?;
+        Ok(report)
+    }
+
+    /// Drain the batch a stopped job detached, on the caller's thread, once
+    /// the stopped heap loan has ended. The batch's mode is cleared by the
+    /// drain, so a later serial collection reclaims native payloads inline.
+    #[cold]
+    fn drain_stopped_native_batch(&self) -> Result<usize, RendezvousError> {
+        let mut collector = self
+            .collector
+            .try_borrow_mut()
+            .map_err(|_| RendezvousError::Busy)?;
+        let heap = collector
+            .as_mut()
+            .ok_or(RendezvousError::Publication)?
+            .registration_heap_mut();
+        Ok(heap.drain_pending_native_destroys())
     }
 }
 
@@ -550,7 +880,6 @@ struct StoppedCollectorJob<'heap, 'stop, 'era> {
     _proof: &'stop scan_contract::ParallelStoppedMutatorsProof<'stop>,
     _stopped: &'stop AllStopped<'era>,
     epoch: u64,
-    weak_sweep: bool,
     kind: GenerationCycle,
 }
 impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
@@ -559,7 +888,6 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         proof: &'stop scan_contract::ParallelStoppedMutatorsProof<'stop>,
         stopped: &'stop AllStopped<'era>,
         registry: &Registry,
-        weak_sweep: bool,
         kind: GenerationCycle,
     ) -> Result<Self, CollectionError> {
         if !stopped.matches_registry(registry) || heap.heap_identity() != registry.heap {
@@ -573,7 +901,6 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
             _proof: proof,
             _stopped: stopped,
             epoch: stopped.epoch().get(),
-            weak_sweep,
             kind,
         })
     }
@@ -599,9 +926,21 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
             })
             .collect();
         // Recover the serial owner's original young payload before any
-        // legacy collector method asks its inline registry to resolve it.
+        // legacy collector method asks its inline registry to resolve it,
+        // folding any live serial-turn GC facts accrued directly on `heap`.
         let legacy = images.images[0].1.take().expect("frozen serial image");
-        if let Err(failure) = legacy.restore_legacy(heap) {
+        let peers = &mut images.images[1..];
+        // SAFETY: world-stopped collection holds `AllStopped` and exclusive
+        // `&mut TaggedHeap` before sweep; `legacy` belongs to this live era.
+        if let Err(failure) = unsafe {
+            legacy.restore_legacy_for_collection(heap, move |moved_id| {
+                peers
+                    .iter_mut()
+                    .find(|(entry, _)| entry.young == moved_id)
+                    .and_then(|(_, image)| image.as_mut())
+                    .map(PublishedGcImage::young_mut)
+            })
+        } {
             images.images[0].1 = Some(failure.image);
             return Err(RegistrationError::from(failure.error).into());
         }
@@ -619,7 +958,8 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         let bytes_before = heap.live_bytes();
         let started = std::time::Instant::now();
         match captured {
-            YoungCapture::Major => heap.begin_stw_collection(),
+            // SAFETY: the stopped job holds the heap loan and has joined markers.
+            YoungCapture::Major => unsafe { heap.begin_stw_collection() },
             YoungCapture::Minor(capture) => heap
                 .begin_parallel_minor_collection(capture, self._proof)
                 .map_err(minor_admission)?,
@@ -632,27 +972,46 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         for root in roots {
             heap.seed_root(root);
         }
+        // Count at the seed site: this is the number of frozen owner root
+        // words the collector actually seeds, not merely the number it read.
+        let mut frozen_root_words = 0usize;
         for word in words {
             heap.seed_root(unsafe {
                 /* SAFETY: value-internal construction from a real Value */
                 TaggedValue::from_bits(word)
             });
+            frozen_root_words += 1;
         }
         for item in &images.work {
             trace_work(heap, item);
         }
+        // E3.2: the stopped job must not run a native finalizer or SQLite
+        // teardown while it holds the stopped heap loan. The sweep detaches
+        // such payloads into the heap's pending-native batch; the stopped
+        // completion drains it after the loan and before owners resume (the
+        // evaluator's completed-cycle block is the serial backstop).
+        heap.begin_native_deferral();
         match self.kind {
             GenerationCycle::Major => {
                 // This scoped keeper job never sends/clones a live heap borrow.
                 // Existing worker MarkAll remains exclusively on its serial path.
                 let mark_started = std::time::Instant::now();
                 heap.mark_all();
-                if self.weak_sweep {
-                    heap.mark_and_sweep_weak_tables();
-                }
-                if !heap.weak_hash_tables.is_empty() {
-                    return Err(RendezvousError::Publication);
-                }
+                // E3 slice 1: the same post-mark adapters the serial stop and
+                // incremental termination run. Ephemeron fixpoint, F, fixpoint,
+                // W, then the three explicit reclaims, all before the sweep.
+                // The test `WeakSweepPermit` no longer gates this call, because
+                // admission already accepted the registries this job must
+                // finish. `finish_stopped_mark_adapters` is the one production
+                // order (see the architecture guard).
+                let _ = heap.finish_stopped_mark_adapters();
+                // The weak fixpoint consumes every table it registered; the
+                // serial stop relies on the same post-condition. A leftover
+                // list would mean the sweep never reached fixpoint.
+                debug_assert!(
+                    heap.weak_hash_tables.is_empty(),
+                    "the stopped weak sweep must consume every registered weak table"
+                );
                 heap.finalize_collection(
                     mark_started.elapsed().as_micros() as u64,
                     bytes_before,
@@ -660,8 +1019,11 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
                 );
             }
             GenerationCycle::Minor => {
-                heap.complete_minor_collection();
-                heap.finish_incremental_sweep_now();
+                // SAFETY: this stopped job owns the minor cycle it just began.
+                unsafe {
+                    heap.complete_minor_collection();
+                    heap.finish_incremental_sweep_now();
+                }
             }
         }
         facade_mark::CollectorQuiescence::check(heap).map_err(|_| RendezvousError::Publication)?;
@@ -675,8 +1037,10 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         } else {
             ResponsePacing::Preserve
         };
+        // SAFETY: world-stopped collection just finished on `heap` with
+        // exclusive `&mut TaggedHeap` authority and closed regions.
         images.images[0].1 =
-            Some(PublishedGcImage::from_legacy(heap).map_err(RegistrationError::from)?);
+            Some(unsafe { PublishedGcImage::from_legacy(heap) }.map_err(RegistrationError::from)?);
         for (_, image) in &mut images.images[1..] {
             image
                 .as_mut()
@@ -702,6 +1066,7 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
             },
             roots: root_count + image_words,
             frozen_owners,
+            frozen_root_words,
             cycle: heap.gc_collections(),
             live_bytes: heap.live_bytes(),
             allocated_count,
@@ -734,14 +1099,23 @@ impl<'a> ImageSession<'a> {
         let mut guards = Vec::new();
         for entry in &selected {
             let state = entry_state(entry)?;
-            if state.image.is_none() {
-                return Err(RendezvousError::Publication);
+            if entry.key.heap != registry.heap {
+                return Err(RendezvousError::Identity);
+            }
+            match state.image.as_ref_for(registry.heap, entry.young) {
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(RendezvousError::Publication),
+                Err(_) => return Err(RendezvousError::Identity),
             }
             guards.push(state);
         }
         let mut images = Vec::with_capacity(selected.len());
         for (entry, state) in selected.iter().zip(&mut guards) {
-            images.push((Arc::clone(entry), state.image.take()));
+            let image = state
+                .image
+                .take_for(registry.heap, entry.young)
+                .map_err(|_| RendezvousError::Identity)?;
+            images.push((Arc::clone(entry), image));
         }
         drop(guards);
         drop(gate);
@@ -770,8 +1144,15 @@ impl<'a> ImageSession<'a> {
             }
             guards.push(state);
         }
-        for (state, (_, image)) in guards.iter_mut().zip(&mut self.images) {
-            state.image = image.take();
+        for (state, (entry, image)) in guards.iter_mut().zip(&mut self.images) {
+            let taken = image.take().expect("image preflighted above");
+            // SAFETY: `ImageSession::take` extracted this image from `entry` in
+            // this same world-stopped collection epoch for `(entry.key.heap, entry.young)`.
+            if let Err(failure) = unsafe { state.image.install(entry.key.heap, entry.young, taken) }
+            {
+                *image = Some(failure.image);
+                return Err(RegistrationError::from(failure.error).into());
+            }
         }
         self.restored = true;
         Ok(())
@@ -829,6 +1210,15 @@ fn capture_young(
     kind: GenerationCycle,
 ) -> Result<YoungCapture, CollectionError> {
     let ids = images.images.iter().map(|(entry, _)| entry.young).collect();
+    capture_young_with_peers(heap, ids, &mut images.images[1..], kind)
+}
+
+fn capture_young_with_peers(
+    heap: &mut TaggedHeap,
+    ids: Vec<YoungRegistrationId>,
+    peers: &mut [(Arc<MutatorEntry>, Option<PublishedGcImage>)],
+    kind: GenerationCycle,
+) -> Result<YoungCapture, CollectionError> {
     let identity = heap.heap_identity();
     let heap = &mut *heap;
     // SAFETY: AllStopped and the unique collector RefCell loan exclude every
@@ -839,7 +1229,7 @@ fn capture_young(
         heap: identity,
         ids,
         legacy,
-        peers: &mut images.images[1..],
+        peers,
     };
     if heap.generational.enabled {
         match kind {
@@ -853,7 +1243,13 @@ fn capture_young(
         }
     } else {
         for id in logs.ids.clone() {
+            if id.heap_identity() != identity {
+                return Err(RendezvousError::Identity);
+            }
             let log = logs.resolve_mut(id)?;
+            if log.id() != id || log.id().heap_identity() != identity {
+                return Err(RendezvousError::Identity);
+            }
             if !log.blocks().is_empty() || log.pending_index().is_some() {
                 return Err(RendezvousError::Publication);
             }
@@ -872,10 +1268,13 @@ fn trace_work(heap: &mut TaggedHeap, work: &CollectionWork) {
         .chain(&work.remembered)
         .chain(&work.cons_writes)
     {
-        heap.seed_root(word.value());
+        // SAFETY: world-stopped collector holds `&mut TaggedHeap` before sweep;
+        // all queued owner words stay live for this cycle.
+        heap.seed_root(unsafe { word.value() });
     }
     for word in &work.remembered {
-        let owner = word.value();
+        // SAFETY: same world-stopped collector authority before sweep.
+        let owner = unsafe { word.value() };
         if !owner.is_cons() && !heap.owner_is_mapped(owner) {
             if let Some(address) = TaggedHeap::value_heap_addr(owner) {
                 // SAFETY: the pending remembered owner remains retained until
@@ -887,7 +1286,8 @@ fn trace_work(heap: &mut TaggedHeap, work: &CollectionWork) {
         }
     }
     for word in work.remembered.iter().chain(&work.cons_writes) {
-        heap.push_value_children_to_gray(word.value(), "parallel-written-owner");
+        // SAFETY: same world-stopped collector authority before sweep.
+        heap.push_value_children_to_gray(unsafe { word.value() }, "parallel-written-owner");
     }
     for &bits in work.mapped.iter().chain(&work.written_owners) {
         heap.push_value_children_to_gray(
@@ -922,5 +1322,118 @@ fn trace_work(heap: &mut TaggedHeap, work: &CollectionWork) {
             // SAFETY: the closed descriptor covers initialized float slots.
             heap.seed_root(unsafe { TaggedValue::from_float_ptr(header.cast()) });
         }
+    }
+}
+
+#[cfg(test)]
+mod post_swap_tests {
+    use super::*;
+    use crate::tagged::gc::mutator_registration::entry_image::EntryImageSlot;
+    use crate::tagged::gc::mutator_registration::image::OwnerGcState;
+    use std::num::NonZeroU64;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+
+    fn synthetic_entry(
+        heap: HeapIdentity,
+        young: YoungRegistrationId,
+        owner: u64,
+    ) -> Arc<MutatorEntry> {
+        let key = MutatorKey {
+            heap,
+            world: heap,
+            owner,
+            registration: NonZeroU64::new(owner + 1).expect("nonzero"),
+            generation: NonZeroU64::new(owner + 1).expect("nonzero"),
+        };
+        Arc::new(MutatorEntry {
+            key,
+            young,
+            cancelled_start: AtomicBool::new(false),
+            admission: AtomicU64::new(AdmissionWord::OUT),
+            keeper_held: AtomicBool::new(false),
+            state: Mutex::new(EntryState {
+                phase: EntryPhase::Published,
+                owner_thread: Some(std::thread::current().id()),
+                publication_generation: 1,
+                epoch: 1,
+                image: EntryImageSlot::empty(),
+                run_loan: false,
+                worker_loan: false,
+                readers: 0,
+                rendezvous: super::super::rendezvous::control::OwnerState::new(
+                    super::super::rendezvous::Mode::Stopped,
+                ),
+                roots: None,
+                retained_roots: Vec::new(),
+            }),
+        })
+    }
+
+    #[test]
+    fn non_generational_capture_young_rejects_mismatched_young_log_id() {
+        let mut heap_a = TaggedHeap::new();
+        heap_a.generational.enabled = false;
+        assert!(
+            !heap_a.generational.enabled,
+            "test must exercise the non-generational capture_young branch"
+        );
+        let heap_b = TaggedHeap::new();
+        let id_a = heap_a.heap_identity();
+        let id_b = heap_b.heap_identity();
+        let legacy_a = heap_a
+            ._satb_layout_reserve
+            .current_young_log_mut()
+            .expect("legacy log")
+            .id();
+        let peer_young_a = YoungRegistrationId::issue_parallel(id_a).unwrap();
+        let other_young_a = YoungRegistrationId::issue_parallel(id_a).unwrap();
+        let foreign_young_b = YoungRegistrationId::issue_parallel(id_b).unwrap();
+
+        let entry_a = synthetic_entry(id_a, peer_young_a, 1);
+
+        // 1. Cross-heap image placed under `entry_a` (wrong heap & wrong log ID).
+        let mut foreign_owner = OwnerGcState::new(id_b, foreign_young_b, 0).unwrap();
+        // SAFETY: fresh empty owner in unit test.
+        let foreign_image = unsafe { foreign_owner.publish() }.unwrap();
+        let mut peers = vec![(Arc::clone(&entry_a), Some(foreign_image))];
+        let err = capture_young_with_peers(
+            &mut heap_a,
+            vec![legacy_a, peer_young_a],
+            &mut peers,
+            GenerationCycle::Major,
+        )
+        .err()
+        .expect("non-generational capture_young must reject cross-heap young log ID");
+        assert_eq!(err, RendezvousError::Identity);
+
+        // 2. Same-heap image from a different registration placed under `entry_a`.
+        let mut other_owner = OwnerGcState::new(id_a, other_young_a, 0).unwrap();
+        // SAFETY: fresh empty owner in unit test.
+        let other_image = unsafe { other_owner.publish() }.unwrap();
+        let mut peers = vec![(Arc::clone(&entry_a), Some(other_image))];
+        let err = capture_young_with_peers(
+            &mut heap_a,
+            vec![legacy_a, peer_young_a],
+            &mut peers,
+            GenerationCycle::Major,
+        )
+        .err()
+        .expect("non-generational capture_young must reject same-heap mismatched young log ID");
+        assert_eq!(err, RendezvousError::Identity);
+
+        // 3. Matching registration ID succeeds on the same non-generational heap.
+        let mut matching_owner = OwnerGcState::new(id_a, peer_young_a, 0).unwrap();
+        // SAFETY: fresh empty owner in unit test.
+        let matching_image = unsafe { matching_owner.publish() }.unwrap();
+        let mut peers = vec![(entry_a, Some(matching_image))];
+        assert!(
+            capture_young_with_peers(
+                &mut heap_a,
+                vec![legacy_a, peer_young_a],
+                &mut peers,
+                GenerationCycle::Major,
+            )
+            .is_ok()
+        );
     }
 }

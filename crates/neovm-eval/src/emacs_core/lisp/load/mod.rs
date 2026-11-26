@@ -529,7 +529,8 @@ fn read_error_for_load(
             ))],
             None,
         ),
-        super::value_reader::ReadErrorKind::Signal => EvalError::signal(
+        super::value_reader::ReadErrorKind::Signal
+        | super::value_reader::ReadErrorKind::ObarrayRejected => EvalError::signal(
             e.signal_symbol.unwrap_or_else(|| intern("error")),
             e.signal_data,
             None,
@@ -1970,12 +1971,15 @@ fn streaming_readevalloop(
             eval.variables(),
             shorthands,
         )
-        .map_err(|e| read_error_for_load(path, source, e))?;
+        .map_err(|e| {
+            super::reader::reset_obarray_after_reader_error(eval, &e);
+            read_error_for_load(path, source, e)
+        })?;
 
         let Some((form, next_pos)) = read_result else {
             break; // EOF
         };
-        eval.obarray_mut().intern_member_symbols_in(form);
+        super::reader::publish_read_symbols(eval, form);
 
         // Log a preview of the form source text.
         let form_start = pos;
@@ -2124,7 +2128,10 @@ fn streaming_readevalloop_lisp_source(
             // chosen below.
             let probe = read_source
                 .read_one_with_shorthands(pos, eval.variables(), shorthands)
-                .map_err(|e| read_error_for_load(path, source, e))?;
+                .map_err(|e| {
+                    super::reader::reset_obarray_after_reader_error(eval, &e);
+                    read_error_for_load(path, source, e)
+                })?;
             let Some((probed_form, probed_next)) = probe else {
                 break;
             };
@@ -2156,7 +2163,7 @@ fn streaming_readevalloop_lisp_source(
                 }
                 None => (probed_form, probed_next),
             };
-            eval.obarray_mut().intern_member_symbols_in(form);
+            super::reader::publish_read_symbols(eval, form);
 
             let form_start = pos;
             if let Some(cursor) = eval.load_read_cursors.last_mut() {
@@ -4365,7 +4372,7 @@ fn collect_value_symbol_names(
                 return;
             }
             if let Some(items) = value.as_vector_data() {
-                for item in items.iter().copied() {
+                for item in items.iter() {
                     collect_value_symbol_names(item, symbol_names, seen);
                 }
             }
@@ -4376,7 +4383,7 @@ fn collect_value_symbol_names(
                 return;
             }
             if let Some(slots) = value.as_record_data().or_else(|| value.closure_slots()) {
-                for slot in slots.iter().copied() {
+                for slot in slots.iter() {
                     collect_value_symbol_names(slot, symbol_names, seen);
                 }
             }
@@ -4401,11 +4408,11 @@ fn collect_value_symbol_names(
                 return;
             }
             if let Some(bytecode) = value.get_bytecode_data() {
-                collect_value_symbol_names(bytecode.arglist, symbol_names, seen);
-                for constant in bytecode.constants.iter().copied() {
+                collect_value_symbol_names(bytecode.arglist(), symbol_names, seen);
+                for constant in bytecode.constants().iter().copied() {
                     collect_value_symbol_names(constant, symbol_names, seen);
                 }
-                if let Some(env) = bytecode.env {
+                if let Some(env) = bytecode.env() {
                     collect_value_symbol_names(env, symbol_names, seen);
                 }
                 if let Some(doc_form) = bytecode.doc_form {
@@ -4942,7 +4949,7 @@ fn republish_terminal_translation_map_symbols(eval: &mut super::eval::Context) {
         else {
             continue;
         };
-        eval.obarray_mut().intern_member_symbols_in(value);
+        super::reader::publish_read_symbols(eval, value);
     }
 }
 
@@ -7133,12 +7140,11 @@ pub fn bootstrap_evaluator_cached_at_path(
                 bootstrap_time,
             );
             let reload_start = std::time::Instant::now();
-            // A reload that fails after installing its own heap has dropped
-            // that heap and replaced the thread's charset/fontset registries
-            // and terminal, so the in-memory evaluator must be re-activated
-            // before it is used.
-            let live_runtime = pdump::snapshot_active_runtime(&mut eval);
-            match pdump::load_from_dump_with_proof(dump_path, proof) {
+            // Park `eval` before loading so the heap slot is empty (rt A3).
+            // On Ok, drop the parked `eval` and return the reloaded image.
+            // On Err, the failed loader's `TaggedHeap::drop` empties the slot
+            // and `resume()` reactivates `eval`.
+            match reload_written_bootstrap_dump(eval, dump_path, proof) {
                 Ok(mut loaded) => {
                     finalize_or_log(
                         &mut loaded,
@@ -7152,11 +7158,11 @@ pub fn bootstrap_evaluator_cached_at_path(
                     );
                     return Ok(loaded);
                 }
-                Err(e) => {
+                Err((resumed_eval, e)) => {
                     tracing::warn!(
                         "pdump: failed to reload freshly written bootstrap image ({e}), using in-memory bootstrap"
                     );
-                    pdump::restore_active_runtime(&mut eval, &live_runtime);
+                    eval = resumed_eval;
                 }
             }
         }
@@ -7171,6 +7177,38 @@ pub fn bootstrap_evaluator_cached_at_path(
         "pdump in-memory fallback finalize failed",
     )?;
     Ok(eval)
+}
+
+/// Park `eval`, load the freshly written dump at `dump_path`, and either drop
+/// the parked `eval` (on `Ok`) or resume it on the empty slot (on `Err`).
+pub(crate) fn reload_written_bootstrap_dump(
+    eval: crate::emacs_core::eval::Context,
+    dump_path: &Path,
+    proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
+) -> Result<
+    crate::emacs_core::eval::Context,
+    (
+        crate::emacs_core::eval::Context,
+        crate::emacs_core::pdump::DumpError,
+    ),
+> {
+    let saved_fontset = crate::emacs_core::eval::lifecycle::fontset_registry_snapshot();
+    let parked_eval = eval.park();
+    match crate::emacs_core::pdump::load_from_dump_with_proof(dump_path, proof) {
+        Ok(loaded) => {
+            drop(parked_eval);
+            Ok(loaded)
+        }
+        Err(err) => {
+            crate::emacs_core::eval::lifecycle::restore_fontset_registry(saved_fontset);
+            let mut eval = parked_eval
+                .resume()
+                .expect("failed pdump load leaves the heap slot empty");
+            eval.sync_thread_runtime_bindings();
+            eval.sync_current_thread_buffer_state();
+            Err((eval, err))
+        }
+    }
 }
 
 /// Expand `~/` prefix to the HOME directory, matching GNU Emacs's

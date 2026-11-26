@@ -977,6 +977,7 @@ Primitive	neomacs-frame-geometry	World	World	None	None
 Primitive	neomacs-frame-shader	World	World	None	None
 Primitive	neomacs-frame-shader-set-uniform	World	World	None	None
 Primitive	neomacs-image-extent	World	World	None	None
+Primitive	neomacs-make-parallel-thread	World	World	None	None
 Primitive	neomacs-mouse-absolute-pixel-position	World	World	None	None
 Primitive	neomacs-open-tls-stream	World	World	None	None
 Primitive	neomacs-primary-selection-get	World	World	None	None
@@ -998,6 +999,7 @@ Primitive	neomacs-terminal-get-text	World	World	None	None
 Primitive	neomacs-terminal-resize	World	World	None	None
 Primitive	neomacs-terminal-set-float	World	World	None	None
 Primitive	neomacs-terminal-write	World	World	None	None
+Primitive	neomacs-thread-parallel-p	World	World	None	None
 Primitive	neomacs-tls-available-p	World	World	None	None
 Primitive	neomacs-video-begin-measurement-epoch	World	World	None	None
 Primitive	neomacs-video-destroy	World	World	None	None

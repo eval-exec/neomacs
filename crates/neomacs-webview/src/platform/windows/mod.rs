@@ -587,13 +587,37 @@ fn webview2_string(
     Ok(CoTaskMemPWSTR::from(raw).to_string())
 }
 
-pub(crate) struct WindowsPlatform {
-    _apartment: Option<ComApartment>,
-    environment: Rc<RefCell<WindowsEnvironmentState>>,
-    composition_device: Result<IDCompositionDevice, String>,
-    hosts: HashMap<HostWindowId, HostComposition>,
+struct ApartmentScoped<T, A> {
+    // Field order is significant: `resources` and every COM interface it owns
+    // drop before `_apartment` calls `CoUninitialize`.
+    resources: T,
+    _apartment: A,
+}
+
+impl<T, A> ApartmentScoped<T, A> {
+    const fn new(resources: T, apartment: A) -> Self {
+        Self {
+            resources,
+            _apartment: apartment,
+        }
+    }
+}
+
+struct WindowsPlatformResources {
+    // Field order is significant: queued WebView2 completions and host
+    // DirectComposition trees drop before the shared composition device and
+    // WebView2 environment.
     completions: Rc<RefCell<Vec<BackendEvent<WindowsWebView>>>>,
+    hosts: HashMap<HostWindowId, HostComposition>,
+    composition_device: Result<IDCompositionDevice, String>,
+    environment: Rc<RefCell<WindowsEnvironmentState>>,
     wake: WebViewWake,
+}
+
+pub(crate) struct WindowsPlatform {
+    // Keeps all COM, DirectComposition, and WebView2 resources strictly ahead
+    // of `ComApartment` so future fields cannot land after `CoUninitialize`.
+    scoped: ApartmentScoped<WindowsPlatformResources, Option<ComApartment>>,
 }
 
 impl WindowsPlatform {
@@ -613,24 +637,32 @@ impl WindowsPlatform {
                 let composition_device = unsafe { DCompositionCreateDevice2(None::<&IUnknown>) }
                     .map_err(|error| format!("failed to create DirectComposition device: {error}"));
                 Self {
-                    _apartment: Some(apartment),
-                    environment,
-                    composition_device,
-                    hosts: HashMap::new(),
-                    completions: Rc::new(RefCell::new(Vec::new())),
-                    wake,
+                    scoped: ApartmentScoped::new(
+                        WindowsPlatformResources {
+                            completions: Rc::new(RefCell::new(Vec::new())),
+                            hosts: HashMap::new(),
+                            composition_device,
+                            environment,
+                            wake,
+                        },
+                        Some(apartment),
+                    ),
                 }
             }
             Err(error) => {
                 let environment =
                     Rc::new(RefCell::new(WindowsEnvironmentState::Failed(error.clone())));
                 Self {
-                    _apartment: None,
-                    environment,
-                    composition_device: Err(error),
-                    hosts: HashMap::new(),
-                    completions: Rc::new(RefCell::new(Vec::new())),
-                    wake,
+                    scoped: ApartmentScoped::new(
+                        WindowsPlatformResources {
+                            completions: Rc::new(RefCell::new(Vec::new())),
+                            hosts: HashMap::new(),
+                            composition_device: Err(error),
+                            environment,
+                            wake,
+                        },
+                        None,
+                    ),
                 }
             }
         }
@@ -642,14 +674,15 @@ impl WindowsPlatform {
         generation: WebViewGeneration,
         host_id: HostWindowId,
     ) -> Result<(), String> {
-        let environment = match &*self.environment.borrow() {
+        let resources = &self.scoped.resources;
+        let environment = match &*resources.environment.borrow() {
             WindowsEnvironmentState::Ready(environment) => environment.clone(),
             WindowsEnvironmentState::Creating => {
                 return Err("WebView2 environment is still being created".to_owned());
             }
             WindowsEnvironmentState::Failed(error) => return Err(error.clone()),
         };
-        let host = self
+        let host = resources
             .hosts
             .get(&host_id)
             .ok_or_else(|| format!("host {host_id:?} has no registered HWND"))?;
@@ -670,9 +703,9 @@ impl WindowsPlatform {
                 .map_err(|error| format!("failed to configure WebView2 profile: {error}"))?;
         }
         let hwnd = host.hwnd;
-        let completions = self.completions.clone();
-        let view_wake = self.wake.clone();
-        let completion_wake = self.wake.clone();
+        let completions = resources.completions.clone();
+        let view_wake = resources.wake.clone();
+        let completion_wake = resources.wake.clone();
         let id = request.id();
         let handler = CreateCoreWebView2CompositionControllerCompletedHandler::create(Box::new(
             move |status, composition| {
@@ -740,10 +773,15 @@ impl Platform for WindowsPlatform {
             tracing::warn!(?id, "winit did not expose an HWND for WebView2 hosting");
             return HostRegistration::Unavailable;
         };
-        if self.hosts.get(&id).is_some_and(|host| host.hwnd == hwnd) {
+        let resources = &mut self.scoped.resources;
+        if resources
+            .hosts
+            .get(&id)
+            .is_some_and(|host| host.hwnd == hwnd)
+        {
             return HostRegistration::Unchanged;
         }
-        let device = match self.composition_device.as_ref() {
+        let device = match resources.composition_device.as_ref() {
             Ok(device) => device.clone(),
             Err(error) => {
                 tracing::error!(?id, %error, "DirectComposition is unavailable");
@@ -752,7 +790,7 @@ impl Platform for WindowsPlatform {
         };
         match HostComposition::new(hwnd, device) {
             Ok(host) => {
-                if self.hosts.insert(id, host).is_some() {
+                if resources.hosts.insert(id, host).is_some() {
                     HostRegistration::Replaced
                 } else {
                     HostRegistration::Added
@@ -766,11 +804,11 @@ impl Platform for WindowsPlatform {
     }
 
     fn unregister_host(&mut self, host: HostWindowId) {
-        self.hosts.remove(&host);
+        self.scoped.resources.hosts.remove(&host);
     }
 
     fn missing_prerequisites(&self, _request: &PlatformCreateRequest) -> MissingPrerequisites {
-        match &*self.environment.borrow() {
+        match &*self.scoped.resources.environment.borrow() {
             WindowsEnvironmentState::Creating => MissingPrerequisites::RUNTIME,
             WindowsEnvironmentState::Ready(_) | WindowsEnvironmentState::Failed(_) => {
                 MissingPrerequisites::empty()
@@ -782,7 +820,7 @@ impl Platform for WindowsPlatform {
         &mut self,
         request: PlatformCreateRequest,
     ) -> Result<CreateOutcome<Self::View, Self::PendingCreate>, String> {
-        match &*self.environment.borrow() {
+        match &*self.scoped.resources.environment.borrow() {
             WindowsEnvironmentState::Creating => {
                 return Err("WebView2 environment is still being created".to_owned());
             }
@@ -798,7 +836,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn drain_events(&mut self) -> Vec<BackendEvent<Self::View>> {
-        std::mem::take(&mut *self.completions.borrow_mut())
+        std::mem::take(&mut *self.scoped.resources.completions.borrow_mut())
     }
 
     fn activate_pending(
@@ -838,7 +876,7 @@ impl Platform for WindowsPlatform {
             PlatformUpdate::EvaluateScript(request) => view.evaluate_script(request),
             PlatformUpdate::Focus(FocusIntent::Focus) => view.focus(),
             PlatformUpdate::Focus(FocusIntent::Blur) => {
-                if let Some(host) = self.hosts.get(&view.host) {
+                if let Some(host) = self.scoped.resources.hosts.get(&view.host) {
                     let _ = unsafe { SetFocus(Some(host.hwnd)) };
                 }
                 Ok(())
@@ -861,10 +899,10 @@ impl Platform for WindowsPlatform {
         view: &mut Self::View,
         presentation: PlatformPresentation<'_>,
     ) -> Result<(), String> {
+        let hosts = &self.scoped.resources.hosts;
         match presentation {
             PlatformPresentation::Hidden => {
-                let host = self
-                    .hosts
+                let host = hosts
                     .get(&view.host)
                     .ok_or_else(|| format!("host {:?} is no longer registered", view.host))?;
                 view.hide(host)
@@ -873,8 +911,7 @@ impl Platform for WindowsPlatform {
                 host: requested,
                 placement,
             } => {
-                let next = self
-                    .hosts
+                let next = hosts
                     .get(&requested)
                     .ok_or_else(|| format!("host {requested:?} has no registered HWND"))?;
                 let logical_host_changed = requested != view.host;
@@ -884,7 +921,7 @@ impl Platform for WindowsPlatform {
                     // released the old HostComposition.  A logical host move
                     // can still detach explicitly from the registered old
                     // root before attaching to the next one.
-                    if logical_host_changed && let Some(old) = self.hosts.get(&view.host) {
+                    if logical_host_changed && let Some(old) = hosts.get(&view.host) {
                         unsafe { old.root.RemoveVisual(&view.visual) }.map_err(|error| {
                             format!("failed to detach WebView2 from its old host: {error}")
                         })?;
@@ -907,7 +944,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn close(&mut self, view: Self::View) {
-        if let Some(host) = self.hosts.get(&view.host) {
+        if let Some(host) = self.scoped.resources.hosts.get(&view.host) {
             let _ = unsafe {
                 host.root
                     .RemoveVisual(&view.visual)
@@ -1047,3 +1084,7 @@ fn round_i32(value: f32) -> i32 {
 fn saturating_i32(value: u32) -> i32 {
     value.min(i32::MAX as u32) as i32
 }
+
+#[cfg(test)]
+#[path = "tests/windows_test.rs"]
+mod tests;

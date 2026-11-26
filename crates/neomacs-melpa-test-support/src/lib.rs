@@ -765,7 +765,11 @@ pub use neomacs_infra::packages::install::{
     deterministic_process_environment, package_preparation_run_id,
     publish_package_preparation_failure,
 };
-/// The path to the `neomacs` binary (override with `NEOMACS_BIN`).
+/// The path to the `neomacs` binary.
+///
+/// `NEOMACS_BIN` wins. Otherwise `NEOVM_BINARY_PATH` is the oracle harness
+/// path, so a private `CARGO_TARGET_DIR` does not fall through to the
+/// worktree `target/release` stamp. The workspace binary is the last resort.
 ///
 /// The resolved binary is attested against its fresh-build stamp before it is
 /// returned.  A MELPA/treesit probe that spawns an editor whose Lisp tree was
@@ -779,10 +783,29 @@ pub use neomacs_infra::packages::install::{
 /// `NEOVM_SKIP_FRESH_BUILD_STAMP=<non-empty>` is the shared documented
 /// override and its value is echoed.
 pub fn neomacs_binary() -> PathBuf {
-    let binary = std::env::var_os("NEOMACS_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target/release/neomacs"));
+    let neomacs_bin = std::env::var_os("NEOMACS_BIN");
+    let neovm_binary_path = std::env::var_os("NEOVM_BINARY_PATH");
+    let binary = resolve_neomacs_binary(
+        neomacs_bin.as_deref(),
+        neovm_binary_path.as_deref(),
+        &workspace_root(),
+    );
     attested_neomacs_binary(binary)
+}
+
+/// Pick the editor binary without reading the process environment.
+///
+/// Split from [`neomacs_binary`] so the order can be tested without the
+/// attestation cache, which records one verdict per process.
+pub(crate) fn resolve_neomacs_binary(
+    neomacs_bin: Option<&OsStr>,
+    neovm_binary_path: Option<&OsStr>,
+    workspace: &Path,
+) -> PathBuf {
+    neomacs_bin
+        .map(PathBuf::from)
+        .or_else(|| neovm_binary_path.map(PathBuf::from))
+        .unwrap_or_else(|| workspace.join("target/release/neomacs"))
 }
 
 /// [`neomacs_binary`]'s attestation half, split out so the pinning test can

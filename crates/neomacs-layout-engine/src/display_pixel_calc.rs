@@ -160,6 +160,10 @@ pub struct PixelCalcImageInputs {
     /// keys the catalog entry a decoder that must paint an unresolvable color
     /// key with something would read (src/image.c:6518; issue #556).
     pub frame_foreground: u32,
+    /// GNU's `FRAME_BACKGROUND_PIXEL`: the frame's `background-color`, used by
+    /// `gif_load` for borders outside frame 0 and transparent pixels when
+    /// `:background` is omitted (src/image.c:10092-10118).
+    pub frame_background: u32,
 }
 
 fn collect_space_image_operands(
@@ -179,6 +183,7 @@ fn collect_space_image_operands(
             inputs.default_fg,
             inputs.default_bg,
             inputs.frame_foreground,
+            inputs.frame_background,
         )
         && let Some(catalog) = inputs.catalog.as_ref()
     {

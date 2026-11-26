@@ -18,6 +18,8 @@ fn slot_value(root: &SliceRoot<'_>) -> TaggedValue {
 }
 
 fn write_slot(root: &mut SliceRoot<'_>, value: TaggedValue) {
+    // SAFETY: `root` points into this active owner's resident root bank and
+    // `value` was produced on this same owner's heap within `RunSlice`.
     unsafe { root.word.as_ptr().write(MarkWord::of(value)) };
 }
 
@@ -46,7 +48,7 @@ pub struct SliceRoot<'brand> {
 /// close. No heap reference, raw payload reader or public early finish exists.
 pub struct RunSlice<'brand, 'run> {
     allocation: ConsRunState<'run>,
-    bank: &'run mut Vec<MarkWord>,
+    bank: &'run mut [MarkWord],
     key: MutatorKey,
     generation: u64,
     cursor: *mut ConsCell,
@@ -93,10 +95,12 @@ impl<'brand> RunSlice<'brand, '_> {
         }
         // SAFETY: only bind constructs a home, with this invariant brand.
         // The bank cannot clear/grow/publish while the slice is borrowed.
-        // All cells of the finite run are disjoint from the root allocation.
+        // All cells of the finite run are disjoint from the root allocation,
+        // and `value` was just initialized in this owner's active cons run on
+        // the same heap, satisfying `MarkWord::of`'s liveness/ownership contract.
         unsafe {
-            let car = car.word.as_ptr().read().value().bits();
-            let cdr = cdr.word.as_ptr().read().value().bits();
+            let car = car.word.as_ptr().read().bits();
+            let cdr = cdr.word.as_ptr().read().bits();
             let value = initialize_next_cons(&mut self.cursor, car, cdr);
             result.word.as_ptr().write(MarkWord::of(value));
         }
@@ -115,13 +119,9 @@ impl<'brand> RunSlice<'brand, '_> {
         result: &mut SliceRoot<'brand>,
         bits: usize,
     ) -> Result<(), RegistrationError> {
-        let value = unsafe {
-            /* SAFETY: value-internal construction from a real Value */
-            TaggedValue::from_bits(bits)
-        };
-        if !(value.is_fixnum() || value.is_nil() || value.is_t()) {
+        let Some(value) = TaggedValue::try_immediate_from_bits(bits) else {
             return Err(RegistrationError::Publication);
-        }
+        };
         write_slot(result, value);
         Ok(())
     }
@@ -209,8 +209,14 @@ impl<'brand> RunSlice<'brand, '_> {
         slot_value(root).bits()
     }
 
+    /// # Safety
+    /// `bits` must encode a valid `TaggedValue` owned by this slice's heap.
     #[cfg(any(test, feature = "test-support"))]
-    pub(super) fn plant_word_for_test(&mut self, result: &mut SliceRoot<'brand>, bits: usize) {
+    pub(super) unsafe fn plant_word_for_test(
+        &mut self,
+        result: &mut SliceRoot<'brand>,
+        bits: usize,
+    ) {
         write_slot(result, unsafe { TaggedValue::from_bits(bits) });
     }
 
@@ -287,15 +293,19 @@ impl RunAccess<'_, '_> {
     ) -> Result<R, RegistrationError> {
         self.owner.check_thread()?;
         let local = self.owner.local.as_mut().expect("resident owner state");
+        // SAFETY: exclusive `RunAccess` pins `local` for `body`, and
+        // `RunSlice` only writes same-heap live values via validated slots.
+        let (hot, cold, stats, region, tails, generation, bank) =
+            unsafe { local.split_for_slice() };
         let allocation = ConsRunState {
             registry: self.owner.registry,
             entry: &self.owner.entry,
             thread: self.owner.thread,
-            hot: &mut local.hot,
-            cold: &mut local.cold,
-            stats: &mut local.region_stats,
-            region: &mut local.catalog_region,
-            tails: &mut local.cons_tails,
+            hot,
+            cold,
+            stats,
+            region,
+            tails,
         };
         allocation.check_boundary()?;
         allocation
@@ -315,9 +325,9 @@ impl RunAccess<'_, '_> {
         };
         let mut slice = RunSlice {
             key: allocation.entry.key,
-            generation: local.root_slot_generation,
+            generation,
             allocation,
-            bank: &mut local.root_scratch,
+            bank,
             cursor,
             limit,
             cursor_live,

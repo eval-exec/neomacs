@@ -35,7 +35,7 @@ fn free_indices(block: &SweepBlockHarness, mut next: *mut ConsCell) -> BTreeSet<
             indices.insert(SweepBlockHarness::index_of_ptr(next)),
             "free-list cycle"
         );
-        assert_eq!(unsafe { (*next).car.get() }, TaggedValue::DEAD);
+        assert!(unsafe { (*next).car.get() }.is_dead());
         next = unsafe { (*next).free_next() };
     }
     indices

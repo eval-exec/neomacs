@@ -206,13 +206,58 @@ pub(crate) fn unix_socket_name(fd: std::os::fd::RawFd, end: SocketEnd) -> Option
 }
 
 /// Resolve a service name (e.g. "http") for a protocol ("tcp"/"udp") to its
-/// port via `getservbyname`. `None` off Unix (std/socket2 have no equivalent).
-#[cfg(unix)]
+/// port. Uses reentrant `getservbyname_r` on Linux (glibc/musl) and serializes
+/// `getservbyname` with a process mutex on Unix targets without it (macOS/BSD).
+/// `None` off Unix (std/socket2 have no equivalent).
+#[cfg(all(target_os = "linux", any(target_env = "gnu", target_env = "musl")))]
+pub(crate) fn service_port(service: &str, protocol: &str) -> Option<u16> {
+    unsafe extern "C" {
+        fn getservbyname_r(
+            name: *const libc::c_char,
+            proto: *const libc::c_char,
+            result_buf: *mut libc::servent,
+            buf: *mut libc::c_char,
+            buflen: libc::size_t,
+            result: *mut *mut libc::servent,
+        ) -> libc::c_int;
+    }
+
+    let service = std::ffi::CString::new(service).ok()?;
+    let protocol = std::ffi::CString::new(protocol).ok()?;
+    // SAFETY: `libc::servent` is a C POD struct; `service` and `protocol` are
+    // valid NUL-terminated C strings; `getservbyname_r` populates `entry` and
+    // sets `result` non-null when `rc == 0`.
+    unsafe {
+        neovm_value::system_vocab::posix_lookup::retry_erange_lookup::<libc::servent, u16>(
+            |entry, buf, len, result| {
+                // SAFETY: `service` and `protocol` are valid NUL-terminated C
+                // strings; `entry`, `buf`, and `result` are valid out-parameters.
+                unsafe {
+                    getservbyname_r(service.as_ptr(), protocol.as_ptr(), entry, buf, len, result)
+                }
+            },
+            |entry| Some(u16::from_be(entry.s_port as u16)),
+        )
+    }
+}
+
+#[cfg(all(
+    unix,
+    not(all(target_os = "linux", any(target_env = "gnu", target_env = "musl")))
+))]
+static SERVENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(all(
+    unix,
+    not(all(target_os = "linux", any(target_env = "gnu", target_env = "musl")))
+))]
 pub(crate) fn service_port(service: &str, protocol: &str) -> Option<u16> {
     let service = std::ffi::CString::new(service).ok()?;
     let protocol = std::ffi::CString::new(protocol).ok()?;
-    // SAFETY: both pointers are valid C strings; getservbyname returns NULL or a
-    // pointer to a static (per-process) servent whose s_port we copy immediately.
+    let _guard = SERVENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // SAFETY: both pointers are valid C strings; `SERVENT_LOCK` serializes
+    // access to the shared servent storage, and we copy `s_port` immediately
+    // before dropping `_guard`.
     let entry = unsafe { libc::getservbyname(service.as_ptr(), protocol.as_ptr()) };
     if entry.is_null() {
         None

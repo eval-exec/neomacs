@@ -151,7 +151,11 @@ impl Vm<'_> {
     /// which a call outside the leaf's arity or a declined shape takes.
     #[inline(never)]
     #[doc(hidden)]
-    pub fn call_builtin_leaf_from_stack_args(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn call_builtin_leaf_from_stack_args(
         ctx: &mut crate::emacs_core::eval::Context,
         func_val: Value,
         args_start: usize,
@@ -165,9 +169,11 @@ impl Vm<'_> {
             || nargs > spec.entry_slots()
             || max_args.is_some_and(|max| nargs > usize::from(max))
         {
-            return Self::call_resolved_builtin_from_stack_args(
-                ctx, func_val, args_start, nargs, callee,
-            );
+            return unsafe {
+                Self::call_resolved_builtin_from_stack_args(
+                    ctx, func_val, args_start, nargs, callee,
+                )
+            };
         }
         debug_assert!(
             !ctx.debug_on_next_call_is_armed(),
@@ -195,7 +201,9 @@ impl Vm<'_> {
         LEAF_CALLS.with(|c| c.set(c.get() + 1));
         match result {
             Ok(value) => Ok(value),
-            Err(LeafExit::Generic) => Self::leaf_declined(ctx, func_val, args_start, nargs, callee),
+            Err(LeafExit::Generic) => unsafe {
+                Self::leaf_declined(ctx, func_val, args_start, nargs, callee)
+            },
             Err(LeafExit::Signal(flow)) => {
                 Self::leaf_signalled(ctx, func_val, args_start, nargs, flow)
             }
@@ -206,7 +214,11 @@ impl Vm<'_> {
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
-    pub fn leaf_declined(
+    /// # Safety
+    /// `bc_buf[args_start..args_start + nargs]` is in range. An empty
+    /// span (`nargs == 0`) requires `args_start <= bc_buf.len()` and no
+    /// overflow. The caller staged that span.
+    pub unsafe fn leaf_declined(
         ctx: &mut crate::emacs_core::eval::Context,
         func_val: Value,
         args_start: usize,
@@ -214,7 +226,9 @@ impl Vm<'_> {
         callee: ResolvedBuiltinCallee,
     ) -> EvalResult {
         STATS.generic.fetch_add(1, Ordering::Relaxed);
-        Self::call_resolved_builtin_from_stack_args(ctx, func_val, args_start, nargs, callee)
+        unsafe {
+            Self::call_resolved_builtin_from_stack_args(ctx, func_val, args_start, nargs, callee)
+        }
     }
 
     /// The leaf signalled: push the frame `Bcall` would have recorded

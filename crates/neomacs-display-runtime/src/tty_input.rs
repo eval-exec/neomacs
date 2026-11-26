@@ -242,7 +242,7 @@ pub struct TtyInputReader {
 #[cfg(unix)]
 mod unix_reader;
 #[cfg(unix)]
-pub use unix_reader::TtyInputCapacityNotifier;
+pub use unix_reader::{TtyInputCapacityNotifier, TtyInputPause, TtyInputPauseGuard};
 
 /// Non-Unix input retains its existing forwarding path and has no capacity wake.
 #[cfg(not(unix))]
@@ -259,11 +259,37 @@ impl TtyInputCapacityNotifier {
     }
 }
 
+/// Non-Unix placeholder matching Unix's synchronous reader pause handle.
+#[cfg(not(unix))]
+#[derive(Clone, Debug, Default)]
+pub struct TtyInputPause {
+    _private: (),
+}
+
+/// Non-Unix placeholder guard matching Unix's [`TtyInputPauseGuard`].
+#[cfg(not(unix))]
+#[derive(Debug)]
+pub struct TtyInputPauseGuard {
+    _private: (),
+}
+
+#[cfg(not(unix))]
+impl TtyInputPause {
+    pub fn new() -> Self {
+        Self { _private: () }
+    }
+
+    pub fn pause(&self) -> TtyInputPauseGuard {
+        TtyInputPauseGuard { _private: () }
+    }
+}
+
 // The owner and bridge may share the notifier; the join/stop handle may move
 // between native threads. These compile-only contracts execute no code.
 const _: fn() = || {
     fn assert_shareable_debug<T: Send + Sync + std::fmt::Debug>() {}
     assert_shareable_debug::<TtyInputCapacityNotifier>();
+    assert_shareable_debug::<TtyInputPause>();
     assert_shareable_debug::<TtyInputReader>();
 };
 
@@ -332,7 +358,19 @@ impl TtyInputReader {
         comms: RenderComms,
         publisher: P,
     ) -> io::Result<Self> {
-        unix_reader::spawn_primary(comms, publisher)
+        unix_reader::spawn_primary(comms, publisher, TtyInputPause::new())
+    }
+
+    /// Publish primary Unix input directly to the core queue with a shared
+    /// [`TtyInputPause`] handle so controlling-TTY emergency escape can
+    /// synchronously pause raw stdin acquisition.
+    #[cfg(unix)]
+    pub fn spawn_primary_with_pause<P: PrimaryTtyPublisher>(
+        comms: RenderComms,
+        publisher: P,
+        pause: TtyInputPause,
+    ) -> io::Result<Self> {
+        unix_reader::spawn_primary(comms, publisher, pause)
     }
 
     /// Capacity notification for the primary bridge after it receives an event.
@@ -378,6 +416,20 @@ impl TtyInputReader {
         hook: Option<Arc<dyn Fn(unix_reader::ReaderTestObservation) + Send + Sync>>,
     ) -> io::Result<Self> {
         unix_reader::spawn_primary_with_source(comms, input, size_query, publisher, hook)
+    }
+
+    #[cfg(all(unix, test))]
+    fn spawn_primary_with_test_source_and_pause<P: PrimaryTtyPublisher>(
+        comms: RenderComms,
+        input: std::os::fd::OwnedFd,
+        size_query: TerminalSizeQuery,
+        publisher: P,
+        pause: TtyInputPause,
+        hook: Option<Arc<dyn Fn(unix_reader::ReaderTestObservation) + Send + Sync>>,
+    ) -> io::Result<Self> {
+        unix_reader::spawn_primary_with_source_and_pause(
+            comms, input, size_query, publisher, pause, hook,
+        )
     }
 
     #[cfg(all(unix, test))]

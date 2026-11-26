@@ -2731,6 +2731,7 @@ fn minibuffer_input_source_distinguishes_stdin_macros_and_live_input() {
         MinibufferInputSource::CommandLoop
     );
 
+    drop(batch);
     let mut interactive = crate::test_utils::new_context();
     let _input_tx = HostInputPublisher::install(&mut interactive);
     interactive.init_input_system();
@@ -5420,7 +5421,7 @@ fn read_from_string_read_label_identity_matches_gnu() {
     assert!(vector.is_vector());
     let slots = vector.as_vector_data().expect("vector slots");
     assert_eq!(slots.len(), 1);
-    assert!(eq_value(&slots[0], &vector));
+    assert!(eq_value(&slots.at(0), &vector));
 
     let direct_self = builtin_read_from_string(&mut ev, vec![Value::string("#1=#1#")]);
     match direct_self.kinded() {

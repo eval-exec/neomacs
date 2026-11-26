@@ -3,8 +3,12 @@ use std::sync::Arc;
 
 fn stalled_mark(heap: &mut TaggedHeap) -> std::sync::mpsc::Sender<ConcurrentMarkResult> {
     let (tx, rx) = std::sync::mpsc::channel();
-    heap.concurrent_mark_running = true;
-    heap.gc_exited = Some(rx);
+    let heap_id = heap.heap_identity();
+    // SAFETY: synthetic serial fixture, no live worker.
+    unsafe {
+        heap.concurrent_mark_running.set(true);
+        heap.gc_exited.install_for_heap(heap_id, rx);
+    }
     tx
 }
 
@@ -36,15 +40,17 @@ unsafe extern "C" fn count_native_finalizer(data: *mut std::ffi::c_void) {
 
 fn allocate_counted_native_objects(heap: &mut TaggedHeap, count: &AtomicUsize) {
     let data = std::ptr::from_ref(count).cast_mut().cast();
-    heap.alloc_user_ptr(data, Some(count_native_finalizer));
-    let function = heap.alloc_module_function(
-        0,
-        0,
-        std::ptr::null(),
-        data,
-        TaggedValue::NIL,
-        TaggedValue::NIL,
-    );
+    unsafe { heap.alloc_user_ptr(data, Some(count_native_finalizer)) };
+    let function = unsafe {
+        heap.alloc_module_function(
+            0,
+            0,
+            std::ptr::null(),
+            data,
+            TaggedValue::NIL,
+            TaggedValue::NIL,
+        )
+    };
     // SAFETY: this test exclusively owns the initialized module function and
     // its data points to count, which outlives all synchronous reclamation.
     unsafe {
@@ -76,10 +82,63 @@ fn ordinary_sweep_runs_foreign_finalizers_once() {
     let count = AtomicUsize::new(0);
     let mut heap = TaggedHeap::new();
     allocate_counted_native_objects(&mut heap, &count);
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     assert_eq!(count.load(Ordering::Relaxed), 2);
     heap.shutdown().unwrap();
     assert_eq!(count.load(Ordering::Relaxed), 2);
+}
+
+/// E3.2: a stopped sweep detaches the payloads and runs no native code. The
+/// drain then runs each finalizer once, on the caller's (Baton) side.
+#[test]
+fn stopped_native_deferral_defers_finalizers_until_the_drain() {
+    let count = AtomicUsize::new(0);
+    let mut heap = TaggedHeap::new();
+    allocate_counted_native_objects(&mut heap, &count);
+    heap.begin_native_deferral_for_test();
+    heap.collect_rooted(std::iter::empty());
+    assert_eq!(
+        count.load(Ordering::Relaxed),
+        0,
+        "the sweep must not invoke a foreign finalizer while deferring"
+    );
+    assert_eq!(heap.pending_native_destroy_count_for_test(), Some(2));
+    assert_eq!(heap.drain_pending_native_destroys(), 2);
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+    assert_eq!(heap.pending_native_destroy_count_for_test(), None);
+    assert_eq!(heap.drain_pending_native_destroys(), 0);
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+    heap.shutdown().unwrap();
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+}
+
+/// A deferral left owed (the stopped job's drain did not run, e.g. an error
+/// path) must not make explicit shutdown skip the finalizers it always ran.
+#[test]
+fn explicit_shutdown_after_a_stopped_deferral_runs_owed_finalizers_once() {
+    let count = AtomicUsize::new(0);
+    let mut heap = TaggedHeap::new();
+    allocate_counted_native_objects(&mut heap, &count);
+    heap.begin_native_deferral_for_test();
+    heap.collect_rooted(std::iter::empty());
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+    assert_eq!(heap.pending_native_destroy_count_for_test(), Some(2));
+    heap.shutdown().unwrap();
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+}
+
+/// A batch never drained because the heap is torn down still runs no callback;
+/// teardown only frees the inert Rust boxes.
+#[test]
+fn undrained_native_deferral_never_runs_finalizers_on_heap_drop() {
+    let count = AtomicUsize::new(0);
+    let mut heap = TaggedHeap::new();
+    allocate_counted_native_objects(&mut heap, &count);
+    heap.begin_native_deferral_for_test();
+    heap.collect_rooted(std::iter::empty());
+    assert_eq!(heap.pending_native_destroy_count_for_test(), Some(2));
+    drop(heap);
+    assert_eq!(count.load(Ordering::Relaxed), 0);
 }
 
 #[test]
@@ -102,7 +161,7 @@ fn explicit_shutdown_reclaims_all_intrusive_owner_lists_once() {
     let mut heap = TaggedHeap::new();
     let data = std::ptr::from_ref(&count).cast_mut().cast();
     for _ in 0..5 {
-        heap.alloc_user_ptr(data, Some(count_native_finalizer));
+        unsafe { heap.alloc_user_ptr(data, Some(count_native_finalizer)) };
     }
     let mut heads = [std::ptr::null_mut(); 5];
     let mut current = heap.all_objects;
@@ -130,6 +189,7 @@ fn explicit_shutdown_reclaims_all_intrusive_owner_lists_once() {
 fn heap_drop_retains_stalled_marker_storage_without_waiting() {
     let before = LIVE_FLOAT_PAGES.load(Ordering::Relaxed);
     let mut heap = TaggedHeap::new();
+    let heap_id = heap.heap_identity();
     let float = heap.alloc_float(7.5);
     let vector = heap.alloc_vector(vec![float]);
     let cons = heap.alloc_cons(vector, TaggedValue::NIL);
@@ -150,7 +210,10 @@ fn heap_drop_retains_stalled_marker_storage_without_waiting() {
         let object = &*(vector.as_veclike_ptr().unwrap() as *const VectorObj);
         assert_eq!(object.data.as_slice(), &[float]);
     }
-    assert!(tx.send(ConcurrentMarkResult::default()).is_err());
+    assert!(
+        tx.send(ConcurrentMarkResult::empty_for_heap(heap_id))
+            .is_err()
+    );
 }
 
 #[test]
@@ -183,7 +246,8 @@ fn failed_marker_finish_preserves_active_state_and_storage() {
         let tx = stalled_mark(&mut heap);
         drop(tx);
         if matches!(failure, Failure::Missing) {
-            heap.gc_exited = None;
+            // SAFETY: synthetic serial fixture testing MissingCompletion.
+            unsafe { heap.gc_exited.clear_for_test() };
         }
         let error = heap.finish_concurrent_mark().unwrap_err();
         assert!(matches!(
@@ -197,7 +261,7 @@ fn failed_marker_finish_preserves_active_state_and_storage() {
             Err(MarkFinishError::MissingCompletion)
         ));
         let sweep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            heap.collect_exact(std::iter::empty());
+            heap.collect_rooted(std::iter::empty());
         }));
         assert!(sweep.is_err(), "failed completion must refuse reclamation");
         drop(heap);
@@ -211,7 +275,8 @@ fn poisoned_collector_queues_fail_finish_before_reclamation() {
     let mut heap = TaggedHeap::new();
     heap.alloc_float(11.5);
     let tx = stalled_mark(&mut heap);
-    tx.send(ConcurrentMarkResult::default()).unwrap();
+    tx.send(ConcurrentMarkResult::empty_for_heap(heap.heap_identity()))
+        .unwrap();
     heap.satb_handoff.poison_for_test();
     assert!(heap.satb_handoff.is_poisoned());
     assert!(matches!(
@@ -220,7 +285,7 @@ fn poisoned_collector_queues_fail_finish_before_reclamation() {
     ));
     assert!(heap.concurrent_mark_running());
     let sweep = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        heap.collect_exact(std::iter::empty());
+        heap.collect_rooted(std::iter::empty());
     }));
     assert!(sweep.is_err());
     drop(heap);
@@ -230,6 +295,7 @@ fn poisoned_collector_queues_fail_finish_before_reclamation() {
 #[test]
 fn abandoned_marker_retains_retired_vector_original() {
     let mut heap = TaggedHeap::new();
+    let heap_id = heap.heap_identity();
     let original = vec![TaggedValue::fixnum(21), TaggedValue::fixnum(22)];
     let vector = heap.alloc_vector(original.clone());
     let tx = stalled_mark(&mut heap);
@@ -244,7 +310,10 @@ fn abandoned_marker_retains_retired_vector_original() {
     // well as the current vector; this reader runs after owner destruction.
     let retained = unsafe { std::slice::from_raw_parts(before, original.len()) };
     assert_eq!(retained, original);
-    assert!(tx.send(ConcurrentMarkResult::default()).is_err());
+    assert!(
+        tx.send(ConcurrentMarkResult::empty_for_heap(heap_id))
+            .is_err()
+    );
 }
 
 #[test]
@@ -295,7 +364,8 @@ fn heap_drop_requests_real_marker_stop_and_retains_reachable_storage() {
     capture.heap_mut().set_pending_obarray_scan(snapshot);
     capture.heap_mut().seed_root(root);
     capture.launch().unwrap();
-    let completion = heap.gc_exited.take().unwrap();
+    // SAFETY: abandonment test waits on completion after dropping `heap`.
+    let completion = unsafe { heap.gc_exited.take_receiver_for_test() }.unwrap();
     drop(heap);
     drop(obarray);
     // The explicit test wait is outside Drop. Completion proves the real
@@ -566,4 +636,22 @@ fn shutdown_after_returned_young_loan_reclaims_normally() {
             assert_eq!(young_retention_live_pages(), baseline);
         }
     }
+}
+
+#[test]
+fn finish_stopped_mark_adapters_fails_closed_after_mark_flag_and_slot_overwrite() {
+    let mut heap = TaggedHeap::new();
+    let _tx = stalled_mark(&mut heap);
+    heap.concurrent_mark_running = mark_channel::ConcurrentMarkFlag::new();
+    heap.gc_exited = mark_channel::MarkExitSlot::empty();
+    assert!(!heap.concurrent_mark_running());
+    assert!(!heap.gc_exited.is_some());
+    assert!(heap.has_unfinished_concurrent_mark());
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            heap.finish_stopped_mark_adapters()
+        }))
+        .is_err(),
+        "finish_stopped_mark_adapters must fail closed while ACTIVE_MARK_HEAPS records an unfinished mark"
+    );
 }

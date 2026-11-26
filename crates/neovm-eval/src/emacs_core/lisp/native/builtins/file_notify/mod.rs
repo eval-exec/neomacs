@@ -79,6 +79,7 @@ thread_local! {
 }
 
 mod registry_detach;
+pub(crate) use registry_detach::detach_file_notify_registry;
 
 #[derive(Default)]
 pub(crate) struct FileNotifyState {

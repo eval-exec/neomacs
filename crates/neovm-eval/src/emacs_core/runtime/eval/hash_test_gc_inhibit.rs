@@ -30,7 +30,7 @@ impl Context {
             self.tagged_heap.gc_threshold(),
             None,
             self.gc_runtime_settings_cache.gc_cons_threshold_bytes,
-            self.gc_runtime_settings_cache.gc_cons_percentage_scaled,
+            self.gc_runtime_settings_cache.gc_cons_percentage,
             self.tagged_heap.gc_threshold_is_overridden(),
             self.gc_runtime_settings_cache.memory_full.is_full(),
             !self.variable_value_or_nil(syms.startup_ceiling).is_nil(),
@@ -109,8 +109,7 @@ impl Context {
     /// The collector's live estimate is constant while GC is inhibited. The
     /// allocation estimate and normalized settings must come from entry: changes
     /// within the callback adjust GNU's countdown and threshold equally.
-    /// This repeats the existing pacing formula on the rare GC-maybe path so
-    /// ordinary GC pacing and its inlining boundaries remain unchanged.
+    /// The rare GC-maybe path shares the ordinary pacing formula.
     #[cold]
     #[inline(never)]
     #[doc(hidden)]
@@ -118,26 +117,12 @@ impl Context {
         if accounting.threshold_overridden() || accounting.memory_full() {
             return accounting.collector_threshold_at_start();
         }
-        let mut threshold = accounting
-            .entry_threshold_bytes()
-            .max(GC_THRESHOLD_FLOOR_BYTES);
-        if let Some(scaled) = accounting.entry_percentage_scaled() {
-            let live_estimate = self
-                .tagged_heap
-                .live_bytes()
-                .saturating_add(accounting.charged_bytes_at_start() / 2);
-            let percentage_threshold = ((live_estimate as u128)
-                .saturating_mul(scaled.get() as u128)
-                .saturating_add((GC_PERCENT_SCALE - 1) as u128)
-                / GC_PERCENT_SCALE as u128)
-                .min(GC_HI_THRESHOLD_BYTES as u128) as usize;
-            threshold = threshold.max(percentage_threshold);
-        }
-        let live_growth = ((self.tagged_heap.live_bytes() as u128)
-            .saturating_mul(super::gc_live_growth_percent())
-            / 100)
-            .min(GC_HI_THRESHOLD_BYTES as u128) as usize;
-        threshold = threshold.max(live_growth).clamp(1, GC_HI_THRESHOLD_BYTES);
+        let mut threshold = super::gc_pacing::consing_threshold(
+            accounting.entry_threshold_bytes(),
+            accounting.entry_percentage(),
+            self.gc_cons_percentage_live_bytes(),
+            accounting.charged_bytes_at_start(),
+        );
         if accounting.startup_ceiling() {
             threshold = threshold.min(GC_STARTUP_THRESHOLD_CEILING_BYTES);
         }

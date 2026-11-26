@@ -349,7 +349,7 @@ const BYTE_CODE_KEY_VALUES: u8 = 4;
 const BYTE_CODE_KEY_TEXT: u8 = 5;
 const BYTE_CODE_KEY_ABSENT: u8 = 6;
 
-fn write_hash_key(out: &mut Vec<u8>, key: &DumpHashKey) -> Result<(), DumpError> {
+pub(crate) fn write_hash_key(out: &mut Vec<u8>, key: &DumpHashKey) -> Result<(), DumpError> {
     match key {
         DumpHashKey::Nil => write_u8(out, HASH_KEY_NIL),
         DumpHashKey::True => write_u8(out, HASH_KEY_TRUE),
@@ -405,10 +405,23 @@ fn write_hash_key(out: &mut Vec<u8>, key: &DumpHashKey) -> Result<(), DumpError>
             write_u8(out, HASH_KEY_HEAP_REF);
             write_u32(out, *index);
         }
-        DumpHashKey::EqualCons(car, cdr) => {
-            write_u8(out, HASH_KEY_EQUAL_CONS);
-            write_hash_key(out, car)?;
-            write_hash_key(out, cdr)?;
+        DumpHashKey::EqualCons(_, _) => {
+            // Tag stream stays `13, car, 13, car, …, tail`. Cars still recurse;
+            // only the cdr spine is a loop.
+            let mut node = key;
+            loop {
+                match node {
+                    DumpHashKey::EqualCons(car, cdr) => {
+                        write_u8(out, HASH_KEY_EQUAL_CONS);
+                        write_hash_key(out, car)?;
+                        node = cdr.as_ref();
+                    }
+                    other => {
+                        write_hash_key(out, other)?;
+                        break;
+                    }
+                }
+            }
         }
         DumpHashKey::EqualVec(keys) => {
             write_u8(out, HASH_KEY_EQUAL_VEC);
@@ -1181,7 +1194,17 @@ impl<'a> Cursor<'a> {
 
     #[doc(hidden)]
     pub fn read_hash_key(&mut self) -> Result<DumpHashKey, DumpError> {
-        match self.read_u8("hash key tag")? {
+        let tag = self.read_u8("hash key tag")?;
+        self.read_hash_key_from_tag(tag)
+    }
+
+    /// Dispatch a hash-key tag that the caller already consumed.
+    ///
+    /// An equal-cons spine is `13, car, 13, car, …, tail`. The reader has to
+    /// hand the tail's tag to this function, because reading it again would
+    /// skip a byte.
+    fn read_hash_key_from_tag(&mut self, tag: u8) -> Result<DumpHashKey, DumpError> {
+        match tag {
             HASH_KEY_NIL => Ok(DumpHashKey::Nil),
             HASH_KEY_TRUE => Ok(DumpHashKey::True),
             HASH_KEY_INT => Ok(DumpHashKey::Int(self.read_i64("hash int key")?)),
@@ -1218,10 +1241,21 @@ impl<'a> Cursor<'a> {
             HASH_KEY_FRAME => Ok(DumpHashKey::Frame(self.read_u64("hash frame key")?)),
             HASH_KEY_PTR => Ok(DumpHashKey::Ptr(self.read_u64("hash ptr key")?)),
             HASH_KEY_HEAP_REF => Ok(DumpHashKey::HeapRef(self.read_u32("hash heap ref key")?)),
-            HASH_KEY_EQUAL_CONS => Ok(DumpHashKey::EqualCons(
-                Box::new(self.read_hash_key()?),
-                Box::new(self.read_hash_key()?),
-            )),
+            HASH_KEY_EQUAL_CONS => {
+                let mut cars = vec![self.read_hash_key()?];
+                let tail = loop {
+                    let next = self.read_u8("hash key tag")?;
+                    if next != HASH_KEY_EQUAL_CONS {
+                        break self.read_hash_key_from_tag(next)?;
+                    }
+                    cars.push(self.read_hash_key()?);
+                };
+                let mut loaded = tail;
+                while let Some(car) = cars.pop() {
+                    loaded = DumpHashKey::EqualCons(Box::new(car), Box::new(loaded));
+                }
+                Ok(loaded)
+            }
             HASH_KEY_EQUAL_VEC => Ok(DumpHashKey::EqualVec(self.read_hash_keys()?)),
             HASH_KEY_BYTE_CODE => {
                 let len = self.read_len("byte-code hash key part count")?;
@@ -1698,9 +1732,14 @@ impl<'a> Cursor<'a> {
 
     #[inline]
     #[doc(hidden)]
-    pub fn read_unaligned<T: Copy>(&mut self, what: &str) -> Result<T, DumpError> {
+    pub fn read_unaligned<T: bytemuck::AnyBitPattern>(
+        &mut self,
+        what: &str,
+    ) -> Result<T, DumpError> {
         let start = self.read_fixed_start(std::mem::size_of::<T>(), what)?;
-        Ok(unsafe { std::ptr::read_unaligned(self.section.as_ptr().add(start).cast::<T>()) })
+        Ok(bytemuck::pod_read_unaligned(
+            &self.section[start..self.offset],
+        ))
     }
 
     #[inline]

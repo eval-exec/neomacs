@@ -48,23 +48,29 @@ pub(crate) fn resume_deopt(
         cause,
     };
     if let Some(inlined) = inlined.as_ref() {
-        super::super::reopt::note_deopt_chain(
-            ctx as *mut Context,
-            func,
-            source,
-            leaf,
-            LeafOrigin::Entry,
-            inlined.guard_site_pc,
-            event,
-        );
+        // SAFETY: `ctx` is this live, exclusively borrowed `Context`.
+        unsafe {
+            super::super::reopt::note_deopt_chain(
+                ctx as *mut Context,
+                func,
+                source,
+                leaf,
+                LeafOrigin::Entry,
+                inlined.guard_site_pc,
+                event,
+            );
+        }
     } else {
-        super::super::reopt::note_deopt(
-            ctx as *mut Context,
-            source,
-            leaf,
-            LeafOrigin::Entry,
-            event,
-        );
+        // SAFETY: `ctx` is this live, exclusively borrowed `Context`.
+        unsafe {
+            super::super::reopt::note_deopt(
+                ctx as *mut Context,
+                source,
+                leaf,
+                LeafOrigin::Entry,
+                event,
+            );
+        }
     }
     let Some(inlined) = inlined else {
         return Vm::from_context(ctx).run_resumed_frame(

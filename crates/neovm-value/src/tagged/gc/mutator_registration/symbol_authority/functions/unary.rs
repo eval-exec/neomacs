@@ -38,13 +38,15 @@ pub(super) fn check_argument(
     argument: &OwnerRootSlot<'_>,
 ) -> Result<(), FunctionError> {
     globals::check_home(run, argument)?;
-    let value = run
+    let word = run
         .owner
         .local
         .as_ref()
-        .and_then(|local| local.root_scratch.get(argument.index))
-        .ok_or(RegistrationError::StaleRegistration)?
-        .value();
+        .and_then(|local| local.root_slot_word(argument.index))
+        .ok_or(RegistrationError::StaleRegistration)?;
+    // SAFETY: `check_home` verified this slot belongs to the active
+    // owning mutator thread's live root bank.
+    let value = unsafe { word.value() };
     if value.is_nil() || value.is_t() || value.is_fixnum() {
         Ok(())
     } else {

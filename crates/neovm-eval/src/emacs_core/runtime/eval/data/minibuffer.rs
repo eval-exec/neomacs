@@ -5,6 +5,8 @@ use neovm_value::gc_trace::GcTrace;
 use neovm_value::heap_types::LispString;
 use neovm_value::intern::SymId;
 use neovm_value::value::Value;
+#[cfg(any(test, feature = "test-support"))]
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::convert::AsRef;
 
@@ -123,6 +125,12 @@ pub struct MinibufferManager {
     pub(crate) completion_style: CompletionStyle,
     #[cfg(test)]
     pub(crate) max_depth: usize,
+    /// Set while a minibuffer restore holds this context's frame and buffer
+    /// field borrows. The mode hook must not run then. Present in this
+    /// crate's tests and in test-support builds, so neovm-core's tests can
+    /// read it. The release layout does not include it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) field_borrows_live: Cell<bool>,
 }
 
 impl GcTrace for MinibufferManager {
@@ -137,6 +145,8 @@ impl GcTrace for MinibufferManager {
             completion_style: _,
             #[cfg(test)]
                 max_depth: _,
+            #[cfg(any(test, feature = "test-support"))]
+                field_borrows_live: _,
         } = self;
         for state in state_stack {
             // No rest pattern: a newly retained field needs a tracing decision.
@@ -218,6 +228,8 @@ impl Default for MinibufferManager {
             completion_style: CompletionStyle::Prefix,
             #[cfg(test)]
             max_depth: 10,
+            #[cfg(any(test, feature = "test-support"))]
+            field_borrows_live: Cell::new(false),
         }
     }
 }
@@ -231,12 +243,21 @@ impl MinibufferManager {
             completion_style: CompletionStyle::Prefix,
             #[cfg(test)]
             max_depth: 10,
+            #[cfg(any(test, feature = "test-support"))]
+            field_borrows_live: Cell::new(false),
         }
     }
 
     /// Current recursive minibuffer depth (0 = not in minibuffer).
     pub fn depth(&self) -> usize {
         self.state_stack.len()
+    }
+
+    /// Whether a restore currently holds this context's frame and buffer
+    /// field borrows. The mode hook reads this so it does not run then.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn field_borrows_are_live(&self) -> bool {
+        self.field_borrows_live.get()
     }
 
     /// Append one history entry from a Lisp string.

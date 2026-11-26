@@ -20,12 +20,12 @@ fn params(n: usize) -> LambdaParams {
 
 fn opcode_fn(op: Op, nargs: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(params(nargs));
-    f.lexical = true;
-    f.ops = match nargs {
+    f.set_lexical(true);
+    f.set_ops(match nargs {
         1 => vec![Op::StackRef(0), op, Op::Return],
         _ => vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return],
-    };
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    });
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     f
 }
 

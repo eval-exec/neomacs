@@ -34,6 +34,7 @@ bytemuck.workspace = true
 pollster.workspace = true
 ash.workspace = true
 image.workspace = true
+gif.workspace = true
 png.workspace = true
 zune-jpeg.workspace = true
 imagesize.workspace = true
@@ -47,6 +48,9 @@ neomacs-font-materializer.workspace = true
 neomacs-layout-engine.workspace = true
 neomacs-video = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+freetype-rs = { version = "0.38.0" }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-foundation.workspace = true
 objc2-core-graphics.workspace = true
@@ -55,6 +59,7 @@ objc2-core-text.workspace = true
 [dev-dependencies]
 neomacs-infra.workspace = true
 neomacs-test-fonts.workspace = true
+tempfile.workspace = true
 tracing-test.workspace = true
 jpeg-encoder.workspace = true
 image-extras.workspace = true

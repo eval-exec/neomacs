@@ -161,6 +161,52 @@ fn heap_object_codec_round_trips_representative_objects() {
     assert_eq!(format!("{decoded:?}"), format!("{objects:?}"));
 }
 
+/// `write_hash_key` and `read_hash_key` walk a cdr spine in a loop, and
+/// `DumpHashKey`'s Drop does too. The chain is built here, so it is not
+/// capped by the equal-table insert budget. One million conses overflows the
+/// recursive codec; a hundred thousand still fits the 8MB test stack.
+/// The loop pushes the last index onto the outside of the spine, so the
+/// head car is 0 and the last car is 999_999.
+#[test]
+fn codec_round_trips_a_one_million_element_list_key() {
+    let mut key = DumpHashKey::Nil;
+    for i in (0..1_000_000).rev() {
+        key = DumpHashKey::EqualCons(Box::new(DumpHashKey::Int(i)), Box::new(key));
+    }
+    let mut bytes = Vec::new();
+    write_hash_key(&mut bytes, &key).expect("write hash key");
+    assert_eq!(bytes.len(), 1_000_000 * 10 + 1);
+    let mut cursor = Cursor::new(&bytes);
+    let read = cursor.read_hash_key().expect("read hash key");
+    assert!(cursor.is_empty());
+    let mut node = &read;
+    let mut count = 0_u32;
+    let mut first = None;
+    let mut last = 0_i64;
+    loop {
+        match node {
+            DumpHashKey::EqualCons(car, cdr) => {
+                let DumpHashKey::Int(n) = car.as_ref() else {
+                    panic!("car should be a fixnum");
+                };
+                if first.is_none() {
+                    first = Some(*n);
+                }
+                last = *n;
+                count += 1;
+                node = cdr.as_ref();
+            }
+            DumpHashKey::Nil => break,
+            _ => panic!("tail should be nil"),
+        }
+    }
+    assert_eq!(count, 1_000_000);
+    assert_eq!(first, Some(0));
+    assert_eq!(last, 999_999);
+    drop(key);
+    drop(read);
+}
+
 #[test]
 fn heap_object_codec_rejects_bad_tag() {
     let bytes = [u8::MAX];
@@ -169,4 +215,41 @@ fn heap_object_codec_rejects_bad_tag() {
         .read_heap_object()
         .expect_err("bad object tag should fail");
     assert!(matches!(err, DumpError::ImageFormatError(_)));
+}
+
+// P6: `Cursor::read_unaligned<T: bytemuck::AnyBitPattern>` rejects types with
+// invalid bit patterns (e.g. `bool`, `char`) at compile time while admitting
+// the integer and float primitives read by the codec.
+static_assertions::assert_not_impl_any!(bool: bytemuck::AnyBitPattern);
+static_assertions::assert_not_impl_any!(char: bytemuck::AnyBitPattern);
+static_assertions::assert_impl_all!(u16: bytemuck::AnyBitPattern);
+static_assertions::assert_impl_all!(u32: bytemuck::AnyBitPattern);
+static_assertions::assert_impl_all!(u64: bytemuck::AnyBitPattern);
+static_assertions::assert_impl_all!(i64: bytemuck::AnyBitPattern);
+static_assertions::assert_impl_all!(f64: bytemuck::AnyBitPattern);
+
+#[test]
+fn cursor_read_unaligned_reads_any_bit_pattern_primitives_from_unaligned_offsets() {
+    let mut buf = vec![0xAAu8]; // shift every subsequent read to an unaligned offset
+    buf.extend_from_slice(&0x1234u16.to_ne_bytes());
+    buf.extend_from_slice(&0x89AB_CDEFu32.to_ne_bytes());
+    buf.extend_from_slice(&0x0102_0304_0506_0708u64.to_ne_bytes());
+    buf.extend_from_slice(&(-987_654_321_i64).to_ne_bytes());
+    buf.extend_from_slice(&3.25f64.to_bits().to_ne_bytes());
+
+    let mut cursor = Cursor::new(&buf);
+    assert_eq!(cursor.read_u8("lead").unwrap(), 0xAA);
+    assert_eq!(cursor.read_unaligned::<u16>("u16").unwrap(), 0x1234);
+    assert_eq!(cursor.read_unaligned::<u32>("u32").unwrap(), 0x89AB_CDEF);
+    assert_eq!(
+        cursor.read_unaligned::<u64>("u64").unwrap(),
+        0x0102_0304_0506_0708
+    );
+    assert_eq!(cursor.read_unaligned::<i64>("i64").unwrap(), -987_654_321);
+    assert_eq!(cursor.read_unaligned::<f64>("f64").unwrap(), 3.25);
+    assert!(cursor.is_empty());
+    assert!(matches!(
+        cursor.read_unaligned::<u16>("eof"),
+        Err(DumpError::ImageFormatError(_))
+    ));
 }

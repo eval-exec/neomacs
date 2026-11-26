@@ -49,8 +49,8 @@ fn array_fn(op: ArrayOp) -> ByteCodeFunction {
         optional: Vec::new(),
         rest: None,
     });
-    function.lexical = true;
-    function.ops = match op {
+    function.set_lexical(true);
+    function.set_ops(match op {
         ArrayOp::Aset => vec![
             Op::StackRef(2),
             Op::StackRef(2),
@@ -59,8 +59,8 @@ fn array_fn(op: ArrayOp) -> ByteCodeFunction {
             Op::Return,
         ],
         ArrayOp::Aref => vec![Op::StackRef(1), Op::StackRef(1), Op::Aref, Op::Return],
-    };
-    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
+    });
+    function.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(8));
     function
 }
 
@@ -88,7 +88,7 @@ fn declared_multibyte_high_bytes_miss_jit_raw_byte_aref_and_aset_guards() {
         },
         Value::fixnum(0xaaa9),
     );
-    match aref.call(context_ptr, &args) {
+    match unsafe { aref.call(context_ptr, &args) } {
         NativeRun::Ok(bits) => assert_eq!(
             unsafe {
                 /* SAFETY: NativeRun::Ok is a real Value's tagged bits */
@@ -114,7 +114,10 @@ fn declared_multibyte_high_bytes_miss_jit_raw_byte_aref_and_aset_guards() {
         take_pending_flow().unwrap().kind(),
         FlowRef::Signal(_)
     ));
-    assert!(matches!(aset.call(context_ptr, &args), NativeRun::Signal));
+    assert!(matches!(
+        unsafe { aset.call(context_ptr, &args) },
+        NativeRun::Signal
+    ));
     assert!(matches!(
         take_pending_flow().unwrap().kind(),
         FlowRef::Signal(_)
@@ -129,7 +132,7 @@ fn declared_multibyte_high_bytes_miss_jit_raw_byte_aref_and_aset_guards() {
         (LispString::from_unibyte(vec![0xe9]), 233),
     ] {
         let array = Value::heap_string(string);
-        match aref.call(context_ptr, &[array, Value::fixnum(0)]) {
+        match unsafe { aref.call(context_ptr, &[array, Value::fixnum(0)]) } {
             NativeRun::Ok(bits) => assert_eq!(
                 unsafe {
                     /* SAFETY: NativeRun::Ok is a real Value's tagged bits */

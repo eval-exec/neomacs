@@ -199,6 +199,7 @@ impl Context {
         // continuation/truncation markers, …) and their `'fringe` indices into
         // the registry, AFTER the obarray is populated by init_builtins.
         ctx.pre_register_standard_fringe_bitmaps();
+        ctx.capture_gc_symbol_census_after_activation();
         ctx
     }
 
@@ -228,6 +229,7 @@ impl Context {
         let mut ctx = Self::new_inner(ConstructionSurface::LegacyImageWithoutDefsyms, _hooks);
         super::hooks_proof::register_core_subrs(&mut ctx);
         ctx.pre_register_standard_fringe_bitmaps();
+        ctx.capture_gc_symbol_census_after_activation();
         ctx
     }
 
@@ -331,6 +333,7 @@ impl Context {
         ev.interpreted_closure_filter_fn = None;
         register_subrs(&mut ev);
         ev.finish_runtime_activation(false);
+        ev.capture_gc_symbol_census_after_activation();
         ev
     }
 
@@ -664,7 +667,6 @@ impl Context {
             "treesit-extra-load-path",
             "treesit-auto-install-grammar",
             "treesit-enabled-modes",
-            "treesit-language-remap-alist",
             "treesit-load-name-override-list",
             "treesit-languages-require-line-column-tracking",
             "treesit-major-mode-remap-alist",
@@ -675,6 +677,13 @@ impl Context {
         ] {
             obarray.seed_value(name, Value::NIL);
             obarray.make_special(name);
+        }
+        // GNU `src/treesit.c:5431-5442`: `treesit-language-remap-alist` is
+        // `DEFVAR_LISP` + `Fmake_variable_buffer_local`, default nil.
+        {
+            let id = neovm_value::intern::intern("treesit-language-remap-alist");
+            obarray.make_symbol_localized(id, Value::NIL);
+            obarray.set_blv_local_if_set(id, true);
         }
         // GNU `frame.c` initializes these global minor-mode variables in C:
         //   Vmenu_bar_mode = Qt
@@ -2366,7 +2375,8 @@ impl Context {
             redisplay_fn: None,
             mode_line_display_flow: None,
             redisplay_prepare_fn: None,
-            font_shape_fn: None,
+            font_driver: None,
+            no_safe_handled_frame: None,
             gstring_shape_cache: world.global.gstring_shape_cache,
             display_idle_maintenance_fn: None,
             scroll_preview_fn: None,
@@ -2462,8 +2472,9 @@ impl Context {
             in_flight_registry: seed.registries.in_flight,
             cached_standard_case_table: None,
             frame_and_buffer_state: None,
-            gc_cycle_elapsed: std::time::Duration::ZERO,
             retained_frame_pins: Vec::new(),
+            condition_snapshots: super::ConditionSnapshotAdmission::Dormant,
+            automatic_retired_processes: None,
         }
     }
 
@@ -2534,7 +2545,16 @@ impl Context {
         // provenance root; installation and every later access derive from it.
         let tagged_heap =
             neovm_value::tagged::gc::AliasableBox::new(neovm_value::tagged::gc::TaggedHeap::new());
-        neovm_value::tagged::gc::set_tagged_heap_root(tagged_heap.root());
+        // Refuse a second active Context on this thread unless the slot is
+        // empty, already names this root, or holds the armed test-fallback
+        // harness heap. `WorldStorageBuilder::build` later reinstalls this
+        // same root, and a bare-heap test nest calls `set_tagged_heap_root`
+        // directly.
+        // SAFETY: this Context owns the AliasableBox. The root stays live
+        // until the Context clears it, and no heap reference is live yet.
+        unsafe {
+            neovm_value::tagged::gc::install_tagged_heap_root_refusing_foreign(tagged_heap.root())
+        };
 
         // Clear any caches that hold heap-allocated Values (tagged pointers) from a
         // previous heap. Critical for test isolation when multiple Contexts
@@ -2834,7 +2854,18 @@ impl Drop for Context {
         // Context is !Send, pinned by thread contracts, so Drop stays on its
         // owner thread. Retain upstream policy retirement as defence in depth.
         self.integer_width_context.retire();
-        neovm_value::tagged::gc::clear_tagged_heap_if_installed(&self.tagged_heap);
+        // Take the admission before the heap slot is cleared. Dormant
+        // unregisters nothing and does not mint. Active removes its id
+        // while the heap is still installed, so the publisher Drop does not
+        // leak that id.
+        let admission = std::mem::replace(
+            &mut self.condition_snapshots,
+            super::ConditionSnapshotAdmission::Dormant,
+        );
+        admission.unregister(&mut self.tagged_heap);
+        // SAFETY: `Context::drop` is tearing down this Context; no eval door
+        // can run on it after drop begins.
+        unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(&self.tagged_heap) };
     }
 }
 

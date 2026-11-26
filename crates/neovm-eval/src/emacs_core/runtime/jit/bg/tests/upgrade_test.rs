@@ -52,7 +52,7 @@ fn done() {
 
 fn constant(value: Value) -> ByteCodeFunction {
     let mut f = function(vec![Op::Constant(0), Op::Return], vec![value], 0);
-    f.lexical = false; // Isolate Fast -> Full jobs from Feedback/MIR policy.
+    f.set_lexical(false); // Isolate Fast -> Full jobs from Feedback/MIR policy.
     f.jit_runtime().set_hot_for_test();
     f
 }
@@ -71,7 +71,7 @@ fn current(f: &ByteCodeFunction) -> &'static CompiledLeaf {
 }
 
 fn request(ctx: &mut Context, f: &ByteCodeFunction) -> &'static CompiledLeaf {
-    let answer = f.constants[0].bits();
+    let answer = f.constants()[0].bits();
     assert_eq!(run(ctx, f), Some(answer));
     let old = current(f);
     assert_eq!(old.regalloc, RegallocChoice::Fast);
@@ -104,7 +104,7 @@ fn jit_bg_upgrade_serves_old_native_until_successful_install() {
     assert_eq!(cache::cache_entry_kind_for_test(id), "upgrading");
     assert!(old.obs.t2.reserved_us.get() > 0);
     assert!(
-        cache::resolve_compiled_leaf_ptr(&mut ctx, &f).is_none(),
+        unsafe { cache::resolve_compiled_leaf_ptr(&mut ctx, &f) }.is_none(),
         "old raw slots must not bypass future probes"
     );
     assert_eq!(

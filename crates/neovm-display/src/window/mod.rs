@@ -14,6 +14,11 @@ use neovm_edit::buffer::{BufferId, BufferManager, LispCharPos1};
 use neovm_value::value::Value;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
+/// Canonical NS frames reserve two internal pixels on every edge
+/// (GNU nsfns.m:1348); the GTK3 profile defaults to zero.
+pub(crate) const GUI_DEFAULT_INTERNAL_BORDER_WIDTH: u32 =
+    if cfg!(target_os = "macos") { 2 } else { 0 };
+
 pub(crate) mod body;
 mod chrome;
 pub use chrome::WindowChromePresence;
@@ -127,10 +132,12 @@ pub(crate) use neovm_eval::emacs_core::eval::data::window_state::{
 
 static_assertions::assert_eq_size!(WindowSequenceOrigin, WindowId);
 
-pub use neovm_value::display_vocab::FrameId;
+pub use neovm_value::display_vocab::{FrameId, GuiResizeRequestId};
 
 pub(crate) use neovm_eval::emacs_core::eval::data::window_state::GuiResizeDelivery;
-pub use neovm_eval::emacs_core::eval::data::window_state::{GuiBarPresentation, PendingGuiResize};
+pub use neovm_eval::emacs_core::eval::data::window_state::{
+    FrameCreationPhase, GuiBarPresentation, PendingGuiResize,
+};
 
 pub mod frame_alpha;
 
@@ -238,8 +245,8 @@ impl SplitPlacement {
 // ---------------------------------------------------------------------------
 
 pub use neovm_eval::emacs_core::eval::data::window_state::{
-    LogicalCursorDimensions, WindowCursorKind, WindowCursorPos, WindowCursorSnapshot,
-    WindowDisplayState, WindowRedisplayOutput, WindowVisibleBufferSpan,
+    GnuWindowAccuracy, LogicalCursorDimensions, WindowCursorKind, WindowCursorPos,
+    WindowCursorSnapshot, WindowDisplayState, WindowRedisplayOutput, WindowVisibleBufferSpan,
 };
 
 /// Explicit live redisplay/update session for one window.
@@ -395,6 +402,7 @@ fn window_redisplay_output_from_snapshot(
     window_end: WindowEndRecord,
 ) -> WindowRedisplayOutput {
     WindowRedisplayOutput {
+        gnu_accuracy: None,
         generation,
         window_end,
         visible_span: snapshot.visible_buffer_span(),
@@ -531,7 +539,7 @@ static_assertions::assert_impl_all!(WindowDisplaySnapshot: Send, Sync, Clone, st
 static_assertions::assert_not_impl_any!(WindowDisplaySnapshot: Copy);
 
 pub use neovm_eval::emacs_core::eval::data::window_state::{
-    BodyRedisplayRevision, ForcedBodyRedisplay,
+    BodyRedisplayRevision, ForcedBodyRedisplay, RedisplayOptimizationsRevision,
 };
 
 /// Canonical logical input identity for one speculative layout leaf.
@@ -607,9 +615,9 @@ impl WindowLayoutAttemptFreshness {
 /// The variants encode GNU redisplay's ordering contract.  Buffer-body Lisp
 /// runs while rows are still being produced, so every logical input must stay
 /// unchanged.  Window chrome runs after GNU has completed the body
-/// (`redisplay_window` -> `display_mode_lines`, xdisp.c): status-line helpers
-/// may populate window-local caches or lazily load functions without making
-/// the body GNU would publish invalid.
+/// (`redisplay_window` -> `display_mode_lines`, xdisp.c). Late source edits
+/// do not rewind that completed body. Ownership, physical layout and realized
+/// resources must still match; admission does not refresh its reuse certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowLayoutLispBoundary {
     BufferBody,
@@ -636,26 +644,60 @@ impl WindowLayoutAttemptFreshness {
     /// given GNU redisplay boundary.
     ///
     /// Keep this projection closed over the complete freshness value: newly
-    /// added fields participate in the final equality automatically.  The two
-    /// assignments below are the only explicitly permitted late-chrome
-    /// mutations.
+    /// added fields participate in the final equality automatically. Late
+    /// source changes are admitted only after body production. The original
+    /// token still describes the producer's inputs and must remain the row
+    /// reuse certificate; this check never rebases it to the callback's state.
     pub fn remains_valid_across(&self, after: &Self, boundary: WindowLayoutLispBoundary) -> bool {
         match boundary {
             WindowLayoutLispBoundary::BufferBody => self == after,
             WindowLayoutLispBoundary::WindowChrome => {
                 let mut expected_after = self.clone();
-                // GNU tab-line.el writes window-local caches such as
-                // `tab-line-buffers` while `display_mode_lines` is formatting
-                // chrome.  Face filters observe the new identity on the next
-                // redisplay; GNU does not rewind the body already produced.
+                // GNU finishes body rows before display_mode_lines, and reacts
+                // there to chrome height changes rather than source revisions
+                // (xdisp.c:21419-21483 at the pinned oracle commit). Keep both
+                // buffer owners: an echo source is not always the live buffer.
+                expected_after.live_buffer =
+                    Self::late_chrome_source(&self.live_buffer, &after.live_buffer);
+                expected_after.source_buffer =
+                    Self::late_chrome_source(&self.source_buffer, &after.source_buffer);
+                expected_after.source_layout_variables = after.source_layout_variables;
+                // Late edits can move the existing start/point markers. Scroll
+                // settings, partitions and allocated capacity remain strict.
+                expected_after.window.window_start = after.window.window_start;
+                expected_after.window.point = after.window.point;
                 expected_after.window.window_parameters_generation =
                     after.window.window_parameters_generation;
-                // Chrome evaluation can autoload its formatter.  The emitted
-                // chrome already used the loaded definition, while the body
-                // precedes this phase in GNU and is not replayed.
+                expected_after.window.char_table_mutation_epoch =
+                    after.window.char_table_mutation_epoch;
+                // A formatter may autoload while producing the shown chrome.
                 expected_after.function_epoch = after.function_epoch;
                 &expected_after == after
             }
+        }
+    }
+
+    fn late_chrome_source(
+        before: &WindowBufferLayoutInputState,
+        after: &WindowBufferLayoutInputState,
+    ) -> WindowBufferLayoutInputState {
+        // Enumerate source fields so extending this record requires an explicit
+        // admission audit. A changed identity still fails final full equality.
+        WindowBufferLayoutInputState {
+            id: before.id,
+            modified_tick: after.modified_tick,
+            chars_modified_tick: after.chars_modified_tick,
+            props_modified_tick: after.props_modified_tick,
+            overlay_modified_tick: after.overlay_modified_tick,
+            accessible_chars: after.accessible_chars,
+            accessible_bytes: after.accessible_bytes,
+            total_chars: after.total_chars,
+            total_emacs_bytes: after.total_emacs_bytes,
+            fontification_functions: after.fontification_functions.clone(),
+            prefixes: after.prefixes.clone(),
+            invisibility: after.invisibility.clone(),
+            display_table: after.display_table.clone(),
+            word_wrap_policy: after.word_wrap_policy.clone(),
         }
     }
 }
@@ -696,7 +738,7 @@ impl FrameDivider {
     }
 }
 
-pub use neovm_eval::emacs_core::eval::data::window_state::{Frame, FrameManager};
+pub use neovm_eval::emacs_core::eval::data::window_state::{Frame, FrameManager, ToolkitToolBar};
 
 pub use neovm_eval::emacs_core::eval::data::window_state::FrameCoordinateHit;
 

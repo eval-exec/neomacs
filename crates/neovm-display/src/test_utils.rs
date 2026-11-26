@@ -1225,6 +1225,7 @@ mod unit_runtime {
             crate::emacs_core::terminal::pure::terminal_handle_value,
             crate::emacs_core::terminal::pure::delete_terminal_noelisp_owned,
             crate::emacs_core::terminal::pure::builtin_frame_terminal,
+            crate::emacs_core::terminal::pure::builtin_suspend_emacs,
             crate::emacs_core::terminal::pure::print_terminal_handle,
             configure_window_system_runtime,
             terminal_park_carrier_tls,
@@ -1237,6 +1238,7 @@ mod unit_runtime {
             crate::emacs_core::terminal::pure::current_terminal_registry_handle,
             crate::emacs_core::terminal::pure::install_terminal_registry_handle,
             crate::emacs_core::terminal::pure::install_owner_terminal_registry_handle,
+            Some(crate::emacs_core::terminal::pure::detach_terminal_registry),
         ),
         FontsetHooks::new(
             crate::emacs_core::fontset::fontset_alias_alist_startup_value,
@@ -1273,6 +1275,7 @@ mod unit_runtime {
             Some(crate::emacs_core::xfaces::carrier_tls_fingerprint),
             crate::emacs_core::xfaces::current_font_registry_handle,
             crate::emacs_core::xfaces::install_font_registry_handle,
+            Some(crate::emacs_core::xfaces::detach_font_registry),
         ),
         s::timefns_reset,
         s::sqlite_reset,
@@ -1321,6 +1324,12 @@ mod unit_runtime {
         s::process_terminate_and_defer_reaping,
     );
 
+    fn display_unit_write_fatal_abort_diagnostic() {}
+
+    fn display_unit_terminate_with_abort(_print_backtrace: bool) -> ! {
+        std::process::abort()
+    }
+
     static INPUT: InputHooks = InputHooks::new(
         s::input_interrupt_for_input_event_if_requested,
         display_unit_os_signal_pending,
@@ -1330,6 +1339,9 @@ mod unit_runtime {
             read_fd: s::input_signal_wake_pipe_read_fd,
             drain: s::input_drain_signal_wake_pipe,
         },
+        crate::emacs_core::terminal::pure::try_run_controlling_tty_emergency_escape,
+        display_unit_write_fatal_abort_diagnostic,
+        display_unit_terminate_with_abort,
     );
 
     static CALL_INTERACTIVELY: CallInteractivelyHooks =
@@ -1973,11 +1985,7 @@ pub mod mode_line_gc_roots_test_upper_layer_helpers {
                 "retained property name cell"
             );
             let name = plist.cons_car();
-            assert_ne!(
-                name.bits(),
-                Value::DEAD.bits(),
-                "a retained property name was swept"
-            );
+            assert!(!name.is_dead(), "a retained property name was swept");
             let rest = plist.cons_cdr();
             assert!(rest.is_cons(), "retained property value cell");
             assert!(
@@ -1985,11 +1993,7 @@ pub mod mode_line_gc_roots_test_upper_layer_helpers {
                 "retained property value ownership"
             );
             let value = rest.cons_car();
-            assert_ne!(
-                value.bits(),
-                Value::DEAD.bits(),
-                "a retained property value was swept"
-            );
+            assert!(!value.is_dead(), "a retained property value was swept");
             if name.bits() == property.bits() {
                 assert_eq!(value.bits(), expected.bits());
                 found = true;
@@ -2999,17 +3003,17 @@ pub mod terminal_test_upper_layer_helpers {
         pub(crate) log: Rc<RefCell<Vec<&'static str>>>,
     }
     impl TerminalHost for RecordingTerminalHost {
-        fn suspend_tty(&mut self) -> Result<(), String> {
+        fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
             self.log.borrow_mut().push("suspend");
             Ok(())
         }
 
-        fn resume_tty(&mut self) -> Result<(), String> {
+        fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
             self.log.borrow_mut().push("resume");
             Ok(())
         }
 
-        fn delete_terminal(&mut self) -> Result<(), String> {
+        fn delete_terminal(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
             self.log.borrow_mut().push("delete");
             Ok(())
         }

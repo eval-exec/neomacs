@@ -133,6 +133,14 @@ impl WindowDelta {
         aligned.overlay_digest = curr.overlay_digest;
         aligned.face_overlay_coverage = curr.face_overlay_coverage;
         aligned.window_start = curr.window_start;
+        // Category and overlay-arrow symbols share this counter. A point-only
+        // wake keeps the current glyphs: GNU `Fput` sets no redisplay flag
+        // (fns.c:2729-2737) and `try_cursor_movement` reuses the matrix
+        // (xdisp.c:19867-19902). `body_redisplay` stays out of this list, so
+        // `force-window-update` still escalates. An overlay-arrow string or
+        // bitmap that moves only this counter is the same reuse until another
+        // unaligned field wakes a full layout (xdisp.c:17098-17135).
+        aligned.symbol_property_revision = curr.symbol_property_revision;
         Self {
             point_moved: prev.point != curr.point,
             text_changed: prev.chars_modified_tick != curr.chars_modified_tick
@@ -202,6 +210,10 @@ pub struct RetainedWindowKey {
     pub wrap_mode: LineWrapMode,
     pub word_wrap: bool,
     pub word_wrap_policy: neovm_core::window::WordWrapPolicy,
+    /// The buffer's paragraph direction at layout time (GNU
+    /// `it->paragraph_embedding`). Changing it changes every row's visual
+    /// order and alignment, so retained rows must not be reused across it.
+    pub bidi_paragraph_directions: crate::bidi::ParagraphDirections,
     pub tab_width: i32,
     pub char_width: f32,
     pub char_height: f32,
@@ -290,6 +302,10 @@ impl RetainedWindowKey {
         let mut placed = current.clone();
         placed.window_start = previous.window_start;
         placed.vscroll = previous.vscroll;
+        // Visible capacity includes the fractional pixel offset. It bounds
+        // foreground scroll margins, but does not change intrinsic row content.
+        // Keep its comparison in the ordinary cursor-only/whole-matrix gate.
+        placed.viewport_rows = previous.viewport_rows;
         Self::cursor_only_eligible(previous, &placed)
     }
 
@@ -324,6 +340,11 @@ impl RetainedWindowKey {
                     buffer.overlay_modified_tick(),
                     buffer.get_multibyte(),
                     buffer.point_max_char_pos().get() as i64,
+                    // The retained-window key compares across a moving
+                    // window_start, so it needs a range-independent digest.
+                    // The window-range digest is for the layout view itself;
+                    // making this key range-scoped would disable scroll and
+                    // prepared-viewport replay (offscreen_row_test).
                     buffer.overlay_content_digest(),
                 )
             })
@@ -359,6 +380,7 @@ impl RetainedWindowKey {
             wrap_mode: p.wrap_mode,
             word_wrap: p.word_wrap,
             word_wrap_policy: p.word_wrap_policy.clone(),
+            bidi_paragraph_directions: p.bidi_paragraph_directions,
             tab_width: p.tab_width,
             char_width: p.char_width,
             char_height: p.char_height,
@@ -556,6 +578,10 @@ pub struct RetainedWindowMatrix {
     pub matrix: GlyphMatrix,
     /// Snapshot of every layout input for the reuse predicate.
     pub key: RetainedWindowKey,
+    /// GNU accuracy stamped after callbacks at the accepted whole-frame seal.
+    /// This is independent of the original `key` used for actual row reuse.
+    /// Synthetic matrices carry no accepted GNU accuracy.
+    pub gnu_accuracy: Option<neovm_core::window::GnuWindowAccuracy>,
     /// Reuse gate; only `Valid` matrices may be reused (Phases 1+).
     pub validity: MatrixValidity,
     /// The clean pass's window display snapshot (point-independent body row
@@ -1497,7 +1523,12 @@ impl RetainedWindowMatrix {
             let end = row.end_charpos as i64;
             if new_cursor.is_none()
                 && start <= new_point
-                && (new_point < end || (new_point == end && !row.continued))
+                && (new_point < end
+                    || (new_point == end
+                        && !row.continued
+                        && !self.display_snapshot.rows.iter().any(|snap| {
+                            snap.row == idx as i64 && snap.truncated_end_buffer_pos.is_some()
+                        })))
             {
                 new_cursor = Some((idx, row.as_ref()));
             }
@@ -2509,6 +2540,15 @@ impl RetainedWindowMatrix {
 /// bench cases prove the win on relaid-row-count, not wall-time alone (spec §7).
 #[derive(Clone, Debug, Default)]
 pub struct LayoutStats {
+    /// The accepted reuse decision for each content window in this frame.
+    /// A sibling's reused rows (including a still minibuffer) grant no reuse
+    /// authority to this window's derived presentation products.
+    pub window_classes:
+        rustc_hash::FxHashMap<neomacs_display_protocol::DisplayWindowId, LayoutClass>,
+    /// Calls entering the actual coverage exporter, including declined
+    /// attempts. A renewed surface incurs no export work for this window.
+    pub coverage_export_calls:
+        rustc_hash::FxHashMap<neomacs_display_protocol::DisplayWindowId, usize>,
     /// Buffer-text ("body") rows laid out from scratch this frame. THE
     /// rank-1 gate metric: Phase 1 cursor-only must drive this to 0.
     pub relaid_body_rows: usize,
@@ -2565,6 +2605,15 @@ pub struct LayoutStats {
     /// (`NEOMACS_CHROME_MEMO`). They are still counted in
     /// `relaid_chrome_rows`: the mode line WAS evaluated.
     pub chrome_memo_hits: usize,
+    /// Number of callback-inhibited exhaustion-snapshot fallback passes run to
+    /// publish this frame (0 for every ordinary converging frame).
+    pub exhaustion_snapshot_passes: usize,
+    /// Number of post-prepass freshness rechecks performed on this frame
+    /// (0 when no fontification callback ran).
+    pub prepass_freshness_rechecks: usize,
+    /// Number of chrome outputs cloned/rooted for ExhaustionSnapshot reuse
+    /// during this frame (0 on every zero-retry converging frame).
+    pub chrome_exhaustion_captures: usize,
 }
 
 #[cfg(test)]
@@ -2610,7 +2659,12 @@ impl LayoutStats {
     }
 
     /// Bump the per-class window counter for one laid-out window.
-    pub fn record_window_class(&mut self, class: LayoutClass) {
+    pub fn record_window_class(
+        &mut self,
+        window: neomacs_display_protocol::DisplayWindowId,
+        class: LayoutClass,
+    ) {
+        self.window_classes.insert(window, class);
         match class {
             LayoutClass::Full => self.full_windows += 1,
             LayoutClass::CursorOnly => self.cursor_only_windows += 1,

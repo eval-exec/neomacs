@@ -63,6 +63,7 @@ fn valid_observation(
             iterations: 10,
             editor_provenance: Some(provenance(role)),
             execution_environment: Some(Default::default()),
+            passthrough_environment: None,
             native_video_input: None,
             native_video_execution: None,
             outcome: ComparisonRunOutcome::Valid,
@@ -199,6 +200,8 @@ fn input() -> ComparisonInput {
         journal_file: None,
         baseline_execution_overrides: crate::ExecutionOverrides::default(),
         candidate_execution_overrides: crate::ExecutionOverrides::default(),
+        expected_baseline: None,
+        guard_tools: None,
     }
 }
 

@@ -35,10 +35,10 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![neovm_value::intern::intern(
         "osr-inline-arg",
     )]));
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -94,12 +94,14 @@ fn osr_inline_chain_maps_a_shifted_header_and_resumes_inside_the_callee() {
     assert!(!entry.leaf.chains.is_empty(), "OSR lowers the v2 body");
     let maximum = Value::fixnum(Value::MOST_POSITIVE_FIXNUM);
     let arguments = [maximum.bits() as i64];
-    let run = entry.leaf.invoke_osr(
-        &mut ctx as *mut Context as *mut u8,
-        arguments.as_ptr(),
-        physical.jit_constant_base(),
-        None,
-    );
+    let run = unsafe {
+        entry.leaf.invoke_osr(
+            &mut ctx as *mut Context as *mut u8,
+            arguments.as_ptr(),
+            physical.jit_constant_base(),
+            None,
+        )
+    };
     let NativeRun::DeoptAt(resume) = run else {
         panic!("callee overflow must yield a precise chain deopt");
     };
@@ -116,7 +118,7 @@ fn osr_inline_chain_feedback_retires_the_osr_leaf_and_widens_the_inner_source() 
     let _knobs = Knobs::enter(Inline2Mode::Off);
     reopt::force_reopt_for_test(Some(ReoptKnobs::stress()));
     let ctx = Context::new(crate::test_utils::unit_runtime());
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let physical = function(vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
     let inner = function(vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
     let id = physical.jit_runtime().compiled_id_or_assign();
@@ -125,22 +127,24 @@ fn osr_inline_chain_feedback_retires_the_osr_leaf_and_widens_the_inner_source() 
     OSR_CACHE.with(|cache| cache.borrow_mut().insert((id, 0), Some(entry)));
     let snapshot = [Value::fixnum(1)];
     assert_eq!(
-        reopt::note_deopt_chain(
-            &ctx,
-            &physical,
-            &inner,
-            &leaf,
-            LeafOrigin::Osr {
-                header_pc: 0,
-                snapshot: &snapshot,
-            },
-            2,
-            DeoptEvent::Precise {
-                pc: 1,
-                stack: &[],
-                cause: Some(reopt::DeoptCause::ArithOperands(NumericFeedback::Float)),
-            },
-        ),
+        unsafe {
+            reopt::note_deopt_chain(
+                &ctx,
+                &physical,
+                &inner,
+                &leaf,
+                LeafOrigin::Osr {
+                    header_pc: 0,
+                    snapshot: &snapshot,
+                },
+                2,
+                DeoptEvent::Precise {
+                    pc: 1,
+                    stack: &[],
+                    cause: Some(reopt::DeoptCause::ArithOperands(NumericFeedback::Float)),
+                },
+            )
+        },
         ReoptVerdict::Invalidated
     );
     assert_eq!(
@@ -160,7 +164,7 @@ fn osr_inline_dependencies_evict_a_source_whose_entry_leaf_inlines_nothing() {
     let _knobs = Knobs::enter(Inline2Mode::All);
     compile::force_profit_gate_for_test(false);
     let ctx = Context::new(crate::test_utils::unit_runtime());
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let physical = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let id = compile_and_cache_jit_leaf(&physical, None).unwrap();
     let ptr = compiled_leaf_ptr_for_test(id).unwrap();
@@ -184,7 +188,7 @@ fn osr_inline_dependencies_evict_a_source_whose_entry_leaf_inlines_nothing() {
 fn osr_inline_dependency_union_survives_rebuilding_the_entry_leaf() {
     let _knobs = Knobs::enter(Inline2Mode::All);
     let ctx = Context::new(crate::test_utils::unit_runtime());
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let physical = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let id = physical.jit_runtime().compiled_id_or_assign();
     let osr_symbol = neovm_value::intern::intern("osr-union-dependency");
@@ -219,7 +223,7 @@ fn baseline_with_dependencies(
 ) -> Rc<CompiledLeaf> {
     let mut leaf = compile::lower_leaf_full(
         physical.executable_ops(),
-        &physical.constants,
+        physical.constants(),
         1,
         physical.executable_gnu_byte_offset_map(),
         Some(&ctx.obarray),
@@ -236,7 +240,7 @@ fn baseline_with_dependencies(
 fn osr_inline_disabled_preserves_entry_only_dependency_eviction() {
     let _knobs = Knobs::enter(Inline2Mode::Off);
     let ctx = Context::new(crate::test_utils::unit_runtime());
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let physical = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let id = physical.jit_runtime().compiled_id_or_assign();
     let entry_symbol = neovm_value::intern::intern("off-entry-dependency");
@@ -283,7 +287,7 @@ fn osr_inline_invalidation_preserves_dependencies_of_a_borrowed_entry() {
     let _knobs = Knobs::enter(Inline2Mode::All);
     reopt::force_reopt_for_test(Some(ReoptKnobs::stress()));
     let ctx = Context::new(crate::test_utils::unit_runtime());
-    sync_cache_to_current_heap();
+    sync_cache_to_current_heap().expect("serial jit grace");
     let physical = function(vec![Op::StackRef(0), Op::Return], vec![]);
     let id = physical.jit_runtime().compiled_id_or_assign();
     let entry_symbol = neovm_value::intern::intern("retained-entry-dependency");
@@ -315,6 +319,16 @@ fn osr_inline_invalidation_preserves_dependencies_of_a_borrowed_entry() {
     assert_eq!(cache_entry_kind_for_test(id), "compiled");
     assert!(!entry_leaf.retired.get());
     assert!(!osr_entry_cached(&physical, 0));
+    // The refused clear parks the leaf on the map, retired, until the next
+    // probe moves it onto `retired`: its `Rc` must outlive this borrowed
+    // frame. Parked is not cached — the loop may transfer again.
+    assert!(OSR_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .get(&(id, 0))
+            .and_then(Option::as_ref)
+            .is_some_and(|entry| entry.leaf.retired.get())
+    }));
     assert!(INLINE_DEPS.with(|deps| {
         deps.borrow()
             .get(&entry_symbol)

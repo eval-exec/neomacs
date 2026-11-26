@@ -166,7 +166,7 @@ fn opt_fold_select_mixed_local_and_incoming_bool_materializes_gnu_boolean() {
             let plan = mixed_select(local_value, local_on_true);
             let leaf = lower_opt_ir_for_test(
                 source.executable_ops(),
-                &source.constants,
+                source.constants(),
                 2,
                 source.executable_gnu_byte_offset_map(),
                 &plan,
@@ -192,7 +192,8 @@ fn opt_fold_select_mixed_local_and_incoming_bool_materializes_gnu_boolean() {
                     };
                     let expected = expected.to_value();
                     assert!(expected.is_nil() || expected.is_t());
-                    let NativeRun::Ok(bits) = leaf.call(&mut ctx as *mut Context as *mut u8, &args)
+                    let NativeRun::Ok(bits) =
+                        (unsafe { leaf.call(&mut ctx as *mut Context as *mut u8, &args) })
                     else {
                         panic!("native Bool Select must return")
                     };

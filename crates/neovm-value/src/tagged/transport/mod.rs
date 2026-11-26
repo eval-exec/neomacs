@@ -21,6 +21,9 @@ mod root_table;
 mod shared_root;
 
 pub use immediate::{ImmediateValue, NotImmediate};
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use root_batch::HeldRootBatchReaderForTest;
 pub use root_batch::{FinalizedRootBatch, RootBatchReader};
 pub(crate) use root_batch::{
     ParallelRootBatchError, ParallelRootBatchLease, ParallelRootBatchReader, ParallelRootIdentity,
@@ -45,3 +48,5 @@ pub(crate) use root_table::with_root_table_lock_for_test;
 pub use shared_root::RootedSlot;
 pub(crate) use shared_root::{ConsRootSeal, RootSlotOps, RootedConsInputs, cons_into};
 pub use shared_root::{LocalRoot, SharedRoot, SharedRootError};
+
+pub(crate) use shared_root::{RootedNumericDestination, bignum_into, float_into};

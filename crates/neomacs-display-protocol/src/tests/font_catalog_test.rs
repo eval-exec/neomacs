@@ -55,3 +55,46 @@ fn mini_frame_clones_the_complete_font_binding_snapshot() {
     assert_eq!(mini.char_fonts, source.char_fonts);
     assert_eq!(mini.shaped_clusters, source.shaped_clusters);
 }
+
+#[test]
+fn frame_font_metadata_preserves_the_captured_desktop_options() {
+    use crate::{
+        DesktopFontAntialias, DesktopFontHinting, DesktopFontRenderOptions,
+        DesktopFontSubpixelOrder,
+    };
+    let explicit = DesktopFontRenderOptions {
+        antialias: DesktopFontAntialias::Subpixel,
+        hinting: DesktopFontHinting::Slight,
+        subpixel_order: DesktopFontSubpixelOrder::Bgr,
+    };
+    assert_eq!(
+        crate::FrameGlyphBuffer::new().desktop_font_render_options,
+        None
+    );
+    let mut state = crate::FrameDisplayState::new(80, 24, 8.0, 16.0);
+    assert_eq!(state.desktop_font_render_options, None);
+    for options in [
+        None,
+        Some(DesktopFontRenderOptions::default()),
+        Some(explicit),
+    ] {
+        state.desktop_font_render_options = options;
+        let materialized = state.materialize();
+        assert_eq!(materialized.desktop_font_render_options, options);
+        assert_eq!(
+            materialized.font_bindings().desktop_font_render_options,
+            options
+        );
+        let restored = crate::FrameDisplayState::from_frame_glyph_buffer(&materialized);
+        assert_eq!(restored.desktop_font_render_options, options);
+        let mut mini = crate::FrameGlyphBuffer::default();
+        mini.desktop_font_render_options = Some(explicit);
+        mini.clone_font_bindings_from(&materialized);
+        assert_eq!(mini.desktop_font_render_options, options);
+        state.desktop_font_render_options = None;
+        assert_eq!(
+            materialized.desktop_font_render_options, options,
+            "later settings cannot mutate an already captured presentation"
+        );
+    }
+}

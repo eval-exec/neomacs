@@ -65,19 +65,21 @@ fn window_text_pixel_size_honours_its_y_limit_like_gnu() {
                    (window-text-pixel-size (selected-window) nil t 40 10 t)
                    (window-text-pixel-size (selected-window) 1 200 nil 5 t)))"#,
     );
-    // The y-limit stops the walk at the row whose pixel span CONTAINS it and
-    // retracts that row (`move_it_to` restores the iterator to the row's start
-    // before `window_text_pixel_size` reads `max_current_x`), so a limit that
-    // lands inside a row drops that row's width and clamps the height to the
-    // limit.  That is why the `x-limit 40 y-limit 10` case reports 19 -- the
-    // width of rows 0..9, whose text is 19 characters -- and not the 20 of row
-    // 10, which is the row the limit landed in.  GNU 31.1 on the same buffer
-    // shape at a 20-pixel row height (`tmp/textsize2/gnu-ylines.txt`):
-    // `y-limit 200` -> (171 . 220), `y-limit 220` -> (180 . 240) -- 171 is
-    // rows 0..9 and 180 is rows 0..10, so exactly the row the limit lands in is
-    // the one that stops counting.
+    // With an X-LIMIT as well as a Y-LIMIT, GNU counts the width of the row the
+    // limit lands in: `(window-text-pixel-size win nil t 40 10 t)` returns
+    // (20 . 11), i.e. the 20-character width of row 10 and 11 rows scanned.
+    // Attested on the GNU Emacs 31.1 oracle (`linux-gtk3`, commit
+    // a360712c9d272d950d8d8255ef74570f7e90b7d9) with exactly the form below:
+    //   OK (1 (21 . 301) (19 . 2) (19 . 6) (20 . 51) (21 . 301) (20 . 11) (19 . 6))
+    // The y-limit-only cases are unaffected: the same oracle run reproduces
+    // (19 . 2), (19 . 6), (20 . 51) and (21 . 301) unchanged.
+    // The expectation here was stale: it encoded Neomacs' pre-R3-1 behaviour
+    // (19, the width of rows 0..9) while claiming to be the GNU value.  The
+    // union row caught the divergence only because `1e490fdc0b` corrected the
+    // implementation; the row and the implementation disagreed in the other
+    // direction before that.
     assert_eq!(
         observed,
-        "OK (1 (21 . 301) (19 . 2) (19 . 6) (20 . 51) (21 . 301) (19 . 11) (19 . 6))"
+        "OK (1 (21 . 301) (19 . 2) (19 . 6) (20 . 51) (21 . 301) (20 . 11) (19 . 6))"
     );
 }

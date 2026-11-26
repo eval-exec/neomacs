@@ -93,23 +93,27 @@ fn regalloc_small_selection_covers_baseline_and_mir() {
         let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![neovm_value::intern::intern(
             "regalloc-small-arg",
         )]));
-        f.lexical = true;
+        f.set_lexical(true);
         if baseline {
             // An optional argument keeps this body out of the MIR tier.
-            let mut params = f.params.named().expect("named fixture parameters").clone();
+            let mut params = f
+                .params()
+                .named()
+                .expect("named fixture parameters")
+                .clone();
             params
                 .optional
                 .push(neovm_value::intern::intern("regalloc-small-optional"));
-            f.params = params.into();
+            f.set_params(params.into());
         }
-        f.ops = vec![
+        f.set_ops(vec![
             Op::StackRef(u16::from(baseline)),
             Op::Constant(0),
             Op::Add,
             Op::Return,
-        ];
-        f.constants = vec![Value::make_int(1)].into();
-        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
+        ]);
+        f.set_constants(vec![Value::make_int(1)].into());
+        f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(4));
         f.seal_hand_assembled_ops();
         let leaf =
             compile_bytecode_function_with(&f, None).expect("small arithmetic body compiles");

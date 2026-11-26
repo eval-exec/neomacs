@@ -45,6 +45,71 @@ pub fn begin_restore_retry_for_test<'owner, 'era>(
     owner.begin_restore_retry(native)
 }
 
+/// Gate-contention fence: counts the times a gate acquisition found the gate
+/// held and then waited for it (`with_stopped_gate`) or retried it (the
+/// receipt read after a native publication). A fixture that holds the gate
+/// releases it once this count moves, so the row proves the caller met the
+/// held gate instead of racing past a timer.
+#[cfg(any(test, feature = "test-support"))]
+static GATE_CONTENTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn note_gate_contention() {
+    GATE_CONTENTION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn gate_contention_for_test() -> u64 {
+    GATE_CONTENTION.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+std::thread_local! {
+    /// One-shot hook for the instant the keeper starts waiting out an owner's
+    /// moment on an entry, outside the gate (the reader scans, and the root
+    /// reader and image entry locks). A row uses it to have an owner hold its
+    /// gate and entry exactly there.
+    static OWNER_MOMENT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Install the hook on the keeper thread. The next owner-moment wait runs it
+/// once, before its first attempt.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn install_owner_moment_hook_for_test(hook: Box<dyn FnOnce()>) {
+    OWNER_MOMENT_HOOK.with(|slot| *slot.borrow_mut() = Some(hook));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn take_owner_moment_hook_for_test() -> Option<Box<dyn FnOnce()>> {
+    OWNER_MOMENT_HOOK.with(|slot| slot.borrow_mut().take())
+}
+
+/// One-shot hook for the instant `prepare_restore` holds the registry gate,
+/// before the condvar wait. The `Mutator` field stays cfg(test) inside this
+/// crate so a test-support build does not put `dyn FnOnce` on `Mutator`.
+/// The hook runs as a gate holder: if it blocks on the keeper, a keeper in
+/// `with_stopped_gate` waits for it, so a row must not combine the two.
+#[cfg(any(test, feature = "test-support"))]
+std::thread_local! {
+    static RESTORE_GATE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Install the hook on this thread. The next non-keeper `prepare_restore`
+/// that waits out `Stopping` or `Tracing` runs it while the gate is held.
+#[cfg(any(test, feature = "test-support"))]
+pub fn install_restore_gate_hook_for_test(hook: Box<dyn FnOnce()>) {
+    RESTORE_GATE_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(hook);
+    });
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn take_restore_gate_hook_for_test() -> Option<Box<dyn FnOnce()>> {
+    RESTORE_GATE_HOOK.with(|slot| slot.borrow_mut().take())
+}
+
 /// Name and public route for the peer-approved MEMQ-TAIL-SHAPES (5) copied
 /// catalog-waits observer. `cons_storage` is a private module, so without this
 /// re-export the A'-widened items have no cross-crate path. Same items and
@@ -195,10 +260,19 @@ impl<'a, 'era> KeeperTableScope<'a, 'era> {
     }
 
     /// Copied current authority word of the recorded table.
+    ///
+    /// `enter` already validated the object. A fresh keeper lease would CAS
+    /// the word to WRITER and then report that bit, hiding both a quiescent
+    /// word and a probe installed by [`Self::hold_authority_word_for_test`].
     pub fn authority_word(&self) -> u64 {
         let table = self.table.expect("enter a table before reading its word");
-        let lease = super::KeeperTableMut::enter(self.stopped, table).expect("keeper lease");
-        lease.authority_word().load(Ordering::Acquire)
+        let ptr = table
+            .gc_veclike_ptr()
+            .expect("rooted table")
+            .cast::<crate::tagged::header::HashTableObj>();
+        // SAFETY: `enter` validated this rooted hash table. The load does
+        // not admit a lease, so a probe word stays observable.
+        unsafe { (*ptr).authority.load(Ordering::Acquire) }
     }
 
     /// Inspect the recorded table through the installed collector-tables
@@ -235,6 +309,10 @@ impl<'a, 'era> KeeperTableScope<'a, 'era> {
         let table = self.table.expect("enter a table before holding its word");
         let lease = super::KeeperTableMut::enter(self.stopped, table).expect("keeper lease");
         let word: *const AtomicU64 = lease.authority_word();
+        // The lease's own WRITER would make the probe CAS fail. Drop it
+        // first: `writer_exit` restores the quiescent word, then the CAS
+        // installs the probe.
+        drop(lease);
         // SAFETY: the rooted table of the stopped heap outlives the scope;
         // the returned guard is tied to &self, so only further &self reads on
         // this scope (not enter) can run while the probe word is installed.

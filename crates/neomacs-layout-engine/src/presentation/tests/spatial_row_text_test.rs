@@ -202,12 +202,17 @@ fn flat_snapshot_falls_back_and_missing_body_row_is_rejected_globally() {
             .unwrap()
             .is_none()
     );
-    let mut missing = (*snapshot).clone();
-    missing.body_rows.retain(|row| row.output_row != 4);
-    assert!(matches!(
-        RowWindowText::new(DisplayWindowId::new(1), Arc::new(missing), body),
-        Err(neomacs_display_protocol::PresentedHitError::MissingBodyRow { output_row: 4, .. })
-    ));
+    for unordered in [false, true] {
+        let mut missing = (*snapshot).clone();
+        if unordered {
+            missing.point_rows.as_mut().unwrap().rows.swap(0, 1);
+        }
+        missing.body_rows.retain(|row| row.output_row != 4);
+        assert!(matches!(
+            RowWindowText::new(DisplayWindowId::new(1), Arc::new(missing), body),
+            Err(neomacs_display_protocol::PresentedHitError::MissingBodyRow { output_row: 4, .. })
+        ));
+    }
 }
 
 #[test]

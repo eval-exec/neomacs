@@ -53,13 +53,14 @@ fn recorded_pty_status_before_read(interruptions: usize) -> (Context, ProcessId,
     let proc = eval.processes_mut().get_mut(id).expect("fixture process");
     // No actual pid is attached to this injected reap: teardown must never
     // signal or wait for an unrelated process on behalf of this fixture.
-    proc.live_io.child = ChildOwnership::Reaped;
+    // SAFETY: fixture process has no poller-registered descriptors.
+    proc.live_io_mut().set_child(ChildOwnership::Reaped);
     let calls = Arc::new(AtomicUsize::new(0));
-    proc.live_io.pty_reader = Some(PtyOutputReader::new(Box::new(InterruptedPtyRead {
+    proc.set_pty_reader(Some(PtyOutputReader::new(Box::new(InterruptedPtyRead {
         inner: Box::new(Cursor::new(b"process-output\n".to_vec())),
         interruptions,
         calls: Arc::clone(&calls),
-    })));
+    }))));
     // The same status-recording seam used after the owning WNOHANG reaper.
     eval.processes_mut()
         .set_child_status_pending(id, process_status_exit_value(0));
@@ -152,11 +153,13 @@ fn accept_process_output_pty_eio_keeps_master_for_exit_drain() {
     eval.processes_mut().clear_status_notify_pending(id);
     eval.processes_mut().mark_status_change_notified(id);
     let proc = eval.processes_mut().get_mut(id).expect("live process");
-    let reader = proc.live_io.pty_reader.take().expect("PTY reader");
-    proc.live_io.pty_reader = Some(PtyOutputReader::new(Box::new(EioBeforeFinalPtyRead {
-        inner: Box::new(reader),
-        step: EioReadStep::Prefix,
-    })));
+    let reader = proc.take_pty_reader().expect("PTY reader");
+    proc.set_pty_reader(Some(PtyOutputReader::new(Box::new(
+        EioBeforeFinalPtyRead {
+            inner: Box::new(reader),
+            step: EioReadStep::Prefix,
+        },
+    ))));
     eval.poll_process_output_for_readiness(vec![id], Some(id), false)
         .expect("read prefix before status notification");
     // A live service pass yields after one read. Observe EIO on the next
@@ -174,11 +177,13 @@ fn pty_eof_zero_timeout_polls_do_not_read_master() {
     eval.processes_mut().clear_status_notify_pending(id);
     eval.processes_mut().mark_status_change_notified(id);
     let proc = eval.processes_mut().get_mut(id).expect("live process");
-    let reader = proc.live_io.pty_reader.take().expect("PTY reader");
-    proc.live_io.pty_reader = Some(PtyOutputReader::new(Box::new(EioBeforeFinalPtyRead {
-        inner: Box::new(reader),
-        step: EioReadStep::Prefix,
-    })));
+    let reader = proc.take_pty_reader().expect("PTY reader");
+    proc.set_pty_reader(Some(PtyOutputReader::new(Box::new(
+        EioBeforeFinalPtyRead {
+            inner: Box::new(reader),
+            step: EioReadStep::Prefix,
+        },
+    ))));
     eval.poll_process_output_for_readiness(vec![id], Some(id), false)
         .expect("read prefix");
     eval.poll_process_output_for_readiness(vec![id], Some(id), false)

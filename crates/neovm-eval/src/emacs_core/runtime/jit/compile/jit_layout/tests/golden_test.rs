@@ -415,10 +415,10 @@ fn tiny_function() -> Value {
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = vec![Op::Constant(0), Op::Return];
-    f.constants = vec![Value::fixnum(41), Value::fixnum(42)].into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
+    f.set_lexical(true);
+    f.set_ops(vec![Op::Constant(0), Op::Return]);
+    f.set_constants(vec![Value::fixnum(41), Value::fixnum(42)].into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(1));
     f.seal_hand_assembled_ops();
     Value::make_bytecode(f)
 }
@@ -536,11 +536,11 @@ fn variable_words_are_where_compiled_code_reads_them() {
         .current_buffer_id()
         .expect("a current buffer");
     assert_eq!(words_at(base, BLV_WHERE_BUF_ID_OFFSET), buffer.0 as usize);
-    assert_eq!(words_at(base, BLV_VALCELL_OFFSET), blv.valcell.get().bits());
-    assert_eq!(words_at(base, BLV_DEFCELL_OFFSET), blv.defcell.get().bits());
+    assert_eq!(words_at(base, BLV_VALCELL_OFFSET), blv.valcell().bits());
+    assert_eq!(words_at(base, BLV_DEFCELL_OFFSET), blv.defcell().bits());
     assert_eq!(
         words_at(base, BLV_ALIST_EPOCH_OFFSET) as u64,
-        blv.alist_epoch
+        blv.alist_epoch.get()
     );
     assert_eq!(words_at(base, BLV_FWD_OFFSET), 0, "no forwarder");
     // SAFETY: the two bool bytes of a live record.
@@ -553,10 +553,10 @@ fn variable_words_are_where_compiled_code_reads_them() {
     assert_eq!((local_if_set, found), (u8::from(blv.local_if_set), 1));
     // SAFETY: a process static.
     let epoch = unsafe { (blv_alist_epoch_addr() as *const u64).read() };
-    assert_eq!(epoch, blv.alist_epoch, "the cache is current");
+    assert_eq!(epoch, blv.alist_epoch.get(), "the cache is current");
     // The valcell's cdr, from the tagged cons word.
     let cdr = words_at(
-        blv.valcell.get().bits() as *const u8,
+        blv.valcell().bits() as *const u8,
         CONS_CDR_OFFSET - neovm_value::tagged::value::TAG_CONS,
     );
     assert_eq!(cdr, Value::fixnum(2).bits());

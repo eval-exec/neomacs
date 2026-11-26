@@ -80,7 +80,7 @@ fn the_first_partition_cycle_reserves_permanence_for_image_residents() {
     for &value in residents.iter().chain(runtime.iter()) {
         root = heap.alloc_cons(value, root);
     }
-    heap.collect_exact(std::iter::once(root));
+    heap.collect_rooted(std::iter::once(root));
     for &value in &residents {
         let header = unsafe { &*header_of(value) };
         assert!(header.tenured, "{value:?}");
@@ -102,7 +102,7 @@ fn the_first_partition_cycle_reserves_permanence_for_image_residents() {
     // runtime class is traced by every full collection, not skipped.
     let root2 = heap.alloc_cons(young, root);
     for _ in 0..3 {
-        heap.collect_exact(std::iter::once(root2));
+        heap.collect_rooted(std::iter::once(root2));
         for &value in residents.iter().chain(runtime.iter()).chain([&young]) {
             assert!(heap.is_value_marked(value), "{value:?}");
         }
@@ -113,7 +113,7 @@ fn the_first_partition_cycle_reserves_permanence_for_image_residents() {
     // Drop every root: the next full collection reclaims the runtime
     // survivors and the young vector; image residents stay forever.
     drop(root2);
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
     for &value in &residents {
         assert!(heap.owns_heap_value_for_test(value), "{value:?}");
         assert!(unsafe { &*header_of(value) }.generation.permanent());
@@ -126,7 +126,7 @@ fn the_first_partition_cycle_reserves_permanence_for_image_residents() {
     }
     // The reclaimed weak table left the always-swept registry: cycling the
     // weak sweep again must not inspect its freed memory.
-    heap.collect_exact(std::iter::empty());
+    heap.collect_rooted(std::iter::empty());
 }
 
 /// The tri-state mark byte (P3.1 C2.2): 0 is unmarked at rest under both
@@ -179,7 +179,7 @@ fn parity_alternates_and_rest_is_white_under_both() {
         "born at parity"
     );
     for parity in [MarkParity::One, MarkParity::Two] {
-        heap.begin_stw_collection();
+        heap.begin_stw_collection_for_test();
         heap.seed_root(v);
         heap.mark_all();
         assert_eq!(heap.mark_parity, parity);
@@ -188,7 +188,7 @@ fn parity_alternates_and_rest_is_white_under_both() {
             unsafe { (*header).is_marked_at(parity) },
             "traced at the new parity before sweep",
         );
-        heap.complete_collection();
+        heap.complete_collection_for_test();
         assert!(heap.owns_heap_value_for_test(v));
         if heap.tagged_heap_generational_enabled() {
             assert!(heap.value_is_old_for_test(v));
@@ -206,7 +206,7 @@ fn parity_alternates_and_rest_is_white_under_both() {
     for parity in [heap.mark_parity.flip(), heap.mark_parity] {
         assert!(!unsafe { (*header).is_marked_at(parity) });
     }
-    heap.collect_exact(std::iter::once(v));
+    heap.collect_rooted(std::iter::once(v));
     assert!(heap.owns_heap_value_for_test(v), "traced again from rest");
     assert!(heap.is_value_marked(v));
 }

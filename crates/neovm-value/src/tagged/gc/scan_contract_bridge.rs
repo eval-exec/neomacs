@@ -34,7 +34,7 @@ impl SingleMutatorWorld<'_> {
         ) -> R,
     ) -> Result<R, super::young_registry::YoungRegistryError> {
         assert!(
-            !self.heap.concurrent_mark_running(),
+            !self.heap.has_unfinished_concurrent_mark(),
             "young capture requires an explicit successful marker join"
         );
         let proof = StoppedMutatorsProof {

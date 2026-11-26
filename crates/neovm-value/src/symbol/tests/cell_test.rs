@@ -101,13 +101,13 @@ fn each_reader_answers_only_for_its_own_arm() {
     let fwd = crate::forward::alloc_objfwd(Value::fixnum(5)).header();
     let blv = BlvPtr::leak(Box::new(LispBufferLocalValue {
         local_if_set: false,
-        found: false,
+        found: std::cell::Cell::new(false),
         fwd: None,
         where_buf: Value::NIL.into(),
-        where_buf_id: NO_WHERE_BUF,
+        where_buf_id: std::cell::Cell::new(NO_WHERE_BUF),
         defcell: Value::NIL.into(),
         valcell: Value::NIL.into(),
-        alist_epoch: 0,
+        alist_epoch: std::cell::Cell::new(0),
     }));
 
     let mut aliased = LispSymbol::new(intern("cell-aliased"));
@@ -157,13 +157,13 @@ fn a_localized_cell_keeps_its_arm() {
     let make = || {
         BlvPtr::leak(Box::new(LispBufferLocalValue {
             local_if_set: true,
-            found: false,
+            found: std::cell::Cell::new(false),
             fwd: None,
             where_buf: Value::NIL.into(),
-            where_buf_id: NO_WHERE_BUF,
+            where_buf_id: std::cell::Cell::new(NO_WHERE_BUF),
             defcell: Value::NIL.into(),
             valcell: Value::NIL.into(),
-            alist_epoch: 0,
+            alist_epoch: std::cell::Cell::new(0),
         }))
     };
     let (first, second) = (make(), make());

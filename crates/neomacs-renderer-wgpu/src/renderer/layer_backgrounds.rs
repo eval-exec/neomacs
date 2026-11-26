@@ -344,15 +344,19 @@ impl WgpuRenderer {
         }
 
         // --- Fringe bitmaps (own fringe column, drawn with the non-overlay
-        // backgrounds so they sit below text — magit section fold arrows). ---
+        // backgrounds so they sit below text): a row's bitmap in its face's
+        // colours, overlay arrows as set bits only. ---
         for glyph in &frame_glyphs.glyphs {
             if let FrameGlyph::FringeBitmap {
                 x,
                 y,
                 width,
                 height,
+                clip_rect,
                 bitmap_index,
                 face_id,
+                side,
+                kind,
                 ..
             } = glyph
             {
@@ -362,12 +366,19 @@ impl WgpuRenderer {
                 let face = frame_glyphs.resolved_face(*face_id);
                 self.render_fringe_bitmap(
                     &mut foreground_rect_vertices,
-                    *x,
-                    *y,
-                    *width,
-                    *height,
-                    &face.fg,
-                    bitmap,
+                    super::fringe_paint::fringe_place(
+                        *x,
+                        *y,
+                        *width,
+                        *height,
+                        *clip_rect,
+                        (0.0, 0.0),
+                        bitmap,
+                        *side,
+                        *kind,
+                    ),
+                    face.fg,
+                    face.bg,
                 );
             }
         }
@@ -702,7 +713,7 @@ impl WgpuRenderer {
 
     pub(super) fn draw_non_overlay_backgrounds(
         &mut self,
-        render_pass: &mut wgpu::RenderPass<'_>,
+        render_pass: &mut super::frame_pass::FrameRenderPass<'_>,
         non_overlay_rect_vertices: &[RectVertex],
         opacity: f32,
     ) {
@@ -711,7 +722,7 @@ impl WgpuRenderer {
 
     pub(super) fn draw_background_rects(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut super::frame_pass::FrameRenderPass<'_>,
         vertices: &[RectVertex],
         opacity: f32,
     ) {
@@ -744,7 +755,7 @@ impl WgpuRenderer {
 
     pub(super) fn draw_background_rounded_rects(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut super::frame_pass::FrameRenderPass<'_>,
         vertices: &[RoundedRectVertex],
         opacity: f32,
     ) {

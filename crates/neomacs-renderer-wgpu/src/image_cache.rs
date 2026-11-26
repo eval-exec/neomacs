@@ -11,7 +11,9 @@ use decoder::DecodeOutputSink;
 pub use decoder::{ImageDecodeClient, ImageDecoder};
 
 use neomacs_display_protocol::image::EncodedBytes;
-use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageLoadIdentity};
+use neomacs_display_protocol::image_diagnostic::{
+    ImageDecodeFailure, ImageDiagnostic, ImageLoadIdentity,
+};
 use neomacs_display_protocol::{
     ImageAnimationPolicy, ImageCacheUsage, ImageColorContext, ImageEmbeddedMetadata,
     ImageFrameIndex, ImageHeuristicMask, ImageId, ImageIntrinsicExtent, ImageLayoutExtent,
@@ -30,7 +32,7 @@ use std::thread;
 
 use crate::image_bands::{
     BandFilling, BandSource, BandStep, BandedDecoder, DecodedBand, RasterBand, RowRange,
-    TextureRows, classify_alpha,
+    TextureRows, classify_alpha, png_source_mask,
 };
 use crate::image_sequence::{ImageSequenceCache, ImageSequenceResolution};
 
@@ -294,6 +296,7 @@ enum BandedAttempt {
 struct NativePixels {
     extent: ImageNativeExtent,
     rgba: Vec<u8>,
+    mask: ImageMaskKind,
     embedded: ImageEmbeddedMetadata,
 }
 
@@ -317,6 +320,7 @@ impl NativePixels {
     fn raster(width: u32, height: u32, rgba: Vec<u8>) -> Self {
         Self {
             extent: ImageNativeExtent::new(width, height),
+            mask: classify_alpha(&rgba),
             rgba,
             embedded: ImageEmbeddedMetadata::default(),
         }
@@ -340,7 +344,12 @@ impl NativePixels {
         realization: ImageRealization,
         mask_policy: ImageMaskPolicy,
     ) -> Option<DecodedPixels> {
-        let mask = apply_mask_policy(&mut self.rgba, self.extent.dimensions(), mask_policy);
+        let mask = apply_mask_policy(
+            &mut self.rgba,
+            self.extent.dimensions(),
+            self.mask,
+            mask_policy,
+        );
         let geometry = realized_geometry(self.extent, size, realization);
         let (raster_width, raster_height) = geometry.raster().dimensions();
         let (native_width, native_height) = self.extent.dimensions();
@@ -420,21 +429,21 @@ fn rgb16_to_rgb8(rgb: [u16; 3]) -> [u8; 3] {
 fn apply_mask_policy(
     rgba: &mut [u8],
     dimensions: (u32, u32),
+    source_mask: ImageMaskKind,
     policy: ImageMaskPolicy,
 ) -> ImageMaskKind {
     match policy {
-        ImageMaskPolicy::Preserve => classify_alpha(rgba),
+        ImageMaskPolicy::Preserve => source_mask,
         ImageMaskPolicy::Suppress => {
-            let mask = classify_alpha(rgba);
-            if mask.has_clipping_mask() {
+            if source_mask.has_clipping_mask() {
                 for alpha in rgba.iter_mut().skip(3).step_by(4) {
                     *alpha = 255;
                 }
                 ImageMaskKind::None
             } else {
                 // GNU's `:mask nil` clears only `img->mask`; it does not
-                // discard continuous alpha represented by the image itself.
-                mask
+                // discard the image's native alpha channel.
+                source_mask
             }
         }
         ImageMaskPolicy::Heuristic(heuristic) => {
@@ -450,6 +459,18 @@ fn apply_mask_policy(
     }
 }
 
+/// Preserve a decoder's mask representation before pixels lose its origin.
+fn decoded_source_mask(data: &[u8], rgba: &[u8]) -> Option<ImageMaskKind> {
+    if matches!(image::guess_format(data), Ok(image::ImageFormat::Png)) {
+        let reader = png::Decoder::new(std::io::Cursor::new(data))
+            .read_info()
+            .ok()?;
+        Some(png_source_mask(reader.info()))
+    } else {
+        Some(classify_alpha(rgba))
+    }
+}
+
 enum WorkerDecodeOutcome {
     /// One band of a decode that is still running. Intermediate, not terminal:
     /// it consumes no load generation, and the `Ready` that ends the decode
@@ -461,7 +482,7 @@ enum WorkerDecodeOutcome {
     Ready(DecodedImage),
     Failed {
         load: ImageLoadToken,
-        diagnostic: ImageDiagnostic,
+        failure: ImageDecodeFailure,
     },
 }
 
@@ -496,7 +517,7 @@ pub enum ImageCacheEvent {
     },
     Failed {
         load: ImageLoadToken,
-        error: ImageDiagnostic,
+        failure: ImageDecodeFailure,
     },
     Evicted {
         image: ImageId,
@@ -571,6 +592,13 @@ impl ImageLoadLifecycle {
         self.current
             .get(&load.image())
             .is_some_and(|phase| phase.attempt() == load.attempt())
+    }
+
+    /// Every image whose load this renderer has already admitted. At a clear
+    /// these predate the clear command, even when their CPU submission does
+    /// not (renderer-originated toolbar/icon loads).
+    fn admitted_images(&self) -> impl Iterator<Item = ImageId> + '_ {
+        self.current.keys().copied()
     }
 
     /// Accept `outcome` if its attempt is still the current one.
@@ -761,6 +789,21 @@ impl DecodeFailureSource {
         }
     }
 
+    fn failed_metadata(&self, frame: ImageFrameIndex) -> ImageEmbeddedMetadata {
+        match self {
+            Self::File { path } => match std::fs::read(path) {
+                Ok(bytes) if crate::image_probe::has_tiff_signature(&bytes) => {
+                    crate::image_sequence::failed_tiff_metadata(&bytes, frame)
+                }
+                _ => ImageEmbeddedMetadata::EMPTY,
+            },
+            Self::Bytes { data } if crate::image_probe::has_tiff_signature(data.as_slice()) => {
+                crate::image_sequence::failed_tiff_metadata(data.as_slice(), frame)
+            }
+            Self::Bytes { .. } | Self::Raw => ImageEmbeddedMetadata::EMPTY,
+        }
+    }
+
     fn from_bytes(identity: &ImageLoadIdentity, data: &[u8]) -> ImageDiagnostic {
         if image::guess_format(data).is_err() {
             return identity.wrong_format();
@@ -884,6 +927,18 @@ impl ImageCache {
         self.decoder
     }
 
+    /// Move the CPU decoder out and leak the GPU cache.
+    ///
+    /// Device-loss recovery must not drop textures, the sampler, or the
+    /// bind-group layout into a wedged driver. The decoder owns CPU jobs only.
+    pub fn take_decoder_and_leak_gpu(self) -> ImageDecoder {
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: `this` is not dropped. `decoder` is copied out once and
+        // becomes the returned owner. Every other field, including the wgpu
+        // resources, stays leaked.
+        unsafe { std::ptr::read(&this.decoder) }
+    }
+
     /// Advance the access clock and return a fresh stamp.
     fn next_access_stamp(&self) -> u64 {
         let stamp = self.access_clock.get() + 1;
@@ -973,12 +1028,16 @@ impl ImageCache {
                     let failure_source = DecodeFailureSource::of(&source);
                     let result = catch_unwind(AssertUnwindSafe(|| {
                         let admitted = match &source {
-                            ImageSource::File { path, .. } => {
-                                crate::admit(crate::ImageProbeSource::File(path), limit)
-                            }
-                            ImageSource::Data { data, .. } => {
-                                crate::admit(crate::ImageProbeSource::Data(data.as_slice()), limit)
-                            }
+                            ImageSource::File { path, .. } => crate::image_probe::admit_frame(
+                                crate::ImageProbeSource::File(path),
+                                frame,
+                                limit,
+                            ),
+                            ImageSource::Data { data, .. } => crate::image_probe::admit_frame(
+                                crate::ImageProbeSource::Data(data.as_slice()),
+                                frame,
+                                limit,
+                            ),
                             _ => Ok(()),
                         };
                         admitted.map_err(|_| ImageDiagnostic::InvalidSize)?;
@@ -1045,9 +1104,15 @@ impl ImageCache {
                         }
                         Ok(Ok(None)) => WorkerDecodeOutcome::Failed {
                             load,
-                            diagnostic: failure_source.diagnostic(&identity),
+                            failure: ImageDecodeFailure::with_embedded(
+                                failure_source.diagnostic(&identity),
+                                failure_source.failed_metadata(frame),
+                            ),
                         },
-                        Ok(Err(diagnostic)) => WorkerDecodeOutcome::Failed { load, diagnostic },
+                        Ok(Err(diagnostic)) => WorkerDecodeOutcome::Failed {
+                            load,
+                            failure: ImageDecodeFailure::new(diagnostic),
+                        },
                         Err(_) => {
                             tracing::warn!(
                                 "Decoder thread {} recovered from a panic while decoding image {}",
@@ -1056,7 +1121,9 @@ impl ImageCache {
                             );
                             WorkerDecodeOutcome::Failed {
                                 load,
-                                diagnostic: failure_source.diagnostic(&identity),
+                                failure: ImageDecodeFailure::new(
+                                    failure_source.diagnostic(&identity),
+                                ),
                             }
                         }
                     };
@@ -1086,6 +1153,28 @@ impl ImageCache {
         sequence: ImageSequenceId,
         sink: Option<&mut dyn FnMut(DecodedBand)>,
     ) -> Option<DecodedPixels> {
+        // A resident GIF stream already owns its source bytes (`anim_cache` in
+        // GNU `gif_load`, src/image.c:9889-9902): step it directly without
+        // re-reading a multi-megabyte file from disk on every `:index` tick.
+        if let Some(resolution) = sequence_cache.resolve_resident_gif(sequence, frame, colors) {
+            match resolution {
+                ImageSequenceResolution::Frame(frame) => {
+                    let (width, height) = frame.dimensions();
+                    let (rgba, embedded) = frame.into_parts();
+                    return NativePixels {
+                        extent: ImageNativeExtent::new(width, height),
+                        mask: classify_alpha(&rgba),
+                        rgba,
+                        embedded,
+                    }
+                    .realize_bitmap(size, rotation, realization, mask);
+                }
+                ImageSequenceResolution::MissingFrame | ImageSequenceResolution::Failed => {
+                    return None;
+                }
+                ImageSequenceResolution::NotAnimated => {}
+            }
+        }
         // The bytes the decode will read, owned here and handed to the decode
         // chain by handle: `std::fs::read` gives the buffer, `EncodedBytes`
         // moves it, and the fallbacks below still have the handle they need.
@@ -1100,6 +1189,7 @@ impl ImageCache {
                 sequence,
                 size,
                 rotation,
+                colors,
                 realization,
                 mask,
                 sink,
@@ -1204,6 +1294,7 @@ impl ImageCache {
             sequence,
             size,
             rotation,
+            colors,
             realization,
             mask,
             sink,
@@ -1280,6 +1371,7 @@ impl ImageCache {
     /// drops both frame selection and animation metadata. Route animated
     /// formats through `AnimationDecoder` first, then use the still-image path
     /// only for frame zero.
+    #[allow(clippy::too_many_arguments)]
     fn decode_raster_data(
         data: EncodedBytes,
         frame: ImageFrameIndex,
@@ -1287,22 +1379,24 @@ impl ImageCache {
         sequence: ImageSequenceId,
         size: ImageSizeSpec,
         rotation: ImageRotation,
+        colors: ImageColorContext,
         realization: ImageRealization,
         mask_policy: ImageMaskPolicy,
         sink: Option<&mut dyn FnMut(DecodedBand)>,
     ) -> Option<DecodedPixels> {
-        match sequence_cache.resolve(sequence, &data, frame) {
+        match sequence_cache.resolve(sequence, &data, frame, colors) {
             ImageSequenceResolution::Frame(frame) => {
                 let (width, height) = frame.dimensions();
                 let (rgba, embedded) = frame.into_parts();
                 NativePixels {
                     extent: ImageNativeExtent::new(width, height),
+                    mask: decoded_source_mask(&data, &rgba)?,
                     rgba,
                     embedded,
                 }
                 .realize_bitmap(size, rotation, realization, mask_policy)
             }
-            ImageSequenceResolution::MissingFrame => None,
+            ImageSequenceResolution::MissingFrame | ImageSequenceResolution::Failed => None,
             ImageSequenceResolution::NotAnimated => {
                 Self::decode_still_image(data, size, rotation, realization, mask_policy, sink)
             }
@@ -1334,6 +1428,7 @@ impl ImageCache {
                 let (rgba, embedded) = frame.into_parts();
                 NativePixels {
                     extent: ImageNativeExtent::new(width, height),
+                    mask: classify_alpha(&rgba),
                     rgba,
                     embedded,
                 }
@@ -1341,7 +1436,9 @@ impl ImageCache {
                 .map(ComputedSequenceDecode::Frame)
                 .unwrap_or(ComputedSequenceDecode::Unavailable)
             }
-            ImageSequenceResolution::MissingFrame => ComputedSequenceDecode::Unavailable,
+            ImageSequenceResolution::MissingFrame | ImageSequenceResolution::Failed => {
+                ComputedSequenceDecode::Unavailable
+            }
             ImageSequenceResolution::NotAnimated => ComputedSequenceDecode::NotAnimated,
         }
     }
@@ -1453,7 +1550,13 @@ impl ImageCache {
     /// The whole image in one decode: the path every source took before
     /// banding, and the one a banded attempt falls back to.
     fn decode_whole(data: EncodedBytes) -> Option<NativePixels> {
-        Self::process_image(image::load_from_memory(&data).ok()?)
+        let rgba = image::load_from_memory(&data).ok()?.to_rgba8();
+        Some(NativePixels {
+            extent: ImageNativeExtent::new(rgba.width(), rgba.height()),
+            mask: decoded_source_mask(&data, &rgba)?,
+            rgba: rgba.into_raw(),
+            embedded: ImageEmbeddedMetadata::EMPTY,
+        })
     }
 
     #[cfg(test)]
@@ -1637,9 +1740,11 @@ impl ImageCache {
         resources: crate::svg::SvgResourceContext,
     ) -> Option<DecodedPixels> {
         let mut decoded = crate::svg::decode(data, size, rotation, realization, colors, resources)?;
+        let source_mask = classify_alpha(&decoded.rgba);
         let mask = apply_mask_policy(
             &mut decoded.rgba,
             decoded.geometry.raster().dimensions(),
+            source_mask,
             mask_policy,
         );
         Some(DecodedPixels {
@@ -1650,17 +1755,6 @@ impl ImageCache {
         })
     }
 
-    /// Process decoded image: resize if needed, convert to RGBA
-    /// Decode to NATIVE pixels. Sizing happens in `realize_bitmap`, which is
-    /// the only place that knows both the native size and the requested one.
-    fn process_image(img: image::DynamicImage) -> Option<NativePixels> {
-        let rgba = img.to_rgba8();
-        Some(NativePixels::raster(
-            rgba.width(),
-            rgba.height(),
-            rgba.into_raw(),
-        ))
-    }
     fn convert_argb32_to_rgba(
         data: &[u8],
         width: u32,
@@ -2288,18 +2382,17 @@ impl ImageCache {
                     });
                     self.upload_texture(device, queue, decoded);
                 }
-                WorkerDecodeOutcome::Failed { load, diagnostic } => {
+                WorkerDecodeOutcome::Failed { load, failure } => {
                     // A failed decode keeps no texture: a band may already have
                     // created one, and it holds rows of an image that will never
                     // arrive. Leaving it would draw them forever.
                     self.release(load.image());
-                    self.states
-                        .insert(load.image(), ImageState::Failed(diagnostic.message()));
+                    self.states.insert(
+                        load.image(),
+                        ImageState::Failed(failure.diagnostic.message()),
+                    );
                     self.pending_dimensions.remove(&load.image());
-                    events.push(ImageCacheEvent::Failed {
-                        load,
-                        error: diagnostic,
-                    });
+                    events.push(ImageCacheEvent::Failed { load, failure });
                 }
             }
         }
@@ -2677,6 +2770,20 @@ impl ImageCache {
         }
     }
 
+    /// Free one image immediately, as GNU's `uncache_image` does for
+    /// `image-flush` (`src/image.c:2538-2560`).
+    ///
+    /// Unlike [`Self::retire`], the texture, its media-budget charge and its
+    /// state are dropped now instead of waiting for the presentation lifetime
+    /// fence; the display realizes the image again on its next lookup.
+    pub fn flush(&mut self, image: ImageId) {
+        self.decoder.client.retire_image(image);
+        self.loads.free(image);
+        self.pending_dimensions.remove(&image);
+        self.residency.cancel_retirement(image);
+        self.release(image);
+    }
+
     /// Publish the complete presentation lifetime fence and release every
     /// retirement which has crossed it.
     pub fn synchronize_retained_images(&mut self, retained: RetainedImageSet) {
@@ -2703,9 +2810,35 @@ impl ImageCache {
         std::mem::take(&mut self.accounting)
     }
 
-    /// Clear entire cache
-    pub fn clear(&mut self) {
-        self.decoder.client.clear();
+    /// The media-budget accounting a wholesale clear must publish for `resident`.
+    pub(crate) fn cleared_image_accounting<'a>(
+        resident: impl IntoIterator<Item = &'a ImageId>,
+    ) -> Vec<crate::media_budget::MediaAccounting> {
+        resident
+            .into_iter()
+            .map(|image| crate::media_budget::MediaAccounting::Freed {
+                media_type: crate::media_budget::MediaType::Image,
+                id: image.get(),
+            })
+            .collect()
+    }
+
+    /// Clear the cache of the images that existed when the caller issued the
+    /// clear. Decodes admitted after `through` survive only when the renderer
+    /// had not already admitted their load: a renderer-originated load
+    /// (toolbar icon, ID-less `load_image_*`) is older than the clear command
+    /// even though its CPU submission carries a newer ticket.
+    pub fn clear(&mut self, through: u64) {
+        // Every resident texture was charged to the media budget when it was
+        // created.  A wholesale clear drops them all at once, so it must
+        // release exactly those charges, like every per-image retire path;
+        // otherwise the budget keeps counting images that no longer exist.
+        self.accounting
+            .extend(Self::cleared_image_accounting(self.textures.keys()));
+        let renderer_admitted: Vec<ImageId> = self.loads.admitted_images().collect();
+        self.decoder
+            .client
+            .clear_through(through, &renderer_admitted);
         self.loads.clear();
         self.residency.clear();
         self.retained_images = RetainedImageSet::default();
@@ -2719,3 +2852,7 @@ impl ImageCache {
 #[cfg(test)]
 #[path = "image_cache/tests/image_cache_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "image_cache/tests/clear_admission_test.rs"]
+mod clear_admission_test;

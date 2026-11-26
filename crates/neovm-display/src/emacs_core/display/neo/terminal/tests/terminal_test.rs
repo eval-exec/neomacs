@@ -224,6 +224,7 @@ fn invalid_lisp_terminal_values_never_reach_the_display_host() {
     assert!(TerminalFloatPlacement::new(0.0, 0.0, -0.1).is_none());
     assert!(TerminalFloatPlacement::new(0.0, 0.0, 1.1).is_none());
 
+    drop(eval);
     let mut no_host = Context::new(crate::test_utils::unit_runtime());
     let result = no_host
         .eval_str("(condition-case err (neomacs-terminal-create 80 24 0) (error (car err)))")

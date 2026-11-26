@@ -255,12 +255,10 @@ fn run_native_scroll_scenario(
         .map(|path| root.join(PathBuf::from(path)))
         .unwrap_or_else(|| root.join("target"))
         .join("neomacs-gui-tests");
-    fs::create_dir_all(&artifact_root).unwrap();
-    let artifacts = artifact_root.join(format!(
+    let artifacts = neomacs_gui_tests::fresh_artifact_dir(artifact_root.join(format!(
         "native-scrolling-{kind:?}-{target:?}-{lines}-{profile}-{}",
         std::process::id()
-    ));
-    fs::create_dir(&artifacts).unwrap();
+    )));
     let session = neomacs_infra::display::start_sway(
         &artifacts,
         r#"
@@ -422,14 +420,19 @@ focus_follows_mouse yes
             "stall proof requires pixel and presentation evidence"
         );
         let deadline = Instant::now() + Duration::from_secs(8);
-        while !fs::read_to_string(artifacts.join("neomacs.log"))
-            .unwrap_or_default()
-            .contains(if resolved {
-                "exported compositor coverage"
-            } else {
-                "predict_pixels=true"
+        let has_certified_coverage = |log: &str| {
+            log.lines().any(|line| {
+                let auxiliary_ok = line.contains("installed auxiliary compositor coverage")
+                    && line.contains("compositor_enabled=true")
+                    && (resolved || line.contains("predict_pixels=true"));
+                let in_frame_ok = line.contains("exported compositor coverage")
+                    && (resolved || line.contains("predict_pixels=true"));
+                auxiliary_ok || in_frame_ok
             })
-        {
+        };
+        while !has_certified_coverage(
+            &fs::read_to_string(artifacts.join("neomacs.log")).unwrap_or_default(),
+        ) {
             assert!(
                 Instant::now() < deadline,
                 "no certified prediction policy: {artifacts:?}"

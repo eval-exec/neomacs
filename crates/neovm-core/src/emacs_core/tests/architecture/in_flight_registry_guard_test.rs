@@ -192,6 +192,13 @@ fn expected_sites() -> Vec<RegistrySite> {
             "neovm-value/src/error/mod.rs",
             "current_in_flight_registry_handle",
         ),
+        // The dormant source shell mints the empty sentinel. The lower detach
+        // function still does not construct a handle.
+        (
+            RegistryEntry::RawConstructor,
+            "neovm-value/src/error/registry_detach.rs",
+            "detach_source_shell_in_flight",
+        ),
         (
             RegistryEntry::RawStruct,
             "neovm-value/src/error/mod.rs",

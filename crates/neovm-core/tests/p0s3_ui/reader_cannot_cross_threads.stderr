@@ -52,9 +52,9 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `RootBatchReader<'static>: Send`
           `Cell<u8>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
-          `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: std::marker::Sync`
-          which is required by `RootBatchReader<'static>: Send`
           `Cell<usize>: std::marker::Sync`
+          which is required by `RootBatchReader<'static>: Send`
+          `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
           `*mut HashTableObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
@@ -113,6 +113,14 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           `*const LispSymbol: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
           `*const Atomic<u32>: std::marker::Sync`
+          which is required by `RootBatchReader<'static>: Send`
+          `*mut UserPtrObj: std::marker::Sync`
+          which is required by `RootBatchReader<'static>: Send`
+          `*mut c_void: std::marker::Sync`
+          which is required by `RootBatchReader<'static>: Send`
+          `*mut ModuleFunctionObj: std::marker::Sync`
+          which is required by `RootBatchReader<'static>: Send`
+          `*mut SqliteObj: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`
           `NonNull<TaggedHeap>: std::marker::Sync`
           which is required by `RootBatchReader<'static>: Send`

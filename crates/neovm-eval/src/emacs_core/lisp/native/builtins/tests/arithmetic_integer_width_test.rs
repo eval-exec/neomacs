@@ -315,9 +315,10 @@ fn integer_width_slot_is_retired_with_its_context() {
     let mut b = Context::new(crate::test_utils::unit_runtime());
     b.eval_str("(setq integer-width (expt 2 62))").unwrap();
     assert!(!super::integer_width_below(1 << 20));
+    let parked_b = b.park_for_test();
     let mut c = Context::new(crate::test_utils::unit_runtime());
     c.eval_str("(setq integer-width 300)").unwrap();
-    drop(b);
+    drop(parked_b);
     // `c' is the active Context: its slot is still the one read.
     assert!(!super::integer_width_below(300));
     assert!(super::integer_width_below(301));

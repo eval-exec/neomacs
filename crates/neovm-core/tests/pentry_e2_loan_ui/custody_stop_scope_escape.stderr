@@ -1,0 +1,12 @@
+error: lifetime may not live long enough
+ --> tests/pentry_e2_loan_ui/custody_stop_scope_escape.rs:4:64
+  |
+4 |     let _escaped: StopScope<'static> = with_stop_scope(|scope| scope);
+  |                                                         ------ ^^^^^ returning this value requires that `'1` must outlive `'2`
+  |                                                         |    |
+  |                                                         |    return type of closure is neovm_value::tagged::gc::heap_transfer::StopScope<'2>
+  |                                                         has type `neovm_value::tagged::gc::heap_transfer::StopScope<'1>`
+  |
+  = note: requirement occurs because of the type `neovm_value::tagged::gc::heap_transfer::StopScope<'_>`, which makes the generic argument `'_` invariant
+  = note: the struct `neovm_value::tagged::gc::heap_transfer::StopScope<'s>` is invariant over the parameter `'s`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

@@ -281,13 +281,17 @@ const VALUE_FRAME_SIZE: usize = 512;
 pub(crate) struct emacs_value_frame {
     pub objects: [emacs_value_tag; VALUE_FRAME_SIZE],
     pub offset: usize,
-    pub next: *mut emacs_value_frame,
+    pub next: Option<std::ptr::NonNull<emacs_value_frame>>,
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct emacs_value_storage {
-    pub(crate) initial: emacs_value_frame,
-    pub(crate) current: *mut emacs_value_frame,
+    initial: emacs_value_frame,
+    /// Head of the heap-allocated overflow frame chain, or `None` while
+    /// allocations still fit in `initial`. Never points at `self.initial`, so
+    /// `emacs_value_storage` is never self-referential and is ready immediately
+    /// after `new()`.
+    overflow: Option<std::ptr::NonNull<emacs_value_frame>>,
 }
 
 // ============================================================================
@@ -376,9 +380,12 @@ struct ActiveModuleEnvEntry {
 impl emacs_value_frame {
     fn new() -> Self {
         Self {
+            // SAFETY: `emacs_value_tag` wraps `Value`, whose all-zero bit
+            // pattern is a valid representation (`Value::NIL` / fixnum 0
+            // slots are overwritten before `offset` advances).
             objects: unsafe { std::mem::zeroed() },
             offset: 0,
-            next: std::ptr::null_mut(),
+            next: None,
         }
     }
 }
@@ -388,34 +395,76 @@ impl emacs_value_storage {
     fn new() -> Self {
         Self {
             initial: emacs_value_frame::new(),
-            current: std::ptr::null_mut(),
+            overflow: None,
         }
     }
 
-    fn init(&mut self) {
-        self.current = &mut self.initial;
+    fn reset(&mut self) {
+        finalize_storage(self);
+    }
+}
+
+impl Drop for emacs_value_storage {
+    fn drop(&mut self) {
+        finalize_storage(self);
+    }
+}
+
+impl emacs_env_private {
+    fn new_boxed() -> Box<Self> {
+        Box::new(Self {
+            pending_non_local_exit: emacs_funcall_exit::Return,
+            non_local_exit_symbol: Value::NIL,
+            non_local_exit_data: Value::NIL,
+            storage: emacs_value_storage::new(),
+        })
     }
 }
 
 fn allocate_emacs_value(storage: &mut emacs_value_storage, lisp_val: Value) -> emacs_value {
-    unsafe {
-        let frame = &mut *storage.current;
-        if frame.offset >= VALUE_FRAME_SIZE {
-            let new_frame = Box::into_raw(Box::new(emacs_value_frame::new()));
-            (*new_frame).next = storage.current;
-            storage.current = new_frame;
-            allocate_emacs_value(storage, lisp_val)
-        } else {
-            frame.objects[frame.offset] = emacs_value_tag::new(lisp_val);
-            let ptr = &mut frame.objects[frame.offset] as *mut emacs_value_tag;
-            frame.offset += 1;
-            ptr
+    let storage_ptr = std::ptr::from_mut(storage);
+    // SAFETY: `storage_ptr` addresses the exclusively borrowed `storage`, and
+    // any `Some(ptr)` in `overflow` is an exclusively owned heap frame created
+    // via `Box::leak`. Deriving the active frame via raw pointers avoids
+    // forming an overlapping `&mut storage.initial` across allocations that
+    // would invalidate previously returned `emacs_value` handles in `initial`.
+    let active_ptr: *mut emacs_value_frame = match unsafe { (*storage_ptr).overflow } {
+        Some(ptr) => ptr.as_ptr(),
+        None => unsafe { std::ptr::addr_of_mut!((*storage_ptr).initial) },
+    };
+    // SAFETY: `active_ptr` points to either `storage.initial` or the head
+    // overflow frame, both live and aligned for this call.
+    let offset = unsafe { (*active_ptr).offset };
+    if offset < VALUE_FRAME_SIZE {
+        // SAFETY: `offset < VALUE_FRAME_SIZE`, so `objects[offset]` is in
+        // bounds of the live active frame and exclusively written here.
+        unsafe {
+            let slot = std::ptr::addr_of_mut!((*active_ptr).objects[offset]);
+            slot.write(emacs_value_tag::new(lisp_val));
+            (*active_ptr).offset = offset + 1;
+            slot
+        }
+    } else {
+        let mut new_frame = Box::new(emacs_value_frame::new());
+        // SAFETY: `storage_ptr` is live and exclusively borrowed.
+        new_frame.next = unsafe { (*storage_ptr).overflow };
+        new_frame.objects[0] = emacs_value_tag::new(lisp_val);
+        new_frame.offset = 1;
+        let new_ptr = std::ptr::NonNull::from(Box::leak(new_frame));
+        // SAFETY: `storage_ptr` is live and exclusively borrowed, and `new_ptr`
+        // points to the heap frame just linked into `storage.overflow`.
+        unsafe {
+            (*storage_ptr).overflow = Some(new_ptr);
+            std::ptr::addr_of_mut!((*new_ptr.as_ptr()).objects[0])
         }
     }
 }
 
+/// # Safety
+/// `v` must be null or point to a live `emacs_value_tag` allocated by this
+/// runtime's module storage or global-ref registry.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-fn value_to_lisp(v: emacs_value) -> Value {
+unsafe fn value_to_lisp(v: emacs_value) -> Value {
     if v.is_null() {
         return Value::NIL;
     }
@@ -423,25 +472,26 @@ fn value_to_lisp(v: emacs_value) -> Value {
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-unsafe fn finalize_storage(storage: &mut emacs_value_storage) {
-    let initial = &mut storage.initial as *mut emacs_value_frame;
-    // Overflow frames form a reverse chain from `current` to `initial`.
-    // The initial frame's `next` is always null, not the chain's head.
-    let mut frame = storage.current;
-    while !frame.is_null() && frame != initial {
-        let next = unsafe { (*frame).next };
-        unsafe { drop(Box::from_raw(frame)) };
-        frame = next;
+fn finalize_storage(storage: &mut emacs_value_storage) {
+    // Overflow frames form a singly-linked heap chain terminated by `None`;
+    // `storage.initial` lives inline and is never on the chain.
+    let mut frame = storage.overflow.take();
+    while let Some(ptr) = frame {
+        // SAFETY: every node in `storage.overflow` was created via
+        // `Box::leak(Box::new(emacs_value_frame::new()))` and is exclusively
+        // owned by `storage`.
+        let boxed = unsafe { Box::from_raw(ptr.as_ptr()) };
+        frame = boxed.next;
+        drop(boxed);
     }
-    storage.initial.next = std::ptr::null_mut();
+    storage.initial.next = None;
     storage.initial.offset = 0;
-    storage.current = initial;
 }
 
 impl Drop for emacs_env_private {
     fn drop(&mut self) {
         // Initialization failures and contained panics also retire local tags.
-        unsafe { finalize_storage(&mut self.storage) };
+        finalize_storage(&mut self.storage);
     }
 }
 
@@ -449,8 +499,11 @@ impl Drop for emacs_env_private {
 // Module → Value helpers
 // ============================================================================
 
+/// # Safety
+/// `env` must be null or a live `emacs_env` with valid `private_members`
+/// exclusively accessed on the current thread.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-fn lisp_to_value(env: *mut emacs_env, val: Value) -> emacs_value {
+unsafe fn lisp_to_value(env: *mut emacs_env, val: Value) -> emacs_value {
     if env.is_null() {
         return std::ptr::null_mut::<emacs_value_tag>();
     }
@@ -463,7 +516,10 @@ fn lisp_to_value(env: *mut emacs_env, val: Value) -> emacs_value {
     }
 }
 
-fn lisp_to_value_ignoring_pending_exit(env: *mut emacs_env, val: Value) -> emacs_value {
+/// # Safety
+/// `env` must be null or a live `emacs_env` with valid `private_members`
+/// exclusively accessed on the current thread.
+unsafe fn lisp_to_value_ignoring_pending_exit(env: *mut emacs_env, val: Value) -> emacs_value {
     if env.is_null() {
         return std::ptr::null_mut::<emacs_value_tag>();
     }
@@ -477,7 +533,9 @@ fn lisp_to_value_ignoring_pending_exit(env: *mut emacs_env, val: Value) -> emacs
 // Non-local exits
 // ============================================================================
 
-fn check_pending_non_local_exit(env: *mut emacs_env) -> bool {
+/// # Safety
+/// `env` must be null or a live `emacs_env` with valid `private_members`.
+unsafe fn check_pending_non_local_exit(env: *mut emacs_env) -> bool {
     if env.is_null() {
         return false;
     }
@@ -486,8 +544,11 @@ fn check_pending_non_local_exit(env: *mut emacs_env) -> bool {
         .unwrap_or(false)
 }
 
-fn module_function_begin(env: *mut emacs_env) -> bool {
-    !env.is_null() && !check_pending_non_local_exit(env)
+/// # Safety
+/// `env` must be null or a live `emacs_env` with valid `private_members`.
+unsafe fn module_function_begin(env: *mut emacs_env) -> bool {
+    // SAFETY: `env` is either null-checked above or the live `emacs_env` for this FFI call.
+    !env.is_null() && !unsafe { check_pending_non_local_exit(env) }
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -521,17 +582,28 @@ pub fn collect_dynamic_module_gc_roots(roots: &mut Vec<Value>, heap_identity: us
             if entry.heap_identity != heap_identity || entry.env_priv.is_null() {
                 continue;
             }
+            // SAFETY: `entry.env_priv` is kept live by `ActiveModuleEnv` while
+            // on `ACTIVE_ENVS`, and `overflow` chains exclusively owned heap frames.
             unsafe {
                 let priv_ = &*entry.env_priv;
                 roots.push(priv_.non_local_exit_symbol);
                 roots.push(priv_.non_local_exit_data);
-                let mut frame = priv_.storage.current as *const emacs_value_frame;
-                while !frame.is_null() {
-                    let frame_ref = &*frame;
+                let mut frame = priv_.storage.overflow;
+                while let Some(ptr) = frame {
+                    let frame_ref = ptr.as_ref();
                     for item in frame_ref.objects.iter().take(frame_ref.offset) {
                         roots.push(item.v);
                     }
                     frame = frame_ref.next;
+                }
+                for item in priv_
+                    .storage
+                    .initial
+                    .objects
+                    .iter()
+                    .take(priv_.storage.initial.offset)
+                {
+                    roots.push(item.v);
                 }
             }
         }
@@ -547,8 +619,11 @@ struct ActiveModuleEnv {
 static_assertions::assert_not_impl_any!(ActiveModuleEnv: Send, Sync);
 
 impl ActiveModuleEnv {
+    /// # Safety
+    /// `env_priv` must remain valid and initialized for the entire lifetime of
+    /// the returned `ActiveModuleEnv` guard so GC root collection can read it.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    fn push(env_priv: *mut emacs_env_private) -> Self {
+    unsafe fn push(env_priv: *mut emacs_env_private) -> Self {
         let heap_identity = neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
         Self {
             _scope: neovm_value::tls_scope::TlsStackScope::push(
@@ -677,7 +752,9 @@ fn module_panic_recovery_blocked_via_ctx() -> bool {
             // without a Context, but GC lock poison is still observable via
             // the thread heap — probe that half, exactly like the JIT's
             // ctx-less shim arm (`contain_jit_shim_panic`).
-            return neovm_value::tagged::gc::with_tagged_heap(|h| h.gc_locks_poisoned());
+            // SAFETY: read-only GC lock-poison probe; never collects, re-enters
+            // `with_tagged_heap`, mints capability tokens, or mutates payloads.
+            return unsafe { neovm_value::tagged::gc::with_tagged_heap(|h| h.gc_locks_poisoned()) };
         }
         // SAFETY: same shared-read-through-MODULE_CTX discipline as
         // `module_should_quit`; the probe only reads two flags.
@@ -696,8 +773,12 @@ fn module_panic_recovery_blocked_via_ctx() -> bool {
 /// [`contain_lisp_panics`] / the trampolines, Drop-guarded host counters) is
 /// what makes the crossing states coherent; a caught panic here never resumes
 /// the broken computation.
+/// # Safety
+/// `env` must be null or a live `emacs_env` with valid `private_members`
+/// exclusively accessed on the current thread so a caught panic can record a
+/// pending signal.
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-fn module_guard<R>(env: *mut emacs_env, sentinel: R, body: impl FnOnce() -> R) -> R {
+unsafe fn module_guard<R>(env: *mut emacs_env, sentinel: R, body: impl FnOnce() -> R) -> R {
     match catch_unwind(AssertUnwindSafe(body)) {
         Ok(value) => value,
         Err(payload) => {
@@ -757,7 +838,7 @@ unsafe fn initialize_environment(env: *mut emacs_env, priv_: *mut emacs_env_priv
         (*priv_).pending_non_local_exit = emacs_funcall_exit::Return;
         (*priv_).non_local_exit_symbol = Value::NIL;
         (*priv_).non_local_exit_data = Value::NIL;
-        (*priv_).storage.init();
+        (*priv_).storage.reset();
 
         let e = &mut *env;
         e.size = std::mem::size_of::<emacs_env>() as isize;
@@ -815,12 +896,14 @@ unsafe extern "C" fn module_make_global_ref(
     env: *mut emacs_env,
     value: emacs_value,
 ) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
+    let body = || {
         if value.is_null() {
             return std::ptr::null_mut();
         }
-        let lisp_val = value_to_lisp(value);
-        if check_pending_non_local_exit(env) {
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let lisp_val = unsafe { value_to_lisp(value) };
+        // SAFETY: `env` is either null-checked above or the live `emacs_env` for this FFI call.
+        if unsafe { check_pending_non_local_exit(env) } {
             return std::ptr::null_mut();
         }
         let heap_identity = neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
@@ -840,6 +923,9 @@ unsafe extern "C" fn module_make_global_ref(
             let mut tag_cell = emacs_value_tag::new(lisp_val);
             tag_cell.set_metadata(metadata);
             let tag = Box::into_raw(Box::new(tag_cell));
+            // SAFETY: `tag` is `Box::into_raw` of a live `emacs_value_tag`.
+            // The registry owns the entry, and `Drop` writes nil only into
+            // that cell. It does not free it.
             let entry = GlobalRefEntry::new(lisp_val, heap_identity, tag);
             if let Some(pos) = refs.iter().position(|e| e.is_none()) {
                 refs[pos] = Some(entry);
@@ -848,12 +934,15 @@ unsafe extern "C" fn module_make_global_ref(
             }
             tag
         })
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 unsafe extern "C" fn module_free_global_ref(env: *mut emacs_env, global_value: emacs_value) {
-    module_guard(env, (), || {
+    let body = || {
         if global_value.is_null() {
             return;
         }
@@ -880,24 +969,30 @@ unsafe extern "C" fn module_free_global_ref(env: *mut emacs_env, global_value: e
         }
         drop(Box::from_raw(metadata_ptr));
         drop(Box::from_raw(global_value));
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, (), body) }
 }
 
 // --- Non-local exits ---
 
 unsafe extern "C" fn module_non_local_exit_check(env: *mut emacs_env) -> emacs_funcall_exit {
-    module_guard(env, emacs_funcall_exit::Return, || {
+    let body = || {
         if env.is_null() {
             return emacs_funcall_exit::Return;
         }
         unsafe { (*env).private_members.as_ref() }
             .map(|p| p.pending_non_local_exit)
             .unwrap_or(emacs_funcall_exit::Return)
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, emacs_funcall_exit::Return, body) }
 }
 
 unsafe extern "C" fn module_non_local_exit_clear(env: *mut emacs_env) {
-    module_guard(env, (), || {
+    let body = || {
         if env.is_null() {
             return;
         }
@@ -907,7 +1002,10 @@ unsafe extern "C" fn module_non_local_exit_clear(env: *mut emacs_env) {
             priv_.non_local_exit_symbol = Value::NIL;
             priv_.non_local_exit_data = Value::NIL;
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, (), body) }
 }
 
 unsafe extern "C" fn module_non_local_exit_get(
@@ -915,7 +1013,7 @@ unsafe extern "C" fn module_non_local_exit_get(
     symbol: *mut emacs_value,
     data: *mut emacs_value,
 ) -> emacs_funcall_exit {
-    module_guard(env, emacs_funcall_exit::Return, || {
+    let body = || {
         if env.is_null() {
             return emacs_funcall_exit::Return;
         }
@@ -924,15 +1022,24 @@ unsafe extern "C" fn module_non_local_exit_get(
             let status = priv_.pending_non_local_exit;
             if status != emacs_funcall_exit::Return {
                 if !symbol.is_null() {
-                    *symbol = lisp_to_value_ignoring_pending_exit(env, priv_.non_local_exit_symbol);
+                    // SAFETY: `env` was checked non-null above and owns initialized private handle storage.
+                    *symbol = unsafe {
+                        lisp_to_value_ignoring_pending_exit(env, priv_.non_local_exit_symbol)
+                    };
                 }
                 if !data.is_null() {
-                    *data = lisp_to_value_ignoring_pending_exit(env, priv_.non_local_exit_data);
+                    // SAFETY: `env` was checked non-null above and owns initialized private handle storage.
+                    *data = unsafe {
+                        lisp_to_value_ignoring_pending_exit(env, priv_.non_local_exit_data)
+                    };
                 }
             }
             status
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, emacs_funcall_exit::Return, body) }
 }
 
 unsafe extern "C" fn module_non_local_exit_signal(
@@ -940,17 +1047,22 @@ unsafe extern "C" fn module_non_local_exit_signal(
     symbol: emacs_value,
     data: emacs_value,
 ) {
-    module_guard(env, (), || {
+    let body = || {
         if env.is_null() {
             return;
         }
         unsafe {
             let priv_ = &mut *(*env).private_members;
             priv_.pending_non_local_exit = emacs_funcall_exit::Signal;
-            priv_.non_local_exit_symbol = value_to_lisp(symbol);
-            priv_.non_local_exit_data = value_to_lisp(data);
+            // SAFETY: `value_to_lisp` handles null as `NIL` and dereferences only live module handles.
+            priv_.non_local_exit_symbol = unsafe { value_to_lisp(symbol) };
+            // SAFETY: `value_to_lisp` handles null as `NIL` and dereferences only live module handles.
+            priv_.non_local_exit_data = unsafe { value_to_lisp(data) };
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, (), body) }
 }
 
 unsafe extern "C" fn module_non_local_exit_throw(
@@ -958,17 +1070,22 @@ unsafe extern "C" fn module_non_local_exit_throw(
     tag: emacs_value,
     value: emacs_value,
 ) {
-    module_guard(env, (), || {
+    let body = || {
         if env.is_null() {
             return;
         }
         unsafe {
             let priv_ = &mut *(*env).private_members;
             priv_.pending_non_local_exit = emacs_funcall_exit::Throw;
-            priv_.non_local_exit_symbol = value_to_lisp(tag);
-            priv_.non_local_exit_data = value_to_lisp(value);
+            // SAFETY: `value_to_lisp` handles null as `NIL` and dereferences only live module handles.
+            priv_.non_local_exit_symbol = unsafe { value_to_lisp(tag) };
+            // SAFETY: `value_to_lisp` handles null as `NIL` and dereferences only live module handles.
+            priv_.non_local_exit_data = unsafe { value_to_lisp(value) };
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, (), body) }
 }
 
 // --- Intern ---
@@ -977,25 +1094,32 @@ unsafe extern "C" fn module_intern(
     env: *mut emacs_env,
     name: *const std::ffi::c_char,
 ) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
-        if name.is_null() || !module_function_begin(env) {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if name.is_null() || !unsafe { module_function_begin(env) } {
             return std::ptr::null_mut();
         }
         let cstr = unsafe { CStr::from_ptr(name) };
         let name = LispString::from_emacs_bytes(cstr.to_bytes().to_vec());
         let val = Value::from_sym_id(intern_lisp_string(&name));
-        lisp_to_value(env, val)
-    })
+        // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+        unsafe { lisp_to_value(env, val) }
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 // --- Type conversion ---
 
 unsafe extern "C" fn module_type_of(env: *mut emacs_env, arg: emacs_value) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) || arg.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || arg.is_null() {
             return std::ptr::null_mut();
         }
-        let val = value_to_lisp(arg);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(arg) };
         let type_name: &str = match val.kind() {
             neovm_value::value::ValueKind::Nil | neovm_value::value::ValueKind::T => "symbol",
             neovm_value::value::ValueKind::Fixnum(_) => "integer",
@@ -1043,34 +1167,50 @@ unsafe extern "C" fn module_type_of(env: *mut emacs_env, arg: emacs_value) -> em
             _ => "unknown",
         };
         let sym = Value::from_sym_id(intern(type_name));
-        lisp_to_value(env, sym)
-    })
+        // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+        unsafe { lisp_to_value(env, sym) }
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 unsafe extern "C" fn module_is_not_nil(env: *mut emacs_env, arg: emacs_value) -> bool {
-    module_guard(env, false, || {
-        if !module_function_begin(env) || arg.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || arg.is_null() {
             return false;
         }
-        !value_to_lisp(arg).is_nil()
-    })
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        !unsafe { value_to_lisp(arg) }.is_nil()
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, false, body) }
 }
 
 unsafe extern "C" fn module_eq(env: *mut emacs_env, a: emacs_value, b: emacs_value) -> bool {
-    module_guard(env, false, || {
-        if !module_function_begin(env) || a.is_null() || b.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || a.is_null() || b.is_null() {
             return false;
         }
-        value_to_lisp(a) == value_to_lisp(b)
-    })
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        (unsafe { value_to_lisp(a) }) == (unsafe { value_to_lisp(b) })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, false, body) }
 }
 
 unsafe extern "C" fn module_extract_integer(env: *mut emacs_env, arg: emacs_value) -> i64 {
-    module_guard(env, 0, || {
-        if !module_function_begin(env) || arg.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || arg.is_null() {
             return 0;
         }
-        let val = value_to_lisp(arg);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(arg) };
         if let Some(n) = val.as_fixnum() {
             return n;
         }
@@ -1091,24 +1231,34 @@ unsafe extern "C" fn module_extract_integer(env: *mut emacs_env, arg: emacs_valu
             );
         }
         0
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, 0, body) }
 }
 
 unsafe extern "C" fn module_make_integer(env: *mut emacs_env, n: i64) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } {
             return std::ptr::null_mut();
         }
-        lisp_to_value(env, Value::fixnum(n))
-    })
+        // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+        unsafe { lisp_to_value(env, Value::fixnum(n)) }
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 unsafe extern "C" fn module_extract_float(env: *mut emacs_env, arg: emacs_value) -> f64 {
-    module_guard(env, 0.0, || {
-        if !module_function_begin(env) || arg.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || arg.is_null() {
             return 0.0;
         }
-        let val = value_to_lisp(arg);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(arg) };
         if let Some(f) = val.as_float() {
             return f;
         }
@@ -1120,16 +1270,24 @@ unsafe extern "C" fn module_extract_float(env: *mut emacs_env, arg: emacs_value)
             );
         }
         0.0
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, 0.0, body) }
 }
 
 unsafe extern "C" fn module_make_float(env: *mut emacs_env, d: f64) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } {
             return std::ptr::null_mut();
         }
-        lisp_to_value(env, Value::make_float(d))
-    })
+        // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+        unsafe { lisp_to_value(env, Value::make_float(d)) }
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 // --- String ---
@@ -1140,11 +1298,13 @@ unsafe extern "C" fn module_copy_string_contents(
     buf: *mut std::ffi::c_char,
     len: *mut isize,
 ) -> bool {
-    module_guard(env, false, || {
-        if !module_function_begin(env) || value.is_null() || len.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || value.is_null() || len.is_null() {
             return false;
         }
-        let val = value_to_lisp(value);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(value) };
         let bytes = match val.as_lisp_string() {
             Some(ls) => {
                 if !ls.is_multibyte() && !ls.as_bytes().is_ascii() {
@@ -1220,7 +1380,32 @@ unsafe extern "C" fn module_copy_string_contents(
             *len = required_len;
         }
         true
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, false, body) }
+}
+
+/// Bytes of a module string argument.
+///
+/// # Safety
+///
+/// When `len > 0`, `ptr` must address `len` initialized bytes that stay valid
+/// for `'a`. `len == 0` does not read `ptr` (GNU `emacs-module.c` returns the
+/// empty string without consulting `str`). A null `ptr` with `len > 0` is
+/// rejected and is not dereferenced.
+unsafe fn module_input_bytes<'a>(ptr: *const u8, len: isize) -> Result<&'a [u8], ()> {
+    if len < 0 {
+        return Err(());
+    }
+    if len == 0 {
+        return Ok(&[]);
+    }
+    if ptr.is_null() {
+        return Err(());
+    }
+    // SAFETY: the caller promised `ptr` addresses `len` initialized bytes for `'a`.
+    Ok(unsafe { std::slice::from_raw_parts(ptr, len as usize) })
 }
 
 unsafe extern "C" fn module_make_string(
@@ -1228,14 +1413,17 @@ unsafe extern "C" fn module_make_string(
     str: *const std::ffi::c_char,
     len: isize,
 ) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) || len < 0 {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } {
             return std::ptr::null_mut();
         }
-        if len > 0 && str.is_null() {
-            return std::ptr::null_mut();
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(str as *const u8, len as usize) };
+        // SAFETY: the module caller of `make_string` passes `len` initialized
+        // bytes, or `len == 0`, matching `module_make_string` in emacs-module.c.
+        let bytes = match unsafe { module_input_bytes(str as *const u8, len) } {
+            Ok(bytes) => bytes,
+            Err(()) => return std::ptr::null_mut(),
+        };
         let s = match std::str::from_utf8(bytes) {
             Ok(s) => s,
             Err(_) => {
@@ -1254,11 +1442,17 @@ unsafe extern "C" fn module_make_string(
                 return std::ptr::null_mut();
             }
         };
-        lisp_to_value(
-            env,
-            Value::heap_string(neovm_value::heap_types::LispString::from_utf8(s)),
-        )
-    })
+        // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+        unsafe {
+            lisp_to_value(
+                env,
+                Value::heap_string(neovm_value::heap_types::LispString::from_utf8(s)),
+            )
+        }
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 unsafe extern "C" fn module_make_unibyte_string(
@@ -1266,21 +1460,34 @@ unsafe extern "C" fn module_make_unibyte_string(
     str: *const std::ffi::c_char,
     len: isize,
 ) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) || len < 0 {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } {
             return std::ptr::null_mut();
         }
-        if len > 0 && str.is_null() {
-            return std::ptr::null_mut();
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(str as *const u8, len as usize) };
-        let val = neovm_value::tagged::gc::with_tagged_heap(|h| {
-            h.alloc_string(neovm_value::heap_types::LispString::from_unibyte(
-                bytes.to_vec(),
-            ))
-        });
-        lisp_to_value(env, val)
-    })
+        // SAFETY: the module caller of `make_unibyte_string` passes `len`
+        // initialized bytes, or `len == 0`, matching emacs-module.c.
+        let bytes = match unsafe { module_input_bytes(str as *const u8, len) } {
+            Ok(bytes) => bytes,
+            Err(()) => return std::ptr::null_mut(),
+        };
+        // SAFETY: the module ABI runs this FFI entry on the evaluator thread that
+        // owns the installed heap; pure arena allocation (`alloc_string`) never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability tokens,
+        // or mutates existing payloads.
+        let val = unsafe {
+            neovm_value::tagged::gc::with_tagged_heap(|h| {
+                h.alloc_string(neovm_value::heap_types::LispString::from_unibyte(
+                    bytes.to_vec(),
+                ))
+            })
+        };
+        // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+        unsafe { lisp_to_value(env, val) }
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 // --- User pointer ---
@@ -1290,21 +1497,37 @@ unsafe extern "C" fn module_make_user_ptr(
     fin: Option<unsafe extern "C" fn(*mut c_void)>,
     ptr: *mut c_void,
 ) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } {
             return std::ptr::null_mut();
         }
-        let val = neovm_value::tagged::gc::with_tagged_heap(|h| h.alloc_user_ptr(ptr, fin));
-        lisp_to_value(env, val)
-    })
+        let alloc = |h: &mut neovm_value::tagged::gc::TaggedHeap| {
+            // SAFETY: the emacs-module ABI gives `fin` ownership of `ptr`.
+            // This `unsafe extern "C"` entry is that contract.
+            unsafe { h.alloc_user_ptr(ptr, fin) }
+        };
+        // SAFETY: the module ABI runs this FFI entry on the evaluator thread that
+        // owns the installed heap; pure allocation (`alloc_user_ptr`) never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability tokens,
+        // or mutates existing payloads.
+        let val = unsafe { neovm_value::tagged::gc::with_tagged_heap(alloc) };
+        // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+        unsafe { lisp_to_value(env, val) }
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 unsafe extern "C" fn module_get_user_ptr(env: *mut emacs_env, arg: emacs_value) -> *mut c_void {
-    module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) || arg.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || arg.is_null() {
             return std::ptr::null_mut();
         }
-        let val = value_to_lisp(arg);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(arg) };
         match val.as_user_ptr() {
             Some(up) => up.ptr,
             None => {
@@ -1321,15 +1544,20 @@ unsafe extern "C" fn module_get_user_ptr(env: *mut emacs_env, arg: emacs_value) 
                 std::ptr::null_mut()
             }
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 unsafe extern "C" fn module_set_user_ptr(env: *mut emacs_env, arg: emacs_value, ptr: *mut c_void) {
-    module_guard(env, (), || {
-        if !module_function_begin(env) || arg.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || arg.is_null() {
             return;
         }
-        let val = value_to_lisp(arg);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(arg) };
         if let Some(veclike_ptr) = val.as_veclike_ptr()
             && val.veclike_type() == Some(VecLikeType::UserPtr)
         {
@@ -1347,18 +1575,23 @@ unsafe extern "C" fn module_set_user_ptr(env: *mut emacs_env, arg: emacs_value, 
                 priv_.non_local_exit_data = Value::list(vec![Value::symbol("user-ptrp"), val]);
             }
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, (), body) }
 }
 
 unsafe extern "C" fn module_get_user_finalizer(
     env: *mut emacs_env,
     uptr: emacs_value,
 ) -> Option<unsafe extern "C" fn(*mut c_void)> {
-    module_guard(env, None, || {
-        if !module_function_begin(env) || uptr.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || uptr.is_null() {
             return None;
         }
-        let val = value_to_lisp(uptr);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(uptr) };
         match val.as_user_ptr() {
             Some(up) => up.finalizer,
             None => {
@@ -1375,7 +1608,10 @@ unsafe extern "C" fn module_get_user_finalizer(
                 None
             }
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, None, body) }
 }
 
 unsafe extern "C" fn module_set_user_finalizer(
@@ -1383,11 +1619,13 @@ unsafe extern "C" fn module_set_user_finalizer(
     arg: emacs_value,
     fin: Option<unsafe extern "C" fn(*mut c_void)>,
 ) {
-    module_guard(env, (), || {
-        if !module_function_begin(env) || arg.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || arg.is_null() {
             return;
         }
-        let val = value_to_lisp(arg);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(arg) };
         if let Some(veclike_ptr) = val.as_veclike_ptr()
             && val.veclike_type() == Some(VecLikeType::UserPtr)
         {
@@ -1405,7 +1643,10 @@ unsafe extern "C" fn module_set_user_finalizer(
                 priv_.non_local_exit_data = Value::list(vec![Value::symbol("user-ptrp"), val]);
             }
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, (), body) }
 }
 
 // --- Vector ---
@@ -1415,15 +1656,18 @@ unsafe extern "C" fn module_vec_get(
     vector: emacs_value,
     index: isize,
 ) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) || vector.is_null() || index < 0 {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || vector.is_null() || index < 0 {
             return std::ptr::null_mut();
         }
-        let val = value_to_lisp(vector);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(vector) };
         if let Some(slice) = val.as_vector_data() {
             let idx = index as usize;
             if idx < slice.len() {
-                return lisp_to_value(env, slice[idx]);
+                // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+                return unsafe { lisp_to_value(env, slice.at(idx)) };
             }
             unsafe {
                 let priv_ = &mut *(*env).private_members;
@@ -1440,7 +1684,10 @@ unsafe extern "C" fn module_vec_get(
             priv_.non_local_exit_data = Value::list(vec![Value::symbol("vectorp"), val]);
         }
         std::ptr::null_mut()
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 unsafe extern "C" fn module_vec_set(
@@ -1449,11 +1696,13 @@ unsafe extern "C" fn module_vec_set(
     index: isize,
     value: emacs_value,
 ) {
-    module_guard(env, (), || {
-        if !module_function_begin(env) || vector.is_null() || index < 0 {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || vector.is_null() || index < 0 {
             return;
         }
-        let val = value_to_lisp(vector);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(vector) };
         if val.veclike_type() == Some(VecLikeType::Vector) {
             let idx = index as usize;
             // Route the slot store through the barriered chokepoint. Writing the
@@ -1462,7 +1711,8 @@ unsafe extern "C" fn module_vec_set(
             // overwritten slot — a use-after-free. `set_vector_slot` performs the
             // bounds check + `note_heap_slot_write` + atomic store, returning false
             // here only when `idx` is out of bounds.
-            if val.set_vector_slot(idx, value_to_lisp(value)) {
+            // SAFETY: handle was checked non-null above and belongs to the active module environment.
+            if val.set_vector_slot(idx, unsafe { value_to_lisp(value) }) {
                 return;
             }
             unsafe {
@@ -1479,15 +1729,20 @@ unsafe extern "C" fn module_vec_set(
             priv_.non_local_exit_symbol = Value::from_sym_id(intern("wrong-type-argument"));
             priv_.non_local_exit_data = Value::list(vec![Value::symbol("vectorp"), val]);
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, (), body) }
 }
 
 unsafe extern "C" fn module_vec_size(env: *mut emacs_env, vector: emacs_value) -> isize {
-    module_guard(env, 0, || {
-        if !module_function_begin(env) || vector.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || vector.is_null() {
             return 0;
         }
-        let val = value_to_lisp(vector);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(vector) };
         if let Some(slice) = val.as_vector_data() {
             return slice.len() as isize;
         }
@@ -1500,14 +1755,18 @@ unsafe extern "C" fn module_vec_size(env: *mut emacs_env, vector: emacs_value) -
             }
         }
         0
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, 0, body) }
 }
 
 // --- Quit / Input ---
 
 unsafe extern "C" fn module_should_quit(env: *mut emacs_env) -> bool {
-    module_guard(env, false, || {
-        if env.is_null() || check_pending_non_local_exit(env) {
+    let body = || {
+        // SAFETY: `env` is either null-checked above or the live `emacs_env` for this FFI call.
+        if env.is_null() || unsafe { check_pending_non_local_exit(env) } {
             return false;
         }
         MODULE_CTX.with(|ctx_cell| {
@@ -1520,12 +1779,16 @@ unsafe extern "C" fn module_should_quit(env: *mut emacs_env) -> bool {
                 ctx.quit_pending()
             }
         })
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, false, body) }
 }
 
 unsafe extern "C" fn module_process_input(env: *mut emacs_env) -> emacs_process_input_result {
-    module_guard(env, emacs_process_input_result::Quit, || {
-        if !module_function_begin(env) {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } {
             return emacs_process_input_result::Quit;
         }
         MODULE_CTX.with(|ctx_cell| {
@@ -1546,73 +1809,85 @@ unsafe extern "C" fn module_process_input(env: *mut emacs_env) -> emacs_process_
                 }
             }
         })
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, emacs_process_input_result::Quit, body) }
 }
 
 // --- Time ---
 
 unsafe extern "C" fn module_extract_time(env: *mut emacs_env, arg: emacs_value) -> emacs_time {
-    module_guard(
-        env,
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || arg.is_null() {
+            return emacs_time {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+        }
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(arg) };
+        if let Some(items) = val.as_vector_data()
+            && items.len() >= 2
+        {
+            let sec_high = items.at(0).as_fixnum().unwrap_or(0);
+            let sec_low = items.at(1).as_fixnum().unwrap_or(0);
+            let micros = if items.len() >= 3 {
+                items.at(2).as_fixnum().unwrap_or(0)
+            } else {
+                0
+            };
+            let picos = if items.len() >= 4 {
+                items.at(3).as_fixnum().unwrap_or(0)
+            } else {
+                0
+            };
+            let seconds = (sec_high << 16) | (sec_low as u16 as i64);
+            let nanoseconds = micros * 1000 + picos / 1000;
+            return emacs_time {
+                tv_sec: seconds as libc::time_t,
+                tv_nsec: nanoseconds as libc::c_long,
+            };
+        }
+        if let Some(n) = val.as_fixnum() {
+            return emacs_time {
+                tv_sec: n as libc::time_t,
+                tv_nsec: 0,
+            };
+        }
+        if !env.is_null() {
+            // SAFETY: `env` was checked non-null above and its `private_members` is live for this call.
+            unsafe {
+                let priv_ = &mut *(*env).private_members;
+                priv_.pending_non_local_exit = emacs_funcall_exit::Signal;
+                priv_.non_local_exit_symbol = Value::from_sym_id(intern("wrong-type-argument"));
+                priv_.non_local_exit_data = Value::list(vec![Value::symbol("timep"), val]);
+            }
+        }
         emacs_time {
             tv_sec: 0,
             tv_nsec: 0,
-        },
-        || {
-            if !module_function_begin(env) || arg.is_null() {
-                return emacs_time {
-                    tv_sec: 0,
-                    tv_nsec: 0,
-                };
-            }
-            let val = value_to_lisp(arg);
-            if let Some(items) = val.as_vector_data()
-                && items.len() >= 2
-            {
-                let sec_high = items[0].as_fixnum().unwrap_or(0);
-                let sec_low = items[1].as_fixnum().unwrap_or(0);
-                let micros = if items.len() >= 3 {
-                    items[2].as_fixnum().unwrap_or(0)
-                } else {
-                    0
-                };
-                let picos = if items.len() >= 4 {
-                    items[3].as_fixnum().unwrap_or(0)
-                } else {
-                    0
-                };
-                let seconds = (sec_high << 16) | (sec_low as u16 as i64);
-                let nanoseconds = micros * 1000 + picos / 1000;
-                return emacs_time {
-                    tv_sec: seconds as libc::time_t,
-                    tv_nsec: nanoseconds as libc::c_long,
-                };
-            }
-            if let Some(n) = val.as_fixnum() {
-                return emacs_time {
-                    tv_sec: n as libc::time_t,
-                    tv_nsec: 0,
-                };
-            }
-            if !env.is_null() {
-                unsafe {
-                    let priv_ = &mut *(*env).private_members;
-                    priv_.pending_non_local_exit = emacs_funcall_exit::Signal;
-                    priv_.non_local_exit_symbol = Value::from_sym_id(intern("wrong-type-argument"));
-                    priv_.non_local_exit_data = Value::list(vec![Value::symbol("timep"), val]);
-                }
-            }
+        }
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe {
+        module_guard(
+            env,
             emacs_time {
                 tv_sec: 0,
                 tv_nsec: 0,
-            }
-        },
-    )
+            },
+            body,
+        )
+    }
 }
 
 unsafe extern "C" fn module_make_time(env: *mut emacs_env, time: emacs_time) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } {
             return std::ptr::null_mut();
         }
         // Route through the shared time-encoding seam (GNU
@@ -1635,8 +1910,12 @@ unsafe extern "C" fn module_make_time(env: *mut emacs_env, time: emacs_time) -> 
         #[cfg(not(target_os = "windows"))]
         let nanoseconds = time.tv_nsec;
         let lisp_time = make_lisp_time(time.tv_sec, nanoseconds, LispTimeOutput::TicksHz);
-        lisp_to_value(env, lisp_time)
-    })
+        // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+        unsafe { lisp_to_value(env, lisp_time) }
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 // --- Big integer ---
@@ -1649,11 +1928,13 @@ unsafe extern "C" fn module_extract_big_integer(
     count: *mut isize,
     magnitude: *mut emacs_limb_t,
 ) -> bool {
-    module_guard(env, false, || {
-        if !module_function_begin(env) || arg.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || arg.is_null() {
             return false;
         }
-        let val = value_to_lisp(arg);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(arg) };
         if let Some(n) = val.as_fixnum() {
             unsafe {
                 if !sign.is_null() {
@@ -1746,7 +2027,10 @@ unsafe extern "C" fn module_extract_big_integer(
             }
         }
         false
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, false, body) }
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1756,15 +2040,18 @@ unsafe extern "C" fn module_make_big_integer(
     count: isize,
     magnitude: *const emacs_limb_t,
 ) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } {
             return std::ptr::null_mut();
         }
         if sign == 0 {
-            return lisp_to_value(env, Value::fixnum(0));
+            // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+            return unsafe { lisp_to_value(env, Value::fixnum(0)) };
         }
         if count == 0 {
-            return lisp_to_value(env, Value::fixnum(0));
+            // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+            return unsafe { lisp_to_value(env, Value::fixnum(0)) };
         }
         if magnitude.is_null() || count < 0 {
             return std::ptr::null_mut();
@@ -1778,13 +2065,18 @@ unsafe extern "C" fn module_make_big_integer(
                 } else {
                     -(single as i64)
                 };
-                return lisp_to_value(env, Value::make_int(v));
+                // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+                return unsafe { lisp_to_value(env, Value::make_int(v)) };
             }
         }
         let b = Integer::from_twos_complement_limbs_asc(limbs);
         let val = Value::make_integer(if sign >= 0 { b } else { -b });
-        lisp_to_value(env, val)
-    })
+        // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+        unsafe { lisp_to_value(env, val) }
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 // --- Function finalizer ---
@@ -1793,11 +2085,13 @@ unsafe extern "C" fn module_get_function_finalizer(
     env: *mut emacs_env,
     arg: emacs_value,
 ) -> Option<unsafe extern "C" fn(*mut c_void)> {
-    module_guard(env, None, || {
-        if !module_function_begin(env) || arg.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || arg.is_null() {
             return None;
         }
-        let val = value_to_lisp(arg);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(arg) };
         match val.as_module_function() {
             Some(mf) => mf.finalizer,
             None => {
@@ -1814,7 +2108,10 @@ unsafe extern "C" fn module_get_function_finalizer(
                 None
             }
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, None, body) }
 }
 
 unsafe extern "C" fn module_set_function_finalizer(
@@ -1822,11 +2119,13 @@ unsafe extern "C" fn module_set_function_finalizer(
     arg: emacs_value,
     fin: Option<unsafe extern "C" fn(*mut c_void)>,
 ) {
-    module_guard(env, (), || {
-        if !module_function_begin(env) || arg.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || arg.is_null() {
             return;
         }
-        let val = value_to_lisp(arg);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let val = unsafe { value_to_lisp(arg) };
         if let Some(veclike_ptr) = val.as_veclike_ptr()
             && val.veclike_type() == Some(VecLikeType::ModuleFunction)
         {
@@ -1845,7 +2144,10 @@ unsafe extern "C" fn module_set_function_finalizer(
                     Value::list(vec![Value::symbol("module-function-p"), val]);
             }
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, (), body) }
 }
 
 // --- Pipe channel ---
@@ -1854,11 +2156,13 @@ unsafe extern "C" fn module_open_channel(
     env: *mut emacs_env,
     pipe_process: emacs_value,
 ) -> std::ffi::c_int {
-    module_guard(env, -1, || {
-        if !module_function_begin(env) || pipe_process.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || pipe_process.is_null() {
             return -1;
         }
-        let process = value_to_lisp(pipe_process);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let process = unsafe { value_to_lisp(pipe_process) };
         MODULE_CTX.with(|ctx_cell| {
             let ctx_ptr = ctx_cell.get();
             if ctx_ptr.is_null() {
@@ -1886,7 +2190,10 @@ unsafe extern "C" fn module_open_channel(
                 }
             }
         })
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, -1, body) }
 }
 
 // --- Interactive ---
@@ -1897,12 +2204,15 @@ unsafe extern "C" fn module_make_interactive(
     function: emacs_value,
     spec: emacs_value,
 ) {
-    module_guard(env, (), || {
-        if !module_function_begin(env) || function.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || function.is_null() {
             return;
         }
-        let func_val = value_to_lisp(function);
-        let spec_val = value_to_lisp(spec);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let func_val = unsafe { value_to_lisp(function) };
+        // SAFETY: `value_to_lisp` handles null as `NIL` and dereferences only live module handles.
+        let spec_val = unsafe { value_to_lisp(spec) };
         if let Some(veclike_ptr) = func_val.as_veclike_ptr()
             && func_val.veclike_type() == Some(VecLikeType::ModuleFunction)
         {
@@ -1931,7 +2241,10 @@ unsafe extern "C" fn module_make_interactive(
             priv_.non_local_exit_data =
                 Value::list(vec![Value::symbol("module-function-p"), func_val]);
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, (), body) }
 }
 
 // ============================================================================
@@ -1947,8 +2260,9 @@ unsafe extern "C" fn module_make_function(
     docstring: *const std::ffi::c_char,
     data: *mut c_void,
 ) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } {
             return std::ptr::null_mut();
         }
         let most_positive_fixnum = Value::MOST_POSITIVE_FIXNUM as isize;
@@ -1996,18 +2310,31 @@ unsafe extern "C" fn module_make_function(
                 }
             }
         };
-        let val = neovm_value::tagged::gc::with_tagged_heap(|h| {
-            h.alloc_module_function(
-                min_arity,
-                max_arity,
-                subr as *const c_void,
-                data,
-                doc_val,
-                Value::NIL,
-            )
-        });
-        lisp_to_value(env, val)
-    })
+        let alloc = |h: &mut neovm_value::tagged::gc::TaggedHeap| {
+            // SAFETY: the emacs-module ABI passes `subr` as a live `emacs_function`
+            // and `data` that outlives every later invocation.
+            unsafe {
+                h.alloc_module_function(
+                    min_arity,
+                    max_arity,
+                    subr as *const c_void,
+                    data,
+                    doc_val,
+                    Value::NIL,
+                )
+            }
+        };
+        // SAFETY: the module ABI runs this FFI entry on the evaluator thread that
+        // owns the installed heap; pure allocation (`alloc_module_function`) never
+        // collects, sweeps, re-enters `with_tagged_heap`, mints capability tokens,
+        // or mutates existing payloads.
+        let val = unsafe { neovm_value::tagged::gc::with_tagged_heap(alloc) };
+        // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+        unsafe { lisp_to_value(env, val) }
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 // ============================================================================
@@ -2020,15 +2347,18 @@ unsafe extern "C" fn module_funcall(
     nargs: isize,
     args: *mut emacs_value,
 ) -> emacs_value {
-    module_guard(env, std::ptr::null_mut(), || {
-        if !module_function_begin(env) || func.is_null() {
+    let body = || {
+        // SAFETY: `env` is either null or the live `emacs_env` pointer for this FFI call.
+        if !unsafe { module_function_begin(env) } || func.is_null() {
             return std::ptr::null_mut();
         }
-        let func_val = value_to_lisp(func);
+        // SAFETY: handle was checked non-null above and belongs to the active module environment.
+        let func_val = unsafe { value_to_lisp(func) };
         let mut lisp_args = Vec::with_capacity(nargs as usize);
         for i in 0..nargs as usize {
             let arg = unsafe { *args.add(i) };
-            lisp_args.push(value_to_lisp(arg));
+            // SAFETY: `value_to_lisp` handles null as `NIL` and dereferences only live module handles.
+            lisp_args.push(unsafe { value_to_lisp(arg) });
         }
 
         let result = MODULE_CTX.with(|ctx_cell| {
@@ -2048,7 +2378,8 @@ unsafe extern "C" fn module_funcall(
         });
 
         match result {
-            Ok(ret_val) => lisp_to_value(env, ret_val),
+            // SAFETY: `module_function_begin(env)` confirmed `env` is live with valid handle storage.
+            Ok(ret_val) => unsafe { lisp_to_value(env, ret_val) },
             Err(flow) => {
                 unsafe {
                     module_handle_nonlocal_exit(env, flow);
@@ -2056,7 +2387,10 @@ unsafe extern "C" fn module_funcall(
                 std::ptr::null_mut()
             }
         }
-    })
+    };
+    // SAFETY: `env` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(env, std::ptr::null_mut(), body) }
 }
 
 // ============================================================================
@@ -2064,33 +2398,99 @@ unsafe extern "C" fn module_funcall(
 // ============================================================================
 
 thread_local! {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static MODULE_CTX: std::cell::Cell<*mut Context> =
         const { std::cell::Cell::new(std::ptr::null_mut()) };
 }
 
-/// RAII installer for `MODULE_CTX`: saves the previous pointer on
-/// construction and restores it on `Drop` (precedent: [`ActiveModuleEnv`]).
+/// Read-only observer of `MODULE_CTX` for cross-crate tests; the underlying
+/// cell remains module-private so external code cannot forge a context pointer.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub fn current_module_context_for_test() -> *mut Context {
+    MODULE_CTX.with(|slot| slot.get())
+}
+
+/// Self-contained verification helper for cross-crate tests: proves
+/// `with_module_context` restores a *distinct* prior `MODULE_CTX` address on
+/// both normal return and panic unwind while keeping `MODULE_CTX` private and
+/// always restoring the slot to null before returning.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub fn verify_with_module_context_restores_distinct_previous_for_test(ctx: &mut Context) {
+    let ctx_ptr: *mut Context = std::ptr::from_mut(ctx);
+    // Never dereferenced: only distinguishes the saved outer slot address
+    // from `ctx_ptr` and from null.
+    let outer_sentinel = std::ptr::without_provenance_mut::<Context>(0x1000);
+    assert_ne!(ctx_ptr, outer_sentinel);
+    let current = || MODULE_CTX.with(|slot| slot.get());
+
+    assert!(current().is_null());
+    {
+        let _outer = neovm_value::tls_scope::TlsScope::new(&MODULE_CTX, outer_sentinel);
+        assert_eq!(current(), outer_sentinel);
+
+        with_module_context(ctx, || {
+            assert_eq!(current(), ctx_ptr);
+        });
+        assert_eq!(
+            current(),
+            outer_sentinel,
+            "normal return must restore the distinct outer context pointer"
+        );
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_module_context(ctx, || {
+                assert_eq!(current(), ctx_ptr);
+                panic!("boom inside with_module_context");
+            });
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(
+            current(),
+            outer_sentinel,
+            "panic unwind must restore the distinct outer context pointer"
+        );
+    }
+    assert!(current().is_null());
+}
+
+/// Private lifetime-branded RAII installer for `MODULE_CTX`: borrows
+/// `&'a mut Context` exclusively, saves the previous pointer on construction,
+/// and restores it on `Drop` (precedent: [`ActiveModuleEnv`]).
+///
 /// Restoring — rather than clearing to NULL — is what makes nested
 /// module→elisp→module calls work: when the inner `apply_module_function`
 /// returns, the outer call's context must come back, or the outer module
 /// function's next `env->funcall` finds no evaluator context. `Drop` also
 /// keeps the teardown coherent once panics become catchable.
+///
+/// Kept private behind [`with_module_context`] so callers can neither forge a
+/// raw `*mut Context`, alias `&mut Context` during the scope, nor leak the
+/// guard via `std::mem::forget` to leave a dangling `MODULE_CTX`.
 #[must_use = "the thread-local extent ends when this guard drops"]
 #[derive(Debug)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-struct ModuleContextGuard {
+struct ModuleContextGuard<'a> {
     _scope: neovm_value::tls_scope::TlsScope<*mut Context, std::cell::Cell<*mut Context>>,
+    _ctx: std::marker::PhantomData<&'a mut Context>,
 }
-static_assertions::assert_not_impl_any!(ModuleContextGuard: Send, Sync);
+static_assertions::assert_not_impl_any!(ModuleContextGuard<'_>: Send, Sync);
 
-impl ModuleContextGuard {
-    #[doc(hidden)]
-    pub fn install(ctx: *mut Context) -> Self {
+impl<'a> ModuleContextGuard<'a> {
+    fn install(ctx: &'a mut Context) -> Self {
+        let ptr: *mut Context = std::ptr::from_mut(ctx);
         Self {
-            _scope: neovm_value::tls_scope::TlsScope::new(&MODULE_CTX, ctx),
+            _scope: neovm_value::tls_scope::TlsScope::new(&MODULE_CTX, ptr),
+            _ctx: std::marker::PhantomData,
         }
     }
+}
+
+/// Run `body` with `ctx` installed in `MODULE_CTX` for the dynamic extent of
+/// the closure, restoring the previous pointer on normal return or unwind.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+fn with_module_context<R>(ctx: &mut Context, body: impl FnOnce() -> R) -> R {
+    let _guard = ModuleContextGuard::install(ctx);
+    body()
 }
 
 // ============================================================================
@@ -2100,7 +2500,7 @@ impl ModuleContextGuard {
 unsafe extern "C" fn module_get_environment(rt: *mut emacs_runtime) -> *mut emacs_env {
     // No env exists yet to record a pending exit on; a caught panic here just
     // returns NULL (which module init code must treat as failure anyway).
-    module_guard(std::ptr::null_mut(), std::ptr::null_mut(), || {
+    let body = || {
         if rt.is_null() {
             return std::ptr::null_mut();
         }
@@ -2108,7 +2508,10 @@ unsafe extern "C" fn module_get_environment(rt: *mut emacs_runtime) -> *mut emac
             let priv_ = &*(*rt).private_members;
             priv_.env
         }
-    })
+    };
+    // SAFETY: `std::ptr::null_mut()` is either null or the live `emacs_env` vtable pointer
+    // supplied by the dynamic-module caller for the duration of this FFI call.
+    unsafe { module_guard(std::ptr::null_mut(), std::ptr::null_mut(), body) }
 }
 
 // ============================================================================
@@ -2152,13 +2555,7 @@ pub fn load_module(ctx: &mut Context, path: std::path::PathBuf) -> EvalResult {
         })?;
     let init_fn_ptr: EmacsInitFn = *init_fn;
 
-    let mut env_priv = Box::new(emacs_env_private {
-        pending_non_local_exit: emacs_funcall_exit::Return,
-        non_local_exit_symbol: Value::NIL,
-        non_local_exit_data: Value::NIL,
-        storage: emacs_value_storage::new(),
-    });
-    env_priv.storage.init();
+    let mut env_priv = emacs_env_private::new_boxed();
     let env_priv_ptr: *mut emacs_env_private = &mut *env_priv;
 
     let mut env_box = Box::new(emacs_env {
@@ -2219,12 +2616,13 @@ pub fn load_module(ctx: &mut Context, path: std::path::PathBuf) -> EvalResult {
         get_environment: Some(module_get_environment),
     });
 
-    let module_ctx = ModuleContextGuard::install(ctx as *mut Context);
-    let active_env = ActiveModuleEnv::push(env_priv_ptr);
-    // SAFETY: the export has the Emacs initialization ABI, its library is
-    // retained, and rt plus its environment remain owned across the call.
-    let init_code = unsafe { init_fn_ptr(&mut *rt as *mut emacs_runtime) };
-    drop(module_ctx);
+    // SAFETY: the private env box outlives `active_env`, which drops before `env_priv` is finalized.
+    let active_env = unsafe { ActiveModuleEnv::push(env_priv_ptr) };
+    let init_code = with_module_context(ctx, || {
+        // SAFETY: the export has the Emacs initialization ABI, its library is
+        // retained, and rt plus its environment remain owned across the call.
+        unsafe { init_fn_ptr(&mut *rt as *mut emacs_runtime) }
+    });
 
     ctx.maybe_quit()?;
     if init_code != 0 {
@@ -2240,9 +2638,7 @@ pub fn load_module(ctx: &mut Context, path: std::path::PathBuf) -> EvalResult {
     module_signal_or_throw(env_priv_ref, ctx.symbol_mode())?;
     drop(active_env);
 
-    // SAFETY: the initializer has returned; this environment owns the
-    // initialized handle storage being finalized.
-    unsafe { finalize_storage(&mut env_priv.storage) };
+    finalize_storage(&mut env_priv.storage);
     // SAFETY: `private_members` came from `Box::into_raw` above and nothing
     // else frees it. Init has returned, so no module code reads the runtime.
     drop(unsafe { Box::from_raw(rt.private_members) });
@@ -2287,13 +2683,7 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
     let subr_fn: emacs_function = unsafe { std::mem::transmute(mf.subr) };
     let data = mf.data;
 
-    let mut env_priv = Box::new(emacs_env_private {
-        pending_non_local_exit: emacs_funcall_exit::Return,
-        non_local_exit_symbol: Value::NIL,
-        non_local_exit_data: Value::NIL,
-        storage: emacs_value_storage::new(),
-    });
-    env_priv.storage.init();
+    let mut env_priv = emacs_env_private::new_boxed();
 
     let mut env = Box::new(emacs_env {
         size: 0,
@@ -2347,7 +2737,8 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
 
     let mut emacs_args: Vec<emacs_value> = Vec::with_capacity(args.len());
     for arg in &args {
-        emacs_args.push(lisp_to_value(env_ptr, *arg));
+        // SAFETY: `env_ptr` points to the initialized `emacs_env` owned by this call.
+        emacs_args.push(unsafe { lisp_to_value(env_ptr, *arg) });
     }
 
     // Call the module function through a "C-unwind" view of the stored
@@ -2363,13 +2754,18 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
     ) -> emacs_value = unsafe { std::mem::transmute(subr_fn) };
 
     let snap = ctx.module_boundary_snapshot();
-    let module_ctx = ModuleContextGuard::install(ctx as *mut Context);
-    let active_env = ActiveModuleEnv::push(priv_ptr);
+    // SAFETY: the private env box outlives `active_env`, which drops before `env_priv` is finalized.
+    let active_env = unsafe { ActiveModuleEnv::push(priv_ptr) };
     let args_ptr = emacs_args.as_mut_ptr();
-    let call = catch_unwind(AssertUnwindSafe(|| unsafe {
-        subr_fn_unwind(env_ptr, nargs, args_ptr, data)
-    }));
-    drop(module_ctx);
+    let call = with_module_context(ctx, || {
+        // SAFETY: `subr_fn_unwind` has the verified module-function C ABI from
+        // a permanently mapped library, `env_ptr` and `args_ptr[..nargs]` stay
+        // live for this call, and `with_module_context` / `active_env` own the
+        // thread-local context and local-value roots.
+        catch_unwind(AssertUnwindSafe(|| unsafe {
+            subr_fn_unwind(env_ptr, nargs, args_ptr, data)
+        }))
+    });
 
     let (result, panic_flow) = match call {
         Ok(result) => (result, None),
@@ -2398,7 +2794,8 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
     }
 
     let priv_ref = unsafe { &*priv_ptr };
-    let ret = value_to_lisp(result);
+    // SAFETY: `value_to_lisp` handles null as `NIL` and dereferences only live module handles.
+    let ret = unsafe { value_to_lisp(result) };
     // A contained panic outranks any exit the module recorded before dying:
     // the env's pending state was part of the computation the panic tore down.
     let exit = match panic_flow {
@@ -2407,9 +2804,7 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
     };
     drop(active_env);
 
-    unsafe {
-        finalize_storage(&mut env_priv.storage);
-    }
+    finalize_storage(&mut env_priv.storage);
     drop(env);
     drop(env_priv);
 
@@ -2435,4 +2830,114 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         dynamic_module_registry_heap_identity().unwrap_or(0) as u64,
     );
     neovm_value::tls_fingerprint::mix(h, MODULE_CTX.with(|slot| slot.get() as usize as u64));
+}
+
+#[cfg(test)]
+mod module_string_tests {
+    use super::module_input_bytes;
+
+    #[test]
+    fn module_make_string_null_zero_is_empty_without_reading_the_pointer() {
+        // SAFETY: length 0 does not read the pointer.
+        let bytes = unsafe { module_input_bytes(std::ptr::null(), 0) }.expect("empty string");
+        assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn module_make_string_null_nonzero_is_rejected() {
+        // SAFETY: a null pointer with a positive length is rejected before any read.
+        assert!(unsafe { module_input_bytes(std::ptr::null(), 4) }.is_err());
+    }
+}
+
+#[cfg(test)]
+mod value_storage_tests {
+    use super::{
+        ActiveModuleEnv, VALUE_FRAME_SIZE, allocate_emacs_value, collect_dynamic_module_gc_roots,
+        emacs_env_private, emacs_value_storage, finalize_storage, value_to_lisp,
+    };
+    use neovm_value::value::Value;
+
+    #[test]
+    fn emacs_value_storage_allocates_immediately_after_new() {
+        let mut storage = emacs_value_storage::new();
+        let handle = allocate_emacs_value(&mut storage, Value::fixnum(42));
+        // SAFETY: `handle` was allocated from `storage` above and remains live.
+        assert_eq!(unsafe { value_to_lisp(handle) }, Value::fixnum(42));
+        finalize_storage(&mut storage);
+    }
+
+    #[test]
+    fn emacs_value_storage_move_after_initial_alloc_and_overflow_finalize_is_sound() {
+        let mut storage = emacs_value_storage::new();
+        let pre_move = 5usize;
+        for i in 0..pre_move {
+            let _ = allocate_emacs_value(&mut storage, Value::fixnum((i + 1) as i64));
+        }
+        // Move storage AFTER allocating into `initial`; no self-pointer may
+        // dangle and previously stored values in `initial` stay intact.
+        let mut env_priv = Box::new(emacs_env_private {
+            pending_non_local_exit: super::emacs_funcall_exit::Return,
+            non_local_exit_symbol: Value::NIL,
+            non_local_exit_data: Value::NIL,
+            storage,
+        });
+        let post_move = VALUE_FRAME_SIZE * 2 + 17;
+        let mut handles = Vec::with_capacity(post_move);
+        for i in 0..post_move {
+            handles.push(allocate_emacs_value(
+                &mut env_priv.storage,
+                Value::fixnum((pre_move + i + 1) as i64),
+            ));
+        }
+        for (i, &h) in handles.iter().enumerate() {
+            // SAFETY: `env_priv` has not moved since `h` was allocated and has not been finalized.
+            assert_eq!(
+                unsafe { value_to_lisp(h) },
+                Value::fixnum((pre_move + i + 1) as i64)
+            );
+        }
+        let priv_ptr: *mut emacs_env_private = &mut *env_priv;
+        // SAFETY: `env_priv` stays boxed and live until after `_active` drops.
+        let active = unsafe { ActiveModuleEnv::push(priv_ptr) };
+        let heap_id = neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
+        let mut roots = Vec::new();
+        collect_dynamic_module_gc_roots(&mut roots, heap_id);
+        drop(active);
+        let mut seen: Vec<i64> = roots
+            .iter()
+            .filter_map(|v| v.as_fixnum())
+            .filter(|&n| n > 0)
+            .collect();
+        seen.sort_unstable();
+        let expected: Vec<i64> = (1..=((pre_move + post_move) as i64)).collect();
+        assert_eq!(seen, expected);
+
+        finalize_storage(&mut env_priv.storage);
+        // Repeated finalization and Drop are idempotent.
+        finalize_storage(&mut env_priv.storage);
+    }
+
+    #[test]
+    fn emacs_value_storage_gc_roots_trace_initial_and_overflow_frames() {
+        let mut env_priv = emacs_env_private::new_boxed();
+        let count = VALUE_FRAME_SIZE * 2 + 17;
+        for i in 0..count {
+            let _ = allocate_emacs_value(&mut env_priv.storage, Value::fixnum((i + 1) as i64));
+        }
+        let priv_ptr: *mut emacs_env_private = &mut *env_priv;
+        // SAFETY: `env_priv` stays boxed and live until after `_active` drops.
+        let _active = unsafe { ActiveModuleEnv::push(priv_ptr) };
+        let heap_id = neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
+        let mut roots = Vec::new();
+        collect_dynamic_module_gc_roots(&mut roots, heap_id);
+        let mut seen: Vec<i64> = roots
+            .iter()
+            .filter_map(|v| v.as_fixnum())
+            .filter(|&n| n > 0)
+            .collect();
+        seen.sort_unstable();
+        let expected: Vec<i64> = (1..=(count as i64)).collect();
+        assert_eq!(seen, expected);
+    }
 }

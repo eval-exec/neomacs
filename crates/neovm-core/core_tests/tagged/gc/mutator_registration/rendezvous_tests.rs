@@ -124,6 +124,19 @@ shells! {
     first_restored_owner_waits_for_the_final_peer_debt => FirstRestoredOwnerWaitsForTheFinalPeerDebt,
     poison_wakes_a_restored_owner_waiting_for_peer_debt => PoisonWakesARestoredOwnerWaitingForPeerDebt,
     stop_and_unrestored_owner_refuse_instead_of_waiting_for_themselves => StopAndUnrestoredOwnerRefuseInsteadOfWaitingForThemselves,
+    native_receipt_outlasts_a_gate_holder_after_the_commit => NativeReceiptOutlastsAGateHolderAfterTheCommit,
+    stopped_keeper_waits_out_a_brief_gate_holder => StoppedKeeperWaitsOutABriefGateHolder,
+    keeper_trace_waits_out_a_brief_gate_holder => KeeperTraceWaitsOutABriefGateHolder,
+    keeper_complete_waits_out_a_brief_gate_holder => KeeperCompleteWaitsOutABriefGateHolder,
+    keeper_complete_retries_an_entry_held_through_the_reader_scan => KeeperCompleteRetriesAnEntryHeldThroughTheReaderScan,
+    keeper_takes_summaries_through_its_stop => KeeperTakesSummariesThroughItsStop,
+    a_broken_census_under_a_stop_is_not_busy => ABrokenCensusUnderAStopIsNotBusy,
+    keeper_world_root_check_waits_out_a_brief_gate_holder => KeeperWorldRootCheckWaitsOutABriefGateHolder,
+    keeper_root_reader_waits_out_an_owner_moment_on_its_entry => KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry,
+    keeper_reentering_an_entry_it_holds_refuses_at_once => KeeperReenteringAnEntryItHoldsRefusesAtOnce,
+    keeper_grants_the_serial_head_only_inside_its_traced_stop => KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop,
+    keeper_bounded_stop_pends_and_keeps_its_epoch => KeeperBoundedStopPendsAndKeepsItsEpoch,
+    keeper_routes_a_baton_group_head_and_grants_it_alone => KeeperRoutesABatonGroupHeadAndGrantsItAlone,
 }
 
 #[test]

@@ -167,7 +167,7 @@ pub(crate) fn builtin_dump_emacs_portable(
         .any_arm()
         .unwrap_or(Value::NIL);
     ctx.set_variable("post-gc-hook", Value::NIL);
-    ctx.gc_collect_exact();
+    ctx.gc_collect_exact_flow()?;
     // A portable dump cannot represent finalizer objects (the pdump writer
     // arms refuse them; see `pdump/convert.rs`). Pending finalizers are no
     // obstacle: the collection above doomed them and ran their functions
@@ -176,7 +176,7 @@ pub(crate) fn builtin_dump_emacs_portable(
     // the live-finalizer registry stops shrinking.
     let mut live_finalizers = ctx.tagged_heap().live_finalizer_count();
     while live_finalizers > 0 {
-        ctx.gc_collect_exact();
+        ctx.gc_collect_exact_flow()?;
         let remaining = ctx.tagged_heap().live_finalizer_count();
         if remaining >= live_finalizers {
             break; // fixpoint: the survivors are genuinely reachable

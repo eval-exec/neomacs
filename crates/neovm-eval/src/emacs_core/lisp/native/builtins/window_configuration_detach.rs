@@ -12,13 +12,6 @@ use std::collections::HashMap;
 use super::WindowConfigurationSnapshot;
 
 #[cold]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "E2 L3 dormant cold detach; no production caller enters it"
-    )
-)]
 pub(crate) fn detach_window_configuration_registry(
     handle: &HeapRegistryHandle<HashMap<i64, WindowConfigurationSnapshot>>,
 ) -> Result<

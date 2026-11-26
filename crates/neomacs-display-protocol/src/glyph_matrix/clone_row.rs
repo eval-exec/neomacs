@@ -59,12 +59,14 @@ fn glyph_has_only_copy_payloads(glyph: &Glyph) -> bool {
             source_rect,
             margins,
             opaque_background,
+            presentation,
         } => {
             assert_copy(image_id);
             assert_copy(width_cols);
             assert_copy(source_rect);
             assert_copy(margins);
             assert_copy(opaque_background);
+            assert_copy(presentation);
             true
         }
         GlyphType::Video {
@@ -137,6 +139,7 @@ const _: fn(Glyph) = |glyph| {
             source_rect: _,
             margins: _,
             opaque_background: _,
+            presentation: _,
         } => {}
         GlyphType::Video {
             video_id: _,

@@ -87,6 +87,7 @@ impl RowProgram {
         // Restore the producer run split only by the acquisition budget.
         // Keeping this artificial boundary would change whole-run admission
         // and scalar fallback near a visual edge (notably emoji metrics).
+        let mut merged_first = false;
         if let (
             Some((Operation::Text(left), left_plan)),
             Some((Operation::Text(right), right_plan)),
@@ -131,7 +132,23 @@ impl RowProgram {
                     right.box_vertical_edges.owns_right(),
                 );
             fragment.operations.remove(0);
+            merged_first = true;
         }
+        let base = self.operations.len();
+        self.overlay_string_kinds
+            .extend(
+                fragment
+                    .overlay_string_kinds
+                    .into_iter()
+                    .filter_map(|(index, kind)| {
+                        let shifted = if merged_first {
+                            base.checked_add(index)?.checked_sub(1)?
+                        } else {
+                            base.checked_add(index)?
+                        };
+                        Some((shifted, kind))
+                    }),
+            );
         self.fonts = fonts;
         self.trailing_text_continues = fragment.trailing_text_continues;
         self.operations.extend(fragment.operations);

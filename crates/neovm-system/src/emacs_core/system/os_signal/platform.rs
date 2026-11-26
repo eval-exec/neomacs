@@ -12,8 +12,9 @@ use super::HandledSignal;
 pub(super) const SUPPORTED_SIGNALS: &[HandledSignal] = &HandledSignal::ALL;
 
 // GNU src/sysdep.c:init_signals deliberately leaves SIGUSR1/SIGUSR2 to
-// android_select, and this port installs no other disposition since ledger 208
-// took SIGCHLD out (see `HandledSignal`), so Android owns nothing here.
+// android_select, so Android has no user-signal entry here. SIGCHLD is not a
+// `HandledSignal`: `install_child_signal_flag` claims it separately on every
+// Unix, as GNU's `catch_child_signal` does (see `HandledSignal`).
 #[cfg(target_os = "android")]
 pub(super) const SUPPORTED_SIGNALS: &[HandledSignal] = &[];
 

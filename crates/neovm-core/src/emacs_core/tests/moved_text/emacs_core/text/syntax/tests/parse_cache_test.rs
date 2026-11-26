@@ -404,6 +404,7 @@ fn category_and_alias_properties_bypass_the_cache() {
     check(&mut eval, query, "category plist changed");
     assert_eq!(parse_cache_stats().bypassed_for_test(), 2);
 
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 0);
     eval.eval_str(
@@ -553,6 +554,7 @@ fn every_key_field_separates_runs() {
 
     // `comment-end-can-be-escaped`: an escaped newline does not end a Lisp
     // comment.
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 1);
     eval.eval_str(
@@ -570,6 +572,7 @@ fn every_key_field_separates_runs() {
 
     // BEGV: a comment resumed after an end-first `*` closes with the `/` at
     // FROM, unless FROM is BEGV.
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 0);
     eval.eval_str("(insert \"/* a */ b c d e f g h\")")
@@ -583,6 +586,7 @@ fn every_key_field_separates_runs() {
 
     // The syntax table's identity: two tables, switched without allocating
     // or writing either.
+    drop(eval);
     let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 0);
     eval.eval_str(

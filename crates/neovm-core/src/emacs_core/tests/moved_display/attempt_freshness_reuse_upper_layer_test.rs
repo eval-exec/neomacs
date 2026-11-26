@@ -180,7 +180,16 @@ fn same_buffer_fontifier_name_unintern_child() {
         attempt_freshness_projections(crate::test_utils::new_context());
     // A second owner has only its own Lisp graph. It removes the shared name,
     // not any A-owned hook/list/string, after the real first projection.
+    // Clear the slot so the second constructor is not a second active Context,
+    // then put eval back: the unintern runs on `other` during eval's capture.
+    // SAFETY: neither Context is evaluated while its heap is cleared; `other`
+    // only mutates its obarray during `eval`'s capture, and `eval` is
+    // reactivated before any Lisp runs.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(eval.tagged_heap()) };
     let mut other = crate::test_utils::new_context();
+    // SAFETY: `other` is never evaluated; only `other.obarray_mut().unintern_id` runs.
+    unsafe { neovm_value::tagged::gc::clear_tagged_heap_if_installed(other.tagged_heap()) };
+    eval.setup_thread_locals();
     eval.eval_str(
         r#"(progn
           (insert "abcd")

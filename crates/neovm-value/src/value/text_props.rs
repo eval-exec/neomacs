@@ -44,6 +44,24 @@ pub(crate) fn interval_balance_calls_for_test() -> usize {
     INTERVAL_BALANCE_CALLS.with(std::cell::Cell::get)
 }
 
+// Actual nodes visited by GC operand enumeration, including nil plists.
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static TEXT_PROPERTY_ROOT_NODE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn reset_text_property_root_node_visits_for_test() {
+    TEXT_PROPERTY_ROOT_NODE_VISITS.with(|visits| visits.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn text_property_root_node_visits_for_test() -> usize {
+    TEXT_PROPERTY_ROOT_NODE_VISITS.with(std::cell::Cell::get)
+}
+
 // ---------------------------------------------------------------------------
 // PropertyInterval
 // ---------------------------------------------------------------------------
@@ -696,6 +714,24 @@ impl IntervalRun {
     }
 }
 
+/// GNU `intervals_consed` (`src/alloc.c:7442`) counts every interval node
+/// allocated, and the sweep leaves `gcstat.total_intervals` at the live count.
+/// Neo's nodes are owned by trees rather than swept individually. Every node
+/// is charged when its tree allocates it (insertion or a deep clone) through
+/// the per-mutator [`crate::value::add_wrapping`] path, so parallel owners do
+/// not contend on one process-wide counter; the drop credit stays global
+/// because a tree can be dropped on any thread and drops are rare compared
+/// with allocations.
+static INTERVALS_DROPPED: AtomicU64 = AtomicU64::new(0);
+
+/// Nodes still owned by a live interval tree, given the allocated total (the
+/// `Intervals` slot of the per-mutator memory-use accounting, summed over
+/// owners by the caller).
+#[inline]
+pub(crate) fn intervals_live_from(allocated: u64) -> u64 {
+    allocated.saturating_sub(INTERVALS_DROPPED.load(Ordering::Relaxed))
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct IntervalTree {
     root: Option<IntervalId>,
@@ -729,6 +765,14 @@ pub(crate) struct IntervalTree {
     /// `version` exactly like the find memo (see `rightmost_id_memo`).
     rightmost_gen: MemoGeneration,
     rightmost_id_cache: AtomicUsize,
+}
+
+impl Drop for IntervalTree {
+    fn drop(&mut self) {
+        // Nodes are append-only inside one tree (`delete_node` only unlinks),
+        // so the whole vector leaves the live interval count together.
+        INTERVALS_DROPPED.fetch_add(self.nodes.len() as u64, Ordering::Relaxed);
+    }
 }
 
 /// Generation tag pairing a memo with the tree version it was computed for.
@@ -772,6 +816,12 @@ impl Default for MemoGeneration {
 
 impl Clone for IntervalTree {
     fn clone(&self) -> Self {
+        // A deep clone owns a new node for every source node (GNU
+        // `copy_intervals` likewise allocates copied intervals).
+        crate::value::add_wrapping(
+            crate::tagged::gc::MemoryUseCountSlot::Intervals,
+            self.nodes.len() as u64,
+        );
         // A clone starts with a fresh (empty) memo; it will populate its own.
         Self {
             root: self.root,
@@ -913,11 +963,11 @@ impl IntervalTree {
     }
 
     fn from_normalized_runs(runs: Vec<IntervalRun>) -> Self {
-        let mut tree = Self {
-            root: None,
-            nodes: Vec::with_capacity(runs.len()),
-            ..Self::default()
-        };
+        // Assign after `default()`: a struct-update expression cannot move
+        // fields out of a type that implements `Drop`.
+        let mut tree = Self::default();
+        tree.root = None;
+        tree.nodes = Vec::with_capacity(runs.len());
         tree.root = tree.build_balanced(&runs, 0, runs.len(), None);
         tree
     }
@@ -977,6 +1027,9 @@ impl IntervalTree {
 
         let mid = start + (end - start) / 2;
         let id = IntervalId(self.nodes.len());
+        // GNU `intervals-consed` (`src/alloc.c:7442`) counts every interval
+        // node allocated; this balanced build is one allocation site.
+        crate::value::add_wrapping(crate::tagged::gc::MemoryUseCountSlot::Intervals, 1);
         self.nodes.push(runs[mid].to_node());
 
         let left = self.build_balanced(runs, start, mid, Some(id));
@@ -1022,6 +1075,9 @@ impl IntervalTree {
     fn push_node(&mut self, node: IntervalNode) -> IntervalId {
         self.invalidate_find_cache();
         let id = IntervalId(self.nodes.len());
+        // GNU `intervals-consed` counts every interval node allocated; a split
+        // or a fresh insertion creates one here.
+        crate::value::add_wrapping(crate::tagged::gc::MemoryUseCountSlot::Intervals, 1);
         self.nodes.push(node);
         id
     }
@@ -2182,6 +2238,8 @@ impl IntervalTree {
         let Some(id) = id else {
             return;
         };
+        #[cfg(any(test, feature = "test-support"))]
+        TEXT_PROPERTY_ROOT_NODE_VISITS.with(|visits| visits.set(visits.get() + 1));
         let node = &self.nodes[id.0];
         self.live_plists(node.left, f);
         f(node.plist);
@@ -2601,19 +2659,225 @@ enum ReplacementPropertyNames<'a> {
     Include(&'a ConservativePropertyNames),
 }
 
+/// An owned native read projection of a text-property interval partition.
+///
+/// This copies live ranges and their ORIGINAL plist heads, not interval nodes
+/// or Lisp cons cells. It therefore keeps the existing table-clone aliasing
+/// contract: range replacement does not change these ranges, while mutation
+/// of an already-shared plist remains visible through that plist identity.
+///
+/// This is NOT a GC root. Before invoking Lisp or collecting, its owner must
+/// root every [`Self::root_operands`] value as well as the source string. The
+/// source string needs a root even when this view is absent or empty, because
+/// layout also retains the string as the object of later display sites.
+/// A liveness lease does not grant mutation freshness or replay authority.
+#[derive(Clone, Debug)]
+pub struct TextPropertyReadView {
+    // Same contiguous, zero-based partition as IntervalTree::cursor_at(0),
+    // including nil-property nodes and the tree's actual trailing extent.
+    runs: Vec<ObjectIntervalPlistRun>,
+    // Preserve the existing clone's immutable absence-proof metadata. This
+    // shares the existing Arc summary; it adds no cache or invalidation path.
+    property_names: ConservativePropertyNames,
+}
+
+static_assertions::assert_not_impl_any!(TextPropertyReadView: Send, Sync);
+
+impl TextPropertyTable {
+    /// Capture a read projection without allocating Lisp intervals.
+    ///
+    /// Capture is synchronous and callback-free. No source table borrow
+    /// escapes; callers must install roots before any subsequent safepoint.
+    pub fn read_view(&self) -> TextPropertyReadView {
+        TextPropertyReadView {
+            runs: self
+                .intervals
+                .cursor_at(CharPos0::ZERO)
+                .map(|(start, end, node)| ObjectIntervalPlistRun::new(start, end, node.plist))
+                .collect(),
+            property_names: self.property_names.clone(),
+        }
+    }
+}
+
+impl TextPropertyReadView {
+    pub fn is_empty(&self) -> bool {
+        self.runs.is_empty()
+    }
+
+    /// Original plist operands; the evaluator/layout owner supplies rooting.
+    /// Repeated heads and nil are permitted, just as in table root tracing.
+    pub fn root_operands(&self) -> impl Iterator<Item = Value> + '_ {
+        self.runs.iter().map(ObjectIntervalPlistRun::plist)
+    }
+
+    fn rank_at(&self, pos: CharPos0) -> Option<usize> {
+        let rank = self
+            .runs
+            .partition_point(|run| run.start() <= pos)
+            .checked_sub(1)?;
+        (pos < self.runs[rank].end()).then_some(rank)
+    }
+
+    fn plist_at(&self, pos: CharPos0) -> Option<Value> {
+        self.rank_at(pos).map(|rank| self.runs[rank].plist())
+    }
+
+    pub fn get_property_at_char_pos(&self, pos: CharPos0, name: Value) -> Option<Value> {
+        if self.property_names.presence(name) == PropertyNamePresence::DefinitelyAbsent {
+            return None;
+        }
+        plist_value_get(self.plist_at(pos)?, name)
+    }
+
+    /// Preserve the existing first-key-wins map projection, used by layout's
+    /// composition comparison after removing face/font-lock-face keys.
+    pub fn get_properties_at_char_pos(&self, pos: CharPos0) -> HashMap<Value, Value> {
+        let Some(rank) = self.rank_at(pos) else {
+            return HashMap::new();
+        };
+        let run = &self.runs[rank];
+        PropertyInterval::from_plist(
+            CharRange::new(run.start(), run.end()),
+            &plist_pairs(run.plist()),
+        )
+        .properties
+    }
+
+    pub fn has_any_non_nil_property_in_char_range(&self, range: CharRange, keys: &[Value]) -> bool {
+        if range.is_empty()
+            || keys.is_empty()
+            || keys.iter().all(|key| {
+                self.property_names.presence(*key) == PropertyNamePresence::DefinitelyAbsent
+            })
+        {
+            return false;
+        }
+        let Some(rank) = self.rank_at(range.start()) else {
+            return false;
+        };
+        self.runs[rank..]
+            .iter()
+            .take_while(|run| run.start() < range.end())
+            .any(|run| !watched_keys_equal_eq_plist(run.plist(), Value::NIL, keys))
+    }
+
+    /// Like TextPropertyTable, ignore raw boundaries with EQ-equivalent
+    /// complete plists, including duplicates and reordered plist pairs.
+    pub fn next_property_change_after_char_pos(&self, pos: CharPos0) -> Option<CharPos0> {
+        let rank = self.rank_at(pos)?;
+        let current = plist_pairs(self.runs[rank].plist());
+        for run in &self.runs[rank + 1..] {
+            if !plists_equal_eq(&current, &plist_pairs(run.plist())) {
+                return Some(run.start());
+            }
+        }
+        let end = self.runs.last()?.end();
+        (!plists_equal_eq(&current, &[])).then_some(end)
+    }
+
+    pub fn next_single_property_change_after_char_pos(
+        &self,
+        pos: CharPos0,
+        name: Value,
+    ) -> Option<CharPos0> {
+        if self.property_names.presence(name) == PropertyNamePresence::DefinitelyAbsent {
+            return None;
+        }
+        let rank = self.rank_at(pos)?;
+        let current = plist_value_get(self.runs[rank].plist(), name).unwrap_or(Value::NIL);
+        let mut boundary = self.runs[rank].end();
+        for run in &self.runs[rank + 1..] {
+            let value = plist_value_get(run.plist(), name).unwrap_or(Value::NIL);
+            if !eq_value(&current, &value) {
+                return Some(run.start());
+            }
+            boundary = run.end();
+        }
+        (!eq_value(&current, &Value::NIL)).then_some(boundary)
+    }
+
+    pub fn previous_single_property_change_before_char_pos(
+        &self,
+        pos: CharPos0,
+        name: Value,
+    ) -> Option<CharPos0> {
+        if self.property_names.presence(name) == PropertyNamePresence::DefinitelyAbsent {
+            return None;
+        }
+        let (current, mut boundary, mut previous) = match self.rank_at(pos) {
+            Some(rank) => (
+                plist_value_get(self.runs[rank].plist(), name),
+                self.runs[rank].start(),
+                rank.checked_sub(1),
+            ),
+            None => {
+                let rank = self.runs.len().checked_sub(1)?;
+                (None, self.runs[rank].end(), Some(rank))
+            }
+        };
+        let current_normalized = current.unwrap_or(Value::NIL);
+        loop {
+            if boundary == CharPos0::ZERO {
+                return current.is_some().then_some(CharPos0::ZERO);
+            }
+            let Some(rank) = previous else {
+                return current.is_some().then_some(CharPos0::ZERO);
+            };
+            let run = &self.runs[rank];
+            let before = plist_value_get(run.plist(), name).unwrap_or(Value::NIL);
+            if !eq_value(&current_normalized, &before) {
+                return Some(boundary);
+            }
+            boundary = run.start();
+            previous = rank.checked_sub(1);
+        }
+    }
+}
+
 /// Text-property interval storage.
 ///
 /// The backing store is a GNU-shaped augmented interval tree.  Callers still
 /// use absolute character positions; internally node starts are derived from
 /// subtree lengths.
+/// See `TextPropertyTable::journal_mark`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum JournalMark {
+    Fresh,
+    Armed,
+    Dirty,
+}
+
 #[derive(Debug)]
 pub struct TextPropertyTable {
     pub(crate) intervals: IntervalTree,
+    /// GNU `buffer_intervals (buffer) != NULL`: the interval tree EXISTS.
+    ///
+    /// GNU creates the tree on the first property store and keeps it after
+    /// the last property is removed; only these sites set it back to NULL:
+    /// deleting the whole text (`src/intervals.c:1324-1328` and `:1346`),
+    /// `reset_buffer` (`src/buffer.c:633`), killing the buffer
+    /// (`src/buffer.c:2136`), and `set-auto-coding`'s whole-text delete
+    /// (`src/fileio.c:3871`).  `current_column` dispatches on this state
+    /// (`src/indent.c:365-370`), not on whether any property is present, so
+    /// the two must stay distinct.
+    pub(crate) interval_tree_present: bool,
     property_names: ConservativePropertyNames,
     /// Bumped by every mutating entry point; run-caching scanners key their
     /// memos on it (together with the buffer content epoch) so a property
     /// change invalidates them. Monotonic, wraps never (u64).
     pub(crate) mutation_tick: u64,
+    /// String collection-journal state. Not a Lisp root.
+    ///
+    /// `Fresh` is a new or wholesale-replaced table. `Armed` means
+    /// `with_string_text_props_mut` entered the closure. `Dirty` means a
+    /// mutator changed property contents. Fresh and Dirty both count as
+    /// changed, because replacing the table installs a Fresh one that must
+    /// journal. Armed means the closure ran and did not dirty.
+    ///
+    /// A future `&mut self` mutator that forgets `mark_journal_dirty` silently
+    /// drops that journal and leaves a stale collection capture.
+    journal_mark: JournalMark,
     /// Bumped only by mutations that can change `syntax-table`/`category`
     /// presence or values: exact for by-name put/remove, conservative for
     /// bulk plist replacement, and NOT bumped by pure position adjusts
@@ -2817,8 +3081,12 @@ impl Clone for TextPropertyTable {
         TABLE_CLONES.with(|c| c.set(c.get() + 1));
         Self {
             intervals: self.intervals.clone(),
+            interval_tree_present: self.interval_tree_present,
             property_names: self.property_names.clone(),
             mutation_tick: self.mutation_tick,
+            // A copy is a new table. Resetting the sentinel makes a wholesale
+            // replacement inside an armed closure visible to the journal.
+            journal_mark: JournalMark::Fresh,
             syntax_prop_tick: self.syntax_prop_tick,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(
                 self.syntax_prop_any.load(Ordering::Relaxed),
@@ -2915,17 +3183,77 @@ impl TextPropertyTable {
     pub fn new() -> Self {
         Self {
             intervals: IntervalTree::new(),
+            interval_tree_present: false,
             property_names: ConservativePropertyNames::default(),
             mutation_tick: 0,
+            journal_mark: JournalMark::Fresh,
             syntax_prop_tick: 0,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
             syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
         }
     }
 
+    /// Record that an interval tree now exists (GNU `create_root_interval`).
+    ///
+    /// Call this after any creation/graft and *before* any mutation that can
+    /// empty the interval set: GNU's tree is persistent, so a table that once
+    /// held an interval must keep reporting one after its last property or
+    /// interval is removed.
+    #[inline]
+    fn note_interval_tree_presence(&mut self) {
+        if !self.intervals.is_empty() {
+            self.interval_tree_present = true;
+        }
+    }
+
+    /// GNU `buffer_intervals (buffer) != NULL`: an interval tree exists,
+    /// even if it currently carries no properties.
+    ///
+    /// Holding an interval is itself proof of the tree: every path that
+    /// creates intervals (put/set, grafted text-property runs, casify and
+    /// transposition rebuilds) therefore reports presence without needing a
+    /// bookkeeping call at each site.  The bit additionally keeps the answer
+    /// true after pruning removes the last interval.
+    pub fn interval_tree_present(&self) -> bool {
+        self.interval_tree_present || !self.intervals.is_empty()
+    }
+
+    /// GNU `set_buffer_intervals (buffer, NULL)`: discard the tree. Callers
+    /// are the whole-text-delete, reset, kill and set-auto-coding paths only.
+    #[doc(hidden)]
+    pub fn clear_interval_tree_presence(&mut self) {
+        self.interval_tree_present = false;
+    }
+
+    /// Carry the previous storage's tree presence across a wholesale table
+    /// replacement.  GNU's interval tree is a persistent object: edits and
+    /// property rewrites never discard it, only the whole-text-delete/reset/
+    /// kill/set-auto-coding sites do.  A replacement table built from runs
+    /// alone therefore must not report "no tree" just because its runs are
+    /// empty.
+    #[doc(hidden)]
+    pub fn inherit_interval_tree_presence(&mut self, previous: &Self) {
+        self.interval_tree_present |= previous.interval_tree_present;
+    }
+
     /// Current mutation tick — see the field doc.
     pub fn mutation_tick(&self) -> u64 {
         self.mutation_tick
+    }
+
+    /// Armed by `with_string_text_props_mut` before the closure runs.
+    pub(crate) fn arm_journal_mark(&mut self) {
+        self.journal_mark = JournalMark::Armed;
+    }
+
+    /// Property contents changed. A no-op put or remove leaves the mark armed.
+    pub(crate) fn mark_journal_dirty(&mut self) {
+        self.journal_mark = JournalMark::Dirty;
+    }
+
+    /// The closure replaced the table or changed property contents.
+    pub(crate) fn journal_mark_changed(&self) -> bool {
+        self.journal_mark != JournalMark::Armed
     }
 
     /// Current syntax-relevant mutation tick — see the field doc.
@@ -3063,11 +3391,14 @@ impl TextPropertyTable {
     }
 
     fn from_interval_runs(runs: Vec<IntervalRun>) -> Self {
+        let interval_tree_present = !runs.is_empty();
         let property_names = ConservativePropertyNames::from_runs(&runs);
         Self {
             intervals: IntervalTree::from_runs(runs),
+            interval_tree_present,
             property_names,
             mutation_tick: 0,
+            journal_mark: JournalMark::Fresh,
             syntax_prop_tick: 0,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
             syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
@@ -3085,10 +3416,13 @@ impl TextPropertyTable {
         runs: Vec<IntervalRun>,
         property_names: ConservativePropertyNames,
     ) -> Self {
+        let interval_tree_present = !runs.is_empty();
         Self {
             intervals: IntervalTree::from_runs_preserving_shape(runs),
+            interval_tree_present,
             property_names,
             mutation_tick: 0,
+            journal_mark: JournalMark::Fresh,
             syntax_prop_tick: 0,
             syntax_prop_any: std::sync::atomic::AtomicU64::new(0),
             syntax_prop_ranges: std::sync::Mutex::new((0, Vec::new())),
@@ -3167,6 +3501,9 @@ impl TextPropertyTable {
         property_names: ReplacementPropertyNames<'_>,
     ) {
         self.mutation_tick += 1;
+        // The replacement can be empty (every grafted run nil), but the table
+        // already owned GNU's tree.
+        self.note_interval_tree_presence();
         match property_names {
             ReplacementPropertyNames::Include(names) => self.property_names.include(names),
         }
@@ -3262,6 +3599,10 @@ impl TextPropertyTable {
             }
         }
         self.intervals.prune_trailing_empty_intervals();
+        self.note_interval_tree_presence();
+        if changed {
+            self.mark_journal_dirty();
+        }
         changed
     }
 
@@ -3309,6 +3650,7 @@ impl TextPropertyTable {
             self.syntax_prop_tick += 1;
         }
         let (changed, written) = self.put_property_walk(range, object_len, name, value);
+        self.note_interval_tree_presence();
         if syntax_relevant {
             // Keep the cached bit-set ranges truthful, exactly as
             // `put_property_raw` does. Its absence here was not a
@@ -3327,6 +3669,9 @@ impl TextPropertyTable {
             // would cut its entry at a position that is no boundary.
             let noted = written.unwrap_or_else(|| CharRange::new(range.start(), range.start()));
             self.syntax_ranges_note_put(noted);
+        }
+        if changed {
+            self.mark_journal_dirty();
         }
         changed
     }
@@ -4261,6 +4606,9 @@ impl TextPropertyTable {
             node_start = node_end;
             id = next_id;
         }
+        if changed {
+            self.mark_journal_dirty();
+        }
         changed
     }
 
@@ -4277,14 +4625,21 @@ impl TextPropertyTable {
         if range.is_empty() {
             return;
         }
+        // GNU's tree outlives the last property: latch presence before the
+        // prune below can remove every interval.
+        self.note_interval_tree_presence();
 
         let affected = self
             .intervals
             .existing_intervals_overlapping_after_splits(range);
+        let wrote = !affected.is_empty();
         for (_, id) in affected {
             self.intervals.set_node_plist(id, Value::NIL);
         }
         self.intervals.prune_trailing_empty_intervals();
+        if wrote {
+            self.mark_journal_dirty();
+        }
     }
 
     pub fn set_properties_for_object_char_len(
@@ -4346,6 +4701,8 @@ impl TextPropertyTable {
             }
             cursor = node_end;
         }
+        self.note_interval_tree_presence();
+        self.mark_journal_dirty();
     }
 
     /// GNU `Ftext_property_not_all`'s walk (src/textprop.c): ONE descent
@@ -4723,6 +5080,10 @@ impl TextPropertyTable {
         if range.is_empty() {
             return;
         }
+        // Deleting the last interval-owning text keeps GNU's tree object
+        // (only `set_buffer_intervals (buffer, NULL)` discards it, and that is
+        // the buffer-level whole-text delete).
+        self.note_interval_tree_presence();
         // See adjust_for_insert_raw: keep the cached ranges positionally
         // truthful. Deletion clips; an entry emptied by the clip is removed.
         if let Ok(mut guard) = self.syntax_prop_ranges.lock()
@@ -4937,6 +5298,39 @@ impl TextPropertyTable {
         containing_end.min(next_start).min(end)
     }
 
+    /// True when `other` has the same boundaries and `eq` plist objects.
+    ///
+    /// `equal` property values are not enough: write-back must install a new
+    /// plist spine. A missing interval on either side is a difference.
+    pub(crate) fn same_eq_plist_boundaries(&self, other: &Self, len: usize) -> bool {
+        if len == 0 {
+            return false;
+        }
+        let end = CharPos0::new(len);
+        let mut pos = CharPos0::ZERO;
+        while pos.get() < len {
+            match (
+                self.interval_plist_at_char_pos(pos),
+                other.interval_plist_at_char_pos(pos),
+            ) {
+                (None, None) => {}
+                (Some(left), Some(right)) if eq_value(&left, &right) => {}
+                _ => return false,
+            }
+            let left_next = self.next_interval_boundary_after(pos, end);
+            let right_next = other.next_interval_boundary_after(pos, end);
+            if left_next != right_next {
+                return false;
+            }
+            let next = left_next.max(pos.add_len(CharLen::new(1)));
+            if next.get() <= pos.get() {
+                return false;
+            }
+            pos = next;
+        }
+        true
+    }
+
     /// Compare string text-property intervals the way GNU
     /// `compare_string_intervals` does for `equal-including-properties`.
     ///
@@ -5126,6 +5520,7 @@ impl TextPropertyTable {
             self.property_names.observe_plist(run.plist);
         }
         self.intervals.graft_shifted_runs(&runs, offset, new_root);
+        self.note_interval_tree_presence();
     }
 
     pub fn append_shifted_at_char_offset(&mut self, other: &TextPropertyTable, offset: CharLen) {
@@ -5260,6 +5655,7 @@ impl TextPropertyTable {
             target_runs,
             ReplacementPropertyNames::Include(&other.property_names),
         );
+        self.note_interval_tree_presence();
     }
 
     pub fn merge_adjacent_equal_properties_around_char_range(&mut self, range: CharRange) {
@@ -5543,6 +5939,10 @@ mod tests;
 #[path = "text_props/tests/bounded_absent_property_test.rs"]
 mod bounded_absent_property_test;
 
+#[cfg(test)]
+#[path = "text_props/tests/read_view_test.rs"]
+mod read_view_test;
+
 impl PropertyInterval {
     #[inline]
     #[doc(hidden)]
@@ -5659,8 +6059,10 @@ pub(crate) mod b13_test_hooks {
 
             if plist.is_empty() {
             } else {
+                self.note_interval_tree_presence();
                 self.intervals.prune_trailing_empty_intervals();
             }
+            self.mark_journal_dirty();
         }
 
         pub(crate) fn raw_plist_at_for_test(&self, pos: CharPos0) -> Option<Value> {

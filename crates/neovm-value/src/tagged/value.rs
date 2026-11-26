@@ -286,6 +286,11 @@ impl Ord for TaggedValue {
 /// naturally.  For Emacs `eq` (pointer identity), use `eq_value()` or
 /// `a.bits() == b.bits()`.
 ///
+/// A list spine is walked in a loop, so its length does not count toward
+/// the depth cap. Car nesting past 200 returns false and does not signal.
+/// Lisp `equal` (`try_equal_value_swp`) signals "Stack overflow in equal"
+/// for that case.
+///
 /// NOTE: This is `equal`-style structural equality. Code that needs Lisp
 /// hash-table semantics for a specific test (`eq`, `eql`, or `equal`) should
 /// convert through `HashKey` with the selected `HashTableTest`.
@@ -301,9 +306,13 @@ impl PartialEq for TaggedValue {
 impl Eq for TaggedValue {}
 
 impl Hash for TaggedValue {
+    /// The bounded hash an `equal` table files this object under.
+    ///
+    /// Equal values hash alike, including circular lists whose cycle shapes
+    /// differ. Unequal values may collide. This is not the stored structural
+    /// [`crate::value::HashKey`].
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.to_hash_key(&crate::value::HashTableTest::Equal)
-            .hash(state);
+        crate::value::equal_value_hash(*self).hash(state);
     }
 }
 
@@ -387,23 +396,59 @@ impl TaggedValue {
         PhantomData,
     );
 
+    /// Non-Lisp sentinel bit pattern for [`Self::DEAD`].
+    ///
+    /// Uses the unused non-Lisp `0b001` tag with bits `3..5 = 0b11` (outside
+    /// `BacktraceArgs`'s valid descriptor kinds `0..=2` and distinct from JIT
+    /// `VALUE_SHIM_SIGNAL = 0b0001` and `LEAF_NEED_GENERIC = 0b1001`) and
+    /// upper payload `0xDEAD`. Cross-crate compile-time assertions in
+    /// `neovm-eval` enumerate every JIT and backtrace sentinel encoding by
+    /// name to prove disjointness.
+    const DEAD_BITS: usize = (0xDEAD_usize << 5) | (0b11 << TAG_BITS) | 0b001;
+
     /// GNU's `dead_object ()` (`src/lisp.h:1353-1357`): "Return a Lisp_Object
     /// value that does not correspond to any object. This can make some Lisp
-    /// objects on free lists recognizable in O(1)." GNU spells it
-    /// `make_lisp_ptr (NULL, Lisp_String)`; this is the same bit pattern here,
-    /// a STRING tag over a null pointer, which no live object can ever hold.
+    /// objects on free lists recognizable in O(1)."
     ///
     /// It exists because the free list is threaded through the dead cells
     /// themselves (`ConsCell::set_free_next`, matching GNU `sweep_conses`), so
     /// a reclaimed cell's slots still decode as ordinary Lisp values. `nil` in
-    /// the car is indistinguishable from a real `nil`; `dead_object` is
+    /// the car is indistinguishable from a real `nil`; `DEAD` is
     /// distinguishable from every live value, which is the whole point.
-    pub const DEAD: Self = Self(TAG_STRING, PhantomData);
+    ///
+    /// Unlike GNU (which spells `dead_object` as a null `Lisp_String` pointer),
+    /// Neomacs places `DEAD` in the unused non-Lisp `0b001` tag space with
+    /// distinct upper bits and keeps it crate-private so it never satisfies
+    /// `is_string()` or `is_heap_object()`, making a null string pointer
+    /// unrepresentable in safe Rust. External callers observe it only via
+    /// [`Self::is_dead`].
+    pub(crate) const DEAD: Self = Self(Self::DEAD_BITS, PhantomData);
+
+    const _DEAD_BITS_DISJOINT: () = {
+        let tag = Self::DEAD_BITS & TAG_MASK;
+        assert!(Self::DEAD_BITS != 0);
+        assert!(Self::DEAD_BITS != 0b0001);
+        assert!(Self::DEAD_BITS != 0b1001);
+        assert!((Self::DEAD_BITS >> TAG_BITS) & 0b11 == 0b11);
+        assert!(tag & FIXNUM_CHECK_MASK != FIXNUM_CHECK_VALUE);
+        assert!(tag != TAG_SYMBOL && tag != TAG_CONS && tag != TAG_STRING);
+        assert!(tag != TAG_VECLIKE && tag != TAG_FLOAT);
+    };
 
     /// GNU `deadp` (`src/alloc.c:425-429`) — is this the free-list poison?
     #[inline]
-    pub fn is_dead(self) -> bool {
+    pub const fn is_dead(self) -> bool {
         self.0 == Self::DEAD.0
+    }
+
+    /// Raw bit pattern of [`Self::DEAD`], exposed only as an untyped `usize` so
+    /// cross-crate ABI assertions and JIT tests can prove disjointness from
+    /// non-Lisp sentinel encodings without letting external safe code construct
+    /// `DEAD` directly.
+    #[doc(hidden)]
+    #[inline]
+    pub const fn dead_sentinel_bits() -> usize {
+        Self::DEAD_BITS
     }
 
     // -- Fixnum --
@@ -573,6 +618,18 @@ impl TaggedValue {
         self.0
     }
 
+    /// Test-support [`HeapWord`] proof for this value's raw word.
+    ///
+    /// Only this crate can mint a `HeapWord`, so the ownership probe stays a
+    /// safe function even though it rebuilds a `TaggedValue` internally.
+    ///
+    /// [`HeapWord`]: crate::tagged::gc::HeapWord
+    #[cfg(any(test, feature = "test-support"))]
+    #[inline(always)]
+    pub fn heap_word_for_test(self) -> crate::tagged::gc::HeapWord {
+        crate::tagged::gc::HeapWord::new(self.0)
+    }
+
     /// Reconstruct a value from its raw tagged bits (the inverse of [`bits`]).
     ///
     /// `pub(crate)` and unchecked: the caller must supply bits that originated
@@ -600,6 +657,27 @@ impl TaggedValue {
     #[inline(always)]
     pub fn is_fixnum(self) -> bool {
         self.0 & FIXNUM_CHECK_MASK == FIXNUM_CHECK_VALUE
+    }
+
+    /// Whether a raw tagged word carries the fixnum tag bits.
+    #[inline(always)]
+    pub const fn bits_are_fixnum(bits: usize) -> bool {
+        bits & FIXNUM_CHECK_MASK == FIXNUM_CHECK_VALUE
+    }
+
+    /// Decode an immediate tagged word (`nil`, `t`, or a fixnum) without
+    /// ever constructing a heap pointer from arbitrary bits.
+    #[inline]
+    pub const fn try_immediate_from_bits(bits: usize) -> Option<Self> {
+        if bits == Self::NIL.0 {
+            Some(Self::NIL)
+        } else if bits == Self::T.0 {
+            Some(Self::T)
+        } else if Self::bits_are_fixnum(bits) {
+            Some(Self(bits, PhantomData))
+        } else {
+            None
+        }
     }
 
     /// Check if this value is a symbol.
@@ -885,24 +963,46 @@ impl TaggedValue {
         }
     }
 
-    /// Extract raw cons cell pointer without tag check.
+    /// Tag failure shared by the cons accessors. Cold and never-inlined so a
+    /// site that does not fold keeps a compare and one call. `track_caller`
+    /// reports the accessor.
+    #[cold]
+    #[inline(never)]
+    #[track_caller]
+    fn cons_accessor_requires_a_cons() -> ! {
+        panic!("cons accessor requires a cons");
+    }
+
+    /// Extract raw cons cell pointer. Panics if this is not a cons.
+    ///
+    /// A caller that has already tested [`Self::is_cons`] does not pay for
+    /// this check: it is the same tag compare, and the dominating branch
+    /// deletes it.
     #[inline(always)]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn xcons_ptr(self) -> *const ConsCell {
-        debug_assert!(self.is_cons());
+        if !self.is_cons() {
+            Self::cons_accessor_requires_a_cons();
+        }
         super::collection_reads::observe(self);
         (self.0 & !TAG_MASK) as *const ConsCell
     }
 
-    /// Extract raw string object pointer. Returns None if not a string.
+    /// Extract raw string object pointer.
+    ///
+    /// Returns `None` when this is not a string, or if an unsafe caller forged
+    /// a null pointer with `TAG_STRING`.
     #[inline(always)]
     pub fn as_string_ptr(self) -> Option<*const StringObj> {
-        if self.is_string() {
-            super::collection_reads::observe(self);
-            Some((self.0 & !TAG_MASK) as *const StringObj)
-        } else {
-            None
+        if !self.is_string() {
+            return None;
         }
+        let ptr = (self.0 & !TAG_MASK) as *const StringObj;
+        if ptr.is_null() {
+            return None;
+        }
+        super::collection_reads::observe(self);
+        Some(ptr)
     }
 
     /// Extract raw float object pointer. Returns None if not a float.
@@ -962,7 +1062,11 @@ impl TaggedValue {
     #[inline(always)]
     #[doc(hidden)]
     pub fn cons_car_unobserved(self) -> Self {
-        debug_assert!(self.is_cons());
+        // Same tag compare as the caller's `is_cons` test. On that path the
+        // branch deletes; a bare call panics instead of reading a wild word.
+        if !self.is_cons() {
+            Self::cons_accessor_requires_a_cons();
+        }
         // An admitted cons has exact tag TAG_CONS. Subtracting it
         // recovers the same aligned base and permits a field displacement.
         unsafe {
@@ -976,9 +1080,66 @@ impl TaggedValue {
     #[inline(always)]
     #[doc(hidden)]
     pub fn cons_cdr_unobserved(self) -> Self {
-        debug_assert!(self.is_cons());
+        // Same tag compare as the caller's `is_cons` test. On that path the
+        // branch deletes; a bare call panics instead of reading a wild word.
+        if !self.is_cons() {
+            Self::cons_accessor_requires_a_cons();
+        }
         // An admitted cons has exact tag TAG_CONS. Subtracting it
         // recovers the same aligned base and permits a field displacement.
+        unsafe { (*(self.0.wrapping_sub(TAG_CONS) as *const ConsCell)).cdr() }
+    }
+
+    /// Car of a cons the caller has already proved.
+    ///
+    /// # Safety
+    ///
+    /// `self.is_cons()` is true and the cell is live. This does not test the
+    /// tag. It observes the cell, same as [`Self::cons_car`].
+    #[inline(always)]
+    pub unsafe fn cons_car_unchecked(self) -> Self {
+        debug_assert!(self.is_cons());
+        super::collection_reads::observe(self);
+        unsafe { (*((self.0 & !TAG_MASK) as *const ConsCell)).car.get() }
+    }
+
+    /// Cdr of a cons the caller has already proved.
+    ///
+    /// # Safety
+    ///
+    /// Same as [`Self::cons_car_unchecked`].
+    #[inline(always)]
+    pub unsafe fn cons_cdr_unchecked(self) -> Self {
+        debug_assert!(self.is_cons());
+        super::collection_reads::observe(self);
+        unsafe { (*((self.0 & !TAG_MASK) as *const ConsCell)).cdr() }
+    }
+
+    /// Unobserved car of a cons the caller has already proved.
+    ///
+    /// # Safety
+    ///
+    /// `self.is_cons()` is true and the cell is live. This does not test the
+    /// tag and does not observe the cell, same as [`Self::cons_car_unobserved`].
+    /// The caller also upholds that function's capture precondition.
+    #[inline(always)]
+    pub unsafe fn cons_car_unobserved_unchecked(self) -> Self {
+        debug_assert!(self.is_cons());
+        unsafe {
+            (*(self.0.wrapping_sub(TAG_CONS) as *const ConsCell))
+                .car
+                .get()
+        }
+    }
+
+    /// Unobserved cdr of a cons the caller has already proved.
+    ///
+    /// # Safety
+    ///
+    /// Same as [`Self::cons_car_unobserved_unchecked`].
+    #[inline(always)]
+    pub unsafe fn cons_cdr_unobserved_unchecked(self) -> Self {
+        debug_assert!(self.is_cons());
         unsafe { (*(self.0.wrapping_sub(TAG_CONS) as *const ConsCell)).cdr() }
     }
 
@@ -1270,37 +1431,36 @@ impl TaggedValue {
     /// different non-UTF-8 strings both return `None`, so comparing
     /// `as_utf8_str()` values with `==` will silently treat them as equal.
     pub fn as_utf8_str(self) -> Option<&'static str> {
-        if self.is_string() {
-            let ptr = self.as_string_ptr().unwrap();
-            // Safety: the string object is alive (caller must ensure no GC).
-            // Lifetime is extended to 'static — same pattern as old Value::as_str.
-            unsafe {
-                let header = &(*ptr).header;
-                if !matches!(header.kind, super::header::HeapObjectKind::String) {
-                    panic!(
-                        "BUG: StringObj header.kind = {:?} (expected String) — \
+        let Some(ptr) = self.as_string_ptr() else {
+            return None;
+        };
+        // Safety: `as_string_ptr` refused non-strings and null pointers.
+        // The string object is alive (caller must ensure no GC).
+        // Lifetime is extended to 'static — same pattern as old Value::as_str.
+        unsafe {
+            let header = &(*ptr).header;
+            if !matches!(header.kind, super::header::HeapObjectKind::String) {
+                panic!(
+                    "BUG: StringObj header.kind = {:?} (expected String) — \
                          possible use-after-free. Tagged value = {:#x}, ptr = {:?}",
-                        header.kind, self.0, ptr,
-                    );
-                }
-                // The kind check above cannot see a slot reclaimed and handed
-                // back to the SAME class arena, which is the common case for
-                // strings. GNU's free marker can (DIVERGENCES.md 163):
-                // `sweep_strings` nulls `s->u.s.data` "so that we know it's
-                // free" (src/alloc.c:1878-1882).
-                if (*ptr).data.is_reclaimed() {
-                    panic!(
-                        "use-after-free: borrowed a string object the collector has \
+                    header.kind, self.0, ptr,
+                );
+            }
+            // The kind check above cannot see a slot reclaimed and handed
+            // back to the SAME class arena, which is the common case for
+            // strings. GNU's free marker can (DIVERGENCES.md 163):
+            // `sweep_strings` nulls `s->u.s.data` "so that we know it's
+            // free" (src/alloc.c:1878-1882).
+            if (*ptr).data.is_reclaimed() {
+                panic!(
+                    "use-after-free: borrowed a string object the collector has \
                          reclaimed (StringObj at {ptr:?} carries GNU sweep_strings' \
                          null-data free marker). Tagged value = {:#x}. See \
                          `Value::as_lisp_string` and DIVERGENCES.md 163.",
-                        self.0,
-                    );
-                }
-                (*ptr).data.as_utf8_str()
+                    self.0,
+                );
             }
-        } else {
-            None
+            (*ptr).data.as_utf8_str()
         }
     }
 
@@ -1476,6 +1636,14 @@ impl fmt::Debug for TaggedValue {
 #[cfg(test)]
 #[path = "value/tests/fixnum_boundary.rs"]
 mod fixnum_boundary_tests;
+
+#[cfg(test)]
+#[path = "value/tests/cons_accessor_contract.rs"]
+mod cons_accessor_contract;
+
+#[cfg(test)]
+#[path = "value/tests/dead_string_tag.rs"]
+mod dead_string_tag;
 
 /// Carrier park: drop subr-object caches (they hold heap Values).
 #[doc(hidden)]

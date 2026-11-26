@@ -42,11 +42,14 @@ fn div_cx18_process_exit_and_buffer_content() {
                          :buffer buf)))
     (set-process-sentinel p #'ignore)
     (set-process-query-on-exit-flag p nil)
-    (let ((i 0))
-      (while (and (memq (process-status p) '(run open listen connect stop))
-                  (< i 40))
-        (accept-process-output p 0.05)
-        (setq i (1+ i))))
+    ;; The child can write and exit before the first `process-status' read.
+    ;; GNU's SIGCHLD handler then settles `exit' first and the live-status
+    ;; loop skips `accept-process-output' with "done\n" still in the pty:
+    ;; GNU itself returns (exit 3 "" nil) in that interleaving.  Settle
+    ;; through the shared helper, whose final zero-time accept drains an
+    ;; already-terminal process in both editors, so the probe observes the
+    ;; settled buffer instead of racing signal delivery.
+    (neovm--oracle-settle-process p)
     (setq result
           (list (process-status p)
                 (process-exit-status p)

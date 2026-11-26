@@ -46,7 +46,7 @@ fn assert_add_result(
     ev: &mut crate::emacs_core::eval::Context,
 ) {
     let ctx = ev as *mut crate::emacs_core::eval::Context as *mut u8;
-    match leaf.call(ctx, &[Value::make_int(10)]) {
+    match unsafe { leaf.call(ctx, &[Value::make_int(10)]) } {
         super::super::compile::NativeRun::Ok(bits) => {
             assert_eq!(bits, Value::make_int(1_234_577).bits());
         }

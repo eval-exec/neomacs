@@ -254,9 +254,9 @@ fn stale_ack_identity_generation_duplicate_and_missing_image_are_refused_body<
         entry.state.lock().unwrap().rendezvous.coverage_epoch = 0;
         assert!(matches!(era.try_stop(), Err(RendezvousError::Publication)));
         entry.state.lock().unwrap().rendezvous.coverage_epoch = epoch.get();
-        let saved_image = entry.state.lock().unwrap().image.take().unwrap();
-        assert!(matches!(era.try_stop(), Err(RendezvousError::Publication)));
-        entry.state.lock().unwrap().image = Some(saved_image);
+        super::keeper::with_missing_image_for_test(&entry, || {
+            assert!(matches!(era.try_stop(), Err(RendezvousError::Publication)));
+        });
         let saved_roots = entry.state.lock().unwrap().roots.take().unwrap();
         assert!(matches!(era.try_stop(), Err(RendezvousError::Publication)));
         entry.state.lock().unwrap().roots = Some(saved_roots);
@@ -378,13 +378,10 @@ fn native_owner_sleeps_two_epochs_latest_image_and_synthetic_work_once_body<
                             first_words = Some(words);
                         }
                         folded += retry(|| {
-                            guard.with_owner_image(native_key, |image| {
-                                image
-                                    .consume_synthetic_remembered_for_test(MarkWord::of(
-                                        TaggedValue::fixnum(621),
-                                    ))
-                                    .unwrap()
-                            })
+                            guard.consume_synthetic_remembered_for_test(
+                                native_key,
+                                MarkWord::from_immediate(TaggedValue::fixnum(621)).unwrap(),
+                            )
                         });
                         assert_eq!(read_words(guard, ordinary_key).len(), 1);
                         Ok(())
@@ -643,12 +640,816 @@ fn native_publication_is_not_stopped_until_root_and_image_commit_body<
     });
 }
 
+/// A lock held by another thread. The holder lets go once the caller under
+/// test has met it (the contention fence moved) or has returned without
+/// meeting it, so neither outcome rides a timer.
+struct Holder<'scope> {
+    holder: thread::ScopedJoinHandle<'scope, ()>,
+    returned: mpsc::Sender<()>,
+}
+
+/// Run on the holder thread with the lock held: report it, then keep it
+/// until the caller meets it or returns.
+fn hold_until_met(before: u64, held: mpsc::Sender<()>, returned: &mpsc::Receiver<()>) {
+    use super::super::test_fences::gate_contention_for_test;
+    held.send(()).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while gate_contention_for_test() == before && returned.try_recv().is_err() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the caller neither met the held lock nor returned"
+        );
+        thread::yield_now();
+    }
+}
+
+impl<'scope> Holder<'scope> {
+    /// Returns once BODY has taken its lock and called `hold_until_met`.
+    fn spawn(
+        scope: &'scope thread::Scope<'scope, '_>,
+        body: impl FnOnce(u64, mpsc::Sender<()>, mpsc::Receiver<()>) + Send + 'scope,
+    ) -> Self {
+        let (held_tx, held_rx) = mpsc::channel();
+        let (returned, returned_rx) = mpsc::channel::<()>();
+        let before = super::super::test_fences::gate_contention_for_test();
+        let holder = scope.spawn(move || body(before, held_tx, returned_rx));
+        receive(&held_rx);
+        Self { holder, returned }
+    }
+
+    /// The registry gate.
+    fn gate<'env>(scope: &'scope thread::Scope<'scope, 'env>, registry: &'env Registry) -> Self {
+        Self::spawn(scope, move |before, held, returned| {
+            let gate = retry(|| registry.lock().map_err(RendezvousError::from));
+            hold_until_met(before, held, &returned);
+            drop(gate);
+        })
+    }
+
+    /// The caller under test has returned: let go if still holding, and join.
+    fn join(self) {
+        let _ = self.returned.send(());
+        self.holder.join().unwrap();
+    }
+}
+
+/// A gate holder after a native publication commits must not strand the
+/// owner without its receipt: the owner is NativeStopped by then and a second
+/// publication is refused, so the caller cannot retry the whole call.
+fn native_receipt_outlasts_a_gate_holder_after_the_commit_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1931, 1).unwrap();
+        let registry = era.registry();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            let (committed_tx, committed_rx) = mpsc::channel();
+            let (held_tx, held_rx) = mpsc::channel();
+            let (published_tx, published_rx) = mpsc::channel();
+            let owner = scope.spawn(move || {
+                let mut owner = activate(permit, heap, 1931);
+                owner.protocol.hooks.receipt_hook = Some(Box::new(move || {
+                    committed_tx.send(()).unwrap();
+                    receive(&held_rx);
+                }));
+                let receipt = owner.publish_native_owner(&input);
+                published_tx
+                    .send(
+                        receipt
+                            .as_ref()
+                            .map(|receipt| receipt.serial_facts().0)
+                            .map_err(|e| *e),
+                    )
+                    .unwrap();
+                drop(receipt);
+                apply(owner.begin_restore_retry(true).unwrap());
+                retire(owner, &input);
+            });
+            receive(&committed_rx);
+            let holder = Holder::gate(scope, registry);
+            held_tx.send(()).unwrap();
+            let published = receive(&published_rx);
+            holder.join();
+            owner.join().unwrap();
+            assert_eq!(
+                published,
+                Ok(1931),
+                "the committed publication returns its receipt"
+            );
+        });
+        finish_era(era);
+    });
+}
+
+/// The stopped keeper's look at the gate, to bind the stop and to validate
+/// a receipt it is about to consume, waits out a brief holder instead of
+/// refusing `Busy`.
+fn stopped_keeper_waits_out_a_brief_gate_holder_body<K: EraKeeper + std::fmt::Debug + 'static>(
+    rooted_era: RootedEraFn<K>,
+) {
+    use super::super::custody_brand::with_stop_scope;
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1932, 1).unwrap();
+        let key = permit.key();
+        let registry = era.registry();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            let (receipt_tx, receipt_rx) = mpsc::channel();
+            let (return_tx, return_rx) = mpsc::channel::<()>();
+            let owner = scope.spawn(move || {
+                let mut owner = activate(permit, heap, 1932);
+                let receipt = retry(|| owner.publish_native_owner(&input));
+                receipt_tx.send(receipt).unwrap();
+                receive(&return_rx);
+                apply(owner.begin_restore_retry(true).unwrap());
+                retire(owner, &input);
+            });
+            let receipt = receive(&receipt_rx);
+            let mut stopped = retry(|| era.stop());
+            trace_owners(&mut stopped, &[key]);
+            with_stop_scope(|stop_scope| {
+                let holder = Holder::gate(scope, registry);
+                let interval = match stop_scope.bind(stopped) {
+                    Ok(interval) => interval,
+                    Err((_scope, stopped, reason)) => {
+                        holder.join();
+                        complete(stopped);
+                        panic!("bind refused while another thread held the gate: {reason:?}");
+                    }
+                };
+                holder.join();
+                let holder = Holder::gate(scope, registry);
+                let validated = interval.validate_owner(&receipt);
+                holder.join();
+                match interval.complete_traced() {
+                    Ok(()) => {}
+                    Err(failure) => complete(failure.into_stopped()),
+                }
+                validated.expect("validation waits out the holder");
+            });
+            drop(receipt);
+            return_tx.send(()).unwrap();
+            owner.join().unwrap();
+        });
+        finish_era(era);
+    });
+}
+
+/// One native owner on its own thread for the keeper rows below. Returns its
+/// thread and entry; the owner leaves and retires once RELEASE fires.
+fn native_owner_for_keeper_rows<'scope, 'env>(
+    scope: &'scope thread::Scope<'scope, 'env>,
+    heap: HeapIdentity,
+    permit: MutatorPermit<'env>,
+    owner_id: u64,
+    input: Vec<SharedRoot>,
+    release: mpsc::Receiver<()>,
+) -> (thread::ScopedJoinHandle<'scope, ()>, Arc<MutatorEntry>) {
+    let (entry_tx, entry_rx) = mpsc::channel();
+    let owner = scope.spawn(move || {
+        let mut owner = activate(permit, heap, owner_id);
+        retry(|| owner.enter_native(&input));
+        entry_tx.send(owner.entry()).unwrap();
+        receive(&release);
+        apply(owner.begin_restore_retry(true).unwrap());
+        retire(owner, &input);
+    });
+    (owner, receive(&entry_rx))
+}
+
+/// The keeper's trace preflight waits out a brief gate holder.
+fn keeper_trace_waits_out_a_brief_gate_holder_body<K: EraKeeper + std::fmt::Debug + 'static>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1933, 1).unwrap();
+        let registry = era.registry();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (owner, _entry) =
+                native_owner_for_keeper_rows(scope, heap, permit, 1933, input, release_rx);
+            let mut stopped = retry(|| era.stop());
+            let holder = Holder::gate(scope, registry);
+            let refused = stopped.trace(|_stopped, _proof| Ok(())).err();
+            holder.join();
+            if refused.is_some() {
+                // The preflight refused before the body: retry, then finish.
+                retry(|| stopped.trace(|_stopped, _proof| Ok(())));
+            }
+            complete(stopped);
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(refused, None, "the trace preflight waits out the holder");
+        });
+        finish_era(era);
+    });
+}
+
+/// `complete` consumes the stop, so a `Busy` from a brief gate holder would
+/// leave the caller only the drop, which poisons the era. It waits instead.
+fn keeper_complete_waits_out_a_brief_gate_holder_body<K: EraKeeper + std::fmt::Debug + 'static>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1934, 1).unwrap();
+        let key = permit.key();
+        let registry = era.registry();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (owner, _entry) =
+                native_owner_for_keeper_rows(scope, heap, permit, 1934, input, release_rx);
+            let mut stopped = retry(|| era.stop());
+            trace_owners(&mut stopped, &[key]);
+            let holder = Holder::gate(scope, registry);
+            let completed = stopped.complete();
+            holder.join();
+            let refused = completed.err().map(|failure| {
+                let reason = failure.reason;
+                complete(failure.into_stopped());
+                reason
+            });
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(refused, None, "complete waits out the gate holder");
+        });
+        finish_era(era);
+    });
+}
+
+/// The reader scan in `complete` stays outside the gate. An owner that holds
+/// the gate and its entry for a moment there is retried, not returned as a
+/// consuming `Busy`.
+fn keeper_complete_retries_an_entry_held_through_the_reader_scan_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    use super::super::test_fences::{gate_contention_for_test, install_owner_moment_hook_for_test};
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1935, 1).unwrap();
+        let key = permit.key();
+        let registry = era.registry();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (owner, entry) =
+                native_owner_for_keeper_rows(scope, heap, permit, 1935, input, release_rx);
+            let mut stopped = retry(|| era.stop());
+            trace_owners(&mut stopped, &[key]);
+            let (go_tx, go_rx) = mpsc::channel::<()>();
+            let (held_tx, held_rx) = mpsc::channel::<()>();
+            let (returned_tx, returned_rx) = mpsc::channel::<()>();
+            let before = gate_contention_for_test();
+            // An owner's moment: the gate, then its entry, exactly when the
+            // keeper starts the scan with the gate released.
+            let holder = scope.spawn(move || {
+                receive(&go_rx);
+                let gate = retry(|| registry.lock().map_err(RendezvousError::from));
+                let state = entry.state.lock().unwrap();
+                hold_until_met(before, held_tx, &returned_rx);
+                drop(state);
+                drop(gate);
+            });
+            install_owner_moment_hook_for_test(Box::new(move || {
+                go_tx.send(()).unwrap();
+                receive(&held_rx);
+            }));
+            let completed = stopped.complete();
+            let _ = returned_tx.send(());
+            holder.join().unwrap();
+            let refused = completed.err().map(|failure| {
+                let reason = failure.reason;
+                complete(failure.into_stopped());
+                reason
+            });
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(refused, None, "the reader scan retries the held entry");
+        });
+        finish_era(era);
+    });
+}
+
+/// F1. Under its stop the keeper takes the census through the stop, whose
+/// borrow keeps `trace` and `complete` out while the census holds the gate.
+/// The era's own census refuses the keeper during the stop.
+fn keeper_takes_summaries_through_its_stop_body<K: EraKeeper + std::fmt::Debug + 'static>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1936, 1).unwrap();
+        let key = permit.key();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            // A running owner that acknowledges the stop, so its published
+            // image carries the stop's epoch, as a census expects.
+            let (running_tx, running_rx) = mpsc::channel::<()>();
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let owner = scope.spawn(move || {
+                let mut owner = activate(permit, heap, 1936);
+                running_tx.send(()).unwrap();
+                let epoch = retry(|| owner.wait_request());
+                retry(|| owner.acknowledge(epoch, &input));
+                receive(&release_rx);
+                let image = owner.begin_restore_retry(false).unwrap();
+                apply(image);
+                retire(owner, &input);
+            });
+            receive(&running_rx);
+            let mut stopped = retry(|| era.stop());
+            trace_owners(&mut stopped, &[key]);
+            let era_census = era.stopped_summaries().err();
+            let stop_census = stopped
+                .summaries()
+                .and_then(|summaries| summaries.census().map(|_| ()));
+            let completed = stopped.complete().err().map(|failure| {
+                let reason = failure.reason;
+                complete(failure.into_stopped());
+                reason
+            });
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(
+                era_census,
+                Some(RegistrationError::WrongThread),
+                "the era refuses the keeper's census during its stop"
+            );
+            stop_census.expect("the census under the stop");
+            assert_eq!(
+                completed, None,
+                "the stop completes once the census is gone"
+            );
+        });
+        finish_era(era);
+    });
+}
+
+/// F2. Under a stop, verify_stopped's "not stopped yet" is a broken census,
+/// not a `Busy` to wait on. With the census restored, the stop completes.
+fn a_broken_census_under_a_stop_is_not_busy_body<K: EraKeeper + std::fmt::Debug + 'static>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1937, 1).unwrap();
+        let key = permit.key();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (owner, entry) =
+                native_owner_for_keeper_rows(scope, heap, permit, 1937, input, release_rx);
+            let mut stopped = retry(|| era.stop());
+            let stopped_mode = std::mem::replace(
+                &mut entry.state.lock().unwrap().rendezvous.mode,
+                Mode::Running,
+            );
+            let refused = stopped.trace(|_stopped, _proof| Ok(())).err();
+            entry.state.lock().unwrap().rendezvous.mode = stopped_mode;
+            trace_owners(&mut stopped, &[key]);
+            let completed = stopped.complete().err().map(|failure| {
+                let reason = failure.reason;
+                complete(failure.into_stopped());
+                reason
+            });
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(
+                refused,
+                Some(RendezvousError::Publication),
+                "a frozen owner that is not stopped breaks the census"
+            );
+            assert_eq!(
+                completed, None,
+                "with the census restored, the stop completes"
+            );
+        });
+        finish_era(era);
+    });
+}
+
+/// F3. The keeper's world-root check waits out a brief gate holder.
+fn keeper_world_root_check_waits_out_a_brief_gate_holder_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1938, 1).unwrap();
+        let key = permit.key();
+        let registry = era.registry();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (owner, _entry) =
+                native_owner_for_keeper_rows(scope, heap, permit, 1938, input, release_rx);
+            let mut stopped = retry(|| era.stop());
+            let holder = Holder::gate(scope, registry);
+            let checked = stopped.check_world_roots(heap);
+            holder.join();
+            trace_owners(&mut stopped, &[key]);
+            complete(stopped);
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(checked, Ok(()), "the check waits out the holder");
+        });
+        finish_era(era);
+    });
+}
+
+/// F3. The root reader takes the owner's entry after the gate is released.
+/// An owner's gate-and-entry moment there is waited out.
+fn keeper_root_reader_waits_out_an_owner_moment_on_its_entry_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    use super::super::test_fences::{gate_contention_for_test, install_owner_moment_hook_for_test};
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1939, 1).unwrap();
+        let key = permit.key();
+        let registry = era.registry();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (owner, entry) =
+                native_owner_for_keeper_rows(scope, heap, permit, 1939, input, release_rx);
+            let mut stopped = retry(|| era.stop());
+            let (go_tx, go_rx) = mpsc::channel::<()>();
+            let (held_tx, held_rx) = mpsc::channel::<()>();
+            let (returned_tx, returned_rx) = mpsc::channel::<()>();
+            let before = gate_contention_for_test();
+            let holder = scope.spawn(move || {
+                receive(&go_rx);
+                let gate = retry(|| registry.lock().map_err(RendezvousError::from));
+                let state = entry.state.lock().unwrap();
+                hold_until_met(before, held_tx, &returned_rx);
+                drop(state);
+                drop(gate);
+            });
+            install_owner_moment_hook_for_test(Box::new(move || {
+                go_tx.send(()).unwrap();
+                receive(&held_rx);
+            }));
+            let read = stopped.with_root_reader(key, |reader| reader.finish());
+            let _ = returned_tx.send(());
+            holder.join().unwrap();
+            trace_owners(&mut stopped, &[key]);
+            complete(stopped);
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(
+                read.map(|finished| finished.is_ok()),
+                Ok(true),
+                "the root reader waits out the owner's moment"
+            );
+        });
+        finish_era(era);
+    });
+}
+
+/// The keeper's hold on an entry across a body is not an owner's moment:
+/// waiting cannot end it. A frozen entry held that way already refuses in
+/// `validate`. The World entry is not frozen, so a body that reaches it again
+/// must refuse at once instead of waiting itself out. Another entry is
+/// still reachable from that body.
+fn keeper_reentering_an_entry_it_holds_refuses_at_once_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    use super::super::test_fences::gate_contention_for_test;
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let registry = era.registry();
+        let world = {
+            let gate = retry(|| registry.lock().map_err(RendezvousError::from));
+            gate.entries
+                .iter()
+                .find(|entry| entry.key.owner == 0)
+                .map(|entry| entry.key)
+                .unwrap()
+        };
+
+        // No owner runs, so nothing else can hold the World entry.
+        let mut stopped = retry(|| era.stop());
+        let before = gate_contention_for_test();
+        let again = stopped
+            .with_owner_image_for_test(world, |_| stopped.with_owner_image_for_test(world, |_| ()))
+            .unwrap();
+        let met = gate_contention_for_test() - before;
+        let after = stopped.with_owner_image_for_test(world, |_| ());
+        trace_owners(&mut stopped, &[]);
+        complete(stopped);
+        assert_eq!(
+            again,
+            Err(RendezvousError::Publication),
+            "the keeper's own hold is not waited out"
+        );
+        assert_eq!(met, 0, "the refusal never met contention");
+        assert_eq!(after, Ok(()), "the hold ends with its body");
+
+        let permit = era.register(1940, 1).unwrap();
+        let key = permit.key();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (owner, _entry) =
+                native_owner_for_keeper_rows(scope, heap, permit, 1940, input, release_rx);
+            let mut stopped = retry(|| era.stop());
+            let other = stopped
+                .with_owner_image_for_test(world, |_| {
+                    stopped.with_owner_image_for_test(key, |_| ())
+                })
+                .unwrap();
+            trace_owners(&mut stopped, &[key]);
+            complete(stopped);
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(other, Ok(()), "another entry stays reachable");
+        });
+        finish_era(era);
+    });
+}
+
+/// L6.7 K3. The keeper grants the serial head inside its own traced stop:
+/// not before the trace, once per ticket, to the queued owner. The stop does
+/// not complete while the grant is out (lead #13911 M1), and the grant
+/// retires once.
+fn keeper_grants_the_serial_head_only_inside_its_traced_stop_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1941, 1).unwrap();
+        let key = permit.key();
+        let registry = era.registry();
+        let input = vec![roots[0].clone()];
+        let generation = NonZeroU64::new(7).unwrap();
+        thread::scope(|scope| {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (owner, _entry) =
+                native_owner_for_keeper_rows(scope, heap, permit, 1941, input, release_rx);
+            let queued = retry(|| super::enqueue_serial_for_test(registry, key, generation));
+            let mut stopped = retry(|| era.stop());
+            let early = stopped
+                .grant_serial_head(|_, _| true)
+                .map(|grant| grant.is_some());
+            trace_owners(&mut stopped, &[key]);
+            let mut seen = None;
+            let grant = stopped
+                .grant_serial_head(|owner, published| {
+                    seen = Some((owner, published));
+                    true
+                })
+                .unwrap()
+                .expect("the queued head is granted");
+            let granted_client = grant.client();
+            let while_out = super::serial_ring_head_for_test(registry);
+            let again = stopped
+                .grant_serial_head(|_, _| true)
+                .map(|grant| grant.is_some());
+            // The stop refuses to complete while the grant is out.
+            let refused = match stopped.complete() {
+                Ok(()) => panic!("the stop completed with a grant out"),
+                Err(failure) => {
+                    let reason = failure.reason;
+                    stopped = failure.into_stopped();
+                    reason
+                }
+            };
+            let retired = stopped.retire_serial_grant(grant);
+            let head_after = super::serial_ring_head_for_test(registry);
+            complete(stopped);
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(
+                early,
+                Err(RendezvousError::Publication),
+                "no grant before the trace"
+            );
+            assert_eq!(seen, Some((key, generation)), "ready sees the queued facts");
+            assert_eq!(
+                granted_client,
+                SerialClient::Owner(key),
+                "the grant names the queued owner"
+            );
+            assert_eq!(
+                while_out,
+                Ok((1, Some(queued))),
+                "the granted entry stays at the head while its ticket is out"
+            );
+            assert_eq!(again, Ok(false), "one ticket out");
+            assert_eq!(
+                refused,
+                RendezvousError::Publication,
+                "no grant outlives its stop"
+            );
+            assert_eq!(retired, Ok(()), "the grant retires once");
+            assert_eq!(
+                head_after,
+                Ok((0, None)),
+                "the ring is empty after the retire"
+            );
+        });
+        finish_era(era);
+    });
+}
+
+/// L6.7b b3 (lead #14011 conditions). The keeper reads a Baton-group head
+/// as the group's, not as a refusal, and grants it only through
+/// `grant_baton_group`: an owner grant leaves it in place, and a group
+/// grant leaves an owner head in place. The grant names the group, the stop
+/// does not complete while the group's turn is out, and the group's queued
+/// entry cancels when the group leaves.
+fn keeper_routes_a_baton_group_head_and_grants_it_alone_body<
+    K: EraKeeper + std::fmt::Debug + 'static,
+>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1942, 1).unwrap();
+        let key = permit.key();
+        let registry = era.registry();
+        let input = vec![roots[0].clone()];
+        let generation = NonZeroU64::new(7).unwrap();
+        thread::scope(|scope| {
+            let (release_tx, release_rx) = mpsc::channel();
+            let (owner, _entry) =
+                native_owner_for_keeper_rows(scope, heap, permit, 1942, input, release_rx);
+            retry(|| super::enqueue_serial_for_test(registry, key, generation));
+            retry(|| super::enqueue_baton_group(registry));
+            let second_group = super::enqueue_baton_group(registry);
+            let mut stopped = retry(|| era.stop());
+            trace_owners(&mut stopped, &[key]);
+            let owner_head = stopped.serial_head();
+            let group_over_owner = stopped.grant_baton_group().map(|grant| grant.is_some());
+            let owner_grant = stopped
+                .grant_serial_head(|_, _| true)
+                .unwrap()
+                .expect("the owner head is granted");
+            stopped.retire_serial_grant(owner_grant).unwrap();
+            let group_head = stopped.serial_head();
+            let owner_over_group = stopped
+                .grant_serial_head(|_, _| true)
+                .map(|grant| grant.is_some());
+            let group_grant = stopped
+                .grant_baton_group()
+                .unwrap()
+                .expect("the group head is granted");
+            let granted_client = group_grant.client();
+            let refused = match stopped.complete() {
+                Ok(()) => panic!("the stop completed with the group's turn out"),
+                Err(failure) => {
+                    let reason = failure.reason;
+                    stopped = failure.into_stopped();
+                    reason
+                }
+            };
+            stopped.retire_serial_grant(group_grant).unwrap();
+            complete(stopped);
+            retry(|| super::enqueue_baton_group(registry));
+            let cancelled = super::cancel_baton_group(registry);
+            let cancelled_again = super::cancel_baton_group(registry);
+            let ring_after = super::serial_ring_head_for_test(registry);
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(
+                second_group,
+                Err(RendezvousError::Identity),
+                "the group holds one entry"
+            );
+            assert_eq!(
+                owner_head,
+                Ok(Some(RingClient::Owner { key, generation })),
+                "an owner head reads with its queued generation"
+            );
+            assert_eq!(
+                group_over_owner,
+                Ok(false),
+                "a group grant leaves an owner head"
+            );
+            assert_eq!(
+                group_head,
+                Ok(Some(RingClient::BatonGroup)),
+                "a group head routes to the group instead of refusing"
+            );
+            assert_eq!(
+                owner_over_group,
+                Ok(false),
+                "an owner grant leaves a group head"
+            );
+            assert_eq!(
+                granted_client,
+                SerialClient::BatonGroup,
+                "the grant names the group"
+            );
+            assert_eq!(
+                refused,
+                RendezvousError::Publication,
+                "no group turn outlives its stop"
+            );
+            assert_eq!(cancelled, Ok(()), "the group's queued entry cancels");
+            assert_eq!(
+                cancelled_again,
+                Err(RendezvousError::Identity),
+                "a cancel happens once"
+            );
+            assert_eq!(ring_after, Ok((0, None)), "the ring is empty");
+        });
+        finish_era(era);
+    });
+}
+
+/// L6.7 K8. A bounded stop that a running owner has not met comes back
+/// pending, names that owner, and leaves the request standing: the owner
+/// still sees the same epoch, and the next attempt stops in it.
+fn keeper_bounded_stop_pends_and_keeps_its_epoch_body<K: EraKeeper + std::fmt::Debug + 'static>(
+    rooted_era: RootedEraFn<K>,
+) {
+    rooted_era(&mut |era, roots| {
+        let heap = era.heap_identity();
+        let permit = era.register(1942, 1).unwrap();
+        let key = permit.key();
+        let input = vec![roots[0].clone()];
+        thread::scope(|scope| {
+            let (running_tx, running_rx) = mpsc::channel::<()>();
+            let (poll_tx, poll_rx) = mpsc::channel::<()>();
+            let (seen_tx, seen_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let owner = scope.spawn(move || {
+                let mut owner = activate(permit, heap, 1942);
+                running_tx.send(()).unwrap();
+                // Running and not polling until the keeper's first attempt
+                // has come back.
+                receive(&poll_rx);
+                let epoch = retry(|| owner.wait_request());
+                seen_tx.send(epoch).unwrap();
+                retry(|| owner.acknowledge(epoch, &input));
+                receive(&release_rx);
+                apply(owner.begin_restore_retry(false).unwrap());
+                retire(owner, &input);
+            });
+            receive(&running_rx);
+            let first = retry(|| era.stop_within(Duration::from_millis(20)));
+            poll_tx.send(()).unwrap();
+            let seen: NonZeroU64 = receive(&seen_rx);
+            let pending = match first {
+                StopAttempt::Pending(pending) => pending,
+                StopAttempt::Stopped(stopped) => {
+                    complete(stopped);
+                    panic!("the first attempt stopped an owner that never polled");
+                }
+            };
+            let mut stopped = match retry(|| era.stop_within(Duration::from_secs(30))) {
+                StopAttempt::Stopped(stopped) => stopped,
+                StopAttempt::Pending(again) => {
+                    panic!("the next attempt did not stop: {again:?} after {pending:?}")
+                }
+            };
+            let epoch = stopped.epoch();
+            trace_owners(&mut stopped, &[key]);
+            complete(stopped);
+            release_tx.send(()).unwrap();
+            owner.join().unwrap();
+            assert_eq!(
+                pending.epoch(),
+                Some(seen),
+                "the pending attempt names the standing epoch"
+            );
+            assert_eq!(
+                pending.waiting_on(),
+                &[key],
+                "it names the owner it waits on"
+            );
+            assert_eq!(epoch, seen, "the next attempt stops in the same epoch");
+        });
+        finish_era(era);
+    });
+}
+
 fn a6_ht_b9_table_scope_gate_contention_retries_before_job_body<
     K: EraKeeper + std::fmt::Debug + 'static,
 >(
     rooted_era: RootedEraFn<K>,
 ) {
     use super::super::super::collector_tables;
+    use super::super::test_fences::gate_contention_for_test;
     rooted_era(&mut |era, roots| {
         let heap = era.heap_identity();
         let permit = era.register(1911, 1).unwrap();
@@ -657,15 +1458,26 @@ fn a6_ht_b9_table_scope_gate_contention_retries_before_job_body<
             let (ready_tx, ready_rx) = mpsc::channel();
             let (return_tx, return_rx) = mpsc::channel();
             let (held_tx, held_rx) = mpsc::channel();
-            let (release_tx, release_rx) = mpsc::channel();
+            let before = gate_contention_for_test();
             let worker = scope.spawn(move || {
                 let mut owner = activate(permit, heap, 1911);
                 retry(|| owner.enter_native(&input));
                 ready_tx.send(()).unwrap();
                 receive(&return_rx);
+                // The hook runs holding the gate. The keeper's table scope
+                // waits out a held gate (L6.7 F3) instead of refusing Busy,
+                // so the hook holds it until the keeper has met it. A gate
+                // holder must not wait on the keeper.
                 owner.protocol.hooks.restore_wait_hook = Some(Box::new(move || {
                     held_tx.send(()).unwrap();
-                    receive(&release_rx);
+                    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+                    while gate_contention_for_test() == before {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "the keeper never met the held gate"
+                        );
+                        thread::yield_now();
+                    }
                 }));
                 let restored = match owner.begin_restore_retry(true) {
                     Ok(image) => {
@@ -684,7 +1496,6 @@ fn a6_ht_b9_table_scope_gate_contention_retries_before_job_body<
             });
             receive(&ready_rx);
             let mut stopped = retry(|| era.stop());
-            let mut release_tx = Some(release_tx);
             let mut body_calls = 0;
             let mut busy_observed = 0;
             let result = stopped.trace(|guard, _proof| {
@@ -703,12 +1514,7 @@ fn a6_ht_b9_table_scope_gate_contention_retries_before_job_body<
                         body_calls += 1;
                         Ok(())
                     },
-                    || {
-                        busy_observed += 1;
-                        if let Some(tx) = release_tx.take() {
-                            tx.send(()).unwrap();
-                        }
-                    },
+                    || busy_observed += 1,
                 )?
             });
             if result.is_ok() {
@@ -723,8 +1529,12 @@ fn a6_ht_b9_table_scope_gate_contention_retries_before_job_body<
                 "pre-job gate contention must not poison trace"
             );
             assert!(
-                busy_observed >= 1,
-                "the real gate refusal must be exercised"
+                gate_contention_for_test() > before,
+                "the keeper met the real held gate"
+            );
+            assert_eq!(
+                busy_observed, 0,
+                "the table scope waits out the holder instead of refusing Busy"
             );
             assert_eq!(body_calls, 1, "only the installed job runs");
             assert!(
@@ -768,16 +1578,12 @@ fn a6_ht_b9_table_scope_body_error_stays_terminal_after_image_mutation_body<
                 guard,
                 |_| {
                     body_calls += 1;
-                    guard.with_owner_image(key, |image| {
-                        assert_eq!(
-                            image
-                                .consume_synthetic_remembered_for_test(MarkWord::of(
-                                    TaggedValue::fixnum(1912)
-                                ))
-                                .unwrap(),
-                            1
-                        );
-                    })?;
+                    guard
+                        .consume_synthetic_remembered_for_test(
+                            key,
+                            MarkWord::from_immediate(TaggedValue::fixnum(1912)).unwrap(),
+                        )
+                        .map(|count| assert_eq!(count, 1))?;
                     Err(RendezvousError::Busy)
                 },
                 || {
@@ -966,6 +1772,45 @@ pub(crate) fn run_rooted_mutator_case<K: EraKeeper + std::fmt::Debug + 'static>(
             super::run_admission::stop_and_unrestored_owner_refuse_instead_of_waiting_for_themselves_body(
                 rooted_era,
             )
+        }
+        RootedRendezvousCase::NativeReceiptOutlastsAGateHolderAfterTheCommit => {
+            native_receipt_outlasts_a_gate_holder_after_the_commit_body(rooted_era)
+        }
+        RootedRendezvousCase::StoppedKeeperWaitsOutABriefGateHolder => {
+            stopped_keeper_waits_out_a_brief_gate_holder_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperTraceWaitsOutABriefGateHolder => {
+            keeper_trace_waits_out_a_brief_gate_holder_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperCompleteWaitsOutABriefGateHolder => {
+            keeper_complete_waits_out_a_brief_gate_holder_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperCompleteRetriesAnEntryHeldThroughTheReaderScan => {
+            keeper_complete_retries_an_entry_held_through_the_reader_scan_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperTakesSummariesThroughItsStop => {
+            keeper_takes_summaries_through_its_stop_body(rooted_era)
+        }
+        RootedRendezvousCase::ABrokenCensusUnderAStopIsNotBusy => {
+            a_broken_census_under_a_stop_is_not_busy_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperWorldRootCheckWaitsOutABriefGateHolder => {
+            keeper_world_root_check_waits_out_a_brief_gate_holder_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperRootReaderWaitsOutAnOwnerMomentOnItsEntry => {
+            keeper_root_reader_waits_out_an_owner_moment_on_its_entry_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperReenteringAnEntryItHoldsRefusesAtOnce => {
+            keeper_reentering_an_entry_it_holds_refuses_at_once_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperGrantsTheSerialHeadOnlyInsideItsTracedStop => {
+            keeper_grants_the_serial_head_only_inside_its_traced_stop_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperBoundedStopPendsAndKeepsItsEpoch => {
+            keeper_bounded_stop_pends_and_keeps_its_epoch_body(rooted_era)
+        }
+        RootedRendezvousCase::KeeperRoutesABatonGroupHeadAndGrantsItAlone => {
+            keeper_routes_a_baton_group_head_and_grants_it_alone_body(rooted_era)
         }
     }
 }

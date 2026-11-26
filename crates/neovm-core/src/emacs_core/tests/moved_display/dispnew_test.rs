@@ -92,11 +92,11 @@ struct ByteRecordingHost {
 }
 
 impl crate::emacs_core::terminal::pure::TerminalHost for ByteRecordingHost {
-    fn suspend_tty(&mut self) -> Result<(), String> {
+    fn suspend_tty(&mut self, _reset_strings: &[u8]) -> Result<(), String> {
         Ok(())
     }
 
-    fn resume_tty(&mut self) -> Result<(), String> {
+    fn resume_tty(&mut self, _set_strings: &[u8]) -> Result<(), String> {
         Ok(())
     }
 

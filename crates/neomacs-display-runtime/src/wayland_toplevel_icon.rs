@@ -20,6 +20,7 @@ use wayland_protocols::xdg::shell::client::xdg_toplevel;
 use wayland_protocols::xdg::toplevel_icon::v1::client::{
     xdg_toplevel_icon_manager_v1, xdg_toplevel_icon_v1,
 };
+use winit::event_loop::OwnedDisplayHandle;
 use winit::platform::wayland::WindowExtWayland;
 use winit::window::Window;
 
@@ -60,14 +61,41 @@ delegate_noop!(ProtocolState: ignore wl_buffer::WlBuffer);
 delegate_noop!(ProtocolState: ignore xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1);
 delegate_noop!(ProtocolState: ignore xdg_toplevel_icon_v1::XdgToplevelIconV1);
 
-struct WaylandIconSession {
+struct DisplayScoped<T, D = OwnedDisplayHandle> {
+    // Field order is significant: `inner` (Wayland proxies, event queue, and
+    // foreign-display Connection) drops before `_display_owner` releases
+    // Winit's `wl_display`.
+    inner: T,
+    _display_owner: D,
+}
+
+impl<T, D> DisplayScoped<T, D> {
+    const fn new(inner: T, display_owner: D) -> Self {
+        Self {
+            inner,
+            _display_owner: display_owner,
+        }
+    }
+}
+
+struct WaylandIconProtocol {
     display: NonNull<c_void>,
-    connection: Connection,
-    event_queue: EventQueue<ProtocolState>,
-    state: ProtocolState,
     manager: xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1,
     shm: wl_shm::WlShm,
+    event_queue: EventQueue<ProtocolState>,
+    state: ProtocolState,
+    connection: Connection,
 }
+
+impl Drop for WaylandIconProtocol {
+    fn drop(&mut self) {
+        let _ = self.event_queue.dispatch_pending(&mut self.state);
+        self.manager.destroy();
+        let _ = self.connection.flush();
+    }
+}
+
+type WaylandIconSession = DisplayScoped<WaylandIconProtocol, OwnedDisplayHandle>;
 
 enum WaylandIconBackend {
     Protocol(WaylandIconSession),
@@ -77,17 +105,29 @@ enum WaylandIconBackend {
 impl WaylandIconBackend {
     fn display(&self) -> NonNull<c_void> {
         match self {
-            Self::Protocol(session) => session.display,
+            Self::Protocol(session) => session.inner.display,
             Self::DesktopEntryOnly { display } => *display,
         }
     }
 }
 
-impl WaylandIconSession {
-    fn connect(display: NonNull<c_void>) -> Result<WaylandIconBackend, ToplevelIconError> {
-        // SAFETY: the raw display comes from the live winit Window. The guest
-        // backend never disconnects it, and the session stays on the render
-        // thread where the Window outlives icon application.
+impl WaylandIconProtocol {
+    fn connect(display_owner: OwnedDisplayHandle) -> Result<WaylandIconBackend, ToplevelIconError> {
+        // `display_owner` is bound ahead of every Wayland guest object below so
+        // reverse-declaration local drop keeps the `wl_display` alive across
+        // both early error returns and the `DesktopEntryOnly` path.
+        let display = match display_owner
+            .display_handle()
+            .map_err(|_| ToplevelIconError::DisplayHandle)?
+            .as_raw()
+        {
+            RawDisplayHandle::Wayland(handle) => handle.display,
+            _ => return Err(ToplevelIconError::DisplayHandle),
+        };
+        // SAFETY: `display` was extracted from `display_owner`, which keeps
+        // Winit's `wl_display` alive until after `WaylandIconProtocol` (and any
+        // error-path locals) have dropped. The guest backend never disconnects
+        // the foreign display.
         let backend = unsafe { Backend::from_foreign_display(display.as_ptr().cast()) };
         let connection = Connection::from_backend(backend);
         let (globals, event_queue) = registry_queue_init::<ProtocolState>(&connection)
@@ -108,17 +148,24 @@ impl WaylandIconSession {
             .bind(&queue_handle, 1..=1, ())
             .map_err(|error| ToplevelIconError::Protocol(error.to_string()))?;
 
-        Ok(WaylandIconBackend::Protocol(Self {
-            display,
-            connection,
-            event_queue,
-            state: ProtocolState,
-            manager,
-            shm,
-        }))
+        Ok(WaylandIconBackend::Protocol(DisplayScoped::new(
+            Self {
+                display,
+                manager,
+                shm,
+                event_queue,
+                state: ProtocolState,
+                connection,
+            },
+            display_owner,
+        )))
     }
 
-    fn set_icon(
+    /// # Safety
+    /// `raw_toplevel` must be a live `xdg_toplevel` proxy belonging to the same
+    /// `wl_display` that `self` connected to, remaining valid for the duration
+    /// of this call.
+    unsafe fn set_icon(
         &mut self,
         raw_toplevel: NonNull<c_void>,
         icon_pixels: &RasterizedWindowIcon,
@@ -186,6 +233,20 @@ impl WaylandIconSession {
     }
 }
 
+fn checked_matching_wayland_display(
+    window_display: RawDisplayHandle,
+    owner_display: RawDisplayHandle,
+) -> Result<NonNull<c_void>, ToplevelIconError> {
+    match (window_display, owner_display) {
+        (RawDisplayHandle::Wayland(window), RawDisplayHandle::Wayland(owner))
+            if window.display == owner.display =>
+        {
+            Ok(owner.display)
+        }
+        _ => Err(ToplevelIconError::DisplayHandle),
+    }
+}
+
 pub(crate) struct WaylandToplevelIconService {
     backend: Option<WaylandIconBackend>,
 }
@@ -198,60 +259,161 @@ impl WaylandToplevelIconService {
     pub(crate) fn apply(
         &mut self,
         window: &dyn Window,
+        display_owner: OwnedDisplayHandle,
         icon_pixels: &RasterizedWindowIcon,
     ) -> Result<(), ToplevelIconError> {
         let Some(raw_toplevel) = window.xdg_toplevel() else {
             return Ok(());
         };
-        let display = match window
+        let window_display = window
             .display_handle()
             .map_err(|_| ToplevelIconError::DisplayHandle)?
-            .as_raw()
-        {
-            RawDisplayHandle::Wayland(handle) => handle.display,
-            _ => return Err(ToplevelIconError::DisplayHandle),
-        };
+            .as_raw();
+        let owner_display = display_owner
+            .display_handle()
+            .map_err(|_| ToplevelIconError::DisplayHandle)?
+            .as_raw();
+        let owner_display = checked_matching_wayland_display(window_display, owner_display)?;
 
         if self
             .backend
             .as_ref()
-            .is_none_or(|current| current.display() != display)
+            .is_none_or(|current| current.display() != owner_display)
         {
             self.shutdown();
-            self.backend = Some(WaylandIconSession::connect(display)?);
+            self.backend = Some(WaylandIconProtocol::connect(display_owner)?);
         }
         match self
             .backend
             .as_mut()
             .expect("backend was initialized above")
         {
-            WaylandIconBackend::Protocol(session) => session.set_icon(raw_toplevel, icon_pixels),
+            WaylandIconBackend::Protocol(session) => {
+                // SAFETY: `raw_toplevel` comes from `window.xdg_toplevel()`,
+                // verified above to belong to the same `wl_display` owned by
+                // `session._display_owner`.
+                unsafe { session.inner.set_icon(raw_toplevel, icon_pixels) }
+            }
             WaylandIconBackend::DesktopEntryOnly { .. } => Ok(()),
         }
     }
 
-    /// Release the guest protocol queue while Winit's display is still live.
+    /// Release the guest protocol queue and its owned display handle.
     pub(crate) fn shutdown(&mut self) {
-        let Some(backend) = self.backend.take() else {
-            return;
-        };
-        if let WaylandIconBackend::Protocol(mut session) = backend {
-            let _ = session.event_queue.dispatch_pending(&mut session.state);
-            session.manager.destroy();
-            let _ = session.connection.flush();
-        }
+        self.backend = None;
     }
 }
 
-impl Drop for WaylandToplevelIconService {
-    fn drop(&mut self) {
-        // Normal shutdown empties the session in RenderApp::handle_exiting.
-        // If winit exits abnormally, its foreign display may already be dead;
-        // leaking the tiny guest wrapper is safer than dereferencing it during
-        // Drop, and the OS reclaims it with the process.
-        if let Some(backend) = self.backend.take() {
-            std::mem::forget(backend);
+#[cfg(test)]
+mod drop_order_tests {
+    use super::{DisplayScoped, ToplevelIconError, checked_matching_wayland_display};
+    use raw_window_handle::{RawDisplayHandle, WaylandDisplayHandle, XlibDisplayHandle};
+    use std::cell::RefCell;
+    use std::ffi::c_void;
+    use std::ptr::NonNull;
+    use std::rc::Rc;
+
+    #[test]
+    fn matching_wayland_display_guard_rejects_mismatch_and_non_wayland() {
+        let mut a = 1u8;
+        let mut b = 2u8;
+        let ptr_a = NonNull::from(&mut a).cast::<c_void>();
+        let ptr_b = NonNull::from(&mut b).cast::<c_void>();
+        let wl_a = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(ptr_a));
+        let wl_b = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(ptr_b));
+        let xlib = RawDisplayHandle::Xlib(XlibDisplayHandle::new(None, 0));
+
+        assert_eq!(checked_matching_wayland_display(wl_a, wl_a).unwrap(), ptr_a);
+        assert!(matches!(
+            checked_matching_wayland_display(wl_a, wl_b),
+            Err(ToplevelIconError::DisplayHandle)
+        ));
+        assert!(matches!(
+            checked_matching_wayland_display(xlib, wl_a),
+            Err(ToplevelIconError::DisplayHandle)
+        ));
+        assert!(matches!(
+            checked_matching_wayland_display(wl_a, xlib),
+            Err(ToplevelIconError::DisplayHandle)
+        ));
+    }
+
+    struct DropRecorder {
+        label: &'static str,
+        log: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl Drop for DropRecorder {
+        fn drop(&mut self) {
+            self.log.borrow_mut().push(self.label);
         }
+    }
+
+    struct FakeProtocol {
+        _manager: DropRecorder,
+        _connection: DropRecorder,
+        log: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl Drop for FakeProtocol {
+        fn drop(&mut self) {
+            self.log.borrow_mut().push("protocol_drop");
+        }
+    }
+
+    #[test]
+    fn display_scoped_drops_protocol_before_display_owner_on_drop_and_unwind() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        {
+            let _scoped = DisplayScoped::new(
+                FakeProtocol {
+                    _manager: DropRecorder {
+                        label: "manager",
+                        log: Rc::clone(&log),
+                    },
+                    _connection: DropRecorder {
+                        label: "connection",
+                        log: Rc::clone(&log),
+                    },
+                    log: Rc::clone(&log),
+                },
+                DropRecorder {
+                    label: "display_owner",
+                    log: Rc::clone(&log),
+                },
+            );
+        }
+        assert_eq!(
+            *log.borrow(),
+            vec!["protocol_drop", "manager", "connection", "display_owner"]
+        );
+
+        log.borrow_mut().clear();
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _scoped = DisplayScoped::new(
+                FakeProtocol {
+                    _manager: DropRecorder {
+                        label: "manager",
+                        log: Rc::clone(&log),
+                    },
+                    _connection: DropRecorder {
+                        label: "connection",
+                        log: Rc::clone(&log),
+                    },
+                    log: Rc::clone(&log),
+                },
+                DropRecorder {
+                    label: "display_owner",
+                    log: Rc::clone(&log),
+                },
+            );
+            panic!("simulated unwind");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            *log.borrow(),
+            vec!["protocol_drop", "manager", "connection", "display_owner"]
+        );
     }
 }
 

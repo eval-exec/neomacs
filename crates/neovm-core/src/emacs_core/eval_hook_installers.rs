@@ -93,15 +93,16 @@ use crate::window::display::WindowDisplayContextExt;
 
 fn wait_service_input_pending_with_timers(
     ctx: &mut crate::emacs_core::eval::Context,
-) -> Result<(), neovm_value::error::Flow> {
+) -> Result<crate::emacs_core::eval::GuiBoundaryServiceActivity, neovm_value::error::Flow> {
     ctx.service_input_pending_with_timers()
 }
 
 fn wait_service_read_char_preliminary_redisplay(
     ctx: &mut crate::emacs_core::eval::Context,
     idle_policy: crate::emacs_core::eval::keyboard::IdleTransitionPolicy,
+    redisplay_phase: crate::emacs_core::eval::keyboard::ReadCharRedisplayPhase,
 ) -> Result<(), neovm_value::error::Flow> {
-    ctx.service_read_char_preliminary_redisplay(idle_policy)
+    ctx.service_read_char_preliminary_redisplay(idle_policy, redisplay_phase)
 }
 
 fn wait_service_timers_without_redisplay(

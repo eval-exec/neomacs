@@ -211,6 +211,62 @@ fn a_syntax_table_removal_inside_a_put_splits_the_run() {
     );
 }
 
+/// Changing a `category` symbol's `syntax-table` plist entry followed by a
+/// garbage collection must not serve a stale (or freed!) descriptor cons from
+/// either the byte-run or char-run syntax memo. Matches GNU Emacs 31.1:
+/// `(9 0 0 1)`.
+#[test]
+fn category_syntax_table_plist_update_and_gc_do_not_read_stale_memo() {
+    let mut eval = crate::test_utils::new_context();
+    let result = eval_ok(
+        &mut eval,
+        "(progn
+           (erase-buffer)
+           (insert \"aaaa bbbb\")
+           (set (make-local-variable 'parse-sexp-lookup-properties) t)
+           (put 'a1-cat 'syntax-table (cons 2 nil))
+           (put-text-property 1 10 'category 'a1-cat)
+           (goto-char 1)
+           (let ((w1 (skip-syntax-forward \"w\"))
+                 (d1 (nth 0 (parse-partial-sexp 1 2))))
+             (put 'a1-cat 'syntax-table (cons 1 nil))
+             (garbage-collect)
+             (goto-char 1)
+             (let ((w2 (skip-syntax-forward \"w\")))
+               (put 'a1-cat 'syntax-table (cons 4 ?\\)))
+               (garbage-collect)
+               (let ((d2 (nth 0 (parse-partial-sexp 1 2))))
+                 (list w1 w2 d1 d2)))))",
+    );
+    assert_eq!(crate::emacs_core::print::print_value(&result), "(9 0 0 1)");
+
+    // Exercise the byte-addressed `SyntaxPropByteRun` directly across a
+    // `category` plist replacement + GC as well.
+    eval_ok(&mut eval, "(put 'a1-cat 'syntax-table (cons 2 nil))");
+    {
+        let props = SyntaxProperties::for_scan(true, eval.variables(), &eval.edit.buffers);
+        let buf = eval.edit.buffers.current_buffer().expect("buffer");
+        let cache = SyntaxPropByteRun::new(props);
+        let got = cache
+            .syntax_table_prop_at_emacs_byte(buf, EmacsBytePos::new(0))
+            .expect("word descriptor");
+        assert_eq!(got.cons_car(), Value::fixnum(2));
+    }
+    eval_ok(
+        &mut eval,
+        "(progn (put 'a1-cat 'syntax-table (cons 1 nil)) (garbage-collect))",
+    );
+    {
+        let props = SyntaxProperties::for_scan(true, eval.variables(), &eval.edit.buffers);
+        let buf = eval.edit.buffers.current_buffer().expect("buffer");
+        let cache = SyntaxPropByteRun::new(props);
+        let got = cache
+            .syntax_table_prop_at_emacs_byte(buf, EmacsBytePos::new(0))
+            .expect("punctuation descriptor");
+        assert_eq!(got.cons_car(), Value::fixnum(1));
+    }
+}
+
 struct Rng(u64);
 
 impl Rng {

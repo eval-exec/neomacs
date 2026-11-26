@@ -14,7 +14,7 @@ paths, generated code or layouts.
 | `tests/model/mod.rs`, `tests/rendezvous.rs` | Keeper and owner control transitions; frozen identities; request/ACK/trace/resume; allocation loans; queued requests; native entry/return; registration, retirement and poisoning |
 | `tests/visibility.rs` | Independent atomic publication of root/log payloads before ACK, and collector responses before resume |
 | `tests/readers.rs` | Reader admission, explicit finish, Closing publications, Busy retry, abandonment, identity/generation checks and retirement |
-| `tests/wait_graph.rs` | Declared keeper/owner/resource dependencies involving the Baton, control mutex and allocator |
+| `tests/wait_graph.rs` | Declared keeper/owner/resource dependencies involving the Baton, control mutex, allocator and owner entries, including the stopped keeper's blocking gate wait and bounded entry wait |
 | `tests/poison.rs` | Event-driven poison, gate holder identity, Condvar owner transfer and exact lost-wake/self-lock controls |
 | `tests/cons_catalog.rs` | Keeper-side catalog detach/restore: transition exclusion of new run admissions and loan refusals around the cold window |
 | `tests/cons_tails.rs` | Owner-exclusive cons tails: lent-range charges, tail publication back to the catalog, and slice-close hand-in ordering |

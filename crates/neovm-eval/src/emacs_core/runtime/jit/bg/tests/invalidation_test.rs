@@ -49,10 +49,10 @@ fn bytecode(arity: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction
         optional: Vec::new(),
         rest: None,
     });
-    f.lexical = true;
-    f.ops = ops;
-    f.constants = constants.into();
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
+    f.set_lexical(true);
+    f.set_ops(ops);
+    f.set_constants(constants.into());
+    f.set_max_stack(crate::emacs_core::bytecode::StackDepth::for_test(16));
     f.seal_hand_assembled_ops();
     f
 }
@@ -109,12 +109,12 @@ fn call(ctx: *mut Context, f: &ByteCodeFunction, x: i64) -> Option<i64> {
 /// tiering state), pinned to Tier 0.
 fn interpreted(ev: &mut Context, f: &ByteCodeFunction, x: i64) -> i64 {
     let twin = bytecode(
-        f.params
+        f.params()
             .stack_shape()
             .expect("fixture stack parameters")
             .required() as u32,
-        f.ops.clone(),
-        f.constants.to_vec(),
+        f.ops().clone(),
+        f.constants().to_vec(),
     );
     twin.jit_runtime().set_cold_for_test();
     let value = ev
@@ -340,6 +340,7 @@ fn jit_bg_a_replaced_heap_never_installs_a_pending_leaf() {
             + s.discarded[DiscardReason::Superseded as usize]
     };
     let before = gone(&stats_snapshot());
+    let _parked_ev = ev.park_for_test();
     let replacement = Context::new(crate::test_utils::unit_runtime());
     assert_ne!(
         neovm_value::tagged::gc::current_tagged_heap_identity(),

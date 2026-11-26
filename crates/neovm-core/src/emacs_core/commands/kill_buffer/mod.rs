@@ -371,6 +371,11 @@ pub(crate) fn builtin_kill_buffer(
         .buffers
         .kill_buffer_collect(id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
+    // GNU carries `clip_changed` and `prevent_redisplay_optimizations_p` on
+    // the buffer itself; the evaluator's per-buffer revision side table must
+    // drop every id this retirement freed, or a reused BufferId would inherit
+    // the dead buffer's body/prevent revisions.
+    eval.forget_buffer_redisplay_revisions(&killed_ids);
     if !eval.owner().is_dormant() {
         eval.owner_buffers_killed(&killed_ids);
     }
@@ -477,3 +482,7 @@ pub(crate) fn builtin_kill_buffer(
 
     Ok(Value::T)
 }
+
+#[cfg(test)]
+#[path = "tests/kill_buffer_redisplay_revisions_test.rs"]
+mod tests;

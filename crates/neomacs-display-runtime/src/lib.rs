@@ -17,6 +17,7 @@ pub mod backend;
 pub(crate) mod clipboard;
 pub mod core;
 pub mod display_identity;
+mod display_raster;
 pub mod display_scale;
 pub mod font_defaults;
 pub mod gui_resources;

@@ -6,6 +6,20 @@ fn face() -> DisplayRowFace {
     DisplayRowFace::from_resolved(FaceId::new(1), &ResolvedFace::default())
 }
 
+fn captured_selection<'a>(
+    service: &FontMetricsService,
+    face: &'a DisplayRowFace,
+) -> crate::font::metrics::RealizedFaceFontSelection<'a> {
+    let (frame, face_epoch) = service.realized_fontset_context();
+    crate::font::metrics::RealizedFaceFontSelection::new(
+        face.font_family.as_ref(),
+        face.font_weight,
+        face.italic,
+        face.font_size.max(1.0),
+    )
+    .with_fontset(frame, face.face_id.get(), face_epoch)
+}
+
 #[test]
 fn cancellation_does_not_initialize_native_fonts() {
     let mut source = crate::font::metrics::test_catalog::metrics_service();
@@ -44,13 +58,7 @@ fn worker_retains_the_pinned_catalog_and_rebuilds_for_another_owner() {
             TestFontCatalogSource::Fixture(catalog)
         );
         let selected = service
-            .resolved_font_for_char(
-                'ل',
-                &faces[0].font_family,
-                faces[0].font_weight,
-                faces[0].italic,
-                faces[0].font_size.max(1.0),
-            )
+            .resolved_font_for_realized_face_char('ل', captured_selection(service, &faces[0]))
             .expect("Arabic fixture selected in the worker");
         assert_eq!(
             std::path::Path::new(selected.identity.file_path.as_ref().unwrap()),
@@ -113,13 +121,7 @@ fn repeated_worker_unicode_queries_keep_native_font_caches_warm() {
         let face = &faces[0];
         assert!(
             service
-                .resolved_font_for_char(
-                    '中',
-                    &face.font_family,
-                    face.font_weight,
-                    face.italic,
-                    face.font_size
-                )
+                .resolved_font_for_realized_face_char('中', captured_selection(service, face))
                 .is_some()
         );
         assert!(!service.worker_font_policy_missing());
@@ -185,13 +187,7 @@ fn joined_font_receipts_authorize_both_fragment_character_policies() {
     for ch in ['س', 'ש'] {
         assert!(
             fonts
-                .resolved_font_for_char(
-                    ch,
-                    &faces[0].font_family,
-                    faces[0].font_weight,
-                    faces[0].italic,
-                    faces[0].font_size.max(1.0),
-                )
+                .resolved_font_for_realized_face_char(ch, captured_selection(fonts, &faces[0]),)
                 .is_some()
         );
     }
@@ -371,13 +367,7 @@ fn worker_matches_pinned_native_cjk_metrics_through_a_long_fontset_chain() {
     let mut worker = WorkerFontMeasurements::default();
     let fonts = worker.prepare(&snapshot, &faces, &|| false).unwrap();
     let measured = fonts
-        .resolved_font_for_char(
-            '好',
-            &face.font_family,
-            face.font_weight,
-            face.italic,
-            face.font_size,
-        )
+        .resolved_font_for_realized_face_char('好', captured_selection(fonts, face))
         .unwrap();
     assert_eq!(measured.identity, fresh.identity);
     assert_eq!(measured.pixel_size, fresh.pixel_size);
@@ -386,13 +376,7 @@ fn worker_matches_pinned_native_cjk_metrics_through_a_long_fontset_chain() {
     assert_eq!(measured.space_advance_px, fresh.space_advance_px);
     assert_eq!(measured.glyph_advance, fresh.glyph_advance);
     assert_eq!(
-        fonts.char_width(
-            '好',
-            &face.font_family,
-            face.font_weight,
-            face.italic,
-            face.font_size
-        ),
+        fonts.char_width_for_realized_face('好', captured_selection(fonts, face)),
         fresh_width
     );
     assert!(!fonts.worker_font_policy_missing());

@@ -9,6 +9,8 @@ description = "Cross-platform GPU-resident video playback for Neomacs"
 
 [features]
 default = []
+# Explicit real-GPU test support; the ordinary video interface stays native-type-free.
+native-validation-fixtures = []
 
 [dependencies]
 bytemuck.workspace = true

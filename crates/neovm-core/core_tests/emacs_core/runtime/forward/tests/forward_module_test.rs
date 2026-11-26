@@ -648,10 +648,12 @@ fn the_remaining_gnu_defvar_int_variables_are_declared_with_gnus_values() {
         ),
         "OK t"
     );
-    // A running allocation counter (`src/alloc.c:7448`): the evaluator has
-    // made strings by now, so only the shape is stable.
+    // A live allocation counter, not a constant: assert the shape (GNU
+    // `strings-consed` is `DEFVAR_INT` and advances with every string).
     assert_eq!(
-        format_eval_result(&eval.eval_str("(and (integerp strings-consed) (>= strings-consed 0))")),
+        format_eval_result(&eval.eval_str(
+            "(progn (make-string 1 ?x) (and (integerp strings-consed) (> strings-consed 0)))"
+        )),
         "OK t"
     );
     // Each one is a real forwarder, not a plain cell that happens to hold an

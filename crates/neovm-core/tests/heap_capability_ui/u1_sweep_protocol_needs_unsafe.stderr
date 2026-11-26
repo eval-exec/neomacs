@@ -1,0 +1,15 @@
+error[E0133]: call to unsafe function `gc::concurrent::<impl TaggedHeap>::begin_stw_collection` is unsafe and requires unsafe block
+ --> tests/heap_capability_ui/u1_sweep_protocol_needs_unsafe.rs:6:5
+  |
+6 |     heap.begin_stw_collection();
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior
+
+error[E0133]: call to unsafe function `mark_sweep::<impl TaggedHeap>::complete_collection` is unsafe and requires unsafe block
+ --> tests/heap_capability_ui/u1_sweep_protocol_needs_unsafe.rs:7:5
+  |
+7 |     heap.complete_collection();
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior
