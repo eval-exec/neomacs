@@ -450,24 +450,75 @@ impl Drop for PendingInput<'_> {
     }
 }
 
+/// Failure from [`write_all_nonblocking_pty`], always retaining the exact
+/// committed prefix count alongside the underlying [`io::Error`].
+#[derive(Debug, thiserror::Error)]
+#[error("non-blocking PTY write failed after {written}/{requested} bytes: {source}")]
+pub struct NonblockingWriteError {
+    written: usize,
+    requested: usize,
+    #[source]
+    source: io::Error,
+}
+
+impl NonblockingWriteError {
+    pub const fn written(&self) -> usize {
+        self.written
+    }
+
+    pub const fn requested(&self) -> usize {
+        self.requested
+    }
+
+    pub fn kind(&self) -> io::ErrorKind {
+        self.source.kind()
+    }
+
+    pub fn into_io_error(self) -> io::Error {
+        self.source
+    }
+}
+
 /// Write the entire `bytes` slice to a non-blocking PTY master (or stream) fd,
 /// looping across POSIX short writes, `EINTR`, and `WouldBlock`/`EAGAIN` (by
 /// polling `POLLOUT`) up to `deadline`.
 ///
-/// Real errors (`EIO`, `EPIPE`, `WriteZero`, `POLLHUP`/`POLLERR`/`POLLNVAL`,
-/// and deadline expiry) are returned immediately rather than ignored.
+/// The deadline is checked at the top of every iteration (matching
+/// `Owner::input`), so even a continuous stream of `EINTR` is bounded. Real
+/// errors (`EIO`, `EPIPE`, `WriteZero`, `POLLHUP`/`POLLERR`/`POLLNVAL`, and
+/// deadline expiry) are returned with the exact number of bytes already
+/// accepted by the kernel.
 pub fn write_all_nonblocking_pty(
     file: &mut std::fs::File,
     bytes: &[u8],
     deadline: Instant,
-) -> io::Result<()> {
+) -> Result<(), NonblockingWriteError> {
+    let requested = bytes.len();
     let mut written = 0usize;
-    while written < bytes.len() {
+    let fail = |written, source| NonblockingWriteError {
+        written,
+        requested,
+        source,
+    };
+    while written < requested {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(fail(
+                written,
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "non-blocking PTY write deadline expired",
+                ),
+            ));
+        }
         match file.write(&bytes[written..]) {
             Ok(0) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::WriteZero,
-                    "non-blocking PTY write returned zero",
+                return Err(fail(
+                    written,
+                    io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "non-blocking PTY write returned zero",
+                    ),
                 ));
             }
             Ok(count) => written += count,
@@ -475,11 +526,11 @@ pub fn write_all_nonblocking_pty(
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 let now = Instant::now();
                 if now >= deadline {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!(
-                            "non-blocking PTY write timed out after {written}/{} bytes",
-                            bytes.len()
+                    return Err(fail(
+                        written,
+                        io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "non-blocking PTY write deadline expired",
                         ),
                     ));
                 }
@@ -500,13 +551,16 @@ pub fn write_all_nonblocking_pty(
                     if error.kind() == io::ErrorKind::Interrupted {
                         continue;
                     }
-                    return Err(error);
+                    return Err(fail(written, error));
                 }
                 if pfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
-                    return Err(io::Error::new(io::ErrorKind::BrokenPipe, "PTY closed"));
+                    return Err(fail(
+                        written,
+                        io::Error::new(io::ErrorKind::BrokenPipe, "PTY closed"),
+                    ));
                 }
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(fail(written, error)),
         }
     }
     Ok(())

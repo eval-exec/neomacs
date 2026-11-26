@@ -392,7 +392,14 @@ fn write_all_nonblocking_pty_handles_short_writes_eagain_and_timeout() {
     let (received, reader) = drain_thread.join().unwrap();
     assert_eq!(received, payload);
 
-    // 2. Undrained pipe with a short deadline must fail with TimedOut rather than hanging.
+    // 2. Already-expired deadline is enforced at top of loop before writing.
+    let expired = write_all_nonblocking_pty(&mut writer, b"abc", Instant::now())
+        .expect_err("expired deadline must fail before writing");
+    assert_eq!(expired.kind(), io::ErrorKind::TimedOut);
+    assert_eq!(expired.written(), 0);
+    assert_eq!(expired.requested(), 3);
+
+    // 3. Undrained pipe with a short deadline must fail with TimedOut and retain partial written count.
     let huge = vec![b'z'; 2 * 1024 * 1024];
     let err = write_all_nonblocking_pty(
         &mut writer,
@@ -401,12 +408,17 @@ fn write_all_nonblocking_pty_handles_short_writes_eagain_and_timeout() {
     )
     .expect_err("undrained full non-blocking fd must time out");
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    assert!(err.written() > 0 && err.written() < huge.len());
+    assert_eq!(err.requested(), huge.len());
 
-    // 3. Closed peer must fail immediately with BrokenPipe.
+    // 4. Closed peer must fail immediately with BrokenPipe and preserve written/requested.
     drop(reader);
-    let err = write_all_nonblocking_pty(&mut writer, b"x", Instant::now() + Duration::from_secs(1))
-        .expect_err("closed peer must fail with BrokenPipe");
+    let err =
+        write_all_nonblocking_pty(&mut writer, b"xy", Instant::now() + Duration::from_secs(1))
+            .expect_err("closed peer must fail with BrokenPipe");
     assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    assert_eq!(err.written(), 0);
+    assert_eq!(err.requested(), 2);
 }
 
 #[test]
