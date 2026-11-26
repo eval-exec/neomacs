@@ -180,7 +180,7 @@ static_assertions::assert_not_impl_any!(CompletionDirectory: Send, Sync);
 // ---------------------------------------------------------------------------
 
 pub(crate) fn install_minibuffer_buffer_contents(
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     buffer_id: BufferId,
     prompt: &LispString,
     initial: Option<&MinibufferInitialContents>,
@@ -214,23 +214,31 @@ pub(crate) fn install_minibuffer_buffer_contents(
         .end();
     if prompt_end.get() > 0 {
         let prompt_range = EmacsByteRange::new(EmacsBytePos::new(0), prompt_end);
-        let buf = buffers.get_mut(buffer_id).expect("minibuffer buffer");
-        buf.text_props_put_property_in_emacs_byte_range(
-            prompt_range,
-            Value::symbol("field"),
-            Value::T,
-        );
-        buf.text_props_put_property_in_emacs_byte_range(
-            prompt_range,
-            StickinessProperty::FrontSticky.value(),
-            Value::T,
-        );
-        buf.text_props_put_property_in_emacs_byte_range(
-            prompt_range,
-            StickinessProperty::RearNonsticky.value(),
-            Value::T,
-        );
-        apply_minibuffer_prompt_properties(buf, prompt_end, prompt_properties);
+        buffers
+            .put_buffer_text_property_in_emacs_byte_range(
+                buffer_id,
+                prompt_range,
+                Value::symbol("field"),
+                Value::T,
+            )
+            .expect("minibuffer buffer");
+        buffers
+            .put_buffer_text_property_in_emacs_byte_range(
+                buffer_id,
+                prompt_range,
+                StickinessProperty::FrontSticky.value(),
+                Value::T,
+            )
+            .expect("minibuffer buffer");
+        buffers
+            .put_buffer_text_property_in_emacs_byte_range(
+                buffer_id,
+                prompt_range,
+                StickinessProperty::RearNonsticky.value(),
+                Value::T,
+            )
+            .expect("minibuffer buffer");
+        apply_minibuffer_prompt_properties(buffers, buffer_id, prompt_end, prompt_properties);
     }
 
     if let Some(initial) = initial {
@@ -244,13 +252,11 @@ pub(crate) fn install_minibuffer_buffer_contents(
         .expect("minibuffer buffer")
         .full_emacs_byte_range()
         .end();
+    let full_range = buffers
+        .full_buffer_emacs_byte_range(buffer_id)
+        .expect("minibuffer buffer");
     buffers
-        .restore_buffer_emacs_byte_restriction(
-            buffer_id,
-            buffers
-                .full_buffer_emacs_byte_range(buffer_id)
-                .expect("minibuffer buffer"),
-        )
+        .restore_buffer_emacs_byte_restriction(buffer_id, full_range)
         .expect("minibuffer buffer widen");
     let initial_point = initial
         .map(|contents| prompt_end.add_len(contents.cursor_byte_offset()))
@@ -263,7 +269,7 @@ pub(crate) fn install_minibuffer_buffer_contents(
 
 #[cfg(test)]
 pub(crate) fn install_minibuffer_buffer_text(
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     buffer_id: BufferId,
     prompt: &LispString,
     initial: Option<&LispString>,
@@ -285,7 +291,8 @@ pub(crate) fn default_minibuffer_prompt_properties() -> Value {
 }
 
 fn apply_minibuffer_prompt_properties(
-    buf: &mut crate::buffer::Buffer,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
+    buffer_id: BufferId,
     prompt_end: EmacsBytePos,
     prompt_properties: Value,
 ) {
@@ -299,7 +306,9 @@ fn apply_minibuffer_prompt_properties(
         }
         let value = cursor.cons_car();
         cursor = cursor.cons_cdr();
-        buf.text_props_put_property_in_emacs_byte_range(prompt_range, key, value);
+        buffers
+            .put_buffer_text_property_in_emacs_byte_range(buffer_id, prompt_range, key, value)
+            .expect("minibuffer buffer");
     }
 }
 

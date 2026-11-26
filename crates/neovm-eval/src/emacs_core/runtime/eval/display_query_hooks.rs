@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 use super::data::window_state::{
     Frame, FrameManager, PresentationGeometry, PresentationId, WindowDomain, WindowRegions,
 };
-use neovm_edit::buffer::{BufferId, BufferManager};
+use neovm_edit::buffer::{BufferId, BufferManager, BufferManagerMut};
 use neovm_edit::emacs_core::display_metrics::{
     InvisibleRunContext, LineWrap, MeasuredMotion, MotionEngine, MotionRequest, WindowId,
 };
@@ -30,9 +30,10 @@ pub(crate) type DisplayFlagQuery = fn() -> bool;
 pub(crate) type FrameTTYTargetQuery = fn(&Frame) -> bool;
 
 /// Resolve (and, in batch mode, synthesize) the selected frame.
-pub(crate) type EnsureSelectedFrameId = fn(&mut FrameManager, &mut BufferManager) -> FrameId;
+pub(crate) type EnsureSelectedFrameId = fn(&mut FrameManager, &mut BufferManagerMut<'_>) -> FrameId;
 /// Mirror the selected window's point into its marker.
-pub(crate) type RememberSelectedWindowPoint = fn(&mut FrameManager, &mut BufferManager, FrameId);
+pub(crate) type RememberSelectedWindowPoint =
+    fn(&mut FrameManager, &mut BufferManagerMut<'_>, FrameId);
 /// Logical body dimensions for GNU window-change records.
 pub(crate) type WindowBodyDimensions =
     fn(&FrameManager, &BufferManager, FrameId, WindowId) -> Result<(i64, i64), Flow>;
@@ -317,14 +318,17 @@ fn installed_window_hooks() -> &'static DisplayWindowHooks {
 }
 
 /// Ensure a selected frame exists (synthesizing the batch frame if needed).
-pub fn ensure_selected_frame_id(frames: &mut FrameManager, buffers: &mut BufferManager) -> FrameId {
+pub fn ensure_selected_frame_id(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManagerMut<'_>,
+) -> FrameId {
     (installed_window_hooks().ensure_selected_frame_id())(frames, buffers)
 }
 
 /// Mirror the selected window's point into its marker.
 pub(crate) fn remember_selected_window_point(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut BufferManagerMut<'_>,
     frame_id: FrameId,
 ) {
     (installed_window_hooks().remember_selected_window_point())(frames, buffers, frame_id)

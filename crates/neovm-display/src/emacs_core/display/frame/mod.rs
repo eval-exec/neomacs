@@ -75,11 +75,11 @@ pub fn builtin_frame_focus(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("frame-focus", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -180,10 +180,10 @@ pub fn builtin_redirect_frame_focus(
 ) -> EvalResult {
     expect_min_args("redirect-frame-focus", &args, 1)?;
     expect_max_args("redirect-frame-focus", &args, 2)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -191,10 +191,10 @@ pub fn builtin_redirect_frame_focus(
         if value.is_nil() {
             Value::NIL
         } else {
-            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+            let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
             let focus_fid = resolve_frame_id_in_state(
                 frames,
-                buffers,
+                &mut buffers,
                 Some(value),
                 crate::emacs_core::window_cmds::FrameDomain::Live,
             )?;
@@ -217,11 +217,11 @@ pub fn builtin_iconify_frame(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("iconify-frame", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -293,10 +293,10 @@ pub fn builtin_make_frame_invisible(
 ) -> EvalResult {
     expect_max_args("make-frame-invisible", &args, 2)?;
     let fid = {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         resolve_frame_id_in_state(
             frames,
-            buffers,
+            &mut buffers,
             args.first(),
             crate::emacs_core::window_cmds::FrameDomain::Live,
         )?
@@ -342,8 +342,8 @@ pub fn builtin_make_frame_invisible(
             let fallback = mru_rooted_frame_in_state(&eval.frame_manager(), fid);
             if fallback != fid {
                 if let Some(old_fid) = eval.frame_manager().selected_frame().map(|frame| frame.id) {
-                    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-                    remember_selected_window_point_in_state(frames, buffers, old_fid);
+                    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+                    remember_selected_window_point_in_state(frames, &mut buffers, old_fid);
                 }
                 if let Some(new_window) = eval
                     .frame_manager()
@@ -364,8 +364,8 @@ pub fn builtin_make_frame_invisible(
                     {
                         let _ = eval.frame_manager_mut().note_window_selected(selected_wid);
                     }
-                    let (frames, buffers) = eval.frame_manager_read_and_buffers_mut();
-                    sync_selected_window_buffer_in_state(frames, buffers, fallback);
+                    let (frames, mut buffers) = eval.frame_manager_read_and_buffer_view_mut();
+                    sync_selected_window_buffer_in_state(frames, &mut buffers, fallback);
                     eval.sync_keyboard_terminal_owner();
                     sync_gui_frame_focus_redirects(eval)?;
                 }
@@ -385,11 +385,11 @@ pub fn builtin_make_frame_visible(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("make-frame-visible", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -411,8 +411,8 @@ pub fn builtin_selected_frame(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    selected_frame_impl(frames, buffers, args)
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    selected_frame_impl(frames, &mut buffers, args)
 }
 
 /// `(frame-list)` -> list of frame objects.
@@ -421,9 +421,9 @@ pub fn builtin_frame_list(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("frame-list", &args, 0)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
     let ids: Vec<Value> = frames
         .frame_list()
         .into_iter()
@@ -438,9 +438,9 @@ pub fn builtin_visible_frame_list(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("visible-frame-list", &args, 0)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
     let mut frame_ids = frames.frame_list();
     frame_ids.sort_by_key(|fid| fid.0);
     let visible = frame_ids
@@ -463,11 +463,11 @@ pub fn builtin_frame_char_height(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("frame-char-height", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -483,11 +483,11 @@ pub fn builtin_frame_char_width(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("frame-char-width", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -502,10 +502,10 @@ pub fn builtin_frame_native_height(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-native-height", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -540,10 +540,10 @@ pub fn builtin_frame_native_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-native-width", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -584,10 +584,10 @@ pub fn builtin_frame_text_cols(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-text-cols", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -606,10 +606,10 @@ pub fn builtin_frame_text_lines(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-text-lines", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -637,10 +637,10 @@ pub fn builtin_frame_text_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-text-width", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -665,10 +665,10 @@ pub fn builtin_frame_text_height(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-text-height", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -691,10 +691,10 @@ pub fn builtin_frame_total_cols(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-total-cols", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -713,10 +713,10 @@ pub fn builtin_frame_total_lines(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-total-lines", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -734,11 +734,11 @@ pub fn builtin_frame_position(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("frame-position", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -848,10 +848,11 @@ pub fn note_linux_toolkit_tool_bar_allocation(
             frame.tool_bar_items_packed = true;
         }
         if grow {
-            let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+            let (frames, mut buffers, display_host) =
+                eval.frame_manager_buffer_view_and_display_host_mut();
             if let Err(err) = resize_live_gui_frame(
                 frames,
-                buffers,
+                &buffers,
                 display_host,
                 fid,
                 text_width,
@@ -870,9 +871,9 @@ pub fn note_linux_toolkit_tool_bar_allocation(
         // eats text rows. This is not a host request: the pixels already
         // match the window that omitted the bar.
         {
-            let (frames, buffers, _) = eval.frame_manager_buffers_and_display_host_mut();
+            let (frames, mut buffers, _) = eval.frame_manager_buffer_view_and_display_host_mut();
             if let Some(frame) = frames.get_mut(fid) {
-                frame.resize_pixelwise_with_buffer_constraints(buffers, outer_width, outer_height);
+                frame.resize_pixelwise_with_buffer_constraints(&buffers, outer_width, outer_height);
             }
         }
         adjust_frame_glyph_matrices(eval, fid);
@@ -908,10 +909,10 @@ pub fn builtin_set_frame_height(
 ) -> EvalResult {
     expect_min_args("set-frame-height", &args, 2)?;
     expect_max_args("set-frame-height", &args, 4)?;
-    let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = ctx.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -946,10 +947,11 @@ pub fn builtin_set_frame_height(
                 .floor()
                 .max(1.0) as i64;
             let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
-            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
+            let (frames, mut buffers, display_host) =
+                ctx.frame_manager_buffer_view_and_display_host_mut();
             request_live_gui_frame_resize_and_keep_pending(
                 frames,
-                buffers,
+                &buffers,
                 display_host,
                 fid,
                 if pixelwise {
@@ -967,10 +969,11 @@ pub fn builtin_set_frame_height(
             )?;
         } else {
             let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
-            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
+            let (frames, mut buffers, display_host) =
+                ctx.frame_manager_buffer_view_and_display_host_mut();
             request_live_gui_frame_resize(
                 frames,
-                buffers,
+                &buffers,
                 display_host,
                 fid,
                 current_text_width_px,
@@ -1042,10 +1045,10 @@ pub fn builtin_set_frame_width(
 ) -> EvalResult {
     expect_min_args("set-frame-width", &args, 2)?;
     expect_max_args("set-frame-width", &args, 4)?;
-    let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = ctx.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -1069,20 +1072,22 @@ pub fn builtin_set_frame_width(
     let text_width_px = check_frame_pixels(&args[1], pixelwise, char_width)?;
     if uses_window_system_pixels {
         if ctx.display_host.is_some() && !pretend {
-            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
+            let (frames, mut buffers, display_host) =
+                ctx.frame_manager_buffer_view_and_display_host_mut();
             request_live_gui_frame_resize_and_keep_pending(
                 frames,
-                buffers,
+                &buffers,
                 display_host,
                 fid,
                 FrameResizeRequest::TextWidth(text_width_px),
                 true,
             )?;
         } else {
-            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
+            let (frames, mut buffers, display_host) =
+                ctx.frame_manager_buffer_view_and_display_host_mut();
             request_live_gui_frame_resize(
                 frames,
-                buffers,
+                &buffers,
                 display_host,
                 fid,
                 text_width_px,
@@ -1159,10 +1164,10 @@ pub fn builtin_set_frame_size(
 ) -> EvalResult {
     expect_min_args("set-frame-size", &args, 3)?;
     expect_max_args("set-frame-size", &args, 4)?;
-    let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = ctx.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -1203,10 +1208,11 @@ pub fn builtin_set_frame_size(
             .max(1.0) as i64;
         if ctx.display_host.is_some() {
             let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
-            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
+            let (frames, mut buffers, display_host) =
+                ctx.frame_manager_buffer_view_and_display_host_mut();
             request_live_gui_frame_resize_and_keep_pending(
                 frames,
-                buffers,
+                &buffers,
                 display_host,
                 fid,
                 if pixelwise {
@@ -1224,10 +1230,11 @@ pub fn builtin_set_frame_size(
             )?;
         } else {
             let include_tool_bar = explicit_outer_includes_tool_bar(ctx, fid)?;
-            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
+            let (frames, mut buffers, display_host) =
+                ctx.frame_manager_buffer_view_and_display_host_mut();
             request_live_gui_frame_resize(
                 frames,
-                buffers,
+                &buffers,
                 display_host,
                 fid,
                 text_width_px,
@@ -1325,11 +1332,11 @@ pub fn builtin_set_frame_position(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("set-frame-position", &args, 3)?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -1387,10 +1394,10 @@ pub fn builtin_set_frame_size_and_position_pixelwise(
 ) -> EvalResult {
     expect_min_args("set-frame-size-and-position-pixelwise", &args, 5)?;
     expect_max_args("set-frame-size-and-position-pixelwise", &args, 6)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -1476,8 +1483,8 @@ pub fn builtin_make_terminal_frame(
             return make_terminal_frame_on_existing_terminal(eval, args, terminal_id);
         }
         let terminal_id = super::terminal::pure::next_terminal_id();
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-        let frame = make_frame_plain_on_terminal(frames, buffers, args, terminal_id, 80, 25)?;
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+        let frame = make_frame_plain_on_terminal(frames, &mut buffers, args, terminal_id, 80, 25)?;
         let frame_id = FrameId(frame.as_frame_id().expect("make-frame returned a frame"));
         if eval
             .frame_manager()
@@ -1526,9 +1533,9 @@ pub fn builtin_make_terminal_frame(
         );
         let size = super::terminal::pure::install_opened_tty(&request, opened);
         let displays_chrome = !eval.noninteractive();
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         if let Some(frame) = frames.get_mut(frame_id) {
-            apply_terminal_viewport_to_tty_frame(frame, buffers, size, displays_chrome);
+            apply_terminal_viewport_to_tty_frame(frame, &buffers, size, displays_chrome);
         }
         // The host is open. Arm batch redisplay only now: doing it at startup
         // built the display runtime (and its font database) for every batch
@@ -1602,8 +1609,9 @@ fn make_terminal_frame_on_existing_terminal(
         let (cols, rows) = root_tty_winsize(terminal_id, stored);
         clamped_tty_root_cells(cols, rows, menu, tab)
     };
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let frame = make_frame_plain_on_terminal(frames, buffers, args, terminal_id, width, height)?;
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let frame =
+        make_frame_plain_on_terminal(frames, &mut buffers, args, terminal_id, width, height)?;
     let frame_id = FrameId(frame.as_frame_id().expect("make-frame returned a frame"));
     if eval
         .frame_manager()
@@ -1626,7 +1634,7 @@ fn make_terminal_frame_on_existing_terminal(
             vec![Value::string("Screen size is too small")],
         ));
     };
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     if let Some(frame) = frames.get_mut(frame_id)
         && frame_is_top_level_non_window(frame)
     {
@@ -1647,7 +1655,7 @@ fn make_terminal_frame_on_existing_terminal(
         }
         frame.sync_menu_bar_height_from_parameters();
         frame.sync_tab_bar_height_from_parameters();
-        apply_terminal_viewport_to_tty_frame(frame, buffers, size, displays_chrome);
+        apply_terminal_viewport_to_tty_frame(frame, &buffers, size, displays_chrome);
     }
     super::xfaces::realization::initialize_new_terminal_frame_faces(eval, frame_id, parameters)?;
     Ok(frame)
@@ -1775,10 +1783,10 @@ pub fn builtin_delete_frame(
         return Ok(Value::NIL);
     }
     let fid = {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         resolve_frame_id_in_state(
             frames,
-            buffers,
+            &mut buffers,
             args.first(),
             crate::emacs_core::window_cmds::FrameDomain::Any,
         )?
@@ -1860,11 +1868,11 @@ pub fn builtin_frame_parameters(
     args: Vec<Value>,
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("frame-parameters", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -1984,10 +1992,10 @@ pub fn builtin_frame_bottom_divider_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-bottom-divider-width", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -2006,10 +2014,10 @@ pub fn builtin_frame_child_frame_border_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-child-frame-border-width", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -2026,10 +2034,10 @@ pub fn builtin_frame_internal_border_width(
     args: &[Value],
 ) -> EvalResult {
     expect_max_args("frame-internal-border-width", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -2046,10 +2054,10 @@ pub fn builtin_frame_right_divider_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-right-divider-width", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -2071,10 +2079,10 @@ pub fn builtin_frame_scale_factor(
     // GNU opens with `decode_live_frame' (`src/frame.c'), unguarded -- so this
     // is `frame-live-p', not `framep'.  It is the one subr in this file that
     // diverged in that direction; its neighbours really are `decode_any_frame'.
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -2115,10 +2123,10 @@ pub fn builtin_modify_frame_parameters(
     let symbol_mode = eval.symbol_mode();
     expect_min_args("modify-frame-parameters", &args, 2)?;
     expect_max_args("modify-frame-parameters", &args, 2)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -2525,10 +2533,10 @@ pub fn builtin_modify_frame_parameters(
         } else {
             true
         };
-        let (frames, buffers, host) = eval.frame_manager_buffers_and_display_host_mut();
+        let (frames, mut buffers, host) = eval.frame_manager_buffer_view_and_display_host_mut();
         request_live_gui_frame_resize_and_keep_pending(
             frames,
-            buffers,
+            &buffers,
             host,
             fid,
             request,
@@ -2586,10 +2594,11 @@ pub fn builtin_modify_frame_parameters(
             let (text_width_px, text_height_px) =
                 resize_request.text_pixels(&eval.frame_manager(), fid)?;
             let include_tool_bar = explicit_outer_includes_tool_bar(eval, fid)?;
-            let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+            let (frames, mut buffers, display_host) =
+                eval.frame_manager_buffer_view_and_display_host_mut();
             resize_live_gui_frame(
                 frames,
-                buffers,
+                &buffers,
                 display_host,
                 fid,
                 text_width_px,

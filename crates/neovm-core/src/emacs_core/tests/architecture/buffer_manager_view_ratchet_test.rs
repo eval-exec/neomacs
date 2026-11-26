@@ -13,18 +13,21 @@
 //!    `pub buffers: BufferManager,`
 //!
 //! (`Context::buffer_manager_mut` at
-//! `crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs:605` is now
-//! gated behind `#[cfg(any(test, feature = "test-support"))]` per #844 Slice
-//! 2a, and this test verifies via `toml::Table` manifest auditing and Cargo's
-//! resolved dependency graph (`cargo metadata --format-version 1 --offline`
-//! with both default features and `--all-features`) that `test-support` is
-//! unreachable along all normal and build dependency edges from production
-//! workspace crates.)
-//! Narrowing the remaining two `pub` fields so that Rust's type system and
-//! privacy rules enforce the boundary workspace-wide is tracked in GitHub
-//! issue #844 (Slices 2b/2c).
+//! `crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs:605` is gated
+//! behind `#[cfg(any(test, feature = "test-support"))]` per #844 Slice 2a, all
+//! 7 raw `Context` window/frame split-borrow accessors are retired per #844
+//! Slice 2b shrinking `ALLOWED_RAW_BUFFER_OR_EDIT_MUT_ACCESSORS` to 3, and
+//! this test verifies via `toml::Table` manifest auditing and Cargo's resolved
+//! dependency graph (`cargo metadata --format-version 1 --offline` with both
+//! default features and `--all-features`) that `test-support` is unreachable
+//! along all normal and build dependency edges from production workspace
+//! crates.)
 //!
-//! ## Documented Scanner Blind Spots
+//! Full design horizon, measured workspace call-site table, permanent `syn`
+//! blind-spot inventory, and check trust boundaries are documented in
+//! `docs/design/buffer-manager-view-boundary.md`.
+//!
+//! ## Documented Scanner Blind Spots (Summary — see `docs/design/buffer-manager-view-boundary.md`)
 //!
 //! * **`impl Deref { type Target = evil::BufferManager }`:** because a `syn`
 //!   scanner cannot resolve module paths, `is_allowed_deref_target_type`
@@ -35,14 +38,13 @@
 //!   (requiring `&self -> &Self::Target`); it does **not** prevent `&mut
 //!   BufferManager` extraction via interior mutability (e.g.
 //!   `Cell<*mut BufferManager>`) or a sibling-module `DerefMut` handle.
-//! * **External/sibling `DerefMut` wrapper handles:** because
+//! * **External/sibling `DerefMut` wrapper handles & erased callables:**
 //!   `FORBIDDEN_VIEW_MUT_TRAITS` only checks impls on `BufferManagerMut` /
 //!   `EditRuntimeMut` and `record_raw_accessor_if_matching` inspects direct
-//!   `&mut BufferManager` / `&mut EditRuntime` signatures, a newtype wrapper
+//!   `&mut BufferManager` / `&mut EditRuntime` signatures, so a newtype wrapper
 //!   outside `manager_view.rs` implementing `DerefMut<Target = BufferManager>`
-//!   (where `deref_mut` returns `&mut Self::Target`) is not caught
-//!   syntactically. Both blind spots remain code-review concerns until #844
-//!   Slices 2b/2c establish a compiler-enforced privacy boundary.
+//!   or an erased `Box<dyn FnOnce(&mut T)>` callback is not caught
+//!   syntactically. See `docs/design/buffer-manager-view-boundary.md` §4–§5.
 //!
 //! ## What Is Enforced Today
 //!
@@ -230,34 +232,6 @@ const ALLOWED_RAW_BUFFER_OR_EDIT_MUT_ACCESSORS: &[(&str, &str)] = &[
     (
         "neovm-edit/src/emacs_core/editing/textprop/mod.rs",
         "with_buffer_property_change",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "frame_manager_and_buffers_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "frame_manager_buffers_and_display_host_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "frame_manager_buffers_and_minibuffer_selection_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "frame_manager_buffers_and_minibuffers_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "frame_manager_read_and_buffers_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "variable_view_and_frames_buffers_mut",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "with_frame_buffers_and_minibuffer_selection_mut",
     ),
     (
         "neovm-eval/src/emacs_core/runtime/eval/edit_host.rs",
@@ -5062,15 +5036,17 @@ fn resolve_non_dev_dep_targets(
     if !exact.is_empty() {
         return Ok(exact);
     }
-    let by_name: Vec<String> = rdeps
-        .iter()
-        .filter(|rd| {
-            rd.has_non_dev_kind && packages.get(&rd.pkg_id).is_some_and(|p| p.name == dep.name)
-        })
-        .map(|rd| rd.pkg_id.clone())
-        .collect();
-    if !by_name.is_empty() {
-        return Ok(by_name);
+    if dep.rename.is_none() {
+        let by_name: Vec<String> = rdeps
+            .iter()
+            .filter(|rd| {
+                rd.has_non_dev_kind && packages.get(&rd.pkg_id).is_some_and(|p| p.name == dep.name)
+            })
+            .map(|rd| rd.pkg_id.clone())
+            .collect();
+        if !by_name.is_empty() {
+            return Ok(by_name);
+        }
     }
     Err(format!(
         "enabled non-dev dependency `{}` (key `{}`) of `{pkg_name}` did not resolve to any non-dev target in `resolve.nodes`",
@@ -5411,9 +5387,7 @@ fn audit_cargo_metadata_prod_test_support_reachability(
     }
 
     for pid in &workspace_members {
-        let Some(pkg) = packages.get(pid) else {
-            continue;
-        };
+        let pkg = &packages[pid];
         if state
             .active_features
             .get(pid)

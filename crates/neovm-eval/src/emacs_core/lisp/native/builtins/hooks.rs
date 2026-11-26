@@ -164,7 +164,10 @@ pub struct WindowConfigurationSnapshot {
 
 impl WindowConfigurationSnapshot {
     #[doc(hidden)]
-    pub fn clone_for_restore(&self, buffers: &mut neovm_edit::buffer::BufferManager) -> Self {
+    pub fn clone_for_restore(
+        &self,
+        buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
+    ) -> Self {
         Self {
             frame_id: self.frame_id,
             change_stamp: self.change_stamp,

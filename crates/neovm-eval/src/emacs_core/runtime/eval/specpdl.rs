@@ -2214,8 +2214,9 @@ impl Context {
                 && let Some(window) = self.frames.lookup_window_mut(window_id)
                 && window.buffer_id() == Some(restored_buffer)
             {
+                let mut buffers = neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers);
                 crate::emacs_core::eval::data::window_markers::set_window_point_with_marker(
-                    &mut self.edit.buffers,
+                    &mut buffers,
                     window,
                     point,
                 );

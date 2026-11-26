@@ -122,13 +122,13 @@ pub(crate) fn frame_window_system_symbol(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame: Option<&Value>,
 ) -> Result<Option<Value>, Flow> {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    frame_window_system_symbol_in_state(frames, buffers, frame)
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    frame_window_system_symbol_in_state(frames, &mut buffers, frame)
 }
 
 fn frame_window_system_symbol_in_state(
     frames: &mut crate::window::FrameManager,
-    buffers: &mut neovm_edit::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     frame: Option<&Value>,
 ) -> Result<Option<Value>, Flow> {
     let frame_id = super::window_cmds::resolve_frame_id_in_state(
@@ -887,8 +887,8 @@ pub fn builtin_window_system(
             dynamic_or_global_symbol_value_in_state_fixed(eval.variables(), WellKnown::WindowSystem)
         }
     } else {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-        frame_window_system_symbol_in_state(frames, buffers, args.first())?
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+        frame_window_system_symbol_in_state(frames, &mut buffers, args.first())?
     };
     Ok(window_system.unwrap_or(Value::NIL))
 }
@@ -2699,10 +2699,10 @@ pub fn builtin_x_export_frames(args: Vec<Value>) -> EvalResult {
 #[doc(hidden)]
 pub fn builtin_x_focus_frame(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("x-focus-frame", &args, 1, 2)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = super::window_cmds::resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;

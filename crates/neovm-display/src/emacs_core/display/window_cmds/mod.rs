@@ -86,10 +86,10 @@ pub fn builtin_resize_mini_window_internal(
     // accepted any window OBJECT and only failed later, when the live-only
     // frame lookup missed, with a plain `error "Window not found"' -- a
     // condition GNU never reaches.
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let (fid, window_id) = crate::emacs_core::window_cmds::check_window_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         &args[0],
         neovm_eval::emacs_core::eval::data::window_state::WindowDomain::Live,
     )?;
@@ -204,7 +204,7 @@ pub fn builtin_resize_mini_window_internal(
 /// PIXEL-SIZE, so a call with both arguments wrong must name the window.
 pub(crate) fn validate_split_window_target(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     window: &Value,
 ) -> Result<(), Flow> {
     resolve_window_id_with_pred_in_state(frames, buffers, Some(window), WindowDomain::Valid)
@@ -250,8 +250,8 @@ pub fn builtin_split_window_internal(
     // argument and `lisp/window.el`'s `split-window` computes a real
     // `new-pixel-size` before calling in.  Exempting nil accepted a call GNU
     // rejects, and let every in-tree caller omit a size without noticing.
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    validate_split_window_target(frames, buffers, &args[0])?;
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    validate_split_window_target(frames, &mut buffers, &args[0])?;
     let _ = expect_fixnum(&args[1])?;
     // SIDE is deliberately NOT type-checked.  GNU never validates it: it
     // reduces it to `horflag' and a before/after test, both plain `EQ'
@@ -287,10 +287,10 @@ pub fn builtin_split_window_internal(
         )
         .unwrap_or(Value::NIL),
     );
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let result = split_window_internal_impl_in_state_with_normal(
         frames,
-        buffers,
+        &mut buffers,
         args[0],
         args[1],
         args[2],
@@ -395,9 +395,9 @@ pub fn builtin_coordinates_in_window_p(
 ) -> EvalResult {
     expect_args("coordinates-in-window-p", &args, 2)?;
     // GNU decodes WINDOW before it `CHECK_CONS`es COORDINATES.
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let live = decode_live_window_in_state(frames, buffers, args.get(1))?;
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let live = decode_live_window_in_state(frames, &mut buffers, args.get(1))?;
 
     if !args[0].is_cons() {
         return Err(signal(
@@ -458,7 +458,7 @@ pub fn builtin_coordinates_in_window_p(
     }
 
     let chrome = |line| {
-        body_geometry::chrome_height_pixels(frames, buffers, window.frame(), window.window(), line)
+        body_geometry::chrome_height_pixels(frames, &buffers, window.frame(), window.window(), line)
     };
     let mode_line = chrome(WindowChromeLine::ModeLine)? as f64;
     let tab_line = chrome(WindowChromeLine::TabLine)? as f64;
@@ -1291,13 +1291,13 @@ fn resolve_window_id_with_pred(
     arg: Option<&Value>,
     pred: WindowDomain,
 ) -> Result<(FrameId, WindowId), Flow> {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    resolve_window_id_with_pred_in_state(frames, buffers, arg, pred)
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    resolve_window_id_with_pred_in_state(frames, &mut buffers, arg, pred)
 }
 
 fn resolve_window_id_with_pred_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     arg: Option<&Value>,
     pred: WindowDomain,
 ) -> Result<(FrameId, WindowId), Flow> {
@@ -1327,7 +1327,7 @@ fn resolve_window_id_with_pred_in_state(
 
 fn resolve_window_id_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     arg: Option<&Value>,
 ) -> Result<(FrameId, WindowId), Flow> {
     resolve_window_id_with_pred_in_state(frames, buffers, arg, WindowDomain::Live)
@@ -1347,7 +1347,7 @@ fn window_is_bottommost(frame: &crate::window::Frame, window_id: WindowId) -> bo
 
 fn resolve_window_object_id_with_pred_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     arg: Option<&Value>,
     pred: WindowDomain,
 ) -> Result<WindowId, Flow> {
@@ -1381,14 +1381,14 @@ pub(crate) fn resolve_frame_id(
     arg: Option<&Value>,
     predicate: FrameDomain,
 ) -> Result<FrameId, Flow> {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    resolve_frame_id_in_state(frames, buffers, arg, predicate)
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    resolve_frame_id_in_state(frames, &mut buffers, arg, predicate)
 }
 
 #[doc(hidden)]
 pub fn resolve_frame_id_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     arg: Option<&Value>,
     predicate: FrameDomain,
 ) -> Result<FrameId, Flow> {
@@ -1422,7 +1422,7 @@ pub fn resolve_frame_id_in_state(
 
 fn resolve_frame_or_window_frame_id_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     arg: Option<&Value>,
     predicate: FrameDomain,
 ) -> Result<FrameId, Flow> {
@@ -1561,7 +1561,7 @@ impl From<LiveWindow> for AnyWindow {
 /// be live.
 pub(crate) fn decode_live_window_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     arg: Option<&Value>,
 ) -> Result<LiveWindow, Flow> {
     let (frame, window) =
@@ -1574,7 +1574,7 @@ pub(crate) fn decode_live_window_in_state(
 /// setter).
 pub(crate) fn check_valid_window_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     arg: &Value,
 ) -> Result<ValidWindow, Flow> {
     let (frame, window) = check_window_id_in_state(frames, buffers, arg, WindowDomain::Valid)?;
@@ -1585,7 +1585,7 @@ pub(crate) fn check_valid_window_in_state(
 /// accepted, a deleted one is not.
 pub(crate) fn decode_valid_window_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     arg: Option<&Value>,
 ) -> Result<ValidWindow, Flow> {
     let (frame, window) =
@@ -1618,14 +1618,14 @@ fn get_window(frames: &FrameManager, w: ValidWindow) -> Result<&Window, Flow> {
 /// When the evaluator has no frame yet, synthesize one on demand.
 #[doc(hidden)]
 pub fn ensure_selected_frame_id(eval: &mut neovm_eval::emacs_core::eval::Context) -> FrameId {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    ensure_selected_frame_id_in_state(frames, buffers)
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    ensure_selected_frame_id_in_state(frames, &mut buffers)
 }
 
 #[doc(hidden)]
 pub fn ensure_selected_frame_id_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
 ) -> FrameId {
     ensure_selected_frame_id_in_state_with_policy(frames, buffers, true)
 }
@@ -1633,14 +1633,14 @@ pub fn ensure_selected_frame_id_in_state(
 #[doc(hidden)]
 pub fn seed_batch_startup_frame_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
 ) -> FrameId {
     ensure_selected_frame_id_in_state_with_policy(frames, buffers, false)
 }
 
 fn ensure_selected_frame_id_in_state_with_policy(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     warn_on_create: bool,
 ) -> FrameId {
     if let Some(fid) = frames.selected_frame().map(|f| f.id) {
@@ -1773,11 +1773,11 @@ pub(crate) fn window_line_wrap(
     current_buffer_id: BufferId,
     engine: MotionEngine,
 ) -> LineWrap {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
     let Ok((fid, wid)) = resolve_window_id_with_pred_in_state(
         frames,
-        buffers,
+        &mut buffers,
         window.as_ref(),
         crate::emacs_core::window_cmds::WindowDomain::Live,
     ) else {
@@ -1815,13 +1815,13 @@ pub(crate) fn window_line_wrap(
         Some(frame) => frame.root_window().id(),
         None => return wrapped,
     };
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let window_cols = window_total_width_impl(frames, buffers, vec![window_value(wid)])
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let window_cols = window_total_width_impl(frames, &mut buffers, vec![window_value(wid)])
         .ok()
         .and_then(|value| value.as_fixnum())
         .unwrap_or(0);
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let root_cols = window_total_width_impl(frames, buffers, vec![window_value(root_wid)])
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let root_cols = window_total_width_impl(frames, &mut buffers, vec![window_value(root_wid)])
         .ok()
         .and_then(|value| value.as_fixnum())
         .unwrap_or(window_cols);
@@ -2063,8 +2063,8 @@ pub fn record_window_buffer_change_history_in_state(
 pub(crate) fn selected_window_id(
     eval: &mut neovm_eval::emacs_core::eval::Context,
 ) -> Result<WindowId, Flow> {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let fid = ensure_selected_frame_id_in_state(frames, buffers);
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let fid = ensure_selected_frame_id_in_state(frames, &mut buffers);
     frames
         .get(fid)
         .map(|frame| frame.selected_window)
@@ -2120,11 +2120,11 @@ pub fn builtin_frame_selected_window(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("frame-selected-window", &args, 1)?;
     let fid = resolve_frame_or_window_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -2150,11 +2150,11 @@ pub fn builtin_frame_old_selected_window(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("frame-old-selected-window", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -2434,10 +2434,10 @@ pub fn builtin_set_frame_selected_window(
 ) -> EvalResult {
     expect_min_args("set-frame-selected-window", &args, 2)?;
     expect_max_args("set-frame-selected-window", &args, 3)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -2470,8 +2470,8 @@ pub fn builtin_set_frame_selected_window(
             )],
         ));
     }
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let selected_fid = ensure_selected_frame_id_in_state(frames, &mut buffers);
     if fid == selected_fid {
         let mut select_args = vec![window_value(wid)];
         if let Some(norecord) = args.get(2) {
@@ -2499,11 +2499,11 @@ pub fn builtin_frame_first_window(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("frame-first-window", &args, 1)?;
     let fid = resolve_frame_or_window_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -2523,11 +2523,11 @@ pub fn builtin_frame_root_window(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("frame-root-window", &args, 1)?;
     let fid = resolve_frame_or_window_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -2542,11 +2542,11 @@ pub fn builtin_minibuffer_window(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("minibuffer-window", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -2564,10 +2564,14 @@ pub fn builtin_window_minibuffer_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-minibuffer-p", &args, 1)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Valid,
+    )?;
     let is_minibuffer = frames
         .get(fid)
         .is_some_and(|frame| frame.minibuffer_window == Some(wid));
@@ -2608,14 +2612,18 @@ pub fn builtin_window_frame(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-frame", &args, 1)?;
     // GNU `Fwindow_frame` calls `decode_valid_window` (window.c:342-348).
     // `WINDOW_VALID_P` requires non-nil contents (window.h:1188-1194).
     // `delete_all_child_windows` nils contents (window.c:8136-8153), so a
     // window of a deleted frame signals `window-valid-p`.
-    let (fid, _) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let (fid, _) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Valid,
+    )?;
     Ok(Value::make_frame(fid.0))
 }
 /// `(window-buffer &optional WINDOW)` -> buffer object.
@@ -2624,7 +2632,7 @@ pub fn builtin_window_buffer(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-buffer", &args, 1)?;
     let resolve_buffer = |frames: &FrameManager, fid: FrameId, wid: WindowId| -> EvalResult {
         let w = get_leaf(frames, fid, wid)?;
@@ -2635,8 +2643,12 @@ pub fn builtin_window_buffer(
     };
 
     if args.first().is_none_or(|v| v.is_nil()) {
-        let (fid, wid) =
-            resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Any)?;
+        let (fid, wid) = resolve_window_id_with_pred_in_state(
+            frames,
+            &mut buffers,
+            args.first(),
+            WindowDomain::Any,
+        )?;
         return resolve_buffer(frames, fid, wid);
     }
     let val = args.first().unwrap();
@@ -2663,11 +2675,15 @@ pub fn builtin_window_display_table(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-display-table", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (_fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     Ok(frames.window_display_table(wid))
 }
 /// `(set-window-display-table WINDOW TABLE)` -> TABLE.
@@ -2676,11 +2692,15 @@ pub fn builtin_set_window_display_table(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("set-window-display-table", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (_fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let table = args[1];
     frames.set_window_display_table(wid, table);
     Ok(table)
@@ -2691,11 +2711,15 @@ pub fn builtin_window_cursor_type(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-cursor-type", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (_fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     Ok(frames.window_cursor_type(wid))
 }
 /// `(set-window-cursor-type WINDOW TYPE)` -> TYPE.
@@ -2717,11 +2741,15 @@ pub fn builtin_set_window_cursor_type(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("set-window-cursor-type", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (_fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let cursor_type = args[1];
 
     if !is_valid_cursor_type(cursor_type) {
@@ -2742,11 +2770,15 @@ pub fn builtin_window_cursor_info(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-cursor-info", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let Some(frame) = frames.get(fid) else {
         return Ok(Value::NIL);
     };
@@ -2799,12 +2831,12 @@ pub fn builtin_window_parameter(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("window-parameter", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
     let wid = resolve_window_object_id_with_pred_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         WindowDomain::Any,
     )?;
@@ -2827,11 +2859,11 @@ pub fn builtin_set_window_parameter(
         && eval
             .special_variable_value_by_id(intern("window-auto-redraw-on-parameter-change"))
             .is_none_or(|enabled| enabled.is_truthy());
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
     let wid = resolve_window_object_id_with_pred_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         WindowDomain::Any,
     )?;
@@ -2873,11 +2905,15 @@ pub fn builtin_window_parameters(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-parameters", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (_fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Valid,
+    )?;
     Ok(frames.window_parameters_alist(wid))
 }
 /// `(window-parent &optional WINDOW)` -> parent window or nil.
@@ -2886,11 +2922,15 @@ pub fn builtin_window_parent(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-parent", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Valid,
+    )?;
     let Some(frame) = frames.get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     };
@@ -2902,11 +2942,15 @@ pub fn builtin_window_top_child(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-top-child", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Valid,
+    )?;
     let Some(frame) = frames.get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     };
@@ -2921,11 +2965,15 @@ pub fn builtin_window_left_child(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-left-child", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Valid,
+    )?;
     let Some(frame) = frames.get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     };
@@ -2940,11 +2988,15 @@ pub fn builtin_window_next_sibling(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-next-sibling", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Valid,
+    )?;
     let Some(frame) = frames.get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     };
@@ -2956,11 +3008,15 @@ pub fn builtin_window_prev_sibling(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-prev-sibling", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Valid,
+    )?;
     let Some(frame) = frames.get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     };
@@ -2981,11 +3037,15 @@ pub fn builtin_window_normal_size(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-normal-size", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Valid,
+    )?;
     let horizontal = args.get(1).is_some_and(|v| v.is_truthy());
     let Some(frame) = frames.get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
@@ -3005,10 +3065,14 @@ pub fn builtin_window_start(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-start", &args, 1)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let w = get_leaf(frames, fid, wid)?;
     match w {
         Window::Leaf { window_start, .. } => Ok(Value::fixnum(window_start.as_i64())),
@@ -3108,10 +3172,10 @@ pub fn builtin_window_end(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("window-end", &args, 2)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let (fid, wid) = resolve_window_id_with_pred_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
@@ -3128,10 +3192,14 @@ pub fn builtin_window_point(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-point", &args, 1)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let w = get_leaf(frames, fid, wid)?;
     match w {
         Window::Leaf {
@@ -3160,10 +3228,10 @@ pub fn builtin_set_window_start(
     expect_max_args("set-window-start", &args, 3)?;
     let chrome_dirty_window;
     let result = {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         let (fid, wid) = resolve_window_id_with_pred_in_state(
             frames,
-            buffers,
+            &mut buffers,
             args.first(),
             WindowDomain::Live,
         )?;
@@ -3183,13 +3251,15 @@ pub fn builtin_set_window_start(
             IntegerOrMarkerArg::Int(pos) => {
                 if !is_minibuffer
                     && let Some(clamped) =
-                        clamped_window_position_in_state(frames, buffers, fid, wid, pos)
+                        clamped_window_position_in_state(frames, &buffers, fid, wid, pos)
                     && let Some(window) = frames
                         .get_mut(fid)
                         .and_then(|frame| frame.find_window_mut(wid))
                 {
                     crate::window::window_markers::set_window_start_with_marker(
-                        buffers, window, clamped,
+                        &mut buffers,
+                        window,
+                        clamped,
                     );
                     set_window_force_start(window, force_start_p);
                 }
@@ -3199,13 +3269,15 @@ pub fn builtin_set_window_start(
                 if !is_minibuffer
                     && let Some(pos) = position
                     && let Some(clamped) =
-                        clamped_window_position_in_state(frames, buffers, fid, wid, pos)
+                        clamped_window_position_in_state(frames, &buffers, fid, wid, pos)
                     && let Some(window) = frames
                         .get_mut(fid)
                         .and_then(|frame| frame.find_window_mut(wid))
                 {
                     crate::window::window_markers::set_window_start_with_marker(
-                        buffers, window, clamped,
+                        &mut buffers,
+                        window,
+                        clamped,
                     );
                     set_window_force_start(window, force_start_p);
                 }
@@ -3240,10 +3312,14 @@ pub fn builtin_set_window_point(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("set-window-point", &args, 2)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let globally_selected = frames.selected_frame().map(|frame| frame.selected_window);
     let pos = parse_integer_or_marker_arg(&args[1])?;
     let is_minibuffer = frames
@@ -3253,7 +3329,7 @@ pub fn builtin_set_window_point(
         IntegerOrMarkerArg::Int(pos) => {
             if !is_minibuffer
                 && let Some(clamped) =
-                    clamped_window_position_in_state(frames, buffers, fid, wid, pos)
+                    clamped_window_position_in_state(frames, &buffers, fid, wid, pos)
             {
                 let selected_live_window =
                     if neovm_eval::emacs_core::eval::gnu_redisplay_hooks_enabled() {
@@ -3270,7 +3346,9 @@ pub fn builtin_set_window_point(
                 {
                     let buffer_id = window.buffer_id();
                     crate::window::window_markers::set_window_point_with_marker(
-                        buffers, window, clamped,
+                        &mut buffers,
+                        window,
+                        clamped,
                     );
                     if selected_live_window
                         && let Some(buffer_id) = buffer_id
@@ -3296,7 +3374,7 @@ pub fn builtin_set_window_point(
                     vec![Value::string("Marker does not point anywhere")],
                 )
             })?;
-            if let Some(clamped) = clamped_window_position_in_state(frames, buffers, fid, wid, pos)
+            if let Some(clamped) = clamped_window_position_in_state(frames, &buffers, fid, wid, pos)
             {
                 let selected_live_window =
                     if neovm_eval::emacs_core::eval::gnu_redisplay_hooks_enabled() {
@@ -3313,7 +3391,9 @@ pub fn builtin_set_window_point(
                 {
                     let buffer_id = window.buffer_id();
                     crate::window::window_markers::set_window_point_with_marker(
-                        buffers, window, clamped,
+                        &mut buffers,
+                        window,
+                        clamped,
                     );
                     if selected_live_window
                         && let Some(buffer_id) = buffer_id
@@ -3344,11 +3424,15 @@ pub fn builtin_window_use_time(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-use-time", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (_fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     Ok(Value::fixnum(frames.window_use_time(wid)))
 }
 /// `(window-bump-use-time &optional WINDOW)` -> integer or nil.
@@ -3357,9 +3441,9 @@ pub fn builtin_window_bump_use_time(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-bump-use-time", &args, 1)?;
-    let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
+    let selected_fid = ensure_selected_frame_id_in_state(frames, &mut buffers);
     let selected_wid = frames
         .get(selected_fid)
         .map(|frame| frame.selected_window)
@@ -3401,11 +3485,15 @@ pub fn builtin_window_old_point(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-old-point", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let w = get_leaf(frames, fid, wid)?;
     match w {
         Window::Leaf { old_point, .. } => {
@@ -3444,12 +3532,12 @@ pub fn builtin_window_old_buffer(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-old-buffer", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
     let window = resolve_window_object_id_with_pred_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         WindowDomain::Any,
     )?;
@@ -3467,11 +3555,15 @@ pub fn builtin_window_prev_buffers(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-prev-buffers", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (_fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     Ok(frames.window_prev_buffers(wid))
 }
 /// `(window-next-buffers &optional WINDOW)` -> next buffer list or nil.
@@ -3480,11 +3572,15 @@ pub fn builtin_window_next_buffers(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-next-buffers", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (_fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     Ok(frames.window_next_buffers(wid))
 }
 /// `(set-window-prev-buffers WINDOW PREV-BUFFERS)` -> PREV-BUFFERS.
@@ -3493,11 +3589,15 @@ pub fn builtin_set_window_prev_buffers(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("set-window-prev-buffers", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (_fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let value = args[1];
     frames.set_window_prev_buffers(wid, value);
     Ok(value)
@@ -3508,11 +3608,15 @@ pub fn builtin_set_window_next_buffers(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("set-window-next-buffers", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (_fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let value = args[1];
     frames.set_window_next_buffers(wid, value);
     Ok(value)
@@ -3524,7 +3628,7 @@ pub fn builtin_window_discard_buffer_from_window(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_min_args("window-discard-buffer-from-window", &args, 2)?;
     expect_max_args("window-discard-buffer-from-window", &args, 3)?;
     let buffer_id = match args.first().and_then(|v| v.as_buffer_id()) {
@@ -3551,12 +3655,20 @@ pub fn builtin_combine_windows(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("combine-windows", &args, 2)?;
-    let (_first_fid, first_wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
-    let (_last_fid, last_wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.get(1), WindowDomain::Valid)?;
+    let (_first_fid, first_wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Valid,
+    )?;
+    let (_last_fid, last_wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.get(1),
+        WindowDomain::Valid,
+    )?;
 
     if first_wid == last_wid {
         return Err(signal(
@@ -3578,10 +3690,14 @@ pub fn builtin_uncombine_window(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("uncombine-window", &args, 1)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Valid,
+    )?;
 
     if frames
         .get(fid)
@@ -3602,10 +3718,10 @@ pub fn builtin_window_left_column(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-left-column", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let window = decode_valid_window_in_state(frames, &mut buffers, args.first())?;
     let w = get_window(frames, window)?;
     // GNU `Fwindow_left_column` returns `w->left_col` directly. See
     // `Window::left_col`.
@@ -3617,10 +3733,10 @@ pub fn builtin_window_top_line(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-top-line", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let window = decode_valid_window_in_state(frames, &mut buffers, args.first())?;
     let w = get_window(frames, window)?;
     // GNU `Fwindow_top_line` returns `w->top_line` directly (the stored
     // character-line edge maintained by the resize passes, decoupled from pixel
@@ -3692,9 +3808,9 @@ pub fn builtin_window_pixel_left(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-pixel-left", &args, 1)?;
-    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let window = decode_valid_window_in_state(frames, &mut buffers, args.first())?;
     let w = get_window(frames, window)?;
     let frame = frames.get(window.frame());
     let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
@@ -3747,9 +3863,9 @@ pub fn builtin_window_pixel_top(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-pixel-top", &args, 1)?;
-    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let window = decode_valid_window_in_state(frames, &mut buffers, args.first())?;
     let w = get_window(frames, window)?;
     let frame = frames.get(window.frame());
     let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
@@ -3774,11 +3890,15 @@ pub fn builtin_window_hscroll(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-hscroll", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let w = get_leaf(frames, fid, wid)?;
     match w {
         Window::Leaf { hscroll, .. } => Ok(Value::fixnum(*hscroll as i64)),
@@ -3791,10 +3911,14 @@ pub fn builtin_set_window_hscroll(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("set-window-hscroll", &args, 2)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let cols = expect_fixnum(&args[1])?.max(0) as usize;
     let mut changed = false;
     if let Some(Window::Leaf {
@@ -3843,10 +3967,10 @@ pub fn builtin_scroll_left(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("scroll-left", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) = resolve_window_id_in_state(frames, buffers, None)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_in_state(frames, &mut buffers, None)?;
     let base = frames
         .get(fid)
         .and_then(|frame| frame.find_window(wid))
@@ -3896,10 +4020,10 @@ pub fn builtin_scroll_right(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("scroll-right", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) = resolve_window_id_in_state(frames, buffers, None)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_in_state(frames, &mut buffers, None)?;
     let base = frames
         .get(fid)
         .and_then(|frame| frame.find_window(wid))
@@ -3948,11 +4072,15 @@ pub fn builtin_window_vscroll(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-vscroll", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (_fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let pixelwise = args.get(1).is_some_and(|v| v.is_truthy());
     Ok(frames
         .window_vscroll(wid, pixelwise)
@@ -3964,11 +4092,15 @@ pub fn builtin_set_window_vscroll(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_min_args("set-window-vscroll", &args, 2)?;
     expect_max_args("set-window-vscroll", &args, 4)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let next_vscroll = expect_number(&args[1])?;
     let pixelwise = args.get(2).is_some_and(|v| v.is_truthy());
     let preserve = args.get(3).is_some_and(|v| v.is_truthy());
@@ -3993,11 +4125,15 @@ pub fn builtin_set_window_margins(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_min_args("set-window-margins", &args, 2)?;
     expect_max_args("set-window-margins", &args, 3)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let left = expect_margin_width(&args[1])?;
     let right = if let Some(arg) = args.get(2) {
         expect_margin_width(arg)?
@@ -4029,10 +4165,14 @@ pub fn builtin_window_margins(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-margins", &args, 1)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let w = get_leaf(frames, fid, wid)?;
     let margins = match w {
         Window::Leaf { margins, .. } => *margins,
@@ -4058,10 +4198,14 @@ pub fn builtin_window_fringes(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-fringes", &args, 1)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let (left, right, outside, persistent) =
         frames.window_fringes(wid).unwrap_or((0, 0, false, false));
     Ok(Value::list(vec![
@@ -4077,11 +4221,15 @@ pub fn builtin_set_window_fringes(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_min_args("set-window-fringes", &args, 2)?;
     expect_max_args("set-window-fringes", &args, 5)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     if frames
         .get(fid)
         .is_none_or(|frame| frame.effective_window_system().is_none())
@@ -4148,10 +4296,14 @@ pub fn builtin_window_scroll_bars(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-scroll-bars", &args, 1)?;
-    let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (_fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let (width, columns, vertical_type, height, lines, horizontal_type, persistent) = frames
         .window_scroll_bars(wid)
         .unwrap_or((Value::NIL, 0, Value::T, Value::NIL, 0, Value::T, false));
@@ -4171,11 +4323,15 @@ pub fn builtin_set_window_scroll_bars(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_min_args("set-window-scroll-bars", &args, 1)?;
     expect_max_args("set-window-scroll-bars", &args, 6)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     if frames
         .get(fid)
         .is_none_or(|frame| frame.effective_window_system().is_none())
@@ -4260,9 +4416,13 @@ pub fn builtin_window_scroll_bar_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("window-scroll-bar-width", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     if let Some(regions) = published_window_regions(frames, fid, wid)? {
         return Ok(Value::fixnum(published_geometry(
             regions.scroll_bar_width_pixels(),
@@ -4278,9 +4438,13 @@ pub fn builtin_window_scroll_bar_height(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("window-scroll-bar-height", &args, 1)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     if let Some(regions) = published_window_regions(frames, fid, wid)? {
         return Ok(Value::fixnum(published_geometry(
             regions.horizontal_scroll_bar_height_pixels(),
@@ -4294,12 +4458,21 @@ pub fn builtin_window_mode_line_height(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-mode-line-height", &args, 1)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
-    let height =
-        body_geometry::chrome_height_pixels(frames, buffers, fid, wid, WindowChromeLine::ModeLine)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
+    let height = body_geometry::chrome_height_pixels(
+        frames,
+        &buffers,
+        fid,
+        wid,
+        WindowChromeLine::ModeLine,
+    )?;
     Ok(Value::fixnum(height))
 }
 /// `(window-header-line-height &optional WINDOW)` -> integer.
@@ -4308,13 +4481,17 @@ pub fn builtin_window_header_line_height(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-header-line-height", &args, 1)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     Ok(Value::fixnum(body_geometry::chrome_height_pixels(
         frames,
-        buffers,
+        &buffers,
         fid,
         wid,
         WindowChromeLine::HeaderLine,
@@ -4326,13 +4503,17 @@ pub fn builtin_window_tab_line_height(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-tab-line-height", &args, 1)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     Ok(Value::fixnum(body_geometry::chrome_height_pixels(
         frames,
-        buffers,
+        &buffers,
         fid,
         wid,
         WindowChromeLine::TabLine,
@@ -4347,9 +4528,9 @@ pub fn builtin_window_pixel_height(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-pixel-height", &args, 1)?;
-    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let window = decode_valid_window_in_state(frames, &mut buffers, args.first())?;
     let w = get_window(frames, window)?;
     // GNU `Fwindow_pixel_height` returns `w->pixel_height` directly.  This is
     // synchronous window-layout state and exists before the first redisplay;
@@ -4364,9 +4545,9 @@ pub fn builtin_window_pixel_width(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-pixel-width", &args, 1)?;
-    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let window = decode_valid_window_in_state(frames, &mut buffers, args.first())?;
     let w = get_window(frames, window)?;
     // GNU `Fwindow_pixel_width` returns `w->pixel_width` directly.  Keep this
     // public Lisp primitive on the logical-layout side of the geometry seam.
@@ -4385,10 +4566,10 @@ pub fn builtin_window_body_height(
 ) -> EvalResult {
     expect_max_args("window-body-height", &args, 2)?;
     let unit = window_body_unit_from_lisp(args.get(1));
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let (fid, wid) = resolve_window_id_with_pred_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
@@ -4405,7 +4586,7 @@ pub fn builtin_window_body_height(
 
 fn window_body_height_impl(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("window-body-height", &args, 2)?;
@@ -4482,10 +4663,10 @@ pub fn builtin_window_body_width(
 ) -> EvalResult {
     expect_max_args("window-body-width", &args, 2)?;
     let unit = window_body_unit_from_lisp(args.get(1));
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let (fid, wid) = resolve_window_id_with_pred_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
@@ -4509,13 +4690,17 @@ pub fn builtin_window_text_height(
     args: Vec<Value>,
 ) -> EvalResult {
     eval.sync_pending_resize_events();
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-text-height", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let pixelwise = args.get(1).is_some_and(|v| v.is_truthy());
-    let body = body_geometry::body_height_pixels(frames, buffers, fid, wid)?;
+    let body = body_geometry::body_height_pixels(frames, &buffers, fid, wid)?;
     if pixelwise {
         Ok(Value::fixnum(body))
     } else {
@@ -4534,11 +4719,15 @@ pub fn builtin_window_text_width(
     args: Vec<Value>,
 ) -> EvalResult {
     eval.sync_pending_resize_events();
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-text-width", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let w = get_leaf(frames, fid, wid)?;
     let pixelwise = args.get(1).is_some_and(|v| v.is_truthy());
     if pixelwise {
@@ -4567,13 +4756,13 @@ pub fn builtin_window_total_height(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    window_total_height_impl(frames, buffers, args)
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    window_total_height_impl(frames, &mut buffers, args)
 }
 
 pub(crate) fn window_total_height_impl(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("window-total-height", &args, 2)?;
@@ -4600,13 +4789,13 @@ pub fn builtin_window_total_width(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    window_total_width_impl(frames, buffers, args)
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    window_total_width_impl(frames, &mut buffers, args)
 }
 
 pub(crate) fn window_total_width_impl(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("window-total-width", &args, 2)?;
@@ -4631,9 +4820,9 @@ pub fn builtin_window_list(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-list", &args, 3)?;
-    let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
+    let selected_fid = ensure_selected_frame_id_in_state(frames, &mut buffers);
     // GNU validates WINDOW before FRAME mismatch checks.
     let requested_start_window = if args.get(2).is_none_or(|v| v.is_nil()) {
         None
@@ -4718,11 +4907,11 @@ pub fn builtin_window_list_1(
     args: &[Value],
 ) -> EvalResult {
     let active_minibuffer_window = active_minibuffer_window_id(eval);
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-list-1", &args, 3)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
     let (fid, start_wid) = if args.first().is_none_or(|v| v.is_nil()) {
-        resolve_window_id_with_pred_in_state(frames, buffers, None, WindowDomain::Live)?
+        resolve_window_id_with_pred_in_state(frames, &mut buffers, None, WindowDomain::Live)?
     } else {
         let val = args.first().unwrap();
         if let Some(raw_id) = val.as_window_id() {
@@ -4872,10 +5061,14 @@ pub fn builtin_window_dedicated_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-dedicated-p", &args, 1)?;
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     let w = get_leaf(frames, fid, wid)?;
     match w {
         Window::Leaf { dedicated, .. } => Ok(*dedicated),
@@ -4888,11 +5081,15 @@ pub fn builtin_set_window_dedicated_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("set-window-dedicated-p", &args, 2)?;
     let flag = args[1];
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
+    let (fid, wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Live,
+    )?;
     if let Some(w) = frames.get_mut(fid).and_then(|f| f.find_window_mut(wid))
         && let Window::Leaf { dedicated, .. } = w
     {
@@ -4967,14 +5164,14 @@ pub fn builtin_window_at(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_min_args("window-at", &args, 2)?;
     expect_max_args("window-at", &args, 3)?;
     let x = expect_number(&args[0])?;
     let y = expect_number(&args[1])?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.get(2),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -5018,7 +5215,7 @@ pub fn builtin_window_at(
 /// `drafts/window-system-audit.md`.
 pub(crate) fn split_window_internal_impl_in_state_with_normal(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     window: Value,
     size: Value,
     side: Value,
@@ -5157,12 +5354,12 @@ pub fn builtin_delete_window_internal(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("delete-window-internal", &args, 1)?;
 
     let wid = resolve_window_object_id_with_pred_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         WindowDomain::Any,
     )?;
@@ -5231,10 +5428,14 @@ pub fn builtin_delete_other_windows_internal(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("delete-other-windows-internal", &args, 2)?;
-    let (fid, keep_wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let (fid, keep_wid) = resolve_window_id_with_pred_in_state(
+        frames,
+        &mut buffers,
+        args.first(),
+        WindowDomain::Valid,
+    )?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -5243,7 +5444,7 @@ pub fn builtin_delete_other_windows_internal(
     } else {
         let root_wid = resolve_window_object_id_with_pred_in_state(
             frames,
-            buffers,
+            &mut buffers,
             args.get(1),
             crate::emacs_core::window_cmds::WindowDomain::Valid,
         )?;
@@ -5292,7 +5493,7 @@ pub fn builtin_delete_other_windows_internal(
 #[doc(hidden)]
 pub fn remember_selected_window_point_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     fid: FrameId,
 ) {
     let Some(frame) = frames.get(fid) else {
@@ -5326,7 +5527,7 @@ pub fn remember_selected_window_point_in_state(
 #[doc(hidden)]
 pub fn sync_selected_window_buffer_in_state(
     frames: &FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     fid: FrameId,
 ) {
     let Some((buffer_id, point)) = frames
@@ -5363,44 +5564,44 @@ fn selected_window_buffer_state_in_frame(
 
 fn note_selected_window_buffer_in_state(
     frames: &FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     fid: FrameId,
 ) {
     let Some((selected_wid, buffer_id)) = selected_window_buffer_state_in_frame(frames, fid) else {
         return;
     };
-    if let Some(buffer) = buffers.get_mut(buffer_id) {
-        buffer.set_last_selected_window(Some(selected_wid));
-    }
+    let _ = buffers.set_buffer_last_selected_window(buffer_id, Some(selected_wid));
 }
 
 fn update_buffer_display_metadata_in_state(
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     buffer_id: BufferId,
 ) -> EvalResult {
     let display_time = neovm_value::time_core::current_time_value(
         neovm_value::time_core::LispTimeOutput::LegacyList,
     );
-    let Some(buffer) = buffers.get_mut(buffer_id) else {
+    let Some(count) = buffers.get(buffer_id).map(|buffer| {
+        buffer
+            .buffer_local_value("buffer-display-count")
+            .and_then(|v| v.as_fixnum())
+    }) else {
         return Ok(Value::NIL);
     };
-    if let Some(count) = buffer
-        .buffer_local_value("buffer-display-count")
-        .and_then(|v| v.as_fixnum())
-    {
-        buffer.set_buffer_local(
+    if let Some(count) = count {
+        let _ = buffers.set_buffer_local_property(
+            buffer_id,
             "buffer-display-count",
             Value::fixnum(count.saturating_add(1)),
         );
     }
-    buffer.set_buffer_local("buffer-display-time", display_time);
+    let _ = buffers.set_buffer_local_property(buffer_id, "buffer-display-time", display_time);
     Ok(Value::NIL)
 }
 
 #[doc(hidden)]
 pub fn record_buffer_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     buffer_id: BufferId,
     fid: FrameId,
 ) -> EvalResult {
@@ -5486,8 +5687,8 @@ pub(crate) fn select_window(
         );
     }
     let (record_selection, run_buffer_list_hook, frame_changed, reset_input_frame) = {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-        let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+        let selected_fid = ensure_selected_frame_id_in_state(frames, &mut buffers);
         // GNU `select_window' derives WINDOW_FRAME and selects that frame when
         // it differs.  Posframe/transient relies on this for child-frame roots.
         let fid = frames.find_window_frame_id(wid).ok_or_else(|| {
@@ -5497,7 +5698,7 @@ pub(crate) fn select_window(
             )
         })?;
         let record_selection = norecord.is_nil();
-        remember_selected_window_point_in_state(frames, buffers, selected_fid);
+        remember_selected_window_point_in_state(frames, &mut buffers, selected_fid);
         {
             let frame = frames
                 .get_mut(fid)
@@ -5524,8 +5725,8 @@ pub(crate) fn select_window(
         if record_selection {
             let _ = frames.note_window_selected(wid);
         }
-        sync_selected_window_buffer_in_state(frames, buffers, fid);
-        note_selected_window_buffer_in_state(frames, buffers, fid);
+        sync_selected_window_buffer_in_state(frames, &mut buffers, fid);
+        note_selected_window_buffer_in_state(frames, &mut buffers, fid);
         // GNU Fselect_window calls record_buffer when NORECORD is nil.
         // record_buffer updates buffer lists and hooks; display count/time are
         // updated by set_window_buffer, not by selecting an already visible
@@ -5536,7 +5737,7 @@ pub(crate) fn select_window(
                 .and_then(|f| f.find_window(wid))
                 .and_then(Window::buffer_id)
         {
-            record_buffer_in_state(frames, buffers, buffer_id, fid)?;
+            record_buffer_in_state(frames, &mut buffers, buffer_id, fid)?;
         }
         let run_buffer_list_hook = record_selection
             && selected_window_buffer_state_in_frame(frames, fid)
@@ -5591,9 +5792,9 @@ pub fn builtin_other_window_for_scrolling(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("other-window-for-scrolling", &args, 0)?;
-    let fid = ensure_selected_frame_id_in_state(frames, buffers);
+    let fid = ensure_selected_frame_id_in_state(frames, &mut buffers);
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?;
@@ -5617,9 +5818,9 @@ pub fn builtin_next_window(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("next-window", &args, 3)?;
-    let (fid, wid) = resolve_window_id_in_state(frames, buffers, args.first())?;
+    let (fid, wid) = resolve_window_id_in_state(frames, &mut buffers, args.first())?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -5637,9 +5838,9 @@ pub fn builtin_previous_window(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("previous-window", &args, 3)?;
-    let (fid, wid) = resolve_window_id_in_state(frames, buffers, args.first())?;
+    let (fid, wid) = resolve_window_id_in_state(frames, &mut buffers, args.first())?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -5713,8 +5914,9 @@ pub fn builtin_set_window_buffer(
     expect_min_args("set-window-buffer", &args, 2)?;
     expect_max_args("set-window-buffer", &args, 3)?;
     let (fid, wid, buf_id, keep_margins, run_buffer_list_hook, display_effect) = {
-        let (frames, buffers, minibuffers) = eval.frame_manager_buffers_and_minibuffers_mut();
-        let (fid, wid) = resolve_window_id_in_state(frames, buffers, args.first())?;
+        let (frames, mut buffers, minibuffers) =
+            eval.frame_manager_buffer_view_and_minibuffers_mut();
+        let (fid, wid) = resolve_window_id_in_state(frames, &mut buffers, args.first())?;
         let buf_id = match args[1].kind() {
             ValueKind::Veclike(VecLikeType::Buffer) => {
                 let bid = args[1].as_buffer_id().unwrap();
@@ -5726,7 +5928,7 @@ pub fn builtin_set_window_buffer(
                 }
                 bid
             }
-            ValueKind::String => match find_buffer_by_name_arg(buffers, &args[1])? {
+            ValueKind::String => match find_buffer_by_name_arg(&buffers, &args[1])? {
                 Some(id) => id,
                 None => {
                     return Err(signal(
@@ -5744,7 +5946,7 @@ pub fn builtin_set_window_buffer(
         };
 
         let keep_margins = args.get(2).is_some_and(|arg| !arg.is_nil());
-        let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
+        let selected_fid = ensure_selected_frame_id_in_state(frames, &mut buffers);
         let mut old_state = None;
         if let Some(Window::Leaf {
             buffer_id,
@@ -5770,9 +5972,10 @@ pub fn builtin_set_window_buffer(
                     ))],
                 ));
             }
-            if let Some(buffer) = buffers.get_mut(old_buffer_id) {
-                buffer.set_last_window_start(old_window_start.max(LispCharPos1::ONE));
-            }
+            let _ = buffers.set_buffer_last_window_start(
+                old_buffer_id,
+                old_window_start.max(LispCharPos1::ONE),
+            );
             let selected_buffer_id = frames
                 .get(selected_fid)
                 .and_then(|frame| frame.find_window(frame.selected_window))
@@ -5794,16 +5997,18 @@ pub fn builtin_set_window_buffer(
                 }
             }
             if old_buffer_id != buf_id
-                && let Some(buffer) = buffers.get_mut(old_buffer_id)
-                && buffer.last_selected_window() == Some(wid)
+                && buffers
+                    .get(old_buffer_id)
+                    .and_then(|buffer| buffer.last_selected_window())
+                    == Some(wid)
             {
-                buffer.set_last_selected_window(None);
+                let _ = buffers.set_buffer_last_selected_window(old_buffer_id, None);
             }
             if old_buffer_id != buf_id {
                 run_buffer_list_hook = record_window_buffer_change_history_in_state(
                     frames,
                     minibuffers,
-                    buffers,
+                    &buffers,
                     fid,
                     wid,
                     WindowBufferHistoryChange {
@@ -5835,7 +6040,7 @@ pub fn builtin_set_window_buffer(
         neovm_eval::emacs_core::builtins::run_buffer_list_update_hook(eval)?;
     }
     {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         if buffers.get(buf_id).is_none() {
             return Err(signal(
                 "error",
@@ -5846,30 +6051,30 @@ pub fn builtin_set_window_buffer(
             None
         } else {
             Some(WindowMargins::new(
-                buffer_margin_width(buffers, buf_id, "left-margin-width")?,
-                buffer_margin_width(buffers, buf_id, "right-margin-width")?,
+                buffer_margin_width(&buffers, buf_id, "left-margin-width")?,
+                buffer_margin_width(&buffers, buf_id, "right-margin-width")?,
             ))
         };
         let next_fringes = if keep_margins {
             None
         } else {
             Some(WindowFringeDefaults::new(
-                buffer_local_optional_dimension(buffers, buf_id, "left-fringe-width")?,
-                buffer_local_optional_dimension(buffers, buf_id, "right-fringe-width")?,
-                buffer_local_value(buffers, buf_id, "fringes-outside-margins").is_truthy(),
+                buffer_local_optional_dimension(&buffers, buf_id, "left-fringe-width")?,
+                buffer_local_optional_dimension(&buffers, buf_id, "right-fringe-width")?,
+                buffer_local_value(&buffers, buf_id, "fringes-outside-margins").is_truthy(),
             ))
         };
         let next_scroll_bars = if keep_margins {
             None
         } else {
-            let vertical_type = buffer_local_value(buffers, buf_id, "vertical-scroll-bar");
+            let vertical_type = buffer_local_value(&buffers, buf_id, "vertical-scroll-bar");
             if !valid_vertical_scroll_bar_type(vertical_type) {
                 return Err(signal(
                     "error",
                     vec![Value::string("Invalid type of vertical scroll bar")],
                 ));
             }
-            let horizontal_type = buffer_local_value(buffers, buf_id, "horizontal-scroll-bar");
+            let horizontal_type = buffer_local_value(&buffers, buf_id, "horizontal-scroll-bar");
             if !valid_horizontal_scroll_bar_type(horizontal_type) {
                 return Err(signal(
                     "error",
@@ -5877,9 +6082,9 @@ pub fn builtin_set_window_buffer(
                 ));
             }
             Some(WindowScrollBarDefaults::new(
-                buffer_local_optional_dimension(buffers, buf_id, "scroll-bar-width")?,
+                buffer_local_optional_dimension(&buffers, buf_id, "scroll-bar-width")?,
                 vertical_type,
-                buffer_local_optional_dimension(buffers, buf_id, "scroll-bar-height")?,
+                buffer_local_optional_dimension(&buffers, buf_id, "scroll-bar-height")?,
                 horizontal_type,
             ))
         };
@@ -5947,16 +6152,17 @@ pub fn builtin_set_window_buffer(
         {
             *dedicated = Value::NIL;
         }
-        update_buffer_display_metadata_in_state(buffers, buf_id)?;
+        update_buffer_display_metadata_in_state(&mut buffers, buf_id)?;
         if let Some(frame) = frames.get_mut(fid)
             && let Some(window) = frame.find_window_mut(wid)
         {
-            super::super::window::window_markers::attach_window_position_markers(buffers, window);
+            super::super::window::window_markers::attach_window_position_markers(
+                &mut buffers,
+                window,
+            );
         }
-        if selected_window == Some(wid)
-            && let Some(buffer) = buffers.get_mut(buf_id)
-        {
-            buffer.set_last_selected_window(Some(wid));
+        if selected_window == Some(wid) {
+            let _ = buffers.set_buffer_last_selected_window(buf_id, Some(wid));
         }
     }
     display_effect.apply(eval);
@@ -6578,10 +6784,11 @@ pub(crate) fn flush_pending_live_gui_resize(
     );
 
     if pending.is_queued() {
-        let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
+        let (frames, mut buffers, display_host) =
+            eval.frame_manager_buffer_view_and_display_host_mut();
         super::frame::request_live_gui_frame_resize_and_keep_pending(
             frames,
-            buffers,
+            &buffers,
             display_host,
             fid,
             FrameResizeRequest::Cells {
@@ -6613,7 +6820,7 @@ fn scroll_down_batch_error() -> Flow {
 fn scroll_lines_in_state(
     vars: VariableView<'_>,
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     arg: Option<&Value>,
     direction: i64,
 ) -> i64 {
@@ -6705,8 +6912,8 @@ fn try_scroll_long_lines(
         return Ok(false);
     }
 
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let body_height = window_body_height_impl(frames, buffers, vec![])
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let body_height = window_body_height_impl(frames, &mut buffers, vec![])
         .ok()
         .and_then(|value| value.as_fixnum())
         .unwrap_or(1)
@@ -6835,11 +7042,11 @@ pub fn builtin_scroll_up(
         eval.invalidate_redisplay();
         return Ok(Value::NIL);
     }
-    let (obarray, owner, frames, buffers) = eval.variable_view_and_frames_buffers_mut();
+    let (obarray, owner, frames, mut buffers) = eval.variable_view_and_frames_buffer_view_mut();
     let lines = scroll_lines_in_state(
         VariableView::new(obarray, owner),
         frames,
-        buffers,
+        &mut buffers,
         arg.as_ref(),
         1,
     );
@@ -6877,11 +7084,11 @@ pub fn builtin_scroll_down(
         eval.invalidate_redisplay();
         return Ok(Value::NIL);
     }
-    let (obarray, owner, frames, buffers) = eval.variable_view_and_frames_buffers_mut();
+    let (obarray, owner, frames, mut buffers) = eval.variable_view_and_frames_buffer_view_mut();
     let lines = scroll_lines_in_state(
         VariableView::new(obarray, owner),
         frames,
-        buffers,
+        &mut buffers,
         arg.as_ref(),
         -1,
     );
@@ -7020,8 +7227,8 @@ fn scroll_by_screen_lines(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     lines: i64,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
     crate::emacs_core::xdisp::motion::paging::commit_scroll_plan(eval, |eval| {
         plan_scroll_by_screen_lines(eval, lines)
     })?;
@@ -7032,10 +7239,10 @@ fn plan_scroll_by_screen_lines(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     lines: i64,
 ) -> Result<Option<crate::window::WindowScrollUpdate>, neovm_value::error::Flow> {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let (fid, wid) = resolve_window_id_in_state(frames, buffers, None)?;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let body_height = window_body_height_impl(frames, buffers, vec![])
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let (fid, wid) = resolve_window_id_in_state(frames, &mut buffers, None)?;
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let body_height = window_body_height_impl(frames, &mut buffers, vec![])
         .ok()
         .and_then(|v| v.as_fixnum())
         .unwrap_or(24)
@@ -7198,8 +7405,8 @@ pub fn builtin_recenter(
         .get(buffer_id)
         .is_some_and(|buffer| buffer.long_line_optimizations_p())
     {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-        let body_height = window_body_height_impl(frames, buffers, vec![])
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+        let body_height = window_body_height_impl(frames, &mut buffers, vec![])
             .ok()
             .and_then(|value| value.as_fixnum())
             .unwrap_or(1)
@@ -7218,19 +7425,21 @@ pub fn builtin_recenter(
         let (pos, _) =
             neovm_edit::emacs_core::indent::vmotion_target(eval, buffer_id, pt, None, -iarg)?;
         {
-            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+            let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
             let Some(buf) = buffers.get(buffer_id) else {
                 return Ok(Value::NIL);
             };
             let pos_lisp = buf.emacs_byte_pos_to_lisp_char_pos(pos).as_i64();
             if let Some(clamped) =
-                clamped_window_position_in_state(frames, buffers, fid, wid, pos_lisp)
+                clamped_window_position_in_state(frames, &buffers, fid, wid, pos_lisp)
                 && let Some(window) = frames
                     .get_mut(fid)
                     .and_then(|frame| frame.find_window_mut(wid))
             {
                 crate::window::window_markers::set_window_start_with_marker(
-                    buffers, window, clamped,
+                    &mut buffers,
+                    window,
+                    clamped,
                 );
                 window.invalidate_window_end();
                 if let Window::Leaf {
@@ -7277,17 +7486,22 @@ pub fn builtin_recenter(
     };
 
     {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         let Some(buf) = buffers.get(buffer_id) else {
             return Ok(Value::NIL);
         };
         let pos_lisp = buf.emacs_byte_pos_to_lisp_char_pos(pos).as_i64();
-        if let Some(clamped) = clamped_window_position_in_state(frames, buffers, fid, wid, pos_lisp)
+        if let Some(clamped) =
+            clamped_window_position_in_state(frames, &buffers, fid, wid, pos_lisp)
             && let Some(window) = frames
                 .get_mut(fid)
                 .and_then(|frame| frame.find_window_mut(wid))
         {
-            crate::window::window_markers::set_window_start_with_marker(buffers, window, clamped);
+            crate::window::window_markers::set_window_start_with_marker(
+                &mut buffers,
+                window,
+                clamped,
+            );
             window.invalidate_window_end();
             if let Window::Leaf {
                 vscroll,
@@ -7363,9 +7577,9 @@ fn recenter_backward_origin(
     args: &[Value],
 ) -> Result<Option<RecenterOrigin>, Flow> {
     use crate::emacs_core::xdisp::motion::recenter::RecenterPlacement;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
 
-    let wh = window_body_height_impl(frames, buffers, vec![])
+    let wh = window_body_height_impl(frames, &mut buffers, vec![])
         .ok()
         .and_then(|v| v.as_fixnum())
         .unwrap_or(24);
@@ -7375,8 +7589,8 @@ fn recenter_backward_origin(
     let target_line = placement.canonical_rows(wh);
 
     // Compute new window-start by moving backward target_line lines from point.
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) = resolve_window_id_in_state(frames, buffers, None)?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let (fid, wid) = resolve_window_id_in_state(frames, &mut buffers, None)?;
     let (buffer_id, window_point) = match get_leaf(frames, fid, wid)? {
         Window::Leaf {
             buffer_id, point, ..
@@ -7425,7 +7639,7 @@ fn recenter_backward_origin(
 #[doc(hidden)]
 pub fn selected_frame_impl(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("selected-frame", &args, 0)?;
@@ -7487,7 +7701,7 @@ fn resolve_child_shared_minibuffer(
 #[cfg(test)]
 pub(crate) fn make_frame_plain(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     args: Vec<Value>,
 ) -> EvalResult {
     make_frame_plain_on_terminal(frames, buffers, args, 0, 800, 600)
@@ -7495,7 +7709,7 @@ pub(crate) fn make_frame_plain(
 
 pub(crate) fn make_frame_plain_on_terminal(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     args: Vec<Value>,
     terminal_id: u64,
     default_width: u32,
@@ -8015,8 +8229,8 @@ pub fn builtin_x_create_frame(
             .frame_manager()
             .selected_frame()
             .is_some_and(|frame| frame.effective_window_system().is_none());
-    let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
-    let result = x_create_frame_impl(frames, buffers, display_host, args);
+    let (frames, mut buffers, display_host) = eval.frame_manager_buffer_view_and_display_host_mut();
+    let result = x_create_frame_impl(frames, &mut buffers, display_host, args);
     eval.sync_keyboard_terminal_owner();
     if let Ok(value) = &result
         && let Some(id) = value.as_frame_id()
@@ -8096,7 +8310,7 @@ pub fn builtin_x_create_frame(
 /// the opening frame after its creation-time parameters have been installed.
 pub(crate) fn x_create_frame_impl(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     display_host: &mut Option<Box<dyn neovm_eval::emacs_core::eval::DisplayHost>>,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -8737,8 +8951,8 @@ pub(crate) fn delete_frame_owned(
             {
                 let _ = eval.frame_manager_mut().note_window_selected(selected_wid);
             }
-            let (frames, buffers) = eval.frame_manager_read_and_buffers_mut();
-            sync_selected_window_buffer_in_state(frames, buffers, replacement);
+            let (frames, mut buffers) = eval.frame_manager_read_and_buffer_view_mut();
+            sync_selected_window_buffer_in_state(frames, &mut buffers, replacement);
         }
     }
     super::frame::sync_gui_frame_focus_redirects(eval)?;
@@ -8752,8 +8966,8 @@ pub(crate) fn delete_frame_owned(
         FrameDeletion::Deleted {
             selected: SelectedFrameAfterDeletion::Replaced(replacement),
         } => {
-            let (frames, buffers) = eval.frame_manager_read_and_buffers_mut();
-            sync_selected_window_buffer_in_state(frames, buffers, replacement);
+            let (frames, mut buffers) = eval.frame_manager_read_and_buffer_view_mut();
+            sync_selected_window_buffer_in_state(frames, &mut buffers, replacement);
         }
         FrameDeletion::Deleted {
             selected: SelectedFrameAfterDeletion::Cleared,
@@ -8888,7 +9102,7 @@ pub fn builtin_window_right_divider_width(
 /// further in with a plain `error` about internal windows.
 pub(crate) fn check_window_id_in_state(
     frames: &mut FrameManager,
-    buffers: &mut BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
     arg: &Value,
     domain: WindowDomain,
 ) -> Result<(FrameId, WindowId), Flow> {
@@ -8910,10 +9124,10 @@ pub fn builtin_window_combination_limit(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("window-combination-limit", &args, 1)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let window = check_valid_window_in_state(frames, buffers, &args[0])?;
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
+    let window = check_valid_window_in_state(frames, &mut buffers, &args[0])?;
     let w = get_window(frames, window)?;
     match w.combination_limit() {
         Some(true) => Ok(Value::T),
@@ -8935,12 +9149,12 @@ pub fn builtin_set_window_combination_limit(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_args("set-window-combination-limit", &args, 2)?;
-    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let _ = ensure_selected_frame_id_in_state(frames, &mut buffers);
     // GNU spells this `CHECK_VALID_WINDOW (window)' too, so nil is rejected
     // rather than standing in for the selected window.
-    let (fid, wid) = check_window_id_in_state(frames, buffers, &args[0], WindowDomain::Valid)?;
+    let (fid, wid) = check_window_id_in_state(frames, &mut buffers, &args[0], WindowDomain::Valid)?;
     let limit = args[1].is_truthy();
     let frame = frames
         .get_mut(fid)
@@ -8968,11 +9182,11 @@ pub fn builtin_window_resize_apply(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-resize-apply", &args, 2)?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -9042,11 +9256,11 @@ pub fn builtin_window_resize_apply_total(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     expect_max_args("window-resize-apply-total", &args, 2)?;
     let fid = resolve_frame_id_in_state(
         frames,
-        buffers,
+        &mut buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;

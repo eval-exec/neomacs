@@ -3343,9 +3343,9 @@ fn bootstrap_runtime_cached_gui_surface_restores_window_system_surface() {
 
 fn assert_gnu_runtime_window_sequence_after_preload(eval: &mut Context) -> crate::window::WindowId {
     use crate::window::{SplitDirection, SplitPlacement};
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     let frame_id =
-        crate::emacs_core::window_cmds::seed_batch_startup_frame_in_state(frames, buffers);
+        crate::emacs_core::window_cmds::seed_batch_startup_frame_in_state(frames, &mut buffers);
     let frame = eval
         .frame_manager()
         .get(frame_id)
@@ -3797,7 +3797,7 @@ fn bootstrap_minibuffer_complete_and_exit_accepts_exact_must_match_input() {
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
     let minibuf_id = eval.edit.buffers.create_buffer(" *Minibuf-exact*");
     crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
-        &mut eval.edit.buffers,
+        &mut eval.buffer_manager_view_mut(),
         minibuf_id,
         &neovm_value::heap_types::LispString::from_utf8("Insert buffer: "),
         Some(&neovm_value::heap_types::LispString::from_utf8(

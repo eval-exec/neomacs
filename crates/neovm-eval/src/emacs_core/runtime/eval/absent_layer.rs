@@ -752,11 +752,18 @@ macro_rules! eval_absent_layer_slots {
                 absent_layer_panic("ABSENT-LAYER display::display_query.frame_tty_target (no unit path: RowsObservation TTY admission only)");
             }
 
-            pub(crate) fn display_window_ensure_selected_frame_id(frames: &mut FrameManager, buffers: &mut BufferManager) -> FrameId {
+            pub(crate) fn display_window_ensure_selected_frame_id(
+                frames: &mut FrameManager,
+                buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
+            ) -> FrameId {
                 absent_layer_panic("ABSENT-LAYER display::display_window.ensure_selected_frame_id");
             }
 
-            pub(crate) fn display_window_remember_selected_window_point(frames: &mut FrameManager, buffers: &mut BufferManager, frame: FrameId) {
+            pub(crate) fn display_window_remember_selected_window_point(
+                frames: &mut FrameManager,
+                buffers: &mut neovm_edit::buffer::BufferManagerMut<'_>,
+                frame: FrameId,
+            ) {
                 absent_layer_panic("ABSENT-LAYER display::display_window.remember_selected_window_point");
             }
 

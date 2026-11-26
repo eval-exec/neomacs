@@ -1034,8 +1034,9 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     let mini_source_before = crate::emacs_core::eval::gnu_redisplay_hooks_enabled().then(||
         shared.edit.buffers.get(minibuf_id).map(|buffer| (buffer.chars_modified_tick(), buffer.props_modified_tick()))
     ).flatten();
+    let mut buffer_view = shared.buffer_manager_view_mut();
     super::install_minibuffer_buffer_contents(
-        &mut shared.edit.buffers,
+        &mut buffer_view,
         minibuf_id,
         &prompt,
         initial_input.as_ref(),

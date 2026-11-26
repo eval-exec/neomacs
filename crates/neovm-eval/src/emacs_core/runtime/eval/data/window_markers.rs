@@ -16,8 +16,8 @@ use super::window_state::{
     WindowTree,
 };
 use neovm_edit::buffer::{
-    Buffer, BufferId, BufferManager, CharPos0, EmacsBytePos, InsertionType, LispCharPos1,
-    TextPositionAnchor,
+    Buffer, BufferId, BufferManager, BufferManagerMut, CharPos0, EmacsBytePos, InsertionType,
+    LispCharPos1, TextPositionAnchor,
 };
 use neovm_value::value::Value;
 
@@ -84,7 +84,7 @@ fn marker_lisp_position(marker: Value, buffer_id: BufferId) -> Option<LispCharPo
 /// Allocate one internal marker and retain its Lisp handle as the precise-GC
 /// root owned by the live window. The marker chain itself is weak.
 fn create_rooted_marker_at_anchor(
-    bm: &mut BufferManager,
+    bm: &mut BufferManagerMut<'_>,
     buffer_id: BufferId,
     position: TextPositionAnchor,
     insertion_type: InsertionType,
@@ -110,7 +110,7 @@ fn create_rooted_marker_at_anchor(
 /// The buffer is read from the window itself so marker ownership cannot be
 /// initialized against a different buffer. Reattaching replaces and unchains
 /// the old set as one lifecycle transition.
-pub fn attach_window_position_markers(bm: &mut BufferManager, window: &mut Window) {
+pub fn attach_window_position_markers(bm: &mut BufferManagerMut<'_>, window: &mut Window) {
     let Window::Leaf {
         buffer_id,
         window_start,
@@ -142,7 +142,7 @@ pub fn attach_window_position_markers(bm: &mut BufferManager, window: &mut Windo
     remove_attached_markers(bm, old.attached());
 }
 
-pub(crate) fn unchain_window_markers(bm: &mut BufferManager, window: &mut Window) {
+pub(crate) fn unchain_window_markers(bm: &mut BufferManagerMut<'_>, window: &mut Window) {
     let Window::Leaf {
         position_markers, ..
     } = window
@@ -154,7 +154,10 @@ pub(crate) fn unchain_window_markers(bm: &mut BufferManager, window: &mut Window
     remove_attached_markers(bm, markers);
 }
 
-fn remove_attached_markers(bm: &mut BufferManager, markers: Option<AttachedWindowPositionMarkers>) {
+fn remove_attached_markers(
+    bm: &mut BufferManagerMut<'_>,
+    markers: Option<AttachedWindowPositionMarkers>,
+) {
     if let Some(markers) = markers {
         bm.remove_marker(markers.start().raw());
         bm.remove_marker(markers.point().raw());
@@ -163,7 +166,7 @@ fn remove_attached_markers(bm: &mut BufferManager, markers: Option<AttachedWindo
 }
 
 fn move_marker(
-    bm: &mut BufferManager,
+    bm: &mut BufferManagerMut<'_>,
     buffer_id: BufferId,
     marker: Option<neovm_edit::buffer::MarkerRef>,
     lisp_position: LispCharPos1,
@@ -174,7 +177,7 @@ fn move_marker(
 }
 
 pub fn set_window_start_with_marker(
-    bm: &mut BufferManager,
+    bm: &mut BufferManagerMut<'_>,
     window: &mut Window,
     lisp_position: LispCharPos1,
 ) {
@@ -199,7 +202,7 @@ pub fn set_window_start_with_marker(
 }
 
 pub fn set_window_point_with_marker(
-    bm: &mut BufferManager,
+    bm: &mut BufferManagerMut<'_>,
     window: &mut Window,
     lisp_position: LispCharPos1,
 ) {
@@ -224,7 +227,7 @@ pub fn set_window_point_with_marker(
 }
 
 pub fn set_window_old_point_with_marker(
-    bm: &mut BufferManager,
+    bm: &mut BufferManagerMut<'_>,
     window: &mut Window,
     lisp_position: LispCharPos1,
 ) {
@@ -301,7 +304,7 @@ fn sync_leaf(window: &mut Window, edited_buffer_id: BufferId) {
 /// beyond the lifetime of a live-tree borrow (notably window configurations)
 /// must cross this boundary instead of retaining copied marker handles.
 pub fn clone_window_tree_with_independent_position_markers(
-    bm: &mut BufferManager,
+    bm: &mut BufferManagerMut<'_>,
     source: &WindowTree,
 ) -> WindowTree {
     let mut cloned = source.clone();
@@ -320,7 +323,7 @@ pub fn clone_window_tree_with_independent_position_markers(
 /// window, which GNU keeps in the frame's tree but neomacs still holds beside
 /// it as a lone leaf.
 pub fn clone_window_leaf_with_independent_position_markers(
-    bm: &mut BufferManager,
+    bm: &mut BufferManagerMut<'_>,
     source: &Window,
 ) -> Window {
     let mut cloned = source.clone();
@@ -368,7 +371,7 @@ fn detach_cloned_leaf_marker_handles(window: &mut Window) {
     *position_markers = WindowPositionMarkerState::Detached;
 }
 
-fn attach_cloned_leaf_independent_markers(window: &mut Window, bm: &mut BufferManager) {
+fn attach_cloned_leaf_independent_markers(window: &mut Window, bm: &mut BufferManagerMut<'_>) {
     let Window::Leaf { buffer_id, .. } = window else {
         return;
     };
@@ -385,7 +388,7 @@ fn attach_cloned_leaf_independent_markers(window: &mut Window, bm: &mut BufferMa
 /// before publishing the frame. That construction seam mirrors GNU
 /// `make_window`, where a live window never escapes without all three marker
 /// objects.
-pub fn attach_frame_window_position_markers(bm: &mut BufferManager, frame: &mut Frame) {
+pub fn attach_frame_window_position_markers(bm: &mut BufferManagerMut<'_>, frame: &mut Frame) {
     frame.tree_mut().for_each_leaf_mut(|leaf| {
         attach_window_position_markers(bm, leaf);
     });

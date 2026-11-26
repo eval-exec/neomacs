@@ -52,9 +52,10 @@ fn vm_window_chrome_height_builtins_use_last_redisplay_snapshot() {
                              (window-tab-line-height))))"#,
             |eval| {
                 let fid = {
-                    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+                    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
                     crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
-                        frames, buffers,
+                        frames,
+                        &mut buffers,
                     )
                 };
                 let wid = eval
@@ -97,9 +98,10 @@ fn vm_interactive_minibuffer_query_builtins_use_shared_runtime_state() {
                  (null (cancel-kbd-macro-events)))"#,
             |eval| {
                 let fid = {
-                    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+                    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
                     crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
-                        frames, buffers,
+                        frames,
+                        &mut buffers,
                     )
                 };
                 let minibuffer_buffer_id = {
@@ -356,7 +358,7 @@ fn vm_minibuffer_builtins_use_shared_runtime_state() {
             |eval| {
                 let minibuf_id = eval.buffer_manager_mut().create_buffer(" *Minibuf-1*");
                 crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
-                    eval.buffer_manager_mut(),
+                    &mut eval.buffer_manager_view_mut(),
                     minibuf_id,
                     &neovm_value::heap_types::LispString::from_utf8("Prompt: "),
                     Some(&neovm_value::heap_types::LispString::from_utf8("vm-mini")),
@@ -402,7 +404,7 @@ fn vm_abort_minibuffers_throws_a_minibuffer_quit_thunk_to_exit() {
             |eval| {
                 let minibuf_id = eval.buffer_manager_mut().create_buffer(" *Minibuf-1*");
                 crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
-                    eval.buffer_manager_mut(),
+                    &mut eval.buffer_manager_view_mut(),
                     minibuf_id,
                     &neovm_value::heap_types::LispString::from_utf8("Prompt: "),
                     Some(&neovm_value::heap_types::LispString::from_utf8("vm-mini")),

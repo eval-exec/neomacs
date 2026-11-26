@@ -1854,7 +1854,7 @@ fn test_format_mode_line_percent_specs_use_window_buffer_and_completed_window_en
         .expect("frame")
         .selected_window;
     {
-        let (pf_frames, pf_buffers) = eval.frame_manager_and_buffers_mut();
+        let (pf_frames, pf_buffers) = eval.frame_manager_and_buffer_view_mut();
         let target = pf_buffers.get(target_id).expect("target buffer");
         let frame = pf_frames.get_mut(frame_id).expect("frame");
         let window = frame

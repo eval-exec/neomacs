@@ -40,7 +40,7 @@ fn inserting_before_a_displayed_window_advances_its_position_caches() {
         .root_window()
         .id();
     {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         let frame = frames.get_mut(frame_id).expect("frame");
         {
             let window = frame.find_window_mut(window_id).expect("root window");
@@ -57,7 +57,7 @@ fn inserting_before_a_displayed_window_advances_its_position_caches() {
             *point = LispCharPos1::from_one_based_usize(5);
             *old_point = LispCharPos1::from_one_based_usize(5);
         }
-        attach_frame_window_position_markers(buffers, frame);
+        attach_frame_window_position_markers(&mut buffers, frame);
     }
 
     // This Lisp edit goes through `signal_after_change` and therefore

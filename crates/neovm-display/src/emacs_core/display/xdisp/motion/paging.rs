@@ -326,9 +326,11 @@ impl MeasurementTarget {
 
 fn synchronize_selected_point(eval: &mut Context) {
     if let Some(frame) = eval.frame_manager().selected_frame().map(|frame| frame.id) {
-        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
         crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-            frames, buffers, frame,
+            frames,
+            &mut buffers,
+            frame,
         );
     }
 }

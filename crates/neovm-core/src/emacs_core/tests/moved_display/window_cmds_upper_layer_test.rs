@@ -1996,14 +1996,14 @@ fn consecutive_scroll_up_before_redisplay_advances_from_window_start() {
             buffer.point_max_emacs_byte_pos(),
         )
     };
-    let (wm_frames, wm_buffers) = ev.frame_manager_and_buffers_mut();
+    let (wm_frames, mut wm_buffers) = ev.frame_manager_and_buffer_view_mut();
     let window = wm_frames
         .get_mut(frame_id)
         .expect("scroll frame")
         .find_window_mut(window_id)
         .expect("scroll window");
-    crate::window::window_markers::set_window_start_with_marker(wm_buffers, window, start);
-    crate::window::window_markers::set_window_point_with_marker(wm_buffers, window, point);
+    crate::window::window_markers::set_window_start_with_marker(&mut wm_buffers, window, start);
+    crate::window::window_markers::set_window_point_with_marker(&mut wm_buffers, window, point);
     window.set_window_end_from_positions(
         buffer_z_char,
         buffer_z_byte,

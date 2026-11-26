@@ -16,8 +16,9 @@ pub(super) fn activate(
     minibuf_id: crate::buffer::BufferId,
     entry_level: neovm_value::minibuffer_state::MinibufferEntryLevel,
 ) -> Option<ActiveMinibufferWindowState> {
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
-    let caller = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, buffers);
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
+    let caller =
+        crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, &mut buffers);
     let frame = eval.frame_manager().get(caller)?;
     let old = frame.selected_window;
     let window = frame.minibuffer_window?;
@@ -30,11 +31,11 @@ pub(super) fn activate(
         eval.gnu_mark_selection(Some(old), window, true);
     }
     publish_tty_top_change(eval, owner);
-    let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
-        eval.frame_manager_buffers_and_minibuffer_selection_mut();
+    let (frames, mut buffers, minibuffer_selected_window, active_minibuffer_window) =
+        eval.frame_manager_buffer_view_and_minibuffer_selection_mut();
     let saved = activate_minibuffer_window_in_state(
         frames,
-        buffers,
+        &mut buffers,
         minibuffer_selected_window,
         active_minibuffer_window,
         minibuf_id,
@@ -199,21 +200,21 @@ pub(super) fn restore_buffer(
     saved: ActiveMinibufferWindowState,
 ) -> MinibufferWindowRestoreEffect {
     let mut effect = MinibufferWindowRestoreEffect::NoBufferRestored;
-    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let (frames, mut buffers) = eval.frame_manager_and_buffer_view_mut();
     if let Some(window) = frames
         .get_mut(saved.minibuffer_frame.0)
         .and_then(|frame| frame.find_window_mut(saved.minibuffer_window_id))
         && let Some(buffer) = saved.previous_minibuffer_buffer
     {
         window.set_buffer(buffer);
-        crate::window::window_markers::attach_window_position_markers(buffers, window);
+        crate::window::window_markers::attach_window_position_markers(&mut buffers, window);
         crate::window::window_markers::set_window_start_with_marker(
-            buffers,
+            &mut buffers,
             window,
             saved.previous_minibuffer_window_start,
         );
         crate::window::window_markers::set_window_point_with_marker(
-            buffers,
+            &mut buffers,
             window,
             saved.previous_minibuffer_point,
         );

@@ -1104,26 +1104,6 @@ impl Context {
         &mut self.coding_systems
     }
 
-    /// Split borrow: the frame manager and the buffer manager, mutably.
-    ///
-    /// One method borrows the whole Context; callers that need both managers
-    /// at once (the display layer's window/frame edits) cannot split fields
-    /// through separate getters.  This returns the two disjoint borrows that
-    /// field syntax used to provide.
-    #[doc(hidden)]
-    #[inline]
-    pub fn frame_manager_and_buffers_mut(&mut self) -> (&mut FrameManager, &mut BufferManager) {
-        (&mut self.frames, &mut self.edit.buffers)
-    }
-
-    /// Split borrow: the frame manager by shared reference and the buffer
-    /// manager mutably (window-buffer sync reads frames, writes buffers).
-    #[doc(hidden)]
-    #[inline]
-    pub fn frame_manager_read_and_buffers_mut(&mut self) -> (&FrameManager, &mut BufferManager) {
-        (&self.frames, &mut self.edit.buffers)
-    }
-
     /// Split borrow: the process manager mutably and the thread manager by
     /// shared reference (status publication reads the current thread).
     #[doc(hidden)]
@@ -1264,53 +1244,6 @@ impl Context {
         )
     }
 
-    /// Split borrow: the frame manager and buffer manager mutably, and the two
-    /// minibuffer selection slots mutably.
-    #[doc(hidden)]
-    #[inline]
-    pub fn frame_manager_buffers_and_minibuffer_selection_mut(
-        &mut self,
-    ) -> (
-        &mut FrameManager,
-        &mut BufferManager,
-        &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
-        &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
-    ) {
-        (
-            &mut self.frames,
-            &mut self.edit.buffers,
-            &mut self.minibuffer_selected_window,
-            &mut self.active_minibuffer_window,
-        )
-    }
-
-    /// Same split as [`Self::frame_manager_buffers_and_minibuffer_selection_mut`],
-    /// passed to `body` so the borrows end when `body` returns.
-    ///
-    /// Test builds record those borrows on the minibuffer manager for the
-    /// duration of `body`, including unwind. A minibuffer mode hook reads
-    /// that flag and must not run while it is set. The flag is a `Cell` on
-    /// the manager, not a thread-local.
-    #[doc(hidden)]
-    pub fn with_frame_buffers_and_minibuffer_selection_mut<R>(
-        &mut self,
-        body: impl FnOnce(
-            &mut FrameManager,
-            &mut BufferManager,
-            &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
-            &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
-        ) -> R,
-    ) -> R {
-        #[cfg(any(test, feature = "test-support"))]
-        let _guard = MinibufferFieldBorrowGuard::enter(&self.minibuffers.field_borrows_live);
-        body(
-            &mut self.frames,
-            &mut self.edit.buffers,
-            &mut self.minibuffer_selected_window,
-            &mut self.active_minibuffer_window,
-        )
-    }
-
     /// Set a runtime variable binding by symbol id through the bounded
     /// value/forwarder path without exposing `&mut BufferManager` or raw
     /// authority parts to callers outside `neovm-eval`.
@@ -1343,24 +1276,6 @@ impl Context {
         &mut self,
     ) -> (&FrameManager, &mut Option<Box<dyn DisplayHost>>) {
         (&self.frames, &mut self.display_host)
-    }
-
-    /// Split borrow: the frame manager, buffer manager and display host, all
-    /// mutably.
-    #[doc(hidden)]
-    #[inline]
-    pub fn frame_manager_buffers_and_display_host_mut(
-        &mut self,
-    ) -> (
-        &mut FrameManager,
-        &mut BufferManager,
-        &mut Option<Box<dyn DisplayHost>>,
-    ) {
-        (
-            &mut self.frames,
-            &mut self.edit.buffers,
-            &mut self.display_host,
-        )
     }
 
     /// Split borrow: the process manager and the coding-system manager, both
@@ -1444,37 +1359,6 @@ impl Context {
             neovm_edit::buffer::BufferManagerMut::new(&mut self.edit.buffers),
             &self.processes,
         )
-    }
-
-    /// Split borrow for variable reads that also scroll a window: the obarray
-    /// and owner bindings by shared reference, the frame and buffer managers
-    /// mutably.
-    #[doc(hidden)]
-    #[inline]
-    pub fn variable_view_and_frames_buffers_mut(
-        &mut self,
-    ) -> (
-        &Obarray,
-        &owner_bindings::OwnerSlot,
-        &mut FrameManager,
-        &mut BufferManager,
-    ) {
-        (
-            &self.obarray,
-            &self.owner,
-            &mut self.frames,
-            &mut self.edit.buffers,
-        )
-    }
-
-    /// Split borrow: the frame manager and buffer manager mutably, and the
-    /// minibuffer manager by shared reference.
-    #[doc(hidden)]
-    #[inline]
-    pub fn frame_manager_buffers_and_minibuffers_mut(
-        &mut self,
-    ) -> (&mut FrameManager, &mut BufferManager, &MinibufferManager) {
-        (&mut self.frames, &mut self.edit.buffers, &self.minibuffers)
     }
 
     // --- Non-swappable BufferManagerMut split-borrow capabilities (rt A3 2c (d)) ---

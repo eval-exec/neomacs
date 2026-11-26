@@ -93,11 +93,11 @@ fn run_teardown_and_collect(
 
     // Activate the minibuffer window so we have a saved state to restore.
     let saved = {
-        let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
-            ev.frame_manager_buffers_and_minibuffer_selection_mut();
+        let (frames, mut buffers, minibuffer_selected_window, active_minibuffer_window) =
+            ev.frame_manager_buffer_view_and_minibuffer_selection_mut();
         activate_minibuffer_window_in_state(
             frames,
-            buffers,
+            &mut buffers,
             minibuffer_selected_window,
             active_minibuffer_window,
             minibuf_id,

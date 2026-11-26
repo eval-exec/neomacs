@@ -8332,9 +8332,10 @@ impl<'a> Vm<'a> {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     #[doc(hidden)]
     pub fn ensure_selected_frame_id(&mut self) -> FrameId {
+        let mut buffers = neovm_edit::buffer::BufferManagerMut::new(&mut self.ctx.edit.buffers);
         crate::emacs_core::eval::display_query_hooks::ensure_selected_frame_id(
             &mut self.ctx.frames,
-            &mut self.ctx.edit.buffers,
+            &mut buffers,
         )
     }
 
