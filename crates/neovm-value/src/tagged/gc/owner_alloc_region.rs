@@ -239,7 +239,7 @@ impl super::TaggedHeap {
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn jit_float_window_for_test(&self) -> (usize, usize) {
-        (self.jit.float_cur.get(), self.jit.float_lim.get())
+        (self.jit.float_cur(), self.jit.float_lim())
     }
 }
 

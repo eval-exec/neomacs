@@ -354,10 +354,10 @@ fn every_open_region_fact_refuses_publication_before_moving_owner_facts() {
                     source: ArenaRunSource::PageTail,
                 }
             }
-            2 => state.jit.cons_cur.set(1),
-            3 => state.jit.cons_lim.set(1),
-            4 => state.jit.float_cur.set(1),
-            5 => state.jit.float_lim.set(1),
+            2 => state.set_synthetic_jit_cursors_for_test(1, 0, 0, 0),
+            3 => state.set_synthetic_jit_cursors_for_test(0, 1, 0, 0),
+            4 => state.set_synthetic_jit_cursors_for_test(0, 0, 1, 0),
+            5 => state.set_synthetic_jit_cursors_for_test(0, 0, 0, 1),
             6 => state.hot.black_cons_region_start = Some(1),
             _ => state.hot.black_float_region_start = Some(1),
         }
@@ -369,10 +369,7 @@ fn every_open_region_fact_refuses_publication_before_moving_owner_facts() {
         assert!(state.hot.remembered_cache.iter().all(|entry| *entry == 19));
         state.regions.cons = ConsRegionSource::Closed;
         state.regions.float = FloatRegionSource::Closed;
-        state.jit.cons_cur.set(0);
-        state.jit.cons_lim.set(0);
-        state.jit.float_cur.set(0);
-        state.jit.float_lim.set(0);
+        state.set_synthetic_jit_cursors_for_test(0, 0, 0, 0);
         state.hot.black_cons_region_start = None;
         state.hot.black_float_region_start = None;
         let image = publish_owner_for_test(&mut state).unwrap();

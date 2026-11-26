@@ -2574,7 +2574,7 @@ impl TaggedHeap {
             // never reserved from its bump tail and the open region's unused
             // tail. Neither is an initialized, handed-out cons.
             if ConsBlock::index_of_ptr(ptr) >= block.next_index()
-                || (self.jit.cons_cur.get()..self.jit.cons_lim.get()).contains(&(ptr as usize))
+                || (self.jit.cons_cur()..self.jit.cons_lim()).contains(&(ptr as usize))
             {
                 return false;
             }

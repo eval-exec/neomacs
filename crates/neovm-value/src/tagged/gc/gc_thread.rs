@@ -2573,7 +2573,7 @@ fn generation_only_cons_is_old(heap: &TaggedHeap, owner: TaggedValue) -> bool {
     if heap.region_book.no_old_cons_block_contains(addr) {
         return false;
     }
-    let cur = heap.jit.cons_cur.get();
+    let cur = heap.jit.cons_cur();
     let ptr = addr as *const ConsCell;
     let base = ConsBlock::block_base_for_ptr(ptr);
     // An open region's cursor belongs to a live owned block, even when it

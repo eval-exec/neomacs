@@ -1,0 +1,43 @@
+error[E0616]: field `cons_cur` of struct `JitHeapState` is private
+  --> tests/heap_capability_ui/b13_jit_state_fields_private.rs:47:9
+   |
+47 |     jit.cons_cur.set(0xdead_beef);
+   |         ^^^^^^^^ private field
+   |
+help: a method `cons_cur` also exists, call it with parentheses
+   |
+47 |     jit.cons_cur().set(0xdead_beef);
+   |                 ++
+
+error[E0616]: field `cons_lim` of struct `JitHeapState` is private
+  --> tests/heap_capability_ui/b13_jit_state_fields_private.rs:48:9
+   |
+48 |     jit.cons_lim.set(0xdead_bff0);
+   |         ^^^^^^^^ private field
+   |
+help: a method `cons_lim` also exists, call it with parentheses
+   |
+48 |     jit.cons_lim().set(0xdead_bff0);
+   |                 ++
+
+error[E0616]: field `float_cur` of struct `JitHeapState` is private
+  --> tests/heap_capability_ui/b13_jit_state_fields_private.rs:49:9
+   |
+49 |     jit.float_cur.set(0xdead_beef);
+   |         ^^^^^^^^^ private field
+   |
+help: a method `float_cur` also exists, call it with parentheses
+   |
+49 |     jit.float_cur().set(0xdead_beef);
+   |                  ++
+
+error[E0616]: field `float_lim` of struct `JitHeapState` is private
+  --> tests/heap_capability_ui/b13_jit_state_fields_private.rs:50:9
+   |
+50 |     jit.float_lim.set(0xdead_bff0);
+   |         ^^^^^^^^^ private field
+   |
+help: a method `float_lim` also exists, call it with parentheses
+   |
+50 |     jit.float_lim().set(0xdead_bff0);
+   |                  ++

@@ -86,7 +86,7 @@ fn exhaust_tail(heap: &mut TaggedHeap) -> Vec<TaggedValue> {
     let cells: Vec<_> = (0..CONS_REGION_MAX_CELLS)
         .map(|index| heap.alloc_cons(TaggedValue::fixnum(index as i64), TaggedValue::NIL))
         .collect();
-    assert_eq!(heap.jit.cons_cur.get(), heap.jit.cons_lim.get());
+    assert_eq!(heap.jit.cons_cur(), heap.jit.cons_lim());
     assert!(
         heap.region_book
             .no_old_cons_block_contains(address(cells[0]))
@@ -178,7 +178,7 @@ fn recording_cache_same_block_tail_grants_keep_canonical_capture_complete() {
 }
 
 fn assert_loan_refusal_refunds_cached_grant(heap: &mut TaggedHeap, prior: &[TaggedValue]) {
-    assert_eq!(heap.jit.cons_cur.get(), heap.jit.cons_lim.get());
+    assert_eq!(heap.jit.cons_cur(), heap.jit.cons_lim());
     let block = base(prior[0]);
     assert!(RegionBook::recorded_cons_age(heap.region_book.cons_block_and_color, block).is_some());
     let before = counts(heap);
@@ -334,8 +334,8 @@ fn recording_cache_black_grants_log_only_handed_prefixes_and_refund_marks() {
         RegionBook::recorded_cons_age(heap.region_book.cons_block_and_color, block),
         Some(ConsCarveAge::NoOldOwners)
     );
-    let cur = heap.jit.cons_cur.get();
-    let lim = heap.jit.cons_lim.get();
+    let cur = heap.jit.cons_cur();
+    let lim = heap.jit.cons_lim();
     assert!(cur < lim);
     let marked = |heap: &TaggedHeap, addr: usize| {
         let index = heap.cons_block_index_by_base[&block];
