@@ -59,12 +59,84 @@ struct Editor {
 fn gnu() -> Editor {
     Editor {
         name: "GNU",
-        program: PathBuf::from("emacs"),
+        program: neomacs_tui_tests::oracle::gnu_oracle_program(),
         extra_args: vec![
             "-no-comp-spawn".to_string(),
             "--eval=(progn(set'native-comp-jit-compilation())(set'native-comp-async-report-warnings-errors'silent))".to_string(),
         ],
     }
+}
+
+/// Ensure `term` has a loadable terminfo description for both GNU and Neomacs.
+///
+/// macOS ships ncurses 5.7 terminfo which omits `alacritty` and `contour` (the
+/// two `TERM` values in `xterm--auto-xt-mouse-allowed-types`). When the host
+/// database lacks `term`, compile an isolated alias from `xterm-256color` via
+/// `tic` so both editors exercise the real `TERM=alacritty` startup path.
+///
+/// Faithfulness: `infocmp -d xterm-256color alacritty` differs only on status
+/// line (`hs`/`tsl`/`fsl`/`dsl`), `pairs` (65536 vs 32767), `blink`, `flash`,
+/// `nel`, `kmous` (`\E[<` vs `\E[M`), margins (`mgc`/`smgl*`/`smgr*`), and
+/// keypad aliases (`ka1`/`ka3`/`kb2`/`kbeg`/`kc1`/`kc3`). None of those are
+/// read by `startup_terminal_initialization`: `term-file-aliases` (`faces.el`),
+/// `xterm--auto-xt-mouse-allowed-types` (`xterm.el`), and `xt-mouse.el` key on
+/// the `TERM` name and push hardcoded xterm mouse sequences, while the `init_tty`
+/// capabilities (`cup`, `clear`, `sgr0`, `colors`, `setaf`/`setab`, `op`,
+/// `smcup`/`rmcup`, `smkx`/`rmkx`, `cnorm`/`civis`) are identical.
+fn ensure_terminfo_dir(term: &str, temp_root: &Path) -> Option<PathBuf> {
+    let has_native = std::process::Command::new("infocmp")
+        .arg(term)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if has_native {
+        return None;
+    }
+
+    let base = std::process::Command::new("infocmp")
+        .arg("xterm-256color")
+        .output()
+        .expect("run `infocmp xterm-256color` to synthesize missing terminfo entry");
+    assert!(
+        base.status.success(),
+        "infocmp xterm-256color failed: {}",
+        String::from_utf8_lossy(&base.stderr)
+    );
+    let desc = String::from_utf8(base.stdout).expect("xterm-256color terminfo UTF-8");
+    let mut rewritten = String::with_capacity(desc.len() + term.len() + 64);
+    let mut replaced_header = false;
+    for line in desc.lines() {
+        if !replaced_header && !line.is_empty() && !line.starts_with('#') && !line.starts_with('\t')
+        {
+            rewritten.push_str(&format!("{term}|{term} test alias of xterm-256color,\n"));
+            replaced_header = true;
+        } else {
+            rewritten.push_str(line);
+            rewritten.push('\n');
+        }
+    }
+    assert!(
+        replaced_header,
+        "failed to locate terminfo header line in `infocmp xterm-256color`"
+    );
+
+    let terminfo_dir = temp_root.join("terminfo");
+    std::fs::create_dir_all(&terminfo_dir).expect("create temp terminfo directory");
+    let ti_path = temp_root.join(format!("{term}.ti"));
+    std::fs::write(&ti_path, rewritten).expect("write synthesized terminfo source");
+    let compiled = std::process::Command::new("tic")
+        .arg("-o")
+        .arg(&terminfo_dir)
+        .arg(&ti_path)
+        .output()
+        .expect("run `tic` to compile synthesized terminfo entry");
+    assert!(
+        compiled.status.success(),
+        "tic failed compiling synthesized {term} entry: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    Some(terminfo_dir)
 }
 
 fn neomacs() -> Editor {
@@ -87,6 +159,8 @@ struct Startup {
     exited: bool,
     /// What `-l` recorded, or `None` when `-l` never ran.
     facts: Option<String>,
+    /// Which terminfo database satisfied `TERM` (`"native"` or synthesized).
+    terminfo_source: &'static str,
 }
 
 /// Run `EDITOR -nw -Q -l PROBE` on a real pty of `term` and collect what it did.
@@ -114,6 +188,12 @@ fn run_startup(editor: &Editor, term: &str, budget: Duration) -> Startup {
         .env("TMPDIR", home.path())
         .env("NEOMACS_STARTUP_PROBE_OUT", &facts_path)
         .env_remove("COLORTERM");
+    let terminfo_source = if let Some(terminfo_dir) = ensure_terminfo_dir(term, home.path()) {
+        launch = launch.env("TERMINFO", terminfo_dir);
+        "synthesized(xterm-256color)"
+    } else {
+        "native"
+    };
     let session_name = format!("{}-{term}", editor.name);
     let mut session = TuiSession::spawn_launch_on_terminal(
         launch,
@@ -125,6 +205,7 @@ fn run_startup(editor: &Editor, term: &str, budget: Duration) -> Startup {
     Startup {
         exited,
         facts: read_facts(&facts_path),
+        terminfo_source,
     }
 }
 
@@ -132,27 +213,71 @@ fn read_facts(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok().filter(|s| !s.is_empty())
 }
 
+#[test]
+fn gnu_editor_uses_attested_oracle_program() {
+    let editor = gnu();
+    let expected = neomacs_tui_tests::oracle::gnu_oracle_program();
+    assert_eq!(
+        editor.program, expected,
+        "startup_terminal_initialization must run the attested GNU oracle, not a raw PATH lookup"
+    );
+    assert!(
+        editor.program.is_absolute(),
+        "attested GNU oracle program must resolve to an absolute path, got {}",
+        editor.program.display()
+    );
+    if let Some(forced) = std::env::var_os("NEOVM_FORCE_ORACLE_PATH") {
+        let canonical_forced =
+            std::fs::canonicalize(&forced).unwrap_or_else(|_| PathBuf::from(&forced));
+        let canonical_actual =
+            std::fs::canonicalize(&editor.program).unwrap_or_else(|_| editor.program.clone());
+        assert_eq!(
+            canonical_actual, canonical_forced,
+            "GNU editor program must honor NEOVM_FORCE_ORACLE_PATH rather than substituting PATH emacs"
+        );
+    }
+    assert!(
+        !neomacs_tui_tests::oracle::gnu_oracle_stamp().is_empty(),
+        "attested GNU oracle stamp must be non-empty"
+    );
+}
+
 /// The gate: on every TERM here, `-l` must run, and it must record what GNU
 /// records.
 #[test]
 fn startup_runs_dash_l_on_every_terminal_gnu_does() {
     let gnu_editor = gnu();
+    let expected_oracle = neomacs_tui_tests::oracle::gnu_oracle_program();
+    assert_eq!(
+        gnu_editor.program, expected_oracle,
+        "startup_runs_dash_l_on_every_terminal_gnu_does must run the attested GNU oracle"
+    );
+    let oracle_stamp = neomacs_tui_tests::oracle::gnu_oracle_stamp();
     let neomacs_editor = neomacs();
     let budget = Duration::from_secs(120);
-    let mut report = Vec::new();
+    let mut report = vec![format!(
+        "oracle: {} ({})",
+        gnu_editor.program.display(),
+        oracle_stamp
+    )];
 
     for (term, auto_mouse) in TERMINALS {
         let gnu_run = run_startup(&gnu_editor, term, budget);
         let gnu_facts = gnu_run.facts.unwrap_or_else(|| {
-            panic!("GNU itself never ran -l on TERM={term}; the harness is wrong, not neomacs")
+            panic!(
+                "GNU itself ({}) never ran -l on TERM={term} (terminfo={}); the harness is wrong, not neomacs",
+                gnu_editor.program.display(),
+                gnu_run.terminfo_source
+            )
         });
         assert!(gnu_run.exited, "GNU did not exit on TERM={term}");
 
         let run = run_startup(&neomacs_editor, term, budget);
         let facts = run.facts.unwrap_or_else(|| {
             panic!(
-                "neomacs swallowed -l on TERM={term} (auto xterm-mouse: {auto_mouse}); \
-                 startup aborted before command-line-1 processed the arguments. GNU recorded:\n{gnu_facts}"
+                "neomacs swallowed -l on TERM={term} (terminfo={}, auto xterm-mouse: {auto_mouse}); \
+                 startup aborted before command-line-1 processed the arguments. GNU recorded:\n{gnu_facts}",
+                run.terminfo_source
             )
         });
         assert!(
@@ -163,12 +288,14 @@ fn startup_runs_dash_l_on_every_terminal_gnu_does() {
         let divergences = compare(&gnu_facts, &facts);
         assert!(
             divergences.is_empty(),
-            "TERM={term}: {} startup fact(s) differ from GNU:\n{}",
+            "TERM={term} (terminfo={}): {} startup fact(s) differ from GNU:\n{}",
+            run.terminfo_source,
             divergences.len(),
             divergences.join("\n")
         );
         report.push(format!(
-            "TERM={term}: -l ran, {} facts match GNU",
+            "TERM={term} [terminfo={}]: -l ran, {} facts match GNU",
+            run.terminfo_source,
             facts.lines().count()
         ));
     }
