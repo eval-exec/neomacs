@@ -134,10 +134,9 @@ fn canonical_tty_rows_lease_case(context: &mut Context) -> (usize, usize, Vec<St
         .map(|line| format!("{line:04} numeric tty row\n"))
         .collect();
     context
-        .buffer_manager_mut()
-        .get_mut(source)
-        .unwrap()
-        .insert(&text);
+        .buffer_manager_view_mut()
+        .insert_into_buffer(source, &text)
+        .unwrap();
     let frame =
         context
             .frame_manager_mut()
@@ -191,10 +190,9 @@ fn canonical_tty_rows_lease_case(context: &mut Context) -> (usize, usize, Vec<St
     // finish_and_drop releases the source Ref before this trace and return.
     // The public mutable buffer access must remain possible afterwards.
     context
-        .buffer_manager_mut()
-        .get_mut(source)
-        .unwrap()
-        .insert("after real TTY certificate");
+        .buffer_manager_view_mut()
+        .insert_into_buffer(source, "after real TTY certificate")
+        .unwrap();
     context.gc_collect_exact();
     let reports = reports.lock().unwrap().clone();
     (rows, points, reports)

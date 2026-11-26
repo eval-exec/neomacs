@@ -16,13 +16,16 @@ fn tty_child_mode_line_throw_discards_staged_presentations_before_activation() {
                mode-line-format nil header-line-format nil tab-line-format nil)",
     )
     .expect("display variables");
-    let root_buffer = eval.buffer_manager_mut().create_buffer("tty-flow-root");
-    let child_buffer = eval.buffer_manager_mut().create_buffer("tty-flow-child");
+    let root_buffer = eval
+        .buffer_manager_view_mut()
+        .create_buffer("tty-flow-root");
+    let child_buffer = eval
+        .buffer_manager_view_mut()
+        .create_buffer("tty-flow-child");
     for buffer_id in [root_buffer, child_buffer] {
-        eval.buffer_manager_mut()
-            .get_mut(buffer_id)
-            .expect("display buffer")
-            .insert("body\n");
+        eval.buffer_manager_view_mut()
+            .insert_into_buffer(buffer_id, "body\n")
+            .expect("display buffer");
     }
     let root = eval
         .frame_manager_mut()

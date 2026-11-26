@@ -5,18 +5,44 @@
 //!
 //! **This scanner is a syntactic regression ratchet over the listed item kinds
 //! and legacy raw-accessor table; it is NOT a soundness boundary while the
-//! following three `pub` sites remain reachable in production code:**
+//! following two `pub` fields remain reachable in production code:**
 //!
 //! 1. `crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs:3433` —
 //!    `pub edit: neovm_edit::buffer::EditRuntime,`
 //! 2. `crates/neovm-edit/src/buffer/edit_runtime.rs:23` —
 //!    `pub buffers: BufferManager,`
-//! 3. `crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs:605` —
-//!    `pub fn buffer_manager_mut(&mut self) -> &mut BufferManager`
 //!
-//! Narrowing those three `pub` items so that Rust's type system and privacy
-//! rules enforce the boundary workspace-wide is tracked in GitHub issue #844
-//! (Slices 2a/2b/2c).
+//! (`Context::buffer_manager_mut` at
+//! `crates/neovm-eval/src/emacs_core/runtime/eval/context_api.rs:605` is now
+//! gated behind `#[cfg(any(test, feature = "test-support"))]` per #844 Slice
+//! 2a, and this test verifies via `toml::Table` manifest auditing and Cargo's
+//! resolved dependency graph (`cargo metadata --format-version 1 --offline`
+//! with both default features and `--all-features`) that `test-support` is
+//! unreachable along all normal and build dependency edges from production
+//! workspace crates.)
+//! Narrowing the remaining two `pub` fields so that Rust's type system and
+//! privacy rules enforce the boundary workspace-wide is tracked in GitHub
+//! issue #844 (Slices 2b/2c).
+//!
+//! ## Documented Scanner Blind Spots
+//!
+//! * **`impl Deref { type Target = evil::BufferManager }`:** because a `syn`
+//!   scanner cannot resolve module paths, `is_allowed_deref_target_type`
+//!   matches the last path segment (`BufferManager` / `EditRuntime`), so a
+//!   qualified path ending in `BufferManager` (e.g. `evil::BufferManager`) is
+//!   syntactically allowed on `impl Deref`. `is_allowed_deref_method` only
+//!   prevents a direct `&mut Self::Target` return from `Deref::deref` itself
+//!   (requiring `&self -> &Self::Target`); it does **not** prevent `&mut
+//!   BufferManager` extraction via interior mutability (e.g.
+//!   `Cell<*mut BufferManager>`) or a sibling-module `DerefMut` handle.
+//! * **External/sibling `DerefMut` wrapper handles:** because
+//!   `FORBIDDEN_VIEW_MUT_TRAITS` only checks impls on `BufferManagerMut` /
+//!   `EditRuntimeMut` and `record_raw_accessor_if_matching` inspects direct
+//!   `&mut BufferManager` / `&mut EditRuntime` signatures, a newtype wrapper
+//!   outside `manager_view.rs` implementing `DerefMut<Target = BufferManager>`
+//!   (where `deref_mut` returns `&mut Self::Target`) is not caught
+//!   syntactically. Both blind spots remain code-review concerns until #844
+//!   Slices 2b/2c establish a compiler-enforced privacy boundary.
 //!
 //! ## What Is Enforced Today
 //!
@@ -49,8 +75,9 @@
 //!     non-literal/unparseable `#[path]` / `#[cfg_attr]`, unallowlisted
 //!     `include!`, unreadable directories, and parse errors.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 
 use syn::visit::{self, Visit};
 
@@ -203,10 +230,6 @@ const ALLOWED_RAW_BUFFER_OR_EDIT_MUT_ACCESSORS: &[(&str, &str)] = &[
     (
         "neovm-edit/src/emacs_core/editing/textprop/mod.rs",
         "with_buffer_property_change",
-    ),
-    (
-        "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
-        "buffer_manager_mut",
     ),
     (
         "neovm-eval/src/emacs_core/runtime/eval/context_api.rs",
@@ -1306,7 +1329,10 @@ impl Scanner {
         }
     }
 
-    fn record_raw_accessor_if_matching(&mut self, sig: &syn::Signature) {
+    fn record_raw_accessor_if_matching(&mut self, attrs: &[syn::Attribute], sig: &syn::Signature) {
+        if has_cfg_test_or_test_support(attrs) {
+            return;
+        }
         if find_mut_target_in_return(&sig.output, RAW_ACCESSOR_TARGETS).is_some()
             || find_mut_target_in_callbacks(sig, RAW_ACCESSOR_TARGETS).is_some()
         {
@@ -1832,7 +1858,7 @@ impl<'ast> Visit<'ast> for Scanner {
         if has_cfg_test(&item_fn.attrs) {
             return;
         }
-        self.record_raw_accessor_if_matching(&item_fn.sig);
+        self.record_raw_accessor_if_matching(&item_fn.attrs, &item_fn.sig);
         visit::visit_item_fn(self, item_fn);
     }
 
@@ -1846,7 +1872,7 @@ impl<'ast> Visit<'ast> for Scanner {
                     if has_cfg_test(&method.attrs) {
                         continue;
                     }
-                    self.record_raw_accessor_if_matching(&method.sig);
+                    self.record_raw_accessor_if_matching(&method.attrs, &method.sig);
                     self.visit_trait_item_fn(method);
                 }
                 syn::TraitItem::Type(assoc_ty) => {
@@ -1996,7 +2022,7 @@ impl<'ast> Visit<'ast> for Scanner {
                             ),
                         );
                     }
-                    self.record_raw_accessor_if_matching(&method.sig);
+                    self.record_raw_accessor_if_matching(&method.attrs, &method.sig);
 
                     if let Some(self_name) = &view_name {
                         let method_name = method.sig.ident.to_string();
@@ -4366,5 +4392,2272 @@ fn negative_workspace_generic_assoc_mut_type_alias_is_rejected() {
             && scanner.violations[0].detail.contains("&mut T::Out"),
         "unexpected detail: {}",
         scanner.violations[0].detail
+    );
+}
+
+#[test]
+fn negative_raw_accessor_cfg_not_test_support_is_caught_while_test_support_is_skipped() {
+    // #844 Slice 2a: `#[cfg(any(test, feature = "test-support"))]` raw
+    // accessors are unreachable in production builds and excluded from the
+    // production allowlist, while `#[cfg(not(any(test, feature = "test-support")))]`
+    // remains caught.
+    let scanner = scan_synthetic(
+        "synthetic/src/context_api.rs",
+        r#"
+        impl Context {
+            #[cfg(any(test, feature = "test-support"))]
+            pub fn test_only_buffers_mut(&mut self) -> &mut BufferManager {
+                loop {}
+            }
+
+            #[cfg(not(any(test, feature = "test-support")))]
+            pub fn prod_only_buffers_mut(&mut self) -> &mut BufferManager {
+                loop {}
+            }
+        }
+        "#,
+    );
+    let raw_names: Vec<&str> = scanner
+        .raw_accessor_sites
+        .iter()
+        .map(|(_, name, _)| name.as_str())
+        .collect();
+    assert_eq!(
+        raw_names,
+        vec!["prod_only_buffers_mut"],
+        "expected only prod_only_buffers_mut in raw_accessor_sites, got: {raw_names:?}"
+    );
+}
+
+fn is_test_support_feature_spec(spec: &str) -> bool {
+    spec == "test-support"
+        || spec.ends_with("/test-support")
+        || spec.starts_with("test-support/")
+        || spec.starts_with("test-support?/")
+}
+
+fn check_features_value_for_test_support(
+    context: &str,
+    features_val: &toml::Value,
+    violations: &mut Vec<String>,
+) {
+    let Some(arr) = features_val.as_array() else {
+        violations.push(format!("{context}: `features` must be a TOML array"));
+        return;
+    };
+    for entry in arr {
+        let Some(spec) = entry.as_str() else {
+            violations.push(format!("{context}: non-string entry in `features` array"));
+            return;
+        };
+        if is_test_support_feature_spec(spec) {
+            violations.push(format!("{context}: enables `{spec}`"));
+        }
+    }
+}
+
+fn check_dep_table_for_test_support(
+    section_label: &str,
+    deps: &toml::Table,
+    violations: &mut Vec<String>,
+) {
+    for (dep_key, dep_val) in deps {
+        let Some(dep_tbl) = dep_val.as_table() else {
+            continue;
+        };
+        if let Some(features_val) = dep_tbl.get("features") {
+            check_features_value_for_test_support(
+                &format!("{section_label}.{dep_key}"),
+                features_val,
+                violations,
+            );
+        }
+    }
+}
+
+fn check_patch_and_replace_tables(
+    manifest_label: &str,
+    table: &toml::Table,
+    workspace_member_names: &BTreeSet<String>,
+    violations: &mut Vec<String>,
+) {
+    if let Some(replace_val) = table.get("replace") {
+        match replace_val.as_table() {
+            Some(replace_tbl) if !replace_tbl.is_empty() => {
+                violations.push(format!(
+                    "{manifest_label}: `[replace]` section is forbidden in workspace manifests"
+                ));
+            }
+            Some(_) => {}
+            None => {
+                violations.push(format!("{manifest_label}: `replace` must be a TOML table"));
+            }
+        }
+    }
+
+    if let Some(patch_val) = table.get("patch") {
+        let Some(registries) = patch_val.as_table() else {
+            violations.push(format!("{manifest_label}: `patch` must be a TOML table"));
+            return;
+        };
+        for (registry_name, registry_val) in registries {
+            let Some(entries) = registry_val.as_table() else {
+                violations.push(format!(
+                    "{manifest_label}: `[patch.{registry_name}]` must be a TOML table"
+                ));
+                continue;
+            };
+            for (patch_key, patch_spec) in entries {
+                let patched_pkg = patch_spec
+                    .as_table()
+                    .and_then(|t| t.get("package"))
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or(patch_key.as_str());
+                if workspace_member_names.contains(patched_pkg) {
+                    violations.push(format!(
+                        "{manifest_label}: `[patch.{registry_name}.{patch_key}]` must not patch workspace crate `{patched_pkg}`"
+                    ));
+                }
+                if let Some(spec_tbl) = patch_spec.as_table() {
+                    if let Some(features_val) = spec_tbl.get("features") {
+                        check_features_value_for_test_support(
+                            &format!("{manifest_label}: [patch.{registry_name}.{patch_key}]"),
+                            features_val,
+                            violations,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn audit_workspace_root_manifest(
+    root_table: &toml::Table,
+    workspace_member_names: &BTreeSet<String>,
+) -> Result<(), Vec<String>> {
+    let mut violations = Vec::new();
+    let Some(ws_tbl) = root_table.get("workspace").and_then(toml::Value::as_table) else {
+        return Err(vec![
+            "root Cargo.toml: missing `[workspace]` table".to_string(),
+        ]);
+    };
+
+    match ws_tbl.get("resolver").and_then(toml::Value::as_str) {
+        Some("2" | "3") => {}
+        other => violations.push(format!(
+            "root Cargo.toml: `[workspace].resolver` must be \"2\" or \"3\" so dev-dependencies do not unify into production builds (got {other:?})"
+        )),
+    }
+
+    if let Some(ws_deps_val) = ws_tbl.get("dependencies") {
+        if let Some(ws_deps) = ws_deps_val.as_table() {
+            check_dep_table_for_test_support(
+                "root Cargo.toml [workspace.dependencies]",
+                ws_deps,
+                &mut violations,
+            );
+        } else {
+            violations.push(
+                "root Cargo.toml: `[workspace.dependencies]` must be a TOML table".to_string(),
+            );
+        }
+    }
+
+    check_patch_and_replace_tables(
+        "root Cargo.toml",
+        root_table,
+        workspace_member_names,
+        &mut violations,
+    );
+
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations)
+    }
+}
+
+fn audit_member_manifest(
+    crate_name: &str,
+    table: &toml::Table,
+    workspace_member_names: &BTreeSet<String>,
+) -> Result<(), Vec<String>> {
+    let mut violations = Vec::new();
+
+    for section in ["dependencies", "build-dependencies"] {
+        if let Some(val) = table.get(section) {
+            if let Some(dep_tbl) = val.as_table() {
+                check_dep_table_for_test_support(&format!("[{section}]"), dep_tbl, &mut violations);
+            } else {
+                violations.push(format!("[{section}] must be a TOML table"));
+            }
+        }
+    }
+
+    if let Some(target_val) = table.get("target") {
+        if let Some(targets_tbl) = target_val.as_table() {
+            for (cfg_expr, cfg_val) in targets_tbl {
+                let Some(cfg_tbl) = cfg_val.as_table() else {
+                    violations.push(format!("[target.{cfg_expr}] must be a TOML table"));
+                    continue;
+                };
+                for section in ["dependencies", "build-dependencies"] {
+                    if let Some(val) = cfg_tbl.get(section) {
+                        if let Some(dep_tbl) = val.as_table() {
+                            check_dep_table_for_test_support(
+                                &format!("[target.{cfg_expr}.{section}]"),
+                                dep_tbl,
+                                &mut violations,
+                            );
+                        } else {
+                            violations.push(format!(
+                                "[target.{cfg_expr}.{section}] must be a TOML table"
+                            ));
+                        }
+                    }
+                }
+            }
+        } else {
+            violations.push("[target] must be a TOML table".to_string());
+        }
+    }
+
+    if let Some(features_val) = table.get("features") {
+        if let Some(features_tbl) = features_val.as_table() {
+            for (feature_name, val) in features_tbl {
+                let Some(arr) = val.as_array() else {
+                    violations.push(format!(
+                        "[features].{feature_name} must be a TOML array of strings"
+                    ));
+                    continue;
+                };
+                let is_allowlisted_test_feature = feature_name == "test-support"
+                    || (crate_name == "neovm-value" && feature_name == "test-thread-fallback-heap");
+                for entry in arr {
+                    let Some(spec) = entry.as_str() else {
+                        violations.push(format!(
+                            "[features].{feature_name} contains a non-string entry"
+                        ));
+                        continue;
+                    };
+                    if is_test_support_feature_spec(spec) && !is_allowlisted_test_feature {
+                        violations.push(format!(
+                            "non-test-support feature `[features].{feature_name}` enables `{spec}`"
+                        ));
+                    }
+                }
+            }
+        } else {
+            violations.push("[features] must be a TOML table".to_string());
+        }
+    }
+
+    check_patch_and_replace_tables(crate_name, table, workspace_member_names, &mut violations);
+
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations)
+    }
+}
+
+fn glob_match_segment(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    let mut dp = vec![vec![false; t.len() + 1]; p.len() + 1];
+    dp[0][0] = true;
+    for i in 1..=p.len() {
+        if p[i - 1] == '*' {
+            dp[i][0] = dp[i - 1][0];
+        }
+    }
+    for i in 1..=p.len() {
+        for j in 1..=t.len() {
+            dp[i][j] = match p[i - 1] {
+                '*' => dp[i - 1][j] || dp[i][j - 1],
+                '?' => dp[i - 1][j - 1],
+                c => dp[i - 1][j - 1] && c == t[j - 1],
+            };
+        }
+    }
+    dp[p.len()][t.len()]
+}
+
+fn expand_workspace_member_pattern(
+    repo_root: &Path,
+    pattern: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let segments: Vec<&str> = pattern
+        .split('/')
+        .filter(|seg| !seg.is_empty() && *seg != ".")
+        .collect();
+    if segments.is_empty() {
+        return Ok(vec![repo_root.to_path_buf()]);
+    }
+    let mut dirs = vec![repo_root.to_path_buf()];
+    for seg in segments {
+        let mut next = Vec::new();
+        let has_glob = seg.contains('*') || seg.contains('?');
+        for dir in dirs {
+            if has_glob {
+                let entries = std::fs::read_dir(&dir)
+                    .map_err(|err| format!("read {}: {err}", dir.display()))?;
+                for entry in entries {
+                    let entry = entry.map_err(|err| format!("read {}: {err}", dir.display()))?;
+                    let name = entry.file_name();
+                    let Some(name_str) = name.to_str() else {
+                        continue;
+                    };
+                    if glob_match_segment(seg, name_str) && entry.path().is_dir() {
+                        next.push(entry.path());
+                    }
+                }
+            } else {
+                let candidate = dir.join(seg);
+                if candidate.is_dir() {
+                    next.push(candidate);
+                }
+            }
+        }
+        dirs = next;
+    }
+    Ok(dirs)
+}
+
+fn discover_workspace_member_manifests(
+    repo_root: &Path,
+    root_table: &toml::Table,
+) -> Result<Vec<PathBuf>, String> {
+    let ws_tbl = root_table
+        .get("workspace")
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "root Cargo.toml missing `[workspace]` table".to_string())?;
+    let members_arr = ws_tbl
+        .get("members")
+        .and_then(toml::Value::as_array)
+        .ok_or_else(|| "root Cargo.toml missing `[workspace].members` array".to_string())?;
+
+    let mut excluded_dirs = BTreeSet::new();
+    if let Some(exclude_val) = ws_tbl.get("exclude") {
+        let exclude_arr = exclude_val
+            .as_array()
+            .ok_or_else(|| "root Cargo.toml `[workspace].exclude` must be an array".to_string())?;
+        for entry in exclude_arr {
+            let pat = entry.as_str().ok_or_else(|| {
+                "root Cargo.toml `[workspace].exclude` entries must be strings".to_string()
+            })?;
+            for dir in expand_workspace_member_pattern(repo_root, pat)? {
+                excluded_dirs.insert(normalize_lexical_path(&dir));
+            }
+        }
+    }
+
+    let mut manifests = BTreeSet::new();
+    if root_table.contains_key("package") {
+        manifests.insert(normalize_lexical_path(&repo_root.join("Cargo.toml")));
+    }
+    for entry in members_arr {
+        let pat = entry.as_str().ok_or_else(|| {
+            "root Cargo.toml `[workspace].members` entries must be strings".to_string()
+        })?;
+        let matched_dirs = expand_workspace_member_pattern(repo_root, pat)?;
+        if matched_dirs.is_empty() {
+            return Err(format!(
+                "workspace member pattern `{pat}` matched 0 directories"
+            ));
+        }
+        for dir in matched_dirs {
+            let norm_dir = normalize_lexical_path(&dir);
+            if excluded_dirs.contains(&norm_dir) {
+                continue;
+            }
+            let manifest = norm_dir.join("Cargo.toml");
+            if !manifest.is_file() {
+                return Err(format!(
+                    "workspace member `{pat}` directory {} is missing Cargo.toml",
+                    norm_dir.display()
+                ));
+            }
+            manifests.insert(manifest);
+        }
+    }
+    if manifests.is_empty() {
+        return Err("discovered 0 workspace member manifests".to_string());
+    }
+    Ok(manifests.into_iter().collect())
+}
+
+#[derive(Debug)]
+struct MetaDep {
+    name: String,
+    rename: Option<String>,
+    kind: Option<String>,
+    optional: bool,
+    uses_default_features: bool,
+    features: Vec<String>,
+}
+
+impl MetaDep {
+    fn dep_key(&self) -> &str {
+        self.rename.as_deref().unwrap_or(self.name.as_str())
+    }
+
+    fn is_non_dev(&self) -> bool {
+        self.kind.as_deref() != Some("dev")
+    }
+}
+
+#[derive(Debug)]
+struct MetaPackage {
+    name: String,
+    manifest_path: PathBuf,
+    features: BTreeMap<String, Vec<String>>,
+    dependencies: Vec<MetaDep>,
+}
+
+#[derive(Debug)]
+struct MetaResolveDep {
+    extern_name: String,
+    pkg_id: String,
+    has_non_dev_kind: bool,
+}
+
+fn parse_cargo_metadata(
+    metadata: &serde_json::Value,
+) -> Result<
+    (
+        BTreeMap<String, MetaPackage>,
+        BTreeSet<String>,
+        BTreeMap<String, Vec<MetaResolveDep>>,
+    ),
+    String,
+> {
+    let pkgs_arr = metadata
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata missing `packages` array".to_string())?;
+    let mut packages = BTreeMap::new();
+    for pkg_val in pkgs_arr {
+        let id = pkg_val
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "cargo metadata package missing `id`".to_string())?
+            .to_string();
+        let name = pkg_val
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("cargo metadata package `{id}` missing `name`"))?
+            .to_string();
+        let manifest_path = pkg_val
+            .get("manifest_path")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .ok_or_else(|| format!("cargo metadata package `{name}` missing `manifest_path`"))?;
+
+        let feat_obj = pkg_val
+            .get("features")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| format!("cargo metadata package `{name}` missing `features` object"))?;
+        let mut features = BTreeMap::new();
+        for (feat_name, acts_val) in feat_obj {
+            let acts_arr = acts_val.as_array().ok_or_else(|| {
+                format!("package `{name}` feature `{feat_name}` must be an array")
+            })?;
+            let mut acts = Vec::with_capacity(acts_arr.len());
+            for act in acts_arr {
+                let s = act.as_str().ok_or_else(|| {
+                    format!("package `{name}` feature `{feat_name}` has non-string activation")
+                })?;
+                acts.push(s.to_string());
+            }
+            features.insert(feat_name.clone(), acts);
+        }
+
+        let deps_arr = pkg_val
+            .get("dependencies")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                format!("cargo metadata package `{name}` missing `dependencies` array")
+            })?;
+        let mut dependencies = Vec::with_capacity(deps_arr.len());
+        for dep_val in deps_arr {
+            let dep_name = dep_val
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| format!("package `{name}` dependency missing `name`"))?
+                .to_string();
+            let rename = match dep_val.get("rename") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(s)) => Some(s.clone()),
+                Some(_) => {
+                    return Err(format!(
+                        "package `{name}` dep `{dep_name}` has non-string `rename`"
+                    ));
+                }
+            };
+            let kind = match dep_val.get("kind") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(s)) => Some(s.clone()),
+                Some(_) => {
+                    return Err(format!(
+                        "package `{name}` dep `{dep_name}` has non-string `kind`"
+                    ));
+                }
+            };
+            let optional = dep_val
+                .get("optional")
+                .and_then(serde_json::Value::as_bool)
+                .ok_or_else(|| {
+                    format!("package `{name}` dep `{dep_name}` missing bool `optional`")
+                })?;
+            let uses_default_features = dep_val
+                .get("uses_default_features")
+                .and_then(serde_json::Value::as_bool)
+                .ok_or_else(|| {
+                    format!(
+                        "package `{name}` dep `{dep_name}` missing bool `uses_default_features`"
+                    )
+                })?;
+            let dep_features_arr = dep_val
+                .get("features")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| {
+                    format!("package `{name}` dep `{dep_name}` missing `features` array")
+                })?;
+            let mut dep_features = Vec::with_capacity(dep_features_arr.len());
+            for v in dep_features_arr {
+                let s = v.as_str().ok_or_else(|| {
+                    format!("package `{name}` dep `{dep_name}` has non-string feature")
+                })?;
+                dep_features.push(s.to_string());
+            }
+            dependencies.push(MetaDep {
+                name: dep_name,
+                rename,
+                kind,
+                optional,
+                uses_default_features,
+                features: dep_features,
+            });
+        }
+
+        packages.insert(
+            id,
+            MetaPackage {
+                name,
+                manifest_path,
+                features,
+                dependencies,
+            },
+        );
+    }
+
+    let ws_members_arr = metadata
+        .get("workspace_members")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata missing `workspace_members` array".to_string())?;
+    let mut workspace_members = BTreeSet::new();
+    for val in ws_members_arr {
+        let id = val
+            .as_str()
+            .ok_or_else(|| "cargo metadata `workspace_members` entry must be string".to_string())?;
+        if !packages.contains_key(id) {
+            return Err(format!(
+                "cargo metadata workspace member `{id}` is missing from `packages`"
+            ));
+        }
+        workspace_members.insert(id.to_string());
+    }
+
+    let nodes_arr = metadata
+        .get("resolve")
+        .and_then(|r| r.get("nodes"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata missing `resolve.nodes` array".to_string())?;
+    let mut resolve_deps: BTreeMap<String, Vec<MetaResolveDep>> = BTreeMap::new();
+    for node_val in nodes_arr {
+        let id = node_val
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "cargo metadata resolve node missing `id`".to_string())?
+            .to_string();
+        if !packages.contains_key(&id) {
+            return Err(format!(
+                "cargo metadata resolve node `{id}` is missing from `packages`"
+            ));
+        }
+        let deps_arr = node_val
+            .get("deps")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| format!("cargo metadata resolve node `{id}` missing `deps` array"))?;
+        let mut deps = Vec::with_capacity(deps_arr.len());
+        for rdep in deps_arr {
+            let extern_name = rdep
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| format!("resolve node `{id}` dep missing `name`"))?
+                .to_string();
+            let pkg_id = rdep
+                .get("pkg")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| format!("resolve node `{id}` dep missing `pkg`"))?
+                .to_string();
+            if !packages.contains_key(&pkg_id) {
+                return Err(format!(
+                    "resolve node `{id}` references unknown package `{pkg_id}` absent from `packages`"
+                ));
+            }
+            let dep_kinds = rdep
+                .get("dep_kinds")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| {
+                    format!("resolve node `{id}` dep `{pkg_id}` missing `dep_kinds` array")
+                })?;
+            let has_non_dev_kind = dep_kinds
+                .iter()
+                .any(|dk| dk.get("kind").and_then(serde_json::Value::as_str) != Some("dev"));
+            deps.push(MetaResolveDep {
+                extern_name,
+                pkg_id,
+                has_non_dev_kind,
+            });
+        }
+        resolve_deps.insert(id, deps);
+    }
+
+    for pid in &workspace_members {
+        if !resolve_deps.contains_key(pid) {
+            return Err(format!(
+                "cargo metadata workspace member `{pid}` is missing from `resolve.nodes`"
+            ));
+        }
+    }
+
+    Ok((packages, workspace_members, resolve_deps))
+}
+
+fn resolve_non_dev_dep_targets(
+    pkg_id: &str,
+    pkg_name: &str,
+    dep: &MetaDep,
+    packages: &BTreeMap<String, MetaPackage>,
+    resolve_deps: &BTreeMap<String, Vec<MetaResolveDep>>,
+) -> Result<Vec<String>, String> {
+    let expected_extern = dep.dep_key().replace('-', "_");
+    let Some(rdeps) = resolve_deps.get(pkg_id) else {
+        return Err(format!(
+            "package `{pkg_name}` (`{pkg_id}`) is missing from `resolve.nodes`"
+        ));
+    };
+    let exact: Vec<String> = rdeps
+        .iter()
+        .filter(|rd| {
+            rd.has_non_dev_kind
+                && rd.extern_name == expected_extern
+                && packages.get(&rd.pkg_id).is_some_and(|p| p.name == dep.name)
+        })
+        .map(|rd| rd.pkg_id.clone())
+        .collect();
+    if !exact.is_empty() {
+        return Ok(exact);
+    }
+    let by_name: Vec<String> = rdeps
+        .iter()
+        .filter(|rd| {
+            rd.has_non_dev_kind && packages.get(&rd.pkg_id).is_some_and(|p| p.name == dep.name)
+        })
+        .map(|rd| rd.pkg_id.clone())
+        .collect();
+    if !by_name.is_empty() {
+        return Ok(by_name);
+    }
+    Err(format!(
+        "enabled non-dev dependency `{}` (key `{}`) of `{pkg_name}` did not resolve to any non-dev target in `resolve.nodes`",
+        dep.name,
+        dep.dep_key()
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetadataSeedMode {
+    DefaultOnly,
+    AllProductionFeatures,
+}
+
+#[derive(Default)]
+struct ReachabilityState {
+    active_pkgs: BTreeSet<String>,
+    reached_via_edge: BTreeSet<String>,
+    active_features: BTreeMap<String, BTreeSet<String>>,
+    active_opt_deps: BTreeMap<String, BTreeSet<String>>,
+    weak_dep_features: BTreeMap<String, BTreeSet<(String, String)>>,
+    feature_origin: BTreeMap<(String, String), String>,
+}
+
+impl ReachabilityState {
+    fn add_pkg(&mut self, pid: &str) -> bool {
+        let inserted = self.active_pkgs.insert(pid.to_string());
+        if inserted {
+            self.active_features.entry(pid.to_string()).or_default();
+            self.active_opt_deps.entry(pid.to_string()).or_default();
+            self.weak_dep_features.entry(pid.to_string()).or_default();
+        }
+        inserted
+    }
+
+    fn add_feat(&mut self, pid: &str, feat: &str, origin: String) -> bool {
+        let mut changed = self.add_pkg(pid);
+        if self
+            .active_features
+            .entry(pid.to_string())
+            .or_default()
+            .insert(feat.to_string())
+        {
+            self.feature_origin
+                .entry((pid.to_string(), feat.to_string()))
+                .or_insert(origin);
+            changed = true;
+        }
+        changed
+    }
+
+    fn add_opt_dep(&mut self, pid: &str, dep_key: &str) -> bool {
+        let mut changed = self.add_pkg(pid);
+        if self
+            .active_opt_deps
+            .entry(pid.to_string())
+            .or_default()
+            .insert(dep_key.to_string())
+        {
+            changed = true;
+        }
+        changed
+    }
+
+    fn add_weak_dep_feat(&mut self, pid: &str, dep_key: &str, target_feat: &str) -> bool {
+        let mut changed = self.add_pkg(pid);
+        if self
+            .weak_dep_features
+            .entry(pid.to_string())
+            .or_default()
+            .insert((dep_key.to_string(), target_feat.to_string()))
+        {
+            changed = true;
+        }
+        changed
+    }
+}
+
+fn audit_cargo_metadata_prod_test_support_reachability(
+    metadata: &serde_json::Value,
+    excluded_crates: &[&str],
+    seed_mode: MetadataSeedMode,
+) -> Result<(), Vec<String>> {
+    let (packages, workspace_members, resolve_deps) =
+        parse_cargo_metadata(metadata).map_err(|err| vec![err])?;
+
+    let mut state = ReachabilityState::default();
+    let mut resolution_errors: BTreeSet<String> = BTreeSet::new();
+
+    for pid in &workspace_members {
+        let Some(pkg) = packages.get(pid) else {
+            return Err(vec![format!(
+                "workspace member `{pid}` missing from `packages`"
+            )]);
+        };
+        if excluded_crates.contains(&pkg.name.as_str()) {
+            continue;
+        }
+        state.add_pkg(pid);
+        match seed_mode {
+            MetadataSeedMode::DefaultOnly => {
+                if pkg.features.contains_key("default") {
+                    state.add_feat(
+                        pid,
+                        "default",
+                        format!("seed default feature `{}[default]`", pkg.name),
+                    );
+                }
+            }
+            MetadataSeedMode::AllProductionFeatures => {
+                for feat in pkg.features.keys() {
+                    if feat == "test-support"
+                        || (pkg.name == "neovm-value" && feat == "test-thread-fallback-heap")
+                    {
+                        continue;
+                    }
+                    state.add_feat(
+                        pid,
+                        feat,
+                        format!("seed production feature `{}[{feat}]`", pkg.name),
+                    );
+                }
+            }
+        }
+    }
+
+    // Fixed-point propagation along ALL normal (`kind: null`) and build
+    // (`kind: "build"`) dependency edges across the entire resolved graph
+    // (including any excluded or external/patched crate reachable from a
+    // production crate). Any unresolvable enabled edge fails closed.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let current_pkgs: Vec<String> = state.active_pkgs.iter().cloned().collect();
+        for pid in current_pkgs {
+            let Some(pkg) = packages.get(&pid) else {
+                resolution_errors
+                    .insert(format!("active package `{pid}` is missing from `packages`"));
+                continue;
+            };
+            let non_dev_deps: Vec<&MetaDep> =
+                pkg.dependencies.iter().filter(|d| d.is_non_dev()).collect();
+
+            // 1. Propagate active non-dev dependencies (required or enabled optional).
+            for dep in &non_dev_deps {
+                let dep_key = dep.dep_key();
+                let dep_enabled = !dep.optional
+                    || state
+                        .active_opt_deps
+                        .get(&pid)
+                        .is_some_and(|s| s.contains(dep_key));
+                if !dep_enabled {
+                    continue;
+                }
+                let kind_label = dep.kind.as_deref().unwrap_or("normal");
+                match resolve_non_dev_dep_targets(&pid, &pkg.name, dep, &packages, &resolve_deps) {
+                    Ok(target_ids) => {
+                        for target_id in target_ids {
+                            state.reached_via_edge.insert(target_id.clone());
+                            changed |= state.add_pkg(&target_id);
+                            if dep.uses_default_features
+                                && packages
+                                    .get(&target_id)
+                                    .is_some_and(|q| q.features.contains_key("default"))
+                            {
+                                changed |= state.add_feat(
+                                    &target_id,
+                                    "default",
+                                    format!(
+                                        "{} --({kind_label} default-features)--> {}",
+                                        pkg.name, dep.name
+                                    ),
+                                );
+                            }
+                            for feat in &dep.features {
+                                changed |= state.add_feat(
+                                    &target_id,
+                                    feat,
+                                    format!(
+                                        "{} --({kind_label} dep feature `{feat}`)--> {}",
+                                        pkg.name, dep.name
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        resolution_errors.insert(err);
+                    }
+                }
+            }
+
+            // 2. Propagate active features on `pkg`.
+            let current_feats: Vec<String> = state
+                .active_features
+                .get(&pid)
+                .map(|s| s.iter().cloned().collect())
+                .unwrap_or_default();
+            for feat in current_feats {
+                let Some(activations) = pkg.features.get(&feat) else {
+                    // Implicit optional-dependency feature (`feat` matches an optional dep key).
+                    if non_dev_deps
+                        .iter()
+                        .any(|d| d.optional && d.dep_key() == feat)
+                    {
+                        changed |= state.add_opt_dep(&pid, &feat);
+                    }
+                    continue;
+                };
+                for act in activations {
+                    if let Some(dep_key) = act.strip_prefix("dep:") {
+                        changed |= state.add_opt_dep(&pid, dep_key);
+                    } else if let Some((dep_key, target_feat)) = act.split_once("?/") {
+                        changed |= state.add_weak_dep_feat(&pid, dep_key, target_feat);
+                    } else if let Some((dep_key, target_feat)) = act.split_once('/') {
+                        changed |= state.add_opt_dep(&pid, dep_key);
+                        // Cargo semantics: `dep_key/target_feat` also activates the
+                        // same-crate `[features].dep_key` feature when one exists.
+                        if pkg.features.contains_key(dep_key) {
+                            changed |= state.add_feat(
+                                &pid,
+                                dep_key,
+                                format!(
+                                    "{}[{feat}] --(`{act}` activates same-crate feature `{dep_key}`)--> {}[{dep_key}]",
+                                    pkg.name, pkg.name
+                                ),
+                            );
+                        }
+                        let matching_deps: Vec<&MetaDep> = non_dev_deps
+                            .iter()
+                            .copied()
+                            .filter(|d| d.dep_key() == dep_key)
+                            .collect();
+                        if matching_deps.is_empty() {
+                            resolution_errors.insert(format!(
+                                "{}[{feat}] references `{act}` but `{dep_key}` is not a non-dev dependency of `{}`",
+                                pkg.name, pkg.name
+                            ));
+                        }
+                        for dep in matching_deps {
+                            match resolve_non_dev_dep_targets(
+                                &pid,
+                                &pkg.name,
+                                dep,
+                                &packages,
+                                &resolve_deps,
+                            ) {
+                                Ok(target_ids) => {
+                                    for target_id in target_ids {
+                                        state.reached_via_edge.insert(target_id.clone());
+                                        changed |= state.add_feat(
+                                            &target_id,
+                                            target_feat,
+                                            format!(
+                                                "{}[{feat}] --(`{act}`)--> {}[{target_feat}]",
+                                                pkg.name, dep.name
+                                            ),
+                                        );
+                                    }
+                                }
+                                Err(err) => {
+                                    resolution_errors.insert(err);
+                                }
+                            }
+                        }
+                    } else {
+                        changed |= state.add_feat(
+                            &pid,
+                            act,
+                            format!("{}[{feat}] -> {}[{act}]", pkg.name, pkg.name),
+                        );
+                    }
+                }
+            }
+
+            // 3. Propagate weak dependency features (`dep?/feat`) whenever `dep` is enabled.
+            let current_weak: Vec<(String, String)> = state
+                .weak_dep_features
+                .get(&pid)
+                .map(|s| s.iter().cloned().collect())
+                .unwrap_or_default();
+            for (dep_key, target_feat) in current_weak {
+                for dep in &non_dev_deps {
+                    if dep.dep_key() != dep_key {
+                        continue;
+                    }
+                    let dep_enabled = !dep.optional
+                        || state
+                            .active_opt_deps
+                            .get(&pid)
+                            .is_some_and(|s| s.contains(&dep_key));
+                    if !dep_enabled {
+                        continue;
+                    }
+                    match resolve_non_dev_dep_targets(
+                        &pid,
+                        &pkg.name,
+                        dep,
+                        &packages,
+                        &resolve_deps,
+                    ) {
+                        Ok(target_ids) => {
+                            for target_id in target_ids {
+                                state.reached_via_edge.insert(target_id.clone());
+                                changed |= state.add_feat(
+                                    &target_id,
+                                    &target_feat,
+                                    format!(
+                                        "{} --(weak `{dep_key}?/{target_feat}`)--> {}[{target_feat}]",
+                                        pkg.name, dep.name
+                                    ),
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            resolution_errors.insert(err);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut violations: Vec<String> = resolution_errors.into_iter().collect();
+
+    // Non-tautological sanity floor: `neovm-eval` must be reached by traversing
+    // at least one resolved normal/build dependency edge, not merely seeded as a
+    // workspace member.
+    let eval_reached_via_edge = state
+        .reached_via_edge
+        .iter()
+        .any(|pid| packages.get(pid).is_some_and(|p| p.name == "neovm-eval"));
+    if !eval_reached_via_edge {
+        violations.push(
+            "sanity floor failed: `neovm-eval` was not reached via any traversed production dependency edge"
+                .to_string(),
+        );
+    }
+
+    for pid in &workspace_members {
+        let Some(pkg) = packages.get(pid) else {
+            continue;
+        };
+        if state
+            .active_features
+            .get(pid)
+            .is_some_and(|feats| feats.contains("test-support"))
+        {
+            let origin = state
+                .feature_origin
+                .get(&(pid.clone(), "test-support".to_string()))
+                .cloned()
+                .unwrap_or_else(|| "<unknown origin>".to_string());
+            violations.push(format!(
+                "workspace crate `{}` has feature `test-support` reachable in production normal/build graph ({seed_mode:?}, via {origin})",
+                pkg.name
+            ));
+        }
+    }
+
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations)
+    }
+}
+
+fn run_cargo_metadata_json(workspace_root: &Path, all_features: bool) -> serde_json::Value {
+    let cargo_bin = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut cmd = Command::new(&cargo_bin);
+    cmd.current_dir(workspace_root)
+        .args(["metadata", "--format-version", "1", "--offline"]);
+    if all_features {
+        cmd.arg("--all-features");
+    }
+    let output = cmd
+        .output()
+        .unwrap_or_else(|err| panic!("failed to run `cargo metadata`: {err}"));
+    assert!(
+        output.status.success(),
+        "`cargo metadata --format-version 1 --offline{}` failed in {} (status {:?}):\n{}",
+        if all_features { " --all-features" } else { "" },
+        workspace_root.display(),
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|err| panic!("failed to parse `cargo metadata` JSON: {err}"))
+}
+
+#[test]
+fn no_production_crate_dependencies_enable_neovm_eval_test_support() {
+    // #844 Slice 2a: `Context::buffer_manager_mut` is gated behind
+    // `#[cfg(any(test, feature = "test-support"))]`. Enforce production absence
+    // through two independent fail-closed layers:
+    //   1. `toml::Table` AST audit of root `Cargo.toml` (`[workspace].resolver`,
+    //      `[workspace.dependencies]`, `[patch]`, `[replace]`, and member
+    //      discovery via `[workspace].members`) plus every non-excluded member's
+    //      `[dependencies]`, `[build-dependencies]`, `[target.*.dependencies]`,
+    //      `[target.*.build-dependencies]`, `[features]`, `[patch]`, `[replace]`.
+    //   2. Cargo's resolved dependency graph from BOTH `cargo metadata
+    //      --format-version 1 --offline` (default-features pass) and `cargo
+    //      metadata --format-version 1 --offline --all-features`
+    //      (all-production-features pass), cross-checked against
+    //      `[workspace].members` discovery. Both passes fail closed on any
+    //      unresolved dependency edge or schema defect and prove `test-support`
+    //      is unreachable on `neovm-eval` and all other workspace crates across
+    //      all normal and build edges (including excluded/external/patched
+    //      transitive crates such as `neomacs-perf -> neomacs-melpa-test-support`).
+    let crates = crates_dir();
+    let repo_root = crates
+        .parent()
+        .expect("crates_dir() must live directly under repo root");
+    let root_manifest_path = repo_root.join("Cargo.toml");
+    let root_text = std::fs::read_to_string(&root_manifest_path)
+        .unwrap_or_else(|err| panic!("read {}: {err}", root_manifest_path.display()));
+    let root_table: toml::Table = toml::from_str(&root_text)
+        .unwrap_or_else(|err| panic!("parse {}: {err}", root_manifest_path.display()));
+
+    let member_manifests = discover_workspace_member_manifests(repo_root, &root_table)
+        .unwrap_or_else(|err| panic!("discover workspace members: {err}"));
+
+    let mut parsed_members: Vec<(PathBuf, String, toml::Table)> = Vec::new();
+    let mut workspace_member_names = BTreeSet::new();
+    for manifest_path in &member_manifests {
+        let text = std::fs::read_to_string(manifest_path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", manifest_path.display()));
+        let table: toml::Table = toml::from_str(&text)
+            .unwrap_or_else(|err| panic!("parse {}: {err}", manifest_path.display()));
+        let crate_name = table
+            .get("package")
+            .and_then(toml::Value::as_table)
+            .and_then(|pkg| pkg.get("name"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: workspace member missing `[package].name`",
+                    manifest_path.display()
+                )
+            })
+            .to_string();
+        workspace_member_names.insert(crate_name.clone());
+        parsed_members.push((manifest_path.clone(), crate_name, table));
+    }
+
+    if let Err(violations) = audit_workspace_root_manifest(&root_table, &workspace_member_names) {
+        panic!(
+            "root workspace manifest violated test-support production guard:\n  - {}",
+            violations.join("\n  - ")
+        );
+    }
+
+    for (manifest_path, crate_name, table) in &parsed_members {
+        if EXCLUDED_WORKSPACE_CRATES.contains(&crate_name.as_str()) {
+            continue;
+        }
+        if let Err(violations) = audit_member_manifest(crate_name, table, &workspace_member_names) {
+            panic!(
+                "{} (`{crate_name}`): production manifest violated test-support guard:\n  - {}",
+                manifest_path.display(),
+                violations.join("\n  - ")
+            );
+        }
+    }
+
+    // Layer 2a: Default-features metadata pass + `[workspace].members` parity check.
+    let default_metadata = run_cargo_metadata_json(repo_root, false);
+    let all_features_metadata = run_cargo_metadata_json(repo_root, true);
+
+    let discovered_paths: BTreeSet<PathBuf> = member_manifests
+        .iter()
+        .map(|p| normalize_lexical_path(p))
+        .collect();
+    for (label, metadata) in [
+        ("default", &default_metadata),
+        ("--all-features", &all_features_metadata),
+    ] {
+        let (meta_pkgs, meta_ws_ids, _) = parse_cargo_metadata(metadata)
+            .unwrap_or_else(|err| panic!("parse {label} cargo metadata: {err}"));
+        let meta_ws_names: BTreeSet<String> = meta_ws_ids
+            .iter()
+            .map(|id| meta_pkgs[id].name.clone())
+            .collect();
+        assert_eq!(
+            workspace_member_names, meta_ws_names,
+            "`[workspace].members` discovery must match `{label}` cargo metadata workspace_members"
+        );
+        let meta_ws_paths: BTreeSet<PathBuf> = meta_ws_ids
+            .iter()
+            .map(|id| normalize_lexical_path(&meta_pkgs[id].manifest_path))
+            .collect();
+        assert_eq!(
+            discovered_paths, meta_ws_paths,
+            "`[workspace].members` manifest paths must match `{label}` cargo metadata paths"
+        );
+    }
+
+    if let Err(violations) = audit_cargo_metadata_prod_test_support_reachability(
+        &default_metadata,
+        EXCLUDED_WORKSPACE_CRATES,
+        MetadataSeedMode::DefaultOnly,
+    ) {
+        panic!(
+            "resolved Cargo default normal/build graph violated production test-support guard:\n  - {}",
+            violations.join("\n  - ")
+        );
+    }
+
+    if let Err(violations) = audit_cargo_metadata_prod_test_support_reachability(
+        &all_features_metadata,
+        EXCLUDED_WORKSPACE_CRATES,
+        MetadataSeedMode::AllProductionFeatures,
+    ) {
+        panic!(
+            "resolved Cargo --all-features normal/build graph violated production test-support guard:\n  - {}",
+            violations.join("\n  - ")
+        );
+    }
+}
+
+#[test]
+fn negative_manifest_prod_dep_enabling_test_support_is_rejected() {
+    let ws_members = BTreeSet::from(["neovm-eval".to_string(), "neovm-core".to_string()]);
+    let assert_rejected = |label: &str, toml_src: &str, expected_substr: &str| {
+        let table: toml::Table = toml::from_str(toml_src)
+            .unwrap_or_else(|err| panic!("{label}: fixture must be valid TOML: {err}"));
+        let Err(violations) = audit_member_manifest("synthetic", &table, &ws_members) else {
+            panic!("{label}: expected audit_member_manifest to reject manifest");
+        };
+        assert!(
+            violations.iter().any(|v| v.contains(expected_substr)),
+            "{label}: expected violation containing `{expected_substr}`, got: {violations:?}"
+        );
+    };
+    let assert_allowed = |label: &str, crate_name: &str, toml_src: &str| {
+        let table: toml::Table = toml::from_str(toml_src)
+            .unwrap_or_else(|err| panic!("{label}: fixture must be valid TOML: {err}"));
+        let result = audit_member_manifest(crate_name, &table, &ws_members);
+        assert!(
+            result.is_ok(),
+            "{label}: expected audit_member_manifest to allow manifest, got: {result:?}"
+        );
+    };
+
+    assert_rejected(
+        "inline double-quoted [dependencies]",
+        r#"
+[dependencies]
+neovm-eval = { path = "../neovm-eval", features = ["test-support"] }
+"#,
+        "[dependencies].neovm-eval: enables `test-support`",
+    );
+    assert_rejected(
+        "subtable [dependencies.neovm-eval]",
+        r#"
+[dependencies.neovm-eval]
+path = "../neovm-eval"
+features = ["test-support"]
+"#,
+        "[dependencies].neovm-eval: enables `test-support`",
+    );
+    assert_rejected(
+        "single-quoted TOML string in [dependencies]",
+        r#"
+[dependencies]
+neovm-eval = { path = '../neovm-eval', features = ['test-support'] }
+"#,
+        "[dependencies].neovm-eval: enables `test-support`",
+    );
+    assert_rejected(
+        "unicode escape in [dependencies]",
+        r#"
+[dependencies]
+neovm-eval = { path = "../neovm-eval", features = ["\u0074est-support"] }
+"#,
+        "[dependencies].neovm-eval: enables `test-support`",
+    );
+    assert_rejected(
+        "dotted key outside [dependencies] header",
+        r#"
+dependencies.neovm-eval.path = "../neovm-eval"
+dependencies.neovm-eval.features = ["test-support"]
+"#,
+        "[dependencies].neovm-eval: enables `test-support`",
+    );
+    assert_rejected(
+        "spaced [ dependencies ] header with '#' inside preceding string",
+        r#"
+[ dependencies ]
+neovm-eval = { git = "https://example.com/repo#main", features = ["test-support"] }
+"#,
+        "[dependencies].neovm-eval: enables `test-support`",
+    );
+    assert_rejected(
+        "[build-dependencies] enabling test-support",
+        r#"
+[build-dependencies]
+neovm-eval = { path = "../neovm-eval", features = ["test-support"] }
+"#,
+        "[build-dependencies].neovm-eval: enables `test-support`",
+    );
+    assert_rejected(
+        "[target.'cfg(unix)'.build-dependencies] enabling test-support",
+        r#"
+[target.'cfg(unix)'.build-dependencies]
+neovm-eval = { path = "../neovm-eval", features = ['test-support'] }
+"#,
+        "[target.cfg(unix).build-dependencies].neovm-eval: enables `test-support`",
+    );
+    assert_rejected(
+        "dotted key under target.'cfg(unix)'.dependencies",
+        r#"
+target.'cfg(unix)'.dependencies.neovm-eval.features = ['test-support']
+"#,
+        "[target.cfg(unix).dependencies].neovm-eval: enables `test-support`",
+    );
+    assert_rejected(
+        "spaced [target.'cfg(unix)' . dependencies] header",
+        r#"
+[target.'cfg(unix)' . dependencies]
+neovm-eval = { path = "../neovm-eval", features = ['test-support'] }
+"#,
+        "[target.cfg(unix).dependencies].neovm-eval: enables `test-support`",
+    );
+    assert_rejected(
+        "non-test-support feature forwarding neovm-eval/test-support",
+        r#"
+[features]
+sneaky = ["neovm-eval/test-support"]
+"#,
+        "non-test-support feature `[features].sneaky` enables `neovm-eval/test-support`",
+    );
+    assert_rejected(
+        "weak optional dependency feature with single quotes",
+        r#"
+[features]
+my_feat = ["dep:neovm-eval", 'neovm-eval?/test-support']
+"#,
+        "non-test-support feature `[features].my_feat` enables `neovm-eval?/test-support`",
+    );
+    assert_rejected(
+        "default feature enabling test-support with single quotes",
+        r#"
+[features]
+default = ['test-support']
+"#,
+        "non-test-support feature `[features].default` enables `test-support`",
+    );
+    assert_rejected(
+        "default feature activating renamed test-support dependency via test-support/bar",
+        r#"
+[features]
+default = ["test-support/bar"]
+test-support = ["dep:test-support", "neovm-eval/test-support"]
+"#,
+        "non-test-support feature `[features].default` enables `test-support/bar`",
+    );
+    assert_rejected(
+        "non-test-support feature activating test-support?/bar",
+        r#"
+[features]
+sneaky = ["test-support?/bar"]
+"#,
+        "non-test-support feature `[features].sneaky` enables `test-support?/bar`",
+    );
+    assert_rejected(
+        "dotted key under features",
+        r#"
+features.sneaky = ['neovm-eval/test-support']
+"#,
+        "non-test-support feature `[features].sneaky` enables `neovm-eval/test-support`",
+    );
+    assert_rejected(
+        "member-level [patch.crates-io] patching a workspace member",
+        r#"
+[patch.crates-io]
+neovm-eval = { path = "../evil-eval" }
+"#,
+        "must not patch workspace crate `neovm-eval`",
+    );
+    assert_rejected(
+        "member-level [replace] section",
+        r#"
+[replace]
+"neovm-eval:0.0.21" = { path = "../evil-eval" }
+"#,
+        "`[replace]` section is forbidden",
+    );
+
+    // Positive controls: dev-dependencies (including target-specific) and
+    // multi-line formatting of the legitimate `test-support` feature must pass.
+    assert_allowed(
+        "[dev-dependencies] enabling test-support",
+        "synthetic",
+        r#"
+[dev-dependencies]
+neovm-eval = { path = "../neovm-eval", features = ["test-support"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+neovm-eval = { path = "../neovm-eval", features = ['test-support'] }
+"#,
+    );
+    assert_allowed(
+        "multi-line [features].test-support array",
+        "synthetic",
+        r#"
+[features]
+test-support = [
+    "neovm-eval/test-support",
+]
+"#,
+    );
+    assert_allowed(
+        "neovm-value allowlisted test-thread-fallback-heap feature",
+        "neovm-value",
+        r#"
+[features]
+test-support = ["dep:visibility"]
+test-thread-fallback-heap = ["test-support"]
+"#,
+    );
+}
+
+#[test]
+fn negative_workspace_root_manifest_deps_patch_replace_and_resolver_rejected() {
+    let ws_members = BTreeSet::from(["neovm-eval".to_string(), "neovm-core".to_string()]);
+    let assert_root_rejected = |label: &str, toml_src: &str, expected_substr: &str| {
+        let table: toml::Table = toml::from_str(toml_src)
+            .unwrap_or_else(|err| panic!("{label}: fixture must be valid TOML: {err}"));
+        let Err(violations) = audit_workspace_root_manifest(&table, &ws_members) else {
+            panic!("{label}: expected audit_workspace_root_manifest to reject root manifest");
+        };
+        assert!(
+            violations.iter().any(|v| v.contains(expected_substr)),
+            "{label}: expected violation containing `{expected_substr}`, got: {violations:?}"
+        );
+    };
+
+    assert_root_rejected(
+        "[workspace.dependencies] enabling test-support",
+        r#"
+[workspace]
+resolver = "2"
+[workspace.dependencies]
+neovm-eval = { path = "crates/neovm-eval", features = ['test-support'] }
+"#,
+        "[workspace.dependencies].neovm-eval: enables `test-support`",
+    );
+    assert_root_rejected(
+        "[patch.crates-io] patching a workspace member directly",
+        r#"
+[workspace]
+resolver = "2"
+[patch.crates-io]
+neovm-eval = { path = "evil/neovm-eval" }
+"#,
+        "must not patch workspace crate `neovm-eval`",
+    );
+    assert_root_rejected(
+        "[patch.crates-io] patching a workspace member via package rename",
+        r#"
+[workspace]
+resolver = "2"
+[patch.crates-io]
+sneaky-alias = { package = "neovm-eval", path = "evil/neovm-eval" }
+"#,
+        "must not patch workspace crate `neovm-eval`",
+    );
+    assert_root_rejected(
+        "[patch.crates-io] enabling test-support feature",
+        r#"
+[workspace]
+resolver = "2"
+[patch.crates-io]
+third-party = { path = "vendor/third-party", features = ["test-support"] }
+"#,
+        "[patch.crates-io.third-party]: enables `test-support`",
+    );
+    assert_root_rejected(
+        "non-empty [replace] section",
+        r#"
+[workspace]
+resolver = "2"
+[replace]
+"neovm-eval:0.0.21" = { path = "evil/neovm-eval" }
+"#,
+        "`[replace]` section is forbidden",
+    );
+    assert_root_rejected(
+        "resolver = 1 allows dev-dep feature unification",
+        r#"
+[workspace]
+resolver = "1"
+"#,
+        "`[workspace].resolver` must be",
+    );
+    assert_root_rejected(
+        "omitted resolver defaults to resolver = 1 in virtual workspaces",
+        r#"
+[workspace]
+members = ["crates/neovm-eval"]
+"#,
+        "`[workspace].resolver` must be",
+    );
+
+    let clean_root: toml::Table = toml::from_str(
+        r#"
+[workspace]
+resolver = "2"
+[workspace.dependencies]
+neovm-core = { path = "crates/neovm-core", default-features = false }
+[patch.crates-io]
+winit = { git = "https://github.com/eval-exec/winit", rev = "0000000" }
+"#,
+    )
+    .expect("valid clean root fixture");
+    assert!(
+        audit_workspace_root_manifest(&clean_root, &ws_members).is_ok(),
+        "clean root manifest with external [patch.crates-io] and resolver = 2 must pass"
+    );
+
+    // Verify `[workspace].members` discovery handles globs, nested directories
+    // outside `crates/`, `[workspace].exclude`, and a root `[package]`.
+    let tmp = tempfile::tempdir().expect("create temp workspace for member discovery");
+    for rel in [
+        "Cargo.toml",
+        "crates/alpha/Cargo.toml",
+        "crates/excluded-crate/Cargo.toml",
+        "tools/nested/beta/Cargo.toml",
+    ] {
+        let full = tmp.path().join(rel);
+        std::fs::create_dir_all(full.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&full, "[package]\nname = \"dummy\"\nversion = \"0.1.0\"\n").expect("write");
+    }
+    let root_with_globs: toml::Table = toml::from_str(
+        r#"
+[package]
+name = "root-pkg"
+version = "0.1.0"
+
+[workspace]
+resolver = "2"
+members = ["crates/*", "tools/nested/beta"]
+exclude = ["crates/excluded-crate"]
+"#,
+    )
+    .expect("parse discovery fixture");
+    let discovered = discover_workspace_member_manifests(tmp.path(), &root_with_globs)
+        .expect("discover members");
+    let rel_paths: BTreeSet<String> = discovered
+        .iter()
+        .map(|p| {
+            p.strip_prefix(tmp.path())
+                .expect("under tempdir")
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    assert_eq!(
+        rel_paths,
+        BTreeSet::from([
+            "Cargo.toml".to_string(),
+            "crates/alpha/Cargo.toml".to_string(),
+            "tools/nested/beta/Cargo.toml".to_string(),
+        ]),
+        "workspace member discovery must handle root [package], globs, nested non-crates paths, and exclude"
+    );
+}
+
+fn build_temp_workspace(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("create temp cargo workspace");
+    for (rel_path, content) in files {
+        let full = dir.path().join(rel_path);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent)
+                .unwrap_or_else(|err| panic!("mkdir {}: {err}", parent.display()));
+        }
+        std::fs::write(&full, content)
+            .unwrap_or_else(|err| panic!("write {}: {err}", full.display()));
+    }
+    dir
+}
+
+fn assert_real_cargo_reachability_rejected(
+    label: &str,
+    files: &[(&str, &str)],
+    excluded_crates: &[&str],
+    all_features: bool,
+    seed_mode: MetadataSeedMode,
+    expected_substrings: &[&str],
+) {
+    let ws = build_temp_workspace(files);
+    let metadata = run_cargo_metadata_json(ws.path(), all_features);
+    let Err(violations) =
+        audit_cargo_metadata_prod_test_support_reachability(&metadata, excluded_crates, seed_mode)
+    else {
+        panic!(
+            "{label}: expected real cargo metadata ({seed_mode:?}, all_features={all_features}) reachability audit to fail"
+        );
+    };
+    let joined = violations.join("\n");
+    for substr in expected_substrings {
+        assert!(
+            joined.contains(substr),
+            "{label}: expected violation containing `{substr}`, got:\n{joined}"
+        );
+    }
+}
+
+fn assert_real_cargo_reachability_allowed(
+    label: &str,
+    files: &[(&str, &str)],
+    excluded_crates: &[&str],
+) {
+    let ws = build_temp_workspace(files);
+    let default_meta = run_cargo_metadata_json(ws.path(), false);
+    let all_meta = run_cargo_metadata_json(ws.path(), true);
+    let default_res = audit_cargo_metadata_prod_test_support_reachability(
+        &default_meta,
+        excluded_crates,
+        MetadataSeedMode::DefaultOnly,
+    );
+    assert!(
+        default_res.is_ok(),
+        "{label}: expected real cargo default metadata to pass, got: {default_res:?}"
+    );
+    let all_res = audit_cargo_metadata_prod_test_support_reachability(
+        &all_meta,
+        excluded_crates,
+        MetadataSeedMode::AllProductionFeatures,
+    );
+    assert!(
+        all_res.is_ok(),
+        "{label}: expected real cargo --all-features metadata to pass, got: {all_res:?}"
+    );
+}
+
+#[test]
+fn negative_real_cargo_metadata_end_to_end_catches_all_bypass_vectors() {
+    // Every fixture below runs REAL `cargo metadata --format-version 1 --offline
+    // [--all-features]` against minimal Cargo workspaces in `tempfile::TempDir`
+    // (never hand-fabricated `resolve.nodes` JSON), proving our reachability
+    // closure matches Cargo's actual output and fails closed on every bypass.
+    const EVAL_TOML: &str = r#"
+[package]
+name = "neovm-eval"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+test-support = []
+"#;
+    const LEAF_TOML: &str = r#"
+[package]
+name = "leaf"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+bar = []
+"#;
+
+    // 1. Workspace inheritance (`[workspace.dependencies]` enables `test-support`,
+    //    member inherits `neovm-eval.workspace = true`).
+    assert_real_cargo_reachability_rejected(
+        "workspace inheritance via [workspace.dependencies]",
+        &[
+            (
+                "Cargo.toml",
+                r#"
+[workspace]
+resolver = "2"
+members = ["prod", "neovm-eval"]
+
+[workspace.dependencies]
+neovm-eval = { path = "neovm-eval", features = ["test-support"] }
+"#,
+            ),
+            (
+                "prod/Cargo.toml",
+                r#"
+[package]
+name = "prod"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+neovm-eval.workspace = true
+"#,
+            ),
+            ("prod/src/lib.rs", ""),
+            ("neovm-eval/Cargo.toml", EVAL_TOML),
+            ("neovm-eval/src/lib.rs", ""),
+        ],
+        &[],
+        true,
+        MetadataSeedMode::AllProductionFeatures,
+        &["neovm-eval", "test-support"],
+    );
+
+    // 2. Reviewer bypass #1 — Optional path dep on a `[workspace].exclude` crate
+    //    enabling `neovm-eval/test-support` (`sneaky = ["dep:excluded-helper"]`).
+    let excluded_optional_ws: &[(&str, &str)] = &[
+        (
+            "Cargo.toml",
+            r#"
+[workspace]
+resolver = "2"
+members = ["prod", "neovm-eval"]
+exclude = ["excluded-helper"]
+"#,
+        ),
+        (
+            "prod/Cargo.toml",
+            r#"
+[package]
+name = "prod"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+neovm-eval = { path = "../neovm-eval" }
+excluded-helper = { path = "../excluded-helper", optional = true }
+
+[features]
+sneaky = ["dep:excluded-helper"]
+"#,
+        ),
+        ("prod/src/lib.rs", ""),
+        (
+            "excluded-helper/Cargo.toml",
+            r#"
+[package]
+name = "excluded-helper"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+neovm-eval = { path = "../neovm-eval", features = ["test-support"] }
+"#,
+        ),
+        ("excluded-helper/src/lib.rs", ""),
+        ("neovm-eval/Cargo.toml", EVAL_TOML),
+        ("neovm-eval/src/lib.rs", ""),
+    ];
+    assert_real_cargo_reachability_rejected(
+        "optional [workspace].exclude path dep enabling neovm-eval/test-support",
+        excluded_optional_ws,
+        &[],
+        true,
+        MetadataSeedMode::AllProductionFeatures,
+        &["neovm-eval", "test-support", "excluded-helper"],
+    );
+    // Also prove fail-closed behavior: running `AllProductionFeatures` against
+    // real non-`--all-features` metadata (where Cargo omits `excluded-helper`
+    // from `resolve.nodes`) MUST fail closed rather than silently dropping the edge!
+    assert_real_cargo_reachability_rejected(
+        "fail-closed when enabled optional dep is absent from non---all-features resolve.nodes",
+        excluded_optional_ws,
+        &[],
+        false,
+        MetadataSeedMode::AllProductionFeatures,
+        &["excluded-helper", "did not resolve to any non-dev target"],
+    );
+
+    // 3. Reviewer bypass #2 — Optional `[target.'cfg(target_os = "windows")'.dependencies]`
+    //    path dep on a `[workspace].exclude` crate (must be caught even on Linux).
+    assert_real_cargo_reachability_rejected(
+        "optional target-cfg [workspace].exclude dep enabling neovm-eval/test-support",
+        &[
+            (
+                "Cargo.toml",
+                r#"
+[workspace]
+resolver = "2"
+members = ["prod", "neovm-eval"]
+exclude = ["excluded-win-helper"]
+"#,
+            ),
+            (
+                "prod/Cargo.toml",
+                r#"
+[package]
+name = "prod"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+neovm-eval = { path = "../neovm-eval" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+excluded-win-helper = { path = "../excluded-win-helper", optional = true }
+
+[features]
+win-helper = ["dep:excluded-win-helper"]
+"#,
+            ),
+            ("prod/src/lib.rs", ""),
+            (
+                "excluded-win-helper/Cargo.toml",
+                r#"
+[package]
+name = "excluded-win-helper"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+neovm-eval = { path = "../neovm-eval", features = ["test-support"] }
+"#,
+            ),
+            ("excluded-win-helper/src/lib.rs", ""),
+            ("neovm-eval/Cargo.toml", EVAL_TOML),
+            ("neovm-eval/src/lib.rs", ""),
+        ],
+        &[],
+        true,
+        MetadataSeedMode::AllProductionFeatures,
+        &["neovm-eval", "test-support", "excluded-win-helper"],
+    );
+
+    // 4. Reviewer bypass #3 — Optional `[patch.crates-io]` target whose local
+    //    manifest enables `neovm-eval/test-support` (100% offline).
+    assert_real_cargo_reachability_rejected(
+        "optional [patch.crates-io] target enabling neovm-eval/test-support",
+        &[
+            (
+                "Cargo.toml",
+                r#"
+[workspace]
+resolver = "2"
+members = ["prod", "neovm-eval"]
+exclude = ["patched-ext"]
+
+[patch.crates-io]
+fake-ext-xyz = { path = "patched-ext" }
+"#,
+            ),
+            (
+                "prod/Cargo.toml",
+                r#"
+[package]
+name = "prod"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+neovm-eval = { path = "../neovm-eval" }
+fake-ext-xyz = { version = "0.1.0", optional = true }
+
+[features]
+enable-patched = ["dep:fake-ext-xyz"]
+"#,
+            ),
+            ("prod/src/lib.rs", ""),
+            (
+                "patched-ext/Cargo.toml",
+                r#"
+[package]
+name = "fake-ext-xyz"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+neovm-eval = { path = "../neovm-eval", features = ["test-support"] }
+"#,
+            ),
+            ("patched-ext/src/lib.rs", ""),
+            ("neovm-eval/Cargo.toml", EVAL_TOML),
+            ("neovm-eval/src/lib.rs", ""),
+        ],
+        &[],
+        true,
+        MetadataSeedMode::AllProductionFeatures,
+        &["neovm-eval", "test-support", "fake-ext-xyz"],
+    );
+
+    // 5. Reviewer bypass #4 — Single-crate DEFAULT-build `dep_key/target_feat`
+    //    activating same-crate `[features].test-support` (must fail on BOTH
+    //    `DefaultOnly` and `AllProductionFeatures`).
+    let dep_key_default_bypass: &[(&str, &str)] = &[
+        (
+            "Cargo.toml",
+            r#"
+[workspace]
+resolver = "2"
+members = ["prod", "leaf", "neovm-eval"]
+"#,
+        ),
+        (
+            "prod/Cargo.toml",
+            r#"
+[package]
+name = "prod"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+test-support = { package = "leaf", path = "../leaf", optional = true }
+neovm-eval = { path = "../neovm-eval" }
+
+[features]
+default = ["test-support/bar"]
+test-support = ["dep:test-support", "neovm-eval/test-support"]
+"#,
+        ),
+        ("prod/src/lib.rs", ""),
+        ("leaf/Cargo.toml", LEAF_TOML),
+        ("leaf/src/lib.rs", ""),
+        ("neovm-eval/Cargo.toml", EVAL_TOML),
+        ("neovm-eval/src/lib.rs", ""),
+    ];
+    assert_real_cargo_reachability_rejected(
+        "single-crate default-build dep_key/target_feat activating [features].test-support (DefaultOnly)",
+        dep_key_default_bypass,
+        &[],
+        false,
+        MetadataSeedMode::DefaultOnly,
+        &["neovm-eval", "test-support", "activates same-crate feature"],
+    );
+    assert_real_cargo_reachability_rejected(
+        "single-crate default-build dep_key/target_feat activating [features].test-support (AllProductionFeatures)",
+        dep_key_default_bypass,
+        &[],
+        true,
+        MetadataSeedMode::AllProductionFeatures,
+        &["neovm-eval", "test-support", "activates same-crate feature"],
+    );
+
+    // 6. Excluded-crate `trigger = ["leaf/bar"]` where `leaf = ["dep:leaf", "neovm-eval/test-support"]`.
+    assert_real_cargo_reachability_rejected(
+        "excluded-crate dep_key/target_feat activating same-crate feature enabling neovm-eval/test-support",
+        &[
+            (
+                "Cargo.toml",
+                r#"
+[workspace]
+resolver = "2"
+members = ["prod", "neomacs-melpa-test-support", "leaf", "neovm-eval"]
+"#,
+            ),
+            (
+                "prod/Cargo.toml",
+                r#"
+[package]
+name = "prod"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+neomacs-melpa-test-support = { path = "../neomacs-melpa-test-support" }
+"#,
+            ),
+            ("prod/src/lib.rs", ""),
+            (
+                "neomacs-melpa-test-support/Cargo.toml",
+                r#"
+[package]
+name = "neomacs-melpa-test-support"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+leaf = { path = "../leaf", optional = true }
+neovm-eval = { path = "../neovm-eval" }
+
+[features]
+default = ["leaf/bar"]
+leaf = ["dep:leaf", "neovm-eval/test-support"]
+"#,
+            ),
+            ("neomacs-melpa-test-support/src/lib.rs", ""),
+            ("leaf/Cargo.toml", LEAF_TOML),
+            ("leaf/src/lib.rs", ""),
+            ("neovm-eval/Cargo.toml", EVAL_TOML),
+            ("neovm-eval/src/lib.rs", ""),
+        ],
+        &["neomacs-melpa-test-support"],
+        false,
+        MetadataSeedMode::DefaultOnly,
+        &["neovm-eval", "test-support"],
+    );
+
+    // 7. Two-hop optional renamed + weak dep feature (`eval_alias?/test-support`)
+    //    verified with REAL `cargo metadata --all-features` output.
+    assert_real_cargo_reachability_rejected(
+        "two-hop optional renamed weak dep feature forwarding",
+        &[
+            (
+                "Cargo.toml",
+                r#"
+[workspace]
+resolver = "2"
+members = ["prod", "mid", "neovm-eval"]
+"#,
+            ),
+            (
+                "prod/Cargo.toml",
+                r#"
+[package]
+name = "prod"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mid = { path = "../mid" }
+
+[features]
+extra = ["mid/bridge"]
+"#,
+            ),
+            ("prod/src/lib.rs", ""),
+            (
+                "mid/Cargo.toml",
+                r#"
+[package]
+name = "mid"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eval_alias = { package = "neovm-eval", path = "../neovm-eval", optional = true }
+
+[features]
+bridge = ["dep:eval_alias", "eval_alias?/test-support"]
+"#,
+            ),
+            ("mid/src/lib.rs", ""),
+            ("neovm-eval/Cargo.toml", EVAL_TOML),
+            ("neovm-eval/src/lib.rs", ""),
+        ],
+        &[],
+        true,
+        MetadataSeedMode::AllProductionFeatures,
+        &["neovm-eval", "test-support", "eval_alias?/test-support"],
+    );
+
+    // 8. `[build-dependencies]` enabling `neovm-eval/test-support`.
+    assert_real_cargo_reachability_rejected(
+        "[build-dependencies] enabling neovm-eval/test-support",
+        &[
+            (
+                "Cargo.toml",
+                r#"
+[workspace]
+resolver = "2"
+members = ["prod", "neovm-eval"]
+"#,
+            ),
+            (
+                "prod/Cargo.toml",
+                r#"
+[package]
+name = "prod"
+version = "0.1.0"
+edition = "2024"
+
+[build-dependencies]
+neovm-eval = { path = "../neovm-eval", features = ["test-support"] }
+"#,
+            ),
+            ("prod/src/lib.rs", ""),
+            ("neovm-eval/Cargo.toml", EVAL_TOML),
+            ("neovm-eval/src/lib.rs", ""),
+        ],
+        &[],
+        true,
+        MetadataSeedMode::AllProductionFeatures,
+        &["neovm-eval", "test-support", "build dep feature"],
+    );
+
+    // 9. Production crate enabling `neovm-value/test-thread-fallback-heap`
+    //    (which implies `neovm-value/test-support`).
+    assert_real_cargo_reachability_rejected(
+        "production crate enabling neovm-value/test-thread-fallback-heap",
+        &[
+            (
+                "Cargo.toml",
+                r#"
+[workspace]
+resolver = "2"
+members = ["prod", "neovm-eval", "neovm-value"]
+"#,
+            ),
+            (
+                "prod/Cargo.toml",
+                r#"
+[package]
+name = "prod"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+neovm-eval = { path = "../neovm-eval" }
+neovm-value = { path = "../neovm-value", features = ["test-thread-fallback-heap"] }
+"#,
+            ),
+            ("prod/src/lib.rs", ""),
+            ("neovm-eval/Cargo.toml", EVAL_TOML),
+            ("neovm-eval/src/lib.rs", ""),
+            (
+                "neovm-value/Cargo.toml",
+                r#"
+[package]
+name = "neovm-value"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+test-support = []
+test-thread-fallback-heap = ["test-support"]
+"#,
+            ),
+            ("neovm-value/src/lib.rs", ""),
+        ],
+        &[],
+        true,
+        MetadataSeedMode::AllProductionFeatures,
+        &["neovm-value", "test-support"],
+    );
+
+    // 10. Positive control: `[dev-dependencies]` enabling `neovm-eval/test-support`
+    //     is permitted under resolver = "2".
+    assert_real_cargo_reachability_allowed(
+        "[dev-dependencies] enabling neovm-eval/test-support",
+        &[
+            (
+                "Cargo.toml",
+                r#"
+[workspace]
+resolver = "2"
+members = ["prod", "neovm-eval"]
+"#,
+            ),
+            (
+                "prod/Cargo.toml",
+                r#"
+[package]
+name = "prod"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+neovm-eval = { path = "../neovm-eval" }
+
+[dev-dependencies]
+neovm-eval = { path = "../neovm-eval", features = ["test-support"] }
+"#,
+            ),
+            ("prod/src/lib.rs", ""),
+            ("neovm-eval/Cargo.toml", EVAL_TOML),
+            ("neovm-eval/src/lib.rs", ""),
+        ],
+        &[],
+    );
+
+    // 11. Positive control: `default-features = false` on an excluded crate
+    //     whose `default = ["neovm-eval/test-support"]` does NOT spuriously fail.
+    assert_real_cargo_reachability_allowed(
+        "default-features = false suppresses excluded crate default test-support",
+        &[
+            (
+                "Cargo.toml",
+                r#"
+[workspace]
+resolver = "2"
+members = ["prod", "neomacs-melpa-test-support", "neovm-eval"]
+"#,
+            ),
+            (
+                "prod/Cargo.toml",
+                r#"
+[package]
+name = "prod"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+neovm-eval = { path = "../neovm-eval" }
+neomacs-melpa-test-support = { path = "../neomacs-melpa-test-support", default-features = false }
+"#,
+            ),
+            ("prod/src/lib.rs", ""),
+            (
+                "neomacs-melpa-test-support/Cargo.toml",
+                r#"
+[package]
+name = "neomacs-melpa-test-support"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+neovm-eval = { path = "../neovm-eval" }
+
+[features]
+default = ["neovm-eval/test-support"]
+"#,
+            ),
+            ("neomacs-melpa-test-support/src/lib.rs", ""),
+            ("neovm-eval/Cargo.toml", EVAL_TOML),
+            ("neovm-eval/src/lib.rs", ""),
+        ],
+        &["neomacs-melpa-test-support"],
+    );
+}
+
+#[test]
+fn negative_malformed_cargo_metadata_and_zero_edge_sanity_floor_fail_closed() {
+    // 1. Non-tautological sanity floor on a real Cargo temp workspace where
+    //    `neovm-eval` is a workspace member with 0 incoming dependency edges:
+    //    must fail closed rather than passing vacuously because it was seeded.
+    assert_real_cargo_reachability_rejected(
+        "zero-edge neovm-eval fails non-tautological sanity floor",
+        &[
+            (
+                "Cargo.toml",
+                r#"
+[workspace]
+resolver = "2"
+members = ["prod", "neovm-eval"]
+"#,
+            ),
+            (
+                "prod/Cargo.toml",
+                r#"
+[package]
+name = "prod"
+version = "0.1.0"
+edition = "2024"
+"#,
+            ),
+            ("prod/src/lib.rs", ""),
+            (
+                "neovm-eval/Cargo.toml",
+                r#"
+[package]
+name = "neovm-eval"
+version = "0.1.0"
+edition = "2024"
+[features]
+test-support = []
+"#,
+            ),
+            ("neovm-eval/src/lib.rs", ""),
+        ],
+        &[],
+        true,
+        MetadataSeedMode::AllProductionFeatures,
+        &["sanity floor failed", "neovm-eval"],
+    );
+
+    // 2. Schema-corruption cases in `parse_cargo_metadata` must fail closed
+    //    rather than silently defaulting to empty collections.
+    let missing_features = serde_json::json!({
+        "workspace_members": ["p#0.1"],
+        "packages": [{ "id": "p#0.1", "name": "p", "manifest_path": "/p/Cargo.toml", "dependencies": [] }],
+        "resolve": { "nodes": [{ "id": "p#0.1", "deps": [] }] }
+    });
+    assert!(
+        parse_cargo_metadata(&missing_features)
+            .unwrap_err()
+            .contains("missing `features` object")
+    );
+
+    let missing_deps = serde_json::json!({
+        "workspace_members": ["p#0.1"],
+        "packages": [{ "id": "p#0.1", "name": "p", "manifest_path": "/p/Cargo.toml", "features": {} }],
+        "resolve": { "nodes": [{ "id": "p#0.1", "deps": [] }] }
+    });
+    assert!(
+        parse_cargo_metadata(&missing_deps)
+            .unwrap_err()
+            .contains("missing `dependencies` array")
+    );
+
+    let dangling_resolve_pkg = serde_json::json!({
+        "workspace_members": ["p#0.1"],
+        "packages": [{ "id": "p#0.1", "name": "p", "manifest_path": "/p/Cargo.toml", "features": {}, "dependencies": [] }],
+        "resolve": {
+            "nodes": [{
+                "id": "p#0.1",
+                "deps": [{ "name": "ghost", "pkg": "ghost#0.1", "dep_kinds": [{ "kind": null }] }]
+            }]
+        }
+    });
+    assert!(
+        parse_cargo_metadata(&dangling_resolve_pkg)
+            .unwrap_err()
+            .contains("references unknown package `ghost#0.1`")
     );
 }

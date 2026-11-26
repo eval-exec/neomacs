@@ -601,7 +601,9 @@ impl Context {
         &self.edit.buffers
     }
 
-    /// Public mutable access to the buffer manager.
+    /// Test-only mutable access to the buffer manager (production code must
+    /// use [`Self::buffer_manager_view_mut`]; see #844 Slice 2a).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn buffer_manager_mut(&mut self) -> &mut BufferManager {
         &mut self.edit.buffers
     }

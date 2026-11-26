@@ -84,13 +84,27 @@ fn fixture(gnu: bool) -> SnapshotFixture {
     install_frame_snapshot_fn(&mut eval);
 
     let hidden_buffer = eval
-        .buffer_manager_mut()
+        .buffer_manager_view_mut()
         .create_buffer("snapshot-hidden-buffer");
     {
-        let buffer = eval.buffer_manager_mut().get_mut(hidden_buffer).unwrap();
-        buffer.insert(&"hidden snapshot source\n".repeat(80));
-        buffer.set_buffer_local("header-line-format", Value::string("SNAPSHOT-HEADER"));
-        buffer.set_buffer_local("mode-line-format", Value::string("SNAPSHOT-MODE"));
+        let mut buffers = eval.buffer_manager_view_mut();
+        buffers
+            .insert_into_buffer(hidden_buffer, &"hidden snapshot source\n".repeat(80))
+            .unwrap();
+        buffers
+            .set_buffer_local_property(
+                hidden_buffer,
+                "header-line-format",
+                Value::string("SNAPSHOT-HEADER"),
+            )
+            .unwrap();
+        buffers
+            .set_buffer_local_property(
+                hidden_buffer,
+                "mode-line-format",
+                Value::string("SNAPSHOT-MODE"),
+            )
+            .unwrap();
     }
     let hidden_frame =
         eval.frame_manager_mut()
@@ -297,13 +311,12 @@ fn gnu_hidden_frame_snapshot_keeps_fresh_chrome_and_echo_source() {
         .expect("hidden mini window");
     let mini_buffer = f
         .eval
-        .buffer_manager_mut()
+        .buffer_manager_view_mut()
         .create_buffer("snapshot-live-mini-buffer");
     f.eval
-        .buffer_manager_mut()
-        .get_mut(mini_buffer)
-        .unwrap()
-        .insert("UNRELATED-LIVE-MINI");
+        .buffer_manager_view_mut()
+        .insert_into_buffer(mini_buffer, "UNRELATED-LIVE-MINI")
+        .unwrap();
     f.eval
         .eval_form(Value::list(vec![
             Value::symbol("set-window-buffer"),
