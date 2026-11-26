@@ -138,30 +138,171 @@ fn incremental_validation_matches_full_rescan_on_randomized_journals() {
     struct TrackedCert {
         cert: CollectionReads,
         deps: rustc_hash::FxHashSet<usize>,
+        dep_values: Vec<Value>,
         origin_log_index: usize,
+        last_checked_log_index: usize,
+        ever_checked: bool,
+        was_valid_at_last_check: bool,
+        pre_capture_origin_dep_written: bool,
     }
 
-    let pool: Vec<Value> = (0..24)
+    let mutable_pool: Vec<Value> = (0..16)
         .map(|i| Value::cons(Value::fixnum(i), Value::NIL))
+        .collect();
+    // Quiet cells are never written by random bursts after capture (only
+    // optionally right *before* capture to test `0..delta` off-by-one), so
+    // non-empty certificates over `quiet_pool` cleanly survive past JOURNAL_SIZE.
+    let quiet_pool: Vec<Value> = (0..8)
+        .map(|i| Value::cons(Value::fixnum(100 + i), Value::NIL))
         .collect();
     let unrelated = Value::cons(Value::NIL, Value::NIL);
 
     let mut rng = XorShift64(0x9E37_79B9_7F4A_7C15);
     let mut write_log: Vec<usize> = Vec::new();
     let mut certs: Vec<TrackedCert> = Vec::new();
+    let mut write_seq_val: i64 = 0;
+
+    let mut push_write = |target: Value, log: &mut Vec<usize>| {
+        write_seq_val += 1;
+        target.set_car(Value::fixnum(write_seq_val));
+        log.push(target.bits());
+    };
+
+    // Coverage counters proving the randomized workload actually reaches every
+    // soundness boundary rather than masking horizon/wrapover/endpoint bugs.
+    let mut horizon_only_invalidations = 0usize;
+    let mut exact_8192_clean_hits = 0usize;
+    let mut exact_8193_horizon_only_hits = 0usize;
+    let mut ring_wrapover_past_tracked_mutation = 0usize;
+    let mut mutation_only_within_horizon = 0usize;
+    let mut empty_past_horizon = 0usize;
+    let mut live_true_to_false = 0usize;
+    let mut first_write_in_burst_invalidations = 0usize;
+    let mut last_write_in_burst_invalidations = 0usize;
+    let mut pre_capture_origin_write_survived = 0usize;
+
+    let mut validate_cert = |tracked: &mut TrackedCert,
+                             write_log: &[usize],
+                             burst_start: usize,
+                             round: usize,
+                             rng: &mut XorShift64| {
+        let total_writes = write_log.len() - tracked.origin_log_index;
+        let delta_since_last = write_log.len() - tracked.last_checked_log_index;
+        let mutated_in_history = !tracked.deps.is_empty()
+            && write_log[tracked.origin_log_index..]
+                .iter()
+                .any(|bits| tracked.deps.contains(bits));
+        let expected = if tracked.deps.is_empty() {
+            true
+        } else if total_writes > JOURNAL_SIZE {
+            false
+        } else {
+            !mutated_in_history
+        };
+
+        let actual = tracked.cert.unchanged();
+        assert_eq!(
+            actual,
+            expected,
+            "round={round} total_writes={total_writes} delta={delta_since_last} deps={} mutated={mutated_in_history} mismatch",
+            tracked.deps.len()
+        );
+        if rng.next_usize(2) == 0 {
+            assert_eq!(
+                tracked.cert.unchanged(),
+                expected,
+                "repeat same-sequence validation mismatch at round={round}"
+            );
+        }
+
+        let scanned = tracked.cert.journal_slots_scanned_for_test();
+        if tracked.deps.is_empty() {
+            assert_eq!(scanned, 0, "empty certificate must scan 0 journal slots");
+            if total_writes > JOURNAL_SIZE {
+                empty_past_horizon += 1;
+            }
+        } else {
+            assert!(
+                scanned <= total_writes.min(JOURNAL_SIZE),
+                "incremental validation scanned {scanned} slots (> min({total_writes}, {JOURNAL_SIZE}))"
+            );
+            if total_writes > JOURNAL_SIZE && !mutated_in_history {
+                horizon_only_invalidations += 1;
+                if total_writes == JOURNAL_SIZE + 1 {
+                    exact_8193_horizon_only_hits += 1;
+                }
+            } else if total_writes == JOURNAL_SIZE && !mutated_in_history {
+                exact_8192_clean_hits += 1;
+            } else if total_writes <= JOURNAL_SIZE && mutated_in_history {
+                mutation_only_within_horizon += 1;
+            }
+            if tracked.was_valid_at_last_check
+                && !expected
+                && delta_since_last > JOURNAL_SIZE
+                && write_log[tracked.last_checked_log_index..write_log.len() - JOURNAL_SIZE]
+                    .iter()
+                    .any(|bits| tracked.deps.contains(bits))
+            {
+                ring_wrapover_past_tracked_mutation += 1;
+            }
+            if tracked.was_valid_at_last_check && !expected && total_writes <= JOURNAL_SIZE {
+                let burst_len = write_log.len() - burst_start;
+                if burst_len >= 2 && tracked.last_checked_log_index == burst_start {
+                    let first_mut = tracked.deps.contains(&write_log[burst_start]);
+                    let last_mut = tracked.deps.contains(&write_log[write_log.len() - 1]);
+                    let middle_mut = write_log[burst_start + 1..write_log.len() - 1]
+                        .iter()
+                        .any(|bits| tracked.deps.contains(bits));
+                    if first_mut && !middle_mut && !last_mut {
+                        first_write_in_burst_invalidations += 1;
+                    }
+                    if last_mut && !first_mut && !middle_mut {
+                        last_write_in_burst_invalidations += 1;
+                    }
+                }
+            }
+            if tracked.pre_capture_origin_dep_written && expected && total_writes >= 1 {
+                pre_capture_origin_write_survived += 1;
+            }
+        }
+
+        if tracked.ever_checked && tracked.was_valid_at_last_check && !expected {
+            live_true_to_false += 1;
+        }
+        tracked.ever_checked = true;
+        tracked.was_valid_at_last_check = expected;
+        tracked.last_checked_log_index = write_log.len();
+    };
 
     for round in 0..160 {
-        // Capture a fresh certificate with 0..=8 random dependencies from `pool`.
+        // Capture a fresh certificate with 0..=8 random dependencies from either
+        // `mutable_pool` or `quiet_pool`.
         if certs.len() < 12 || rng.next_usize(4) == 0 {
-            let dep_count = match rng.next_usize(10) {
-                0 => 0,
-                1..=3 => 1,
-                _ => 2 + rng.next_usize(7),
+            let mode = rng.next_usize(10);
+            let chosen: Vec<Value> = match mode {
+                0 => Vec::new(),
+                1..=3 => {
+                    let count = 1 + rng.next_usize(4);
+                    (0..count)
+                        .map(|_| quiet_pool[rng.next_usize(quiet_pool.len())])
+                        .collect()
+                }
+                _ => {
+                    let count = 1 + rng.next_usize(7);
+                    (0..count)
+                        .map(|_| mutable_pool[rng.next_usize(mutable_pool.len())])
+                        .collect()
+                }
             };
-            let mut chosen = Vec::with_capacity(dep_count);
-            for _ in 0..dep_count {
-                chosen.push(pool[rng.next_usize(pool.len())]);
+
+            // On ~1/3 of non-empty captures, write chosen[0] right BEFORE capture
+            // so `journal[origin % JOURNAL_SIZE] == chosen[0].bits()`, catching
+            // any `0..delta` off-by-one scan that inspects the origin slot.
+            let pre_capture_origin_dep_written = !chosen.is_empty() && rng.next_usize(3) == 0;
+            if pre_capture_origin_dep_written {
+                push_write(chosen[0], &mut write_log);
             }
+
             let (_, captured) = capture(|| {
                 let mut acc = 0usize;
                 for &cell in &chosen {
@@ -171,71 +312,190 @@ fn incremental_validation_matches_full_rescan_on_randomized_journals() {
             });
             let cert = captured.expect("randomized capture");
             let deps: rustc_hash::FxHashSet<usize> = chosen.iter().map(|v| v.bits()).collect();
-            if certs.len() >= 16 {
+            if certs.len() >= 18 {
                 certs.swap_remove(rng.next_usize(certs.len()));
             }
+            let now = write_log.len();
             certs.push(TrackedCert {
                 cert,
                 deps,
-                origin_log_index: write_log.len(),
+                dep_values: chosen,
+                origin_log_index: now,
+                last_checked_log_index: now,
+                ever_checked: false,
+                was_valid_at_last_check: true,
+                pre_capture_origin_dep_written,
             });
         }
 
-        // Perform a random burst of writes (mostly unrelated so certificates stay
-        // valid long enough to exercise multi-step deltas and horizon crossings,
-        // interspersed with real mutations to `pool` entries).
-        let burst = match rng.next_usize(10) {
-            0 => 0,
-            1..=4 => 1 + rng.next_usize(5),
-            5..=7 => 16 + rng.next_usize(128),
-            8 => 1024 + rng.next_usize(2048),
-            _ => JOURNAL_SIZE / 2 + rng.next_usize(128),
-        };
-        for step in 0..burst {
-            let target = if rng.next_usize(64) == 0 {
-                pool[rng.next_usize(pool.len())]
-            } else {
-                unrelated
-            };
-            target.set_car(Value::fixnum((round * 10_000 + step) as i64));
-            write_log.push(target.bits());
+        let burst_start = write_log.len();
+        let mut force_validate_all = false;
+
+        // Choose a randomized workload pattern that covers short/medium/large
+        // bursts, exact 8192->8193 horizon crossings, ring-buffer wrapovers
+        // past a tracked mutation (`delta > JOURNAL_SIZE`), and burst-endpoint
+        // mutations (`step == 0` and `step == burst - 1`).
+        match rng.next_usize(12) {
+            0 => {
+                // 0-write round (tests same-sequence memo hits).
+            }
+            1..=3 => {
+                // Short burst (2..=8 writes); occasionally place a tracked
+                // mutation strictly on the first OR last write of a valid live
+                // cert to catch `0..delta` / `1..delta` / `2..=delta` off-by-ones.
+                let burst = 2 + rng.next_usize(7);
+                let live_candidate = certs.iter().position(|c| {
+                    !c.dep_values.is_empty()
+                        && c.was_valid_at_last_check
+                        && c.last_checked_log_index == burst_start
+                        && write_log.len() - c.origin_log_index + burst <= JOURNAL_SIZE
+                        && c.dep_values
+                            .iter()
+                            .all(|v| mutable_pool.iter().any(|m| m.bits() == v.bits()))
+                });
+                let place_mode = if live_candidate.is_some() {
+                    rng.next_usize(3)
+                } else {
+                    2
+                };
+                let target_dep = live_candidate.map(|idx| {
+                    let c = &certs[idx];
+                    c.dep_values[rng.next_usize(c.dep_values.len())]
+                });
+                for step in 0..burst {
+                    let target = match (place_mode, target_dep) {
+                        (0, Some(dep)) if step == 0 => dep,
+                        (1, Some(dep)) if step + 1 == burst => dep,
+                        _ => unrelated,
+                    };
+                    push_write(target, &mut write_log);
+                }
+                force_validate_all = live_candidate.is_some();
+            }
+            4..=6 => {
+                // Medium burst (16..=192 writes) with sparse random mutations.
+                let burst = 16 + rng.next_usize(177);
+                for _ in 0..burst {
+                    let target = if rng.next_usize(512) == 0 {
+                        mutable_pool[rng.next_usize(mutable_pool.len())]
+                    } else {
+                        unrelated
+                    };
+                    push_write(target, &mut write_log);
+                }
+            }
+            7..=8 => {
+                // Unrelated-only large burst (1024..=3072 writes) advancing clean
+                // certificates toward and past JOURNAL_SIZE without mutating them.
+                let burst = 1024 + rng.next_usize(2049);
+                for _ in 0..burst {
+                    push_write(unrelated, &mut write_log);
+                }
+            }
+            9 => {
+                // Ring-buffer wrapover burst (`delta > JOURNAL_SIZE`): mutate a
+                // live cert's dependency early, then overwrite the entire 8192-slot
+                // ring buffer with unrelated writes so the tracked entry is gone
+                // from the ring buffer before the next `unchanged()` call.
+                let live_idx = certs
+                    .iter()
+                    .position(|c| !c.dep_values.is_empty() && c.was_valid_at_last_check);
+                let early_offset = rng.next_usize(8);
+                let tail_unrelated = JOURNAL_SIZE + 1 + rng.next_usize(256);
+                for step in 0..=early_offset {
+                    let target = if step == early_offset
+                        && let Some(idx) = live_idx
+                    {
+                        let c = &certs[idx];
+                        c.dep_values[rng.next_usize(c.dep_values.len())]
+                    } else {
+                        unrelated
+                    };
+                    push_write(target, &mut write_log);
+                }
+                for _ in 0..tail_unrelated {
+                    push_write(unrelated, &mut write_log);
+                }
+                force_validate_all = true;
+            }
+            _ => {
+                // Exact horizon boundary probe: advance an unmutated non-empty
+                // cert to exact `total_writes == JOURNAL_SIZE`, validate all,
+                // then write 1 more unrelated write to hit `JOURNAL_SIZE + 1`.
+                let clean_near = certs.iter().find_map(|c| {
+                    if c.deps.is_empty() {
+                        return None;
+                    }
+                    let tw = write_log.len() - c.origin_log_index;
+                    let mutated = write_log[c.origin_log_index..]
+                        .iter()
+                        .any(|b| c.deps.contains(b));
+                    (!mutated && tw < JOURNAL_SIZE).then(|| JOURNAL_SIZE - tw)
+                });
+                if let Some(remaining) = clean_near {
+                    for _ in 0..remaining {
+                        push_write(unrelated, &mut write_log);
+                    }
+                    for tracked in &mut certs {
+                        validate_cert(tracked, &write_log, burst_start, round, &mut rng);
+                    }
+                    let step_start = write_log.len();
+                    push_write(unrelated, &mut write_log);
+                    for tracked in &mut certs {
+                        validate_cert(tracked, &write_log, step_start, round, &mut rng);
+                    }
+                    continue;
+                } else {
+                    let burst = 256 + rng.next_usize(512);
+                    for _ in 0..burst {
+                        push_write(unrelated, &mut write_log);
+                    }
+                }
+            }
         }
 
-        // Validate every live certificate (including a duplicate same-sequence
-        // check on some) and assert exact equivalence with a naive full rescan
-        // of `(origin_log_index .. write_log.len())` enforcing `JOURNAL_SIZE`.
-        for tracked in &certs {
-            let total_writes = write_log.len() - tracked.origin_log_index;
-            let expected = if tracked.deps.is_empty() {
-                true
-            } else if total_writes > JOURNAL_SIZE {
-                false
-            } else {
-                write_log[tracked.origin_log_index..]
-                    .iter()
-                    .all(|bits| !tracked.deps.contains(bits))
-            };
-            let actual = tracked.cert.unchanged();
-            assert_eq!(
-                actual,
-                expected,
-                "round={round} total_writes={total_writes} deps={} mismatch",
-                tracked.deps.len()
-            );
-            if rng.next_usize(2) == 0 {
-                assert_eq!(
-                    tracked.cert.unchanged(),
-                    expected,
-                    "repeat same-sequence validation mismatch at round={round}"
-                );
+        // Randomly skip ~1/3 of certs on non-boundary rounds so inter-check
+        // deltas also accumulate across multiple rounds.
+        for tracked in &mut certs {
+            if !force_validate_all && rng.next_usize(3) == 0 {
+                continue;
             }
-            assert!(
-                tracked.cert.journal_slots_scanned_for_test() <= JOURNAL_SIZE,
-                "incremental validation scanned {} slots (> JOURNAL_SIZE={JOURNAL_SIZE})",
-                tracked.cert.journal_slots_scanned_for_test()
-            );
+            validate_cert(tracked, &write_log, burst_start, round, &mut rng);
         }
     }
+
+    assert!(
+        horizon_only_invalidations >= 3,
+        "workload must exercise clean JOURNAL_SIZE horizon crossings without tracked mutations (got {horizon_only_invalidations})"
+    );
+    assert!(
+        exact_8192_clean_hits >= 1 && exact_8193_horizon_only_hits >= 1,
+        "workload must hit exact 8192/8193 horizon boundaries (8192={exact_8192_clean_hits}, 8193={exact_8193_horizon_only_hits})"
+    );
+    assert!(
+        ring_wrapover_past_tracked_mutation >= 2,
+        "workload must roll the ring buffer past a tracked mutation between validations (got {ring_wrapover_past_tracked_mutation})"
+    );
+    assert!(
+        mutation_only_within_horizon >= 5,
+        "workload must exercise in-horizon mutation invalidations (got {mutation_only_within_horizon})"
+    );
+    assert!(
+        empty_past_horizon >= 5,
+        "workload must exercise empty certificates staying valid past JOURNAL_SIZE (got {empty_past_horizon})"
+    );
+    assert!(
+        live_true_to_false >= 5,
+        "workload must exercise live true->false transitions (got {live_true_to_false})"
+    );
+    assert!(
+        first_write_in_burst_invalidations >= 1 && last_write_in_burst_invalidations >= 1,
+        "workload must exercise first-write and last-write burst endpoints (first={first_write_in_burst_invalidations}, last={last_write_in_burst_invalidations})"
+    );
+    assert!(
+        pre_capture_origin_write_survived >= 1,
+        "workload must exercise pre-capture writes at the origin slot (got {pre_capture_origin_write_survived})"
+    );
 }
 
 #[test]
