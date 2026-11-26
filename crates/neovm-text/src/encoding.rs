@@ -1957,8 +1957,21 @@ fn insert_coding_result<H: TextHost>(
     text: &neovm_value::heap_types::LispString,
     restore_point: Option<TextPositionAnchor>,
 ) -> Result<(), neovm_value::error::Flow> {
+    // GNU `decode_coding_object`/`encode_coding_object` set `coding->dst_multibyte`
+    // from the destination buffer's `enable-multibyte-characters` (coding.c:8144-8145),
+    // and `produce_chars` writes internal UTF-8 bytes for normal characters and
+    // raw bytes for `CHAR_BYTE8_P` characters when inserting into a unibyte buffer
+    // (coding.c:7060-7064). Reconcile here so every buffer destination caller
+    // (`decode-coding-string`, `encode-coding-string`, `decode-coding-region`,
+    // `encode-coding-region`) shares one seam.
+    let target_multibyte = ctx
+        .buffers()
+        .get(buffer_id)
+        .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?
+        .get_multibyte();
+    let stored = coding_result_for_buffer_multibyte(text, target_multibyte);
     ctx.buffers_view_mut()
-        .insert_lisp_string_into_buffer(buffer_id, text)
+        .insert_lisp_string_into_buffer(buffer_id, &stored)
         .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
     if let Some(point) = restore_point {
         let _ = ctx
@@ -6540,7 +6553,12 @@ fn builtin_coding_region<H: TextHost>(
                 .map(|buf| buf.get_multibyte())
                 .unwrap_or(true);
             let stored = coding_result_for_buffer_multibyte(&result_text, target_multibyte);
-            let produced_chars = stored.schars();
+            // In-place point restoration uses buffer position units (bytes in a
+            // unibyte buffer, chars in a multibyte buffer — GNU `src/coding.c:8228-8233`),
+            // while `code_convert_region` returns `coding.produced_char` (decoded/encoded
+            // character count, `src/coding.c:9497-9499`).
+            let inserted_units = stored.schars();
+            let produced_chars = result_text.schars();
             // Capture point geometry BEFORE the replacement so we can mirror
             // GNU's in-place point restoration (coding.c
             // `decode_coding_object`/`encode_coding_object`, the `saved_pt >= 0`
@@ -6576,7 +6594,7 @@ fn builtin_coding_region<H: TextHost>(
             } else if saved_pt < from_char + chars {
                 from_char
             } else {
-                saved_pt + (produced_chars as i64 - chars)
+                saved_pt + (inserted_units as i64 - chars)
             };
             let byte_pos = ctx
                 .buffers()
@@ -6597,14 +6615,8 @@ fn builtin_coding_region<H: TextHost>(
                     vec![Value::string("Selecting deleted buffer")],
                 ));
             }
-            let target_multibyte = ctx
-                .buffers()
-                .get(buffer_id)
-                .map(|buf| buf.get_multibyte())
-                .unwrap_or(true);
-            let stored = coding_result_for_buffer_multibyte(&result_text, target_multibyte);
-            let produced_chars = stored.schars();
-            insert_coding_result(ctx, buffer_id, &stored, restore_point)?;
+            let produced_chars = result_text.schars();
+            insert_coding_result(ctx, buffer_id, &result_text, restore_point)?;
             Ok(Value::fixnum(produced_chars as i64))
         }
     }
