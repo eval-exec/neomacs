@@ -20805,6 +20805,41 @@ fn drive_rustls_server_handshake(
 }
 
 #[cfg(unix)]
+fn read_tls_line(
+    server: &mut rustls::ServerConnection,
+    stream: &mut std::net::TcpStream,
+    eof_context: &str,
+) -> Vec<u8> {
+    use std::io::Read;
+    let mut line = Vec::new();
+    let mut tmp = [0u8; 256];
+    loop {
+        // Always drain already-decrypted plaintext BEFORE calling `read_tls()`:
+        // during TLS 1.3 handshake (`drive_rustls_server_handshake`), a coalesced
+        // TCP segment can deliver the client's `Finished` and first application
+        // data record together, leaving the payload buffered in `server.reader()`.
+        loop {
+            match server.reader().read(&mut tmp) {
+                Ok(0) => break,
+                Ok(k) => line.extend_from_slice(&tmp[..k]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("tls reader error ({eof_context}): {e}"),
+            }
+        }
+        if line.ends_with(b"\n") {
+            return line;
+        }
+        let n = server
+            .read_tls(stream)
+            .unwrap_or_else(|e| panic!("read_tls failed ({eof_context}): {e}"));
+        assert!(n > 0, "{eof_context}");
+        server
+            .process_new_packets()
+            .unwrap_or_else(|e| panic!("process_new_packets failed ({eof_context}): {e}"));
+    }
+}
+
+#[cfg(unix)]
 fn build_loopback_rustls_server_config() -> std::sync::Arc<rustls::ServerConfig> {
     use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
     use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
@@ -20846,21 +20881,7 @@ fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deini
         let mut server = rustls::ServerConnection::new(server_cfg).expect("server conn");
         drive_rustls_server_handshake(&mut server, &mut stream);
 
-        let mut ping = Vec::new();
-        while !ping.ends_with(b"\n") {
-            let n = server.read_tls(&mut stream).expect("read tls ping");
-            assert!(n > 0, "eof waiting for encrypted PING1");
-            server.process_new_packets().expect("process tls ping");
-            let mut tmp = [0u8; 256];
-            loop {
-                match server.reader().read(&mut tmp) {
-                    Ok(0) => break,
-                    Ok(k) => ping.extend_from_slice(&tmp[..k]),
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(e) => panic!("tls reader error: {e}"),
-                }
-            }
-        }
+        let ping = read_tls_line(&mut server, &mut stream, "eof waiting for encrypted PING1");
         assert_eq!(ping, b"PING1\n");
         server.writer().write_all(b"PONG1\n").expect("write PONG1");
         while server.wants_write() {
@@ -21019,7 +21040,7 @@ fn gnutls_deinit_unwraps_and_registers_plaintext_socket_and_ignores_second_deini
 #[test]
 fn gnutls_deinit_clears_boot_state_and_allows_fresh_reboot() {
     use crate::emacs_core::moved_system::tls_tests_runtime_test_rs::loopback;
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::net::TcpListener;
 
     crate::test_utils::init_test_tracing();
@@ -21040,21 +21061,7 @@ fn gnutls_deinit_clears_boot_state_and_allows_fresh_reboot() {
             let mut server =
                 rustls::ServerConnection::new(std::sync::Arc::clone(&server_cfg)).expect("server");
             drive_rustls_server_handshake(&mut server, &mut stream);
-            let mut got = Vec::new();
-            while !got.ends_with(b"\n") {
-                let n = server.read_tls(&mut stream).expect("read tls");
-                assert!(n > 0, "eof during tls session");
-                server.process_new_packets().expect("process packets");
-                let mut tmp = [0u8; 256];
-                loop {
-                    match server.reader().read(&mut tmp) {
-                        Ok(0) => break,
-                        Ok(k) => got.extend_from_slice(&tmp[..k]),
-                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                        Err(e) => panic!("tls read err: {e}"),
-                    }
-                }
-            }
+            let got = read_tls_line(&mut server, &mut stream, "eof during tls session");
             assert_eq!(got, expected);
             server.writer().write_all(reply).expect("write reply");
             while server.wants_write() {
